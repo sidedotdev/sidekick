@@ -347,7 +347,129 @@ placeholder_full_code
 			},
 		},
 		{
-			name: "Symbol in different file",
+			name: "Symbol referenced in requested file, defined in another file (resolved via LSP)",
+			code: `package cools
+
+func WontExistHere() {
+	ExistsElsewhere()
+}`,
+			otherCode: `package cools
+
+func ExistsElsewhere() {
+	println("Hello, world!")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"ExistsElsewhere"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_other_tempfile
+Symbol: ExistsElsewhere
+Lines: 3-5
+` + "```go" + `
+func ExistsElsewhere() {
+	println("Hello, world!")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "ReferenceLine disambiguates between same-named function and method",
+			code: `package cools
+
+func use() {
+	Foo()
+	B{}.Foo()
+}`,
+			otherCode: `package cools
+
+func Foo() {}
+
+type B struct{}
+
+func (b B) Foo() {
+	println("method")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames:   []string{"Foo"},
+					ReferenceLine: "B{}.Foo()",
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_other_tempfile
+Symbol: Foo
+Lines: 7-9
+` + "```go" + `
+func (b B) Foo() {
+	println("method")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "Without ReferenceLine the first occurrence is used (function, not method)",
+			code: `package cools
+
+func use() {
+	Foo()
+	B{}.Foo()
+}`,
+			otherCode: `package cools
+
+func Foo() {}
+
+type B struct{}
+
+func (b B) Foo() {
+	println("method")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"Foo"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_other_tempfile
+Symbol: Foo
+Lines: 3-3
+` + "```go" + `
+func Foo() {}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "ReferenceLine that does not match degrades to first occurrence",
+			code: `package cools
+
+func WontExistHere() {
+	ExistsElsewhere()
+}`,
+			otherCode: `package cools
+
+func ExistsElsewhere() {
+	println("Hello, world!")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames:   []string{"ExistsElsewhere"},
+					ReferenceLine: "this line is not present anywhere",
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_other_tempfile
+Symbol: ExistsElsewhere
+Lines: 3-5
+` + "```go" + `
+func ExistsElsewhere() {
+	println("Hello, world!")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "Symbol referenced but unresolvable via LSP falls back to name-search hint",
 			code: `package cools
 
 func WontExistHere() {
@@ -369,6 +491,29 @@ The symbol 'ExistsElsewhere' is defined in the following files:
   - placeholder_other_tempfile`,
 				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
 The symbol 'ExistsElsewhere' is defined in the following files:
+  - placeholder_other_tempfile`,
+			},
+		},
+		{
+			name:          "Symbol in different file - unsupported language degrades to name-search hint",
+			fileExtension: "py",
+			code: `def use():
+    existsElsewhere()
+`,
+			otherCode: `def existsElsewhere():
+    pass
+`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"existsElsewhere"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'existsElsewhere'. However, it does contain the following symbols: use
+The symbol 'existsElsewhere' is defined in the following files:
+  - placeholder_other_tempfile`,
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'existsElsewhere'. However, it does contain the following symbols: use
+The symbol 'existsElsewhere' is defined in the following files:
   - placeholder_other_tempfile`,
 			},
 		},
@@ -638,7 +783,17 @@ func SecondFunc() {
 				tc.expectedOutput.Failures = strings.ReplaceAll(tc.expectedOutput.Failures, "placeholder_other_tempfile", filepath.Base(otherFilePath))
 			}
 
-			ca := &CodingActivities{}
+			ca := &CodingActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(language string) lsp.LSPClient {
+						return &lsp.Jsonrpc2LSPClient{
+							LanguageName: language,
+						}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+				TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+			}
 
 			// Call the method under test
 			numLines := 0
