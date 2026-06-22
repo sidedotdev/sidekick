@@ -131,6 +131,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import Button from 'primevue/button'
 import Dropdown from 'primevue/dropdown'
@@ -216,6 +217,8 @@ const emit = defineEmits<{
 }>()
 
 const isEditMode = computed(() => !!props.task?.id)
+
+const router = useRouter()
 
 const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
 
@@ -701,6 +704,12 @@ const startTask = async () => {
     return
   }
 
+  let startedTaskId = currentTaskId.value
+  if (isIdd.value && typeof response.json === 'function') {
+    const responseBody = await response.json().catch(() => null)
+    startedTaskId = responseBody?.task?.id ?? currentTaskId.value
+  }
+
   // Mark as clean so close() won't trigger another auto-save
   isDirty.value = false
 
@@ -719,6 +728,33 @@ const startTask = async () => {
   }
 
   close()
+
+  if (isIdd.value && startedTaskId) {
+    await navigateToIntentCanvas(startedTaskId)
+  }
+}
+
+// Starting an IDD task drops the user straight into the intent canvas. The flow
+// id is generated asynchronously by the task workflow, so poll the task until
+// its first flow surfaces before navigating.
+const navigateToIntentCanvas = async (taskId: string) => {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      const res = await fetch(`/api/v1/workspaces/${workspaceId.value}/tasks/${taskId}`)
+      if (res.ok) {
+        const data = await res.json()
+        const intentFlowId = data?.task?.flows?.[0]?.id
+        if (intentFlowId) {
+          router.push({ name: 'intent-canvas', params: { id: intentFlowId } })
+          return
+        }
+      }
+    } catch (e) {
+      console.error('Failed to resolve intent flow for navigation:', e)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  console.error('Timed out resolving intent flow for navigation')
 }
 
 const canDelete = computed(() => !!currentTaskId.value)

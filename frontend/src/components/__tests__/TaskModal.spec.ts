@@ -25,6 +25,13 @@ vi.mock('../../lib/store', () => ({
   store: mockStore
 }))
 
+const { routerPushMock } = vi.hoisted(() => ({ routerPushMock: vi.fn() }))
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: routerPushMock }),
+  useRoute: () => ({ params: {}, query: {} }),
+}))
+
 const mockBranchesResponse = {
   branches: ['main', 'feature-1', 'feature-2']
 }
@@ -1374,9 +1381,17 @@ describe('TaskModal determineRequirements behavior', () => {
     })
 
     it('starts an idd task with the title and without a description', async () => {
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ task: { id: 'idd-task-id' } })
+      const fetchMock = vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+        if (url.toString().endsWith('/tasks/idd-task-id')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ task: { id: 'idd-task-id', flows: [{ id: 'idd-flow-id' }] } })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ task: { id: 'idd-task-id' } })
+        })
       })
       vi.stubGlobal('fetch', fetchMock)
       const wrapper = mountIdd()
@@ -1388,14 +1403,47 @@ describe('TaskModal determineRequirements behavior', () => {
       await wrapper.find('form').trigger('submit')
       await flushPromises()
 
-      const taskCall = fetchMock.mock.calls.find((call) => call[0].toString().includes('/tasks'))
+      const taskCall = fetchMock.mock.calls.find((call) =>
+        call[0].toString().endsWith('/tasks') && call[1]?.method === 'POST'
+      )
       expect(taskCall).toBeTruthy()
-      expect(taskCall![1].method).toBe('POST')
-      const body = JSON.parse(taskCall![1].body as string)
+      const taskInit = taskCall![1]!
+      expect(taskInit.method).toBe('POST')
+      const body = JSON.parse(taskInit.body as string)
       expect(body.title).toBe('My intent')
       expect(body.description).toBeUndefined()
       expect(body.flowType).toBe('idd')
       expect(body.status).toBe('to_do')
+    })
+
+    it('navigates to the intent canvas after starting an idd task', async () => {
+      routerPushMock.mockClear()
+      const fetchMock = vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+        if (url.toString().endsWith('/tasks/idd-task-id')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ task: { id: 'idd-task-id', flows: [{ id: 'idd-flow-id' }] } })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ task: { id: 'idd-task-id' } })
+        })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const wrapper = mountIdd()
+
+      ;(wrapper.vm as any).flowType = 'idd'
+      ;(wrapper.vm as any).title = 'My intent'
+      await wrapper.vm.$nextTick()
+
+      await wrapper.find('form').trigger('submit')
+      await flushPromises()
+
+      expect(routerPushMock).toHaveBeenCalledWith({
+        name: 'intent-canvas',
+        params: { id: 'idd-flow-id' },
+      })
     })
   })
 })
