@@ -77,9 +77,9 @@ type PrepareInitialCodeContextResult struct {
 // - include one case where the code context is too long from step 2
 // - include cases where retrieving code context fails, both in step 2 and 3, but succeeds after codeContextLoop retries
 // - include a case where code context is incorrect many times and we ask for guidance, then succeed after guidance
-func PrepareInitialCodeContext(dCtx DevContext, requirements string, planExec *DevPlanExecution, step *DevStep) (string, string, error) {
+func PrepareInitialCodeContext(dCtx DevContext, requirements string, planExec *DevPlanExecution, step *DevStep, weightedRankQueries ...persisted_ai.WeightedRankQuery) (string, string, error) {
 	result, err := RunSubflow(dCtx, "code_context", "Prepare Initial Code Context", func(subflow domain.Subflow) (PrepareInitialCodeContextResult, error) {
-		return prepareInitialCodeContextSubflow(dCtx, requirements, planExec, step)
+		return prepareInitialCodeContextSubflow(dCtx, requirements, planExec, step, weightedRankQueries...)
 	})
 	if err != nil {
 		return "", "", err
@@ -87,9 +87,9 @@ func PrepareInitialCodeContext(dCtx DevContext, requirements string, planExec *D
 	return result.CodeContext, result.Request, nil
 }
 
-func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, planExec *DevPlanExecution, step *DevStep) (PrepareInitialCodeContextResult, error) {
+func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, planExec *DevPlanExecution, step *DevStep, weightedRankQueries ...persisted_ai.WeightedRankQuery) (PrepareInitialCodeContextResult, error) {
 	// Step 1: Extract high-level code outline aka repo summary
-	repoSummary, needs, err := PrepareRepoSummary(dCtx, requirements)
+	repoSummary, needs, err := PrepareRepoSummary(dCtx, requirements, weightedRankQueries...)
 	if err != nil {
 		return PrepareInitialCodeContextResult{}, err
 	}
@@ -124,8 +124,8 @@ func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, plan
 	}
 }
 
-func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, error) {
-	repoSummary, err := GetRankedRepoSummary(dCtx, requirements, min(defaultMaxChatHistoryLength/2, 15000))
+func PrepareRepoSummary(dCtx DevContext, requirements string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (string, string, error) {
+	repoSummary, err := GetRankedRepoSummary(dCtx, requirements, min(defaultMaxChatHistoryLength/2, 15000), weightedRankQueries...)
 	if err != nil {
 		return "", "", err
 	}
@@ -143,21 +143,22 @@ func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, e
 
 	// Append the identified needs to the requirements for second round of ranked signatures
 	rankQuery := fmt.Sprintf("%s\n\n%s", requirements, strings.Join(infoNeeds.Needs, "\n"))
-	repoSummary, err = GetRankedRepoSummary(dCtx, rankQuery, min(defaultMaxChatHistoryLength/2, 15000))
+	repoSummary, err = GetRankedRepoSummary(dCtx, rankQuery, min(defaultMaxChatHistoryLength/2, 15000), weightedRankQueries...)
 
 	return repoSummary, needs, err
 }
 
 var GetRepoSummaryForPrompt = GetRankedRepoSummary
 
-func GetRankedRepoSummary(dCtx DevContext, rankQuery string, charLimit int) (string, error) {
+func GetRankedRepoSummary(dCtx DevContext, rankQuery string, charLimit int, weightedRankQueries ...persisted_ai.WeightedRankQuery) (string, error) {
 	options := persisted_ai.RankedDirSignatureOutlineOptions{
 		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
-			WorkspaceId:  dCtx.WorkspaceId,
-			EnvContainer: *dCtx.EnvContainer,
-			RankQuery:    rankQuery,
-			Secrets:      *dCtx.Secrets,
-			ModelConfig:  dCtx.GetEmbeddingModelConfig(common.DefaultKey),
+			WorkspaceId:         dCtx.WorkspaceId,
+			EnvContainer:        *dCtx.EnvContainer,
+			RankQuery:           rankQuery,
+			WeightedRankQueries: weightedRankQueries,
+			Secrets:             *dCtx.Secrets,
+			ModelConfig:         dCtx.GetEmbeddingModelConfig(common.DefaultKey),
 		},
 		CharLimit: charLimit,
 	}

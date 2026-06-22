@@ -15,7 +15,18 @@ import (
 	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
+)
+
+// Weights used when fusing repo-summary RAG rankings derived from review
+// feedback. The baseline (full requirements) ranking carries the shared
+// BaselineRankWeight; the latest rejection message dominates, with prior
+// accumulated feedback contributing above-baseline but below the latest.
+const (
+	rankWeightBaselineRequirements = persisted_ai.BaselineRankWeight
+	rankWeightLatestReview         = 3.0
+	rankWeightPriorReviews         = 1.5
 )
 
 // Define the workflow input type.
@@ -302,8 +313,8 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	return result, nil
 }
 
-func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string) (result string, err error) {
-	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil)
+func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
+	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil, weightedRankQueries...)
 	contextSizeExtension := len(fullCodeContext) - len(codeContext)
 	if err != nil {
 		return "", fmt.Errorf("failed to prepare code context: %w", err)
@@ -326,7 +337,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 	// prepend a concise repository summary to the other code context in the initial prompt
 	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
 	if version >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
-		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
+		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000, weightedRankQueries...)
 		if err != nil {
 			return "", fmt.Errorf("failed to get repo summary: %w", err)
 		}
@@ -615,6 +626,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 		reviewMessages := []string{}
 		originalRequirements := params.Requirements
 		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+		feedbackRagVersion := workflow.GetVersion(dCtx, "review-feedback-rag-weighting", workflow.DefaultVersion, 1)
 		// Used to generate "diff since last review" on subsequent iterations
 		lastReviewTreeHash := ""
 
@@ -670,13 +682,32 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 					mergeInfo.Message,
 				)
 
+				// Build weighted RAG queries from review feedback before
+				// appending the latest message, so reviewMessages still
+				// contains only the prior accumulated feedback here.
+				var feedbackRankQueries []persisted_ai.WeightedRankQuery
+				if feedbackRagVersion >= 1 {
+					if strings.TrimSpace(mergeInfo.Message) != "" {
+						feedbackRankQueries = append(feedbackRankQueries, persisted_ai.WeightedRankQuery{
+							Query:  mergeInfo.Message,
+							Weight: rankWeightLatestReview,
+						})
+					}
+					if len(reviewMessages) > 0 {
+						feedbackRankQueries = append(feedbackRankQueries, persisted_ai.WeightedRankQuery{
+							Query:  strings.Join(reviewMessages, "\n\n"),
+							Weight: rankWeightPriorReviews,
+						})
+					}
+				}
+
 				// Add rejection message to history for next iteration
 				reviewMessages = append(reviewMessages, mergeInfo.Message)
 
 				// must commit before merge at this point, as codingSubflow
 				// doesn't do so inherently
 				params.CommitRequired = true
-				_, err = codingSubflow(dCtx, requirements, params.StartBranch, lastReviewTreeHash)
+				_, err = codingSubflow(dCtx, requirements, params.StartBranch, lastReviewTreeHash, feedbackRankQueries...)
 
 				if err != nil {
 					if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
