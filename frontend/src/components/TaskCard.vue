@@ -170,7 +170,8 @@ const cardClicked = async () => {
 
   if (props.task.flows && props.task.flows.length > 0) {
     const firstFlowId = props.task.flows[0].id
-    router.push({ name: 'flow', params: { id: firstFlowId } })
+    const routeName = props.task.flowType === 'idd' ? 'intent-canvas' : 'flow'
+    router.push({ name: routeName, params: { id: firstFlowId } })
   } else {
     openEditModal()
   }

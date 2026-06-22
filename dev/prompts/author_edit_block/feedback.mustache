@@ -35,7 +35,10 @@ see the current state of the relevant code via the {{{retrieveCodeContextFunctio
 Hint: If an error indicates that a function/type/symbol doesn't exist, find
 what actual function needs to be used via tools or ask for help. Do not create
 it unless the original instructions mention doing that, as it is likely to be a
-hallucination.
+hallucination. Remember that {{{retrieveCodeContextFunctionName}}} accepts any
+file that references/uses the symbol as `file_path` (not only the file where
+it's defined) and will resolve the real definition via LSP, including symbols
+defined in third-party libraries.
 {{/isTestFailure}}
 
 {{#isEditBlockError}}

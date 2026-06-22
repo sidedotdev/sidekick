@@ -30,6 +30,15 @@ type LSPDefinitionLocationsRequest struct {
 	// eg: "SomeFunction", or "SomeStruct", or "recieiver.SomeMethod", or
 	// "some_package.SomeThing", or "someConst" or "aVariableName"
 	Symbols []string `json:"symbols"`
+	// ReferenceLine, when set, is a literal source line (or distinctive
+	// substring of one) from FilePath used to constrain the symbol-position
+	// search to a specific line before invoking go-to-definition. When the
+	// snippet cannot be located in the file, an error is returned for each
+	// symbol listing the actual lines (with 1-based line numbers) where that
+	// symbol occurs, so the caller can retry with a correct reference line.
+	// When unset, every occurrence of each symbol is resolved and the
+	// resulting definition locations are de-duplicated.
+	ReferenceLine string `json:"reference_line,omitempty"`
 }
 
 type SymbolDefinitionLocation struct {
@@ -53,7 +62,6 @@ func (la *LSPActivities) GetSymbolDefinitionLocations(ctx context.Context, reque
 }
 
 func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request LSPDefinitionLocationsRequest) ([]SymbolDefinitionLocation, error) {
-	// Step 1: Find the Position of each symbol in the file.
 	if request.EnvContainer == nil {
 		return nil, fmt.Errorf("EnvContainer is required in LSPDefinitionLocationsRequest")
 	}
@@ -61,12 +69,22 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 	if readErr != nil {
 		return []SymbolDefinitionLocation{}, readErr
 	}
-	positions, err := findSymbolPositionsFromBytes(fileBytes, request.Symbols)
-	if err != nil {
-		return []SymbolDefinitionLocation{}, err
+
+	var lineRange *Range
+	if request.ReferenceLine != "" {
+		lineRange = findReferenceLineRange(fileBytes, request.ReferenceLine)
+		if lineRange == nil {
+			symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
+			for _, symbol := range request.Symbols {
+				symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
+					Symbol: symbol,
+					Error:  buildReferenceLineMismatchError(fileBytes, request.FilePath, request.ReferenceLine, symbol),
+				})
+			}
+			return symbolDefinitions, nil
+		}
 	}
 
-	// Step 2: Initialize the lsp client and invoke its TextDocumentDefinition function to get the definition of each symbol.
 	langName := utils.InferLanguageNameFromFilePath(request.FilePath)
 	repoDir := request.EnvContainer.Env.GetWorkingDirectory()
 	lspClient, err := la.findOrInitClient(ctx, repoDir, langName)
@@ -74,29 +92,148 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 		return []SymbolDefinitionLocation{}, err
 	}
 	fileURI := convertFilePathToURI(repoDir, request.FilePath)
-	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(positions))
-	for _, position := range positions {
-		locations, err := lspClient.TextDocumentDefinition(ctx, fileURI, position.Line, position.Character)
-		if err != nil {
+
+	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
+	for _, symbol := range request.Symbols {
+		positions := findAllSymbolPositions(fileBytes, lineRange, symbol)
+		if len(positions) == 0 {
 			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-				// FIXME include the symbol name here
-				// Symbol: symbolPosition.symbol,
-				Error: err.Error(),
+				Symbol: symbol,
+				Error:  "symbol not found in file content",
 			})
 			continue
 		}
 
-		for _, location := range locations {
+		seen := make(map[Location]struct{})
+		var lastErr error
+		foundAny := false
+		for _, pos := range positions {
+			locations, defErr := lspClient.TextDocumentDefinition(ctx, fileURI, pos.Line, pos.Character)
+			if defErr != nil {
+				lastErr = defErr
+				continue
+			}
+			for _, location := range locations {
+				if _, ok := seen[location]; ok {
+					continue
+				}
+				seen[location] = struct{}{}
+				symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
+					Symbol:   symbol,
+					Location: location,
+				})
+				foundAny = true
+			}
+		}
+		if !foundAny && lastErr != nil {
 			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-				// FIXME include the symbol name here
-				// Symbol: symbolPosition.symbol,
-				Location: location,
+				Symbol: symbol,
+				Error:  lastErr.Error(),
 			})
 		}
 	}
 
-	// Step 3: Use the Location responses and read the location file to get the definition of each symbol based on given range
 	return symbolDefinitions, nil
+}
+
+// findAllSymbolPositions returns the position of every occurrence of
+// symbolText within data, pointing at the last character of each match (matching
+// findSymbolPosition's convention). When fileRange is non-nil, only matches on
+// lines within that range are returned. Multiple matches on the same line are
+// each reported.
+func findAllSymbolPositions(data []byte, fileRange *Range, symbolText string) []Position {
+	if symbolText == "" {
+		return nil
+	}
+	var positions []Position
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for i := 0; scanner.Scan(); i++ {
+		if fileRange != nil && (i < fileRange.Start.Line || i > fileRange.End.Line) {
+			continue
+		}
+		line := scanner.Text()
+		searchFrom := 0
+		for searchFrom <= len(line) {
+			idx := strings.Index(line[searchFrom:], symbolText)
+			if idx < 0 {
+				break
+			}
+			absoluteIdx := searchFrom + idx
+			positions = append(positions, Position{
+				Line:      i,
+				Character: absoluteIdx + len(symbolText) - 1,
+			})
+			searchFrom = absoluteIdx + len(symbolText)
+		}
+	}
+	return positions
+}
+
+// buildReferenceLineMismatchError formats an error message explaining that
+// the caller-provided reference_line could not be located in the file, and
+// lists the actual lines (1-based numbers + literal content) where the symbol
+// appears so the caller can retry with a correct reference line.
+func buildReferenceLineMismatchError(data []byte, filePath, referenceLine, symbol string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "reference_line %q did not match any line in %s", referenceLine, filePath)
+	occurrences := findSymbolOccurrenceLines(data, symbol)
+	if len(occurrences) == 0 {
+		fmt.Fprintf(&b, "; symbol %q does not appear in the file", symbol)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "; symbol %q occurs on the following lines:", symbol)
+	for _, occ := range occurrences {
+		fmt.Fprintf(&b, "\n  - line %d: %s", occ.lineNumber, occ.content)
+	}
+	return b.String()
+}
+
+type symbolOccurrenceLine struct {
+	lineNumber int
+	content    string
+}
+
+// findSymbolOccurrenceLines returns each line in data that contains symbolText,
+// reported as a 1-based line number and the literal line content. A line that
+// contains multiple occurrences is reported once.
+func findSymbolOccurrenceLines(data []byte, symbolText string) []symbolOccurrenceLine {
+	if symbolText == "" {
+		return nil
+	}
+	var occurrences []symbolOccurrenceLine
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for i := 0; scanner.Scan(); i++ {
+		line := scanner.Text()
+		if strings.Contains(line, symbolText) {
+			occurrences = append(occurrences, symbolOccurrenceLine{
+				lineNumber: i + 1,
+				content:    line,
+			})
+		}
+	}
+	return occurrences
+}
+
+// findReferenceLineRange returns a single-line Range covering the first line in
+// data that contains the given snippet (after trimming surrounding whitespace),
+// or nil if no such line is found. Callers use a nil return to signal that the
+// caller-provided reference_line could not be located.
+func findReferenceLineRange(data []byte, snippet string) *Range {
+	trimmed := strings.TrimSpace(snippet)
+	if trimmed == "" {
+		return nil
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for i := 0; scanner.Scan(); i++ {
+		line := scanner.Text()
+		if strings.Contains(line, trimmed) {
+			return &Range{
+				Start: Position{Line: i, Character: 0},
+				End:   Position{Line: i, Character: len(line)},
+			}
+		}
+	}
+	return nil
 }
 
 // TODO return this instead of Position in findSymbolPositions
