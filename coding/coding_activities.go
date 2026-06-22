@@ -28,9 +28,16 @@ type CodingActivities struct {
 }
 
 type FileSymDefRequest struct {
-	FilePath      string   `json:"file_path" jsonschema:"description=The path to a file\\, including relative path\\, eg: \"foo/bar/something.go\". This may be either the file where the symbol is defined OR a file that references/uses it; when the symbol is not defined in the given file\\, the tool automatically resolves the real definition via LSP go-to-definition (possibly in another repo file or a third-party library)."`
-	SymbolNames   []string `json:"symbol_names,omitempty" jsonschema:"description=Each string in this array is a case-sensitive name of a code symbol (eg name of a function\\, type\\, alias\\, interface\\, class\\, method\\, enum/member\\, constant\\, etc\\, depending on the language) defined or referenced in the given file\\, eg: \"someFunction\"\\, or \"SomeType\"\\, or \"SOME_CONSTANT\" etc. These are the symbol names for which the full symbol definition will be returned. Eg for a function name\\, this would be the entire function declaration including the function body. When a symbol is only referenced (not defined) in file_path\\, the tool resolves the actual definition via LSP and inlines it from wherever it lives (another repo file or a third-party library). If no symbol names are provided\\, the entire file will be returned\\, but this usage is generally discouraged except for non-code files. Specifying the desired symbol names is strongly recommended\\, even when all symbols are desired."`
-	ReferenceLine string   `json:"reference_line,omitempty" jsonschema:"description=Optional literal source line (or a distinctive substring of it) from file_path where the symbol is referenced/used. Used only by the LSP go-to-definition fallback to choose which occurrence to resolve from when the symbol text appears multiple times in file_path. Has no effect when the definition is found directly in file_path via tree-sitter. When omitted\\, the first occurrence is used."`
+	FilePath string            `json:"file_path" jsonschema:"description=The path to a file\\, including relative path\\, eg: \"foo/bar/something.go\". This may be either the file where the symbol is defined OR a file that references/uses it; when a requested symbol is not defined in the given file\\, the tool automatically resolves the real definition via LSP go-to-definition (possibly in another repo file or a third-party library)."`
+	Symbols  []RequestedSymbol `json:"symbols,omitempty" jsonschema:"description=List of symbols to retrieve from this file. Each entry is an object with a required \"name\" (the case-sensitive symbol name\\, eg a function\\, type\\, alias\\, interface\\, class\\, method\\, enum/member\\, constant\\, etc) and an optional \"reference_line\" used by the LSP go-to-definition fallback to disambiguate among multiple occurrences. If the list is empty\\, the entire file will be returned\\, but this usage is generally discouraged except for non-code files. Specifying the desired symbols is strongly recommended\\, even when all symbols are desired."`
+}
+
+// RequestedSymbol identifies one symbol to resolve within a FileSymDefRequest's
+// file. ReferenceLine is consulted only by the LSP go-to-definition fallback to
+// disambiguate when the same symbol text appears multiple times.
+type RequestedSymbol struct {
+	Name          string `json:"name" jsonschema:"description=Case-sensitive name of a code symbol defined or referenced in the file (eg \"someFunction\"\\, \"SomeType\"\\, \"SOME_CONSTANT\"). The full symbol definition will be returned (eg for a function\\, the entire function declaration including the body). When the symbol is only referenced (not defined) in file_path\\, the tool resolves the real definition via LSP and inlines it from wherever it lives (another repo file or a third-party library)."`
+	ReferenceLine string `json:"reference_line,omitempty" jsonschema:"description=Optional literal source line (or a distinctive substring of it) from file_path where this symbol is referenced/used. Used only by the LSP go-to-definition fallback to choose which occurrence to resolve from when the symbol text appears multiple times in file_path. Has no effect when the definition is found directly in file_path via tree-sitter. When omitted\\, every occurrence of the symbol in file_path is resolved and the resulting definitions are de-duplicated\\, so set this only to disambiguate when distinct usages would otherwise resolve to different (and unwanted) definitions. If the provided snippet does not match any line in file_path\\, the tool returns an error listing the actual lines (with line numbers) where the symbol occurs\\, so you can retry with a correct value."`
 }
 
 type SymDefResults struct {
@@ -206,15 +213,19 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 	}
 
 	for _, req := range dirSymDefRequest.Requests {
-		if shouldRetrieveFullFile(req.SymbolNames, req.FilePath) {
-			result := getWildcardRetrievalResult(ctx, dirSymDefRequest.EnvContainer, req.SymbolNames, req.FilePath)
+		symbolNames := make([]string, len(req.Symbols))
+		for i, s := range req.Symbols {
+			symbolNames[i] = s.Name
+		}
+		if shouldRetrieveFullFile(symbolNames, req.FilePath) {
+			result := getWildcardRetrievalResult(ctx, dirSymDefRequest.EnvContainer, symbolNames, req.FilePath)
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
 			continue
 		}
 
-		if len(req.SymbolNames) == 0 {
+		if len(req.Symbols) == 0 {
 			continue
 		}
 
@@ -801,7 +812,7 @@ func shouldRetrieveFullFile(symbols []string, absolutePath string) bool {
 }
 
 func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContainer, symDefRequest FileSymDefRequest, numContextLines int, includeRelatedSymbols bool) []SymbolRetrievalResult {
-	results := make([]SymbolRetrievalResult, len(symDefRequest.SymbolNames))
+	results := make([]SymbolRetrievalResult, len(symDefRequest.Symbols))
 	var extras []SymbolRetrievalResult
 	var extrasMu sync.Mutex
 	var wg sync.WaitGroup
@@ -810,11 +821,13 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 	fileBytes, readErr := envContainer.Env.ReadFile(context.Background(), symDefRequest.FilePath)
 	langName := utils.InferLanguageNameFromFilePath(symDefRequest.FilePath)
 
-	for i, symbol := range symDefRequest.SymbolNames {
-		if symbol == "" || symbol == "*" {
+	for i, sym := range symDefRequest.Symbols {
+		if sym.Name == "" || sym.Name == "*" {
 			continue
 		}
-		i, symbol := i, symbol // avoid loop variable capture
+		i, sym := i, sym // avoid loop variable capture
+		symbol := sym.Name
+		referenceLine := sym.ReferenceLine
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -874,8 +887,17 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 				return
 			}
 
-			resolved := ca.resolveSymbolDefinitionViaLSP(context.Background(), envContainer, symDefRequest.FilePath, symbol, symDefRequest.ReferenceLine, numContextLines)
+			resolved := ca.resolveSymbolDefinitionViaLSP(context.Background(), envContainer, symDefRequest.FilePath, symbol, referenceLine, numContextLines)
 			if len(resolved) == 0 {
+				return
+			}
+
+			// When the LSP fallback surfaces an actionable error (e.g. an
+			// unmatched reference_line), propagate it instead of falling back
+			// to the whole-repo name-search hint so the caller can correct the
+			// reference_line.
+			if resolved[0].Error != nil && len(resolved[0].SourceBlocks) == 0 {
+				result.Error = resolved[0].Error
 				return
 			}
 
@@ -925,9 +947,11 @@ func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, e
 		resolvedSymbolName = symbol[i+1:]
 	}
 
+	var lspErrMsgs []string
 	var out []SymbolRetrievalResult
 	for _, loc := range locations {
 		if loc.Error != "" {
+			lspErrMsgs = append(lspErrMsgs, loc.Error)
 			continue
 		}
 		parsedURL, parseErr := url.Parse(loc.Location.URI)
@@ -974,6 +998,15 @@ func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, e
 			RelativePath: lspDefinitionDisplayPath(envContainer.Env, workingDir, absPath),
 			SourceBlocks: blocks,
 		})
+	}
+	if len(out) == 0 && len(lspErrMsgs) > 0 {
+		return []SymbolRetrievalResult{
+			{
+				SymbolName:   symbol,
+				RelativePath: filePath,
+				Error:        errors.New(strings.Join(lspErrMsgs, "; ")),
+			},
+		}
 	}
 	return out
 }

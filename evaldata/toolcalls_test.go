@@ -89,8 +89,11 @@ func TestExtractToolCalls_GetSymbolDefinitions(t *testing.T) {
 		"analysis": "Looking for function definitions",
 		"requests": []interface{}{
 			map[string]interface{}{
-				"file_path":    "foo/bar.go",
-				"symbol_names": []interface{}{"FuncA", "TypeB"},
+				"file_path": "foo/bar.go",
+				"symbols": []interface{}{
+					map[string]interface{}{"name": "FuncA"},
+					map[string]interface{}{"name": "TypeB"},
+				},
 			},
 		},
 	}
@@ -125,8 +128,8 @@ func TestExtractToolCalls_GetSymbolDefinitions(t *testing.T) {
 	if typed.Requests[0].FilePath != "foo/bar.go" {
 		t.Errorf("unexpected file path: %q", typed.Requests[0].FilePath)
 	}
-	if len(typed.Requests[0].SymbolNames) != 2 {
-		t.Errorf("expected 2 symbol names, got %d", len(typed.Requests[0].SymbolNames))
+	if len(typed.Requests[0].Symbols) != 2 {
+		t.Errorf("expected 2 symbols, got %d", len(typed.Requests[0].Symbols))
 	}
 }
 
