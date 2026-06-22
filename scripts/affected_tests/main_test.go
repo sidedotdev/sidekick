@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"hash"
 	"os"
 	"path/filepath"
@@ -174,26 +175,71 @@ func TestApplyPasses(t *testing.T) {
 	if pe.Description != "go test ./..." {
 		t.Errorf("description not set: %q", pe.Description)
 	}
-	if pe.Packages["sidekick/foo"].Hash != "hf" {
+	if !pe.Packages["sidekick/foo"].hasHash("hf") {
 		t.Errorf("foo hash: %+v", pe.Packages["sidekick/foo"])
 	}
-	if pe.Packages["sidekick/bar"].PassedAt != now.Format(time.RFC3339) {
+	if passes := pe.Packages["sidekick/bar"].Passes; len(passes) != 1 || passes[0].PassedAt != now.Format(time.RFC3339) {
 		t.Errorf("bar timestamp: %+v", pe.Packages["sidekick/bar"])
 	}
 
-	// Re-apply with only foo passing at a later time; bar's previous entry must remain.
+	// Re-apply with only foo passing at a later time at a NEW hash; both the
+	// new hash and the previously-passing hash for foo must be remembered,
+	// and bar's untouched entry must remain.
 	later := now.Add(time.Hour)
 	applyPasses(c, "prof1", "", []string{"sidekick/foo"}, map[string]string{"sidekick/foo": "hf2"}, later)
-	if got := c.Profiles["prof1"].Packages["sidekick/foo"].Hash; got != "hf2" {
-		t.Errorf("foo not updated: %q", got)
+	foo := c.Profiles["prof1"].Packages["sidekick/foo"]
+	if !foo.hasHash("hf") || !foo.hasHash("hf2") {
+		t.Errorf("foo should remember both passing hashes, got %+v", foo)
 	}
-	if got := c.Profiles["prof1"].Packages["sidekick/bar"].Hash; got != "hb" {
-		t.Errorf("bar should remain unchanged: %q", got)
+	if got := c.Profiles["prof1"].Packages["sidekick/bar"]; !got.hasHash("hb") {
+		t.Errorf("bar should remain unchanged: %+v", got)
 	}
 	// Skipping empty hashes: should not insert an entry.
 	applyPasses(c, "prof1", "", []string{"sidekick/baz"}, map[string]string{}, later)
 	if _, ok := c.Profiles["prof1"].Packages["sidekick/baz"]; ok {
 		t.Errorf("baz should not have been cached without a hash")
+	}
+}
+
+func TestApplyPassesOscillation(t *testing.T) {
+	t.Parallel()
+	c := &cacheFile{Profiles: map[string]*profileEntry{}}
+	t0 := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	applyPasses(c, "prof", "", []string{"pkg"}, map[string]string{"pkg": "A"}, t0)
+	applyPasses(c, "prof", "", []string{"pkg"}, map[string]string{"pkg": "B"}, t0.Add(time.Hour))
+	applyPasses(c, "prof", "", []string{"pkg"}, map[string]string{"pkg": "A"}, t0.Add(2*time.Hour))
+
+	pe := c.Profiles["prof"].Packages["pkg"]
+	if !pe.hasHash("A") || !pe.hasHash("B") {
+		t.Fatalf("expected both A and B remembered, got %+v", pe)
+	}
+	// Re-recording A should refresh, not duplicate, its entry.
+	if len(pe.Passes) != 2 {
+		t.Errorf("expected 2 distinct passes after oscillation, got %d: %+v", len(pe.Passes), pe.Passes)
+	}
+	if pe.Passes[len(pe.Passes)-1].Hash != "A" {
+		t.Errorf("re-recorded A should be newest, got %+v", pe.Passes)
+	}
+}
+
+func TestApplyPassesCapEvictsOldest(t *testing.T) {
+	t.Parallel()
+	c := &cacheFile{Profiles: map[string]*profileEntry{}}
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	total := maxPassesPerPackage + 5
+	for i := 0; i < total; i++ {
+		h := fmt.Sprintf("h%04d", i)
+		applyPasses(c, "prof", "", []string{"pkg"}, map[string]string{"pkg": h}, base.Add(time.Duration(i)*time.Second))
+	}
+	pe := c.Profiles["prof"].Packages["pkg"]
+	if len(pe.Passes) != maxPassesPerPackage {
+		t.Fatalf("expected cap of %d entries, got %d", maxPassesPerPackage, len(pe.Passes))
+	}
+	if pe.Passes[0].Hash != fmt.Sprintf("h%04d", total-maxPassesPerPackage) {
+		t.Errorf("oldest entry not evicted, oldest hash = %q", pe.Passes[0].Hash)
+	}
+	if pe.Passes[len(pe.Passes)-1].Hash != fmt.Sprintf("h%04d", total-1) {
+		t.Errorf("newest entry wrong, got %q", pe.Passes[len(pe.Passes)-1].Hash)
 	}
 }
 
@@ -205,6 +251,9 @@ func TestPackageTrackerObserveLine(t *testing.T) {
 		`{"Action":"pass","Package":"sidekick/foo","Test":"TestX","Elapsed":0.1}`,
 		`{"Action":"pass","Package":"sidekick/foo","Elapsed":0.2}`,
 		`{"Action":"fail","Package":"sidekick/bar","Elapsed":0.3}`,
+		// Individual test-level skip must not be mistaken for a package result.
+		`{"Action":"skip","Package":"sidekick/qux","Test":"TestSkipped","Elapsed":0.0}`,
+		// Package-level skip (no tests / all tests skipped) is cacheable.
 		`{"Action":"skip","Package":"sidekick/baz","Elapsed":0.0}`,
 		`not json`,
 		``,
@@ -213,8 +262,8 @@ func TestPackageTrackerObserveLine(t *testing.T) {
 		tr.observeLine([]byte(l))
 	}
 	passed := tr.passed()
-	if !reflect.DeepEqual(passed, []string{"sidekick/foo"}) {
-		t.Errorf("passed = %v, want [sidekick/foo]", passed)
+	if !reflect.DeepEqual(passed, []string{"sidekick/baz", "sidekick/foo"}) {
+		t.Errorf("passed = %v, want [sidekick/baz sidekick/foo]", passed)
 	}
 }
 
@@ -235,8 +284,40 @@ func TestCacheRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Profiles["prof"].Packages["a"].Hash != "ha" {
+	if !loaded.Profiles["prof"].Packages["a"].hasHash("ha") {
 		t.Errorf("round-trip mismatch: %+v", loaded.Profiles["prof"].Packages)
+	}
+}
+
+func TestReadLegacyCacheMigrates(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "cache.json")
+	legacy := `{
+  "profiles": {
+    "prof": {
+      "description": "go test",
+      "packages": {
+        "sidekick/foo": {"hash": "hf", "passedAt": "2024-01-02T03:04:05Z"}
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := readCacheFromPath(path)
+	if err != nil {
+		t.Fatalf("legacy cache must read without error, got %v", err)
+	}
+	pe := c.Profiles["prof"].Packages["sidekick/foo"]
+	if !pe.hasHash("hf") {
+		t.Errorf("legacy hash not migrated into Passes: %+v", pe)
+	}
+	if pe.LegacyHash != "" || pe.LegacyPassedAt != "" {
+		t.Errorf("legacy fields not cleared after migration: %+v", pe)
+	}
+	if len(pe.Passes) != 1 || pe.Passes[0].PassedAt != "2024-01-02T03:04:05Z" {
+		t.Errorf("expected single migrated pass entry preserving timestamp, got %+v", pe.Passes)
 	}
 }
 
@@ -273,15 +354,15 @@ func TestSelectAffected(t *testing.T) {
 	}
 	cache := &cacheFile{Profiles: map[string]*profileEntry{
 		"prof": {Packages: map[string]packageEntry{
-			"sidekick/foo": {Hash: "hf-old"},
-			"sidekick/bar": {Hash: "hb"},
+			"sidekick/foo": {Passes: []passEntry{{Hash: "hf-old"}, {Hash: "hf-older"}}},
+			"sidekick/bar": {Passes: []passEntry{{Hash: "hb"}}},
 			// baz is absent: should run.
 		}},
 	}}
 	prof := cache.Profiles["prof"]
 	var toRun, toSkip []string
 	for p, h := range hashes {
-		if e, ok := prof.Packages[p]; ok && e.Hash == h {
+		if e, ok := prof.Packages[p]; ok && e.hasHash(h) {
 			toSkip = append(toSkip, p)
 		} else {
 			toRun = append(toRun, p)
@@ -391,7 +472,7 @@ func TestUpdateCachePassesQuarantinesCorruptFile(t *testing.T) {
 		t.Fatalf("read rewritten cache: %v", err)
 	}
 	prof := c.Profiles["prof"]
-	if prof == nil || prof.Packages["sidekick/foo"].Hash != "hf" {
+	if prof == nil || !prof.Packages["sidekick/foo"].hasHash("hf") {
 		t.Errorf("expected fresh cache to contain recorded pass, got %+v", c)
 	}
 
@@ -476,8 +557,8 @@ func TestUpdateCachePassesAtomicAndConcurrent(t *testing.T) {
 			t.Errorf("missing package %s", j.pkg)
 			continue
 		}
-		if entry.Hash != j.hash {
-			t.Errorf("%s: hash = %q, want %q", j.pkg, entry.Hash, j.hash)
+		if !entry.hasHash(j.hash) {
+			t.Errorf("%s: passes = %+v, want hash %q", j.pkg, entry.Passes, j.hash)
 		}
 	}
 }
