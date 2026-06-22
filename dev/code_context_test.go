@@ -102,7 +102,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 				RequiredCodeContext: RequiredCodeContext{
 					Analysis: "Test analysis",
 					Requests: []coding.FileSymDefRequest{
-						{FilePath: "foo/bar.go", SymbolNames: []string{"Func1"}},
+						{FilePath: "foo/bar.go", Symbols: []coding.RequestedSymbol{{Name: "Func1"}}},
 					},
 				},
 			},
@@ -127,7 +127,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 				RequiredCodeContext: RequiredCodeContext{
 					Analysis: "First analysis",
 					Requests: []coding.FileSymDefRequest{
-						{FilePath: "foo/bar.go", SymbolNames: []string{"Func1"}},
+						{FilePath: "foo/bar.go", Symbols: []coding.RequestedSymbol{{Name: "Func1"}}},
 					},
 				},
 			},
@@ -139,7 +139,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 				RequiredCodeContext: RequiredCodeContext{
 					Analysis: "Second analysis",
 					Requests: []coding.FileSymDefRequest{
-						{FilePath: "baz/qux.go", SymbolNames: []string{"Func2", "Func3"}},
+						{FilePath: "baz/qux.go", Symbols: []coding.RequestedSymbol{{Name: "Func2"}, {Name: "Func3"}}},
 					},
 				},
 			},
@@ -164,7 +164,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 				RequiredCodeContext: RequiredCodeContext{
 					Analysis: "Valid analysis",
 					Requests: []coding.FileSymDefRequest{
-						{FilePath: "foo/bar.go", SymbolNames: []string{"Func1"}},
+						{FilePath: "foo/bar.go", Symbols: []coding.RequestedSymbol{{Name: "Func1"}}},
 					},
 				},
 			},
@@ -193,8 +193,8 @@ func TestToolCallWithCodeContext(t *testing.T) {
 				RequiredCodeContext: RequiredCodeContext{
 					Analysis: "First",
 					Requests: []coding.FileSymDefRequest{
-						{FilePath: "a.go", SymbolNames: []string{"A"}},
-						{FilePath: "b.go", SymbolNames: []string{"B"}},
+						{FilePath: "a.go", Symbols: []coding.RequestedSymbol{{Name: "A"}}},
+						{FilePath: "b.go", Symbols: []coding.RequestedSymbol{{Name: "B"}}},
 					},
 				},
 			},
@@ -203,7 +203,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 				RequiredCodeContext: RequiredCodeContext{
 					Analysis: "Second",
 					Requests: []coding.FileSymDefRequest{
-						{FilePath: "c.go", SymbolNames: []string{"C"}},
+						{FilePath: "c.go", Symbols: []coding.RequestedSymbol{{Name: "C"}}},
 					},
 				},
 			},
@@ -212,7 +212,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 				RequiredCodeContext: RequiredCodeContext{
 					Analysis: "Third",
 					Requests: []coding.FileSymDefRequest{
-						{FilePath: "d.go", SymbolNames: []string{"D"}},
+						{FilePath: "d.go", Symbols: []coding.RequestedSymbol{{Name: "D"}}},
 					},
 				},
 			},
