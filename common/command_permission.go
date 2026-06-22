@@ -335,12 +335,13 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "parted", Message: "Disk partitioning commands are extremely dangerous"},
 			// Fork bomb
 			{Pattern: ":(){:|:&};:", Message: "Fork bomb detected - this will crash the system"},
-			// Heredoc file creation (should use edit blocks instead)
-			{Pattern: "cat << EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
-			{Pattern: "cat <<EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
-			{Pattern: "cat <<-EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
-			{Pattern: "cat <<'EOF' >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
-			{Pattern: `cat <<\"EOF\" >`, Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			// Heredoc file creation (should use edit blocks instead). Two
+			// orderings are covered: heredoc-before-redirect and
+			// redirect-before-heredoc. Character classes exclude newlines and
+			// command separators so the match stays on the command's first
+			// line and doesn't bleed into the heredoc body.
+			{Pattern: `^cat\b[^\n;|&]*<<-?\s*(['"]?)\w+['"]?[^\n;|&]*>`, Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: `^cat\b[^\n;|&]*>[^\n;|&]*<<`, Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
 			// Network attacks
 			{Pattern: ":(){ :|:& };:", Message: "Fork bomb detected - this will crash the system"},
 			// History manipulation
@@ -951,8 +952,20 @@ func EvaluateScriptPermission(config CommandPermissionConfig, script string) (Pe
 	})
 }
 
+// heredocFileWriteDenyMessage is returned when a script writes a file using a
+// shell heredoc and the delimiter is not the documented escape hatch.
+const heredocFileWriteDenyMessage = "Writing files via shell heredoc (e.g. `cat > path << EOF`) is not allowed. " +
+	"Use edit blocks to create or modify files. If edit blocks truly cannot be used, " +
+	"the heredoc delimiter `ESCAPE_HATCH_EOF` is permitted but will require explicit approval."
+
 // EvaluateScriptPermissionWithOptions evaluates a shell script with configurable options.
 func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script string, opts EvaluatePermissionOptions) (PermissionResult, string) {
+	for _, hw := range permission.DetectHeredocFileWrites(script) {
+		if !hw.UsesEscapeHatch() {
+			return PermissionDeny, heredocFileWriteDenyMessage
+		}
+	}
+
 	var commands []string
 	if opts.UseLegacyCommandExtraction {
 		commands = permission.ExtractCommandsLegacy(script)
@@ -968,6 +981,14 @@ func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script 
 	hasRequireApproval := false
 
 	for _, cmd := range commands {
+		// Commands that use the documented heredoc escape-hatch delimiter
+		// bypass the heredoc deny patterns in the config and are forced
+		// through the approval flow so a human can vet them.
+		if commandUsesHeredocEscapeHatch(cmd) {
+			hasRequireApproval = true
+			continue
+		}
+
 		result, msg := EvaluateCommandPermissionWithOptions(config, cmd, opts)
 		switch result {
 		case PermissionDeny:
@@ -982,4 +1003,13 @@ func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script 
 	}
 
 	return PermissionAutoApprove, ""
+}
+
+func commandUsesHeredocEscapeHatch(cmd string) bool {
+	for _, hw := range permission.DetectHeredocFileWrites(cmd) {
+		if hw.UsesEscapeHatch() {
+			return true
+		}
+	}
+	return false
 }
