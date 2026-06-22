@@ -1,21 +1,6 @@
 <template>
   <div v-if="flow">
-    <div class="editor-links">
-      <p v-for="worktree in flow.worktrees" :key="worktree.id">
-        Open Worktree
-        <a :href="`vscode://file/${worktree.workingDirectory}?windowId=_blank`">
-          <VSCodeIcon/>
-        </a>&nbsp;<a :href="`idea://open?file=${encodeURIComponent(worktree.workingDirectory)}`">
-          <IntellijIcon/>
-        </a>&nbsp;<a :href="`zed://file/${worktree.workingDirectory}`">
-          <ZedIcon/>
-        </a>
-      </p>
-    <div class="debug" v-if="devMode">
-      <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal Flow</a>
-      | <router-link :to="{ name: 'flow-reset', params: { id: flow.id } }">Reset Workflow</router-link>
-    </div>
-    </div>
+    <FlowEditorLinks :flow-id="flow.id" :worktrees="flow.worktrees" />
     <!-- TODO: In the future, we should allow going to next step even if currently paused -->
     <div 
       v-if="flow && !['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" 
@@ -60,9 +45,7 @@ import { computed, onMounted, ref, onUnmounted, watch, provide } from 'vue'
 import { useEventBus } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
 import IdeSelectorDialog from '@/components/IdeSelectorDialog.vue'
-import VSCodeIcon from '@/components/icons/VSCodeIcon.vue'
-import IntellijIcon from '@/components/icons/IntellijIcon.vue'
-import ZedIcon from '@/components/icons/ZedIcon.vue'
+import FlowEditorLinks from '@/components/FlowEditorLinks.vue'
 import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow, Workspace } from '../lib/models'
 import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
@@ -684,18 +667,6 @@ onUnmounted(() => {
 
 .flow-actions-container.short-content {
   flex-direction: column;
-}
-
-.editor-links {
-  position: absolute;
-  z-index: 1000;
-  top: 1rem;
-  right: 1rem;
-}
-
-.editor-links a > * {
-  height: 1.2rem;
-  vertical-align: middle;
 }
 
 .flow-controls-container { /* Renamed from pause-button-container */
