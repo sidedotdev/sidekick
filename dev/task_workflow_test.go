@@ -187,6 +187,24 @@ func (s *TaskWorkflowTestSuite) TestInvalidFlowType() {
 	s.Contains(err.Error(), "invalid flow type")
 }
 
+func (s *TaskWorkflowTestSuite) TestIddFlowTypeAcceptedButNotYetSupported() {
+	s.setupFindWorkspace("ws_123")
+	s.env.RegisterWorkflow(TaskWorkflow)
+	s.env.ExecuteWorkflow(TaskWorkflow, TaskWorkflowInput{
+		WorkspaceId: "ws_123",
+		TaskId:      "task_456",
+		FlowType:    "idd",
+		FlowOptions: map[string]interface{}{},
+		Description: "test requirements",
+	})
+
+	s.True(s.env.IsWorkflowCompleted())
+	err := s.env.GetWorkflowError()
+	s.Error(err)
+	s.NotContains(err.Error(), "invalid flow type")
+	s.Contains(err.Error(), "not yet supported")
+}
+
 func (s *TaskWorkflowTestSuite) TestRequestForUserSignal() {
 	s.registerSlowMockBasicDev()
 	s.setupFindWorkspace("ws_123")

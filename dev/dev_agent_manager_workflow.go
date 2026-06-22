@@ -336,9 +336,12 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 			RepoDir:           repoDir,
 			PlannedDevOptions: options,
 		})
+	} else if workRequest.FlowType == "idd" {
+		// TODO dispatch to IddWorkflow once it is implemented.
+		return domain.Flow{}, fmt.Errorf("flow type 'idd' is not yet supported")
 	} else {
 		log.Error("Invalid flow type", "FlowType", workRequest.FlowType)
-		return domain.Flow{}, fmt.Errorf("Invalid flow type '%s'. Valid values are 'basic_dev' and 'planned_dev'", workRequest.FlowType)
+		return domain.Flow{}, fmt.Errorf("Invalid flow type '%s'. Valid values are 'basic_dev', 'planned_dev' and 'idd'", workRequest.FlowType)
 	}
 
 	var we workflow.Execution

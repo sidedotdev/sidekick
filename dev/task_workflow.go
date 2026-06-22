@@ -40,8 +40,8 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 			return fmt.Errorf("failed to get existing flow: %w", err)
 		}
 	} else {
-		if input.FlowType != "basic_dev" && input.FlowType != "planned_dev" {
-			return fmt.Errorf("invalid flow type '%s'; valid values are 'basic_dev' and 'planned_dev'", input.FlowType)
+		if input.FlowType != "basic_dev" && input.FlowType != "planned_dev" && input.FlowType != "idd" {
+			return fmt.Errorf("invalid flow type '%s'; valid values are 'basic_dev', 'planned_dev' and 'idd'", input.FlowType)
 		}
 
 		var workspace domain.Workspace
@@ -79,6 +79,9 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 				RepoDir:           workspace.LocalRepoDir,
 				PlannedDevOptions: options,
 			})
+		case "idd":
+			// TODO dispatch to IddWorkflow once it is implemented.
+			return fmt.Errorf("flow type 'idd' is not yet supported")
 		}
 
 		// Wait for child workflow to actually start
