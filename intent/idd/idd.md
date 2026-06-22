@@ -1,3 +1,37 @@
+---
+intent_links:
+  - intent: "#seamless-intent-driven-development-flow"
+    code:
+      - domain/flow.go:FlowTypeIdd
+      - dev/idd_workflow.go:IddWorkflow
+      - worker/worker.go:RegisterWorkflows
+  - intent: "#context"
+    code:
+      - dev/prompts/author_edit_block/idd_instructions.mustache
+  - intent: "#mvp"
+    code:
+      - domain/flow.go:FlowTypeIdd
+      - dev/task_workflow.go:TaskWorkflow
+      - dev/dev_agent_manager_workflow.go:executeWorkRequest
+      - dev/idd_workflow.go:IddWorkflow
+      - dev/idd_workflow.go:runIntentSubtask
+      - dev/idd_workflow.go:commitIntent
+      - dev/basic_dev_workflow.go:BasicDevOptions
+      - dev/intent_requirements.go:renderIntentRequirements
+      - api/intent_api.go:ListIntentFilesHandler
+      - api/intent_api.go:ReadIntentFileHandler
+      - api/intent_api.go:WriteIntentFileHandler
+      - api/intent_api.go:StartIntentSubtaskHandler
+      - frontend/src/components/TaskModal.vue
+      - frontend/src/views/IntentCanvasView.vue
+      - frontend/src/router/index.ts
+  - intent: "#idd-instructions-for-coding-agents"
+    code:
+      - dev/prompts/author_edit_block/idd_instructions.mustache
+      - dev/edit_code.go:renderAuthorEditBlockInitialPrompt
+      - dev/prompts/intent/requirements.mustache
+      - dev/intent_requirements.go:renderIntentRequirements
+---
 # Seamless Intent Driven Development Flow
 
 Intent Driven Development (IDD) is a new developmental methodology where

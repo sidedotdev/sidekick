@@ -566,13 +566,13 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	case InitialCodeInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content = renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements, applyImmediately, doneRequired, environmentContext)
+		content = renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements, applyImmediately, doneRequired, environmentContext, dCtx.Idd)
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case InitialDevStepInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content = renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired, environmentContext)
+		content = renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired, environmentContext, dCtx.Idd)
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case SkipInfo:
@@ -653,7 +653,7 @@ func getEnvironmentContext() string {
 	return fmt.Sprintf("OS: %s, Arch: %s", runtime.GOOS, runtime.GOARCH)
 }
 
-func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string, applyEditBlocksImmediately, doneRequired bool, environmentContext string) string {
+func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string, applyEditBlocksImmediately, doneRequired bool, environmentContext string, idd bool) string {
 	data := map[string]interface{}{
 		"codeContext":                     codeContext,
 		"requirements":                    requirements,
@@ -668,6 +668,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"doneRequired":                    doneRequired,
 		"doneFunctionName":                doneTool.Name,
 		"environmentContext":              environmentContext,
+		"idd":                             idd,
 	}
 	if doneRequired {
 		data["doneFunctionName"] = doneTool.Name
@@ -681,7 +682,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 	return RenderPrompt(AuthorEditBlockInitial, data)
 }
 
-func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, requirements, planContext, currentStep string, applyEditBlocksImmediately, doneRequired bool, environmentContext string) string {
+func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, requirements, planContext, currentStep string, applyEditBlocksImmediately, doneRequired bool, environmentContext string, idd bool) string {
 	data := map[string]interface{}{
 		"codeContext":                     codeContext,
 		"requirements":                    requirements,
@@ -698,6 +699,7 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"doneRequired":                    doneRequired,
 		"hasPlan":                         true,
 		"environmentContext":              environmentContext,
+		"idd":                             idd,
 	}
 	if doneRequired {
 		data["doneFunctionName"] = doneTool.Name

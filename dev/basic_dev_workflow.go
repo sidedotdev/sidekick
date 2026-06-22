@@ -32,12 +32,20 @@ type BasicDevOptions struct {
 	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
 	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
+	// AutoMerge skips the human merge approval and merges automatically into the
+	// start branch. Used by IDD sub-tasks so their worktree merges back into the
+	// parent idd worktree.
+	AutoMerge bool `json:"autoMerge,omitempty"`
+	// Idd marks the sub-task as originating from an Intent Driven Development
+	// flow, enabling the intent/ directory guidance in coding-agent prompts.
+	Idd bool `json:"idd,omitempty"`
 }
 
 type MergeWithReviewParams struct {
 	Requirements   string
 	StartBranch    *string
 	CommitRequired bool
+	AutoMerge      bool
 }
 
 // getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes.
@@ -216,6 +224,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		signalWorkflowFailureOrCancel(ctx)
 		return "", err
 	}
+	dCtx.Idd = input.BasicDevOptions.Idd
 	defer handleFlowCancel(dCtx)
 	defer stopActiveDevRun(dCtx)
 	defer func() {
@@ -275,6 +284,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 			CommitRequired: true,
 			Requirements:   requirements,
 			StartBranch:    input.StartBranch,
+			AutoMerge:      input.AutoMerge,
 		}
 		err = reviewAndResolve(dCtx, params)
 		if err != nil {
@@ -522,7 +532,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool, lastReviewTreeHash string) (MergeApprovalResponse, string, string, error) {
+func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool, lastReviewTreeHash string, autoMerge bool) (MergeApprovalResponse, string, string, error) {
 	v := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
 
 	var gitDiff string
@@ -567,6 +577,15 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 				diffSinceLastReview = ""
 			}
 		}
+	}
+
+	// Auto-merge bypasses human review, merging straight into the chosen target.
+	if autoMerge {
+		return MergeApprovalResponse{
+			Approved:      true,
+			TargetBranch:  defaultTarget,
+			MergeStrategy: MergeStrategySquash,
+		}, gitDiff, currentTreeHash, nil
 	}
 
 	// Request merge approval from user
@@ -693,6 +712,11 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 			defaultTarget = *params.StartBranch
 		}
 	}
+	// AutoMerge always targets the start branch so IDD sub-task worktrees merge
+	// back into the parent idd worktree they were branched from.
+	if params.AutoMerge && params.StartBranch != nil {
+		defaultTarget = *params.StartBranch
+	}
 
 	gitAddVersion := workflow.GetVersion(dCtx, "git-add-before-diff", workflow.DefaultVersion, 1)
 	if gitAddVersion == 1 {
@@ -701,7 +725,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
-	mergeInfo, gitDiff, currentTreeHash, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired, lastReviewTreeHash)
+	mergeInfo, gitDiff, currentTreeHash, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired, lastReviewTreeHash, params.AutoMerge)
 	if err != nil {
 		return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get merge approval: %w", err)
 	}
@@ -840,7 +864,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				break
 			}
 
-			mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "")
+			mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "", params.AutoMerge)
 			if err != nil {
 				return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get final merge approval: %w", err)
 			}

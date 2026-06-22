@@ -6,6 +6,7 @@ import (
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/utils"
+	"strings"
 
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/workflow"
@@ -17,6 +18,9 @@ type TaskWorkflowInput struct {
 	FlowType    string
 	FlowOptions map[string]interface{}
 	Description string
+	// Title is required for IDD flows, which carry no description and use the
+	// title for branch naming and the intent commit message.
+	Title string
 
 	// ExistingFlowId, when set, puts the workflow into "monitor mode":
 	// it skips child creation and listens for signals from an already-running
@@ -40,8 +44,8 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 			return fmt.Errorf("failed to get existing flow: %w", err)
 		}
 	} else {
-		if input.FlowType != "basic_dev" && input.FlowType != "planned_dev" {
-			return fmt.Errorf("invalid flow type '%s'; valid values are 'basic_dev' and 'planned_dev'", input.FlowType)
+		if input.FlowType != "basic_dev" && input.FlowType != "planned_dev" && input.FlowType != "idd" {
+			return fmt.Errorf("invalid flow type '%s'; valid values are 'basic_dev', 'planned_dev' and 'idd'", input.FlowType)
 		}
 
 		var workspace domain.Workspace
@@ -79,6 +83,20 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 				RepoDir:           workspace.LocalRepoDir,
 				PlannedDevOptions: options,
 			})
+		case "idd":
+			if strings.TrimSpace(input.Title) == "" {
+				return fmt.Errorf("a non-empty title is required for the 'idd' flow type")
+			}
+			var options IddOptions
+			utils.Transcode(untypedOptions, &options)
+			configOverrides = options.ConfigOverrides
+			childFuture = workflow.ExecuteChildWorkflow(childCtx, IddWorkflow, IddWorkflowInput{
+				WorkspaceId: input.WorkspaceId,
+				RepoDir:     workspace.LocalRepoDir,
+				TaskId:      input.TaskId,
+				Title:       input.Title,
+				IddOptions:  options,
+			})
 		}
 
 		// Wait for child workflow to actually start
@@ -102,7 +120,7 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		}
 
 		titleVersion := workflow.GetVersion(ctx, "generate-task-title", workflow.DefaultVersion, 2)
-		if titleVersion >= 1 {
+		if titleVersion >= 1 && input.FlowType != "idd" {
 			workflow.Go(ctx, func(gCtx workflow.Context) {
 				gCtx = setActivityOptions(gCtx)
 				titleInput := GenerateTitleInput{
