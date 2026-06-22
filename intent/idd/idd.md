@@ -78,6 +78,7 @@ according to the human author/user.
         - Uses monaco or codemirror, whatever is easier to get all our desired
           features working in for now.
         - Theme of editor respects dark/light mode 
+        
             - Highlighting text has a separate color from the active line so it stands out better
             - 
         - Strong colors for markdown elements like headings or "-" for lists, etc
@@ -99,6 +100,9 @@ according to the human author/user.
           surfaced. Note that some level of ambiguity is expected, but not when
           a different answer than the one assumed would require a near-100%
           rewrite of the implementation.
+        - Sub task statuses are shown: completed, failed, in progress, blocked and canceled
+        - sub tasks become blocked just like top-level flows do, when they wait on user request. normally this is something the task workflow handles, but the idd workflow has to handle it in this case
+        - 
 
 - Starting intent sub tasks
     - Pressing the button to start results in saving and git committing the
@@ -110,6 +114,7 @@ according to the human author/user.
     - Makes a worktree based off of HEAD of the worktree for the idd flow
     - Automatically gets merged into the idd worktree when completed (new basic
       dev / planned dev workflow option)
+    
 
 ## IDD Instructions for Coding Agents
 
