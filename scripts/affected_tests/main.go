@@ -378,10 +378,11 @@ func commonHashBase(profileSig string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, error) {
-	h := sha256.New()
-	h.Write(base)
-
+// packageClosure returns the set of import paths whose source file changes are
+// treated as inputs to pkg's hash: pkg itself plus its transitive build and
+// test dependencies. It mirrors exactly what computePackageHash folds into the
+// hash, so callers can reason about which dependency edges are captured.
+func packageClosure(pkg string, listing *pkgListing) map[string]bool {
 	closure := map[string]bool{pkg: true}
 	if tb := listing.testBinaries[pkg]; tb != nil {
 		for _, d := range tb.Deps {
@@ -398,6 +399,14 @@ func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, e
 			closure[d] = true
 		}
 	}
+	return closure
+}
+
+func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, error) {
+	h := sha256.New()
+	h.Write(base)
+
+	closure := packageClosure(pkg, listing)
 
 	sorted := make([]string, 0, len(closure))
 	for k := range closure {

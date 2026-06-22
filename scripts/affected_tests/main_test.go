@@ -596,3 +596,71 @@ func TestComputePackageHashIncludesTestVariantFiles(t *testing.T) {
 		t.Errorf("hash did not change after editing external test file; xtest variant inputs are not being hashed")
 	}
 }
+
+// TestActivityFunctionReferenceCapturedInClosure confirms that activities
+// invoked by function reference (workflow.ExecuteActivity(ctx, Activity, ...))
+// still create a captured dependency edge. sidekick/dev calls
+// env.EnvRunCommandActivity this way, so sidekick/env must appear in dev's
+// hashed dependency closure; otherwise changes to that activity could be
+// skipped (a recall gap).
+func TestActivityFunctionReferenceCapturedInClosure(t *testing.T) {
+	t.Parallel()
+	const testPkg = "sidekick/dev"
+	const activityPkg = "sidekick/env"
+
+	listing, err := goListDepsTest([]string{testPkg})
+	if err != nil {
+		t.Fatalf("goListDepsTest(%q): %v", testPkg, err)
+	}
+	closure := packageClosure(testPkg, listing)
+	if !closure[activityPkg] {
+		t.Fatalf("activity package %q not in hashed closure of %q; function-reference activity edge not captured", activityPkg, testPkg)
+	}
+}
+
+// TestReplayClosureIncludesRegisteredWorkflowPackages confirms that the
+// worker/replay test package's hashed closure includes the packages that define
+// workflows/activities registered via RegisterWorkflows in worker/worker.go.
+// Changes to any of those (or their transitive deps) must force the replay
+// tests to re-run.
+func TestReplayClosureIncludesRegisteredWorkflowPackages(t *testing.T) {
+	t.Parallel()
+	const replayPkg = "sidekick/worker/replay"
+
+	listing, err := goListDepsTest([]string{replayPkg})
+	if err != nil {
+		t.Fatalf("goListDepsTest(%q): %v", replayPkg, err)
+	}
+	closure := packageClosure(replayPkg, listing)
+
+	for _, want := range []string{
+		"sidekick/dev",
+		"sidekick/poll_failures",
+		"sidekick/persisted_ai",
+		"sidekick/srv",
+		"sidekick/common",
+	} {
+		if !closure[want] {
+			t.Errorf("replay closure missing registered workflow package %q; changes there would not re-run replay tests", want)
+		}
+	}
+}
+
+// TestReplayClosureExcludesApiPackage locks in that the replay tests are not
+// coupled to sidekick/api. There is no legitimate reason for the api package to
+// be part of the replay closure, so its presence is treated as a defect rather
+// than tolerable over-broadness.
+func TestReplayClosureExcludesApiPackage(t *testing.T) {
+	t.Parallel()
+	const replayPkg = "sidekick/worker/replay"
+	const apiPkg = "sidekick/api"
+
+	listing, err := goListDepsTest([]string{replayPkg})
+	if err != nil {
+		t.Fatalf("goListDepsTest(%q): %v", replayPkg, err)
+	}
+	closure := packageClosure(replayPkg, listing)
+	if closure[apiPkg] {
+		t.Errorf("replay closure unexpectedly includes %q; replay tests should not depend on the api package", apiPkg)
+	}
+}
