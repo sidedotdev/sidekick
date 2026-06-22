@@ -74,12 +74,17 @@ according to the human author/user.
           in a intent/ directory, prompting for the file name.
         - Uses monaco or codemirror, whatever is easier to get all our desired
           features working in for now.
-        - Theme of editor respects dark/light mode setting
+        - Theme of editor respects dark/light mode 
+            - Highlighting text has a separate color from the active line so it stands out better
+            - 
+        - Strong colors for markdown elements like headings or "-" for lists, etc
+        - YAML syntax highlighting for the frontmatter
         - Remembers which file was open last
         - Saves intent automatically as you type in the worktree
     - The canvas also has a right sidebar that supports showing the user:
         - A button to start implementing the current intent state
             - Clicking them opens the existing flow view component (not iframe, and without header/editor
+            
               links/sidebar nav/etc.), but in a side view that can be
               dismissed, so the intent canvas is always visible.
         - Any questions wrt highly ambiguous or contradictory intent that have
@@ -90,7 +95,7 @@ according to the human author/user.
 - Starting intent sub tasks
     - Pressing the button to start results in saving and git committing the
       current intent state and creating a sub task for implementing it
-    - cmd/ctrl+enter to start a new intent sub task from the canvas
+    - cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add a newline in the editor if the editor is focused.
 
 - Sub tasks
     - Uses basic dev flow type with determine requirements disabled
