@@ -963,4 +963,6 @@ onBeforeUnmount(() => {
 .loading {
   color: var(--color-text-2);
 }
+
+
 </style>

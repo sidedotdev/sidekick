@@ -75,10 +75,13 @@ according to the human author/user.
         - Uses monaco or codemirror, whatever is easier to get all our desired
           features working in for now.
         - Theme of editor respects dark/light mode setting
+        - Remembers which file was open last
         - Saves intent automatically as you type in the worktree
     - The canvas also has a right sidebar that supports showing the user:
         - A button to start implementing the current intent state
-        - Ongoing sub-tasks and their status
+            - Clicking them opens the existing flow view component (not iframe, and without header/editor
+              links/sidebar nav/etc.), but in a side view that can be
+              dismissed, so the intent canvas is always visible.
         - Any questions wrt highly ambiguous or contradictory intent that have
           surfaced. Note that some level of ambiguity is expected, but not when
           a different answer than the one assumed would require a near-100%
