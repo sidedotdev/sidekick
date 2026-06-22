@@ -124,8 +124,23 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 		containerRepoDir = filepath.Join(home, filepath.Base(input.LocalRepoDir))
 	}
 
-	// Create a git bundle containing all refs
-	bundlePath := filepath.Join(os.TempDir(), fmt.Sprintf("openshell-repo-%s.bundle", input.SandboxName))
+	// Create a git bundle containing all refs. The bundle path must be unique
+	// per invocation: `git bundle create` creates a sibling .lock file and
+	// will refuse to run if either it or the bundle already exists, so a
+	// fixed path keyed only on SandboxName collides with concurrent or
+	// previously-crashed invocations against the same sandbox.
+	bundleFile, err := os.CreateTemp("", fmt.Sprintf("openshell-repo-%s-*.bundle", input.SandboxName))
+	if err != nil {
+		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to allocate bundle temp file: %w", err)
+	}
+	bundlePath := bundleFile.Name()
+	// Close immediately so git can write to it; also remove the empty
+	// placeholder so `git bundle create` does not see a pre-existing file
+	// (git refuses to overwrite an existing bundle target).
+	bundleFile.Close()
+	if err := os.Remove(bundlePath); err != nil && !os.IsNotExist(err) {
+		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to clear bundle temp file: %w", err)
+	}
 	defer os.Remove(bundlePath)
 
 	// FIXME skip creating the bundle when it's not needed (when updating)
