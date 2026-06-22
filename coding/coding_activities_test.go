@@ -38,7 +38,7 @@ func TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"TestFunc"},
+					Symbols: []RequestedSymbol{{Name: "TestFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -63,7 +63,7 @@ func (*x SomeStruct) TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"SomeStruct.TestFunc"},
+					Symbols: []RequestedSymbol{{Name: "SomeStruct.TestFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -90,7 +90,7 @@ func (*x SomeStruct) TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"*SomeStruct.TestFunc"},
+					Symbols: []RequestedSymbol{{Name: "*SomeStruct.TestFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -121,7 +121,7 @@ func (x SomeThing) SomeMethod() string {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"func (x SomeThing) SomeMethod() string"},
+					Symbols: []RequestedSymbol{{Name: "func (x SomeThing) SomeMethod() string"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -154,7 +154,7 @@ func TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"TestFunc"},
+					Symbols: []RequestedSymbol{{Name: "TestFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -187,7 +187,7 @@ func TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"*"},
+					Symbols: []RequestedSymbol{{Name: "*"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -209,7 +209,7 @@ func TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{""},
+					Symbols: []RequestedSymbol{{Name: ""}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -231,7 +231,7 @@ func TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{},
+					Symbols: []RequestedSymbol{},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -257,7 +257,7 @@ func TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"TestFunc"},
+					Symbols: []RequestedSymbol{{Name: "TestFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -293,7 +293,7 @@ func TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"NonExistentFunc"},
+					Symbols: []RequestedSymbol{{Name: "NonExistentFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -312,7 +312,7 @@ func TestFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"placeholder_without_extension_tempfile"},
+					Symbols: []RequestedSymbol{{Name: "placeholder_without_extension_tempfile"}},
 				},
 			},
 			fileExtension: "go",
@@ -334,7 +334,7 @@ export default {
 </script>`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"placeholder_without_extension_tempfile"},
+					Symbols: []RequestedSymbol{{Name: "placeholder_without_extension_tempfile"}},
 				},
 			},
 			fileExtension: "vue",
@@ -347,7 +347,138 @@ placeholder_full_code
 			},
 		},
 		{
-			name: "Symbol in different file",
+			name: "Symbol referenced in requested file, defined in another file (resolved via LSP)",
+			code: `package cools
+
+func WontExistHere() {
+	ExistsElsewhere()
+}`,
+			otherCode: `package cools
+
+func ExistsElsewhere() {
+	println("Hello, world!")
+}`,
+			input: []FileSymDefRequest{
+				{
+					Symbols: []RequestedSymbol{{Name: "ExistsElsewhere"}},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_other_tempfile
+Symbol: ExistsElsewhere
+Lines: 3-5
+` + "```go" + `
+func ExistsElsewhere() {
+	println("Hello, world!")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "ReferenceLine disambiguates between same-named function and method",
+			code: `package cools
+
+func use() {
+	Foo()
+	B{}.Foo()
+}`,
+			otherCode: `package cools
+
+func Foo() {}
+
+type B struct{}
+
+func (b B) Foo() {
+	println("method")
+}`,
+			input: []FileSymDefRequest{
+				{
+					Symbols: []RequestedSymbol{{Name: "Foo", ReferenceLine: "B{}.Foo()"}},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_other_tempfile
+Symbol: Foo
+Lines: 7-9
+` + "```go" + `
+func (b B) Foo() {
+	println("method")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "Without ReferenceLine every occurrence resolves to its own definition",
+			code: `package cools
+
+func use() {
+	Foo()
+	B{}.Foo()
+}`,
+			otherCode: `package cools
+
+func Foo() {}
+
+type B struct{}
+
+func (b B) Foo() {
+	println("method")
+}`,
+			input: []FileSymDefRequest{
+				{
+					Symbols: []RequestedSymbol{{Name: "Foo"}},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_other_tempfile
+Symbol: Foo
+Lines: 3-3
+` + "```go" + `
+func Foo() {}
+` + "```" + `
+
+File: placeholder_other_tempfile
+Symbol: Foo
+Lines: 7-9
+` + "```go" + `
+func (b B) Foo() {
+	println("method")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "ReferenceLine that does not match errors with occurrence lines",
+			code: `package cools
+
+func WontExistHere() {
+	ExistsElsewhere()
+}`,
+			otherCode: `package cools
+
+func ExistsElsewhere() {
+	println("Hello, world!")
+}`,
+			input: []FileSymDefRequest{
+				{
+					Symbols: []RequestedSymbol{{Name: "ExistsElsewhere", ReferenceLine: "this line is not present anywhere"}},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `reference_line "this line is not present anywhere" did not match any line in placeholder_tempfile; symbol "ExistsElsewhere" occurs on the following lines:
+  - line 4: 	ExistsElsewhere()
+The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
+The symbol 'ExistsElsewhere' is defined in the following files:
+  - placeholder_other_tempfile`,
+				Failures: `reference_line "this line is not present anywhere" did not match any line in placeholder_tempfile; symbol "ExistsElsewhere" occurs on the following lines:
+  - line 4: 	ExistsElsewhere()
+The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
+The symbol 'ExistsElsewhere' is defined in the following files:
+  - placeholder_other_tempfile`,
+			},
+		},
+		{
+			name: "Symbol referenced but unresolvable via LSP falls back to name-search hint",
 			code: `package cools
 
 func WontExistHere() {
@@ -360,7 +491,7 @@ func ExistsElsewhere() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"ExistsElsewhere"},
+					Symbols: []RequestedSymbol{{Name: "ExistsElsewhere"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -373,10 +504,33 @@ The symbol 'ExistsElsewhere' is defined in the following files:
 			},
 		},
 		{
+			name:          "Symbol in different file - unsupported language degrades to name-search hint",
+			fileExtension: "py",
+			code: `def use():
+    existsElsewhere()
+`,
+			otherCode: `def existsElsewhere():
+    pass
+`,
+			input: []FileSymDefRequest{
+				{
+					Symbols: []RequestedSymbol{{Name: "existsElsewhere"}},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'existsElsewhere'. However, it does contain the following symbols: use
+The symbol 'existsElsewhere' is defined in the following files:
+  - placeholder_other_tempfile`,
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'existsElsewhere'. However, it does contain the following symbols: use
+The symbol 'existsElsewhere' is defined in the following files:
+  - placeholder_other_tempfile`,
+			},
+		},
+		{
 			name: "Non-existent file (code not specified)",
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"TestFunc"},
+					Symbols: []RequestedSymbol{{Name: "TestFunc"}},
 					FilePath:    "nonexistent.go",
 				},
 			},
@@ -393,7 +547,7 @@ The symbol 'TestFunc' is not defined in any repo files.`,
 			fileExtension: "unknown",
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"NonExistentFunc"},
+					Symbols: []RequestedSymbol{{Name: "NonExistentFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -408,7 +562,7 @@ The symbol 'NonExistentFunc' is not defined in any repo files.`,
 			fileExtension: "unknown",
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"TestFunc"},
+					Symbols: []RequestedSymbol{{Name: "TestFunc"}},
 					FilePath:    "nonexistent.ext",
 				},
 			},
@@ -436,7 +590,7 @@ var y = 1
 import "os"`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"TestFunc"},
+					Symbols: []RequestedSymbol{{Name: "TestFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -479,7 +633,7 @@ func SecondFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"FirstFunc", "SecondFunc"},
+					Symbols: []RequestedSymbol{{Name: "FirstFunc"}, {Name: "SecondFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -516,7 +670,7 @@ func SecondFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"FirstFunc", "SecondFunc"},
+					Symbols: []RequestedSymbol{{Name: "FirstFunc"}, {Name: "SecondFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -558,7 +712,7 @@ func SecondFunc() {
 }`,
 			input: []FileSymDefRequest{
 				{
-					SymbolNames: []string{"SecondFunc", "FirstFunc"},
+					Symbols: []RequestedSymbol{{Name: "SecondFunc"}, {Name: "FirstFunc"}},
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -616,9 +770,9 @@ func SecondFunc() {
 					ext := filepath.Ext(relativePath)
 					relativeWithoutExt := relativePath[:len(relativePath)-len(ext)]
 					tc.input[i].FilePath = relativePath
-					tc.input[i].SymbolNames = utils.Map(tc.input[i].SymbolNames, func(s string) string {
-						return strings.ReplaceAll(s, "placeholder_without_extension_tempfile", relativeWithoutExt)
-					})
+					for si := range tc.input[i].Symbols {
+						tc.input[i].Symbols[si].Name = strings.ReplaceAll(tc.input[i].Symbols[si].Name, "placeholder_without_extension_tempfile", relativeWithoutExt)
+					}
 					tc.expectedOutput.SymbolDefinitions = strings.ReplaceAll(tc.expectedOutput.SymbolDefinitions, "placeholder_tempfile", relativePath)
 					tc.expectedOutput.Failures = strings.ReplaceAll(tc.expectedOutput.Failures, "placeholder_tempfile", relativePath)
 					tc.expectedOutput.SymbolDefinitions = strings.ReplaceAll(tc.expectedOutput.SymbolDefinitions, "placeholder_abs_tempfile", filePath)
@@ -638,7 +792,17 @@ func SecondFunc() {
 				tc.expectedOutput.Failures = strings.ReplaceAll(tc.expectedOutput.Failures, "placeholder_other_tempfile", filepath.Base(otherFilePath))
 			}
 
-			ca := &CodingActivities{}
+			ca := &CodingActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(language string) lsp.LSPClient {
+						return &lsp.Jsonrpc2LSPClient{
+							LanguageName: language,
+						}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+				TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+			}
 
 			// Call the method under test
 			numLines := 0
@@ -972,7 +1136,7 @@ Foo is referenced in the same file by:
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			input := []FileSymDefRequest{
-				{FilePath: filepath.Base(tc.filename), SymbolNames: []string{tc.symbol}},
+				{FilePath: filepath.Base(tc.filename), Symbols: []RequestedSymbol{{Name: tc.symbol}}},
 			}
 
 			numContextLines := 0
@@ -1017,7 +1181,7 @@ func TestBulkGetSymbolDefinitionsTruncation(t *testing.T) {
 				Env: &env.LocalEnv{WorkingDirectory: testDir},
 			},
 			Requests: []FileSymDefRequest{
-				{FilePath: "large_file.txt", SymbolNames: []string{}},
+				{FilePath: "large_file.txt", Symbols: []RequestedSymbol{}},
 			},
 			NumContextLines: &numLines,
 		})
@@ -1055,8 +1219,8 @@ func TestBulkGetSymbolDefinitionsTruncation(t *testing.T) {
 				Env: &env.LocalEnv{WorkingDirectory: testDir},
 			},
 			Requests: []FileSymDefRequest{
-				{FilePath: "file1.txt", SymbolNames: []string{}},
-				{FilePath: "file2.txt", SymbolNames: []string{}},
+				{FilePath: "file1.txt", Symbols: []RequestedSymbol{}},
+				{FilePath: "file2.txt", Symbols: []RequestedSymbol{}},
 			},
 			NumContextLines: &numLines,
 		})
@@ -1101,9 +1265,9 @@ func TestBulkGetSymbolDefinitionsTruncation(t *testing.T) {
 				Env: &env.LocalEnv{WorkingDirectory: testDir},
 			},
 			Requests: []FileSymDefRequest{
-				{FilePath: "huge_file.txt", SymbolNames: []string{}},
-				{FilePath: "large_file2.txt", SymbolNames: []string{}},
-				{FilePath: "small_file.txt", SymbolNames: []string{}},
+				{FilePath: "huge_file.txt", Symbols: []RequestedSymbol{}},
+				{FilePath: "large_file2.txt", Symbols: []RequestedSymbol{}},
+				{FilePath: "small_file.txt", Symbols: []RequestedSymbol{}},
 			},
 			NumContextLines: &numLines,
 		})
@@ -1156,7 +1320,7 @@ Some details here.
 			Env: &env.LocalEnv{WorkingDirectory: testDir},
 		},
 		Requests: []FileSymDefRequest{
-			{FilePath: "readme.md", SymbolNames: []string{"Introduction"}},
+			{FilePath: "readme.md", Symbols: []RequestedSymbol{{Name: "Introduction"}}},
 		},
 		NumContextLines:       &numContextLines,
 		IncludeRelatedSymbols: true,
