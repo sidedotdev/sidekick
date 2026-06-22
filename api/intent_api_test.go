@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -117,6 +118,67 @@ func TestWriteAndReadIntentFileHandler(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 	assert.Equal(t, "intent/requirements.md", resp.Path)
 	assert.Equal(t, "# Requirements\n", resp.Content)
+}
+
+func TestReadIntentFileHandler_CommittedContent(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	ctrl := NewMockController(t)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
+	worktreeDir := t.TempDir()
+	workspaceId, flowId := setupIntentTestFlow(t, ctrl, worktreeDir)
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = worktreeDir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, string(out))
+	}
+
+	runGit("init", "-b", "main")
+	require.NoError(t, os.MkdirAll(filepath.Join(worktreeDir, "intent"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "intent", "mission.md"), []byte("# Mission\nv1\n"), 0o644))
+	runGit("add", ".")
+	runGit("commit", "-m", "initial")
+
+	// Modify the working copy after the commit.
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "intent", "mission.md"), []byte("# Mission\nv1 updated\n"), 0o644))
+	// Add a brand-new untracked file too.
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "intent", "new.md"), []byte("brand new\n"), 0o644))
+
+	read := func(relPath string) (string, string) {
+		t.Helper()
+		readURL := fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/intent/file?path=%s", workspaceId, flowId, relPath)
+		req, _ := http.NewRequest(http.MethodGet, readURL, nil)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var resp struct {
+			Path             string `json:"path"`
+			Content          string `json:"content"`
+			CommittedContent string `json:"committedContent"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+		return resp.Content, resp.CommittedContent
+	}
+
+	content, committed := read("intent/mission.md")
+	assert.Equal(t, "# Mission\nv1 updated\n", content)
+	assert.Equal(t, "# Mission\nv1\n", committed)
+
+	content, committed = read("intent/new.md")
+	assert.Equal(t, "brand new\n", content)
+	assert.Equal(t, "", committed)
 }
 
 func TestReadIntentFileHandler_Errors(t *testing.T) {

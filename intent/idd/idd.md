@@ -22,9 +22,12 @@ intent_links:
       - api/intent_api.go:ReadIntentFileHandler
       - api/intent_api.go:WriteIntentFileHandler
       - api/intent_api.go:StartIntentSubtaskHandler
+      - api/intent_api.go:committedIntentContent
       - frontend/src/components/TaskModal.vue
       - frontend/src/views/IntentCanvasView.vue
       - frontend/src/router/index.ts
+      - frontend/src/lib/intent_diff.ts
+      - frontend/src/lib/intent_diff_editor.ts
   - intent: "#idd-instructions-for-coding-agents"
     code:
       - dev/prompts/author_edit_block/idd_instructions.mustache
