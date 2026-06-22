@@ -150,7 +150,6 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	// subprocess that frequently hangs past the test timeout in CI, blocking
 	// the rest of the package's tests.
 	t.Skip("temporarily disabled: openshell sync subprocess hangs past the test timeout")
-
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set to true")
 	}
