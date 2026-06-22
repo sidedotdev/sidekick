@@ -61,17 +61,29 @@
         <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
       </div>
 
-      <div>
+      <div v-if="isIdd" class="title-field">
+        <label for="title">Title</label>
+        <input
+          id="title"
+          ref="titleRef"
+          type="text"
+          v-model="title"
+          class="title-input"
+          placeholder="Title for this intent"
+        />
+      </div>
+
+      <div v-if="!isIdd">
         <label>Environment</label>
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
       </div>
 
-      <div>
+      <div v-if="!isIdd">
         <label>Repo Mode</label>
         <SegmentedControl v-model="repoMode" :options="repoModeOptions" />
       </div>
 
-      <div>
+      <div v-if="!isIdd">
         <div v-if="repoMode === 'worktree'" style="display: flex;">
           <label for="startBranch">Start Branch</label>
           <BranchSelector
@@ -82,12 +94,12 @@
         </div>
       </div>
 
-      <label>
+      <label v-if="!isIdd">
         <input type="checkbox" v-model="determineRequirements" />
         Determine Requirements
       </label>
 
-      <div>
+      <div v-if="!isIdd">
         <AutogrowTextarea ref="descriptionRef" id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
       <div v-if="devMode && flowType === 'planned_dev'">
@@ -228,8 +240,18 @@ const initialBranchValue = getInitialBranch()
 
 const description = ref(initialDescriptionValue)
 const descriptionRef = ref<{ focus: () => void } | null>(null)
+const title = ref(props.task?.title ?? '')
+const titleRef = ref<HTMLInputElement | null>(null)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
+
+// The Intent Driven flow type drives intent from a title rather than a task description.
+const isIdd = computed(() => flowType.value === 'idd')
+
+// The required field differs by flow type: idd needs a title, others need a description.
+const hasRequiredContent = computed(() =>
+  isIdd.value ? !!title.value.trim() : !!description.value.trim()
+)
 const resolveEnvType = (raw: string): string => raw === 'local_git_worktree' ? 'local' : raw
 const envType = ref<string>(resolveEnvType(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local'))
 const getInitialRepoMode = (): string => {
@@ -287,6 +309,7 @@ const saveIndicatorClass = computed(() => {
 // Undo/redo state
 interface FormState {
   description: string
+  title: string
   flowType: string
   envType: string
   repoMode: string
@@ -304,6 +327,7 @@ const isUndoRedo = ref(false)
 
 const captureFormState = (): FormState => ({
   description: description.value,
+  title: title.value,
   flowType: flowType.value,
   envType: envType.value,
   repoMode: repoMode.value,
@@ -318,6 +342,7 @@ const captureFormState = (): FormState => ({
 const restoreFormState = (state: FormState) => {
   isUndoRedo.value = true
   description.value = state.description
+  title.value = state.title
   flowType.value = state.flowType
   envType.value = state.envType
   repoMode.value = state.repoMode
@@ -465,6 +490,7 @@ const deletePreset = (presetId: string, event?: Event) => {
 const flowTypeOptions = [
   { label: 'Just Code', value: 'basic_dev' },
   { label: 'Plan Then Code', value: 'planned_dev' },
+  { label: 'Intent Driven', value: 'idd' },
 ]
 
 const envTypeOptions = [
@@ -503,6 +529,20 @@ const buildFlowOptions = (): Record<string, any> => {
   return flowOptions
 }
 
+const buildTaskData = (status: TaskStatus): Record<string, any> => {
+  const taskData: Record<string, any> = {
+    flowType: flowType.value,
+    status,
+    flowOptions: buildFlowOptions(),
+  }
+  if (isIdd.value) {
+    taskData.title = title.value
+  } else {
+    taskData.description = description.value
+  }
+  return taskData
+}
+
 const autoSave = async () => {
   if (isSaving.value) return
   
@@ -512,12 +552,7 @@ const autoSave = async () => {
 
   saveOrUpdatePreset()
 
-  const taskData = {
-    description: description.value,
-    flowType: flowType.value,
-    status: 'drafting' as TaskStatus,
-    flowOptions: buildFlowOptions(),
-  }
+  const taskData = buildTaskData('drafting')
 
   try {
     const hasTaskId = currentTaskId.value
@@ -562,8 +597,8 @@ const scheduleAutoSave = () => {
   if (saveDebounceTimer.value) {
     clearTimeout(saveDebounceTimer.value)
   }
-  // Don't auto-save if description is empty
-  if (!description.value.trim()) {
+  // Don't auto-save until the field required for the current flow type has content
+  if (!hasRequiredContent.value) {
     isDirty.value = false
     saveStatus.value = 'idle'
     return
@@ -575,7 +610,7 @@ const scheduleAutoSave = () => {
 }
 
 // Watch all form fields for auto-save
-watch([description, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
+watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
   if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()
@@ -628,7 +663,12 @@ const fetchTaskConfig = async () => {
 }
 
 const startTask = async () => {
-  if (!description.value.trim()) {
+  if (isIdd.value) {
+    if (!title.value.trim()) {
+      alert('Title cannot be empty')
+      return
+    }
+  } else if (!description.value.trim()) {
     alert('Task description cannot be empty')
     return
   }
@@ -642,12 +682,7 @@ const startTask = async () => {
     clearTimeout(saveDebounceTimer.value)
   }
 
-  const taskData = {
-    description: description.value,
-    flowType: flowType.value,
-    status: 'to_do' as TaskStatus,
-    flowOptions: buildFlowOptions(),
-  }
+  const taskData = buildTaskData('to_do')
 
   const hasTaskId = currentTaskId.value
   const url = hasTaskId
@@ -717,7 +752,7 @@ const close = async () => {
     clearTimeout(saveDebounceTimer.value)
     saveDebounceTimer.value = null
   }
-  if (isDirty.value && description.value.trim()) {
+  if (isDirty.value && hasRequiredContent.value) {
     await autoSave()
   }
   emit('close')
@@ -726,7 +761,11 @@ const close = async () => {
 onMounted(() => {
   // Initialize history with current state
   pushHistory()
-  descriptionRef.value?.focus()
+  if (isIdd.value) {
+    titleRef.value?.focus()
+  } else {
+    descriptionRef.value?.focus()
+  }
   fetchTaskConfig()
 })
 
@@ -981,6 +1020,23 @@ label {
   background-color: var(--color-background);
   color: var(--color-text);
   max-width: 20rem;
+}
+
+.title-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.title-input {
+  width: 100%;
+  padding: 0.5rem;
+  font-size: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
 }
 
 .start-task-button {
