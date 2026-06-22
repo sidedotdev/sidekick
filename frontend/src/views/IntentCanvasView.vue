@@ -473,7 +473,8 @@ onBeforeUnmount(() => {
   position: relative;
   display: grid;
   grid-template-columns: 16rem 1fr 18rem;
-  height: 100vh;
+  height: 100%;
+  overflow: hidden;
   background-color: var(--color-background);
   color: var(--color-text);
 }
