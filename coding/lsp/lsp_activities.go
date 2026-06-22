@@ -33,8 +33,11 @@ type LSPDefinitionLocationsRequest struct {
 	// ReferenceLine, when set, is a literal source line (or distinctive
 	// substring of one) from FilePath used to constrain the symbol-position
 	// search to a specific line before invoking go-to-definition. When the
-	// line cannot be located in the file, the search degrades to the first
-	// occurrence of each symbol rather than erroring.
+	// snippet cannot be located in the file, an error is returned for each
+	// symbol listing the actual lines (with 1-based line numbers) where that
+	// symbol occurs, so the caller can retry with a correct reference line.
+	// When unset, every occurrence of each symbol is resolved and the
+	// resulting definition locations are de-duplicated.
 	ReferenceLine string `json:"reference_line,omitempty"`
 }
 
@@ -70,6 +73,16 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 	var lineRange *Range
 	if request.ReferenceLine != "" {
 		lineRange = findReferenceLineRange(fileBytes, request.ReferenceLine)
+		if lineRange == nil {
+			symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
+			for _, symbol := range request.Symbols {
+				symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
+					Symbol: symbol,
+					Error:  buildReferenceLineMismatchError(fileBytes, request.FilePath, request.ReferenceLine, symbol),
+				})
+			}
+			return symbolDefinitions, nil
+		}
 	}
 
 	langName := utils.InferLanguageNameFromFilePath(request.FilePath)
@@ -82,31 +95,40 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 
 	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
 	for _, symbol := range request.Symbols {
-		position, posErr := findSymbolPosition(bytes.NewReader(fileBytes), lineRange, symbol)
-		if posErr != nil && lineRange != nil {
-			position, posErr = findSymbolPosition(bytes.NewReader(fileBytes), nil, symbol)
-		}
-		if posErr != nil {
+		positions := findAllSymbolPositions(fileBytes, lineRange, symbol)
+		if len(positions) == 0 {
 			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
 				Symbol: symbol,
-				Error:  posErr.Error(),
+				Error:  "symbol not found in file content",
 			})
 			continue
 		}
 
-		locations, err := lspClient.TextDocumentDefinition(ctx, fileURI, position.Line, position.Character)
-		if err != nil {
+		seen := make(map[Location]struct{})
+		var lastErr error
+		foundAny := false
+		for _, pos := range positions {
+			locations, defErr := lspClient.TextDocumentDefinition(ctx, fileURI, pos.Line, pos.Character)
+			if defErr != nil {
+				lastErr = defErr
+				continue
+			}
+			for _, location := range locations {
+				if _, ok := seen[location]; ok {
+					continue
+				}
+				seen[location] = struct{}{}
+				symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
+					Symbol:   symbol,
+					Location: location,
+				})
+				foundAny = true
+			}
+		}
+		if !foundAny && lastErr != nil {
 			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
 				Symbol: symbol,
-				Error:  err.Error(),
-			})
-			continue
-		}
-
-		for _, location := range locations {
-			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-				Symbol:   symbol,
-				Location: location,
+				Error:  lastErr.Error(),
 			})
 		}
 	}
@@ -114,10 +136,88 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 	return symbolDefinitions, nil
 }
 
+// findAllSymbolPositions returns the position of every occurrence of
+// symbolText within data, pointing at the last character of each match (matching
+// findSymbolPosition's convention). When fileRange is non-nil, only matches on
+// lines within that range are returned. Multiple matches on the same line are
+// each reported.
+func findAllSymbolPositions(data []byte, fileRange *Range, symbolText string) []Position {
+	if symbolText == "" {
+		return nil
+	}
+	var positions []Position
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for i := 0; scanner.Scan(); i++ {
+		if fileRange != nil && (i < fileRange.Start.Line || i > fileRange.End.Line) {
+			continue
+		}
+		line := scanner.Text()
+		searchFrom := 0
+		for searchFrom <= len(line) {
+			idx := strings.Index(line[searchFrom:], symbolText)
+			if idx < 0 {
+				break
+			}
+			absoluteIdx := searchFrom + idx
+			positions = append(positions, Position{
+				Line:      i,
+				Character: absoluteIdx + len(symbolText) - 1,
+			})
+			searchFrom = absoluteIdx + len(symbolText)
+		}
+	}
+	return positions
+}
+
+// buildReferenceLineMismatchError formats an error message explaining that
+// the caller-provided reference_line could not be located in the file, and
+// lists the actual lines (1-based numbers + literal content) where the symbol
+// appears so the caller can retry with a correct reference line.
+func buildReferenceLineMismatchError(data []byte, filePath, referenceLine, symbol string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "reference_line %q did not match any line in %s", referenceLine, filePath)
+	occurrences := findSymbolOccurrenceLines(data, symbol)
+	if len(occurrences) == 0 {
+		fmt.Fprintf(&b, "; symbol %q does not appear in the file", symbol)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "; symbol %q occurs on the following lines:", symbol)
+	for _, occ := range occurrences {
+		fmt.Fprintf(&b, "\n  - line %d: %s", occ.lineNumber, occ.content)
+	}
+	return b.String()
+}
+
+type symbolOccurrenceLine struct {
+	lineNumber int
+	content    string
+}
+
+// findSymbolOccurrenceLines returns each line in data that contains symbolText,
+// reported as a 1-based line number and the literal line content. A line that
+// contains multiple occurrences is reported once.
+func findSymbolOccurrenceLines(data []byte, symbolText string) []symbolOccurrenceLine {
+	if symbolText == "" {
+		return nil
+	}
+	var occurrences []symbolOccurrenceLine
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for i := 0; scanner.Scan(); i++ {
+		line := scanner.Text()
+		if strings.Contains(line, symbolText) {
+			occurrences = append(occurrences, symbolOccurrenceLine{
+				lineNumber: i + 1,
+				content:    line,
+			})
+		}
+	}
+	return occurrences
+}
+
 // findReferenceLineRange returns a single-line Range covering the first line in
 // data that contains the given snippet (after trimming surrounding whitespace),
-// or nil if no such line is found. Callers use a nil return to degrade to
-// first-occurrence search.
+// or nil if no such line is found. Callers use a nil return to signal that the
+// caller-provided reference_line could not be located.
 func findReferenceLineRange(data []byte, snippet string) *Range {
 	trimmed := strings.TrimSpace(snippet)
 	if trimmed == "" {
