@@ -105,10 +105,6 @@ needs changes, the user must make them, and the code should then follow.
 
 If in doubt — e.g. the latest user request conflicts with the intent — ask the
 user to clarify their intent.
-
-There are no backwards-compatibility concerns: this brand-new cli tool is in
-active development and has never been deployed, so feel free to make sweeping
-changes where necessary to better match the user's intent.
 ```
 
 Then we add a text block like this for the requirements prompt for a new intent
