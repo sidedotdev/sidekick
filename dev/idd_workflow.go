@@ -13,6 +13,7 @@ import (
 	"sidekick/utils"
 
 	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -121,8 +122,18 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		return *state, nil
 	})
 
+	// Versioning gates branches added after IddWorkflow first shipped, so any
+	// in-flight workflows replay against the same selector shape they used the
+	// first time around. The check is evaluated once per workflow lifetime
+	// (the result is recorded on first execution).
+	subtaskBlockedTrackingVersion := workflow.GetVersion(dCtx, "idd-subtask-blocked-tracking", workflow.DefaultVersion, 1)
+
 	startSubtaskCh := workflow.GetSignalChannel(dCtx, SignalNameStartIntentSubtask)
 	requestForUserCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameRequestForUser)
+	var subtaskUnblockedCh workflow.ReceiveChannel
+	if subtaskBlockedTrackingVersion >= 1 {
+		subtaskUnblockedCh = workflow.GetSignalChannel(dCtx, flow_action.SignalNameSubtaskUnblocked)
+	}
 	workflowClosedCh := workflow.GetSignalChannel(dCtx, SignalNameWorkflowClosed)
 
 	// The canvas keeps this workflow alive so the user can launch many sub-tasks
@@ -145,15 +156,20 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			var req flow_action.RequestForUser
 			c.Receive(dCtx, &req)
 			// A sub-task blocks on user input when intent is too ambiguous or
-			// contradictory to proceed. Forward the request up to the task
-			// workflow, whose existing handler surfaces it as a pending user
-			// request and marks the IDD task blocked. The user's response routes
-			// straight back to the originating sub-task (unblocking it) and, since
-			// the sub-task flow is parented to the IDD task, returns that task to
-			// in-progress on completion.
+			// contradictory to proceed. The top-level task workflow normally
+			// translates such a request into a blocked task status, but for
+			// IDD sub-tasks no separate task workflow sits between the
+			// sub-task and the IDD canvas, so we mark the sub-task blocked
+			// here as well. The matching unblock arrives via
+			// SignalNameSubtaskUnblocked when the user answers. The request is
+			// also forwarded to the parent task workflow so the IDD task
+			// itself surfaces a pending user request and is marked blocked.
 			// TODO have the orchestrator attempt to resolve clarifications from
 			// intent itself before falling back to asking the user, and surface
 			// unresolved ones on the canvas.
+			if subtaskBlockedTrackingVersion >= 1 {
+				setSubtaskStatus(state, req.OriginWorkflowId, "blocked")
+			}
 			parent := workflow.GetInfo(dCtx).ParentWorkflowExecution
 			if parent == nil {
 				workflow.GetLogger(dCtx).Error("Cannot forward intent sub-task user request: no parent workflow")
@@ -163,6 +179,14 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 				workflow.GetLogger(dCtx).Error("Failed to forward intent sub-task user request to task workflow", "Error", sigErr)
 			}
 		})
+
+		if subtaskBlockedTrackingVersion >= 1 {
+			selector.AddReceive(subtaskUnblockedCh, func(c workflow.ReceiveChannel, _ bool) {
+				var sig flow_action.SubtaskUnblocked
+				c.Receive(dCtx, &sig)
+				setSubtaskStatus(state, sig.FlowId, "in_progress")
+			})
+		}
 
 		selector.AddReceive(workflowClosedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var closure WorkflowClosure
@@ -248,8 +272,12 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 
 	status := "completed"
 	if childErr := childFuture.Get(childCtx, nil); childErr != nil {
-		status = "failed"
-		log.Error("Intent sub-task failed", "Error", childErr)
+		if temporal.IsCanceledError(childErr) {
+			status = "canceled"
+		} else {
+			status = "failed"
+			log.Error("Intent sub-task failed", "Error", childErr)
+		}
 	}
 	setSubtaskStatus(state, we.ID, status)
 

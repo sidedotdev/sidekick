@@ -244,6 +244,8 @@ const statusClass = (status: string): string => {
   const normalized = (status || '').toLowerCase()
   if (normalized.includes('complete') || normalized.includes('merged')) return 'done'
   if (normalized.includes('fail') || normalized.includes('error')) return 'failed'
+  if (normalized.includes('cancel')) return 'canceled'
+  if (normalized.includes('block') || normalized.includes('pause')) return 'blocked'
   return 'active'
 }
 
@@ -500,9 +502,8 @@ const buildEditorTheme = (isDark: boolean) => {
       '.cm-activeLineGutter': { backgroundColor: 'transparent' },
       '&.cm-focused': { outline: 'none' },
       '.cm-selectionBackground, ::selection': { backgroundColor: selectionBg },
-      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
-        backgroundColor: selectionBg,
-      },
+      '&.cm-focused .cm-selectionBackground': { backgroundColor: selectionBg },
+      '.cm-content ::selection': { backgroundColor: selectionBg },
     },
     { dark: isDark },
   )
@@ -739,6 +740,15 @@ onBeforeUnmount(() => {
 
 .subtask-status.failed {
   color: var(--color-error-text);
+}
+
+.subtask-status.blocked {
+  color: var(--color-warn-text, var(--color-text));
+}
+
+.subtask-status.canceled {
+  color: var(--color-text-muted, var(--color-text));
+  opacity: 0.7;
 }
 
 .clarify-card {

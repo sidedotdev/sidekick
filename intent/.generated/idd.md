@@ -8,7 +8,10 @@ intent_links:
     code:
       - dev/idd_workflow.go:IddWorkflow
       - dev/idd_workflow.go:runIntentSubtask
+      - dev/idd_workflow.go:setSubtaskStatus
       - dev/task_workflow.go:TaskWorkflow
+      - flow_action/user_interaction.go:GetUserResponse
+      - flow_action/user_interaction.go:SubtaskUnblocked
   - intent: "#auto-merge-targets-the-start-branch"
     code:
       - dev/basic_dev_workflow.go:BasicDevOptions
@@ -32,10 +35,15 @@ user request and blocks waiting for the answer. This blocking is intentional: th
 user must clarify or edit intent to unblock it (the agent may later decide a
 subsequent intent update resolves the ambiguity). The IDD workflow forwards that
 request up to the task workflow, whose existing handler surfaces it as a pending
-user request and marks the IDD task blocked. Sub-task flows are parented to the
-IDD task (not the IDD flow), so when the user answers, the response routes
-directly back to the originating sub-task to unblock it and the completion
-handler returns the IDD task to in-progress.
+user request and marks the IDD task blocked. The IDD workflow also marks the
+originating sub-task as "blocked" in its in-memory state so the canvas can show
+that status alongside completed/failed/in-progress/canceled — top-level flows
+get their blocked status from the task workflow, but sub-tasks have no separate
+task workflow, so the IDD workflow tracks it directly. When the user answers,
+the response routes directly back to the originating sub-task to unblock it; on
+unblock the sub-task signals the IDD workflow (SubtaskUnblocked) so the canvas
+returns the sub-task to in-progress, and the completion handler returns the IDD
+task itself to in-progress.
 
 ## Auto-merge targets the start branch
 

@@ -22,7 +22,18 @@ const (
 const (
 	SignalNameRequestForUser = "requestForUser"
 	SignalNameUserResponse   = "userResponse"
+	// SignalNameSubtaskUnblocked is emitted by a child workflow to its parent
+	// once it has received a user response and resumed work. The IDD workflow
+	// listens for it so a sub-task previously marked "blocked" can be shown as
+	// in-progress again until it completes (or blocks once more).
+	SignalNameSubtaskUnblocked = "subtaskUnblocked"
 )
+
+// SubtaskUnblocked notifies a parent workflow that the named child workflow has
+// received its user response and is no longer waiting on the user.
+type SubtaskUnblocked struct {
+	FlowId string
+}
 
 type UserResponse struct {
 	TargetWorkflowId string
@@ -104,6 +115,23 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 	userResponse, err := ReceiveUserResponse(ctx.Context, req.FlowActionId)
 	if err != nil {
 		return nil, err
+	}
+
+	// Notify the parent that this workflow has been unblocked so e.g. the IDD
+	// workflow can return a sub-task's displayed status from "blocked" back to
+	// in-progress. Unhandled by other parent workflow types and harmless there.
+	// A failure here is non-fatal (the user response was already received), so
+	// we log and continue rather than failing the activity; the canvas will
+	// reconcile the status when the sub-task ultimately completes.
+	unblockedVersion := workflow.GetVersion(ctx.Context, "subtask-unblocked-signal", workflow.DefaultVersion, 1)
+	if unblockedVersion >= 1 {
+		unblockSig := SubtaskUnblocked{FlowId: workflowInfo.WorkflowExecution.ID}
+		if sigErr := workflow.SignalExternalWorkflow(ctx.Context, parentWorkflow.ID, "", SignalNameSubtaskUnblocked, unblockSig).Get(ctx.Context, nil); sigErr != nil {
+			workflow.GetLogger(ctx.Context).Warn("Failed to signal parent workflow that sub-task is unblocked",
+				"parentWorkflowId", parentWorkflow.ID,
+				"flowId", unblockSig.FlowId,
+				"error", sigErr)
+		}
 	}
 
 	// NOTE: unpausing of the flow is always done via the complete flow action
