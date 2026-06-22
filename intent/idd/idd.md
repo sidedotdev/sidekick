@@ -64,6 +64,7 @@ according to the human author/user.
     - Doesn't ask for task description in the UI to start. In fact, it removes
       task fields other than model config, title (required for idd, unlike
       other flow types), and start branch.
+      
 
 - Interface
     - Starting an idd task/flow creates a new worktree and takes you
@@ -102,8 +103,9 @@ according to the human author/user.
           rewrite of the implementation.
         - Sub task statuses are shown: completed, failed, in progress, blocked and canceled
         - sub tasks become blocked just like top-level flows do, when they wait on user request. normally this is something the task workflow handles, but the idd workflow has to handle it in this case
-        - 
-
+        - For pending user actions/user requests, the user can decide to unblock these at their
+        
+      convenience. They are shown alongside the sub task that triggered it.
 - Starting intent sub tasks
     - Pressing the button to start results in saving and git committing the
       current intent state and creating a sub task for implementing it
