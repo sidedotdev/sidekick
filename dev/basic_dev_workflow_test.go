@@ -97,7 +97,7 @@ func (s *AutoMergeApprovalTestSuite) setupMergeMocks() {
 	s.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 }
 
-func (s *AutoMergeApprovalTestSuite) mergeWorkflow(autoMerge bool, mergeInto *string) func(ctx workflow.Context) (MergeApprovalResponse, error) {
+func (s *AutoMergeApprovalTestSuite) mergeWorkflow(autoMerge bool, startBranch *string) func(ctx workflow.Context) (MergeApprovalResponse, error) {
 	return func(ctx workflow.Context) (MergeApprovalResponse, error) {
 		ctx = utils.NoRetryCtx(ctx)
 		gs := &flow_action.GlobalState{}
@@ -120,18 +120,18 @@ func (s *AutoMergeApprovalTestSuite) mergeWorkflow(autoMerge bool, mergeInto *st
 			RepoConfig: common.RepoConfig{},
 		}
 		_, mergeInfo, _, err := mergeWorktreeIfApproved(dCtx, MergeWithReviewParams{
-			CommitRequired:  true,
-			Requirements:    "Implement the thing",
-			MergeIntoBranch: mergeInto,
-			AutoMerge:       autoMerge,
+			CommitRequired: true,
+			Requirements:   "Implement the thing",
+			StartBranch:    startBranch,
+			AutoMerge:      autoMerge,
 		}, "")
 		return mergeInfo, err
 	}
 }
 
-// TestAutoMergeMergesIntoConfiguredBranch verifies that when AutoMerge is set
-// with a MergeIntoBranch, mergeWorktreeIfApproved performs the merge against the
-// configured branch without requesting human approval.
+// TestAutoMergeMergesIntoConfiguredBranch verifies that when AutoMerge is set,
+// mergeWorktreeIfApproved performs the merge against the start branch without
+// requesting human approval.
 func (s *AutoMergeApprovalTestSuite) TestAutoMergeMergesIntoConfiguredBranch() {
 	s.setupMergeMocks()
 
@@ -145,8 +145,8 @@ func (s *AutoMergeApprovalTestSuite) TestAutoMergeMergesIntoConfiguredBranch() {
 		}).
 		Return(git.MergeActivityResult{HasConflicts: false}, nil)
 
-	mergeInto := "side/idd-worktree"
-	testWorkflow := s.mergeWorkflow(true, &mergeInto)
+	startBranch := "side/idd-worktree"
+	testWorkflow := s.mergeWorkflow(true, &startBranch)
 	s.env.RegisterWorkflow(testWorkflow)
 
 	s.env.ExecuteWorkflow(testWorkflow)

@@ -348,6 +348,7 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 		childWorkflowFuture = workflow.ExecuteChildWorkflow(childCtx, IddWorkflow, IddWorkflowInput{
 			WorkspaceId: workspaceId,
 			RepoDir:     repoDir,
+			TaskId:      workRequest.ParentId,
 			Title:       workRequest.Title,
 			IddOptions:  options,
 		})

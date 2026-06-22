@@ -32,12 +32,9 @@ type BasicDevOptions struct {
 	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
 	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
-	// MergeIntoBranch names the branch the worktree should merge into on
-	// completion. When set together with AutoMerge, the merge target is forced
-	// to this branch instead of the user-selected one.
-	MergeIntoBranch *string `json:"mergeIntoBranch,omitempty"`
-	// AutoMerge skips the human merge approval and merges automatically. Used by
-	// IDD sub-tasks so their worktree merges back into the parent idd worktree.
+	// AutoMerge skips the human merge approval and merges automatically into the
+	// start branch. Used by IDD sub-tasks so their worktree merges back into the
+	// parent idd worktree.
 	AutoMerge bool `json:"autoMerge,omitempty"`
 	// Idd marks the sub-task as originating from an Intent Driven Development
 	// flow, enabling the intent/ directory guidance in coding-agent prompts.
@@ -45,11 +42,10 @@ type BasicDevOptions struct {
 }
 
 type MergeWithReviewParams struct {
-	Requirements    string
-	StartBranch     *string
-	CommitRequired  bool
-	MergeIntoBranch *string
-	AutoMerge       bool
+	Requirements   string
+	StartBranch    *string
+	CommitRequired bool
+	AutoMerge      bool
 }
 
 // getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes.
@@ -285,11 +281,10 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	worktreeMergeVersion := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
 	if dCtx.Worktree != nil && worktreeMergeVersion >= 1 {
 		params := MergeWithReviewParams{
-			CommitRequired:  true,
-			Requirements:    requirements,
-			StartBranch:     input.StartBranch,
-			MergeIntoBranch: input.MergeIntoBranch,
-			AutoMerge:       input.AutoMerge,
+			CommitRequired: true,
+			Requirements:   requirements,
+			StartBranch:    input.StartBranch,
+			AutoMerge:      input.AutoMerge,
 		}
 		err = reviewAndResolve(dCtx, params)
 		if err != nil {
@@ -717,8 +712,10 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 			defaultTarget = *params.StartBranch
 		}
 	}
-	if params.AutoMerge && params.MergeIntoBranch != nil {
-		defaultTarget = *params.MergeIntoBranch
+	// AutoMerge always targets the start branch so IDD sub-task worktrees merge
+	// back into the parent idd worktree they were branched from.
+	if params.AutoMerge && params.StartBranch != nil {
+		defaultTarget = *params.StartBranch
 	}
 
 	gitAddVersion := workflow.GetVersion(dCtx, "git-add-before-diff", workflow.DefaultVersion, 1)

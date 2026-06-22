@@ -264,6 +264,9 @@ let editorView: EditorView | null = null
 let applyingExternal = false
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let savedTimer: ReturnType<typeof setTimeout> | null = null
+// Snapshot of the document queued for a debounced save, captured at schedule
+// time so switching files before the timer fires can't save the wrong path.
+let pendingSave: { path: string; content: string } | null = null
 
 const fileNodes = computed<FileNode[]>(() =>
   files.value.map((entry) => {
@@ -299,6 +302,7 @@ const setEditorDoc = (text: string) => {
 
 const openFile = async (path: string) => {
   if (path === activePath.value) return
+  flushPendingSave()
   try {
     const res = await fetch(`${apiBase.value}/file?path=${encodeURIComponent(path)}`)
     if (!res.ok) throw new Error(await res.text())
@@ -314,14 +318,14 @@ const openFile = async (path: string) => {
   }
 }
 
-const saveFile = async () => {
-  if (!activePath.value) return
+const saveFile = async (path: string | null = activePath.value, body: string = content.value) => {
+  if (!path) return
   saveStatus.value = 'saving'
   try {
     const res = await fetch(`${apiBase.value}/file`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: activePath.value, content: content.value }),
+      body: JSON.stringify({ path, content: body }),
     })
     if (!res.ok) throw new Error(await res.text())
     saveStatus.value = 'saved'
@@ -336,8 +340,26 @@ const saveFile = async () => {
 }
 
 const scheduleSave = () => {
+  if (!activePath.value) return
   if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(saveFile, 800)
+  pendingSave = { path: activePath.value, content: content.value }
+  const queued = pendingSave
+  saveTimer = setTimeout(() => {
+    saveTimer = null
+    pendingSave = null
+    void saveFile(queued.path, queued.content)
+  }, 800)
+}
+
+// flushPendingSave persists any debounced edit immediately, used before
+// switching files so the prior file's changes aren't dropped or mis-saved.
+const flushPendingSave = () => {
+  if (!saveTimer) return
+  clearTimeout(saveTimer)
+  saveTimer = null
+  const queued = pendingSave
+  pendingSave = null
+  if (queued) void saveFile(queued.path, queued.content)
 }
 
 const createEditor = () => {

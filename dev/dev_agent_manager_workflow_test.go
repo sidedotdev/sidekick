@@ -72,6 +72,7 @@ func (s *DevAgentManagerWorkflowTestSuite) TestExecuteWorkRequest_IddDispatchAnd
 	s.Equal(domain.FlowType("idd"), flow.Type)
 	s.Equal("Build the intent canvas", captured.Title)
 	s.Equal("ws_123", captured.WorkspaceId)
+	s.Equal("task_456", captured.TaskId)
 }
 
 func (s *DevAgentManagerWorkflowTestSuite) TestExecuteWorkRequest_IddRequiresTitle() {
