@@ -1,9 +1,9 @@
 # Seamless Intent Driven Development Flow
 
 Intent Driven Development (IDD) is a new developmental methodology where
-engineers focus on intent rather than code as they build software. This new flow
-type makes IDD seamless and effortless, by providing a custom interface that
-feels magical.
+software engineers focus on intent rather than code as they build software. This
+new flow type makes IDD seamless and effortless, by providing a custom interface
+that feels magical.
 
 ## Context
 
@@ -28,8 +28,8 @@ according to the human author/user.
 
 - New Flow Type: Intent Driven Development (idd)
     - Doesn't ask for task description in the UI to start. In fact, it removes
-      task fields other than model config and title (required for idd, unlike
-      other flow types)
+      task fields other than model config, title (required for idd, unlike
+      other flow types), and start branch.
 
 - Interface
     - Starting an idd task/flow creates a new worktree and takes you
