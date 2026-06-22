@@ -314,6 +314,132 @@ func TestEphemeralTakeoverFromPersistent(t *testing.T) {
 	sup1.StopAll()
 }
 
+func TestFrontendOnlyEphemeralTakeover(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	persistentProcesses := []ProcessConfig{
+		{Name: "api", Command: "sleep", Args: []string{"30"}},
+		{Name: "frontend", Command: "sleep", Args: []string{"30"}},
+	}
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	outputChan1 := make(chan processOutputMsg, 100)
+
+	sup1 := NewSupervisor(persistentProcesses, false, tmpDir, tmpDir)
+	if err := sup1.StartIPCServer(ctx1, outputChan1); err != nil {
+		t.Fatalf("failed to start IPC server: %v", err)
+	}
+	defer sup1.CloseIPC()
+
+	sup1.StartAll(ctx1, outputChan1)
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[0].isRunning() && sup1.processes[1].isRunning()
+	}, "both persistent processes should be running")
+
+	// Ephemeral instance that only takes over the frontend.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	outputChan2 := make(chan processOutputMsg, 100)
+
+	frontendOnly := []ProcessConfig{
+		{Name: "frontend", Command: "sleep", Args: []string{"30"}},
+	}
+	sup2 := NewSupervisor(frontendOnly, true, tmpDir, tmpDir)
+
+	if err := sup2.ConnectToPersistent(); err != nil {
+		t.Fatalf("failed to connect to persistent: %v", err)
+	}
+	defer sup2.ReleaseToPersistent()
+
+	// Only the persistent frontend should stop; api keeps running.
+	waitForCondition(t, 5*time.Second, func() bool {
+		return !sup1.processes[1].isRunning()
+	}, "persistent frontend should have stopped")
+
+	if !sup1.processes[0].isRunning() {
+		t.Error("persistent api should keep running during frontend-only takeover")
+	}
+
+	// A partial takeover must not fully suspend the persistent supervisor.
+	if sup1.IsSuspended() {
+		t.Error("persistent supervisor should not be fully suspended during a frontend-only takeover")
+	}
+
+	sup2.StartAll(ctx2, outputChan2)
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup2.processes[0].isRunning()
+	}, "ephemeral frontend should be running")
+
+	// Releasing should restart only the frontend on the persistent supervisor.
+	sup2.StopAll()
+	sup2.ReleaseToPersistent()
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[1].isRunning()
+	}, "persistent frontend should restart after ephemeral release")
+
+	if !sup1.processes[0].isRunning() {
+		t.Error("persistent api should still be running after ephemeral release")
+	}
+
+	sup1.StopAll()
+}
+
+func TestFilterProcessConfigs(t *testing.T) {
+	t.Parallel()
+
+	configs := []ProcessConfig{
+		{Name: "api"},
+		{Name: "worker"},
+		{Name: "frontend"},
+	}
+
+	t.Run("selects requested subset in order", func(t *testing.T) {
+		t.Parallel()
+		got, err := filterProcessConfigs(configs, []string{"frontend"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 || got[0].Name != "frontend" {
+			t.Fatalf("expected only frontend, got %+v", got)
+		}
+	})
+
+	t.Run("errors on unknown process", func(t *testing.T) {
+		t.Parallel()
+		if _, err := filterProcessConfigs(configs, []string{"nope"}); err == nil {
+			t.Fatal("expected error for unknown process name")
+		}
+	})
+}
+
+func TestSplitProcessNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"frontend", []string{"frontend"}},
+		{"api, worker , frontend", []string{"api", "worker", "frontend"}},
+		{" , ,", nil},
+	}
+	for _, tc := range cases {
+		got := splitProcessNames(tc.in)
+		if fmt.Sprintf("%v", got) != fmt.Sprintf("%v", tc.want) {
+			t.Errorf("splitProcessNames(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestEphemeralTakeoverFromEphemeral(t *testing.T) {
 	t.Parallel()
 

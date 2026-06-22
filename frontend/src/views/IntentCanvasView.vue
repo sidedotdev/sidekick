@@ -983,6 +983,9 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   padding: 0.85rem 1.25rem;
   border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-background);
+  position: relative;
+  z-index: 1;
 }
 
 .side-panel-close {
@@ -1006,6 +1009,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .side-panel-body :deep(.flow-actions-container) {
