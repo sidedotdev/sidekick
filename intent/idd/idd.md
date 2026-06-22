@@ -109,6 +109,12 @@ according to the human author/user.
         - For pending user actions/user requests, the user can decide to unblock these at their
         
       convenience. They are shown alongside the sub task that triggered it.
+
+      - There is a button to finish the idd flow. This shows a UI where you can
+        select the branch to merge back into (default: start branch), and shows
+        you the diff that will be merged, and lets you confirm.
+
+
 - Starting intent sub tasks
     - Pressing the button to start results in saving and git committing the
       current intent state and creating a sub task for implementing it
