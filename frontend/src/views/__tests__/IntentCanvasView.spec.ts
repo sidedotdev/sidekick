@@ -24,7 +24,17 @@ vi.mock('codemirror', () => {
   return { EditorView, basicSetup: {} }
 })
 
-vi.mock('@codemirror/state', () => ({ EditorState: { create: () => ({}) } }))
+vi.mock('@codemirror/state', () => ({
+  EditorState: { create: () => ({}) },
+  Compartment: class {
+    of() {
+      return {}
+    }
+    reconfigure() {
+      return {}
+    }
+  },
+}))
 vi.mock('@codemirror/lang-markdown', () => ({ markdown: () => ({}) }))
 
 const intentBase = '/api/v1/workspaces/ws-1/flows/flow-1/intent'
