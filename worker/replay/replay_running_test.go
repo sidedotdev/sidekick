@@ -314,4 +314,3 @@ func dropInFlightWFTTail(events []*history.HistoryEvent) []*history.HistoryEvent
 	}
 	return events[:lastScheduledIdx]
 }
-
