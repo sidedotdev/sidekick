@@ -33,14 +33,14 @@ const measure = (tokens: Token[], start: number, end: number): number => {
   return n
 }
 
-// diffAddedRanges produces the contiguous ranges within `current` whose token
-// stream has no counterpart in `previous`. Adjacent additions are merged.
+// computeAddedRanges produces the contiguous ranges within `current` whose
+// token stream has no counterpart in `previous`. Adjacent additions are merged.
 //
 // The middle of the diff is computed with classical LCS. To keep memory and
 // time bounded, common prefix and suffix tokens are trimmed first, and a
 // generous size cap falls back to highlighting everything between the
 // trimmed prefix and suffix.
-export const diffAddedRanges = (previous: string, current: string): AddedRange[] => {
+const computeAddedRanges = (previous: string, current: string): AddedRange[] => {
   if (current.length === 0) return []
   if (previous.length === 0) return [{ from: 0, to: current.length }]
 
@@ -125,3 +125,27 @@ export const diffAddedRanges = (previous: string, current: string): AddedRange[]
   closeRun(pos)
   return ranges
 }
+
+const isWhitespace = (ch: string | undefined): boolean => ch !== undefined && /\s/.test(ch)
+
+// rotateLeadingWhitespace shifts whitespace from the start of a range to its
+// end whenever following whitespace is available. Whitespace is fungible for
+// this word-level diff, so the common prefix/suffix trimming can leave an
+// inserted word highlighted as " word" when the more intuitive result is
+// "word ". Rotating keeps the highlighted length identical while preferring a
+// trailing space, except where none exists (e.g. before punctuation or at the
+// end of the text), which legitimately keeps the leading space.
+const rotateLeadingWhitespace = (range: AddedRange, text: string): AddedRange => {
+  let { from, to } = range
+  while (from < to && isWhitespace(text[from]) && to < text.length && isWhitespace(text[to])) {
+    from++
+    to++
+  }
+  return { from, to }
+}
+
+// diffAddedRanges computes the uncommitted additions in `current` relative to
+// `previous`, normalizing range boundaries so adjacent insertions are
+// highlighted consistently.
+export const diffAddedRanges = (previous: string, current: string): AddedRange[] =>
+  computeAddedRanges(previous, current).map((range) => rotateLeadingWhitespace(range, current))
