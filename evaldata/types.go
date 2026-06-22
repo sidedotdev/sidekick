@@ -32,8 +32,14 @@ type GetSymbolDefinitionsArgs struct {
 
 // FileSymDefRequestArgs mirrors coding.FileSymDefRequest for typed parsing.
 type FileSymDefRequestArgs struct {
-	FilePath    string   `json:"file_path"`
-	SymbolNames []string `json:"symbol_names,omitempty"`
+	FilePath string                 `json:"file_path"`
+	Symbols  []RequestedSymbolArgs  `json:"symbols,omitempty"`
+}
+
+// RequestedSymbolArgs mirrors coding.RequestedSymbol for typed parsing.
+type RequestedSymbolArgs struct {
+	Name          string `json:"name"`
+	ReferenceLine string `json:"reference_line,omitempty"`
 }
 
 // BulkSearchRepositoryArgs mirrors the arguments for bulk_search_repository tool.
