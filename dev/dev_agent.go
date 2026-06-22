@@ -63,6 +63,7 @@ func (ia DevAgent) HandleNewTask(ctx context.Context, task *domain.Task) error {
 		FlowType:    task.FlowType,
 		FlowOptions: task.FlowOptions,
 		Description: task.Description,
+		Title:       task.Title,
 	})
 	return err
 }

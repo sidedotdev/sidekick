@@ -113,6 +113,15 @@ func (s *TaskWorkflowTestSuite) registerMockPlannedDev() {
 	)
 }
 
+func (s *TaskWorkflowTestSuite) registerMockIdd() {
+	s.env.RegisterWorkflowWithOptions(
+		func(ctx workflow.Context, input IddWorkflowInput) error {
+			return nil
+		},
+		workflow.RegisterOptions{Name: "IddWorkflow"},
+	)
+}
+
 func (s *TaskWorkflowTestSuite) registerSlowMockBasicDev() {
 	s.env.RegisterWorkflowWithOptions(
 		func(ctx workflow.Context, input BasicDevWorkflowInput) (string, error) {
@@ -187,22 +196,27 @@ func (s *TaskWorkflowTestSuite) TestInvalidFlowType() {
 	s.Contains(err.Error(), "invalid flow type")
 }
 
-func (s *TaskWorkflowTestSuite) TestIddFlowTypeAcceptedButNotYetSupported() {
+func (s *TaskWorkflowTestSuite) TestChildStartsCorrectly_Idd() {
+	s.registerMockIdd()
 	s.setupFindWorkspace("ws_123")
+	s.setupPutWorkflow()
+
+	s.env.OnActivity(
+		s.ima.CompleteFlowParentTask,
+		mock.Anything, "ws_123", "task_456", "completed",
+	).Return(nil)
+
 	s.env.RegisterWorkflow(TaskWorkflow)
 	s.env.ExecuteWorkflow(TaskWorkflow, TaskWorkflowInput{
 		WorkspaceId: "ws_123",
 		TaskId:      "task_456",
 		FlowType:    "idd",
 		FlowOptions: map[string]interface{}{},
-		Description: "test requirements",
+		Title:       "Build the thing",
 	})
 
 	s.True(s.env.IsWorkflowCompleted())
-	err := s.env.GetWorkflowError()
-	s.Error(err)
-	s.NotContains(err.Error(), "invalid flow type")
-	s.Contains(err.Error(), "not yet supported")
+	s.NoError(s.env.GetWorkflowError())
 }
 
 func (s *TaskWorkflowTestSuite) TestRequestForUserSignal() {
