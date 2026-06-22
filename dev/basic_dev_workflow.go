@@ -32,12 +32,21 @@ type BasicDevOptions struct {
 	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
 	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
+	// MergeIntoBranch names the branch the worktree should merge into on
+	// completion. When set together with AutoMerge, the merge target is forced
+	// to this branch instead of the user-selected one.
+	MergeIntoBranch *string `json:"mergeIntoBranch,omitempty"`
+	// AutoMerge skips the human merge approval and merges automatically. Used by
+	// IDD sub-tasks so their worktree merges back into the parent idd worktree.
+	AutoMerge bool `json:"autoMerge,omitempty"`
 }
 
 type MergeWithReviewParams struct {
-	Requirements   string
-	StartBranch    *string
-	CommitRequired bool
+	Requirements    string
+	StartBranch     *string
+	CommitRequired  bool
+	MergeIntoBranch *string
+	AutoMerge       bool
 }
 
 // getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes.
@@ -272,9 +281,11 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	worktreeMergeVersion := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
 	if dCtx.Worktree != nil && worktreeMergeVersion >= 1 {
 		params := MergeWithReviewParams{
-			CommitRequired: true,
-			Requirements:   requirements,
-			StartBranch:    input.StartBranch,
+			CommitRequired:  true,
+			Requirements:    requirements,
+			StartBranch:     input.StartBranch,
+			MergeIntoBranch: input.MergeIntoBranch,
+			AutoMerge:       input.AutoMerge,
 		}
 		err = reviewAndResolve(dCtx, params)
 		if err != nil {
@@ -522,7 +533,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool, lastReviewTreeHash string) (MergeApprovalResponse, string, string, error) {
+func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool, lastReviewTreeHash string, autoMerge bool) (MergeApprovalResponse, string, string, error) {
 	v := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
 
 	var gitDiff string
@@ -567,6 +578,15 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 				diffSinceLastReview = ""
 			}
 		}
+	}
+
+	// Auto-merge bypasses human review, merging straight into the chosen target.
+	if autoMerge {
+		return MergeApprovalResponse{
+			Approved:      true,
+			TargetBranch:  defaultTarget,
+			MergeStrategy: MergeStrategySquash,
+		}, gitDiff, currentTreeHash, nil
 	}
 
 	// Request merge approval from user
@@ -693,6 +713,9 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 			defaultTarget = *params.StartBranch
 		}
 	}
+	if params.AutoMerge && params.MergeIntoBranch != nil {
+		defaultTarget = *params.MergeIntoBranch
+	}
 
 	gitAddVersion := workflow.GetVersion(dCtx, "git-add-before-diff", workflow.DefaultVersion, 1)
 	if gitAddVersion == 1 {
@@ -701,7 +724,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
-	mergeInfo, gitDiff, currentTreeHash, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired, lastReviewTreeHash)
+	mergeInfo, gitDiff, currentTreeHash, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired, lastReviewTreeHash, params.AutoMerge)
 	if err != nil {
 		return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get merge approval: %w", err)
 	}
@@ -840,7 +863,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				break
 			}
 
-			mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "")
+			mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "", params.AutoMerge)
 			if err != nil {
 				return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get final merge approval: %w", err)
 			}
