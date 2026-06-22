@@ -262,6 +262,7 @@ func RegisterWorkflows(w worker.WorkflowRegistry) {
 	w.RegisterWorkflow(dev.TaskWorkflow)
 	w.RegisterWorkflow(dev.PlannedDevWorkflow)
 	w.RegisterWorkflow(dev.BasicDevWorkflow)
+	w.RegisterWorkflow(dev.IddWorkflow)
 	w.RegisterWorkflow(poll_failures.PollFailuresWorkflow)
 	w.RegisterWorkflow(srv.CascadeDeleteTaskWorkflow)
 	w.RegisterWorkflow(dev.CleanupWorktreesWorkflow)
