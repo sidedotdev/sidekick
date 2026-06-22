@@ -336,6 +336,23 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		commitMessage = fmt.Sprintf("Intent update: %s", title)
 	}
 
+	// `git commit -a` alone skips brand-new (untracked) intent files, which
+	// would leave HEAD pointing at the previous intent commit and cause the
+	// sub-task to be built from stale state. Explicitly staging the worktree
+	// first guarantees any new intent file lands in the commit we then read
+	// back via `rev-parse HEAD`. Gate behind a version so in-flight workflows
+	// recorded before this fix replay against the original command sequence.
+	stageIntentVersion := workflow.GetVersion(dCtx, "idd-commit-intent-stage-untracked", workflow.DefaultVersion, 1)
+	if stageIntentVersion >= 1 {
+		err := workflow.ExecuteActivity(dCtx, git.GitAddActivity, git.GitAddActivityInput{
+			EnvContainer: *dCtx.EnvContainer,
+			Path:         ".",
+		}).Get(dCtx, nil)
+		if err != nil {
+			return IntentRequirementsInfo{}, fmt.Errorf("failed to stage intent changes: %w", err)
+		}
+	}
+
 	err := workflow.ExecuteActivity(dCtx, git.GitCommitActivity, *dCtx.EnvContainer, git.GitCommitParams{
 		CommitMessage:         commitMessage,
 		CommitAll:             true,
