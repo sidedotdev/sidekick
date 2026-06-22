@@ -1,5 +1,6 @@
 <template>
   <div class="intent-canvas">
+    <FlowEditorLinks v-if="flow" :flow-id="flow.id" :worktrees="flow.worktrees" />
     <aside class="index" aria-label="Intent files">
       <header class="index-head">
         <span class="eyebrow">Intent</span>
@@ -144,6 +145,8 @@ import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { store } from '../lib/store'
+import FlowEditorLinks from '../components/FlowEditorLinks.vue'
+import type { Flow } from '../lib/models'
 
 interface IntentFileEntry {
   path: string
@@ -189,10 +192,21 @@ const saveLabel = computed(() => {
   }
 })
 
+const flow = ref<Flow | null>(null)
 const subtasks = ref<IddSubtask[]>([])
 const clarifications = ref<IddClarification[]>([])
 const starting = ref(false)
 const activeSubtaskFlowId = ref<string | null>(null)
+
+const fetchFlow = async () => {
+  try {
+    const res = await fetch(flowBase.value)
+    if (!res.ok) return
+    flow.value = (await res.json()) as Flow
+  } catch (e) {
+    console.error('Failed to fetch flow:', e)
+  }
+}
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 const shortcutLabel = isMac ? '⌘↵' : 'Ctrl+↵'
@@ -450,6 +464,7 @@ const focusFirstFile = async () => {
 }
 
 onMounted(async () => {
+  void fetchFlow()
   await fetchFiles()
   loading.value = false
   await focusFirstFile()
