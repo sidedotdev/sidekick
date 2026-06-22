@@ -153,6 +153,7 @@ import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { store } from '../lib/store'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import FlowView from './FlowView.vue'
+import { applyUncommittedHighlight, uncommittedHighlightExtension } from '../lib/intent_diff_editor'
 import type { Flow } from '../lib/models'
 
 interface IntentFileEntry {
@@ -203,6 +204,7 @@ const recallActiveFile = (): string | null => {
 const files = ref<IntentFileEntry[]>([])
 const activePath = ref<string | null>(null)
 const content = ref('')
+const committedContent = ref('')
 const loading = ref(true)
 const creating = ref(false)
 const showNewFileForm = ref(false)
@@ -358,6 +360,11 @@ const setEditorDoc = (text: string) => {
   applyingExternal = false
 }
 
+const refreshUncommittedHighlight = () => {
+  if (!editorView) return
+  applyUncommittedHighlight(editorView, committedContent.value)
+}
+
 const openFile = async (path: string) => {
   if (path === activePath.value) return
   flushPendingSave()
@@ -366,12 +373,14 @@ const openFile = async (path: string) => {
     if (!res.ok) throw new Error(await res.text())
     const data = await res.json()
     content.value = data.content ?? ''
+    committedContent.value = data.committedContent ?? ''
     activePath.value = path
     rememberActiveFile(path)
     saveStatus.value = 'idle'
     await nextTick()
     if (!editorView) createEditor()
     setEditorDoc(content.value)
+    refreshUncommittedHighlight()
   } catch (e) {
     console.error('Failed to read intent file:', e)
   }
@@ -485,10 +494,12 @@ const createEditor = () => {
               },
             },
           ]),
+          uncommittedHighlightExtension(),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !applyingExternal) {
               content.value = update.state.doc.toString()
               scheduleSave()
+              refreshUncommittedHighlight()
             }
           }),
           themeCompartment.of(buildEditorTheme(darkModeMedia?.matches ?? false)),
@@ -514,6 +525,11 @@ const buildEditorTheme = (isDark: boolean) => {
       '.cm-selectionBackground, ::selection': { backgroundColor: selectionBg },
       '&.cm-focused .cm-selectionBackground': { backgroundColor: selectionBg },
       '.cm-content ::selection': { backgroundColor: selectionBg },
+      '.cm-intent-uncommitted': {
+        backgroundColor: isDark ? 'rgba(245, 197, 24, 0.18)' : 'rgba(245, 197, 24, 0.28)',
+        borderBottom: isDark ? '1px dashed rgba(245, 197, 24, 0.7)' : '1px dashed rgba(180, 130, 0, 0.7)',
+        borderRadius: '2px',
+      },
     },
     { dark: isDark },
   )

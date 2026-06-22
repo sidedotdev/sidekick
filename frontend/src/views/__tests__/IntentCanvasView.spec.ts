@@ -48,6 +48,11 @@ vi.mock('../FlowView.vue', () => ({
   },
 }))
 
+vi.mock('../../lib/intent_diff_editor', () => ({
+  uncommittedHighlightExtension: () => ({}),
+  applyUncommittedHighlight: () => {},
+}))
+
 const intentBase = '/api/v1/workspaces/ws-1/flows/flow-1/intent'
 const flowBase = '/api/v1/workspaces/ws-1/flows/flow-1'
 

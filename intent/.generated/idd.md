@@ -50,3 +50,11 @@ task itself to in-progress.
 Sub-task worktrees auto-merge back into their start branch (the idd worktree
 branch) on completion, reusing the existing start branch rather than a separate
 merge-target option.
+
+## Uncommitted intent baseline comes from HEAD
+
+To distinguish committed vs uncommitted intent in the canvas, the read handler
+returns the file's content at `HEAD` alongside the working-copy content. The
+frontend diffs them at word granularity (whitespace runs compared loosely so
+newline shifts don't register as edits) and decorates the added ranges in the
+CodeMirror editor.

@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -72,6 +74,22 @@ func resolveWorktreeFilePath(worktreeDir, relPath string) (string, error) {
 		return "", fmt.Errorf("path escapes worktree")
 	}
 	return full, nil
+}
+
+// committedIntentContent returns the file's content at HEAD as stored in the
+// worktree's repository. Returns an empty string (no error) when there's no
+// HEAD commit yet or the file isn't tracked, since either case is normal while
+// authoring brand-new intent.
+func committedIntentContent(ctx context.Context, worktreeDir, relPath string) string {
+	cmd := exec.CommandContext(ctx, "git", "show", "HEAD:"+filepath.ToSlash(relPath))
+	cmd.Dir = worktreeDir
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return out.String()
 }
 
 // listIntentFiles walks the worktree's intent/ directory, returning entries with
@@ -164,7 +182,13 @@ func (ctrl *Controller) ReadIntentFileHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"path": c.Query("path"), "content": string(content)})
+	committed := committedIntentContent(c.Request.Context(), worktreeDir, c.Query("path"))
+
+	c.JSON(http.StatusOK, gin.H{
+		"path":             c.Query("path"),
+		"content":          string(content),
+		"committedContent": committed,
+	})
 }
 
 // WriteIntentFileHandler saves the contents of a file within a flow's worktree,
