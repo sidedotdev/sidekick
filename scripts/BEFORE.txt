@@ -1,0 +1,39 @@
+==================
+WARNING: DATA RACE
+Read at 0x00c0001d60a8 by goroutine 15:
+  sidekick/scripts.(*Supervisor).StopProcess.func1()
+      /Users/ehsanhoque/Library/Application Support/sidekick/worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-fix-restart-stopping-state/scripts/supervisor.go:627 +0x48
+
+Previous write at 0x00c0001d60a8 by goroutine 11:
+  os/exec.(*Cmd).Wait()
+      /usr/local/go/src/os/exec/exec.go:926 +0x148
+  sidekick/scripts.(*Supervisor).StartProcess.func1()
+      /Users/ehsanhoque/Library/Application Support/sidekick/worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-fix-restart-stopping-state/scripts/supervisor.go:577 +0x4c
+
+Goroutine 15 (running) created at:
+  sidekick/scripts.(*Supervisor).StopProcess()
+      /Users/ehsanhoque/Library/Application Support/sidekick/worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-fix-restart-stopping-state/scripts/supervisor.go:624 +0x180
+  sidekick/scripts.(*Supervisor).RestartProcess()
+      /Users/ehsanhoque/Library/Application Support/sidekick/worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-fix-restart-stopping-state/scripts/supervisor.go:682 +0x50
+  sidekick/scripts.TestRestartProcessClearsLogsAndShowsStoppingStatus.gowrap2()
+      /Users/ehsanhoque/Library/Application Support/sidekick/worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-fix-restart-stopping-state/scripts/supervisor_test.go:808 +0x5c
+
+Goroutine 11 (finished) created at:
+  sidekick/scripts.(*Supervisor).StartProcess()
+      /Users/ehsanhoque/Library/Application Support/sidekick/worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-fix-restart-stopping-state/scripts/supervisor.go:576 +0x874
+  sidekick/scripts.(*Supervisor).StartAll()
+      /Users/ehsanhoque/Library/Application Support/sidekick/worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-fix-restart-stopping-state/scripts/supervisor.go:654 +0xa0
+  sidekick/scripts.TestRestartProcessClearsLogsAndShowsStoppingStatus()
+      /Users/ehsanhoque/Library/Application Support/sidekick/worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-fix-restart-stopping-state/scripts/supervisor_test.go:779 +0x364
+  testing.tRunner()
+      /usr/local/go/src/testing/testing.go:1934 +0x164
+  testing.(*T).Run.gowrap1()
+      /usr/local/go/src/testing/testing.go:1997 +0x3c
+==================
+--- FAIL: TestRestartProcessClearsLogsAndShowsStoppingStatus (1.22s)
+    testing.go:1617: race detected during execution of test
+--- FAIL: TestRestartProcessClearsLogsAndShowsStoppingStatus (2.05s)
+    supervisor_test.go:811: process should be in stopping state after restart begins
+FAIL
+FAIL	sidekick/scripts	257.027s
+FAIL
