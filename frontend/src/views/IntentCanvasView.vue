@@ -57,6 +57,16 @@
         <div ref="editorParent" class="editor"></div>
       </div>
 
+      <div v-else-if="!loading && hasIntentFiles" class="welcome">
+        <div class="welcome-card">
+          <span class="eyebrow">Select intent</span>
+          <h1 class="welcome-title">Pick a file to edit</h1>
+          <p class="welcome-body">
+            Choose an intent file from the list on the left to start editing.
+          </p>
+        </div>
+      </div>
+
       <div v-else-if="!loading" class="welcome">
         <div class="welcome-card">
           <span class="eyebrow">Start here</span>
@@ -167,7 +177,12 @@
 
         <section class="finish-diff-section">
           <span class="finish-label">Diff to be merged</span>
-          <pre v-if="finishDiff" class="finish-diff">{{ finishDiff }}</pre>
+          <UnifiedDiffViewer
+            v-if="finishDiff"
+            class="finish-diff"
+            :diff-string="finishDiff"
+            default-expanded
+          />
           <p v-else-if="finishLoading" class="finish-empty">Loading diff…</p>
           <p v-else class="finish-empty">No changes to merge.</p>
         </section>
@@ -200,6 +215,7 @@ import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { store } from '../lib/store'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import FlowView from './FlowView.vue'
+import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
 import { applyUncommittedHighlight, uncommittedHighlightExtension } from '../lib/intent_diff_editor'
 import type { Flow } from '../lib/models'
 
@@ -461,6 +477,8 @@ let pendingSave: { path: string; content: string } | null = null
 
 const isGeneratedPath = (path: string): boolean =>
   path.split('/').includes('.generated')
+
+const hasIntentFiles = computed(() => files.value.some((f) => !f.isDir))
 
 const fileNodes = computed<FileNode[]>(() => {
   const nodes = files.value.map((entry) => {
@@ -728,13 +746,11 @@ const createFile = async () => {
 const focusFirstFile = async () => {
   const remembered = recallActiveFile()
   const rememberedFile = remembered && files.value.find((f) => !f.isDir && f.path === remembered)
-  const firstFile =
-    files.value.find((f) => !f.isDir && !isGeneratedPath(f.path)) ??
-    files.value.find((f) => !f.isDir)
-  const target = rememberedFile || firstFile
-  if (target) {
-    await openFile(target.path)
-  } else {
+  if (rememberedFile) {
+    await openFile(rememberedFile.path)
+    return
+  }
+  if (!hasIntentFiles.value) {
     await nextTick()
     welcomeInputRef.value?.focus()
   }
@@ -1332,18 +1348,8 @@ onBeforeUnmount(() => {
 }
 
 .finish-diff {
-  background-color: var(--color-background-soft);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  padding: 0.75rem 1rem;
-  margin: 0;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 0.8rem;
-  line-height: 1.5;
-  white-space: pre;
   overflow: auto;
   max-height: 22rem;
-  color: var(--color-text);
 }
 
 .finish-empty {
