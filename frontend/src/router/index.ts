@@ -8,6 +8,7 @@ import ArchivedTasksView from '@/views/ArchivedTasksView.vue'
 import BlockedView from '@/views/BlockedView.vue'
 import { isBlockedNow } from '@/lib/offHours'
 import EvalDataValidatorView from '@/views/EvalDataValidatorView.vue'
+import IntentCanvasView from '@/views/IntentCanvasView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -25,6 +26,11 @@ const router = createRouter({
       path: '/kanban',
       name: 'kanban',
       component: KanbanView,
+    },
+    {
+      path: '/flows/:id/intent',
+      name: 'intent-canvas',
+      component: IntentCanvasView,
     },
     {
       path: '/flows/:id',

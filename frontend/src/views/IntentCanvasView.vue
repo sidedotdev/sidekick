@@ -1,0 +1,565 @@
+<template>
+  <div class="intent-canvas">
+    <aside class="index" aria-label="Intent files">
+      <header class="index-head">
+        <span class="eyebrow">Intent</span>
+        <button
+          class="new-file-btn"
+          type="button"
+          @click="beginNewFile"
+          :disabled="creating"
+          title="New intent file"
+        >+ New file</button>
+      </header>
+
+      <nav v-if="fileNodes.length" class="file-list">
+        <button
+          v-for="node in fileNodes"
+          :key="node.path"
+          type="button"
+          class="file-row"
+          :class="{ active: node.path === activePath, dir: node.isDir }"
+          :style="{ paddingLeft: `${0.75 + node.depth * 0.9}rem` }"
+          :disabled="node.isDir"
+          @click="openFile(node.path)"
+        >
+          <span class="file-name">{{ node.name }}</span>
+        </button>
+      </nav>
+
+      <p v-else-if="!loading" class="index-empty">No intent files yet.</p>
+
+      <form v-if="showNewFileForm" class="new-file-form" @submit.prevent="createFile">
+        <span class="path-prefix">intent/</span>
+        <input
+          ref="newFileInputRef"
+          v-model="newFileName"
+          class="new-file-input"
+          type="text"
+          placeholder="overview.md"
+          @keydown.esc="cancelNewFile"
+        />
+        <div class="new-file-actions">
+          <button type="submit" class="primary-btn" :disabled="!newFileName.trim() || creating">Create</button>
+          <button type="button" class="text-btn" @click="cancelNewFile">Cancel</button>
+        </div>
+      </form>
+    </aside>
+
+    <section class="canvas">
+      <header class="canvas-head">
+        <span class="crumb" v-if="activePath">{{ activePath }}</span>
+        <span class="save-status" :class="saveStatus">{{ saveLabel }}</span>
+      </header>
+
+      <div v-if="activePath" class="sheet">
+        <div ref="editorParent" class="editor"></div>
+      </div>
+
+      <div v-else-if="!loading" class="welcome">
+        <div class="welcome-card">
+          <span class="eyebrow">Start here</span>
+          <h1 class="welcome-title">Write your first intent</h1>
+          <p class="welcome-body">
+            Intent files live in <code>intent/</code> and are the source of truth your
+            coding agents build from. Name a file to begin.
+          </p>
+          <form class="welcome-form" @submit.prevent="createFile">
+            <span class="path-prefix">intent/</span>
+            <input
+              ref="welcomeInputRef"
+              v-model="newFileName"
+              class="new-file-input"
+              type="text"
+              placeholder="overview.md"
+            />
+            <button type="submit" class="primary-btn" :disabled="!newFileName.trim() || creating">Create file</button>
+          </form>
+        </div>
+      </div>
+
+      <div v-else class="welcome">
+        <p class="loading">Loading intent…</p>
+      </div>
+    </section>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
+import { EditorView, basicSetup } from 'codemirror'
+import { EditorState } from '@codemirror/state'
+import { markdown } from '@codemirror/lang-markdown'
+import { store } from '../lib/store'
+
+interface IntentFileEntry {
+  path: string
+  isDir: boolean
+}
+
+interface FileNode extends IntentFileEntry {
+  name: string
+  depth: number
+}
+
+const route = useRoute()
+const flowId = computed(() => route.params.id as string)
+const apiBase = computed(() => `/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}/intent`)
+
+const files = ref<IntentFileEntry[]>([])
+const activePath = ref<string | null>(null)
+const content = ref('')
+const loading = ref(true)
+const creating = ref(false)
+const showNewFileForm = ref(false)
+const newFileName = ref('')
+
+const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const saveLabel = computed(() => {
+  switch (saveStatus.value) {
+    case 'saving': return 'Saving…'
+    case 'saved': return 'Saved'
+    case 'error': return 'Save failed'
+    default: return ''
+  }
+})
+
+const newFileInputRef = ref<HTMLInputElement | null>(null)
+const welcomeInputRef = ref<HTMLInputElement | null>(null)
+const editorParent = ref<HTMLElement | null>(null)
+
+let editorView: EditorView | null = null
+let applyingExternal = false
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+let savedTimer: ReturnType<typeof setTimeout> | null = null
+
+const fileNodes = computed<FileNode[]>(() =>
+  files.value.map((entry) => {
+    const segments = entry.path.split('/')
+    return {
+      ...entry,
+      name: segments[segments.length - 1],
+      depth: Math.max(0, segments.length - 2),
+    }
+  })
+)
+
+const fetchFiles = async () => {
+  try {
+    const res = await fetch(`${apiBase.value}/files`)
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json()
+    files.value = (data.files ?? []) as IntentFileEntry[]
+  } catch (e) {
+    console.error('Failed to list intent files:', e)
+    files.value = []
+  }
+}
+
+const setEditorDoc = (text: string) => {
+  if (!editorView) return
+  applyingExternal = true
+  editorView.dispatch({
+    changes: { from: 0, to: editorView.state.doc.length, insert: text },
+  })
+  applyingExternal = false
+}
+
+const openFile = async (path: string) => {
+  if (path === activePath.value) return
+  try {
+    const res = await fetch(`${apiBase.value}/file?path=${encodeURIComponent(path)}`)
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json()
+    content.value = data.content ?? ''
+    activePath.value = path
+    saveStatus.value = 'idle'
+    await nextTick()
+    if (!editorView) createEditor()
+    setEditorDoc(content.value)
+  } catch (e) {
+    console.error('Failed to read intent file:', e)
+  }
+}
+
+const saveFile = async () => {
+  if (!activePath.value) return
+  saveStatus.value = 'saving'
+  try {
+    const res = await fetch(`${apiBase.value}/file`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: activePath.value, content: content.value }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    saveStatus.value = 'saved'
+    if (savedTimer) clearTimeout(savedTimer)
+    savedTimer = setTimeout(() => {
+      if (saveStatus.value === 'saved') saveStatus.value = 'idle'
+    }, 2000)
+  } catch (e) {
+    console.error('Failed to save intent file:', e)
+    saveStatus.value = 'error'
+  }
+}
+
+const scheduleSave = () => {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(saveFile, 800)
+}
+
+const createEditor = () => {
+  if (editorView || !editorParent.value) return
+  try {
+    editorView = new EditorView({
+      parent: editorParent.value,
+      state: EditorState.create({
+        doc: content.value,
+        extensions: [
+          basicSetup,
+          markdown(),
+          EditorView.lineWrapping,
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged && !applyingExternal) {
+              content.value = update.state.doc.toString()
+              scheduleSave()
+            }
+          }),
+          editorTheme,
+        ],
+      }),
+    })
+  } catch (e) {
+    console.error('Failed to initialize editor:', e)
+  }
+}
+
+const editorTheme = EditorView.theme({
+  '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
+  '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
+  '.cm-content': { padding: '1.75rem 2rem', lineHeight: '1.6' },
+  '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--color-text-2)' },
+  '.cm-activeLine': { backgroundColor: 'var(--color-background-mute)' },
+  '.cm-activeLineGutter': { backgroundColor: 'transparent' },
+  '&.cm-focused': { outline: 'none' },
+})
+
+const beginNewFile = async () => {
+  showNewFileForm.value = true
+  newFileName.value = ''
+  await nextTick()
+  newFileInputRef.value?.focus()
+}
+
+const cancelNewFile = () => {
+  showNewFileForm.value = false
+  newFileName.value = ''
+}
+
+const normalizeIntentPath = (raw: string): string => {
+  let name = raw.trim().replace(/^\/+/, '')
+  if (!name) return ''
+  if (!/\.[a-zA-Z0-9]+$/.test(name)) name += '.md'
+  return name.startsWith('intent/') ? name : `intent/${name}`
+}
+
+const createFile = async () => {
+  const path = normalizeIntentPath(newFileName.value)
+  if (!path || creating.value) return
+  creating.value = true
+  try {
+    const res = await fetch(`${apiBase.value}/file`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content: '' }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    showNewFileForm.value = false
+    newFileName.value = ''
+    await fetchFiles()
+    await openFile(path)
+  } catch (e) {
+    console.error('Failed to create intent file:', e)
+  } finally {
+    creating.value = false
+  }
+}
+
+const focusFirstFile = async () => {
+  const firstFile = files.value.find((f) => !f.isDir)
+  if (firstFile) {
+    await openFile(firstFile.path)
+  } else {
+    await nextTick()
+    welcomeInputRef.value?.focus()
+  }
+}
+
+onMounted(async () => {
+  await fetchFiles()
+  loading.value = false
+  await focusFirstFile()
+})
+
+onBeforeUnmount(() => {
+  if (saveTimer) clearTimeout(saveTimer)
+  if (savedTimer) clearTimeout(savedTimer)
+  editorView?.destroy()
+  editorView = null
+})
+</script>
+
+<style scoped>
+.intent-canvas {
+  display: grid;
+  grid-template-columns: 16rem 1fr;
+  height: 100vh;
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
+.index {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background-color: var(--color-background-soft);
+  overflow-y: auto;
+}
+
+.index-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1rem 0.75rem;
+}
+
+.eyebrow {
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-text-2);
+}
+
+.new-file-btn,
+.text-btn {
+  background: none;
+  border: none;
+  color: var(--color-link);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.2rem 0.3rem;
+}
+
+.new-file-btn:hover {
+  color: var(--color-primary-hover);
+}
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem 0.5rem;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  text-align: left;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+  border-radius: 0 4px 4px 0;
+}
+
+.file-row:hover:not(.dir) {
+  background-color: var(--color-background-hover);
+}
+
+.file-row.active {
+  border-left-color: var(--color-primary);
+  background-color: var(--color-background-mute);
+  color: var(--color-heading);
+}
+
+.file-row.dir {
+  color: var(--color-text-2);
+  cursor: default;
+  letter-spacing: 0.04em;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.index-empty {
+  padding: 0.5rem 1rem;
+  color: var(--color-text-2);
+  font-size: 0.85rem;
+}
+
+.new-file-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--color-border);
+  margin-top: auto;
+}
+
+.path-prefix {
+  color: var(--color-text-2);
+  font-size: 0.85rem;
+}
+
+.new-file-input {
+  flex: 1 1 6rem;
+  min-width: 6rem;
+  background-color: var(--color-background);
+  border: 1px solid var(--color-border-contrast);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.new-file-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.new-file-actions {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.primary-btn {
+  background-color: var(--color-primary);
+  border: none;
+  border-radius: 4px;
+  color: var(--color-cta-button-text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.canvas {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+}
+
+.canvas-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.crumb {
+  font-size: 0.85rem;
+  color: var(--color-text-2);
+}
+
+.save-status {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-2);
+}
+
+.save-status.saved {
+  color: var(--color-green);
+}
+
+.save-status.error {
+  color: var(--color-error-text);
+}
+
+.sheet {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  padding: 1.5rem;
+  overflow: hidden;
+}
+
+.editor {
+  width: 100%;
+  max-width: 52rem;
+  height: 100%;
+  background-color: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.welcome {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.welcome-card {
+  max-width: 30rem;
+  border-left: 3px solid var(--color-primary);
+  padding-left: 1.5rem;
+}
+
+.welcome-title {
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--color-heading);
+  margin: 0.5rem 0 0.75rem;
+}
+
+.welcome-body {
+  color: var(--color-text-2);
+  line-height: 1.6;
+  margin-bottom: 1.5rem;
+}
+
+.welcome-body code {
+  color: var(--color-text);
+  background-color: var(--color-background-mute);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.welcome-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.loading {
+  color: var(--color-text-2);
+}
+</style>
