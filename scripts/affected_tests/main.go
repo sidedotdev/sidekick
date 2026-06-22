@@ -532,7 +532,7 @@ func selectAffected(profileSig string, selected []string, hashes map[string]stri
 	var toRun, toSkip []string
 	for _, p := range selected {
 		if prof != nil {
-			if e, ok := prof.Packages[p]; ok && e.Hash == hashes[p] {
+			if e, ok := prof.Packages[p]; ok && e.hasHash(hashes[p]) {
 				toSkip = append(toSkip, p)
 				continue
 			}
@@ -544,6 +544,12 @@ func selectAffected(profileSig string, selected []string, hashes map[string]stri
 	return toRun, toSkip, nil
 }
 
+// maxPassesPerPackage bounds the per-package set of remembered passing hashes
+// so the on-disk cache cannot grow unboundedly as a working tree oscillates
+// across many distinct contents. Oldest entries (by PassedAt) are evicted
+// first when the cap is exceeded.
+const maxPassesPerPackage = 500
+
 type cacheFile struct {
 	Profiles map[string]*profileEntry `json:"profiles"`
 }
@@ -553,9 +559,34 @@ type profileEntry struct {
 	Packages    map[string]packageEntry `json:"packages"`
 }
 
+// packageEntry remembers every closure-hash at which a package was last seen
+// passing under a given profile so that oscillating the working tree between
+// previously-passing contents still hits the cache.
+//
+// LegacyHash / LegacyPassedAt accept the pre-multi-hash on-disk format so
+// existing caches read cleanly; readCacheFromPath migrates them into Passes
+// and clears them, so they are never written back out.
 type packageEntry struct {
+	Passes         []passEntry `json:"passes,omitempty"`
+	LegacyHash     string      `json:"hash,omitempty"`
+	LegacyPassedAt string      `json:"passedAt,omitempty"`
+}
+
+type passEntry struct {
 	Hash     string `json:"hash"`
 	PassedAt string `json:"passedAt"`
+}
+
+func (pe packageEntry) hasHash(h string) bool {
+	if h == "" {
+		return false
+	}
+	for _, p := range pe.Passes {
+		if p.Hash == h {
+			return true
+		}
+	}
+	return false
 }
 
 func cachePath() (string, error) {
@@ -598,6 +629,23 @@ func readCacheFromPath(path string) (*cacheFile, error) {
 	}
 	if c.Profiles == nil {
 		c.Profiles = map[string]*profileEntry{}
+	}
+	for _, prof := range c.Profiles {
+		if prof == nil {
+			continue
+		}
+		if prof.Packages == nil {
+			prof.Packages = map[string]packageEntry{}
+			continue
+		}
+		for k, pe := range prof.Packages {
+			if len(pe.Passes) == 0 && pe.LegacyHash != "" {
+				pe.Passes = []passEntry{{Hash: pe.LegacyHash, PassedAt: pe.LegacyPassedAt}}
+			}
+			pe.LegacyHash = ""
+			pe.LegacyPassedAt = ""
+			prof.Packages[k] = pe
+		}
 	}
 	return &c, nil
 }
@@ -717,12 +765,26 @@ func applyPasses(c *cacheFile, profileSig, description string, passed []string, 
 		if h == "" {
 			continue
 		}
-		pe.Packages[p] = packageEntry{Hash: h, PassedAt: ts}
+		entry := pe.Packages[p]
+		// If this hash was already recorded as passing, refresh its timestamp
+		// by moving it to the newest position so it survives future evictions.
+		for i, pp := range entry.Passes {
+			if pp.Hash == h {
+				entry.Passes = append(entry.Passes[:i], entry.Passes[i+1:]...)
+				break
+			}
+		}
+		entry.Passes = append(entry.Passes, passEntry{Hash: h, PassedAt: ts})
+		if len(entry.Passes) > maxPassesPerPackage {
+			entry.Passes = entry.Passes[len(entry.Passes)-maxPassesPerPackage:]
+		}
+		pe.Packages[p] = entry
 	}
 }
 
 // packageTracker observes go test -json package-level events and remembers
-// which import paths emitted a final pass action.
+// the final per-package action so the caller can record non-failing packages
+// in the affected-tests cache.
 type packageTracker struct {
 	mu      sync.Mutex
 	results map[string]string // package -> "pass" | "fail" | "skip"
@@ -755,12 +817,18 @@ func (t *packageTracker) observeLine(line []byte) {
 	}
 }
 
+// passed returns packages whose final package-level action was "pass" OR
+// "skip". A package-level skip means either the package has no test files or
+// every test was skipped (e.g. build tags excluded them); in both cases the
+// run did not fail and re-running at the same closure hash would produce the
+// same outcome, so it is safe (and necessary, to avoid forever re-running
+// no-test packages) to record them as cacheable.
 func (t *packageTracker) passed() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	out := make([]string, 0, len(t.results))
 	for p, r := range t.results {
-		if r == "pass" {
+		if r == "pass" || r == "skip" {
 			out = append(out, p)
 		}
 	}
