@@ -147,44 +147,42 @@
       </div>
     </div>
 
-    <div v-if="showFinishDialog" class="finish-overlay" role="dialog" aria-modal="true" aria-label="Finish IDD">
-      <div class="finish-modal">
-        <header class="finish-head">
-          <h2 class="finish-title">Finish IDD</h2>
-          <button type="button" class="side-panel-close" @click="closeFinishDialog" aria-label="Cancel finish">×</button>
-        </header>
-        <div class="finish-body">
-          <label class="finish-field">
-            <span class="finish-label">Merge into branch</span>
-            <select
-              v-model="finishTargetBranch"
-              class="finish-select"
-              :disabled="finishLoading || finishing"
-              @change="loadFinishDiff"
-            >
-              <option v-for="branch in finishMergeTargets" :key="branch" :value="branch">{{ branch }}</option>
-            </select>
-          </label>
+    <div v-if="showFinishDialog" class="finish-panel" role="dialog" aria-label="Finish IDD">
+      <header class="finish-head">
+        <h2 class="finish-title">Finish IDD</h2>
+        <button type="button" class="side-panel-close" @click="closeFinishDialog" aria-label="Cancel finish">×</button>
+      </header>
+      <div class="finish-body">
+        <label class="finish-field">
+          <span class="finish-label">Merge into branch</span>
+          <select
+            v-model="finishTargetBranch"
+            class="finish-select"
+            :disabled="finishLoading || finishing"
+            @change="loadFinishDiff"
+          >
+            <option v-for="branch in finishMergeTargets" :key="branch" :value="branch">{{ branch }}</option>
+          </select>
+        </label>
 
-          <section class="finish-diff-section">
-            <span class="finish-label">Diff to be merged</span>
-            <pre v-if="finishDiff" class="finish-diff">{{ finishDiff }}</pre>
-            <p v-else-if="finishLoading" class="finish-empty">Loading diff…</p>
-            <p v-else class="finish-empty">No changes to merge.</p>
-          </section>
+        <section class="finish-diff-section">
+          <span class="finish-label">Diff to be merged</span>
+          <pre v-if="finishDiff" class="finish-diff">{{ finishDiff }}</pre>
+          <p v-else-if="finishLoading" class="finish-empty">Loading diff…</p>
+          <p v-else class="finish-empty">No changes to merge.</p>
+        </section>
 
-          <p v-if="finishError" class="finish-error">{{ finishError }}</p>
-        </div>
-        <footer class="finish-actions">
-          <button type="button" class="text-btn" @click="closeFinishDialog" :disabled="finishing">Cancel</button>
-          <button
-            type="button"
-            class="primary-btn"
-            :disabled="!finishTargetBranch || finishing || finishLoading"
-            @click="confirmFinish"
-          >{{ finishing ? 'Merging…' : 'Confirm merge' }}</button>
-        </footer>
+        <p v-if="finishError" class="finish-error">{{ finishError }}</p>
       </div>
+      <footer class="finish-actions">
+        <button type="button" class="text-btn" @click="closeFinishDialog" :disabled="finishing">Cancel</button>
+        <button
+          type="button"
+          class="primary-btn"
+          :disabled="!finishTargetBranch || finishing || finishLoading"
+          @click="confirmFinish"
+        >{{ finishing ? 'Merging…' : 'Confirm merge' }}</button>
+      </footer>
     </div>
   </div>
 </template>
@@ -1265,27 +1263,18 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
-.finish-overlay {
+.finish-panel {
   position: absolute;
-  inset: 0;
-  background-color: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 20;
-  padding: 2rem;
-}
-
-.finish-modal {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(48rem, 80vw);
   display: flex;
   flex-direction: column;
-  width: min(48rem, 90vw);
-  max-height: 90vh;
   background-color: var(--color-background);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
-  overflow: hidden;
+  border-left: 1px solid var(--color-border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+  z-index: 20;
 }
 
 .finish-head {
