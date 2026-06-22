@@ -21,6 +21,7 @@ intent_links:
       - dev/idd_workflow.go:IddWorkflow
       - dev/idd_workflow.go:FinishIddSignal
       - dev/idd_workflow.go:finishIdd
+      - dev/idd_workflow.go:cancelPendingSubtasks
       - api/intent_api.go:ListIntentBranchesHandler
       - api/intent_api.go:FinishIntentDiffHandler
       - api/intent_api.go:FinishIntentHandler
@@ -66,9 +67,11 @@ A "Finish IDD" button on the canvas opens a dialog where the user picks the
 merge target branch (defaulting to the idd worktree's start branch, exposed via
 the `idd_state` query) and confirms after reviewing the diff that would be
 merged (`git diff <target>...HEAD` from the worktree). Confirmation signals the
-long-running IDD workflow, which commits any pending intent, merges its branch
-into the chosen target, cleans up the worktree, and exits cleanly so the parent
-task workflow marks the IDD task completed.
+long-running IDD workflow, which first cancels any still in-flight sub-tasks
+(in_progress or blocked) and waits for them to settle so their auto-merges into
+the worktree branch don't race the finish-merge, then commits any pending
+intent, merges its branch into the chosen target, cleans up the worktree, and
+exits cleanly so the parent task workflow marks the IDD task completed.
 
 ## Uncommitted intent baseline comes from HEAD
 

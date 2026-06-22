@@ -375,6 +375,53 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 	}, nil
 }
 
+// isPendingSubtaskStatus reports whether a sub-task in the given status is
+// still in flight (i.e. has not yet reached a terminal status reported back to
+// the IddWorkflow via the runIntentSubtask coroutine or a workflow closure).
+func isPendingSubtaskStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "canceled":
+		return false
+	default:
+		return true
+	}
+}
+
+// pendingSubtaskFlowIds returns the flow ids of sub-tasks that are still in
+// flight according to the canvas's in-memory state.
+func pendingSubtaskFlowIds(state *IddState) []string {
+	var pending []string
+	for _, st := range state.Subtasks {
+		if isPendingSubtaskStatus(st.Status) {
+			pending = append(pending, st.FlowId)
+		}
+	}
+	return pending
+}
+
+// cancelPendingSubtasks requests cancellation of every in-flight sub-task and
+// waits for each to reach a terminal status. This stops sub-tasks from racing
+// the finish-merge against the idd worktree branch, and lets their own
+// cleanup/auto-merge logic settle so the worktree is in a consistent state
+// before we merge it elsewhere.
+func cancelPendingSubtasks(dCtx DevContext, state *IddState) error {
+	pending := pendingSubtaskFlowIds(state)
+	for _, flowId := range pending {
+		if err := workflow.RequestCancelExternalWorkflow(dCtx, flowId, "").Get(dCtx, nil); err != nil {
+			workflow.GetLogger(dCtx).Warn("Failed to request cancel of intent sub-task", "FlowId", flowId, "Error", err)
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	if err := workflow.Await(dCtx, func() bool {
+		return len(pendingSubtaskFlowIds(state)) == 0
+	}); err != nil {
+		return fmt.Errorf("waiting for intent sub-tasks to finish: %w", err)
+	}
+	return nil
+}
+
 // finishIdd commits any pending intent in the worktree, merges the idd
 // worktree branch into the requested target branch, and cleans up the
 // worktree. A clean exit lets the parent task workflow mark the IDD task
@@ -392,6 +439,13 @@ func finishIdd(dCtx DevContext, input IddWorkflowInput, sig FinishIddSignal, sta
 	}
 	if target == dCtx.Worktree.Name {
 		return fmt.Errorf("finish idd: target branch %q is the idd worktree branch", target)
+	}
+
+	cancelSubtasksVersion := workflow.GetVersion(dCtx, "idd-finish-cancel-subtasks", workflow.DefaultVersion, 1)
+	if cancelSubtasksVersion >= 1 {
+		if err := cancelPendingSubtasks(dCtx, state); err != nil {
+			return err
+		}
 	}
 
 	if _, err := commitIntent(dCtx, input.Title, true); err != nil {

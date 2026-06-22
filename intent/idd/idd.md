@@ -16,6 +16,8 @@ intent_links:
       - dev/idd_workflow.go:IddWorkflow
       - dev/idd_workflow.go:runIntentSubtask
       - dev/idd_workflow.go:commitIntent
+      - dev/idd_workflow.go:finishIdd
+      - dev/idd_workflow.go:cancelPendingSubtasks
       - dev/basic_dev_workflow.go:BasicDevOptions
       - dev/intent_requirements.go:renderIntentRequirements
       - api/intent_api.go:ListIntentFilesHandler
