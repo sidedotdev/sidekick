@@ -16,6 +16,7 @@ import (
 	sidekick_worker "sidekick/worker"
 
 	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/history/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
@@ -242,6 +243,14 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				result.skipped = true
 				return
 			}
+			// Drop any in-flight WorkflowTask tail to avoid the
+			// "extra replay command" false positive caused by reading
+			// history mid workflow-task on a running workflow.
+			hist.Events = dropInFlightWFTTail(hist.Events)
+			if len(hist.Events) == 0 {
+				result.skipped = true
+				return
+			}
 			replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
 				DataConverter: clientOptions.DataConverter,
 			})
@@ -271,3 +280,37 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		})
 	}
 }
+
+// dropInFlightWFTTail removes a trailing in-flight WorkflowTask
+// (WorkflowTaskScheduled, optionally followed by WorkflowTaskStarted, with no
+// terminator yet) from a fetched history. This avoids the "extra replay
+// command" false positive that occurs when a running workflow's history is
+// read mid workflow-task: replay would advance workflow code past
+// WorkflowTaskStarted and generate pending commands that do not yet appear
+// as events.
+//
+// Crucially, it does NOT cut the events that follow the last completed WFT
+// (ActivityTaskScheduled, TimerStarted, ...), since those events are
+// materialized by the server as part of that WFT's completion and are
+// required for the replayer to match the commands it regenerates.
+func dropInFlightWFTTail(events []*history.HistoryEvent) []*history.HistoryEvent {
+	lastScheduledIdx := -1
+	for i, e := range events {
+		if e.EventType == enums.EVENT_TYPE_WORKFLOW_TASK_SCHEDULED {
+			lastScheduledIdx = i
+		}
+	}
+	if lastScheduledIdx < 0 {
+		return events
+	}
+	for _, e := range events[lastScheduledIdx+1:] {
+		switch e.EventType {
+		case enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED,
+			enums.EVENT_TYPE_WORKFLOW_TASK_FAILED,
+			enums.EVENT_TYPE_WORKFLOW_TASK_TIMED_OUT:
+			return events
+		}
+	}
+	return events[:lastScheduledIdx]
+}
+
