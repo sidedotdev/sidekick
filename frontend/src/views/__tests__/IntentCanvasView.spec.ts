@@ -104,6 +104,36 @@ describe('IntentCanvasView', () => {
     expect(wrapper.find('.welcome').exists()).toBe(false)
   })
 
+  it('orders .generated entries last and opens the first non-generated file', async () => {
+    const fetchSpy = installFetch((url) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: [
+              { path: 'intent/.generated', isDir: true },
+              { path: 'intent/.generated/inferred.md', isDir: false },
+              { path: 'intent/overview.md', isDir: false },
+            ],
+          })
+        )
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    const rows = wrapper.findAll('.file-row')
+    expect(rows.map((r) => r.text())).toEqual(['overview.md', '.generated', 'inferred.md'])
+
+    expect(fetchSpy).toHaveBeenCalledWith(`${intentBase}/file?path=${encodeURIComponent('intent/overview.md')}`)
+    expect(wrapper.find('.crumb').text()).toBe('intent/overview.md')
+  })
+
   it('shows a create prompt when no intent files exist and creates one in intent/', async () => {
     const putBodies: string[] = []
     let listCalls = 0

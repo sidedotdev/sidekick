@@ -316,8 +316,11 @@ const darkModeMedia =
 // time so switching files before the timer fires can't save the wrong path.
 let pendingSave: { path: string; content: string } | null = null
 
-const fileNodes = computed<FileNode[]>(() =>
-  files.value.map((entry) => {
+const isGeneratedPath = (path: string): boolean =>
+  path.split('/').includes('.generated')
+
+const fileNodes = computed<FileNode[]>(() => {
+  const nodes = files.value.map((entry) => {
     const segments = entry.path.split('/')
     return {
       ...entry,
@@ -325,7 +328,14 @@ const fileNodes = computed<FileNode[]>(() =>
       depth: Math.max(0, segments.length - 2),
     }
   })
-)
+  const regular: FileNode[] = []
+  const generated: FileNode[] = []
+  for (const node of nodes) {
+    if (isGeneratedPath(node.path)) generated.push(node)
+    else regular.push(node)
+  }
+  return [...regular, ...generated]
+})
 
 const fetchFiles = async () => {
   try {
@@ -559,9 +569,11 @@ const createFile = async () => {
 
 const focusFirstFile = async () => {
   const remembered = recallActiveFile()
-  const target =
-    (remembered && files.value.find((f) => !f.isDir && f.path === remembered)) ||
+  const rememberedFile = remembered && files.value.find((f) => !f.isDir && f.path === remembered)
+  const firstFile =
+    files.value.find((f) => !f.isDir && !isGeneratedPath(f.path)) ??
     files.value.find((f) => !f.isDir)
+  const target = rememberedFile || firstFile
   if (target) {
     await openFile(target.path)
   } else {
