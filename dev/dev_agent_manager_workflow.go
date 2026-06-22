@@ -99,6 +99,9 @@ type WorkRequest struct {
 	Input       string
 	FlowType    string
 	FlowOptions map[string]interface{}
+	// Title is required for IDD flows, which carry no free-form input/description
+	// and use the title for branch naming and the intent commit message.
+	Title string
 }
 
 type WorkRequestResult struct {
@@ -337,8 +340,17 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 			PlannedDevOptions: options,
 		})
 	} else if workRequest.FlowType == "idd" {
-		// TODO dispatch to IddWorkflow once it is implemented.
-		return domain.Flow{}, fmt.Errorf("flow type 'idd' is not yet supported")
+		if strings.TrimSpace(workRequest.Title) == "" {
+			return domain.Flow{}, fmt.Errorf("a non-empty title is required for the 'idd' flow type")
+		}
+		var options IddOptions
+		utils.Transcode(untypedOptions, &options)
+		childWorkflowFuture = workflow.ExecuteChildWorkflow(childCtx, IddWorkflow, IddWorkflowInput{
+			WorkspaceId: workspaceId,
+			RepoDir:     repoDir,
+			Title:       workRequest.Title,
+			IddOptions:  options,
+		})
 	} else {
 		log.Error("Invalid flow type", "FlowType", workRequest.FlowType)
 		return domain.Flow{}, fmt.Errorf("Invalid flow type '%s'. Valid values are 'basic_dev', 'planned_dev' and 'idd'", workRequest.FlowType)
