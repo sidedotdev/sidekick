@@ -202,7 +202,8 @@ const fetchFlow = async () => {
   try {
     const res = await fetch(flowBase.value)
     if (!res.ok) return
-    flow.value = (await res.json()) as Flow
+    const data = (await res.json()) as { flow: Flow }
+    flow.value = data.flow ?? null
   } catch (e) {
     console.error('Failed to fetch flow:', e)
   }
