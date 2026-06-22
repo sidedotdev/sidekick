@@ -25,6 +25,13 @@ vi.mock('../../lib/store', () => ({
   store: mockStore
 }))
 
+const { routerPushMock } = vi.hoisted(() => ({ routerPushMock: vi.fn() }))
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: routerPushMock }),
+  useRoute: () => ({ params: {}, query: {} }),
+}))
+
 const mockBranchesResponse = {
   branches: ['main', 'feature-1', 'feature-2']
 }
@@ -1330,5 +1337,113 @@ describe('TaskModal determineRequirements behavior', () => {
 
     const checkbox = wrapper.find('input[type="checkbox"]')
     expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+  })
+
+  describe('intent driven flow type', () => {
+    const mountIdd = () =>
+      mountModal({
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+
+    it('shows the title field and hides task fields when idd is selected', async () => {
+      vi.stubGlobal('fetch', createMockFetch())
+      const wrapper = mountIdd()
+
+      ;(wrapper.vm as any).flowType = 'idd'
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.find('#title').exists()).toBe(true)
+      expect(wrapper.find('#description').exists()).toBe(false)
+      // Only the Flow control remains; environment and repo mode are hidden.
+      expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(1)
+    })
+
+    it('does not start an idd task without a title', async () => {
+      const fetchMock = createMockFetch()
+      vi.stubGlobal('fetch', fetchMock)
+      const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {})
+      const wrapper = mountIdd()
+
+      ;(wrapper.vm as any).flowType = 'idd'
+      await wrapper.vm.$nextTick()
+
+      await wrapper.find('form').trigger('submit')
+      await flushPromises()
+
+      const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+      expect(taskCalls).toHaveLength(0)
+      expect(alertMock).toHaveBeenCalled()
+    })
+
+    it('starts an idd task with the title and without a description', async () => {
+      const fetchMock = vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+        if (url.toString().endsWith('/tasks/idd-task-id')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ task: { id: 'idd-task-id', flows: [{ id: 'idd-flow-id' }] } })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ task: { id: 'idd-task-id' } })
+        })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const wrapper = mountIdd()
+
+      ;(wrapper.vm as any).flowType = 'idd'
+      ;(wrapper.vm as any).title = 'My intent'
+      await wrapper.vm.$nextTick()
+
+      await wrapper.find('form').trigger('submit')
+      await flushPromises()
+
+      const taskCall = fetchMock.mock.calls.find((call) =>
+        call[0].toString().endsWith('/tasks') && call[1]?.method === 'POST'
+      )
+      expect(taskCall).toBeTruthy()
+      const taskInit = taskCall![1]!
+      expect(taskInit.method).toBe('POST')
+      const body = JSON.parse(taskInit.body as string)
+      expect(body.title).toBe('My intent')
+      expect(body.description).toBeUndefined()
+      expect(body.flowType).toBe('idd')
+      expect(body.status).toBe('to_do')
+    })
+
+    it('navigates to the intent canvas after starting an idd task', async () => {
+      routerPushMock.mockClear()
+      const fetchMock = vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+        if (url.toString().endsWith('/tasks/idd-task-id')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ task: { id: 'idd-task-id', flows: [{ id: 'idd-flow-id' }] } })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ task: { id: 'idd-task-id' } })
+        })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const wrapper = mountIdd()
+
+      ;(wrapper.vm as any).flowType = 'idd'
+      ;(wrapper.vm as any).title = 'My intent'
+      await wrapper.vm.$nextTick()
+
+      await wrapper.find('form').trigger('submit')
+      await flushPromises()
+
+      expect(routerPushMock).toHaveBeenCalledWith({
+        name: 'intent-canvas',
+        params: { id: 'idd-flow-id' },
+      })
+    })
   })
 })

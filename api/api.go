@@ -238,6 +238,10 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.GET("/:id/subflows", ctrl.GetFlowSubflowsHandler)
 	flowRoutes.POST("/:id/query", ctrl.QueryFlowHandler)
 	flowRoutes.POST("/:id/chat_history/hydrate", ctrl.HydrateChatHistoryHandler)
+	flowRoutes.GET("/:id/intent/files", ctrl.ListIntentFilesHandler)
+	flowRoutes.GET("/:id/intent/file", ctrl.ReadIntentFileHandler)
+	flowRoutes.PUT("/:id/intent/file", ctrl.WriteIntentFileHandler)
+	flowRoutes.POST("/:id/intent/start_subtask", ctrl.StartIntentSubtaskHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
@@ -1230,6 +1234,12 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *domain.Tas
 	err := devAgent.HandleNewTask(ctx, task)
 	if err != nil {
 		return err
+	}
+
+	// A cancelled/timed-out start context means the caller already reverted the
+	// task to drafting; persisting in-progress now would race with that revert.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 
 	// Update the task status to in progress
