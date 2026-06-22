@@ -72,6 +72,8 @@ according to the human author/user.
       markdown editor + filetree browser.
         - If no intent files exists, shows a prompt to create a new intent file
           in a intent/ directory, prompting for the file name.
+        - If intent files exist, open first non-generated one
+        - .generated files are shown last in filetree
         - Uses monaco or codemirror, whatever is easier to get all our desired
           features working in for now.
         - Theme of editor respects dark/light mode 
@@ -79,6 +81,7 @@ according to the human author/user.
             - 
         - Strong colors for markdown elements like headings or "-" for lists, etc
         - YAML syntax highlighting for the frontmatter
+        
         - Remembers which file was open last
         - Saves intent automatically as you type in the worktree
     - The canvas also has a right sidebar that supports showing the user:
