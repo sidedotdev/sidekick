@@ -141,7 +141,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { EditorView, basicSetup } from 'codemirror'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { store } from '../lib/store'
 
@@ -264,6 +264,11 @@ let editorView: EditorView | null = null
 let applyingExternal = false
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let savedTimer: ReturnType<typeof setTimeout> | null = null
+const themeCompartment = new Compartment()
+const darkModeMedia =
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null
 // Snapshot of the document queued for a debounced save, captured at schedule
 // time so switching files before the timer fires can't save the wrong path.
 let pendingSave: { path: string; content: string } | null = null
@@ -379,7 +384,7 @@ const createEditor = () => {
               scheduleSave()
             }
           }),
-          editorTheme,
+          themeCompartment.of(buildEditorTheme(darkModeMedia?.matches ?? false)),
         ],
       }),
     })
@@ -388,15 +393,26 @@ const createEditor = () => {
   }
 }
 
-const editorTheme = EditorView.theme({
-  '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
-  '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
-  '.cm-content': { padding: '1.75rem 2rem', lineHeight: '1.6' },
-  '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--color-text-2)' },
-  '.cm-activeLine': { backgroundColor: 'var(--color-background-mute)' },
-  '.cm-activeLineGutter': { backgroundColor: 'transparent' },
-  '&.cm-focused': { outline: 'none' },
-})
+const buildEditorTheme = (isDark: boolean) =>
+  EditorView.theme(
+    {
+      '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
+      '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
+      '.cm-content': { padding: '1.75rem 2rem', lineHeight: '1.6' },
+      '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--color-text-2)' },
+      '.cm-activeLine': { backgroundColor: 'var(--color-background-mute)' },
+      '.cm-activeLineGutter': { backgroundColor: 'transparent' },
+      '&.cm-focused': { outline: 'none' },
+    },
+    { dark: isDark },
+  )
+
+const handleColorSchemeChange = (event: MediaQueryListEvent) => {
+  if (!editorView) return
+  editorView.dispatch({
+    effects: themeCompartment.reconfigure(buildEditorTheme(event.matches)),
+  })
+}
 
 const beginNewFile = async () => {
   showNewFileForm.value = true
@@ -456,6 +472,7 @@ onMounted(async () => {
   await fetchIddState()
   iddStateTimer = setInterval(fetchIddState, 5000)
   window.addEventListener('keydown', handleShortcut)
+  darkModeMedia?.addEventListener('change', handleColorSchemeChange)
 })
 
 onBeforeUnmount(() => {
@@ -463,6 +480,7 @@ onBeforeUnmount(() => {
   if (savedTimer) clearTimeout(savedTimer)
   if (iddStateTimer) clearInterval(iddStateTimer)
   window.removeEventListener('keydown', handleShortcut)
+  darkModeMedia?.removeEventListener('change', handleColorSchemeChange)
   editorView?.destroy()
   editorView = null
 })
