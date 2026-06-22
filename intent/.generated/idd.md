@@ -16,6 +16,15 @@ intent_links:
     code:
       - dev/basic_dev_workflow.go:BasicDevOptions
       - dev/basic_dev_workflow.go:mergeWorktreeIfApproved
+  - intent: "#finishing-idd-via-confirmed-merge"
+    code:
+      - dev/idd_workflow.go:IddWorkflow
+      - dev/idd_workflow.go:FinishIddSignal
+      - dev/idd_workflow.go:finishIdd
+      - api/intent_api.go:ListIntentBranchesHandler
+      - api/intent_api.go:FinishIntentDiffHandler
+      - api/intent_api.go:FinishIntentHandler
+      - frontend/src/views/IntentCanvasView.vue
 ---
 # Inferred IDD Implementation Notes
 
@@ -50,6 +59,16 @@ task itself to in-progress.
 Sub-task worktrees auto-merge back into their start branch (the idd worktree
 branch) on completion, reusing the existing start branch rather than a separate
 merge-target option.
+
+## Finishing IDD via confirmed merge
+
+A "Finish IDD" button on the canvas opens a dialog where the user picks the
+merge target branch (defaulting to the idd worktree's start branch, exposed via
+the `idd_state` query) and confirms after reviewing the diff that would be
+merged (`git diff <target>...HEAD` from the worktree). Confirmation signals the
+long-running IDD workflow, which commits any pending intent, merges its branch
+into the chosen target, cleans up the worktree, and exits cleanly so the parent
+task workflow marks the IDD task completed.
 
 ## Uncommitted intent baseline comes from HEAD
 

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"sidekick/coding/git"
 	"sidekick/dev"
 	"sidekick/srv"
 
@@ -36,6 +37,11 @@ type WriteIntentFileRequest struct {
 // StartIntentSubtaskRequest is the body for launching an intent sub-task.
 type StartIntentSubtaskRequest struct {
 	Update bool `json:"update"`
+}
+
+// FinishIntentRequest is the body for finishing the idd flow with a merge.
+type FinishIntentRequest struct {
+	TargetBranch string `json:"targetBranch"`
 }
 
 // flowWorktreeDir resolves the working directory of the worktree backing a flow,
@@ -265,4 +271,118 @@ func (ctrl *Controller) StartIntentSubtaskHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Intent sub-task started"})
+}
+
+// currentWorktreeBranch returns the branch checked out in the given worktree
+// directory, used to identify the idd worktree's source branch.
+func currentWorktreeBranch(ctx context.Context, worktreeDir string) string {
+	cmd := exec.CommandContext(ctx, "git", "symbolic-ref", "--short", "HEAD")
+	cmd.Dir = worktreeDir
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
+}
+
+// ListIntentBranchesHandler returns the list of local branches in the flow's
+// repository alongside the worktree's current branch, for use by the finish-idd
+// merge target picker.
+func (ctrl *Controller) ListIntentBranchesHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	worktreeDir, status, err := ctrl.flowWorktreeDir(c.Request.Context(), workspaceId, flowId)
+	if err != nil {
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	branches, err := git.ListLocalBranches(c.Request.Context(), worktreeDir)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to list branches for intent finish")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list branches"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"branches":      branches,
+		"currentBranch": currentWorktreeBranch(c.Request.Context(), worktreeDir),
+	})
+}
+
+// FinishIntentDiffHandler returns the diff that would be merged from the idd
+// worktree branch into the given target branch.
+func (ctrl *Controller) FinishIntentDiffHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	target := strings.TrimSpace(c.Query("target"))
+	if target == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target branch is required"})
+		return
+	}
+
+	worktreeDir, status, err := ctrl.flowWorktreeDir(c.Request.Context(), workspaceId, flowId)
+	if err != nil {
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	cmd := exec.CommandContext(c.Request.Context(), "git", "diff", target+"...HEAD")
+	cmd.Dir = worktreeDir
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	if runErr := cmd.Run(); runErr != nil {
+		log.Error().Err(runErr).Str("workspaceId", workspaceId).Str("flowId", flowId).Str("target", target).Str("stderr", errBuf.String()).Msg("Failed to compute intent finish diff")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to compute diff against %s", target)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"target": target,
+		"diff":   out.String(),
+	})
+}
+
+// FinishIntentHandler signals the IddWorkflow to merge its worktree into the
+// requested target branch and exit.
+func (ctrl *Controller) FinishIntentHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	var req FinishIntentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.TargetBranch) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "targetBranch is required"})
+		return
+	}
+
+	if _, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	err := ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameFinishIdd, dev.FinishIddSignal{TargetBranch: req.TargetBranch})
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to signal intent finish")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to finish intent: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Intent finish requested"})
 }

@@ -242,6 +242,9 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.GET("/:id/intent/file", ctrl.ReadIntentFileHandler)
 	flowRoutes.PUT("/:id/intent/file", ctrl.WriteIntentFileHandler)
 	flowRoutes.POST("/:id/intent/start_subtask", ctrl.StartIntentSubtaskHandler)
+	flowRoutes.GET("/:id/intent/branches", ctrl.ListIntentBranchesHandler)
+	flowRoutes.GET("/:id/intent/finish_diff", ctrl.FinishIntentDiffHandler)
+	flowRoutes.POST("/:id/intent/finish", ctrl.FinishIntentHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
