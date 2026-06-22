@@ -123,15 +123,18 @@ according to the human author/user.
 
 ### Finish UI
 
-          - UI where you can
+- UI where you can
             select the branch to merge back into (default: start branch), and shows
             you the diff that will be merged, and lets you confirm.
-          - Diff is displayed using existing expandable DiffFile components
+          - Diff is displayed using existing unified diff viewer, with unexpanded files by default
           - Finishing means that the idd flow
               - Merges into the selected target branch
               - Cleans up its worktree
               - Cancels sub tasks that are still going
-              - And sends a completion signal so that the task is marked completed
+              - And sends a completion signal
+              - The temporal ends immediately after sending the completion signal
+              - The flow status is updated to complete
+              - The parent task is marked completed too
 
 ### Starting intent sub tasks
     - Pressing the button to start results in saving and git committing the

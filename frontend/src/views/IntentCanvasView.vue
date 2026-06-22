@@ -1348,8 +1348,7 @@ onBeforeUnmount(() => {
 }
 
 .finish-diff {
-  overflow: auto;
-  max-height: 22rem;
+  overflow: scroll;
 }
 
 .finish-empty {
