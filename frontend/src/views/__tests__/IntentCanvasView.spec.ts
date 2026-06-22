@@ -78,7 +78,7 @@ describe('IntentCanvasView', () => {
     }
   })
 
-  it('renders the intent filetree and opens the first file', async () => {
+  it('renders the intent filetree and prompts the user to pick a file without auto-opening one', async () => {
     const fetchSpy = installFetch((url) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
@@ -104,12 +104,15 @@ describe('IntentCanvasView', () => {
     const rows = wrapper.findAll('.file-row')
     expect(rows.map((r) => r.text())).toEqual(['overview.md', 'specs', 'auth.md'])
 
-    expect(fetchSpy).toHaveBeenCalledWith(`${intentBase}/file?path=${encodeURIComponent('intent/overview.md')}`)
-    expect(wrapper.find('.crumb').text()).toBe('intent/overview.md')
-    expect(wrapper.find('.welcome').exists()).toBe(false)
+    const fileFetches = fetchSpy.mock.calls.filter(([url]) =>
+      String(url).includes('/intent/file?path='),
+    )
+    expect(fileFetches).toHaveLength(0)
+    expect(wrapper.find('.crumb').exists()).toBe(false)
+    expect(wrapper.find('.welcome').text()).toContain('Pick a file')
   })
 
-  it('orders .generated entries last and opens the first non-generated file', async () => {
+  it('orders .generated entries last and still does not auto-open a file', async () => {
     const fetchSpy = installFetch((url) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
@@ -135,8 +138,11 @@ describe('IntentCanvasView', () => {
     const rows = wrapper.findAll('.file-row')
     expect(rows.map((r) => r.text())).toEqual(['overview.md', '.generated', 'inferred.md'])
 
-    expect(fetchSpy).toHaveBeenCalledWith(`${intentBase}/file?path=${encodeURIComponent('intent/overview.md')}`)
-    expect(wrapper.find('.crumb').text()).toBe('intent/overview.md')
+    const fileFetches = fetchSpy.mock.calls.filter(([url]) =>
+      String(url).includes('/intent/file?path='),
+    )
+    expect(fileFetches).toHaveLength(0)
+    expect(wrapper.find('.crumb').exists()).toBe(false)
   })
 
   it('shows a create prompt when no intent files exist and creates one in intent/', async () => {
