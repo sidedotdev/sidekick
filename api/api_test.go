@@ -360,6 +360,38 @@ func TestCreateTaskHandler(t *testing.T) {
 	}
 }
 
+func TestCreateTaskHandler_PersistsTitleForIdd(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+
+	taskReq := TaskRequest{
+		Title:    "My intent",
+		FlowType: domain.FlowTypeIdd,
+	}
+	workspaceId := "ws_" + ksuid.New().String()
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+	jsonData, err := json.Marshal(taskReq)
+	assert.NoError(t, err)
+	c.Request = httptest.NewRequest("POST", "/tasks", bytes.NewBuffer(jsonData))
+	ctrl.CreateTaskHandler(c)
+
+	assert.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	responseBody := make(map[string]domain.Task)
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+	responseTask, hasTask := responseBody["task"]
+	assert.True(t, hasTask)
+	assert.Equal(t, "My intent", responseTask.Title)
+	assert.Equal(t, domain.FlowTypeIdd, responseTask.FlowType)
+
+	persisted, err := ctrl.service.GetTask(context.Background(), workspaceId, responseTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "My intent", persisted.Title)
+}
+
 func TestCreateTaskHandler_TemporalFailure(t *testing.T) {
 	t.Parallel()
 
@@ -1312,6 +1344,62 @@ func TestUpdateTaskHandler(t *testing.T) {
 	assert.Equal(t, req.Status, string(updatedTask.Status))
 	// New assertions for 'updated' field
 	assert.WithinDuration(t, time.Now(), updatedTask.Updated, time.Second, "'updated' field should be current time")
+}
+
+func TestUpdateTaskHandler_TitleOnlyUpdatedWhenNonEmpty(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+
+	task := domain.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Title:       "original title",
+		Description: "original description",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusToDo,
+	}
+	err := ctrl.service.PersistTask(context.Background(), task)
+	require.NoError(t, err)
+
+	emptyTitleReq := TaskRequest{
+		Description: "updated description",
+		AgentType:   string(domain.AgentTypeHuman),
+		Status:      string(domain.TaskStatusDrafting),
+	}
+	reqBody, _ := json.Marshal(emptyTitleReq)
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = httptest.NewRequest(http.MethodPut, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, bytes.NewBuffer(reqBody))
+	ginCtx.Params = []gin.Param{
+		{Key: "workspaceId", Value: task.WorkspaceId},
+		{Key: "id", Value: task.Id},
+	}
+	ctrl.UpdateTaskHandler(ginCtx)
+	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+	updatedTask, err := ctrl.service.GetTask(context.Background(), task.WorkspaceId, task.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "original title", updatedTask.Title, "title should be preserved when request title is empty")
+	assert.Equal(t, "updated description", updatedTask.Description)
+
+	newTitleReq := TaskRequest{
+		Title:       "new title",
+		Description: "updated description",
+		AgentType:   string(domain.AgentTypeHuman),
+		Status:      string(domain.TaskStatusDrafting),
+	}
+	reqBody, _ = json.Marshal(newTitleReq)
+	ginCtx2, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx2.Request = httptest.NewRequest(http.MethodPut, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, bytes.NewBuffer(reqBody))
+	ginCtx2.Params = []gin.Param{
+		{Key: "workspaceId", Value: task.WorkspaceId},
+		{Key: "id", Value: task.Id},
+	}
+	ctrl.UpdateTaskHandler(ginCtx2)
+	assert.Equal(t, http.StatusOK, ginCtx2.Writer.Status())
+
+	updatedTask, err = ctrl.service.GetTask(context.Background(), task.WorkspaceId, task.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "new title", updatedTask.Title, "title should be updated when request title is non-empty")
 }
 
 func TestUpdateTaskHandler_UpdatesFlowType(t *testing.T) {

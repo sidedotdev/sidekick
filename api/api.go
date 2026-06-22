@@ -690,8 +690,7 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 		Id:          "task_" + ksuid.New().String(),
 		Created:     time.Now(),
 		Updated:     time.Now(),
-		// TODO add title afterwards automagically via LLM
-		// Title:       "",
+		Title:       taskReq.Title,
 		Description: taskReq.Description,
 		Status:      status, // Set the task status to the requested status
 		AgentType:   agentType,
@@ -1515,6 +1514,9 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	// Update the 'updated' field to the current time before persisting
 	task.Updated = time.Now()
 
+	if taskReq.Title != "" {
+		task.Title = taskReq.Title
+	}
 	task.Description = taskReq.Description
 	task.AgentType = agentType
 	task.Status = status
