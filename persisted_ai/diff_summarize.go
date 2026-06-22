@@ -600,9 +600,40 @@ func (c *embeddingCache) set(text, taskType string, vec embedding.EmbeddingVecto
 	if err != nil {
 		return fmt.Errorf("failed to marshal embedding for cache: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write cache file: %w", err)
+
+	tmpFile, err := os.CreateTemp(c.cacheDir, key+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary cache file: %w", err)
 	}
+
+	tmpPath := tmpFile.Name()
+	shouldRemoveTmp := true
+	defer func() {
+		if shouldRemoveTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to write temporary cache file: %w", err)
+	}
+	if err := tmpFile.Chmod(0644); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to set temporary cache file permissions: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to sync temporary cache file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary cache file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("failed to replace cache file: %w", err)
+	}
+	shouldRemoveTmp = false
 	return nil
 }
 
@@ -674,17 +705,59 @@ func buildSummarizedOutput(rankedChunks []DiffChunk, symbolSummaries map[string]
 	expandedChunks := make(map[chunkKey]bool)
 	var omittedChunks []chunkKey
 
-	// Add ranked chunks until we hit the limit
+	isStructuralMetadataChunk := func(content string) bool {
+		return strings.Contains(content, "\ndeleted file mode ") ||
+			strings.HasPrefix(content, "deleted file mode ") ||
+			strings.Contains(content, "\nrename from ") ||
+			strings.HasPrefix(content, "rename from ") ||
+			strings.Contains(content, "\nrename to ") ||
+			strings.HasPrefix(content, "rename to ")
+	}
+
 	var diffContent strings.Builder
-	for _, chunk := range rankedChunks {
-		key := chunkKey{filePath: chunk.FilePath, chunkIndex: chunk.ChunkIndex, linesAdded: chunk.LinesAdded, linesRemoved: chunk.LinesRemoved}
+	writeDiffChunk := func(chunk DiffChunk, key chunkKey) bool {
 		chunkSize := len(chunk.Content) + 1 // +1 for newline
 		if chunkSize <= remainingChars {
 			diffContent.WriteString(chunk.Content)
 			diffContent.WriteString("\n")
 			remainingChars -= chunkSize
 			expandedChunks[key] = true
-		} else {
+			return true
+		}
+
+		return false
+	}
+
+	// Preserve file-level metadata even when ranking prefers ordinary hunks.
+	for _, chunk := range rankedChunks {
+		if !isStructuralMetadataChunk(chunk.Content) {
+			continue
+		}
+
+		key := chunkKey{filePath: chunk.FilePath, chunkIndex: chunk.ChunkIndex, linesAdded: chunk.LinesAdded, linesRemoved: chunk.LinesRemoved}
+		if writeDiffChunk(chunk, key) {
+			continue
+		}
+
+		header := extractDiffHeader(chunk.Content)
+		headerSize := len(header) + 1
+		if header != "" && headerSize <= remainingChars {
+			diffContent.WriteString(header)
+			diffContent.WriteString("\n")
+			remainingChars -= headerSize
+		}
+		omittedChunks = append(omittedChunks, key)
+		expandedChunks[key] = true
+	}
+
+	// Add ranked chunks until we hit the limit
+	for _, chunk := range rankedChunks {
+		key := chunkKey{filePath: chunk.FilePath, chunkIndex: chunk.ChunkIndex, linesAdded: chunk.LinesAdded, linesRemoved: chunk.LinesRemoved}
+		if expandedChunks[key] {
+			continue
+		}
+
+		if !writeDiffChunk(chunk, key) {
 			omittedChunks = append(omittedChunks, key)
 		}
 	}

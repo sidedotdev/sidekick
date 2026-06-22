@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/flow_action"
 )
 
@@ -49,6 +51,11 @@ type StartDevRunInput struct {
 	CommandId        string
 	Context          DevRunContext
 	ExistingInstance *DevRunInstance
+	// EnvContainer is the code execution environment in which the dev run
+	// command should run. For SSH-capable envs the command runs remotely with
+	// the local ssh client as the supervising process; for local envs the
+	// command is exec'd directly in the env's working directory.
+	EnvContainer env.EnvContainer
 }
 
 // StartDevRunOutput contains the output from starting a Dev Run.
@@ -245,18 +252,19 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	// Build environment variables for the commands
 	envVars := buildDevRunEnvVars(input.Context)
 
-	// Determine working directory
+	// Determine working directory. For remote envs this is the path inside the
+	// env (set by callers via env.GetWorkingDirectory); startCommand will use
+	// it as a remote cd target rather than a local cmd.Dir.
 	workingDir := input.Context.WorktreeDir
 	if cmdConfig.WorkingDir != "" {
 		if filepath.IsAbs(cmdConfig.WorkingDir) {
 			workingDir = cmdConfig.WorkingDir
 		} else {
-			// Resolve relative paths against the worktree directory
 			workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.WorkingDir)
 		}
 	}
 
-	proc, err := a.startCommand(ctx, input.Context, cmdConfig.Command, workingDir, envVars, 0)
+	proc, err := a.startCommand(ctx, input.EnvContainer, input.Context, cmdConfig.Command, workingDir, envVars, 0)
 	if err != nil {
 		// Clean up any processes we started with proper timeout escalation
 		timeout := cmdConfig.StopTimeoutSeconds
@@ -294,8 +302,51 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	}, nil
 }
 
+// buildDevRunCmd constructs the local *exec.Cmd that supervises a dev run.
+// For SSH-capable envs the cmd is an `ssh -tt ... <remote shell pipeline>`
+// invocation so killing the local ssh client closes the channel and the
+// remote shell (with PTY allocated) receives SIGHUP. For local envs the cmd
+// is a direct `sh -c` invocation running in the env's working directory.
+func buildDevRunCmd(ctx context.Context, envContainer env.EnvContainer, command, workingDir string, envVars []string) (*exec.Cmd, error) {
+	if envContainer.Env != nil {
+		if sshEnv, ok := envContainer.Env.(env.SSHCapableEnv); ok {
+			sshArgs, err := sshEnv.SSHArgs(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get SSH args for env: %w", err)
+			}
+
+			shellParts := make([]string, 0, len(envVars)+2)
+			for _, ev := range envVars {
+				shellParts = append(shellParts, "export "+devRunShellQuote(ev))
+			}
+			shellParts = append(shellParts, "cd "+devRunShellQuote(workingDir))
+			// `exec` makes the user's shell the foreground process of the
+			// remote session leader so SIGHUP on channel close terminates it.
+			shellParts = append(shellParts, "exec sh -c "+devRunShellQuote(command))
+			remoteCmd := strings.Join(shellParts, " && ")
+
+			args := append([]string{"-tt"}, sshArgs...)
+			args = append(args, remoteCmd)
+			cmd := exec.Command("ssh", args...)
+			return cmd, nil
+		}
+	}
+
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Dir = workingDir
+	cmd.Env = append(os.Environ(), envVars...)
+	return cmd, nil
+}
+
+// devRunShellQuote wraps a string in single quotes, escaping any embedded
+// single quotes for safe interpolation into a POSIX shell command line.
+func devRunShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func (a *DevRunActivities) startCommand(
 	ctx context.Context,
+	envContainer env.EnvContainer,
 	devRunCtx DevRunContext,
 	command string,
 	workingDir string,
@@ -306,9 +357,14 @@ func (a *DevRunActivities) startCommand(
 	// activity/worker restarts. Lifecycle is managed explicitly: workflow
 	// cleanup (stopActiveDevRun, handleFlowCancel) calls StopDevRun which
 	// terminates processes via session-level signals (SIGINT→SIGKILL).
-	cmd := exec.Command("sh", "-c", command)
-	cmd.Dir = workingDir
-	cmd.Env = append(os.Environ(), envVars...)
+	//
+	// For SSH-capable envs, the command runs remotely and the local process
+	// is the ssh client; signaling/killing the ssh client closes the channel
+	// so the remote shell (running with a PTY via -tt) receives SIGHUP.
+	cmd, err := buildDevRunCmd(ctx, envContainer, command, workingDir, envVars)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create a new session so processes survive worker restarts
 	cmd.SysProcAttr = &syscall.SysProcAttr{

@@ -170,6 +170,12 @@ func downloadModelsDev(cachePath string) (modelsDevData, error) {
 	return data, nil
 }
 
+// modelsDevProviderAliases maps sidekick provider names to the corresponding
+// provider key used in the models.dev dataset, when they differ.
+var modelsDevProviderAliases = map[string]string{
+	"bedrock": "amazon-bedrock",
+}
+
 // returns model info from models.dev, and whether the provider matched the
 // requested provider (if not, but model info was returned, it means the model
 // exists in a different provider)
@@ -180,6 +186,9 @@ func GetModel(provider string, model string) (*ModelInfo, bool) {
 	}
 
 	providerLower := strings.ToLower(provider)
+	if aliased, ok := modelsDevProviderAliases[providerLower]; ok {
+		providerLower = strings.ToLower(aliased)
+	}
 	for providerKey, providerData := range data {
 		if strings.ToLower(providerKey) == providerLower {
 			if modelData, exists := providerData.Models[model]; exists {

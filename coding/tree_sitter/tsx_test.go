@@ -186,7 +186,7 @@ function UserList()
 			}
 
 			// Call GetFileSignatures with the path to the temp file
-			result, err := GetFileSignaturesString(tmpfile.Name())
+			result, err := GetFileSignaturesStringFromBytes("tsx", []byte(tc.code))
 			if err != nil {
 				t.Fatalf("GetFileSignatures returned an error: %v", err)
 			}
@@ -322,7 +322,7 @@ export default UserList;`,
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			symbolsString, err := GetFileSymbolsString(tmpfile.Name())
+			symbolsString, err := GetFileSymbolsStringFromBytes(tmpfile.Name(), "tsx", []byte(test.code))
 			if err != nil {
 				t.Fatalf("Failed to get symbols: %v", err)
 			}
@@ -408,7 +408,7 @@ func TestGetFileHeadersStringTsx(t *testing.T) {
 			if err := tmpfile.Close(); err != nil {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
-			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			result, err := GetFileHeadersStringFromBytes("tsx", []byte(tc.code), 0)
 			assert.Nil(t, err)
 			// Check the result
 			if result != tc.expected {

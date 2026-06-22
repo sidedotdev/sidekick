@@ -124,7 +124,7 @@ func TestGetFileSignaturesStringTypescript(t *testing.T) {
 			}
 
 			// Call GetFileSignatures with the path to the temp file
-			result, err := GetFileSignaturesString(tmpfile.Name())
+			result, err := GetFileSignaturesStringFromBytes("typescript", []byte(tc.code))
 			if err != nil {
 				t.Fatalf("GetFileSignatures returned an error: %v", err)
 			}
@@ -253,7 +253,7 @@ function add(a: number, b: number): number {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			symbolsString, err := GetFileSymbolsString(tmpfile.Name())
+			symbolsString, err := GetFileSymbolsStringFromBytes(tmpfile.Name(), "typescript", []byte(test.code))
 			if err != nil {
 				t.Fatalf("Failed to get symbols: %v", err)
 			}
@@ -455,7 +455,7 @@ export const x = someFunction({
 			}
 			defer os.Remove(filePath)
 
-			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			definition, err := GetSymbolDefinitionsStringFromBytes("typescript", []byte(tc.code), tc.symbolName, 0)
 			if err != nil {
 				if tc.expectedError == "" {
 					t.Fatalf("Unexpected error: %v", err)
@@ -574,7 +574,7 @@ func TestGetFileHeadersStringTypescript(t *testing.T) {
 			if err := tmpfile.Close(); err != nil {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
-			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			result, err := GetFileHeadersStringFromBytes("typescript", []byte(tc.code), 0)
 			assert.Nil(t, err)
 			// Check the result
 			if result != tc.expected {
@@ -619,7 +619,7 @@ func TestGetSymbolDefinitionTypescriptEnum(t *testing.T) {
 			}
 			defer os.Remove(filePath)
 
-			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			definition, err := GetSymbolDefinitionsStringFromBytes("typescript", []byte(tc.code), tc.symbolName, 0)
 
 			if tc.expectedError != "" {
 				// We expect an error

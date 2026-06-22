@@ -162,18 +162,30 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 
 	// Clone or update the repo inside the sandbox.
 	// If the repo already exists (sandbox reuse), fetch from the bundle and
-	// reset to match; otherwise clone fresh.
+	// reset to match; otherwise clone fresh. On reuse, the bundle's prior
+	// HEAD branch may have been pruned by --prune, leaving the sandbox HEAD
+	// dangling; we re-point HEAD at the bundle's HEAD ref and reset via
+	// FETCH_HEAD to recover.
 	quotedRepo := shellQuote(containerRepoDir)
 	quotedBundle := shellQuote(remoteBundlePath)
 	cloneScript := fmt.Sprintf(
 		"if [ -d %s/.git ]; then "+
-			"cd %s && git fetch %s '+refs/*:refs/*' --prune && git reset --hard HEAD; "+
+			"cd %s && "+
+			"head_ref=$(git ls-remote --symref %s HEAD 2>/dev/null | awk '/^ref:/ {print $2; exit}') && "+
+			"git fetch --update-head-ok %s '+refs/*:refs/*' --prune && "+
+			"if [ -n \"$head_ref\" ]; then git symbolic-ref HEAD \"$head_ref\"; fi && "+
+			"git fetch %s && "+
+			"if ! git rev-parse --verify HEAD >/dev/null 2>&1; then git update-ref --no-deref HEAD \"$(git rev-parse FETCH_HEAD)\"; fi && "+
+			"git reset --hard FETCH_HEAD; "+
 			"else "+
 			"mkdir -p %s && git clone %s %s && cd %s && "+
 			"git config user.name 'Sidekick' && git config user.email 'sidekick@side.dev'; "+
 			"fi && rm -f %s",
 		quotedRepo,
-		quotedRepo, quotedBundle,
+		quotedRepo,
+		quotedBundle,
+		quotedBundle,
+		quotedBundle,
 		shellQuote(filepath.Dir(containerRepoDir)), quotedBundle, quotedRepo, quotedRepo,
 		quotedBundle,
 	)

@@ -9,7 +9,7 @@
     </div>
 
     <h3 v-if="task.title" class="task-title">{{ task.title }}</h3>
-    <p class="task-description">{{ task.description }}</p>
+    <p class="task-description" @mouseleave.self="handleDescriptionBlur">{{ task.description }}</p>
     <div class="card-footer">
       <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
       <span v-if="task.archived" class="archived-label">Archived</span>
@@ -208,6 +208,12 @@ const cancelTask = async () => {
     emit('error', errorData.error || 'Failed to cancel task')
   }
 }
+
+const handleDescriptionBlur = (event: FocusEvent) => {
+  // we switch to scrolling overflow and back to hidden, but it can stay
+  // scrolled which is very odd looking
+  ;(event.target as HTMLElement).scrollTop = 0
+}
 </script>
 
 
@@ -239,7 +245,7 @@ const cancelTask = async () => {
   border: 1px solid var(--task-card-border);
   background-color: var(--task-card-background);
   border-radius: 2px;
-  padding: var(--task-pad) calc(var(--task-pad) / 2);
+  padding: calc(var(--task-pad) / 2);
   transition: box-shadow 0.3s ease;
   font-family: sans-serif;
   height: 7.5rem;
@@ -299,44 +305,57 @@ const cancelTask = async () => {
 
 .task-title {
   margin: 0 0 0.25rem 0;
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: 1.05rem;
   line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.task-card:hover .task-title {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  background-color: var(--task-card-hover-background);
 }
 
 .task-description {
   overflow: hidden;
   word-wrap: break-word;
   margin: 0 0 0.5rem 0;
-  font-size: 0.85rem;
+  white-space: pre-wrap;
+  font-size: 0.85;
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
+.task-card:not(.has-title) .task-description {
+    padding-top: 0
+}
+
 /* When no title, make the first line title-sized */
 .task-card:not(.has-title) .task-description::first-line {
-  font-size: 0.95rem;
+  font-size: 1.05rem;
   line-height: 2.0;
 }
 
 .task-card:hover .task-description {
   display: block;
   -webkit-line-clamp: unset;
-  white-space: pre-wrap;
   position: relative;
   z-index: 1;
   max-height: 24rem;
   /* TODO: only engage scroll capture when user starts scrolling within this element */
   overflow-y: auto;
   background-color: var(--task-card-hover-background);
-  padding: 0.4rem calc(var(--task-pad) / 2);
-  margin-left: calc(var(--task-pad) / -2);
-  margin-right: calc(var(--task-pad) / -2);
+  padding: calc(1px + var(--task-pad) / 2);
+  margin: calc(-1px - var(--task-pad) / 2);
+  padding-top: 0;
+  margin-top: 0;
   border-radius: 0 0 2px 2px;
 }
 

@@ -385,7 +385,8 @@ func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowA
 
 	//fmt.Printf("putFlowAction with:\n")
 	//utils.PrettyPrint(flowAction)
-	err := workflow.ExecuteActivity(eCtx, fa.PersistFlowAction, flowAction).Get(eCtx, nil)
+	storageCtx := utils.WithStorageActivityOptions(eCtx)
+	err := workflow.ExecuteActivity(storageCtx, fa.PersistFlowAction, flowAction).Get(storageCtx, nil)
 	if err != nil {
 		if eCtx.GlobalState != nil && (eCtx.GlobalState.Paused || eCtx.GlobalState.GetPendingUserAction() != nil) {
 			return domain.FlowAction{}, PendingActionError
@@ -423,7 +424,8 @@ func setupSubflow(eCtx ExecContext, detached bool, subflowType, subflowName stri
 
 func putSubflow(eCtx ExecContext, subflow domain.Subflow) (domain.Subflow, error) {
 	var fa *FlowActivities // nil struct pointer for struct-based activities
-	err := workflow.ExecuteActivity(eCtx, fa.PersistSubflow, subflow).Get(eCtx, nil)
+	storageCtx := utils.WithStorageActivityOptions(eCtx)
+	err := workflow.ExecuteActivity(storageCtx, fa.PersistSubflow, subflow).Get(storageCtx, nil)
 	if err != nil {
 		if eCtx.GlobalState != nil && (eCtx.GlobalState.Paused || eCtx.GlobalState.GetPendingUserAction() != nil) {
 			return domain.Subflow{}, PendingActionError

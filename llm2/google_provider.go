@@ -50,6 +50,11 @@ func resolveGoogleReasoningEffort(effort, model string) string {
 		return effort
 	}
 
+	// Google-compatible endpoints can proxy GPT models, such as LiteLLM routing OpenAI models through another provider API.
+	if resolvedEffort, ok := resolveGPTReasoningEffort(effort, model); ok {
+		return resolvedEffort
+	}
+
 	modelLower := strings.ToLower(model)
 	if !strings.Contains(modelLower, "gemini") {
 		if effort == "lowest" {

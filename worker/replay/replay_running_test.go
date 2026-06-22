@@ -185,6 +185,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			t.Logf("Skipping workflow %s: version %s is not in current branch history", wf.id, wf.sidekickVersion)
 			continue
 		}
+		t.Logf("Replaying workflow %s: sidekickVersion=%q", wf.id, wf.sidekickVersion)
 		filtered = append(filtered, wf.id)
 		if len(filtered) >= maxWorkflowsToReplay {
 			break

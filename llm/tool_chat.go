@@ -52,6 +52,7 @@ const (
 	OpenaiCompatibleToolChatProviderType          ToolChatProviderType = ToolChatProviderType(common.OpenaiCompatibleChatProvider)
 	OpenaiResponsesCompatibleToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.OpenaiResponsesCompatibleChatProvider)
 	GoogleToolChatProviderType                    ToolChatProviderType = ToolChatProviderType(common.GoogleChatProvider)
+	BedrockToolChatProviderType                   ToolChatProviderType = ToolChatProviderType(common.BedrockChatProvider)
 )
 
 type ToolChatOptions struct {

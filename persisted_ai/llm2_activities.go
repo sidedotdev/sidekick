@@ -278,6 +278,15 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 			customHeaders = providerConfig.CustomHeaders
 		}
 		return llm2.GoogleProvider{AuthType: authType, CustomHeaders: customHeaders}, nil
+	case llm.BedrockToolChatProviderType:
+		var customHeaders map[string]string
+		if providerConfig != nil {
+			customHeaders = providerConfig.CustomHeaders
+		}
+		return llm2.BedrockProvider{
+			AuthType:      authType,
+			CustomHeaders: customHeaders,
+		}, nil
 	case llm.UnspecifiedToolChatProviderType:
 		return nil, fmt.Errorf("llm2 provider was not specified")
 	default:

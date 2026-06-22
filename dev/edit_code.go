@@ -73,11 +73,12 @@ func applyEditBlocksAndReport(dCtx DevContext, editBlocks []EditBlock) (applyEdi
 			}
 
 			subflow := dCtx.FlowScope.Subflow
-			err = workflow.ExecuteActivity(dCtx, srv.Activities.AddFlowEvent, dCtx.WorkspaceId, subflow.FlowId, domain.CodeDiffEvent{
+			storageCtx := utils.WithStorageActivityOptions(dCtx)
+			err = workflow.ExecuteActivity(storageCtx, srv.Activities.AddFlowEvent, dCtx.WorkspaceId, subflow.FlowId, domain.CodeDiffEvent{
 				EventType: domain.CodeDiffEventType,
 				SubflowId: subflow.Id,
 				Diff:      diff,
-			}).Get(dCtx, nil)
+			}).Get(storageCtx, nil)
 			if err != nil {
 				return applyEditBlocksResult{}, fmt.Errorf("failed to emit code diff event: %v", err)
 			}

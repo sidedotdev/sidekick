@@ -6,10 +6,10 @@ import (
 )
 
 // ValidProviderTypes are the allowed provider types for custom providers
-var ValidProviderTypes = []string{"openai", "anthropic", "openai_compatible", "google", "openai_responses_compatible"}
+var ValidProviderTypes = []string{"openai", "anthropic", "openai_compatible", "google", "openai_responses_compatible", "bedrock"}
 
 // BuiltinProviders are the providers that are built into the system
-var BuiltinProviders = []string{"openai", "anthropic", "google"}
+var BuiltinProviders = []string{"openai", "anthropic", "google", "bedrock"}
 
 // ModelProviderConfig represents configuration for an LLM or embedding provider
 type ModelProviderConfig struct {

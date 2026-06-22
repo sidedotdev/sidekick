@@ -208,11 +208,13 @@ func TestDevPodEnvironment_MarshalUnmarshal(t *testing.T) {
 	originalEnv := &DevPodEnv{
 		WorkingDirectory: "/some/workspace/dir",
 		WorkspaceName:    "my-workspace",
+		LocalRepoDir:     "/host/path/to/repo",
 	}
 	envContainer := EnvContainer{Env: originalEnv}
 
 	jsonBytes, err := json.Marshal(envContainer)
 	assert.NoError(t, err)
+	assert.Contains(t, string(jsonBytes), `"localRepoDir":"/host/path/to/repo"`)
 
 	var unmarshaledEnvContainer EnvContainer
 	err = json.Unmarshal(jsonBytes, &unmarshaledEnvContainer)
@@ -221,6 +223,7 @@ func TestDevPodEnvironment_MarshalUnmarshal(t *testing.T) {
 	assert.Equal(t, originalEnv, unmarshaledEnvContainer.Env.(*DevPodEnv))
 	assert.Equal(t, EnvTypeDevPod, unmarshaledEnvContainer.Env.GetType())
 	assert.Equal(t, "/some/workspace/dir", unmarshaledEnvContainer.Env.GetWorkingDirectory())
+	assert.Equal(t, "/host/path/to/repo", unmarshaledEnvContainer.Env.(*DevPodEnv).LocalRepoDir)
 }
 
 func TestEnvContainer_MarshalJSON_NilEnv(t *testing.T) {
@@ -493,6 +496,40 @@ func TestDevPodWorkspaceName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.expected, DevPodWorkspaceName(tc.repoDir))
+		})
+	}
+}
+
+func TestPosixRel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		base    string
+		targ    string
+		want    string
+		wantErr bool
+	}{
+		{name: "same path", base: "/a/b", targ: "/a/b", want: "."},
+		{name: "child", base: "/a/b", targ: "/a/b/c/d", want: "c/d"},
+		{name: "sibling", base: "/a/b", targ: "/a/c", want: "../c"},
+		{name: "deeper base", base: "/a/b/c", targ: "/a/d", want: "../../d"},
+		{name: "root to child", base: "/", targ: "/a/b", want: "a/b"},
+		{name: "mixed abs/rel", base: "/a", targ: "b", wantErr: true},
+		{name: "both relative", base: "a/b", targ: "a/c", want: "../c"},
+		{name: "unclean paths", base: "/a//b/", targ: "/a/b/c", want: "c"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := posixRel(tt.base, tt.targ)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
 		})
 	}
 }

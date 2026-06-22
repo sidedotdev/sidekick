@@ -120,6 +120,7 @@ func handleDevRunStart(dCtx DevContext) {
 			CommandId:        commandId,
 			Context:          devRunCtx,
 			ExistingInstance: existingInstance,
+			EnvContainer:     *dCtx.EnvContainer,
 		}).Get(dCtx, &startOutput)
 		if err != nil {
 			workflow.GetLogger(dCtx).Warn("Failed to start Dev Run", "commandId", commandId, "error", err)

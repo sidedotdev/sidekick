@@ -154,6 +154,7 @@ const (
 	OpenaiCompatibleChatProvider          ChatProvider = "openai_compatible"
 	OpenaiResponsesCompatibleChatProvider ChatProvider = "openai_responses_compatible"
 	GoogleChatProvider                    ChatProvider = "google"
+	BedrockChatProvider                   ChatProvider = "bedrock"
 )
 
 type ToolChatProviderType string
@@ -164,6 +165,7 @@ const (
 	AnthropicToolChatProviderType        ToolChatProviderType = "anthropic"
 	GoogleToolChatProviderType           ToolChatProviderType = "google"
 	OpenaiCompatibleToolChatProviderType ToolChatProviderType = "openai_compatible"
+	BedrockToolChatProviderType          ToolChatProviderType = "bedrock"
 )
 
 var SmallModels = map[ToolChatProviderType]string{
@@ -172,6 +174,8 @@ var SmallModels = map[ToolChatProviderType]string{
 	AnthropicToolChatProviderType: "claude-haiku-4-5",
 
 	GoogleToolChatProviderType: "gemini-3-flash-preview",
+
+	BedrockToolChatProviderType: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
 func (provider ToolChatProviderType) SmallModel() string {
@@ -192,6 +196,8 @@ func StringToToolChatProviderType(providerType string) (ToolChatProviderType, er
 		return UnspecifiedToolChatProviderType, nil
 	case string(OpenaiCompatibleToolChatProviderType):
 		return OpenaiCompatibleToolChatProviderType, nil
+	case string(BedrockToolChatProviderType):
+		return BedrockToolChatProviderType, nil
 	default:
 		return UnspecifiedToolChatProviderType, fmt.Errorf("unknown provider: %s", providerType)
 	}

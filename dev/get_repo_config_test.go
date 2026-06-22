@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sidekick/env"
@@ -35,6 +36,60 @@ func (m *mockEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) 
 
 func (m *mockEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
 	return (&env.LocalEnv{WorkingDirectory: m.workingDir}).Walk(ctx, ignoreFileNames, handleEntry)
+}
+
+func (m *mockEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(m.workingDir, p)
+	}
+	return os.ReadFile(p)
+}
+
+func (m *mockEnv) ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error) {
+	return os.ReadDir(path)
+}
+
+func (m *mockEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(m.workingDir, p)
+	}
+	return os.WriteFile(p, data, perm)
+}
+
+func (m *mockEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(m.workingDir, p)
+	}
+	return os.MkdirAll(p, perm)
+}
+
+func (m *mockEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(m.workingDir, p)
+	}
+	return os.Stat(p)
+}
+
+func (m *mockEnv) Remove(ctx context.Context, p string) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(m.workingDir, p)
+	}
+	return os.Remove(p)
+}
+
+func (m *mockEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if dir != "" && !filepath.IsAbs(dir) {
+		dir = filepath.Join(m.workingDir, dir)
+	}
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	if cerr := f.Close(); cerr != nil {
+		return name, cerr
+	}
+	return name, nil
 }
 
 // setupTestEnv creates a test environment with a repo config file and optional hints file.
