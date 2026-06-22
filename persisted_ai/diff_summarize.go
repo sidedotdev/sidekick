@@ -474,8 +474,11 @@ func rankChunksByRelevance(ctx context.Context, chunks []DiffChunk, feedback str
 		rankedLists = append(rankedLists, rankedList)
 	}
 
-	// Fuse results using RRF
-	fusedRanking := FuseResultsRRF(rankedLists)
+	rankings := make([]WeightedRanking, len(rankedLists))
+	for i, list := range rankedLists {
+		rankings[i] = WeightedRanking{Items: list, Weight: BaselineRankWeight}
+	}
+	fusedRanking := FuseResults(rankings)
 
 	// Convert back to DiffChunk slice
 	result := make([]DiffChunk, 0, len(fusedRanking))

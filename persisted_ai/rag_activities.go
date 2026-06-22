@@ -26,21 +26,38 @@ type RankedDirSignatureOutlineOptions struct {
 	CharLimit int
 }
 
+// WeightedRankQuery is an additional embedding query merged into RAG ranking
+// alongside the baseline RankQuery, contributing with the given weight when
+// fused.
+type WeightedRankQuery struct {
+	Query  string
+	Weight float64
+}
+
 type RankedViaEmbeddingOptions struct {
 	WorkspaceId  string
 	EnvContainer env.EnvContainer
-	RankQuery    string
-	Secrets      secret_manager.SecretManagerContainer
-	ModelConfig  common.ModelConfig
+	// RankQuery is the baseline embedding query, contributing with weight 1.0.
+	RankQuery string
+	// WeightedRankQueries are additional queries merged into the ranking. Each
+	// is independently chunked, embedded, and searched; resulting ranked lists
+	// are fused with the baseline using their declared weights.
+	WeightedRankQueries []WeightedRankQuery
+	Secrets             secret_manager.SecretManagerContainer
+	ModelConfig         common.ModelConfig
 }
 
 func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
-	return map[string]interface{}{
+	params := map[string]interface{}{
 		"rankQuery": options.RankQuery,
 		"charLimit": options.CharLimit,
 		"provider":  options.ModelConfig.Provider,
 		"model":     options.ModelConfig.Model,
 	}
+	if len(options.WeightedRankQueries) > 0 {
+		params["weightedRankQueries"] = options.WeightedRankQueries
+	}
+	return params
 }
 
 // RankedDirSignatureOutline generates a ranked outline of the directory structure based on the query.
@@ -113,12 +130,30 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 		return []string{}, fmt.Errorf("failed to calculate embedding limits: %w", err)
 	}
 
-	// Split query into chunks if it exceeds max size, otherwise it's a single chunk.
+	// Build the full list of weighted queries: baseline RankQuery first, then
+	// any additional weighted queries. Each query is independently chunked so
+	// that each chunk's ranked search result contributes a separate ranking
+	// (sharing its parent query's weight) to the final fusion.
+	weightedQueries := make([]WeightedRankQuery, 0, 1+len(options.WeightedRankQueries))
+	weightedQueries = append(weightedQueries, WeightedRankQuery{Query: options.RankQuery, Weight: BaselineRankWeight})
+	weightedQueries = append(weightedQueries, options.WeightedRankQueries...)
+
 	var queryChunks []string
-	if len(options.RankQuery) > maxQueryChars {
-		queryChunks = splitQueryIntoChunks(options.RankQuery, goodQueryChars, maxQueryChars)
-	} else {
-		queryChunks = []string{options.RankQuery}
+	var chunkWeights []float64
+	for _, wq := range weightedQueries {
+		if strings.TrimSpace(wq.Query) == "" {
+			continue
+		}
+		var chunks []string
+		if len(wq.Query) > maxQueryChars {
+			chunks = splitQueryIntoChunks(wq.Query, goodQueryChars, maxQueryChars)
+		} else {
+			chunks = []string{wq.Query}
+		}
+		for _, c := range chunks {
+			queryChunks = append(queryChunks, c)
+			chunkWeights = append(chunkWeights, wq.Weight)
+		}
 	}
 
 	// NOTE: "code_retrieval_query" would be ideal here, but isn't supported by text-embedding-004
@@ -151,8 +186,11 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 		return []string{}, fmt.Errorf("failed multi-vector search: %w", err)
 	}
 
-	// rank-fusion to merge result sets. note: still works if there's just one result set
-	return FuseResultsRRF(resultSets), nil
+	rankings := make([]WeightedRanking, len(resultSets))
+	for i, set := range resultSets {
+		rankings[i] = WeightedRanking{Items: set, Weight: chunkWeights[i]}
+	}
+	return FuseResults(rankings), nil
 }
 
 // splitQueryIntoChunks splits a query into chunks based on sentence boundaries and size limits.
