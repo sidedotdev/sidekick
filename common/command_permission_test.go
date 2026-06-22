@@ -1413,6 +1413,51 @@ func TestEvaluateScriptPermission(t *testing.T) {
 	}
 }
 
+func TestEvaluateScriptPermission_HeredocFileWrite(t *testing.T) {
+	config := CommandPermissionConfig{
+		AutoApprove: []CommandPattern{
+			{Pattern: "cat"},
+		},
+	}
+
+	t.Run("heredoc to file is denied", func(t *testing.T) {
+		script := "cat > some/path << 'SOME_EOF'\nhello\nSOME_EOF"
+		result, msg := EvaluateScriptPermission(config, script)
+		assert.Equal(t, PermissionDeny, result)
+		assert.Contains(t, msg, "edit blocks")
+		assert.Contains(t, msg, "ESCAPE_HATCH_EOF")
+	})
+
+	t.Run("heredoc to file with redirect after heredoc is denied", func(t *testing.T) {
+		script := "cat << EOF > out.txt\nhi\nEOF"
+		result, msg := EvaluateScriptPermission(config, script)
+		assert.Equal(t, PermissionDeny, result)
+		assert.Contains(t, msg, "edit blocks")
+	})
+
+	t.Run("escape hatch delimiter requires approval even when commands auto-approved", func(t *testing.T) {
+		script := "cat > some/path << ESCAPE_HATCH_EOF\nhello\nESCAPE_HATCH_EOF"
+		result, _ := EvaluateScriptPermission(config, script)
+		assert.Equal(t, PermissionRequireApproval, result)
+	})
+
+	t.Run("heredoc without writing redirect is unaffected", func(t *testing.T) {
+		script := "cat << EOF\nhello\nEOF"
+		result, _ := EvaluateScriptPermission(config, script)
+		assert.Equal(t, PermissionAutoApprove, result)
+	})
+
+	t.Run("heredoc file write is denied regardless of command auto-approval", func(t *testing.T) {
+		denyConfig := CommandPermissionConfig{
+			Deny: []CommandPattern{{Pattern: "sudo", Message: "no sudo"}},
+		}
+		script := "cat > out.txt << EOF\nhi\nEOF"
+		result, msg := EvaluateScriptPermission(denyConfig, script)
+		assert.Equal(t, PermissionDeny, result)
+		assert.Contains(t, msg, "edit blocks")
+	})
+}
+
 func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 	config := BaseCommandPermissions()
 
@@ -1791,6 +1836,47 @@ func TestBasePermissions_RmRfPatterns(t *testing.T) {
 		// rm is not auto-approved since it's a destructive operation
 		result, _ := EvaluateCommandPermission(config, "rm file.txt")
 		assert.Equal(t, PermissionRequireApproval, result)
+	})
+}
+
+func TestBasePermissions_CatHeredocPatterns(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+	expectedMessage := "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"
+
+	t.Run("cat heredoc-to-file patterns are denied", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			`cat > main.go <<'EOF'`,
+			`cat << EOF > out.txt`,
+			`cat <<EOF > out.txt`,
+			`cat <<-EOF > out.txt`,
+			`cat <<'EOF' > out.txt`,
+			`cat <<"EOF" > out.txt`,
+			`cat <<MARKER > out.txt`,
+			`cat > file.txt << END`,
+			`cat >> notes.md <<EOF`,
+			"cat > main.go <<'EOF'\npackage main\nEOF",
+		}
+
+		for _, cmd := range commands {
+			result, msg := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionDeny, result, "expected deny for: %q", cmd)
+			assert.Equal(t, expectedMessage, msg, "wrong message for: %q", cmd)
+		}
+	})
+
+	t.Run("cat without heredoc-to-file is not denied", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			`cat <<EOF`,
+			`cat file.txt`,
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.NotEqual(t, PermissionDeny, result, "expected non-deny for: %q", cmd)
+		}
 	})
 }
 
