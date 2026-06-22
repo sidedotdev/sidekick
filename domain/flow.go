@@ -40,6 +40,7 @@ type FlowType = string
 const (
 	FlowTypeBasicDev   FlowType = "basic_dev"
 	FlowTypePlannedDev FlowType = "planned_dev"
+	FlowTypeIdd        FlowType = "idd"
 )
 
 func StringToFlowType(s string) (FlowType, error) {
@@ -48,6 +49,8 @@ func StringToFlowType(s string) (FlowType, error) {
 		return FlowTypeBasicDev, nil
 	case "planned_dev":
 		return FlowTypePlannedDev, nil
+	case "idd":
+		return FlowTypeIdd, nil
 	default:
 		return "", fmt.Errorf("Invalid flow type: \"%s\"", s)
 	}
