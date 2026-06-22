@@ -181,7 +181,6 @@
             v-if="finishDiff"
             class="finish-diff"
             :diff-string="finishDiff"
-            default-expanded
           />
           <p v-else-if="finishLoading" class="finish-empty">Loading diff…</p>
           <p v-else class="finish-empty">No changes to merge.</p>
