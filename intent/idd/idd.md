@@ -73,6 +73,7 @@ according to the human author/user.
         - If no intent files exists, shows a prompt to create a new intent file
           in a intent/ directory, prompting for the file name.
         - If intent files exist, open first non-generated one
+        
         - .generated files are shown last in filetree
         - Uses monaco or codemirror, whatever is easier to get all our desired
           features working in for now.
@@ -84,6 +85,10 @@ according to the human author/user.
         
         - Remembers which file was open last
         - Saves intent automatically as you type in the worktree
+        - Intent that is not yet committed is styled differently to committed
+          intent. This must use a diff algorithm that finds word-level changes
+          even in multi-line markdown with newlines shifting around.
+          
     - The canvas also has a right sidebar that supports showing the user:
         - A button to start implementing the current intent state
             - Clicking them opens the existing flow view component (not iframe, and without header/editor
