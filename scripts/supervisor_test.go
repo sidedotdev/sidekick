@@ -751,9 +751,12 @@ func TestRestartProcessClearsLogsAndShowsStoppingStatus(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create a script that outputs a unique marker based on an env var
+	// Create a script that outputs a unique marker based on an env var.
+	// Trap SIGTERM with a brief delay to widen the window in which the
+	// process is in the "stopping" state, mirroring TestRestartProcessSlowStop.
 	scriptPath := filepath.Join(tmpDir, "test.sh")
 	script := `#!/bin/sh
+trap 'sleep 1; exit 0' TERM
 echo "RUN_MARKER=$RUN_MARKER"
 sleep 30
 `
@@ -804,13 +807,21 @@ sleep 30
 		<-outputChan
 	}
 
-	// Now restart the process
+	// Launch the restart and synchronize on the notification RestartProcess
+	// sends immediately after StopProcess. At that moment stopping=true is
+	// guaranteed, avoiding a race where the stopping window is shorter than
+	// waitForCondition's 10ms polling interval.
 	go sup.RestartProcess(ctx, p, outputChan)
 
-	// Check that stopping status is set
-	waitForCondition(t, 2*time.Second, func() bool {
-		return p.isStopping()
-	}, "process should be in stopping state after restart begins")
+	select {
+	case <-outputChan:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for restart notification")
+	}
+
+	if !p.isStopping() {
+		t.Error("process should be in stopping state after restart begins")
+	}
 
 	// Check that logs are cleared
 	outputAfterClear := p.getOutput()
@@ -820,18 +831,9 @@ sleep 30
 		}
 	}
 
-	// Wait for restart to complete
-	time.Sleep(1 * time.Second)
-
-	// Process should be running again
-	if !p.isRunning() {
-		t.Error("process should be running after restart")
-	}
-
-	// Should not be in stopping state
-	if p.isStopping() {
-		t.Error("process should not be in stopping state after restart completes")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && !p.isStopping()
+	}, "process should be running and not stopping after restart completes")
 
 	// Old logs should still not be present (FIRST_RUN should be gone)
 	// New logs should show FIRST_RUN again since env is same
