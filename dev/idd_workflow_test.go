@@ -127,6 +127,113 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	s.Contains(capturedInput.Requirements, "diff body")
 }
 
+// TestFinishIddSignalMergesAndCloses drives the finish-path signal end-to-end:
+// a parent workflow launches a child that mirrors the IDD workflow's
+// finish-related selector branch with a ready DevContext, signals
+// SignalNameFinishIdd, and asserts the merge activity ran and a closure signal
+// with reason "completed" was delivered back to the parent.
+func (s *IddWorkflowTestSuite) TestFinishIddSignalMergesAndCloses() {
+	const iddBranch = "side/idd-worktree"
+	const targetBranch = "main"
+
+	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
+		return params.CommitAll && params.IgnoreNothingToCommit
+	})).Return("commit-sha", nil).Once()
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "deadbeef\n", ExitStatus: 0}, nil).Once()
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 0 && in.Args[0] == "show"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Once()
+
+	var capturedMergeParams git.GitMergeParams
+	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitMergeParams) bool {
+		capturedMergeParams = params
+		return true
+	})).Return(git.MergeActivityResult{HasConflicts: false}, nil).Once()
+
+	s.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	miniIdd := func(ctx workflow.Context) error {
+		ctx = utils.NoRetryCtx(ctx)
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
+				GlobalState: gs,
+				EnvContainer: &env.EnvContainer{
+					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
+				},
+			},
+			Worktree:   &domain.Worktree{Name: iddBranch},
+			RepoConfig: common.RepoConfig{},
+		}
+		state := &IddState{}
+		finishIddCh := workflow.GetSignalChannel(dCtx, SignalNameFinishIdd)
+		finished := false
+		for !finished {
+			selector := workflow.NewSelector(dCtx)
+			selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
+				var sig FinishIddSignal
+				c.Receive(dCtx, &sig)
+				if err := finishIdd(dCtx, IddWorkflowInput{
+					WorkspaceId: "test-workspace",
+					RepoDir:     "/tmp/repo",
+					Title:       "My Intent",
+				}, sig, state); err != nil {
+					workflow.GetLogger(dCtx).Error("Failed to finish idd flow", "Error", err)
+					return
+				}
+				finished = true
+			})
+			selector.Select(dCtx)
+			if dCtx.Err() != nil {
+				return dCtx.Err()
+			}
+		}
+		return signalWorkflowClosure(dCtx, "completed")
+	}
+	s.env.RegisterWorkflowWithOptions(miniIdd, workflow.RegisterOptions{Name: "miniIdd"})
+
+	parent := func(ctx workflow.Context) (WorkflowClosure, error) {
+		closureCh := workflow.GetSignalChannel(ctx, SignalNameWorkflowClosed)
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "child-idd",
+		})
+		childFuture := workflow.ExecuteChildWorkflow(childCtx, "miniIdd")
+		var execution workflow.Execution
+		if err := childFuture.GetChildWorkflowExecution().Get(ctx, &execution); err != nil {
+			return WorkflowClosure{}, err
+		}
+		if err := workflow.SignalExternalWorkflow(ctx, execution.ID, "", SignalNameFinishIdd, FinishIddSignal{TargetBranch: targetBranch}).Get(ctx, nil); err != nil {
+			return WorkflowClosure{}, err
+		}
+		var closure WorkflowClosure
+		closureCh.Receive(ctx, &closure)
+		if err := childFuture.Get(ctx, nil); err != nil {
+			return closure, err
+		}
+		return closure, nil
+	}
+	s.env.RegisterWorkflow(parent)
+
+	s.env.ExecuteWorkflow(parent)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var closure WorkflowClosure
+	s.NoError(s.env.GetWorkflowResult(&closure))
+	s.Equal("completed", closure.Reason)
+	s.Equal(iddBranch, capturedMergeParams.SourceBranch)
+	s.Equal(targetBranch, capturedMergeParams.TargetBranch)
+	s.Equal(git.MergeStrategyMerge, capturedMergeParams.MergeStrategy)
+}
+
 func TestIddWorkflowTestSuite(t *testing.T) {
 	suite.Run(t, new(IddWorkflowTestSuite))
 }
