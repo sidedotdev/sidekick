@@ -21,6 +21,10 @@ import (
 // state in its worktree and launch a sub-task that implements it.
 const SignalNameStartIntentSubtask = "startIntentSubtask"
 
+// SignalNameFinishIdd asks an IddWorkflow to merge its worktree into the
+// requested target branch, cleanup the worktree, and exit cleanly.
+const SignalNameFinishIdd = "finishIdd"
+
 // QueryNameIddState returns the current IddState, including ongoing sub-tasks
 // and any clarification questions surfaced by those sub-tasks.
 const QueryNameIddState = "idd_state"
@@ -52,6 +56,12 @@ type StartIntentSubtaskSignal struct {
 	Update bool
 }
 
+// FinishIddSignal is the payload for SignalNameFinishIdd, asking the workflow
+// to merge the idd worktree branch into TargetBranch and exit.
+type FinishIddSignal struct {
+	TargetBranch string `json:"targetBranch"`
+}
+
 // IddSubtask tracks an intent sub-task launched by the IddWorkflow.
 type IddSubtask struct {
 	FlowId string `json:"flowId"`
@@ -68,8 +78,11 @@ type IddClarification struct {
 
 // IddState is the query response describing an IddWorkflow's progress.
 type IddState struct {
-	Subtasks       []IddSubtask       `json:"subtasks"`
-	Clarifications []IddClarification `json:"clarifications"`
+	// DefaultTargetBranch is the branch the idd worktree was created off of,
+	// surfaced so the finish-flow UI can default its merge target.
+	DefaultTargetBranch string             `json:"defaultTargetBranch"`
+	Subtasks            []IddSubtask       `json:"subtasks"`
+	Clarifications      []IddClarification `json:"clarifications"`
 }
 
 // IddWorkflow drives the Intent Driven Development canvas: it sets up a worktree
@@ -115,8 +128,9 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	SetupDevRunStateQuery(dCtx)
 
 	state := &IddState{
-		Subtasks:       []IddSubtask{},
-		Clarifications: []IddClarification{},
+		DefaultTargetBranch: dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch),
+		Subtasks:            []IddSubtask{},
+		Clarifications:      []IddClarification{},
 	}
 	_ = workflow.SetQueryHandler(dCtx, QueryNameIddState, func() (IddState, error) {
 		return *state, nil
@@ -127,6 +141,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	// first time around. The check is evaluated once per workflow lifetime
 	// (the result is recorded on first execution).
 	subtaskBlockedTrackingVersion := workflow.GetVersion(dCtx, "idd-subtask-blocked-tracking", workflow.DefaultVersion, 1)
+	finishIddVersion := workflow.GetVersion(dCtx, "idd-finish-merge", workflow.DefaultVersion, 1)
 
 	startSubtaskCh := workflow.GetSignalChannel(dCtx, SignalNameStartIntentSubtask)
 	requestForUserCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameRequestForUser)
@@ -134,7 +149,12 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	if subtaskBlockedTrackingVersion >= 1 {
 		subtaskUnblockedCh = workflow.GetSignalChannel(dCtx, flow_action.SignalNameSubtaskUnblocked)
 	}
+	var finishIddCh workflow.ReceiveChannel
+	if finishIddVersion >= 1 {
+		finishIddCh = workflow.GetSignalChannel(dCtx, SignalNameFinishIdd)
+	}
 	workflowClosedCh := workflow.GetSignalChannel(dCtx, SignalNameWorkflowClosed)
+	finished := false
 
 	// The canvas keeps this workflow alive so the user can launch many sub-tasks
 	// over the lifetime of one intent worktree; it ends only on cancellation.
@@ -188,6 +208,18 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			})
 		}
 
+		if finishIddVersion >= 1 {
+			selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
+				var sig FinishIddSignal
+				c.Receive(dCtx, &sig)
+				if err := finishIdd(dCtx, input, sig, state); err != nil {
+					workflow.GetLogger(dCtx).Error("Failed to finish idd flow", "Error", err)
+					return
+				}
+				finished = true
+			})
+		}
+
 		selector.AddReceive(workflowClosedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var closure WorkflowClosure
 			c.Receive(dCtx, &closure)
@@ -195,6 +227,13 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		})
 
 		selector.Select(dCtx)
+
+		if finished {
+			if closureErr := signalWorkflowClosure(dCtx, "completed"); closureErr != nil {
+				workflow.GetLogger(dCtx).Error("Failed to signal idd workflow closure", "Error", closureErr)
+			}
+			return nil
+		}
 
 		if dCtx.Err() != nil {
 			return dCtx.Err()
@@ -334,4 +373,49 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		Diff:   showOutput.Stdout,
 		Update: update,
 	}, nil
+}
+
+// finishIdd commits any pending intent in the worktree, merges the idd
+// worktree branch into the requested target branch, and cleans up the
+// worktree. A clean exit lets the parent task workflow mark the IDD task
+// completed via the closure signal sent by the caller.
+func finishIdd(dCtx DevContext, input IddWorkflowInput, sig FinishIddSignal, state *IddState) error {
+	target := strings.TrimSpace(sig.TargetBranch)
+	if target == "" {
+		target = state.DefaultTargetBranch
+	}
+	if target == "" {
+		return fmt.Errorf("finish idd: no target branch specified")
+	}
+	if dCtx.Worktree == nil {
+		return fmt.Errorf("finish idd: no worktree associated with idd workflow")
+	}
+	if target == dCtx.Worktree.Name {
+		return fmt.Errorf("finish idd: target branch %q is the idd worktree branch", target)
+	}
+
+	if _, err := commitIntent(dCtx, input.Title, true); err != nil {
+		return fmt.Errorf("failed to commit pending intent before merge: %w", err)
+	}
+
+	var mergeResult git.MergeActivityResult
+	err := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, *dCtx.EnvContainer, git.GitMergeParams{
+		SourceBranch:  dCtx.Worktree.Name,
+		TargetBranch:  target,
+		CommitMessage: fmt.Sprintf("Finish IDD: %s", input.Title),
+		MergeStrategy: git.MergeStrategyMerge,
+	}).Get(dCtx, &mergeResult)
+	if err != nil {
+		return fmt.Errorf("failed to merge idd worktree into %s: %w", target, err)
+	}
+	if mergeResult.HasConflicts {
+		return fmt.Errorf("merge conflicts encountered while finishing idd into %s; resolve them manually", target)
+	}
+
+	cleanupErr := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, *dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "IDD flow finished").Get(dCtx, nil)
+	if cleanupErr != nil {
+		workflow.GetLogger(dCtx).Warn("Failed to cleanup IDD worktree after finish merge", "Error", cleanupErr)
+	}
+
+	return nil
 }

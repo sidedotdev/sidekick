@@ -100,6 +100,15 @@
           <kbd class="implement-hint">{{ shortcutLabel }}</kbd>
         </button>
 
+        <button
+          class="finish-btn"
+          type="button"
+          @click="openFinishDialog"
+          :disabled="finishing || finishLoading"
+        >
+          {{ finishing ? 'Finishing…' : 'Finish IDD' }}
+        </button>
+
         <section class="rail-section">
           <h2 class="rail-title">Sub-tasks</h2>
           <p v-if="!subtasks.length" class="rail-empty">No sub-tasks yet. Implement your intent to spin one up.</p>
@@ -135,6 +144,46 @@
       </header>
       <div class="side-panel-body">
         <FlowView :key="activeSubtaskFlowId" :flow-id="activeSubtaskFlowId" embedded />
+      </div>
+    </div>
+
+    <div v-if="showFinishDialog" class="finish-overlay" role="dialog" aria-modal="true" aria-label="Finish IDD">
+      <div class="finish-modal">
+        <header class="finish-head">
+          <h2 class="finish-title">Finish IDD</h2>
+          <button type="button" class="side-panel-close" @click="closeFinishDialog" aria-label="Cancel finish">×</button>
+        </header>
+        <div class="finish-body">
+          <label class="finish-field">
+            <span class="finish-label">Merge into branch</span>
+            <select
+              v-model="finishTargetBranch"
+              class="finish-select"
+              :disabled="finishLoading || finishing"
+              @change="loadFinishDiff"
+            >
+              <option v-for="branch in finishMergeTargets" :key="branch" :value="branch">{{ branch }}</option>
+            </select>
+          </label>
+
+          <section class="finish-diff-section">
+            <span class="finish-label">Diff to be merged</span>
+            <pre v-if="finishDiff" class="finish-diff">{{ finishDiff }}</pre>
+            <p v-else-if="finishLoading" class="finish-empty">Loading diff…</p>
+            <p v-else class="finish-empty">No changes to merge.</p>
+          </section>
+
+          <p v-if="finishError" class="finish-error">{{ finishError }}</p>
+        </div>
+        <footer class="finish-actions">
+          <button type="button" class="text-btn" @click="closeFinishDialog" :disabled="finishing">Cancel</button>
+          <button
+            type="button"
+            class="primary-btn"
+            :disabled="!finishTargetBranch || finishing || finishLoading"
+            @click="confirmFinish"
+          >{{ finishing ? 'Merging…' : 'Confirm merge' }}</button>
+        </footer>
       </div>
     </div>
   </div>
@@ -263,6 +312,8 @@ const fetchIddState = async () => {
     const result = data.result ?? {}
     subtasks.value = (result.subtasks ?? []) as IddSubtask[]
     clarifications.value = (result.clarifications ?? []) as IddClarification[]
+    const defaultTarget = (result.defaultTargetBranch ?? '') as string
+    if (defaultTarget) finishDefaultBranch.value = defaultTarget
   } catch (e) {
     console.error('Failed to query intent state:', e)
   }
@@ -292,6 +343,98 @@ const openSubtask = (subtaskFlowId: string) => {
 
 const closeSubtask = () => {
   activeSubtaskFlowId.value = null
+}
+
+const showFinishDialog = ref(false)
+const finishBranches = ref<string[]>([])
+const finishCurrentBranch = ref('')
+const finishDefaultBranch = ref('')
+const finishTargetBranch = ref('')
+const finishDiff = ref('')
+const finishLoading = ref(false)
+const finishing = ref(false)
+const finishError = ref('')
+
+const finishMergeTargets = computed(() =>
+  finishBranches.value.filter((b) => b !== finishCurrentBranch.value),
+)
+
+const loadFinishDiff = async () => {
+  if (!finishTargetBranch.value) {
+    finishDiff.value = ''
+    return
+  }
+  finishLoading.value = true
+  finishError.value = ''
+  try {
+    const res = await fetch(
+      `${apiBase.value}/finish_diff?target=${encodeURIComponent(finishTargetBranch.value)}`,
+    )
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json()
+    finishDiff.value = (data.diff ?? '') as string
+  } catch (e) {
+    console.error('Failed to load finish IDD diff:', e)
+    finishError.value = 'Failed to load diff'
+    finishDiff.value = ''
+  } finally {
+    finishLoading.value = false
+  }
+}
+
+const openFinishDialog = async () => {
+  finishError.value = ''
+  finishDiff.value = ''
+  showFinishDialog.value = true
+  finishLoading.value = true
+  try {
+    const res = await fetch(`${apiBase.value}/branches`)
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json()
+    finishBranches.value = (data.branches ?? []) as string[]
+    finishCurrentBranch.value = (data.currentBranch ?? '') as string
+    const candidates = finishBranches.value.filter((b) => b !== finishCurrentBranch.value)
+    const preferred =
+      finishDefaultBranch.value && candidates.includes(finishDefaultBranch.value)
+        ? finishDefaultBranch.value
+        : candidates[0] ?? ''
+    if (!finishTargetBranch.value || !candidates.includes(finishTargetBranch.value)) {
+      finishTargetBranch.value = preferred
+    }
+    await loadFinishDiff()
+  } catch (e) {
+    console.error('Failed to load finish IDD info:', e)
+    finishError.value = 'Failed to load branches'
+  } finally {
+    finishLoading.value = false
+  }
+}
+
+const closeFinishDialog = () => {
+  if (finishing.value) return
+  showFinishDialog.value = false
+}
+
+const confirmFinish = async () => {
+  if (!finishTargetBranch.value || finishing.value) return
+  finishing.value = true
+  finishError.value = ''
+  try {
+    const res = await fetch(`${apiBase.value}/finish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetBranch: finishTargetBranch.value }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    showFinishDialog.value = false
+    await fetchIddState()
+    await fetchFlow()
+  } catch (e) {
+    console.error('Failed to finish IDD:', e)
+    finishError.value = 'Failed to finish IDD'
+  } finally {
+    finishing.value = false
+  }
 }
 
 const handleShortcut = (event: KeyboardEvent) => {
@@ -1098,6 +1241,140 @@ onBeforeUnmount(() => {
 
 .loading {
   color: var(--color-text-2);
+}
+
+.finish-btn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+.finish-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background-color: var(--color-background-mute);
+}
+
+.finish-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.finish-overlay {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 2rem;
+}
+
+.finish-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(48rem, 90vw);
+  max-height: 90vh;
+  background-color: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.finish-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.finish-title {
+  font-size: 1rem;
+  margin: 0;
+  color: var(--color-heading);
+}
+
+.finish-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.finish-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.finish-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-2);
+}
+
+.finish-select {
+  padding: 0.45rem 0.6rem;
+  background-color: var(--color-background-soft);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.finish-diff-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-height: 0;
+}
+
+.finish-diff {
+  background-color: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  margin: 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  max-height: 22rem;
+  color: var(--color-text);
+}
+
+.finish-empty {
+  color: var(--color-text-2);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.finish-error {
+  color: var(--color-error-text);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.finish-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--color-border);
 }
 
 
