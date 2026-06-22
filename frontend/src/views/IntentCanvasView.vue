@@ -82,6 +82,58 @@
         <p class="loading">Loading intent…</p>
       </div>
     </section>
+
+    <aside class="rail" aria-label="Implementation">
+      <header class="rail-head">
+        <span class="eyebrow">Build</span>
+      </header>
+
+      <div class="rail-body">
+        <button
+          class="implement-btn"
+          type="button"
+          @click="startSubtask"
+          :disabled="starting"
+        >
+          <span class="implement-label">{{ starting ? 'Starting…' : 'Implement intent' }}</span>
+          <kbd class="implement-hint">{{ shortcutLabel }}</kbd>
+        </button>
+
+        <section class="rail-section">
+          <h2 class="rail-title">Sub-tasks</h2>
+          <p v-if="!subtasks.length" class="rail-empty">No sub-tasks yet. Implement your intent to spin one up.</p>
+          <ul v-else class="subtask-list">
+            <li v-for="(task, idx) in subtasks" :key="task.flowId">
+              <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
+                <span class="subtask-index">{{ String(idx + 1).padStart(2, '0') }}</span>
+                <span class="subtask-meta">
+                  <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
+                  <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+        </section>
+
+        <section v-if="clarifications.length" class="rail-section">
+          <h2 class="rail-title">Clarifications</h2>
+          <ul class="clarify-list">
+            <li v-for="(item, idx) in clarifications" :key="`${item.subtaskFlowId}-${idx}`" class="clarify-card">
+              <p class="clarify-question">{{ item.question }}</p>
+              <button type="button" class="clarify-link" @click="openSubtask(item.subtaskFlowId)">View sub-task</button>
+            </li>
+          </ul>
+        </section>
+      </div>
+    </aside>
+
+    <div v-if="activeSubtaskFlowId" class="side-panel" role="dialog" aria-label="Sub-task">
+      <header class="side-panel-head">
+        <span class="eyebrow">Sub-task</span>
+        <button type="button" class="side-panel-close" @click="closeSubtask" aria-label="Dismiss sub-task">×</button>
+      </header>
+      <iframe class="side-panel-frame" :src="`/flows/${activeSubtaskFlowId}`" title="Sub-task flow"></iframe>
+    </div>
   </div>
 </template>
 
@@ -103,9 +155,21 @@ interface FileNode extends IntentFileEntry {
   depth: number
 }
 
+interface IddSubtask {
+  flowId: string
+  commit: string
+  status: string
+}
+
+interface IddClarification {
+  subtaskFlowId: string
+  question: string
+}
+
 const route = useRoute()
 const flowId = computed(() => route.params.id as string)
-const apiBase = computed(() => `/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}/intent`)
+const flowBase = computed(() => `/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}`)
+const apiBase = computed(() => `${flowBase.value}/intent`)
 
 const files = ref<IntentFileEntry[]>([])
 const activePath = ref<string | null>(null)
@@ -124,6 +188,73 @@ const saveLabel = computed(() => {
     default: return ''
   }
 })
+
+const subtasks = ref<IddSubtask[]>([])
+const clarifications = ref<IddClarification[]>([])
+const starting = ref(false)
+const activeSubtaskFlowId = ref<string | null>(null)
+
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+const shortcutLabel = isMac ? '⌘↵' : 'Ctrl+↵'
+
+let iddStateTimer: ReturnType<typeof setInterval> | null = null
+
+const statusClass = (status: string): string => {
+  const normalized = (status || '').toLowerCase()
+  if (normalized.includes('complete') || normalized.includes('merged')) return 'done'
+  if (normalized.includes('fail') || normalized.includes('error')) return 'failed'
+  return 'active'
+}
+
+const fetchIddState = async () => {
+  try {
+    const res = await fetch(`${flowBase.value}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'idd_state' }),
+    })
+    if (!res.ok) return
+    const data = await res.json()
+    const result = data.result ?? {}
+    subtasks.value = (result.subtasks ?? []) as IddSubtask[]
+    clarifications.value = (result.clarifications ?? []) as IddClarification[]
+  } catch (e) {
+    console.error('Failed to query intent state:', e)
+  }
+}
+
+const startSubtask = async () => {
+  if (starting.value) return
+  starting.value = true
+  try {
+    const res = await fetch(`${apiBase.value}/start_subtask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ update: subtasks.value.length > 0 }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    await fetchIddState()
+  } catch (e) {
+    console.error('Failed to start intent sub-task:', e)
+  } finally {
+    starting.value = false
+  }
+}
+
+const openSubtask = (subtaskFlowId: string) => {
+  activeSubtaskFlowId.value = subtaskFlowId
+}
+
+const closeSubtask = () => {
+  activeSubtaskFlowId.value = null
+}
+
+const handleShortcut = (event: KeyboardEvent) => {
+  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault()
+    startSubtask()
+  }
+}
 
 const newFileInputRef = ref<HTMLInputElement | null>(null)
 const welcomeInputRef = ref<HTMLInputElement | null>(null)
@@ -300,11 +431,16 @@ onMounted(async () => {
   await fetchFiles()
   loading.value = false
   await focusFirstFile()
+  await fetchIddState()
+  iddStateTimer = setInterval(fetchIddState, 5000)
+  window.addEventListener('keydown', handleShortcut)
 })
 
 onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
   if (savedTimer) clearTimeout(savedTimer)
+  if (iddStateTimer) clearInterval(iddStateTimer)
+  window.removeEventListener('keydown', handleShortcut)
   editorView?.destroy()
   editorView = null
 })
@@ -312,11 +448,219 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .intent-canvas {
+  position: relative;
   display: grid;
-  grid-template-columns: 16rem 1fr;
+  grid-template-columns: 16rem 1fr 18rem;
   height: 100vh;
   background-color: var(--color-background);
   color: var(--color-text);
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--color-border);
+  background-color: var(--color-background-soft);
+  overflow-y: auto;
+}
+
+.rail-head {
+  padding: 1.25rem 1rem 0.75rem;
+}
+
+.rail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 0 1rem 1.5rem;
+}
+
+.implement-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  background-color: var(--color-primary);
+  border: none;
+  border-radius: 4px;
+  color: var(--color-cta-button-text);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0.65rem 0.9rem;
+  cursor: pointer;
+}
+
+.implement-btn:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.implement-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.implement-hint {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.7rem;
+  opacity: 0.8;
+  letter-spacing: 0.04em;
+}
+
+.rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.rail-title {
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-2);
+  margin: 0;
+}
+
+.rail-empty {
+  color: var(--color-text-2);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.subtask-list,
+.clarify-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+}
+
+.subtask-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: inherit;
+  padding: 0.5rem 0.65rem;
+  cursor: pointer;
+}
+
+.subtask-row:hover {
+  border-color: var(--color-primary);
+  background-color: var(--color-background-mute);
+}
+
+.subtask-index {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.75rem;
+  color: var(--color-text-2);
+}
+
+.subtask-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.subtask-commit {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.8rem;
+  color: var(--color-heading);
+}
+
+.subtask-status {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.subtask-status.active {
+  color: var(--color-link);
+}
+
+.subtask-status.done {
+  color: var(--color-green);
+}
+
+.subtask-status.failed {
+  color: var(--color-error-text);
+}
+
+.clarify-card {
+  border-left: 3px solid var(--color-primary);
+  padding: 0.5rem 0 0.5rem 0.75rem;
+}
+
+.clarify-question {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0 0 0.35rem;
+  color: var(--color-text);
+}
+
+.clarify-link {
+  background: none;
+  border: none;
+  color: var(--color-link);
+  font-family: inherit;
+  font-size: 0.78rem;
+  padding: 0;
+  cursor: pointer;
+}
+
+.clarify-link:hover {
+  color: var(--color-primary-hover);
+}
+
+.side-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(46rem, 70vw);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-background);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+}
+
+.side-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.side-panel-close {
+  background: none;
+  border: none;
+  color: var(--color-text-2);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
+.side-panel-close:hover {
+  color: var(--color-text);
+}
+
+.side-panel-frame {
+  flex: 1;
+  width: 100%;
+  border: none;
 }
 
 .index {

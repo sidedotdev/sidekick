@@ -28,6 +28,7 @@ vi.mock('@codemirror/state', () => ({ EditorState: { create: () => ({}) } }))
 vi.mock('@codemirror/lang-markdown', () => ({ markdown: () => ({}) }))
 
 const intentBase = '/api/v1/workspaces/ws-1/flows/flow-1/intent'
+const flowBase = '/api/v1/workspaces/ws-1/flows/flow-1'
 
 type FetchImpl = (url: string, opts?: RequestInit) => Promise<Response>
 
@@ -109,5 +110,79 @@ describe('IntentCanvasView', () => {
     expect(putBodies).toHaveLength(1)
     expect(JSON.parse(putBodies[0])).toEqual({ path: 'intent/overview.md', content: '' })
     expect(wrapper.find('.crumb').text()).toBe('intent/overview.md')
+  })
+
+  it('renders ongoing sub-tasks and clarifications from the idd state query', async () => {
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({
+            result: {
+              subtasks: [
+                { flowId: 'sub-1', commit: 'abcdef1234567', status: 'in_progress' },
+                { flowId: 'sub-2', commit: 'fedcba7654321', status: 'completed' },
+              ],
+              clarifications: [{ subtaskFlowId: 'sub-1', question: 'Which auth provider?' }],
+            },
+          })
+        )
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    const rows = wrapper.findAll('.subtask-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].find('.subtask-commit').text()).toBe('abcdef1')
+    expect(rows[0].find('.subtask-status').text()).toBe('in_progress')
+    expect(rows[1].find('.subtask-status').classes()).toContain('done')
+
+    expect(wrapper.find('.clarify-question').text()).toBe('Which auth provider?')
+
+    expect(wrapper.find('.side-panel').exists()).toBe(false)
+    await rows[0].trigger('click')
+    const frame = wrapper.find('.side-panel-frame')
+    expect(frame.exists()).toBe(true)
+    expect(frame.attributes('src')).toBe('/flows/sub-1')
+
+    await wrapper.find('.side-panel-close').trigger('click')
+    expect(wrapper.find('.side-panel').exists()).toBe(false)
+  })
+
+  it('starts an intent sub-task when the implement button is pressed', async () => {
+    const startBodies: string[] = []
+    const fetchSpy = installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u.endsWith('/intent/start_subtask') && opts?.method === 'POST') {
+        startBodies.push(String(opts.body))
+        return Promise.resolve(jsonResponse({ message: 'Intent sub-task started' }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    await wrapper.find('.implement-btn').trigger('click')
+    await flushPromises()
+
+    expect(fetchSpy).toHaveBeenCalledWith(`${intentBase}/start_subtask`, expect.objectContaining({ method: 'POST' }))
+    expect(startBodies).toHaveLength(1)
+    expect(JSON.parse(startBodies[0])).toEqual({ update: false })
   })
 })
