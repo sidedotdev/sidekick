@@ -133,7 +133,9 @@
         <span class="eyebrow">Sub-task</span>
         <button type="button" class="side-panel-close" @click="closeSubtask" aria-label="Dismiss sub-task">×</button>
       </header>
-      <iframe class="side-panel-frame" :src="`/flows/${activeSubtaskFlowId}`" title="Sub-task flow"></iframe>
+      <div class="side-panel-body">
+        <FlowView :key="activeSubtaskFlowId" :flow-id="activeSubtaskFlowId" embedded />
+      </div>
     </div>
   </div>
 </template>
@@ -146,6 +148,7 @@ import { Compartment, EditorState } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { store } from '../lib/store'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
+import FlowView from './FlowView.vue'
 import type { Flow } from '../lib/models'
 
 interface IntentFileEntry {
@@ -173,6 +176,25 @@ const route = useRoute()
 const flowId = computed(() => route.params.id as string)
 const flowBase = computed(() => `/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}`)
 const apiBase = computed(() => `${flowBase.value}/intent`)
+const lastFileStorageKey = computed(() => `intent-canvas:last-file:${flowId.value}`)
+
+const rememberActiveFile = (path: string) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(lastFileStorageKey.value, path)
+  } catch {
+    // Storage may be unavailable (private mode, quota); fall back silently.
+  }
+}
+
+const recallActiveFile = (): string | null => {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage.getItem(lastFileStorageKey.value)
+  } catch {
+    return null
+  }
+}
 
 const files = ref<IntentFileEntry[]>([])
 const activePath = ref<string | null>(null)
@@ -329,6 +351,7 @@ const openFile = async (path: string) => {
     const data = await res.json()
     content.value = data.content ?? ''
     activePath.value = path
+    rememberActiveFile(path)
     saveStatus.value = 'idle'
     await nextTick()
     if (!editorView) createEditor()
@@ -471,9 +494,12 @@ const createFile = async () => {
 }
 
 const focusFirstFile = async () => {
-  const firstFile = files.value.find((f) => !f.isDir)
-  if (firstFile) {
-    await openFile(firstFile.path)
+  const remembered = recallActiveFile()
+  const target =
+    (remembered && files.value.find((f) => !f.isDir && f.path === remembered)) ||
+    files.value.find((f) => !f.isDir)
+  if (target) {
+    await openFile(target.path)
   } else {
     await nextTick()
     welcomeInputRef.value?.focus()
@@ -714,10 +740,18 @@ onBeforeUnmount(() => {
   color: var(--color-text);
 }
 
-.side-panel-frame {
+.side-panel-body {
   flex: 1;
-  width: 100%;
-  border: none;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.side-panel-body :deep(.flow-actions-container) {
+  flex: 1;
+  min-height: 0;
 }
 
 .index {

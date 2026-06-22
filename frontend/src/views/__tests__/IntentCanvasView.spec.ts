@@ -37,6 +37,17 @@ vi.mock('@codemirror/state', () => ({
 }))
 vi.mock('@codemirror/lang-markdown', () => ({ markdown: () => ({}) }))
 
+vi.mock('../FlowView.vue', () => ({
+  default: {
+    name: 'FlowView',
+    props: {
+      flowId: { type: String, default: '' },
+      embedded: { type: Boolean, default: false },
+    },
+    template: '<div class="side-panel-flow" :data-flow-id="flowId" :data-embedded="String(embedded)"></div>',
+  },
+}))
+
 const intentBase = '/api/v1/workspaces/ws-1/flows/flow-1/intent'
 const flowBase = '/api/v1/workspaces/ws-1/flows/flow-1'
 
@@ -55,6 +66,11 @@ describe('IntentCanvasView', () => {
   beforeEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
+    try {
+      window.localStorage.clear()
+    } catch {
+      // Ignore environments without localStorage.
+    }
   })
 
   it('renders the intent filetree and opens the first file', async () => {
@@ -160,9 +176,10 @@ describe('IntentCanvasView', () => {
 
     expect(wrapper.find('.side-panel').exists()).toBe(false)
     await rows[0].trigger('click')
-    const frame = wrapper.find('.side-panel-frame')
-    expect(frame.exists()).toBe(true)
-    expect(frame.attributes('src')).toBe('/flows/sub-1')
+    const embeddedFlow = wrapper.find('.side-panel-flow')
+    expect(embeddedFlow.exists()).toBe(true)
+    expect(embeddedFlow.attributes('data-flow-id')).toBe('sub-1')
+    expect(embeddedFlow.attributes('data-embedded')).toBe('true')
 
     await wrapper.find('.side-panel-close').trigger('click')
     expect(wrapper.find('.side-panel').exists()).toBe(false)
@@ -194,5 +211,69 @@ describe('IntentCanvasView', () => {
     expect(fetchSpy).toHaveBeenCalledWith(`${intentBase}/start_subtask`, expect.objectContaining({ method: 'POST' }))
     expect(startBodies).toHaveLength(1)
     expect(JSON.parse(startBodies[0])).toEqual({ update: false })
+  })
+
+  it('reopens the last viewed file on mount when one is remembered', async () => {
+    const fileReads: string[] = []
+    installFetch((url) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: [
+              { path: 'intent/overview.md', isDir: false },
+              { path: 'intent/specs/auth.md', isDir: false },
+            ],
+          })
+        )
+      }
+      const fileMatch = u.match(/\/intent\/file\?path=(.+)$/)
+      if (fileMatch) {
+        const path = decodeURIComponent(fileMatch[1])
+        fileReads.push(path)
+        return Promise.resolve(jsonResponse({ path, content: `# ${path}` }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    window.localStorage.setItem('intent-canvas:last-file:flow-1', 'intent/specs/auth.md')
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    expect(fileReads[0]).toBe('intent/specs/auth.md')
+    expect(wrapper.find('.crumb').text()).toBe('intent/specs/auth.md')
+  })
+
+  it('remembers the most recently opened file in localStorage', async () => {
+    installFetch((url) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: [
+              { path: 'intent/overview.md', isDir: false },
+              { path: 'intent/specs/auth.md', isDir: false },
+            ],
+          })
+        )
+      }
+      const fileMatch = u.match(/\/intent\/file\?path=(.+)$/)
+      if (fileMatch) {
+        const path = decodeURIComponent(fileMatch[1])
+        return Promise.resolve(jsonResponse({ path, content: `# ${path}` }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    const rows = wrapper.findAll('.file-row')
+    const authRow = rows.find((r) => r.text() === 'auth.md')!
+    await authRow.trigger('click')
+    await flushPromises()
+
+    expect(window.localStorage.getItem('intent-canvas:last-file:flow-1')).toBe('intent/specs/auth.md')
   })
 })
