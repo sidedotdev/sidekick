@@ -25,6 +25,9 @@ type DevContext struct {
 	flow_action.ExecContext
 	Worktree   *domain.Worktree
 	RepoConfig common.RepoConfig
+	// Idd indicates the work originates from an Intent Driven Development flow,
+	// enabling the intent/ directory guidance in coding-agent prompts.
+	Idd bool
 }
 
 // WithContext returns a new DevContext with the workflow.Context updated.

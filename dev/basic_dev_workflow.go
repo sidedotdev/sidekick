@@ -39,6 +39,9 @@ type BasicDevOptions struct {
 	// AutoMerge skips the human merge approval and merges automatically. Used by
 	// IDD sub-tasks so their worktree merges back into the parent idd worktree.
 	AutoMerge bool `json:"autoMerge,omitempty"`
+	// Idd marks the sub-task as originating from an Intent Driven Development
+	// flow, enabling the intent/ directory guidance in coding-agent prompts.
+	Idd bool `json:"idd,omitempty"`
 }
 
 type MergeWithReviewParams struct {
@@ -225,6 +228,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		signalWorkflowFailureOrCancel(ctx)
 		return "", err
 	}
+	dCtx.Idd = input.BasicDevOptions.Idd
 	defer handleFlowCancel(dCtx)
 	defer stopActiveDevRun(dCtx)
 	defer func() {

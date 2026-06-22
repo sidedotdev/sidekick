@@ -1232,6 +1232,12 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *domain.Tas
 		return err
 	}
 
+	// A cancelled/timed-out start context means the caller already reverted the
+	// task to drafting; persisting in-progress now would race with that revert.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+
 	// Update the task status to in progress
 	task.Status = domain.TaskStatusInProgress
 	task.Updated = time.Now()

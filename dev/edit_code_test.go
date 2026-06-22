@@ -13,6 +13,7 @@ import (
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
 	"sidekick/utils"
+	"strings"
 	"testing"
 
 	"github.com/sashabaranov/go-openai"
@@ -273,7 +274,7 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	}
 
 	// Test with doneRequired=true
-	prompt := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true, "OS: Linux, Arch: x86_64")
+	prompt := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true, "OS: Linux, Arch: x86_64", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -285,7 +286,7 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	assert.Contains(t, prompt, "Environment: OS: Linux, Arch: x86_64")
 
 	// Test with doneRequired=false (legacy behavior)
-	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, false, "OS: Linux, Arch: x86_64")
+	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, false, "OS: Linux, Arch: x86_64", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -295,7 +296,7 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	assert.NotContains(t, prompt, "paused to answer a question")
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true, "OS: Linux, Arch: x86_64")
+	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true, "OS: Linux, Arch: x86_64", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -312,7 +313,7 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	}
 
 	// Test with doneRequired=true
-	prompt := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true, "OS: Darwin, Arch: arm64")
+	prompt := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true, "OS: Darwin, Arch: arm64", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -326,7 +327,7 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, "Environment: OS: Darwin, Arch: arm64")
 
 	// Test with doneRequired=false (legacy behavior)
-	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, false, "OS: Darwin, Arch: arm64")
+	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, false, "OS: Darwin, Arch: arm64", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -338,7 +339,7 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.NotContains(t, prompt, "paused to answer a question")
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true, "OS: Darwin, Arch: arm64")
+	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true, "OS: Darwin, Arch: arm64", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -347,6 +348,35 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.NotContains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, doneTool.Name)
 	assert.NotContains(t, prompt, "#START SUMMARY")
+}
+
+func TestRenderAuthorEditBlockInitialPromptIddInstructions(t *testing.T) {
+	dCtx := DevContext{
+		RepoConfig: common.RepoConfig{
+			DisableHumanInTheLoop: false,
+		},
+	}
+
+	// The IDD instructions must appear verbatim, so assert against the actual
+	// partial file content rather than a hand-copied excerpt.
+	partialBytes, err := os.ReadFile("prompts/author_edit_block/idd_instructions.mustache")
+	assert.NoError(t, err)
+	iddBlock := strings.TrimRight(string(partialBytes), "\n")
+	assert.NotEmpty(t, iddBlock)
+
+	withIdd := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true, "OS: Linux, Arch: x86_64", true)
+	assert.Contains(t, withIdd, iddBlock)
+
+	withoutIdd := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true, "OS: Linux, Arch: x86_64", false)
+	assert.NotContains(t, withoutIdd, iddBlock)
+	assert.NotContains(t, withoutIdd, "intent/.generated")
+
+	withIddStep := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true, "OS: Darwin, Arch: arm64", true)
+	assert.Contains(t, withIddStep, iddBlock)
+
+	withoutIddStep := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true, "OS: Darwin, Arch: arm64", false)
+	assert.NotContains(t, withoutIddStep, iddBlock)
+	assert.NotContains(t, withoutIddStep, "intent/.generated")
 }
 
 type BuildAuthorEditBlockInputTestSuite struct {
@@ -456,4 +486,69 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 
 	s.Contains(toolNames, doneTool.Name)
 	s.NotContains(toolNames, getHelpOrInputTool.Name)
+}
+
+// buildInitialCodePromptContent runs buildAuthorEditBlockInput for an
+// InitialCodeInfo prompt with the given idd flag (as BasicDevWorkflow sets it on
+// DevContext from BasicDevOptions.Idd) and returns the rendered message content.
+func (s *BuildAuthorEditBlockInputTestSuite) buildInitialCodePromptContent(idd bool) string {
+	wrapperWorkflow := func(ctx workflow.Context, idd bool) (string, error) {
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context: ctx,
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+			},
+			RepoConfig: common.RepoConfig{
+				DisableHumanInTheLoop: false,
+			},
+			Idd: idd,
+		}
+		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLegacyChatHistoryFromChatMessages(nil)}
+
+		doneRequired := IsDoneRequiredProtocol(dCtx)
+		_, err := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, InitialCodeInfo{
+			CodeContext:  "some code",
+			Requirements: "some requirements",
+		}, doneRequired, false, "OS: Linux, Arch: x86_64")
+		if err != nil {
+			return "", err
+		}
+
+		msgs := chatHistory.History.Messages()
+		if len(msgs) == 0 {
+			return "", nil
+		}
+		return msgs[len(msgs)-1].GetContentString(), nil
+	}
+
+	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+
+	var ffa *fflag.FFlagActivities
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil)
+
+	s.env.ExecuteWorkflow(wrapperWorkflow, idd)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var content string
+	s.NoError(s.env.GetWorkflowResult(&content))
+	return content
+}
+
+func (s *BuildAuthorEditBlockInputTestSuite) TestIddInstructionsIncludedForIddFlow() {
+	iddBytes, err := os.ReadFile("prompts/author_edit_block/idd_instructions.mustache")
+	s.NoError(err)
+	iddBlock := strings.TrimRight(string(iddBytes), "\n")
+	s.NotEmpty(iddBlock)
+
+	content := s.buildInitialCodePromptContent(true)
+	s.Contains(content, iddBlock)
+}
+
+func (s *BuildAuthorEditBlockInputTestSuite) TestIddInstructionsExcludedForNonIddFlow() {
+	content := s.buildInitialCodePromptContent(false)
+	s.NotEmpty(content)
+	s.NotContains(content, "intent/.generated")
 }
