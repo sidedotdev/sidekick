@@ -136,23 +136,10 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		return *state, nil
 	})
 
-	// Versioning gates branches added after IddWorkflow first shipped, so any
-	// in-flight workflows replay against the same selector shape they used the
-	// first time around. The check is evaluated once per workflow lifetime
-	// (the result is recorded on first execution).
-	subtaskBlockedTrackingVersion := workflow.GetVersion(dCtx, "idd-subtask-blocked-tracking", workflow.DefaultVersion, 1)
-	finishIddVersion := workflow.GetVersion(dCtx, "idd-finish-merge", workflow.DefaultVersion, 1)
-
 	startSubtaskCh := workflow.GetSignalChannel(dCtx, SignalNameStartIntentSubtask)
 	requestForUserCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameRequestForUser)
-	var subtaskUnblockedCh workflow.ReceiveChannel
-	if subtaskBlockedTrackingVersion >= 1 {
-		subtaskUnblockedCh = workflow.GetSignalChannel(dCtx, flow_action.SignalNameSubtaskUnblocked)
-	}
-	var finishIddCh workflow.ReceiveChannel
-	if finishIddVersion >= 1 {
-		finishIddCh = workflow.GetSignalChannel(dCtx, SignalNameFinishIdd)
-	}
+	subtaskUnblockedCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameSubtaskUnblocked)
+	finishIddCh := workflow.GetSignalChannel(dCtx, SignalNameFinishIdd)
 	workflowClosedCh := workflow.GetSignalChannel(dCtx, SignalNameWorkflowClosed)
 	finished := false
 
@@ -187,9 +174,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			// TODO have the orchestrator attempt to resolve clarifications from
 			// intent itself before falling back to asking the user, and surface
 			// unresolved ones on the canvas.
-			if subtaskBlockedTrackingVersion >= 1 {
-				setSubtaskStatus(state, req.OriginWorkflowId, "blocked")
-			}
+			setSubtaskStatus(state, req.OriginWorkflowId, "blocked")
 			parent := workflow.GetInfo(dCtx).ParentWorkflowExecution
 			if parent == nil {
 				workflow.GetLogger(dCtx).Error("Cannot forward intent sub-task user request: no parent workflow")
@@ -200,25 +185,21 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			}
 		})
 
-		if subtaskBlockedTrackingVersion >= 1 {
-			selector.AddReceive(subtaskUnblockedCh, func(c workflow.ReceiveChannel, _ bool) {
-				var sig flow_action.SubtaskUnblocked
-				c.Receive(dCtx, &sig)
-				setSubtaskStatus(state, sig.FlowId, "in_progress")
-			})
-		}
+		selector.AddReceive(subtaskUnblockedCh, func(c workflow.ReceiveChannel, _ bool) {
+			var sig flow_action.SubtaskUnblocked
+			c.Receive(dCtx, &sig)
+			setSubtaskStatus(state, sig.FlowId, "in_progress")
+		})
 
-		if finishIddVersion >= 1 {
-			selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
-				var sig FinishIddSignal
-				c.Receive(dCtx, &sig)
-				if err := finishIdd(dCtx, input, sig, state); err != nil {
-					workflow.GetLogger(dCtx).Error("Failed to finish idd flow", "Error", err)
-					return
-				}
-				finished = true
-			})
-		}
+		selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
+			var sig FinishIddSignal
+			c.Receive(dCtx, &sig)
+			if err := finishIdd(dCtx, input, sig, state); err != nil {
+				workflow.GetLogger(dCtx).Error("Failed to finish idd flow", "Error", err)
+				return
+			}
+			finished = true
+		})
 
 		selector.AddReceive(workflowClosedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var closure WorkflowClosure
@@ -441,11 +422,8 @@ func finishIdd(dCtx DevContext, input IddWorkflowInput, sig FinishIddSignal, sta
 		return fmt.Errorf("finish idd: target branch %q is the idd worktree branch", target)
 	}
 
-	cancelSubtasksVersion := workflow.GetVersion(dCtx, "idd-finish-cancel-subtasks", workflow.DefaultVersion, 1)
-	if cancelSubtasksVersion >= 1 {
-		if err := cancelPendingSubtasks(dCtx, state); err != nil {
-			return err
-		}
+	if err := cancelPendingSubtasks(dCtx, state); err != nil {
+		return err
 	}
 
 	if _, err := commitIntent(dCtx, input.Title, true); err != nil {
