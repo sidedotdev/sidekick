@@ -1,0 +1,76 @@
+You are determining if the work done during a specific step of a plan was
+completed successfully and fulfills the criteria set for that step.
+
+Thinking step-by-step as a senior software engineer, analyze the following git
+diff and determine if the step has been completed correctly and its completion
+criteria fulfilled. First output your analysis of the diff against all aspects
+of the criteria. In addition, analyze whether the code changes look correct and
+maintain previous functionality that should not have been altered as part of the
+change (taking into account the latest test results).
+
+Review the latest code changes for any issues. If there are major issues, we
+consider that an unsaid criterium for correctness that has not been fulfilled.
+If you're not sure if it's an issue or its something you cannot check for (eg
+whether an import already existed), assume it is correct unless test results
+tell you otherwise. If there are code changes referenced that we got user
+feedback on, then only consider the latest user feedback and the latest code,
+not the earlier code/requirements.
+
+Finally, output whether the step is complete and criteria are fulfilled or not.
+The "is_fulfilled" field should be set to true if and only if the step is
+complete and criteria are completely fulfilled. Do not say that the criteria is
+not fulfilled if a later step in the plan is clearly intended to fix the issue.
+
+{{> coding_hints}}
+Here is a reminder of the original requirements, the plan execution context,
+the current step and completion criteria:
+
+# START REQUIREMENTS
+{{{requirements}}}
+# END REQUIREMENTS
+
+# START PLAN
+{{{planContext}}}
+# END PLAN
+
+# START CURRENT STEP
+{{{currentStep}}}
+# END CURRENT STEP
+
+# START Completion Criteria
+{{{completionCriteria}}}
+# END Completion Criteria
+
+{{> git_diff}}
+{{#autoChecks}}
+And coming up are results of automated checks, which is important for your
+analysis. A failure here is not automatically a failure of the criteria -- that
+depends on your analysis, since failure may be expected or even desired -- but
+it is a strong hint that something might be wrong with the work done. If you
+notice that the step is defined in a way that necessarily fails the checks
+temporarily, and the manner in which it failed matches what should be expected,
+and you also confirm first that there is already a later step defined that is
+expected to fix the issue, then this kind of failure doesn't mean the criteria
+haven't been fulfilled.
+
+If there is no such later step or the step doesn't necessitate the failure, then
+consider the criteria NOT fulfilled. Even if the failure doesn't seem directly
+related to the step, if it's not expected nor is there an expected later step
+that will fix it, consider the criteria not fulfilled, so you must analyze the
+failure and determine if pre-planned steps exist that will fix it. Don't think
+about what is "likely" to happen in future steps. Instead, start by spelling out
+the specific future step from the above plan that you think will fix the issue
+if you think the automatic check failure is not meant to be fixed in the current
+step. If there's no such step, consider the criteria not fulfilled due to the
+failure.
+
+If the automated tests clearly indicate a failure related to the changes made in
+the current step or a previous one without a followup step explicitly defined to
+fix it, then don't analyze too much after determining that fact: just indicate
+that the tests should be fixed. When they are fixed, we'll come back to analyze
+whether criteria is fulfilled fully later.
+
+Anyways, here are the automated check results:
+
+{{{autoChecks}}}
+{{/autoChecks}}

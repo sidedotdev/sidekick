@@ -3,8 +3,10 @@ package dev
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/flow_action"
 )
 
@@ -1257,4 +1260,98 @@ func TestStartDevRun_NoExistingInstanceStartsFresh(t *testing.T) {
 		Context:      input.Context,
 		Instance:     output.Instance,
 	})
+}
+
+// mockSSHEnv is a minimal SSHCapableEnv used to verify buildDevRunCmd's
+// SSH wrapping behavior without requiring real remote tooling.
+type mockSSHEnv struct {
+	workingDir string
+	sshArgs    []string
+}
+
+func (m *mockSSHEnv) GetType() env.EnvType        { return env.EnvTypeDevPod }
+func (m *mockSSHEnv) GetWorkingDirectory() string { return m.workingDir }
+func (m *mockSSHEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
+	return env.EnvRunCommandOutput{}, nil
+}
+func (m *mockSSHEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	return nil
+}
+func (m *mockSSHEnv) ReadFile(ctx context.Context, p string) ([]byte, error)       { return nil, nil }
+func (m *mockSSHEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) { return nil, nil }
+func (m *mockSSHEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	return nil
+}
+func (m *mockSSHEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error { return nil }
+func (m *mockSSHEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error)        { return nil, nil }
+func (m *mockSSHEnv) Remove(ctx context.Context, p string) error                     { return nil }
+func (m *mockSSHEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	return "", nil
+}
+func (m *mockSSHEnv) SSHArgs(ctx context.Context) ([]string, error) { return m.sshArgs, nil }
+
+func TestBuildDevRunCmd_LocalEnv(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cmd, err := buildDevRunCmd(context.Background(),
+		env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tmpDir}},
+		"echo hello",
+		tmpDir,
+		[]string{"FOO=bar"},
+	)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, len(cmd.Args), 3)
+	assert.Equal(t, "sh", filepath.Base(cmd.Args[0]))
+	assert.Equal(t, "-c", cmd.Args[1])
+	assert.Equal(t, "echo hello", cmd.Args[2])
+	assert.Equal(t, tmpDir, cmd.Dir)
+	assert.Contains(t, cmd.Env, "FOO=bar")
+}
+
+func TestBuildDevRunCmd_NilEnvFallsBackToLocal(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cmd, err := buildDevRunCmd(context.Background(),
+		env.EnvContainer{},
+		"echo hi",
+		tmpDir,
+		nil,
+	)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, len(cmd.Args), 3)
+	assert.Equal(t, "sh", filepath.Base(cmd.Args[0]))
+	assert.Equal(t, "-c", cmd.Args[1])
+	assert.Equal(t, tmpDir, cmd.Dir)
+}
+
+func TestBuildDevRunCmd_SSHCapableWrapping(t *testing.T) {
+	t.Parallel()
+
+	sshEnv := &mockSSHEnv{
+		workingDir: "/remote/repo",
+		sshArgs:    []string{"-o", "BatchMode=yes", "user@host", "--"},
+	}
+
+	cmd, err := buildDevRunCmd(context.Background(),
+		env.EnvContainer{Env: sshEnv},
+		"echo $FOO",
+		"/remote/repo/sub",
+		[]string{"FOO=bar"},
+	)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, len(cmd.Args), 2)
+	assert.Equal(t, "ssh", filepath.Base(cmd.Args[0]))
+	// -tt must come before SSH args so a PTY is allocated for SIGHUP propagation
+	assert.Equal(t, "-tt", cmd.Args[1])
+
+	joined := strings.Join(cmd.Args, " ")
+	assert.Contains(t, joined, "user@host")
+	assert.Contains(t, joined, "export 'FOO=bar'")
+	assert.Contains(t, joined, "cd '/remote/repo/sub'")
+	assert.Contains(t, joined, "exec sh -c 'echo $FOO'")
 }

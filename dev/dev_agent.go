@@ -20,12 +20,27 @@ type DevAgent struct {
 
 func (ia *DevAgent) RelayResponse(ctx context.Context, userResponse flow_action.UserResponse) error {
 	log.Info().Str("workflowId", userResponse.TargetWorkflowId).Msg("relaying response to workflow")
-	err := ia.TemporalClient.SignalWorkflow(ctx, userResponse.TargetWorkflowId, "", flow_action.SignalNameUserResponse, userResponse)
-	if err != nil && strings.Contains(err.Error(), temporalLiteAlreadyCompletedError) {
-		log.Warn().Msg("tried to relay user response to a workflow that already completed")
-		return nil
+
+	// Signal both the legacy unscoped channel and the FlowActionId-specific
+	// channel so workflows on either side of the version gate get unblocked.
+	// Each workflow only listens on one of these names, so the unconsumed
+	// signal is harmless.
+	signalNames := []string{flow_action.SignalNameUserResponse}
+	if userResponse.FlowActionId != "" {
+		signalNames = append(signalNames, flow_action.UserResponseSignalName(userResponse.FlowActionId))
 	}
-	return err
+
+	for _, name := range signalNames {
+		err := ia.TemporalClient.SignalWorkflow(ctx, userResponse.TargetWorkflowId, "", name, userResponse)
+		if err != nil {
+			if strings.Contains(err.Error(), temporalLiteAlreadyCompletedError) {
+				log.Warn().Msg("tried to relay user response to a workflow that already completed")
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 // TaskWorkflowId returns the deterministic Temporal workflow ID for a task's

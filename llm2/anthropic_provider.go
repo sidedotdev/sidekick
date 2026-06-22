@@ -406,6 +406,11 @@ func resolveAnthropicReasoningEffort(effort, model string) string {
 		return effort
 	}
 
+	// Anthropic-compatible endpoints can proxy GPT models, such as LiteLLM routing OpenAI models through its Anthropic API.
+	if resolvedEffort, ok := resolveGPTReasoningEffort(effort, model); ok {
+		return resolvedEffort
+	}
+
 	modelLower := strings.ToLower(model)
 	if !strings.Contains(modelLower, "claude") {
 		if effort == "lowest" {

@@ -1356,54 +1356,29 @@ sleep 30
 	}
 
 	// Drain initial messages
-	for len(outputChan) > 0 {
-		<-outputChan
+	drainTimeout := time.After(time.Second)
+drainLoop:
+	for {
+		select {
+		case <-outputChan:
+			// keep draining
+		case <-time.After(100 * time.Millisecond):
+			break drainLoop
+		case <-drainTimeout:
+			break drainLoop
+		}
 	}
 
-	// Simulate pressing 'r' - this is what Update() does
-	restartDone := make(chan struct{})
-	go func() {
-		sup.RestartProcess(ctx, p, outputChan)
-		close(restartDone)
-	}()
+	// Simulate pressing 'r' through the Bubble Tea update path.
+	updatedModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = updatedModel.(model)
 
-	// Wait for notification
-	select {
-	case msg := <-outputChan:
-		// Simulate what Update() does when it receives processOutputMsg
-		t.Logf("Received notification for: %s", msg.name)
-
-		// Check process state
-		t.Logf("Process state: stopping=%v, running=%v", p.isStopping(), p.isRunning())
-
-		// Update viewport content (this is what Update() does)
-		m.updateViewportContent()
-
-		// Check viewport content
-		viewportContent := m.viewports[0].View()
-		t.Logf("Viewport content after notification: %q", viewportContent)
-
-		// The viewport should be empty (logs cleared)
-		if strings.Contains(viewportContent, "run number 1") {
-			t.Errorf("old output 'run number 1' should be cleared from viewport")
-		}
-
-		// Check status indicator
-		statusIndicator := m.getStatusIndicator(p)
-		t.Logf("Status indicator: %s", statusIndicator)
-		if !strings.Contains(statusIndicator, "Stopping") {
-			t.Errorf("status should show 'Stopping', got: %s", statusIndicator)
-		}
-
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for notification")
-	}
-
-	// Wait for restart to complete before checking for new output
-	select {
-	case <-restartDone:
-	case <-time.After(15 * time.Second):
-		t.Fatal("timeout waiting for restart to complete")
+	// The key handler updates the UI immediately before the asynchronous restart
+	// begins, so old output should be cleared without waiting for a notification.
+	viewportContent := m.viewports[0].View()
+	t.Logf("Viewport content after restart keypress: %q", viewportContent)
+	if strings.Contains(viewportContent, "run number 1") {
+		t.Errorf("old output 'run number 1' should be cleared from viewport")
 	}
 
 	waitForCondition(t, 10*time.Second, func() bool {

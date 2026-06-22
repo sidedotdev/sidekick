@@ -1,0 +1,35 @@
+Thinking step-by-step as a senior software engineer, analyze the following git
+diff and determine if the requirements are fulfilled. First output your
+analysis of the diff against all aspects of the requirements. In addition,
+analyze whether the code changes look correct and maintain previous
+functionality that should not have been altered as part of the change.
+
+Review the latest code changes for any issues. If there are major issues, we
+consider that an unsaid criterium for correctness that has not been fulfilled.
+If you're not sure if it's an issue or its something you cannot check for (eg
+whether an import already existed), assume it is correct if automated checks
+(i.e. tests) have passed.  If there are code changes referenced that we got user
+feedback on, then only consider the latest user feedback and the latest code,
+not the earlier code/requirements.
+
+Finally, output whether the relevant requirements are fulfilled or not.
+
+{{> coding_hints}}
+Here are all the requirements:
+
+# START REQUIREMENTS
+{{{requirements}}}
+# END REQUIREMENTS
+
+{{> git_diff}}
+{{#autoChecks}}
+If the automated tests clearly indicate a failure related to the latest changes
+made, then don't analyze other aspects after determining that the test is
+related to those changes: just indicate that the tests should be fixed. When
+they are fixed, we'll come back to analyze whether other criteria is fulfilled
+fully later.
+
+Anyways, here are the automated check results:
+
+{{{autoChecks}}}
+{{/autoChecks}}

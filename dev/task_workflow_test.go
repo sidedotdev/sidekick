@@ -10,8 +10,12 @@ import (
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
+	"sidekick/workspace"
 )
 
 type TaskWorkflowTestSuite struct {
@@ -51,9 +55,44 @@ func (s *TaskWorkflowTestSuite) setupPutWorkflow() {
 
 func (s *TaskWorkflowTestSuite) setupGenerateTitle() {
 	s.env.OnActivity(
-		s.ima.GenerateTaskTitle,
+		s.ima.GetTask,
 		mock.Anything, mock.Anything,
-	).Return(GenerateTitleOutput{}, nil).Maybe()
+	).Return(domain.Task{Description: "different"}, nil).Maybe()
+
+	s.env.OnActivity(common.GetLocalConfig).Return(common.LocalPublicConfig{
+		LLM: common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai"}},
+		},
+	}, nil).Maybe()
+	var wa *workspace.Activities
+	s.env.OnActivity(wa.GetWorkspaceConfig, mock.Anything).Return(domain.WorkspaceConfig{}, nil).Maybe()
+	s.env.OnActivity(wa.GetWorkspace, mock.Anything).Return(domain.Workspace{ConfigMode: "merge"}, nil).Maybe()
+
+	var fa *flow_action.FlowActivities
+	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	var ka *common.KVActivities
+	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.env.OnActivity(ka.MGet, mock.Anything, mock.Anything, mock.Anything).Return([][]byte{}, nil).Maybe()
+	var cha *persisted_ai.ChatHistoryActivities
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
+		&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "user"}, nil,
+	).Maybe()
+
+	var la *persisted_ai.Llm2Activities
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{
+				{Type: llm2.ContentBlockTypeText, Text: "Generated Test Title"},
+			},
+		},
+	}, nil).Maybe()
+
+	s.env.OnActivity(
+		s.ima.UpdateTaskTitle,
+		mock.Anything, mock.Anything,
+	).Return(nil).Maybe()
 }
 
 func (s *TaskWorkflowTestSuite) registerMockBasicDev() {
@@ -272,6 +311,14 @@ func (s *TaskWorkflowTestSuite) TestWorkflowClosedSignal() {
 }
 
 func (s *TaskWorkflowTestSuite) TestChildFailureWithoutSignal() {
+	s.env.RegisterWorkflowWithOptions(
+		func(ctx workflow.Context, input BasicDevWorkflowInput) (string, error) {
+			return "", fmt.Errorf("simulated failure")
+		},
+		workflow.RegisterOptions{Name: "BasicDevWorkflow"},
+	)
+	s.env.RegisterWorkflow(TaskWorkflow)
+
 	s.setupFindWorkspace("ws_123")
 	s.setupPutWorkflow()
 	s.setupGenerateTitle()
@@ -281,14 +328,6 @@ func (s *TaskWorkflowTestSuite) TestChildFailureWithoutSignal() {
 		mock.Anything, "ws_123", "task_456", "failed",
 	).Return(nil)
 
-	s.env.RegisterWorkflowWithOptions(
-		func(ctx workflow.Context, input BasicDevWorkflowInput) (string, error) {
-			return "", fmt.Errorf("simulated failure")
-		},
-		workflow.RegisterOptions{Name: "BasicDevWorkflow"},
-	)
-
-	s.env.RegisterWorkflow(TaskWorkflow)
 	s.env.ExecuteWorkflow(TaskWorkflow, TaskWorkflowInput{
 		WorkspaceId: "ws_123",
 		TaskId:      "task_456",

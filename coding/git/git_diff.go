@@ -52,7 +52,7 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
-		Args:               []string{"diff"},
+		Args:               []string{"diff", "--no-ext-diff"},
 	}).Get(eCtx, &gitDiffOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to git diff: %v", err)
@@ -93,7 +93,7 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	}
 
 	var cmdParts []string
-	cmdParts = append(cmdParts, "git", "diff")
+	cmdParts = append(cmdParts, "git", "diff", "--no-ext-diff")
 
 	// Handle different combinations of flags
 	if params.EndRef != "" && params.BaseRef != "" {
@@ -273,7 +273,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 	}
 
 	// Step 5: Run git diff against the temp index for the untracked files
-	diffArgs := []string{"--no-pager", "diff", "--"}
+	diffArgs := []string{"--no-pager", "diff", "--no-ext-diff", "--"}
 	diffArgs = append(diffArgs, untrackedPaths...)
 
 	diffOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
@@ -309,7 +309,7 @@ func workingTreeAndUntrackedDiff(ctx context.Context, envContainer env.EnvContai
 	}
 
 	// Part 2: Tracked files diff (Modified in Working Tree vs. Index)
-	trackedArgs := []string{"diff"}
+	trackedArgs := []string{"diff", "--no-ext-diff"}
 	if params.IgnoreWhitespace {
 		trackedArgs = append(trackedArgs, "-w")
 	}

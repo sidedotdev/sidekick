@@ -1,14 +1,26 @@
 package dev
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sidekick/env"
+	"sidekick/flow_action"
+	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
+	"sidekick/srv/sqlite"
 	"sidekick/utils"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 func TestReadFileActivity(t *testing.T) {
@@ -527,4 +539,262 @@ def hello():
 ` + "```"
 
 	require.Equal(t, expectedOutput, finalOutput)
+}
+
+// BulkReadFileV2TestSuite tests the BulkReadFileV2 workflow helper,
+// which dispatches to BulkReadFileActivities.BulkReadFileActivityV2.
+type BulkReadFileV2TestSuite struct {
+	suite.Suite
+	testsuite.WorkflowTestSuite
+	env *testsuite.TestWorkflowEnvironment
+}
+
+func (s *BulkReadFileV2TestSuite) SetupTest() {
+	s.env = s.NewTestWorkflowEnvironment()
+}
+
+func (s *BulkReadFileV2TestSuite) TearDownTest() {
+	s.env.AssertExpectations(s.T())
+}
+
+func (s *BulkReadFileV2TestSuite) TestBulkReadFileV2_ReturnsRef() {
+	tempDir := s.T().TempDir()
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tempDir}}
+
+	expectedRef := persisted_ai.MessageRef{
+		BlockKeys: []string{"test-flow:msg:block1"},
+		Role:      "user",
+	}
+
+	wrapperWorkflow := func(ctx workflow.Context) (*BulkReadFileActivityV2Output, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:      ctx,
+				EnvContainer: &ec,
+				WorkspaceId:  "test-workspace",
+			},
+		}
+		return BulkReadFileV2(dCtx, BulkReadFileParams{
+			FileLines:  []FileLine{{FilePath: "test.go", LineNumber: 1}},
+			WindowSize: 5,
+		}, llm.ToolCall{Id: "call_123", Name: "read_file"})
+	}
+	s.env.RegisterWorkflow(wrapperWorkflow)
+
+	// Mock the activity via nil struct pointer — identical to production usage
+	var bra *BulkReadFileActivities
+	s.env.OnActivity(bra.BulkReadFileActivityV2, mock.Anything, mock.Anything).Return(
+		&BulkReadFileActivityV2Output{Ref: expectedRef}, nil,
+	)
+
+	s.env.ExecuteWorkflow(wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var result BulkReadFileActivityV2Output
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.Equal(expectedRef, result.Ref)
+}
+
+func (s *BulkReadFileV2TestSuite) TestBulkReadFileV2_EmptyFileLines() {
+	tempDir := s.T().TempDir()
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tempDir}}
+
+	wrapperWorkflow := func(ctx workflow.Context) (*BulkReadFileActivityV2Output, error) {
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:      ctx,
+				EnvContainer: &ec,
+				WorkspaceId:  "test-workspace",
+			},
+		}
+		return BulkReadFileV2(dCtx, BulkReadFileParams{
+			FileLines:  []FileLine{},
+			WindowSize: 5,
+		}, llm.ToolCall{Id: "call_123", Name: "read_file"})
+	}
+	s.env.RegisterWorkflow(wrapperWorkflow)
+
+	s.env.ExecuteWorkflow(wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.Error(s.env.GetWorkflowError())
+}
+
+func TestBulkReadFileV2(t *testing.T) {
+	suite.Run(t, new(BulkReadFileV2TestSuite))
+}
+
+func TestReadFileActivity_OutOfRangeIncludesValidRange(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name         string
+		fileContent  string
+		params       ReadFileActivityInput
+		wantContains string
+	}{
+		{
+			name:         "line number exceeds file length",
+			fileContent:  "line1\nline2\nline3",
+			params:       ReadFileActivityInput{LineNumber: 10, WindowSize: 0},
+			wantContains: "file has 3 lines, valid line numbers are 1-3",
+		},
+		{
+			name:         "line number exceeds file length with window",
+			fileContent:  "line1\nline2\nline3\nline4\nline5",
+			params:       ReadFileActivityInput{LineNumber: 20, WindowSize: 2},
+			wantContains: "file has 5 lines, valid line numbers are 1-5",
+		},
+		{
+			name:         "empty file",
+			fileContent:  "",
+			params:       ReadFileActivityInput{LineNumber: 1, WindowSize: 0},
+			wantContains: "file is empty",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			relativeFilePath := fmt.Sprintf("range_test%d.txt", i)
+			tt.params.FilePath = relativeFilePath
+			absoluteFilePath := filepath.Join(tempDir, relativeFilePath)
+			err := os.WriteFile(absoluteFilePath, []byte(tt.fileContent), 0644)
+			require.NoError(t, err)
+
+			_, err = ReadFileActivity(tempDir, tt.params)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantContains)
+		})
+	}
+}
+
+func TestBulkReadFileActivity_OutOfRangeIncludesValidRange(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	smallFile := filepath.Join(tempDir, "small.go")
+	require.NoError(t, os.WriteFile(smallFile, []byte("line1\nline2\nline3"), 0644))
+
+	emptyFile := filepath.Join(tempDir, "empty.go")
+	require.NoError(t, os.WriteFile(emptyFile, []byte(""), 0644))
+
+	tests := []struct {
+		name         string
+		params       BulkReadFileParams
+		wantContains string
+	}{
+		{
+			name: "line number exceeds file length",
+			params: BulkReadFileParams{
+				FileLines:  []FileLine{{FilePath: "small.go", LineNumber: 100}},
+				WindowSize: 1,
+			},
+			wantContains: "file has 3 lines, valid line numbers are 1-3",
+		},
+		{
+			name: "all windows out of range",
+			params: BulkReadFileParams{
+				FileLines: []FileLine{
+					{FilePath: "small.go", LineNumber: 50},
+					{FilePath: "small.go", LineNumber: 60},
+				},
+				WindowSize: 1,
+			},
+			wantContains: "file has 3 lines, valid line numbers are 1-3",
+		},
+		{
+			name: "empty file",
+			params: BulkReadFileParams{
+				FileLines:  []FileLine{{FilePath: "empty.go", LineNumber: 1}},
+				WindowSize: 1,
+			},
+			wantContains: "file is empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := BulkReadFileActivity(tempDir, tt.params)
+			require.NoError(t, err)
+			require.Empty(t, result.CodeBlocks)
+			require.Len(t, result.Errors, 1)
+			require.Contains(t, result.Errors[0], tt.wantContains)
+		})
+	}
+}
+
+func TestBulkReadFileActivityV2_OutOfRangeIncludesValidRange(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	smallFile := filepath.Join(tempDir, "small.go")
+	require.NoError(t, os.WriteFile(smallFile, []byte("line1\nline2\nline3"), 0644))
+
+	emptyFile := filepath.Join(tempDir, "empty.go")
+	require.NoError(t, os.WriteFile(emptyFile, []byte(""), 0644))
+
+	tests := []struct {
+		name         string
+		params       BulkReadFileParams
+		wantContains string
+	}{
+		{
+			name: "line number exceeds file length",
+			params: BulkReadFileParams{
+				FileLines:  []FileLine{{FilePath: "small.go", LineNumber: 100}},
+				WindowSize: 1,
+			},
+			wantContains: "file has 3 lines, valid line numbers are 1-3",
+		},
+		{
+			name: "empty file",
+			params: BulkReadFileParams{
+				FileLines:  []FileLine{{FilePath: "empty.go", LineNumber: 1}},
+				WindowSize: 1,
+			},
+			wantContains: "file is empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			storage := sqlite.NewTestSqliteStorage(t, "bulk_read_v2_range_test")
+			activities := &BulkReadFileActivities{Storage: storage}
+
+			ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tempDir}}
+			input := BulkReadFileActivityV2Input{
+				EnvContainer: ec,
+				Params:       tt.params,
+				FlowId:       "test-flow",
+				WorkspaceId:  "test-workspace",
+				ToolCall:     llm.ToolCall{Id: "call_1", Name: "read_file"},
+			}
+
+			out, err := activities.BulkReadFileActivityV2(context.Background(), input)
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			require.Len(t, out.Ref.BlockKeys, 1)
+
+			storageKey := persisted_ai.StorageKey(input.FlowId, out.Ref.BlockKeys[0])
+			values, err := storage.MGet(context.Background(), input.WorkspaceId, []string{storageKey})
+			require.NoError(t, err)
+			require.Len(t, values, 1)
+			require.NotNil(t, values[0])
+
+			var block llm2.ContentBlock
+			require.NoError(t, json.Unmarshal(values[0], &block))
+			require.NotNil(t, block.ToolResult)
+
+			var combined strings.Builder
+			for _, inner := range block.ToolResult.Content {
+				combined.WriteString(inner.Text)
+			}
+			require.Contains(t, combined.String(), tt.wantContains)
+		})
+	}
 }

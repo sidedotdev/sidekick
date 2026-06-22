@@ -1346,6 +1346,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 
 	userResponse := flow_action.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
+		FlowActionId:     flowAction.Id,
 		Content:          body.UserResponse.Content,
 		Approved:         body.UserResponse.Approved,
 		Choice:           body.UserResponse.Choice,
@@ -1458,6 +1459,7 @@ func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
 
 	userResponse := flow_action.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
+		FlowActionId:     flowAction.Id,
 		Content:          body.UserResponse.Content,
 		Approved:         nil,
 		Choice:           body.UserResponse.Choice,
@@ -1507,6 +1509,9 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	task.AgentType = agentType
 	task.Status = status
 	task.FlowOptions = taskReq.FlowOptions
+	if taskReq.FlowType != "" {
+		task.FlowType = taskReq.FlowType
+	}
 
 	// If the task status is 'to_do' and there is no flow record, start the flow
 	flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)

@@ -75,6 +75,7 @@ func TestDevPodIntegration(t *testing.T) {
 	devEnv := &DevPodEnv{
 		WorkingDirectory: containerWorkDir,
 		WorkspaceName:    workspaceName,
+		LocalRepoDir:     workspacePath,
 	}
 
 	t.Run("basic command execution", func(t *testing.T) {
@@ -86,6 +87,10 @@ func TestDevPodIntegration(t *testing.T) {
 		assert.Equal(t, 0, out.ExitStatus)
 		assert.Contains(t, out.Stdout, "hello from devpod")
 		t.Logf("stdout: %s", out.Stdout)
+	})
+
+	t.Run("filesystem methods via sftp", func(t *testing.T) {
+		runRemoteEnvFilesystemSubtests(t, ctx, devEnv)
 	})
 
 	t.Run("create worktree inside container", func(t *testing.T) {

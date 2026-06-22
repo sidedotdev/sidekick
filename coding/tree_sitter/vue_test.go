@@ -56,7 +56,7 @@ func TestGetFileSymbolsStringVue(t *testing.T) {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			symbolsString, err := GetFileSymbolsString(tmpfile.Name())
+			symbolsString, err := GetFileSymbolsStringFromBytes(tmpfile.Name(), "vue", []byte(test.code))
 			if err != nil {
 				t.Fatalf("Failed to get symbols: %v", err)
 			}
@@ -113,7 +113,7 @@ func TestGetAllAlternativeFileSymbolsVue(t *testing.T) {
 			}
 
 			// Call the function and check the output
-			output, err := GetAllAlternativeFileSymbols(filePath)
+			output, err := GetAllAlternativeFileSymbolsFromBytes(filePath, "vue", []byte(tc.code))
 			if err != nil {
 				t.Fatalf("failed to get all alternative file symbols: %v", err)
 			}
@@ -289,7 +289,7 @@ h1 {
 			}
 			defer os.Remove(filePath)
 
-			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			definition, err := GetSymbolDefinitionsStringFromBytes("vue", []byte(tc.code), tc.symbolName, 0)
 			if err != nil {
 				if tc.expectedError == "" {
 					t.Fatalf("Unexpected error: %v", err)
@@ -393,7 +393,7 @@ func TestGetFileHeadersStringVue(t *testing.T) {
 			if err := tmpfile.Close(); err != nil {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
-			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			result, err := GetFileHeadersStringFromBytes("vue", []byte(tc.code), 0)
 			assert.Nil(t, err)
 			// Check the result
 			if result != tc.expected {

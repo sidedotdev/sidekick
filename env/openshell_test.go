@@ -137,11 +137,13 @@ func TestOpenShellEnvironment_MarshalUnmarshal(t *testing.T) {
 	originalEnv := &OpenShellEnv{
 		WorkingDirectory: "/workspaces/myrepo",
 		SandboxName:      "anointed-smelt",
+		LocalRepoDir:     "/host/path/to/repo",
 	}
 	envContainer := EnvContainer{Env: originalEnv}
 
 	jsonBytes, err := json.Marshal(envContainer)
 	assert.NoError(t, err)
+	assert.Contains(t, string(jsonBytes), `"localRepoDir":"/host/path/to/repo"`)
 
 	var unmarshaledEnvContainer EnvContainer
 	err = json.Unmarshal(jsonBytes, &unmarshaledEnvContainer)
@@ -150,6 +152,7 @@ func TestOpenShellEnvironment_MarshalUnmarshal(t *testing.T) {
 	assert.Equal(t, originalEnv, unmarshaledEnvContainer.Env.(*OpenShellEnv))
 	assert.Equal(t, EnvTypeOpenShell, unmarshaledEnvContainer.Env.GetType())
 	assert.Equal(t, "/workspaces/myrepo", unmarshaledEnvContainer.Env.GetWorkingDirectory())
+	assert.Equal(t, "/host/path/to/repo", unmarshaledEnvContainer.Env.(*OpenShellEnv).LocalRepoDir)
 }
 
 func TestCreateOpenShellWorktreeActivity(t *testing.T) {

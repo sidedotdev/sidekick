@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,9 +119,23 @@ type searchContext struct {
 }
 
 func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (*searchContext, error) {
-	coreIgnorePath, err := getOrCreateCoreIgnoreFile()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get core ignore file: %w", err)
+	var coreIgnorePath string
+	envSideCoreIgnoreVersion := workflow.GetVersion(ctx, "env-side-core-ignore", workflow.DefaultVersion, 1)
+	if envSideCoreIgnoreVersion >= 1 {
+		var ensureOutput EnsureCoreIgnoreFileActivityOutput
+		err := workflow.ExecuteActivity(ctx, EnsureCoreIgnoreFileActivity, EnsureCoreIgnoreFileActivityInput{
+			EnvContainer: envContainer,
+		}).Get(ctx, &ensureOutput)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ensure core ignore file in env: %w", err)
+		}
+		coreIgnorePath = ensureOutput.Path
+	} else {
+		var err error
+		coreIgnorePath, err = getOrCreateCoreIgnoreFile()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get core ignore file: %w", err)
+		}
 	}
 
 	sCtx := &searchContext{
@@ -163,7 +178,7 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 	// Check for .sideignore file
 	var catOutput env.EnvRunCommandOutput
 	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that. (This comment is from original code, moved here with the logic)
-	err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       sCtx.envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "cat",
@@ -262,6 +277,32 @@ another/file.go
 // TODO /gen use cs command to search the repository instead of just rg as a fallback at least given the "*"/"" path glob
 
 // TODO /gen support "-F" flag for fixed string search in rg, and use it if the search term is a fixed string
+
+// EnsureCoreIgnoreFileActivityInput is the input for EnsureCoreIgnoreFileActivity.
+type EnsureCoreIgnoreFileActivityInput struct {
+	EnvContainer env.EnvContainer
+}
+
+// EnsureCoreIgnoreFileActivityOutput contains the env-side path of the created
+// core ignore file.
+type EnsureCoreIgnoreFileActivityOutput struct {
+	Path string
+}
+
+// EnsureCoreIgnoreFileActivity creates a core ignore file inside the code
+// execution environment and returns its env-side path, suitable for passing to
+// commands like rg that run via env.RunCommand. A fresh temp file is created
+// per invocation so the path is always valid for the env.
+func EnsureCoreIgnoreFileActivity(ctx context.Context, input EnsureCoreIgnoreFileActivityInput) (EnsureCoreIgnoreFileActivityOutput, error) {
+	path, err := input.EnvContainer.Env.CreateTemp(ctx, "", "sidekick-core-ignore-*")
+	if err != nil {
+		return EnsureCoreIgnoreFileActivityOutput{}, fmt.Errorf("failed to create core ignore temp file: %w", err)
+	}
+	if err := input.EnvContainer.Env.WriteFile(ctx, path, []byte(".git\n"), 0644); err != nil {
+		return EnsureCoreIgnoreFileActivityOutput{}, fmt.Errorf("failed to write core ignore file: %w", err)
+	}
+	return EnsureCoreIgnoreFileActivityOutput{Path: path}, nil
+}
 
 func getOrCreateCoreIgnoreFile() (string, error) {
 	configDir := common.GetSidekickConfigDir()

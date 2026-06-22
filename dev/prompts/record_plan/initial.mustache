@@ -5,21 +5,21 @@ changes to and then test the fooBar function:
 ```
 {
   "learnings": [
-    "The fooBar function already does foo currently, but not bar.",
-    "The Omg struct holds important info around omega values.",
+    "The `fooBar` function already does foo currently, but not bar.",
+    "The `Omg` struct holds important info around omega values.",
     "Other unit tests make use of the XYZ library",
   ],
-  "analysis": "We first have to build out the bar functionality of fooBar. Then, to write tests for the fooBar function, we need to write tests that confirm it is performing foo & bar and exercise its edge cases.",
+  "analysis": "We first have to build out the bar functionality of `fooBar`. Then, to write tests for the `fooBar` function, we need to write tests that confirm it is performing foo & bar and exercise its edge cases.",
   "steps": [
 	{
 		"step_number": "1",
-		"definition": "Edit the fooBar function such that it actually does bar.",
+		"definition": "Edit the `fooBar` function such that it actually does bar.",
 		"type": "edit"
-		"completion_analysis": "Step 1 is complete when we have added bar functionality to the fooBar function, which view_diff is sufficient to confirm.",
+		"completion_analysis": "Step 1 is complete when we have added bar functionality to the `fooBar` function, which view_diff is sufficient to confirm.",
 	},
 	{
 		"step_number": "2",
-		"definition": "Instantiate the XYZ library to create a test suite for fooBar with a new file: abc/xyz/foo_bar_test.go",
+		"definition": "Instantiate the XYZ library to create a test suite for fooBar with a new file: `abc/xyz/foo_bar_test.go`",
 		"type": "edit"
 		"completion_analysis": "This step is complete when we have created a test file with the XYZ library set up to enable testing of the fooBar function.",
 	},
@@ -39,6 +39,10 @@ changes to and then test the fooBar function:
   "is_planning_complete": true
 }	
 ```
+
+Step definitions should be very concise, easy to read and understand, and should
+be written using markdown, making use of backticks for code and file path
+references.
 
 All plan steps *must* specify actions that require editing files. Thus, there
 should be NO steps that say anything related to investigating the root cause or

@@ -38,6 +38,6 @@ func InferLanguageNameFromFilePath(filePath string) string {
 	case ".jsx":
 		return "jsx"
 	default:
-		return "unknown"
+		return ""
 	}
 }

@@ -213,6 +213,77 @@ func TestGetModel(t *testing.T) {
 	}
 }
 
+func TestGetModel_BedrockAlias(t *testing.T) {
+	ClearModelsCache()
+	t.Cleanup(ClearModelsCache)
+	tempDir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", tempDir)
+
+	cachePath := filepath.Join(tempDir, modelsDevFilename)
+
+	sampleData := modelsDevData{
+		"amazon-bedrock": ProviderInfo{
+			Models: map[string]ModelInfo{
+				"google.gemma-3-27b-it": {
+					ID:   "google.gemma-3-27b-it",
+					Name: "Gemma 3 27B",
+				},
+				"global.anthropic.claude-haiku-4-5-20251001-v1:0": {
+					ID:        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+					Name:      "Claude Haiku 4.5",
+					Reasoning: true,
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(sampleData)
+	if err != nil {
+		t.Fatalf("failed to marshal sample data: %v", err)
+	}
+
+	if err := os.WriteFile(cachePath, data, 0644); err != nil {
+		t.Fatalf("failed to write cache file: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+	}{
+		{
+			name:     "bedrock alias resolves gemma",
+			provider: "bedrock",
+			model:    "google.gemma-3-27b-it",
+		},
+		{
+			name:     "bedrock alias resolves claude haiku",
+			provider: "bedrock",
+			model:    "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+		},
+		{
+			name:     "bedrock alias is case insensitive",
+			provider: "Bedrock",
+			model:    "google.gemma-3-27b-it",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			modelInfo, providerMatched := GetModel(tt.provider, tt.model)
+			if !providerMatched {
+				t.Errorf("GetModel(%q, %q) provider matched = false, want true", tt.provider, tt.model)
+			}
+			if modelInfo == nil {
+				t.Fatalf("GetModel(%q, %q) returned nil model info, want non-nil", tt.provider, tt.model)
+			}
+			if modelInfo.ID != tt.model {
+				t.Errorf("GetModel(%q, %q) model ID = %q, want %q", tt.provider, tt.model, modelInfo.ID, tt.model)
+			}
+		})
+	}
+}
+
 func TestLoadModelsDev_CacheFreshness(t *testing.T) {
 	ClearModelsCache()
 	t.Cleanup(ClearModelsCache)

@@ -288,7 +288,7 @@ Line 5`
 	assert.Nil(t, err)
 
 	// Read the contents of the file
-	contents, err := readURI(documentURI)
+	contents, err := readURI(context.Background(), envContainer, documentURI)
 	assert.Nil(t, err)
 
 	// Assert that the contents of the file have been updated as expected
@@ -350,7 +350,7 @@ Line 5`
 	assert.Nil(t, err)
 
 	// Read the contents of the file
-	contents, err := readURI(documentURI)
+	contents, err := readURI(context.Background(), envContainer, documentURI)
 	assert.Nil(t, err)
 
 	// Assert that the contents of the file have been updated as expected
