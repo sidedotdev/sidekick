@@ -16,8 +16,6 @@ intent_links:
       - dev/idd_workflow.go:IddWorkflow
       - dev/idd_workflow.go:runIntentSubtask
       - dev/idd_workflow.go:commitIntent
-      - dev/idd_workflow.go:finishIdd
-      - dev/idd_workflow.go:cancelPendingSubtasks
       - dev/basic_dev_workflow.go:BasicDevOptions
       - dev/intent_requirements.go:renderIntentRequirements
       - api/intent_api.go:ListIntentFilesHandler
@@ -65,37 +63,46 @@ according to the human author/user.
 
 ## MVP
 
-- New Flow Type: Intent Driven Development (idd)
-    - Doesn't ask for task description in the UI to start. In fact, it removes
-      task fields other than model config, title (required for idd, unlike
-      other flow types), and start branch.
-      
+### New Flow Type: Intent Driven Development (idd)
 
-- Interface
-    - Starting an idd task/flow creates a new worktree and takes you
-      directly to the intent canvas to edit intent files in that worktree
-    - The canvas is a custom interface for specifying intent, with a simple
-      markdown editor + filetree browser.
-        - If no intent files exists, shows a prompt to create a new intent file
+- Doesn't ask for task description in the UI to start. In fact, it removes
+  task fields other than model config, title (required for idd, unlike
+  other flow types), and start branch.
+      
+### Interface
+
+- Starting an idd task/flow creates a new worktree and takes you
+  directly to the intent canvas to edit intent files in that worktree
+- The canvas is a custom interface for specifying intent, with a simple
+  markdown editor + filetree browser.
+    - If no intent files exists, shows a prompt to create a new intent file
           in a intent/ directory, prompting for the file name.
-        - If intent files exist, open first non-generated one
-        
-        - .generated files are shown last in filetree
+    - Remember which intent file was last open and open it again when the specific idd flow id is next accessed
+    - If intent files exist, on startup, do not open one: allow the user to select one themselves first, with a prompt telling them to do so
+     - .generated files are shown last in filetree
+     
+#### Markdown Editor Component
+
         - Uses monaco or codemirror, whatever is easier to get all our desired
           features working in for now.
-        - Theme of editor respects dark/light mode 
-        
-            - Highlighting text has a separate color from the active line so it stands out better
-            - 
-        - Strong colors for markdown elements like headings or "-" for lists, etc
-        - YAML syntax highlighting for the frontmatter
-        
+
         - Remembers which file was open last
         - Saves intent automatically as you type in the worktree
         - Intent that is not yet committed is styled differently to committed
           intent. This must use a diff algorithm that finds word-level changes
           even in multi-line markdown with newlines shifting around.
         - Tab character expands to 4 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
+
+##### Editor Styling
+        - Theme of editor respects dark/light mode 
+            - Highlighting text has a separate color from the active line so it stands out better
+            - 
+        - Strong colors for markdown elements like headings or "-" for lists, etc
+        - YAML syntax highlighting for the frontmatter
+        
+
+#### Right Sidebar
+
     - The canvas also has a right sidebar that supports showing the user:
         - A button to start implementing the current intent state
             - Clicking them opens the existing flow view component (not iframe, and without header/editor
@@ -112,23 +119,26 @@ according to the human author/user.
         
       convenience. They are shown alongside the sub task that triggered it.
 
-      - There is a button to finish the idd flow.
-          - This shows a UI where you can
+      - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI
+
+### Finish UI
+
+          - UI where you can
             select the branch to merge back into (default: start branch), and shows
             you the diff that will be merged, and lets you confirm.
-            Uses a dismissable side view to show this UI.
+          - Diff is displayed using existing expandable DiffFile components
           - Finishing means that the idd flow
               - Merges into the selected target branch
               - Cleans up its worktree
               - Cancels sub tasks that are still going
               - And sends a completion signal so that the task is marked completed
 
-- Starting intent sub tasks
+### Starting intent sub tasks
     - Pressing the button to start results in saving and git committing the
       current intent state and creating a sub task for implementing it
     - cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add a newline in the editor if the editor is focused.
 
-- Sub tasks
+### Sub tasks
     - Uses basic dev flow type with determine requirements disabled
     - Makes a worktree based off of HEAD of the worktree for the idd flow
     - Automatically gets merged into the idd worktree when completed (new basic
