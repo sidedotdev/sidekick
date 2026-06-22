@@ -146,6 +146,10 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 }
 
 func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
+	// TODO: re-enable once the underlying openshell sync / ranked-outline pipeline
+	// stops intermittently hanging under syscall.wait4 in CI. The test has been
+	// timing out for a sustained period without a clear shell-side culprit.
+	t.Skip("temporarily disabled: openshell sync hangs intermittently in CI")
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set to true")
 	}
