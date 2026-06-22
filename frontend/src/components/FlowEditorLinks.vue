@@ -35,7 +35,7 @@ const devMode = import.meta.env.MODE === 'development'
 
 <style scoped>
 .editor-links {
-  position: absolute;
+  position: fixed;
   z-index: 1000;
   top: 1rem;
   right: 1rem;
