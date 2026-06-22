@@ -88,7 +88,7 @@ according to the human author/user.
         - Intent that is not yet committed is styled differently to committed
           intent. This must use a diff algorithm that finds word-level changes
           even in multi-line markdown with newlines shifting around.
-          
+        - Tab character expands to 4 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
     - The canvas also has a right sidebar that supports showing the user:
         - A button to start implementing the current intent state
             - Clicking them opens the existing flow view component (not iframe, and without header/editor
