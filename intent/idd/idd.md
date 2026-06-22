@@ -115,9 +115,11 @@ according to the human author/user.
             select the branch to merge back into (default: start branch), and shows
             you the diff that will be merged, and lets you confirm.
             Uses a dismissable side view to show this UI.
-      
-        
-
+          - Finishing means that the idd flow
+              - Merges into the selected target branch
+              - Cleans up its worktree
+              - Cancels sub tasks that are still going
+              - And sends a completion signal so that the task is marked completed
 
 - Starting intent sub tasks
     - Pressing the button to start results in saving and git committing the
