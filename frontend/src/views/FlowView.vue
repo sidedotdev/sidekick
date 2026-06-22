@@ -1,6 +1,6 @@
 <template>
   <div v-if="flow">
-    <FlowEditorLinks :flow-id="flow.id" :worktrees="flow.worktrees" />
+    <FlowEditorLinks v-if="!embedded" :flow-id="flow.id" :worktrees="flow.worktrees" />
     <!-- TODO: In the future, we should allow going to next step even if currently paused -->
     <div 
       v-if="flow && !['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" 
@@ -54,6 +54,11 @@ import { store } from '../lib/store'
 import { viewCache } from '../lib/viewCache'
 import { useIdeOpener, IDE_OPENER_KEY } from '@/composables/useIdeOpener'
 
+const props = defineProps<{
+  flowId?: string
+  embedded?: boolean
+}>()
+
 const subflowProcessingDebounceTimers = ref<Record<string, NodeJS.Timeout>>({})
 const workspace = ref<Workspace | null>(null)
 
@@ -75,6 +80,8 @@ const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
 const router = useRouter()
+
+const effectiveFlowId = computed(() => props.flowId ?? (route.params.id as string | undefined))
 
 // activeDevStep: Stores IDs of 'step.dev', 'coding', or 'review_and_resolve' subflows that are currently active.
 // This is populated by listening to WebSocket events for subflow status changes.
@@ -502,7 +509,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
   // Restore from cache or initialize empty state
   const cached = viewCache.getFlowView(newFlowId);
   if (cached) {
-    if (cached.flow?.type === 'idd') {
+    if (cached.flow?.type === 'idd' && !props.embedded) {
       router.replace({ name: 'intent-canvas', params: { id: newFlowId } });
       return;
     }
@@ -540,7 +547,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
     const response = await flowPromise;
     if (response.ok) {
       const flowData = await response.json();
-      if (flowData.flow?.type === 'idd') {
+      if (flowData.flow?.type === 'idd' && !props.embedded) {
         router.replace({ name: 'intent-canvas', params: { id: newFlowId } });
         return;
       }
@@ -577,7 +584,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
 
 
 onMounted(async () => {
-  const initialFlowId = route.params.id as string;
+  const initialFlowId = effectiveFlowId.value;
   if (initialFlowId) {
     await setupFlow(initialFlowId);
   }
@@ -587,7 +594,7 @@ onMounted(async () => {
   });
 });
 
-watch(() => route.params.id, async (newFlowId, oldFlowId) => {
+watch(effectiveFlowId, async (newFlowId, oldFlowId) => {
   if (newFlowId && newFlowId !== oldFlowId && typeof newFlowId === 'string') {
     await setupFlow(newFlowId);
   } else if (!newFlowId && oldFlowId) { // Navigating away from a specific flow
