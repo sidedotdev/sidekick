@@ -93,6 +93,7 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 			childFuture = workflow.ExecuteChildWorkflow(childCtx, IddWorkflow, IddWorkflowInput{
 				WorkspaceId: input.WorkspaceId,
 				RepoDir:     workspace.LocalRepoDir,
+				TaskId:      input.TaskId,
 				Title:       input.Title,
 				IddOptions:  options,
 			})

@@ -24,10 +24,12 @@ type IddWorkflowTestSuite struct {
 	suite.Suite
 	testsuite.WorkflowTestSuite
 	env *testsuite.TestWorkflowEnvironment
+	ima *DevAgentManagerActivities
 }
 
 func (s *IddWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.ima = nil
 }
 
 func (s *IddWorkflowTestSuite) AfterTest(suiteName, testName string) {
@@ -62,6 +64,12 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Once()
+
+	s.env.OnActivity(
+		s.ima.PutWorkflow,
+		mock.Anything,
+		mock.AnythingOfType("domain.Flow"),
+	).Return(nil)
 
 	wrapper := func(ctx workflow.Context) (IddState, error) {
 		ctx = utils.NoRetryCtx(ctx)
@@ -114,8 +122,6 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	s.Equal("/tmp/repo", capturedInput.RepoDir)
 	s.Require().NotNil(capturedInput.StartBranch)
 	s.Equal(iddBranch, *capturedInput.StartBranch)
-	s.Require().NotNil(capturedInput.MergeIntoBranch)
-	s.Equal(iddBranch, *capturedInput.MergeIntoBranch)
 	s.Contains(capturedInput.Requirements, "Implement the following initial intent:")
 	s.Contains(capturedInput.Requirements, "git show abc123")
 	s.Contains(capturedInput.Requirements, "diff body")

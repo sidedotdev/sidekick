@@ -7,6 +7,7 @@ import (
 
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/utils"
@@ -33,6 +34,10 @@ type IddOptions struct {
 type IddWorkflowInput struct {
 	WorkspaceId string
 	RepoDir     string
+	// TaskId is the parent task of the IDD flow. Sub-task flows are parented to
+	// it so that surfacing/answering a sub-task's user request blocks and then
+	// unblocks the task via the existing task workflow machinery.
+	TaskId string
 	// Title is required for IDD flows and is used for branch naming and the
 	// intent commit message, since IDD tasks carry no free-form description.
 	Title string
@@ -139,12 +144,24 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(requestForUserCh, func(c workflow.ReceiveChannel, _ bool) {
 			var req flow_action.RequestForUser
 			c.Receive(dCtx, &req)
-			// Sub-tasks request user input when intent is ambiguous or
-			// contradictory; surface those as clarification questions.
-			state.Clarifications = append(state.Clarifications, IddClarification{
-				SubtaskFlowId: req.OriginWorkflowId,
-				Question:      req.Content,
-			})
+			// A sub-task blocks on user input when intent is too ambiguous or
+			// contradictory to proceed. Forward the request up to the task
+			// workflow, whose existing handler surfaces it as a pending user
+			// request and marks the IDD task blocked. The user's response routes
+			// straight back to the originating sub-task (unblocking it) and, since
+			// the sub-task flow is parented to the IDD task, returns that task to
+			// in-progress on completion.
+			// TODO have the orchestrator attempt to resolve clarifications from
+			// intent itself before falling back to asking the user, and surface
+			// unresolved ones on the canvas.
+			parent := workflow.GetInfo(dCtx).ParentWorkflowExecution
+			if parent == nil {
+				workflow.GetLogger(dCtx).Error("Cannot forward intent sub-task user request: no parent workflow")
+				return
+			}
+			if sigErr := workflow.SignalExternalWorkflow(dCtx, parent.ID, "", flow_action.SignalNameRequestForUser, req).Get(dCtx, nil); sigErr != nil {
+				workflow.GetLogger(dCtx).Error("Failed to forward intent sub-task user request to task workflow", "Error", sigErr)
+			}
 		})
 
 		selector.AddReceive(workflowClosedCh, func(c workflow.ReceiveChannel, _ bool) {
@@ -196,7 +213,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			RepoMode:              input.RepoMode,
 			StartBranch:           &branch,
 			ConfigOverrides:       input.ConfigOverrides,
-			MergeIntoBranch:       &branch,
 			AutoMerge:             true,
 			Idd:                   true,
 		},
@@ -213,12 +229,34 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		Status: "in_progress",
 	})
 
+	// Persist a flow record for the sub-task, parented to the IDD task, so its
+	// flow view (and any pending user requests it raises when intent is
+	// ambiguous) can be opened from the canvas and answered. Parenting to the
+	// task lets the existing completion handler block and then unblock that task.
+	var ima *DevAgentManagerActivities
+	actCtx := setActivityOptions(dCtx)
+	subtaskFlow := domain.Flow{
+		WorkspaceId: input.WorkspaceId,
+		Id:          we.ID,
+		Type:        domain.FlowTypeBasicDev,
+		Status:      "in_progress",
+		ParentId:    input.TaskId,
+	}
+	if putErr := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, subtaskFlow).Get(actCtx, nil); putErr != nil {
+		log.Error("Failed to persist intent sub-task flow record", "Error", putErr)
+	}
+
 	status := "completed"
 	if childErr := childFuture.Get(childCtx, nil); childErr != nil {
 		status = "failed"
 		log.Error("Intent sub-task failed", "Error", childErr)
 	}
 	setSubtaskStatus(state, we.ID, status)
+
+	subtaskFlow.Status = status
+	if putErr := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, subtaskFlow).Get(actCtx, nil); putErr != nil {
+		log.Error("Failed to update intent sub-task flow record", "Error", putErr)
+	}
 }
 
 // commitIntent commits all pending intent changes in the worktree and returns
