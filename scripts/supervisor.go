@@ -302,6 +302,9 @@ type IPCMessage struct {
 	Token      string `json:"token,omitempty"`
 	Ephemeral  bool   `json:"ephemeral,omitempty"`
 	WorkingDir string `json:"workingDir,omitempty"`
+	// Processes is the set of process names an ephemeral instance is taking
+	// over. Empty means all processes (full takeover).
+	Processes []string `json:"processes,omitempty"`
 }
 
 const (
@@ -467,6 +470,8 @@ type ephemeralConn struct {
 	encoder   *json.Encoder
 	encoderMu sync.Mutex
 	stopAckCh chan struct{}
+	// processes is the set of process names this connection has taken over.
+	processes []string
 }
 
 func (ec *ephemeralConn) send(msg IPCMessage) error {
@@ -494,6 +499,11 @@ type Supervisor struct {
 	ownershipMu    sync.Mutex
 	ownershipCond  *sync.Cond
 	ephemeralConns map[string]*ephemeralConn
+	// ownedProcesses is a per-process reference count of ephemeral owners.
+	// A process is suspended on the persistent supervisor while its count is
+	// greater than zero, allowing ephemeral instances to take over only a
+	// subset of processes (e.g. just the frontend).
+	ownedProcesses map[string]int
 
 	// For ephemeral: channel to receive takeover notifications
 	takeoverChan chan struct{}
@@ -525,6 +535,7 @@ func NewSupervisor(configs []ProcessConfig, ephemeral bool, projectID, execution
 		socketPath:      getSocketPath(projectID),
 		takeoverChan:    make(chan struct{}, 1),
 		ephemeralConns:  make(map[string]*ephemeralConn),
+		ownedProcesses:  make(map[string]int),
 		prebuildTimers:  make(map[string]*time.Timer),
 		prebuildCancels: make(map[string]context.CancelFunc),
 	}
@@ -1096,6 +1107,7 @@ func (s *Supervisor) handleIPCConnection(ctx context.Context, conn net.Conn, out
 				}
 				return
 			}
+			ec.processes = msg.Processes
 			ec.token = s.acquireOwnership(ctx, outputChan, ec)
 			ec.send(IPCMessage{Type: msgAck, Token: ec.token})
 
@@ -1119,9 +1131,47 @@ func (s *Supervisor) handleIPCConnection(ctx context.Context, conn net.Conn, out
 	}
 }
 
+// allProcessNames returns the names of every process this supervisor manages.
+func (s *Supervisor) allProcessNames() []string {
+	names := make([]string, len(s.processes))
+	for i, p := range s.processes {
+		names[i] = p.Config.Name
+	}
+	return names
+}
+
+// processByName returns the managed process with the given name, or nil.
+func (s *Supervisor) processByName(name string) *Process {
+	for _, p := range s.processes {
+		if p.Config.Name == name {
+			return p
+		}
+	}
+	return nil
+}
+
+// ownedCountLocked returns the number of distinct processes currently owned by
+// ephemeral instances. Callers must hold ownershipMu.
+func (s *Supervisor) ownedCountLocked() int {
+	distinct := 0
+	for _, c := range s.ownedProcesses {
+		if c > 0 {
+			distinct++
+		}
+	}
+	return distinct
+}
+
+// fullyOwnedLocked reports whether every managed process is owned by an
+// ephemeral instance. Callers must hold ownershipMu.
+func (s *Supervisor) fullyOwnedLocked() bool {
+	return s.ownedCountLocked() == len(s.processes)
+}
+
 // acquireOwnership is called when an ephemeral wants to take over.
 // It notifies previous owners to stop, waits for acknowledgement,
-// then registers the new owner.
+// then registers the new owner. Only the processes named by the ephemeral
+// (ec.processes) are suspended; an empty set means all processes.
 func (s *Supervisor) acquireOwnership(ctx context.Context, outputChan chan<- processOutputMsg, ec *ephemeralConn) string {
 	s.ownershipMu.Lock()
 
@@ -1135,13 +1185,29 @@ func (s *Supervisor) acquireOwnership(ctx context.Context, outputChan chan<- pro
 		prevOwners = append(prevOwners, prev)
 	}
 
+	// An empty request means a full takeover of every managed process.
+	if len(ec.processes) == 0 {
+		ec.processes = s.allProcessNames()
+	}
+
+	// Determine which processes transition from unowned to owned so we only
+	// stop those, leaving any already-suspended processes untouched.
+	wasFullyOwned := s.fullyOwnedLocked()
+	var toStop []*Process
+	for _, name := range ec.processes {
+		if s.ownedProcesses[name] == 0 {
+			if p := s.processByName(name); p != nil {
+				toStop = append(toStop, p)
+			}
+		}
+		s.ownedProcesses[name]++
+	}
+	nowFullyOwned := s.fullyOwnedLocked()
+
 	// Register this connection before releasing lock
 	s.ephemeralConns[token] = ec
 	s.currentToken = token
 	s.activeOwners++
-
-	// Check if this is the first takeover (persistent needs to stop)
-	firstTakeover := s.activeOwners == 1
 
 	s.ownershipMu.Unlock()
 
@@ -1160,32 +1226,65 @@ func (s *Supervisor) acquireOwnership(ctx context.Context, outputChan chan<- pro
 		}
 	}
 
-	// Stop persistent's processes if this is the first takeover
-	if firstTakeover {
-		s.SetSuspended(true)
-		s.StopAll()
+	// The watcher serves the still-running processes, so only stop it once
+	// every process has been taken over.
+	if !wasFullyOwned && nowFullyOwned {
+		s.StopWatcher()
 	}
+	for _, p := range toStop {
+		s.StopProcess(p)
+	}
+	s.SetSuspended(nowFullyOwned)
 
 	return token
 }
 
 // releaseOwnership is called when an ephemeral releases or disconnects.
-// It decrements the owner count and only restarts processes when no owners remain.
+// It decrements the per-process owner counts and restarts each process once
+// its last owner has released, so a partial (e.g. frontend-only) takeover only
+// restarts the processes it had suspended.
 func (s *Supervisor) releaseOwnership(token string, ctx context.Context, outputChan chan<- processOutputMsg) {
 	s.ownershipMu.Lock()
 	defer s.ownershipMu.Unlock()
 
 	// Remove this connection from tracking
+	ec, ok := s.ephemeralConns[token]
 	delete(s.ephemeralConns, token)
 
 	if s.activeOwners > 0 {
 		s.activeOwners--
 	}
 
-	// Only restart when all ephemeral instances have released
-	if s.activeOwners == 0 {
-		s.SetSuspended(false)
-		s.StartAll(ctx, outputChan)
+	wasFullyOwned := s.fullyOwnedLocked()
+	var toStart []*Process
+	if ok {
+		for _, name := range ec.processes {
+			if s.ownedProcesses[name] > 0 {
+				s.ownedProcesses[name]--
+				if s.ownedProcesses[name] == 0 {
+					if p := s.processByName(name); p != nil {
+						toStart = append(toStart, p)
+					}
+				}
+			}
+		}
+	}
+
+	// Restart the watcher only when leaving the fully-suspended state, mirroring
+	// the watcher shutdown performed once everything was taken over.
+	if wasFullyOwned && !s.fullyOwnedLocked() {
+		if err := s.StartWatcher(ctx, outputChan); err != nil {
+			debug("failed to restart watcher: %v", err)
+		}
+	}
+	for _, p := range toStart {
+		if err := s.StartProcess(ctx, p, outputChan); err != nil {
+			p.appendOutput(fmt.Sprintf("[Failed to start: %v]", err))
+		}
+	}
+
+	s.SetSuspended(s.fullyOwnedLocked())
+	if s.ownedCountLocked() == 0 {
 		s.currentToken = ""
 	}
 }
@@ -1213,8 +1312,13 @@ func (s *Supervisor) ConnectToPersistent() error {
 	encoder := json.NewEncoder(conn)
 	decoder := json.NewDecoder(conn)
 
-	// Send takeover request with ephemeral flag and working directory
+	// Send takeover request with ephemeral flag and working directory. Ephemeral
+	// instances advertise which processes they run so the persistent supervisor
+	// only suspends those (enabling e.g. a frontend-only takeover).
 	msg := IPCMessage{Type: msgTakeover, Ephemeral: s.ephemeral, WorkingDir: s.executionRoot}
+	if s.ephemeral {
+		msg.Processes = s.allProcessNames()
+	}
 	if err := encoder.Encode(msg); err != nil {
 		conn.Close()
 		s.parentConn = nil
@@ -2048,10 +2152,45 @@ func (m model) getStatusIndicator(p *Process) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("●")
 }
 
+// splitProcessNames parses a comma-separated list of process names, trimming
+// whitespace and dropping empty entries.
+func splitProcessNames(s string) []string {
+	var names []string
+	for _, part := range strings.Split(s, ",") {
+		if name := strings.TrimSpace(part); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// filterProcessConfigs returns the configs whose names appear in names,
+// preserving the order of names. It errors if a requested name is unknown.
+func filterProcessConfigs(configs []ProcessConfig, names []string) ([]ProcessConfig, error) {
+	byName := make(map[string]ProcessConfig, len(configs))
+	for _, cfg := range configs {
+		byName[cfg.Name] = cfg
+	}
+	filtered := make([]ProcessConfig, 0, len(names))
+	for _, name := range names {
+		cfg, ok := byName[name]
+		if !ok {
+			available := make([]string, len(configs))
+			for i, c := range configs {
+				available[i] = c.Name
+			}
+			return nil, fmt.Errorf("unknown process %q (available: %s)", name, strings.Join(available, ", "))
+		}
+		filtered = append(filtered, cfg)
+	}
+	return filtered, nil
+}
+
 func main() {
 	ephemeral := false
 	var projectIDFlag string
 	var workingDirFlag string
+	var onlyNames []string
 
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -2068,6 +2207,26 @@ func main() {
 			workingDirFlag = args[i]
 		} else if strings.HasPrefix(arg, "--working-directory=") {
 			workingDirFlag = strings.TrimPrefix(arg, "--working-directory=")
+		} else if arg == "--frontend-only" {
+			onlyNames = []string{"frontend"}
+		} else if arg == "--only" && i+1 < len(args) {
+			i++
+			onlyNames = splitProcessNames(args[i])
+		} else if strings.HasPrefix(arg, "--only=") {
+			onlyNames = splitProcessNames(strings.TrimPrefix(arg, "--only="))
+		}
+	}
+
+	// Running a subset of processes only makes sense alongside a persistent
+	// supervisor that keeps the rest alive, so it always implies ephemeral mode.
+	processConfigs := defaultProcesses
+	if len(onlyNames) > 0 {
+		ephemeral = true
+		var err error
+		processConfigs, err = filterProcessConfigs(defaultProcesses, onlyNames)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
 	}
 
@@ -2115,7 +2274,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sup := NewSupervisor(defaultProcesses, ephemeral, projectID, executionRoot)
+	sup := NewSupervisor(processConfigs, ephemeral, projectID, executionRoot)
 	outputChan := make(chan processOutputMsg, 100)
 
 	// Handle signals
