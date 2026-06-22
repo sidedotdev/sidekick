@@ -144,6 +144,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { EditorView, basicSetup } from 'codemirror'
+import { keymap } from '@codemirror/view'
 import { Compartment, EditorState } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { store } from '../lib/store'
@@ -405,6 +406,8 @@ const flushPendingSave = () => {
   if (queued) void saveFile(queued.path, queued.content)
 }
 
+const TAB_INDENT = '    '
+
 const createEditor = () => {
   if (editorView || !editorParent.value) return
   try {
@@ -416,6 +419,21 @@ const createEditor = () => {
           basicSetup,
           markdown(),
           EditorView.lineWrapping,
+          keymap.of([
+            {
+              key: 'Tab',
+              preventDefault: true,
+              run: (view) => {
+                view.dispatch(
+                  view.state.update(view.state.replaceSelection(TAB_INDENT), {
+                    scrollIntoView: true,
+                    userEvent: 'input.indent',
+                  }),
+                )
+                return true
+              },
+            },
+          ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !applyingExternal) {
               content.value = update.state.doc.toString()
