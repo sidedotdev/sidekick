@@ -145,8 +145,11 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { EditorView, basicSetup } from 'codemirror'
 import { keymap } from '@codemirror/view'
-import { Compartment, EditorState } from '@codemirror/state'
-import { markdown } from '@codemirror/lang-markdown'
+import { Compartment, EditorState, Prec } from '@codemirror/state'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags as t } from '@lezer/highlight'
+import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { store } from '../lib/store'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import FlowView from './FlowView.vue'
@@ -408,6 +411,36 @@ const flushPendingSave = () => {
 
 const TAB_INDENT = '    '
 
+const markdownHighlightStyle = HighlightStyle.define([
+  { tag: t.heading1, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.6em' },
+  { tag: t.heading2, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.35em' },
+  { tag: t.heading3, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.2em' },
+  { tag: t.heading4, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.1em' },
+  { tag: [t.heading5, t.heading6], color: 'var(--color-heading)', fontWeight: '700' },
+  { tag: t.strong, color: 'var(--color-heading)', fontWeight: '700' },
+  { tag: t.emphasis, fontStyle: 'italic' },
+  { tag: t.strikethrough, textDecoration: 'line-through' },
+  { tag: t.link, color: 'var(--color-link)' },
+  { tag: t.url, color: 'var(--color-link)', textDecoration: 'underline' },
+  { tag: t.monospace, fontFamily: '"JetBrains Mono", monospace', color: 'var(--color-primary)' },
+  { tag: t.list, color: 'var(--color-primary)', fontWeight: '700' },
+  { tag: t.quote, color: 'var(--color-text-2)', fontStyle: 'italic' },
+  { tag: t.meta, color: 'var(--color-text-2)' },
+  { tag: t.processingInstruction, color: 'var(--color-text-2)' },
+  { tag: t.contentSeparator, color: 'var(--color-text-2)' },
+  { tag: t.atom, color: 'var(--color-primary)' },
+  { tag: t.bool, color: 'var(--color-primary)' },
+  { tag: t.number, color: 'var(--color-primary)' },
+  { tag: t.string, color: 'var(--color-green-dark)' },
+  { tag: t.keyword, color: 'var(--color-link)', fontWeight: '600' },
+  { tag: t.propertyName, color: 'var(--color-link)' },
+])
+
+const startSubtaskCommand = () => {
+  void startSubtask()
+  return true
+}
+
 const createEditor = () => {
   if (editorView || !editorParent.value) return
   try {
@@ -416,8 +449,14 @@ const createEditor = () => {
       state: EditorState.create({
         doc: content.value,
         extensions: [
+          Prec.highest(
+            keymap.of([
+              { key: 'Mod-Enter', preventDefault: true, run: startSubtaskCommand },
+            ]),
+          ),
           basicSetup,
-          markdown(),
+          yamlFrontmatter({ content: markdown({ base: markdownLanguage }) }),
+          syntaxHighlighting(markdownHighlightStyle),
           EditorView.lineWrapping,
           keymap.of([
             {
@@ -449,8 +488,9 @@ const createEditor = () => {
   }
 }
 
-const buildEditorTheme = (isDark: boolean) =>
-  EditorView.theme(
+const buildEditorTheme = (isDark: boolean) => {
+  const selectionBg = isDark ? 'rgba(131, 58, 180, 0.45)' : 'rgba(131, 58, 180, 0.28)'
+  return EditorView.theme(
     {
       '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
       '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
@@ -459,9 +499,14 @@ const buildEditorTheme = (isDark: boolean) =>
       '.cm-activeLine': { backgroundColor: 'var(--color-background-mute)' },
       '.cm-activeLineGutter': { backgroundColor: 'transparent' },
       '&.cm-focused': { outline: 'none' },
+      '.cm-selectionBackground, ::selection': { backgroundColor: selectionBg },
+      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+        backgroundColor: selectionBg,
+      },
     },
     { dark: isDark },
   )
+}
 
 const handleColorSchemeChange = (event: MediaQueryListEvent) => {
   if (!editorView) return
