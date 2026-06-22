@@ -530,8 +530,8 @@ The symbol 'existsElsewhere' is defined in the following files:
 			name: "Non-existent file (code not specified)",
 			input: []FileSymDefRequest{
 				{
-					Symbols: []RequestedSymbol{{Name: "TestFunc"}},
-					FilePath:    "nonexistent.go",
+					Symbols:  []RequestedSymbol{{Name: "TestFunc"}},
+					FilePath: "nonexistent.go",
 				},
 			},
 			expectedOutput: SymDefResults{
@@ -562,8 +562,8 @@ The symbol 'NonExistentFunc' is not defined in any repo files.`,
 			fileExtension: "unknown",
 			input: []FileSymDefRequest{
 				{
-					Symbols: []RequestedSymbol{{Name: "TestFunc"}},
-					FilePath:    "nonexistent.ext",
+					Symbols:  []RequestedSymbol{{Name: "TestFunc"}},
+					FilePath: "nonexistent.ext",
 				},
 			},
 			expectedOutput: SymDefResults{

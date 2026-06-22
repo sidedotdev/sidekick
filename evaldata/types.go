@@ -32,8 +32,8 @@ type GetSymbolDefinitionsArgs struct {
 
 // FileSymDefRequestArgs mirrors coding.FileSymDefRequest for typed parsing.
 type FileSymDefRequestArgs struct {
-	FilePath string                 `json:"file_path"`
-	Symbols  []RequestedSymbolArgs  `json:"symbols,omitempty"`
+	FilePath string                `json:"file_path"`
+	Symbols  []RequestedSymbolArgs `json:"symbols,omitempty"`
 }
 
 // RequestedSymbolArgs mirrors coding.RequestedSymbol for typed parsing.
