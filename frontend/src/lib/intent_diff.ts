@@ -16,13 +16,14 @@ interface Token {
 }
 
 const TOKEN_RE = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]+/gu
+const WS_KEY = '\u0001ws'
 
 const tokenize = (text: string): Token[] => {
   const out: Token[] = []
   for (const match of text.matchAll(TOKEN_RE)) {
     const t = match[0]
     const isWs = /^\s+$/.test(t)
-    out.push({ text: t, key: isWs ? '\u0001ws' : t })
+    out.push({ text: t, key: isWs ? WS_KEY : t })
   }
   return out
 }
@@ -56,6 +57,19 @@ export const diffAddedRanges = (previous: string, current: string): AddedRange[]
     a[a.length - 1 - suffix].key === b[b.length - 1 - suffix].key
   ) {
     suffix++
+  }
+  // Keep a trailing whitespace token attached to a non-whitespace insertion
+  // rather than letting the greedy suffix match swallow it. Without this,
+  // typing "WORD " between matched context would highlight as " WORD" because
+  // the suffix matcher pairs the new trailing space with the original space
+  // before the next token.
+  if (
+    suffix > 0 &&
+    b.length - suffix - 1 >= prefix &&
+    b[b.length - suffix].key === WS_KEY &&
+    b[b.length - suffix - 1].key !== WS_KEY
+  ) {
+    suffix--
   }
 
   const prefixLen = measure(b, 0, prefix)
