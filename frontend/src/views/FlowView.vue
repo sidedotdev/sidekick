@@ -66,7 +66,7 @@ import ZedIcon from '@/components/icons/ZedIcon.vue'
 import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow, Workspace } from '../lib/models'
 import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
 import { viewCache } from '../lib/viewCache'
 import { useIdeOpener, IDE_OPENER_KEY } from '@/composables/useIdeOpener'
@@ -91,6 +91,7 @@ const devMode = import.meta.env.MODE === 'development'
 const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
+const router = useRouter()
 
 // activeDevStep: Stores IDs of 'step.dev', 'coding', or 'review_and_resolve' subflows that are currently active.
 // This is populated by listening to WebSocket events for subflow status changes.
@@ -518,6 +519,10 @@ const setupFlow = async (newFlowId: string | undefined) => {
   // Restore from cache or initialize empty state
   const cached = viewCache.getFlowView(newFlowId);
   if (cached) {
+    if (cached.flow?.type === 'idd') {
+      router.replace({ name: 'intent-canvas', params: { id: newFlowId } });
+      return;
+    }
     flow.value = cached.flow;
     flowActions.value = [...cached.flowActions];
     subflowsById.value = { ...cached.subflowsById };
@@ -552,6 +557,10 @@ const setupFlow = async (newFlowId: string | undefined) => {
     const response = await flowPromise;
     if (response.ok) {
       const flowData = await response.json();
+      if (flowData.flow?.type === 'idd') {
+        router.replace({ name: 'intent-canvas', params: { id: newFlowId } });
+        return;
+      }
       flow.value = flowData.flow;
       isLoadingFlow.value = false;
       isStartingFlow.value = !hasReceivedFirstAction;
