@@ -67,7 +67,7 @@ according to the human author/user.
 
 - Doesn't ask for task description in the UI to start. In fact, it removes
   task fields other than model config, title (required for idd, unlike
-  other flow types), and start branch.
+  other flow types), and start branch. 
       
 ### Interface
 
@@ -105,7 +105,7 @@ according to the human author/user.
   - Tab character expands to 2 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
   - YAML frontmatter is always collapsed by default in the editor (all other
      sections are expanded by default)
-  - Supports auto-formatting markdown (collapsing whitespace and wrapping lines)
+  - Supports auto-formatting markdown (collapsing whitespace and wrapping lines, including list items)
     when editor has been idle for 15s
 
 ##### Editor Styling
@@ -115,7 +115,6 @@ according to the human author/user.
 - Strong colors to highlight markdown syntax like the "#" character for headings or the "-" character, etc
 - YAML syntax highlighting for the frontmatter
 - The caret is the same shape when collapsed or expanded, just rotated about it's centerpoint.
-
 
 #### Right Sidebar
 
@@ -183,7 +182,6 @@ according to the human author/user.
 - User requests go to the parent flow, which is the idd flow in this case,
   which passes them on to the task workflow for now.
 - Parent task remains blocked as long as any sub task is blocked
-
 
 ## IDD Instructions for Coding Agents
 
