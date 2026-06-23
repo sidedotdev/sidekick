@@ -1,16 +1,37 @@
 <template>
-  <div class="intent-canvas">
+  <div
+    class="intent-canvas"
+    :class="{ 'left-min': leftMinimized, 'right-min': rightMinimized }"
+    :style="{ '--left-col': leftColumn, '--right-col': rightColumn, '--side-panel-w': sidePanelWidthStyle }"
+  >
     <FlowEditorLinks v-if="flow" :flow-id="flow.id" :worktrees="flow.worktrees" />
     <aside class="index" aria-label="Intent files">
-      <header class="index-head">
+      <button
+        v-if="leftMinimized"
+        type="button"
+        class="rail-expand-btn"
+        @click="toggleLeftMinimized"
+        aria-label="Expand intent files"
+        title="Expand intent files"
+      >›</button>
+      <header v-else class="index-head">
         <span class="eyebrow">Intent</span>
-        <button
-          class="new-file-btn"
-          type="button"
-          @click="beginNewFile"
-          :disabled="creating"
-          title="New intent file"
-        >+ New file</button>
+        <div class="head-actions">
+          <button
+            class="new-file-btn"
+            type="button"
+            @click="beginNewFile"
+            :disabled="creating"
+            title="New intent file"
+          >+ New file</button>
+          <button
+            type="button"
+            class="rail-min-btn"
+            @click="toggleLeftMinimized"
+            aria-label="Minimize intent files"
+            title="Minimize"
+          >‹</button>
+        </div>
       </header>
 
       <nav v-if="fileNodes.length" class="file-list">
@@ -54,7 +75,14 @@
       </header>
 
       <div v-if="activePath" class="sheet">
-        <div ref="editorParent" class="editor"></div>
+        <IntentMarkdownEditor
+          class="editor"
+          :model-value="content"
+          :committed-content="committedContent"
+          :tab-size="2"
+          @update:model-value="onEditorContentChange"
+          @shortcut-submit="startSubtask"
+        />
       </div>
 
       <div v-else-if="!loading && hasIntentFiles" class="welcome">
@@ -95,8 +123,23 @@
     </section>
 
     <aside class="rail" aria-label="Implementation">
-      <header class="rail-head">
+      <button
+        v-if="rightMinimized"
+        type="button"
+        class="rail-expand-btn"
+        @click="toggleRightMinimized"
+        aria-label="Expand implementation rail"
+        title="Expand implementation rail"
+      >‹</button>
+      <header v-else class="rail-head">
         <span class="eyebrow">Build</span>
+        <button
+          type="button"
+          class="rail-min-btn"
+          @click="toggleRightMinimized"
+          aria-label="Minimize implementation rail"
+          title="Minimize"
+        >›</button>
       </header>
 
       <div class="rail-body">
@@ -148,6 +191,13 @@
     </aside>
 
     <div v-if="activeSubtaskFlowId" class="side-panel" role="dialog" aria-label="Sub-task">
+      <div
+        class="side-panel-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sub-task panel"
+        @mousedown="(e) => startDrag('side-panel', e)"
+      ></div>
       <header class="side-panel-head">
         <span class="eyebrow">Sub-task</span>
         <button type="button" class="side-panel-close" @click="closeSubtask" aria-label="Dismiss sub-task">×</button>
@@ -163,17 +213,14 @@
         <button type="button" class="side-panel-close" @click="closeFinishDialog" aria-label="Cancel finish">×</button>
       </header>
       <div class="finish-body">
-        <label class="finish-field">
+        <div class="finish-field">
           <span class="finish-label">Merge into branch</span>
-          <select
+          <BranchSelector
+            v-if="store.workspaceId"
+            :workspace-id="store.workspaceId"
             v-model="finishTargetBranch"
-            class="finish-select"
-            :disabled="finishLoading || finishing"
-            @change="loadFinishDiff"
-          >
-            <option v-for="branch in finishMergeTargets" :key="branch" :value="branch">{{ branch }}</option>
-          </select>
-        </label>
+          />
+        </div>
 
         <section class="finish-diff-section">
           <span class="finish-label">Diff to be merged</span>
@@ -198,24 +245,43 @@
         >{{ finishing ? 'Merging…' : 'Confirm merge' }}</button>
       </footer>
     </div>
+
+    <div
+      class="rail-resize rail-resize-left"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize intent files panel"
+      @mousedown="(e) => startDrag('left', e)"
+    ></div>
+    <div
+      class="rail-resize rail-resize-right"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize implementation panel"
+      @mousedown="(e) => startDrag('right', e)"
+    ></div>
+
+    <DevRunControls
+      v-if="hasDevRunConfig && store.workspaceId"
+      class="dev-run-launcher"
+      :workspaceId="store.workspaceId"
+      :flowId="flowId"
+      @start="handleDevRunStart"
+      @stop="handleDevRunStop"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { EditorView, basicSetup } from 'codemirror'
-import { keymap } from '@codemirror/view'
-import { Compartment, EditorState, Prec } from '@codemirror/state'
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { tags as t } from '@lezer/highlight'
-import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { store } from '../lib/store'
+import BranchSelector from '../components/BranchSelector.vue'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
+import IntentMarkdownEditor from '../components/IntentMarkdownEditor.vue'
 import FlowView from './FlowView.vue'
 import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
-import { applyUncommittedHighlight, uncommittedHighlightExtension } from '../lib/intent_diff_editor'
+import DevRunControls from '../components/DevRunControls.vue'
 import type { Flow } from '../lib/models'
 
 interface IntentFileEntry {
@@ -304,6 +370,132 @@ const shortcutLabel = isMac ? '⌘↵' : 'Ctrl+↵'
 
 let iddStateTimer: ReturnType<typeof setInterval> | null = null
 
+const LEFT_DEFAULT_REM = 16
+const RIGHT_DEFAULT_REM = 18
+const SIDE_PANEL_DEFAULT_REM = 46
+const SIDEBAR_MIN_REM = 10
+const SIDEBAR_MAX_REM = 40
+const SIDE_PANEL_MIN_REM = 24
+const SIDE_PANEL_MAX_REM = 90
+const RAIL_COLLAPSED_REM = 2.25
+
+const layoutStorageKey = 'intent-canvas:layout'
+type LayoutPrefs = {
+  leftWidth: number
+  rightWidth: number
+  sidePanelWidth: number
+  leftMinimized: boolean
+  rightMinimized: boolean
+}
+const readLayout = (): LayoutPrefs => {
+  const defaults: LayoutPrefs = {
+    leftWidth: LEFT_DEFAULT_REM,
+    rightWidth: RIGHT_DEFAULT_REM,
+    sidePanelWidth: SIDE_PANEL_DEFAULT_REM,
+    leftMinimized: false,
+    rightMinimized: false,
+  }
+  if (typeof window === 'undefined') return defaults
+  try {
+    const raw = window.localStorage.getItem(layoutStorageKey)
+    if (!raw) return defaults
+    const parsed = JSON.parse(raw) as Partial<LayoutPrefs>
+    return { ...defaults, ...parsed }
+  } catch {
+    return defaults
+  }
+}
+const initialLayout = readLayout()
+const leftWidth = ref(initialLayout.leftWidth)
+const rightWidth = ref(initialLayout.rightWidth)
+const sidePanelWidth = ref(initialLayout.sidePanelWidth)
+const leftMinimized = ref(initialLayout.leftMinimized)
+const rightMinimized = ref(initialLayout.rightMinimized)
+
+const clamp = (n: number, min: number, max: number) => Math.min(Math.max(n, min), max)
+const persistLayout = () => {
+  if (typeof window === 'undefined') return
+  try {
+    const payload: LayoutPrefs = {
+      leftWidth: leftWidth.value,
+      rightWidth: rightWidth.value,
+      sidePanelWidth: sidePanelWidth.value,
+      leftMinimized: leftMinimized.value,
+      rightMinimized: rightMinimized.value,
+    }
+    window.localStorage.setItem(layoutStorageKey, JSON.stringify(payload))
+  } catch (e) {
+    console.warn('Failed to persist intent-canvas layout', e)
+  }
+}
+
+const remPx = () => {
+  if (typeof window === 'undefined') return 16
+  const size = parseFloat(getComputedStyle(document.documentElement).fontSize)
+  return Number.isFinite(size) && size > 0 ? size : 16
+}
+
+const leftColumn = computed(() =>
+  leftMinimized.value ? `${RAIL_COLLAPSED_REM}rem` : `${leftWidth.value}rem`,
+)
+const rightColumn = computed(() =>
+  rightMinimized.value ? `${RAIL_COLLAPSED_REM}rem` : `${rightWidth.value}rem`,
+)
+const sidePanelWidthStyle = computed(() => `${sidePanelWidth.value}rem`)
+
+type DragKind = 'left' | 'right' | 'side-panel'
+let dragKind: DragKind | null = null
+let dragStartX = 0
+let dragStartWidth = 0
+
+const onDragMove = (event: MouseEvent) => {
+  if (!dragKind) return
+  const px = remPx()
+  if (dragKind === 'left') {
+    const deltaRem = (event.clientX - dragStartX) / px
+    leftWidth.value = clamp(dragStartWidth + deltaRem, SIDEBAR_MIN_REM, SIDEBAR_MAX_REM)
+  } else if (dragKind === 'right') {
+    const deltaRem = (dragStartX - event.clientX) / px
+    rightWidth.value = clamp(dragStartWidth + deltaRem, SIDEBAR_MIN_REM, SIDEBAR_MAX_REM)
+  } else {
+    const deltaRem = (dragStartX - event.clientX) / px
+    sidePanelWidth.value = clamp(dragStartWidth + deltaRem, SIDE_PANEL_MIN_REM, SIDE_PANEL_MAX_REM)
+  }
+}
+const onDragEnd = () => {
+  if (!dragKind) return
+  dragKind = null
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', onDragMove)
+  window.removeEventListener('mouseup', onDragEnd)
+  persistLayout()
+}
+const startDrag = (kind: DragKind, event: MouseEvent) => {
+  event.preventDefault()
+  dragKind = kind
+  dragStartX = event.clientX
+  dragStartWidth =
+    kind === 'left'
+      ? leftWidth.value
+      : kind === 'right'
+        ? rightWidth.value
+        : sidePanelWidth.value
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onDragMove)
+  window.addEventListener('mouseup', onDragEnd)
+}
+
+const toggleLeftMinimized = () => {
+  leftMinimized.value = !leftMinimized.value
+  persistLayout()
+}
+const toggleRightMinimized = () => {
+  rightMinimized.value = !rightMinimized.value
+  persistLayout()
+}
+
 const statusClass = (status: string): string => {
   const normalized = (status || '').toLowerCase()
   if (normalized.includes('complete') || normalized.includes('merged')) return 'done'
@@ -359,18 +551,18 @@ const closeSubtask = () => {
 }
 
 const showFinishDialog = ref(false)
-const finishBranches = ref<string[]>([])
-const finishCurrentBranch = ref('')
 const finishDefaultBranch = ref('')
-const finishTargetBranch = ref('')
+const finishTargetBranch = ref<string | null>('')
 const finishDiff = ref('')
 const finishLoading = ref(false)
 const finishing = ref(false)
 const finishError = ref('')
 
-const finishMergeTargets = computed(() =>
-  finishBranches.value.filter((b) => b !== finishCurrentBranch.value),
-)
+watch(finishTargetBranch, (value, prev) => {
+  if (!showFinishDialog.value) return
+  if (value === prev) return
+  loadFinishDiff()
+})
 
 const loadFinishDiff = async () => {
   if (!finishTargetBranch.value) {
@@ -399,27 +591,11 @@ const openFinishDialog = async () => {
   finishError.value = ''
   finishDiff.value = ''
   showFinishDialog.value = true
-  finishLoading.value = true
-  try {
-    const res = await fetch(`${apiBase.value}/branches`)
-    if (!res.ok) throw new Error(await res.text())
-    const data = await res.json()
-    finishBranches.value = (data.branches ?? []) as string[]
-    finishCurrentBranch.value = (data.currentBranch ?? '') as string
-    const candidates = finishBranches.value.filter((b) => b !== finishCurrentBranch.value)
-    const preferred =
-      finishDefaultBranch.value && candidates.includes(finishDefaultBranch.value)
-        ? finishDefaultBranch.value
-        : candidates[0] ?? ''
-    if (!finishTargetBranch.value || !candidates.includes(finishTargetBranch.value)) {
-      finishTargetBranch.value = preferred
-    }
+  if (finishDefaultBranch.value && !finishTargetBranch.value) {
+    finishTargetBranch.value = finishDefaultBranch.value
+  }
+  if (finishTargetBranch.value) {
     await loadFinishDiff()
-  } catch (e) {
-    console.error('Failed to load finish IDD info:', e)
-    finishError.value = 'Failed to load branches'
-  } finally {
-    finishLoading.value = false
   }
 }
 
@@ -457,19 +633,48 @@ const handleShortcut = (event: KeyboardEvent) => {
   }
 }
 
+const hasDevRunConfig = ref(false)
+
+const queryDevRunConfig = async () => {
+  try {
+    const res = await fetch(`${flowBase.value}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'dev_run_config' }),
+    })
+    if (!res.ok) return
+    const data = await res.json()
+    if (data.result && typeof data.result === 'object' && Object.keys(data.result).length > 0) {
+      hasDevRunConfig.value = true
+    }
+  } catch (e) {
+    console.debug('Dev run config query error:', e)
+  }
+}
+
+const sendDevRunAction = async (actionType: 'dev_run_start' | 'dev_run_stop') => {
+  try {
+    const res = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}/user_action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actionType }),
+    })
+    if (!res.ok) {
+      console.error('Failed to send dev run action:', res.status, res.statusText)
+    }
+  } catch (e) {
+    console.error('Network error sending dev run action:', e)
+  }
+}
+
+const handleDevRunStart = () => sendDevRunAction('dev_run_start')
+const handleDevRunStop = () => sendDevRunAction('dev_run_stop')
+
 const newFileInputRef = ref<HTMLInputElement | null>(null)
 const welcomeInputRef = ref<HTMLInputElement | null>(null)
-const editorParent = ref<HTMLElement | null>(null)
 
-let editorView: EditorView | null = null
-let applyingExternal = false
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let savedTimer: ReturnType<typeof setTimeout> | null = null
-const themeCompartment = new Compartment()
-const darkModeMedia =
-  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    ? window.matchMedia('(prefers-color-scheme: dark)')
-    : null
 // Snapshot of the document queued for a debounced save, captured at schedule
 // time so switching files before the timer fires can't save the wrong path.
 let pendingSave: { path: string; content: string } | null = null
@@ -509,20 +714,6 @@ const fetchFiles = async () => {
   }
 }
 
-const setEditorDoc = (text: string) => {
-  if (!editorView) return
-  applyingExternal = true
-  editorView.dispatch({
-    changes: { from: 0, to: editorView.state.doc.length, insert: text },
-  })
-  applyingExternal = false
-}
-
-const refreshUncommittedHighlight = () => {
-  if (!editorView) return
-  applyUncommittedHighlight(editorView, committedContent.value)
-}
-
 const openFile = async (path: string) => {
   if (path === activePath.value) return
   flushPendingSave()
@@ -535,13 +726,14 @@ const openFile = async (path: string) => {
     activePath.value = path
     rememberActiveFile(path)
     saveStatus.value = 'idle'
-    await nextTick()
-    if (!editorView) createEditor()
-    setEditorDoc(content.value)
-    refreshUncommittedHighlight()
   } catch (e) {
     console.error('Failed to read intent file:', e)
   }
+}
+
+const onEditorContentChange = (next: string) => {
+  content.value = next
+  scheduleSave()
 }
 
 const saveFile = async (path: string | null = activePath.value, body: string = content.value) => {
@@ -586,131 +778,6 @@ const flushPendingSave = () => {
   const queued = pendingSave
   pendingSave = null
   if (queued) void saveFile(queued.path, queued.content)
-}
-
-const TAB_INDENT = '    '
-
-const markdownHighlightStyle = HighlightStyle.define([
-  { tag: t.heading1, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.6em' },
-  { tag: t.heading2, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.35em' },
-  { tag: t.heading3, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.2em' },
-  { tag: t.heading4, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.1em' },
-  { tag: [t.heading5, t.heading6], color: 'var(--color-heading)', fontWeight: '700' },
-  { tag: t.strong, color: 'var(--color-heading)', fontWeight: '700' },
-  { tag: t.emphasis, fontStyle: 'italic' },
-  { tag: t.strikethrough, textDecoration: 'line-through' },
-  { tag: t.link, color: 'var(--color-link)' },
-  { tag: t.url, color: 'var(--color-link)', textDecoration: 'underline' },
-  { tag: t.monospace, fontFamily: '"JetBrains Mono", monospace', color: 'var(--color-text-2)' },
-  { tag: t.list, color: 'var(--color-text)' },
-  { tag: t.quote, color: 'var(--color-text-2)', fontStyle: 'italic' },
-  { tag: t.meta, color: 'var(--color-text-2)' },
-  { tag: t.processingInstruction, color: 'var(--color-text-2)' },
-  { tag: t.contentSeparator, color: 'var(--color-text-2)' },
-  { tag: t.atom, color: 'var(--color-primary)' },
-  { tag: t.bool, color: 'var(--color-primary)' },
-  { tag: t.number, color: 'var(--color-primary)' },
-  { tag: t.string, color: 'var(--color-green-dark)' },
-  { tag: t.keyword, color: 'var(--color-link)', fontWeight: '600' },
-  { tag: t.propertyName, color: 'var(--color-link)' },
-])
-
-const startSubtaskCommand = () => {
-  void startSubtask()
-  return true
-}
-
-const createEditor = () => {
-  if (editorView || !editorParent.value) return
-  try {
-    editorView = new EditorView({
-      parent: editorParent.value,
-      state: EditorState.create({
-        doc: content.value,
-        extensions: [
-          Prec.highest(
-            keymap.of([
-              { key: 'Mod-Enter', preventDefault: true, run: startSubtaskCommand },
-            ]),
-          ),
-          basicSetup,
-          yamlFrontmatter({ content: markdown({ base: markdownLanguage }) }),
-          syntaxHighlighting(markdownHighlightStyle),
-          EditorView.lineWrapping,
-          keymap.of([
-            {
-              key: 'Tab',
-              preventDefault: true,
-              run: (view) => {
-                view.dispatch(
-                  view.state.update(view.state.replaceSelection(TAB_INDENT), {
-                    scrollIntoView: true,
-                    userEvent: 'input.indent',
-                  }),
-                )
-                return true
-              },
-            },
-          ]),
-          uncommittedHighlightExtension(),
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged && !applyingExternal) {
-              content.value = update.state.doc.toString()
-              scheduleSave()
-              refreshUncommittedHighlight()
-            }
-          }),
-          themeCompartment.of(buildEditorTheme(darkModeMedia?.matches ?? false)),
-        ],
-      }),
-    })
-  } catch (e) {
-    console.error('Failed to initialize editor:', e)
-  }
-}
-
-const buildEditorTheme = (isDark: boolean) => {
-  const selectionBg = isDark ? 'rgba(131, 58, 180, 0.65)' : 'rgba(131, 58, 180, 0.45)'
-  return EditorView.theme(
-    {
-      '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
-      '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
-      '.cm-content': { padding: '1.75rem 2rem', lineHeight: '1.6' },
-      '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--color-text-2)' },
-      // CodeMirror sizes each gutter element to match its corresponding editor
-      // line's height. Markdown headings render with a larger font-size and
-      // therefore taller line boxes; centring keeps line numbers visually
-      // aligned with the (also vertically-centred) heading text and caret.
-      '.cm-gutterElement': { display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
-      '.cm-lineNumbers .cm-gutterElement': { paddingRight: '0.5em' },
-      '.cm-activeLine': { backgroundColor: 'var(--color-background-mute)' },
-      '.cm-activeLineGutter': { backgroundColor: 'transparent' },
-      '&.cm-focused': { outline: 'none' },
-      // CodeMirror applies an inline `z-index: -2` to the selection layer so
-      // that the host page's selection styles can sit beneath the content; we
-      // need it above .cm-activeLine so partial selections stay visible.
-      '.cm-selectionLayer': { zIndex: '2 !important' },
-      '.cm-selectionBackground, ::selection': { backgroundColor: selectionBg },
-      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
-        backgroundColor: selectionBg,
-      },
-      '.cm-content ::selection': { backgroundColor: selectionBg },
-      '.cm-intent-uncommitted': {
-        backgroundColor: isDark ? 'rgba(25, 197, 24, 0.10)' : 'rgba(25, 197, 24, 0.28)',
-        borderRadius: '4px',
-        padding: '0 0.5em',
-        margin: '0 -0.5em',
-      },
-    },
-    { dark: isDark },
-  )
-}
-
-const handleColorSchemeChange = (event: MediaQueryListEvent) => {
-  if (!editorView) return
-  editorView.dispatch({
-    effects: themeCompartment.reconfigure(buildEditorTheme(event.matches)),
-  })
 }
 
 const beginNewFile = async () => {
@@ -769,13 +836,13 @@ const focusFirstFile = async () => {
 
 onMounted(async () => {
   void fetchFlow()
+  void queryDevRunConfig()
   await fetchFiles()
   loading.value = false
   await focusFirstFile()
   await fetchIddState()
   iddStateTimer = setInterval(fetchIddState, 5000)
   window.addEventListener('keydown', handleShortcut)
-  darkModeMedia?.addEventListener('change', handleColorSchemeChange)
 })
 
 onBeforeUnmount(() => {
@@ -783,9 +850,6 @@ onBeforeUnmount(() => {
   if (savedTimer) clearTimeout(savedTimer)
   if (iddStateTimer) clearInterval(iddStateTimer)
   window.removeEventListener('keydown', handleShortcut)
-  darkModeMedia?.removeEventListener('change', handleColorSchemeChange)
-  editorView?.destroy()
-  editorView = null
 })
 </script>
 
@@ -793,7 +857,7 @@ onBeforeUnmount(() => {
 .intent-canvas {
   position: relative;
   display: grid;
-  grid-template-columns: 16rem 1fr 18rem;
+  grid-template-columns: var(--left-col, 16rem) 1fr var(--right-col, 18rem);
   height: 100%;
   /* `overflow: clip` (rather than `hidden`) prevents programmatic scrolling
      (e.g. from descendant focus/scrollIntoView) that would otherwise shift the
@@ -804,12 +868,97 @@ onBeforeUnmount(() => {
   color: var(--color-text);
 }
 
+.rail-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0.4rem;
+  margin-left: -0.2rem;
+  cursor: col-resize;
+  z-index: 10;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.rail-resize:hover,
+.rail-resize:active {
+  background-color: var(--color-primary);
+  opacity: 0.6;
+}
+
+.rail-resize-left {
+  left: var(--left-col, 16rem);
+}
+
+.rail-resize-right {
+  left: auto;
+  right: var(--right-col, 18rem);
+  margin-left: 0;
+  margin-right: -0.2rem;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rail-min-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-2);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.rail-min-btn:hover {
+  color: var(--color-text);
+  background-color: var(--color-background-mute);
+}
+
+.rail-expand-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-2);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.5rem 0;
+  width: 100%;
+}
+
+.rail-expand-btn:hover {
+  color: var(--color-text);
+  background-color: var(--color-background-mute);
+}
+
+.intent-canvas.left-min .index > :not(.rail-expand-btn) {
+  display: none;
+}
+
+.intent-canvas.right-min .rail > :not(.rail-expand-btn) {
+  display: none;
+}
+
 .rail {
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--color-border);
   background-color: var(--color-background-soft);
   overflow-y: auto;
+}
+
+:deep(.dev-run-launcher) {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  margin: 0;
+  z-index: 5;
+  max-width: min(28rem, calc(100% - 2rem));
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.18);
 }
 
 .rail-head {
@@ -983,7 +1132,7 @@ onBeforeUnmount(() => {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(60rem, 80vw);
+  width: min(var(--side-panel-w, 60rem), 90vw);
   display: flex;
   flex-direction: column;
   background-color: var(--color-background);
@@ -992,6 +1141,24 @@ onBeforeUnmount(() => {
   /* Must sit above the fixed FlowEditorLinks overlay (z-index 1000) so the
      dismiss control and sticky sub-flow headers remain interactive. */
   z-index: 1001;
+}
+
+.side-panel-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -0.2rem;
+  width: 0.5rem;
+  cursor: col-resize;
+  z-index: 2;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.side-panel-resize:hover,
+.side-panel-resize:active {
+  background-color: var(--color-primary);
+  opacity: 0.6;
 }
 
 .side-panel-head {
@@ -1218,18 +1385,16 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   display: flex;
-  justify-content: center;
-  padding: 1.5rem;
+  padding: 0;
   overflow: hidden;
 }
 
 .editor {
   width: 100%;
-  max-width: 52rem;
   height: 100%;
   background-color: var(--color-background-soft);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border: none;
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -1305,7 +1470,7 @@ onBeforeUnmount(() => {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(60rem, 80vw);
+  width: min(var(--side-panel-w, 60rem), 90vw);
   display: flex;
   flex-direction: column;
   background-color: var(--color-background);
