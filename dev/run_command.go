@@ -25,9 +25,12 @@ var runCommandTool = llm.Tool{
 }
 
 type CheckCommandPermissionInput struct {
-	CommandPermissions common.CommandPermissionConfig
-	Command            string
-	StripEnvVarPrefix  bool
+	CommandPermissions                common.CommandPermissionConfig
+	Command                           string
+	StripEnvVarPrefix                 bool
+	DefaultAutoApprove                bool
+	SkipAbsolutePathEscalation        bool
+	HeredocFileWriteWarnInsteadOfDeny bool
 }
 
 type CheckCommandPermissionOutput struct {
@@ -37,7 +40,10 @@ type CheckCommandPermissionOutput struct {
 
 func CheckCommandPermissionActivity(ctx context.Context, input CheckCommandPermissionInput) (CheckCommandPermissionOutput, error) {
 	opts := common.EvaluatePermissionOptions{
-		StripEnvVarPrefix: input.StripEnvVarPrefix,
+		StripEnvVarPrefix:                 input.StripEnvVarPrefix,
+		DefaultAutoApprove:                input.DefaultAutoApprove,
+		SkipAbsolutePathEscalation:        input.SkipAbsolutePathEscalation,
+		HeredocFileWriteWarnInsteadOfDeny: input.HeredocFileWriteWarnInsteadOfDeny,
 	}
 	result, message := common.EvaluateScriptPermissionWithOptions(input.CommandPermissions, input.Command, opts)
 	return CheckCommandPermissionOutput{
@@ -47,13 +53,22 @@ func CheckCommandPermissionActivity(ctx context.Context, input CheckCommandPermi
 }
 
 // checkCommandPermission evaluates command permissions and handles user approval if needed.
-// Returns (proceed, message, error) where proceed indicates whether to execute the command,
-// message contains any early return message (for denied or unapproved commands), and error
-// for any failures during approval.
-func checkCommandPermission(dCtx DevContext, command string, workingDir string) (proceed bool, message string, err error) {
+// Returns (proceed, denyMessage, advisory, error) where proceed indicates whether to execute
+// the command, denyMessage contains any early-return message (for denied or unapproved
+// commands), advisory contains informational guidance to append to the command output for
+// auto-approved commands (e.g. heredoc warnings, cd guidance), and error for failures.
+func checkCommandPermission(dCtx DevContext, command string, workingDir string) (proceed bool, denyMessage string, advisory string, err error) {
 	enableCommandPermissions := workflow.GetVersion(dCtx, "command-permissions", workflow.DefaultVersion, 1) >= 1
 	stripEnvVarPrefix := workflow.GetVersion(dCtx, "command-permissions-strip-env-var", workflow.DefaultVersion, 1) >= 1
 	usePermissionActivity := workflow.GetVersion(dCtx, "command-permissions-activity", workflow.DefaultVersion, 1) >= 1
+
+	sandboxMode := false
+	if workflow.GetVersion(dCtx, "sandbox-command-permissions", workflow.DefaultVersion, 1) >= 1 {
+		switch dCtx.EnvContainer.Env.GetType() {
+		case env.EnvTypeDevPod, env.EnvTypeOpenShell:
+			sandboxMode = true
+		}
+	}
 
 	if enableCommandPermissions {
 		var permResult common.PermissionResult
@@ -62,19 +77,25 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		if usePermissionActivity {
 			var output CheckCommandPermissionOutput
 			err := workflow.ExecuteActivity(dCtx.Context, CheckCommandPermissionActivity, CheckCommandPermissionInput{
-				CommandPermissions: dCtx.RepoConfig.CommandPermissions,
-				Command:            command,
-				StripEnvVarPrefix:  stripEnvVarPrefix,
+				CommandPermissions:                dCtx.RepoConfig.CommandPermissions,
+				Command:                           command,
+				StripEnvVarPrefix:                 stripEnvVarPrefix,
+				DefaultAutoApprove:                sandboxMode,
+				SkipAbsolutePathEscalation:        sandboxMode,
+				HeredocFileWriteWarnInsteadOfDeny: sandboxMode,
 			}).Get(dCtx.Context, &output)
 			if err != nil {
-				return false, "", fmt.Errorf("failed to check command permission: %v", err)
+				return false, "", "", fmt.Errorf("failed to check command permission: %v", err)
 			}
 			permResult = output.Result
 			permMessage = output.Message
 		} else {
 			opts := common.EvaluatePermissionOptions{
-				StripEnvVarPrefix:          stripEnvVarPrefix,
-				UseLegacyCommandExtraction: true,
+				StripEnvVarPrefix:                 stripEnvVarPrefix,
+				UseLegacyCommandExtraction:        true,
+				DefaultAutoApprove:                sandboxMode,
+				SkipAbsolutePathEscalation:        sandboxMode,
+				HeredocFileWriteWarnInsteadOfDeny: sandboxMode,
 			}
 			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(dCtx.RepoConfig.CommandPermissions, command, opts)
 		}
@@ -83,9 +104,9 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 
 		switch permResult {
 		case common.PermissionDeny:
-			return false, fmt.Sprintf("Command denied: %s", permMessage), nil
+			return false, fmt.Sprintf("Command denied: %s", permMessage), "", nil
 		case common.PermissionAutoApprove:
-			return true, "", nil
+			return true, "", permMessage, nil
 		case common.PermissionRequireApproval:
 			// Fall through to request approval
 		}
@@ -94,7 +115,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 	}
 
 	l := logger.Get()
-	l.Debug().Str("cmd", command).Bool("auto-approved", proceed).Str("message", message).Msg("checkCommandPermission auto result")
+	l.Debug().Str("cmd", command).Bool("auto-approved", proceed).Msg("checkCommandPermission auto result")
 
 	// Request user approval (legacy behavior or when permission requires approval)
 	approvalPrompt := "Allow running the following command?"
@@ -103,23 +124,23 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		"workingDir": workingDir,
 	})
 	if err != nil {
-		return false, "", fmt.Errorf("failed to get user approval: %v", err)
+		return false, "", "", fmt.Errorf("failed to get user approval: %v", err)
 	}
 	if userResponse == nil || userResponse.Approved == nil || !*userResponse.Approved {
-		return false, "Command execution was not approved by user. They said:\n\n" + userResponse.Content, nil
+		return false, "Command execution was not approved by user. They said:\n\n" + userResponse.Content, "", nil
 	}
 
-	return true, "", nil
+	return true, "", "", nil
 }
 
 // RunCommand handles the execution of shell commands with user approval
 func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
-	proceed, message, err := checkCommandPermission(dCtx, params.Command, params.WorkingDir)
+	proceed, denyMessage, advisory, err := checkCommandPermission(dCtx, params.Command, params.WorkingDir)
 	if err != nil {
 		return "", err
 	}
 	if !proceed {
-		return message, nil
+		return denyMessage, nil
 	}
 
 	// Prepare working directory
@@ -140,11 +161,13 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		return "", fmt.Errorf("failed to execute command: %v", err)
 	}
 
-	// Format response
 	response := fmt.Sprintf("Command executed with exit status %d\n\nStdout:\n%s\n\nStderr:\n%s",
 		output.ExitStatus,
 		output.Stdout,
 		output.Stderr)
+	if advisory != "" {
+		response = response + "\n\n" + advisory
+	}
 
 	return response, nil
 }
