@@ -1,10 +1,11 @@
 // Lightweight markdown auto-formatter used by the intent editor's
-// format-on-idle behavior. It rewrites plain prose paragraphs by collapsing
-// internal whitespace and wrapping them at `wrapColumn`. Structural blocks
-// that should preserve byte-for-byte fidelity -- YAML frontmatter, fenced
-// code blocks, tables, headings, list markers, blockquotes, horizontal rules
-// -- are left untouched. Multiple consecutive blank lines collapse to one so
-// the document doesn't accumulate vertical drift over time.
+// format-on-idle behavior. It rewrites plain prose paragraphs and list items
+// by collapsing internal whitespace and wrapping them at `wrapColumn`. List
+// continuation lines are hung-indented to align after the marker. Structural
+// blocks that should preserve byte-for-byte fidelity -- YAML frontmatter,
+// fenced code blocks, tables, headings, blockquotes, horizontal rules -- are
+// left untouched. Multiple consecutive blank lines collapse to one so the
+// document doesn't accumulate vertical drift over time.
 
 const FENCE_RE = /^(\s*)(```+|~~~+)(.*)$/
 const HEADING_RE = /^\s{0,3}#{1,6}\s/
@@ -48,6 +49,63 @@ const wrapParagraph = (text: string, wrapColumn: number): string => {
   }
   if (current.length > 0) lines.push(current)
   return lines.join('\n')
+}
+
+// LIST_ITEM_RE captures the leading indentation and full marker (including
+// trailing whitespace) of a list item so we can preserve the hanging indent
+// when reflowing the item's content.
+const LIST_ITEM_RE = /^(\s*)([-*+]|\d+[.)])(\s+)(.*)$/
+
+type ListItem = { indent: string; marker: string; content: string }
+
+// parseListBlock walks a contiguous non-blank block and, if it begins with a
+// list marker, returns the parsed items. Continuation lines must be indented
+// at least to the marker's content column and must not themselves introduce
+// another structural block (heading, fence, blockquote, table). Returns null
+// when the block is not a (clean) list so the caller can fall back to the
+// passthrough behavior used for ambiguous structures.
+const parseListBlock = (block: string[]): ListItem[] | null => {
+  if (block.length === 0) return null
+  const first = block[0].match(LIST_ITEM_RE)
+  if (!first) return null
+
+  const items: ListItem[] = []
+  let current: ListItem | null = null
+  let currentContentCol = 0
+
+  for (const line of block) {
+    const m = line.match(LIST_ITEM_RE)
+    if (m) {
+      if (current) items.push(current)
+      const [, indent, marker, gap, content] = m
+      current = { indent, marker, content }
+      currentContentCol = indent.length + marker.length + gap.length
+      continue
+    }
+    if (!current) return null
+    // Continuation lines must be indented at least to the item's content
+    // column; otherwise the block is mixing list items with non-list content
+    // and we leave it alone to avoid corrupting unusual structures.
+    const leading = line.match(/^(\s*)/)![1].length
+    if (leading < currentContentCol) return null
+    if (HEADING_RE.test(line) || FENCE_RE.test(line) || HR_RE.test(line)) {
+      return null
+    }
+    current.content += ' ' + line.trim()
+  }
+  if (current) items.push(current)
+  return items
+}
+
+const formatListItem = (item: ListItem, wrapColumn: number): string[] => {
+  const prefix = item.indent + item.marker + ' '
+  const hangingIndent = ' '.repeat(prefix.length)
+  // Reserve room for the marker prefix when wrapping so the produced lines
+  // (including the indent) fit within wrapColumn where possible.
+  const effective = Math.max(wrapColumn - prefix.length, 1)
+  const wrapped = wrapParagraph(item.content, effective).split('\n')
+  if (wrapped.length === 0 || wrapped[0] === '') return [prefix.trimEnd()]
+  return wrapped.map((l, idx) => (idx === 0 ? prefix + l : hangingIndent + l))
 }
 
 // extractFrontmatter returns the frontmatter block (including delimiters and
@@ -134,7 +192,14 @@ export const formatMarkdown = (input: string, wrapColumn = 80): string => {
       const wrapped = wrapParagraph(merged, wrapColumn)
       for (const wl of wrapped.split('\n')) pushLine(wl)
     } else {
-      for (const bl of block) pushLine(bl)
+      const listItems = parseListBlock(block)
+      if (listItems) {
+        for (const item of listItems) {
+          for (const wl of formatListItem(item, wrapColumn)) pushLine(wl)
+        }
+      } else {
+        for (const bl of block) pushLine(bl)
+      }
     }
   }
 
