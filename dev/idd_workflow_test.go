@@ -260,6 +260,8 @@ func (s *IddWorkflowTestSuite) TestRunOrchestratorTurn_EmptyDiffIsNoOp() {
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return in.Command == "git" && len(in.Args) >= 2 && in.Args[0] == "diff"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: ""}, nil).Once()
+	s.env.OnActivity(git.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.Anything).
+		Return("", nil).Once()
 
 	miniIdd := func(ctx workflow.Context) (IddState, error) {
 		ctx = utils.NoRetryCtx(ctx)
@@ -299,6 +301,51 @@ func (s *IddWorkflowTestSuite) TestRunOrchestratorTurn_EmptyDiffIsNoOp() {
 	s.NoError(s.env.GetWorkflowResult(&state))
 	s.Empty(state.Subtasks)
 	s.Empty(state.Nudges)
+}
+
+// TestPendingIntentDiffIncludesUntrackedFiles verifies the orchestrator's
+// pending-intent diff covers both tracked modifications and brand-new
+// (untracked) intent files, reusing the shared untracked-diff activity.
+func (s *IddWorkflowTestSuite) TestPendingIntentDiffIncludesUntrackedFiles() {
+	const iddBranch = "side/idd-worktree"
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return in.Command == "git" && len(in.Args) >= 2 && in.Args[0] == "diff"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "tracked-intent-change"}, nil).Once()
+	s.env.OnActivity(git.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(paths []string) bool {
+		return len(paths) == 1 && paths[0] == "intent"
+	})).Return("untracked-intent-file", nil).Once()
+
+	miniIdd := func(ctx workflow.Context) (string, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
+				GlobalState: gs,
+				EnvContainer: &env.EnvContainer{
+					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
+				},
+			},
+			Worktree:   &domain.Worktree{Name: iddBranch},
+			RepoConfig: common.RepoConfig{},
+		}
+		state := &IddState{DefaultTargetBranch: "main"}
+		return pendingIntentDiff(dCtx, state)
+	}
+	s.env.RegisterWorkflow(miniIdd)
+
+	s.env.ExecuteWorkflow(miniIdd)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var diff string
+	s.NoError(s.env.GetWorkflowResult(&diff))
+	s.Contains(diff, "tracked-intent-change")
+	s.Contains(diff, "untracked-intent-file")
 }
 
 // TestSetAutoModeSignalTogglesState verifies the auto-mode toggle signal

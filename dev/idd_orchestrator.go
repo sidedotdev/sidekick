@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
@@ -120,7 +121,28 @@ func pendingIntentDiff(dCtx DevContext, state *IddState) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to compute pending intent diff: %w", err)
 	}
-	return out.Stdout, nil
+	tracked := out.Stdout
+
+	// Brand-new (untracked) intent files never show up in `git diff`, so a
+	// freshly authored intent file would otherwise be invisible to the
+	// orchestrator. Reuse the shared untracked-diff activity (which renders
+	// untracked content as a full add) and scope it to intent/ to match the
+	// tracked diff above.
+	var untracked string
+	if workflow.GetVersion(dCtx, "idd-orchestrator-untracked-intent", workflow.DefaultVersion, 1) >= 1 {
+		if err := workflow.ExecuteActivity(dCtx, git.DiffUntrackedFilesActivity, *dCtx.EnvContainer, []string{"intent"}).Get(dCtx, &untracked); err != nil {
+			return "", fmt.Errorf("failed to compute untracked intent diff: %w", err)
+		}
+	}
+
+	parts := make([]string, 0, 2)
+	if strings.TrimSpace(tracked) != "" {
+		parts = append(parts, tracked)
+	}
+	if strings.TrimSpace(untracked) != "" {
+		parts = append(parts, untracked)
+	}
+	return strings.Join(parts, "\n"), nil
 }
 
 // runIddOrchestratorTurn runs one decision turn of the background
@@ -140,14 +162,11 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 	diff, err := pendingIntentDiff(dCtx, state)
 	if err != nil {
 		log.Error("Orchestrator: failed to read pending intent diff", "Error", err)
-		fmt.Printf("%v\n", err)
 		return
 	}
 	if strings.TrimSpace(diff) == "" {
-		fmt.Printf("empty\n")
 		return
 	}
-	fmt.Printf("here1\n")
 
 	if chatHistory.Len() == 0 {
 		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
