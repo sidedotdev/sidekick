@@ -983,7 +983,7 @@ onBeforeUnmount(() => {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(46rem, 70vw);
+  width: min(60rem, 80vw);
   display: flex;
   flex-direction: column;
   background-color: var(--color-background);
@@ -1305,7 +1305,7 @@ onBeforeUnmount(() => {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(48rem, 80vw);
+  width: min(60rem, 80vw);
   display: flex;
   flex-direction: column;
   background-color: var(--color-background);
