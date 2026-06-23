@@ -35,6 +35,9 @@ intent_links:
     code:
       - frontend/src/lib/intent_diff.ts
       - frontend/src/lib/intent_diff_editor.ts
+  - intent: "#resizable-and-minimizable-canvas-layout"
+    code:
+      - frontend/src/views/IntentCanvasView.vue
 ---
 # Inferred IDD Implementation Notes
 
@@ -102,3 +105,16 @@ default-collapsed YAML frontmatter fold. It communicates via `v-model` for the
 working-copy text, a `committedContent` prop for the diff baseline, and a
 `shortcut-submit` event so the host view can decide what Mod-Enter does (start
 sub-task on the canvas).
+
+## Resizable and minimizable canvas layout
+
+The intent canvas uses a CSS-grid layout whose left/right sidebar widths are
+driven by CSS variables bound to reactive widths, with drag handles overlaid at
+the column boundaries so users can resize either rail; each rail also has a
+minimize toggle that collapses it to a thin strip exposing only an expand
+button. The sub-task side panel similarly has a left-edge drag handle and a
+variable-driven width. All widths and minimized states persist to
+`localStorage` (single shared key across flows since they're layout
+preferences, not per-flow content). The markdown editor itself is full-width
+between the rails and flush with the file-path header — no internal padding,
+border, or max-width — so the writing surface dominates the canvas.

@@ -1,16 +1,37 @@
 <template>
-  <div class="intent-canvas">
+  <div
+    class="intent-canvas"
+    :class="{ 'left-min': leftMinimized, 'right-min': rightMinimized }"
+    :style="{ '--left-col': leftColumn, '--right-col': rightColumn, '--side-panel-w': sidePanelWidthStyle }"
+  >
     <FlowEditorLinks v-if="flow" :flow-id="flow.id" :worktrees="flow.worktrees" />
     <aside class="index" aria-label="Intent files">
-      <header class="index-head">
+      <button
+        v-if="leftMinimized"
+        type="button"
+        class="rail-expand-btn"
+        @click="toggleLeftMinimized"
+        aria-label="Expand intent files"
+        title="Expand intent files"
+      >›</button>
+      <header v-else class="index-head">
         <span class="eyebrow">Intent</span>
-        <button
-          class="new-file-btn"
-          type="button"
-          @click="beginNewFile"
-          :disabled="creating"
-          title="New intent file"
-        >+ New file</button>
+        <div class="head-actions">
+          <button
+            class="new-file-btn"
+            type="button"
+            @click="beginNewFile"
+            :disabled="creating"
+            title="New intent file"
+          >+ New file</button>
+          <button
+            type="button"
+            class="rail-min-btn"
+            @click="toggleLeftMinimized"
+            aria-label="Minimize intent files"
+            title="Minimize"
+          >‹</button>
+        </div>
       </header>
 
       <nav v-if="fileNodes.length" class="file-list">
@@ -102,8 +123,23 @@
     </section>
 
     <aside class="rail" aria-label="Implementation">
-      <header class="rail-head">
+      <button
+        v-if="rightMinimized"
+        type="button"
+        class="rail-expand-btn"
+        @click="toggleRightMinimized"
+        aria-label="Expand implementation rail"
+        title="Expand implementation rail"
+      >‹</button>
+      <header v-else class="rail-head">
         <span class="eyebrow">Build</span>
+        <button
+          type="button"
+          class="rail-min-btn"
+          @click="toggleRightMinimized"
+          aria-label="Minimize implementation rail"
+          title="Minimize"
+        >›</button>
       </header>
 
       <div class="rail-body">
@@ -155,6 +191,13 @@
     </aside>
 
     <div v-if="activeSubtaskFlowId" class="side-panel" role="dialog" aria-label="Sub-task">
+      <div
+        class="side-panel-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sub-task panel"
+        @mousedown="(e) => startDrag('side-panel', e)"
+      ></div>
       <header class="side-panel-head">
         <span class="eyebrow">Sub-task</span>
         <button type="button" class="side-panel-close" @click="closeSubtask" aria-label="Dismiss sub-task">×</button>
@@ -202,6 +245,21 @@
         >{{ finishing ? 'Merging…' : 'Confirm merge' }}</button>
       </footer>
     </div>
+
+    <div
+      class="rail-resize rail-resize-left"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize intent files panel"
+      @mousedown="(e) => startDrag('left', e)"
+    ></div>
+    <div
+      class="rail-resize rail-resize-right"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize implementation panel"
+      @mousedown="(e) => startDrag('right', e)"
+    ></div>
 
     <DevRunControls
       v-if="hasDevRunConfig && store.workspaceId"
@@ -311,6 +369,132 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 const shortcutLabel = isMac ? '⌘↵' : 'Ctrl+↵'
 
 let iddStateTimer: ReturnType<typeof setInterval> | null = null
+
+const LEFT_DEFAULT_REM = 16
+const RIGHT_DEFAULT_REM = 18
+const SIDE_PANEL_DEFAULT_REM = 46
+const SIDEBAR_MIN_REM = 10
+const SIDEBAR_MAX_REM = 40
+const SIDE_PANEL_MIN_REM = 24
+const SIDE_PANEL_MAX_REM = 90
+const RAIL_COLLAPSED_REM = 2.25
+
+const layoutStorageKey = 'intent-canvas:layout'
+type LayoutPrefs = {
+  leftWidth: number
+  rightWidth: number
+  sidePanelWidth: number
+  leftMinimized: boolean
+  rightMinimized: boolean
+}
+const readLayout = (): LayoutPrefs => {
+  const defaults: LayoutPrefs = {
+    leftWidth: LEFT_DEFAULT_REM,
+    rightWidth: RIGHT_DEFAULT_REM,
+    sidePanelWidth: SIDE_PANEL_DEFAULT_REM,
+    leftMinimized: false,
+    rightMinimized: false,
+  }
+  if (typeof window === 'undefined') return defaults
+  try {
+    const raw = window.localStorage.getItem(layoutStorageKey)
+    if (!raw) return defaults
+    const parsed = JSON.parse(raw) as Partial<LayoutPrefs>
+    return { ...defaults, ...parsed }
+  } catch {
+    return defaults
+  }
+}
+const initialLayout = readLayout()
+const leftWidth = ref(initialLayout.leftWidth)
+const rightWidth = ref(initialLayout.rightWidth)
+const sidePanelWidth = ref(initialLayout.sidePanelWidth)
+const leftMinimized = ref(initialLayout.leftMinimized)
+const rightMinimized = ref(initialLayout.rightMinimized)
+
+const clamp = (n: number, min: number, max: number) => Math.min(Math.max(n, min), max)
+const persistLayout = () => {
+  if (typeof window === 'undefined') return
+  try {
+    const payload: LayoutPrefs = {
+      leftWidth: leftWidth.value,
+      rightWidth: rightWidth.value,
+      sidePanelWidth: sidePanelWidth.value,
+      leftMinimized: leftMinimized.value,
+      rightMinimized: rightMinimized.value,
+    }
+    window.localStorage.setItem(layoutStorageKey, JSON.stringify(payload))
+  } catch (e) {
+    console.warn('Failed to persist intent-canvas layout', e)
+  }
+}
+
+const remPx = () => {
+  if (typeof window === 'undefined') return 16
+  const size = parseFloat(getComputedStyle(document.documentElement).fontSize)
+  return Number.isFinite(size) && size > 0 ? size : 16
+}
+
+const leftColumn = computed(() =>
+  leftMinimized.value ? `${RAIL_COLLAPSED_REM}rem` : `${leftWidth.value}rem`,
+)
+const rightColumn = computed(() =>
+  rightMinimized.value ? `${RAIL_COLLAPSED_REM}rem` : `${rightWidth.value}rem`,
+)
+const sidePanelWidthStyle = computed(() => `${sidePanelWidth.value}rem`)
+
+type DragKind = 'left' | 'right' | 'side-panel'
+let dragKind: DragKind | null = null
+let dragStartX = 0
+let dragStartWidth = 0
+
+const onDragMove = (event: MouseEvent) => {
+  if (!dragKind) return
+  const px = remPx()
+  if (dragKind === 'left') {
+    const deltaRem = (event.clientX - dragStartX) / px
+    leftWidth.value = clamp(dragStartWidth + deltaRem, SIDEBAR_MIN_REM, SIDEBAR_MAX_REM)
+  } else if (dragKind === 'right') {
+    const deltaRem = (dragStartX - event.clientX) / px
+    rightWidth.value = clamp(dragStartWidth + deltaRem, SIDEBAR_MIN_REM, SIDEBAR_MAX_REM)
+  } else {
+    const deltaRem = (dragStartX - event.clientX) / px
+    sidePanelWidth.value = clamp(dragStartWidth + deltaRem, SIDE_PANEL_MIN_REM, SIDE_PANEL_MAX_REM)
+  }
+}
+const onDragEnd = () => {
+  if (!dragKind) return
+  dragKind = null
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', onDragMove)
+  window.removeEventListener('mouseup', onDragEnd)
+  persistLayout()
+}
+const startDrag = (kind: DragKind, event: MouseEvent) => {
+  event.preventDefault()
+  dragKind = kind
+  dragStartX = event.clientX
+  dragStartWidth =
+    kind === 'left'
+      ? leftWidth.value
+      : kind === 'right'
+        ? rightWidth.value
+        : sidePanelWidth.value
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onDragMove)
+  window.addEventListener('mouseup', onDragEnd)
+}
+
+const toggleLeftMinimized = () => {
+  leftMinimized.value = !leftMinimized.value
+  persistLayout()
+}
+const toggleRightMinimized = () => {
+  rightMinimized.value = !rightMinimized.value
+  persistLayout()
+}
 
 const statusClass = (status: string): string => {
   const normalized = (status || '').toLowerCase()
@@ -673,7 +857,7 @@ onBeforeUnmount(() => {
 .intent-canvas {
   position: relative;
   display: grid;
-  grid-template-columns: 16rem 1fr 18rem;
+  grid-template-columns: var(--left-col, 16rem) 1fr var(--right-col, 18rem);
   height: 100%;
   /* `overflow: clip` (rather than `hidden`) prevents programmatic scrolling
      (e.g. from descendant focus/scrollIntoView) that would otherwise shift the
@@ -682,6 +866,81 @@ onBeforeUnmount(() => {
   overflow: clip;
   background-color: var(--color-background);
   color: var(--color-text);
+}
+
+.rail-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0.4rem;
+  margin-left: -0.2rem;
+  cursor: col-resize;
+  z-index: 10;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.rail-resize:hover,
+.rail-resize:active {
+  background-color: var(--color-primary);
+  opacity: 0.6;
+}
+
+.rail-resize-left {
+  left: var(--left-col, 16rem);
+}
+
+.rail-resize-right {
+  left: auto;
+  right: var(--right-col, 18rem);
+  margin-left: 0;
+  margin-right: -0.2rem;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rail-min-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-2);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.rail-min-btn:hover {
+  color: var(--color-text);
+  background-color: var(--color-background-mute);
+}
+
+.rail-expand-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-2);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.5rem 0;
+  width: 100%;
+}
+
+.rail-expand-btn:hover {
+  color: var(--color-text);
+  background-color: var(--color-background-mute);
+}
+
+.intent-canvas.left-min .index > :not(.rail-expand-btn) {
+  display: none;
+}
+
+.intent-canvas.right-min .rail > :not(.rail-expand-btn) {
+  display: none;
 }
 
 .rail {
@@ -873,7 +1132,7 @@ onBeforeUnmount(() => {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(46rem, 70vw);
+  width: min(var(--side-panel-w, 46rem), 90vw);
   display: flex;
   flex-direction: column;
   background-color: var(--color-background);
@@ -882,6 +1141,24 @@ onBeforeUnmount(() => {
   /* Must sit above the fixed FlowEditorLinks overlay (z-index 1000) so the
      dismiss control and sticky sub-flow headers remain interactive. */
   z-index: 1001;
+}
+
+.side-panel-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -0.2rem;
+  width: 0.5rem;
+  cursor: col-resize;
+  z-index: 2;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.side-panel-resize:hover,
+.side-panel-resize:active {
+  background-color: var(--color-primary);
+  opacity: 0.6;
 }
 
 .side-panel-head {
@@ -1108,18 +1385,16 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   display: flex;
-  justify-content: center;
-  padding: 1.5rem;
+  padding: 0;
   overflow: hidden;
 }
 
 .editor {
   width: 100%;
-  max-width: 52rem;
   height: 100%;
   background-color: var(--color-background-soft);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border: none;
+  border-radius: 0;
   overflow: hidden;
 }
 
