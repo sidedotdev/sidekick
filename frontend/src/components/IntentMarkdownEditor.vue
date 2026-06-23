@@ -18,6 +18,7 @@ import {
 import { tags as t } from '@lezer/highlight'
 import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { applyUncommittedHighlight, uncommittedHighlightExtension } from '../lib/intent_diff_editor'
+import { formatMarkdown } from '../lib/markdown_format'
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +37,9 @@ const emit = defineEmits<{
 const editorParent = ref<HTMLElement | null>(null)
 let editorView: EditorView | null = null
 let applyingExternal = false
+let idleFormatTimer: ReturnType<typeof setTimeout> | null = null
+const IDLE_FORMAT_DELAY_MS = 15000
+const FORMAT_WRAP_COLUMN = 80
 
 const themeCompartment = new Compartment()
 const darkModeMedia =
@@ -139,6 +143,32 @@ const refreshUncommittedHighlight = () => {
   applyUncommittedHighlight(editorView, props.committedContent)
 }
 
+// Format-on-idle reflows plain paragraphs and collapses extra blank lines once
+// the user has paused editing. Frontmatter and fenced code blocks are left
+// alone so executable/structured content is never silently rewritten.
+const runIdleFormat = () => {
+  idleFormatTimer = null
+  if (!editorView) return
+  const current = editorView.state.doc.toString()
+  const formatted = formatMarkdown(current, FORMAT_WRAP_COLUMN)
+  if (formatted === current) return
+  editorView.dispatch({
+    changes: { from: 0, to: current.length, insert: formatted },
+    userEvent: 'input.format',
+  })
+}
+
+const scheduleIdleFormat = () => {
+  if (idleFormatTimer !== null) clearTimeout(idleFormatTimer)
+  idleFormatTimer = setTimeout(runIdleFormat, IDLE_FORMAT_DELAY_MS)
+}
+
+const cancelIdleFormat = () => {
+  if (idleFormatTimer === null) return
+  clearTimeout(idleFormatTimer)
+  idleFormatTimer = null
+}
+
 // foldFrontmatter collapses the YAML frontmatter block so it gets out of the
 // way of the actual intent content. The range covers everything between the
 // opening and closing `---` DashLine nodes so the delimiter lines remain
@@ -211,6 +241,7 @@ const createEditor = () => {
             if (update.docChanged && !applyingExternal) {
               emit('update:modelValue', update.state.doc.toString())
               refreshUncommittedHighlight()
+              scheduleIdleFormat()
             }
           }),
           themeCompartment.of(buildEditorTheme(darkModeMedia?.matches ?? false)),
@@ -242,6 +273,7 @@ watch(
     }
     if (!editorView) return
     if (editorView.state.doc.toString() === next) return
+    cancelIdleFormat()
     setEditorDoc(next)
     refreshUncommittedHighlight()
     foldFrontmatter()
@@ -260,6 +292,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   darkModeMedia?.removeEventListener('change', handleColorSchemeChange)
+  cancelIdleFormat()
   editorView?.destroy()
   editorView = null
 })
@@ -270,6 +303,8 @@ defineExpose({
   // can inspect parser/fold state without dragging in a real browser. Not
   // part of the component's public API and should not be used by app code.
   __editorViewForTest: () => editorView,
+  __runIdleFormatForTest: () => runIdleFormat(),
+  __hasIdleFormatTimerForTest: () => idleFormatTimer !== null,
 })
 </script>
 
