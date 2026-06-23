@@ -69,25 +69,28 @@ according to the human author/user.
 
 ### New Flow Type: Intent Driven Development (idd)
 
-- Doesn't ask for task description in the UI to start. In fact, it removes
-  task fields other than model config, title (required for idd, unlike
-  other flow types), and start branch. 
+- Doesn't ask for task description in the UI to start. In fact, it removes task
+  fields other than model config, title (required for idd, unlike other flow
+  types), and start branch.
       
 ### Interface
 
-- Starting an idd task/flow creates a new worktree and takes you
-  directly to the intent canvas to edit intent files in that worktree
-- The canvas is a custom interface for specifying intent, with a simple
-  markdown editor + filetree browser.
-    - If no intent files exists, shows a prompt to create a new intent file
-          in a intent/ directory, prompting for the file name.
-    - Remember which intent file was last open and open it again when the specific idd flow id is next accessed
-    - If intent files exist, on startup, do not open one: allow the user to select one themselves first, with a prompt telling them to do so
+- Starting an idd task/flow creates a new worktree and takes you directly to the
+  intent canvas to edit intent files in that worktree
+- The canvas is a custom interface for specifying intent, with a simple markdown
+  editor + filetree browser.
+    - If no intent files exists, shows a prompt to create a new intent file in a
+      intent/ directory, prompting for the file name.
+    - Remember which intent file was last open and open it again when the
+      specific idd flow id is next accessed
+    - If intent files exist, on startup, do not open one: allow the user to
+      select one themselves first, with a prompt telling them to do so
      - .generated files are shown last in filetree
 
 #### Styling
 
-- Editor is full-width between the sidebars and touching the file path header (no gaps)
+- Editor is full-width between the sidebars and touching the file path header
+  (no gaps)
 - Sidebars can be resized and minimized
 - Side view for sub tasks can be resized too
 
@@ -95,56 +98,71 @@ according to the human author/user.
 
   - Separate component from intent canvas
   - Uses monaco or codemirror, whatever is easier to get all our desired
-          features working in for now.
+    features working in for now.
   - Remembers which file was open last
   - Saves intent automatically as you type in the worktree
   - Intent that is not yet committed has a special background color.
-      - This must use a diff algorithm that finds word-level changes
-        even in multi-line markdown with newlines shifting around. Words
-        right beside each other on the same line are merged so there is no
-        divider between multiple words added in terms of this styling
+      - This must use a diff algorithm that finds word-level changes even in
+        multi-line markdown with newlines shifting around. Words right beside
+        each other on the same line are merged so there is no divider between
+        multiple words added in terms of this styling
       - After a commit happens and a sub task is started, then this styling goes
-        away for those words immediately, not requiring a refresh (only new words
-        that aren't yet committed show the style)
-  - Tab character expands to 2 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
+        away for those words immediately, not requiring a refresh (only new
+        words that aren't yet committed show the style)
+  - Tab character expands to 2 spaces and does NOT switch to a different
+    interface element as regular browser interactions work, but instead works
+    like an editor is expected to
   - YAML frontmatter is always collapsed by default in the editor (all other
-     sections are expanded by default)
-  - Supports auto-formatting markdown (collapsing whitespace and wrapping lines, including list items)
-    when editor has been idle for 15s
+    sections are expanded by default)
+  - Supports auto-formatting markdown (collapsing whitespace and wrapping lines,
+    including list items) when editor has been idle for 15s
 
 ##### Editor Styling
 
-- Theme of editor respects dark/light mode 
+- Theme of editor respects dark/light mode
 - Highlighting text uses a very transparent version of the primary color
-- Strong colors to highlight markdown syntax like the "#" character for headings or the "-" character, etc
+- Strong colors to highlight markdown syntax like the "#" character for headings
+  or the "-" character, etc
 - YAML syntax highlighting for the frontmatter
-- The caret is the same shape when collapsed or expanded, just rotated about it's centerpoint.
+- The caret is the same shape when collapsed or expanded, just rotated about
+  it's centerpoint.
 
 #### Right Sidebar
 
 - The canvas also has a right sidebar that supports showing the user:
   - A button to start implementing the current intent state
   - A list of subtasks
-      - Clicking them opens the existing flow view component (not iframe, and without header/editor links/sidebar nav/etc.), but in a side view. When the side view has focus, pressing escape dismisses it.
-        that can be dismissed, so the intent canvas is always visible.
-      - Sub task statuses are shown: completed, failed, in progress, blocked and canceled
+      - Clicking them opens the existing flow view component (not iframe, and
+        without header/editor links/sidebar nav/etc.), but in a side view. When
+        the side view has focus, pressing escape dismisses it. that can be
+        dismissed, so the intent canvas is always visible.
+      - Sub task statuses are shown: completed, failed, in progress, blocked and
+        canceled
   - Any questions wrt highly ambiguous or contradictory intent that have
-    surfaced, either by sub tasks or the orchestrator agent. Note that some level of ambiguity
-    is expected, but not when a different answer than the one assumed would require a near-100%
-    rewrite of the implementation.
+    surfaced, either by sub tasks or the orchestrator agent. Note that some
+    level of ambiguity is expected, but not when a different answer than the one
+    assumed would require a near-100% rewrite of the implementation.
 
-  - Sub tasks become blocked just like top-level flows do, when they wait on user request. normally this is something the task workflow handles, but the idd workflow has to handle it in this case
-  - For pending user actions/user requests, the user can decide to unblock these at their
-    convenience. They are shown alongside the sub task that triggered it.
-  - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI 
+  - Sub tasks become blocked just like top-level flows do, when they wait on
+    user request. normally this is something the task workflow handles, but the
+    idd workflow has to handle it in this case
+  - For pending user actions/user requests, the user can decide to unblock these
+    at their convenience. They are shown alongside the sub task that triggered
+    it.
+  - There is a button to finish the idd flow. Uses a dismissable side view to
+    show the finish UI
   - Bottom right has a dev run play button, which will start a dev run
-  - There is some way to interact with the orchestrator agent that normally just runs
-    in the background. Opens a side view with a new component. Allows viewing the full history of what happened with the agent as well as queuing messages to it.
+  - There is some way to interact with the orchestrator agent that normally just
+    runs in the background. Opens a side view with a new component. Allows
+    viewing the full history of what happened with the agent as well as queuing
+    messages to it.
 
 ### Finish UI
 
-- UI where you can select the branch to merge back into (default: start branch), and shows you the diff that will be merged, and lets you confirm.
-- Diff is displayed using existing unified diff viewer, with unexpanded files by default
+- UI where you can select the branch to merge back into (default: start branch),
+  and shows you the diff that will be merged, and lets you confirm.
+- Diff is displayed using existing unified diff viewer, with unexpanded files by
+  default
 - Branch selector also uses the standard component for selecting a branch
 - Finishing means that the idd flow:
   - Merges into the selected target branch
@@ -157,34 +175,35 @@ according to the human author/user.
 
 ### Starting intent sub tasks
     
-- Pressing the button to start results in saving and git committing the
-      current intent state and creating a sub task for implementing it
-- cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add a newline in the editor if the editor is focused.
+- Pressing the button to start results in saving and git committing the current
+  intent state and creating a sub task for implementing it
+- cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add
+  a newline in the editor if the editor is focused.
 - A new background orchestrator AI agent watches edits as they are made in
   chunks (some heuristic to ensure LLM isn't invoked for partial edits, and
-  always invoked if there are unproceesed edits and there has been no
-  activity for a while)
+  always invoked if there are unproceesed edits and there has been no activity
+  for a while)
 
 ### Background Orchestrator Agent
 
 - This agent is implemented by the IDD flow (which includes this agent along
   with other orchestration for IDD)
-- This AI agent automatically starts tasks if it thinks there is a good
-  chunk of intent to work on
-- Task start tool calls and responses are always retained when managing
-  chat history.
-- It can scope the intent to a specific section of an intent file, or
-  the entire intent diff, or just an arbitrary prompt that scopes and directs
-  the subtask to a portion of the intent.
+- This AI agent automatically starts tasks if it thinks there is a good chunk of
+  intent to work on
+- Task start tool calls and responses are always retained when managing chat
+  history.
+- It can scope the intent to a specific section of an intent file, or the entire
+  intent diff, or just an arbitrary prompt that scopes and directs the subtask
+  to a portion of the intent.
 
 ### Sub tasks
    
 - Uses basic dev flow type with determine requirements disabled
 - Makes a worktree based off of HEAD of the worktree for the idd flow
-- Automatically gets merged into the idd worktree when completed (new basic
-      dev / planned dev workflow option)
-- User requests go to the parent flow, which is the idd flow in this case,
-  which passes them on to the task workflow for now.
+- Automatically gets merged into the idd worktree when completed (new basic dev
+  / planned dev workflow option)
+- User requests go to the parent flow, which is the idd flow in this case, which
+  passes them on to the task workflow for now.
 - Parent task remains blocked as long as any sub task is blocked
 
 ## IDD Instructions for Coding Agents
@@ -237,7 +256,12 @@ user to clarify their intent.
 Then we add a text block like this for the requirements prompt for a new intent
 file:
 
-````md
+````
+The following intent update has already been committed to intent/<path to file.md> (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself — treat the diff as a specification change that the code must now conform to.
+
+$ git show <sha>
+<diff>
+Identify which behaviors in the diff are newly required or changed, locate the corresponding code (frontend, backend, prompts, etc.), and make the code changes needed. If a change is purely editorial (whitespace, wording with no semantic effect), no code change is needed for that hunk.
 Implement the following initial intent:
 
 ```md
