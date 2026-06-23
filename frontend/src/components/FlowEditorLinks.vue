@@ -40,6 +40,7 @@ const devMode = import.meta.env.MODE === 'development'
   z-index: 1000;
   top: 1rem;
   right: 1rem;
+  background-color: var(--color-background-soft);
 }
 
 /* When shown for a sub-task, the links overlay the side panel header, so they
