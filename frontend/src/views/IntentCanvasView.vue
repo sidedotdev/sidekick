@@ -170,17 +170,14 @@
         <button type="button" class="side-panel-close" @click="closeFinishDialog" aria-label="Cancel finish">×</button>
       </header>
       <div class="finish-body">
-        <label class="finish-field">
+        <div class="finish-field">
           <span class="finish-label">Merge into branch</span>
-          <select
+          <BranchSelector
+            v-if="store.workspaceId"
+            :workspace-id="store.workspaceId"
             v-model="finishTargetBranch"
-            class="finish-select"
-            :disabled="finishLoading || finishing"
-            @change="loadFinishDiff"
-          >
-            <option v-for="branch in finishMergeTargets" :key="branch" :value="branch">{{ branch }}</option>
-          </select>
-        </label>
+          />
+        </div>
 
         <section class="finish-diff-section">
           <span class="finish-label">Diff to be merged</span>
@@ -209,9 +206,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
+import BranchSelector from '../components/BranchSelector.vue'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import IntentMarkdownEditor from '../components/IntentMarkdownEditor.vue'
 import FlowView from './FlowView.vue'
@@ -359,18 +357,18 @@ const closeSubtask = () => {
 }
 
 const showFinishDialog = ref(false)
-const finishBranches = ref<string[]>([])
-const finishCurrentBranch = ref('')
 const finishDefaultBranch = ref('')
-const finishTargetBranch = ref('')
+const finishTargetBranch = ref<string | null>('')
 const finishDiff = ref('')
 const finishLoading = ref(false)
 const finishing = ref(false)
 const finishError = ref('')
 
-const finishMergeTargets = computed(() =>
-  finishBranches.value.filter((b) => b !== finishCurrentBranch.value),
-)
+watch(finishTargetBranch, (value, prev) => {
+  if (!showFinishDialog.value) return
+  if (value === prev) return
+  loadFinishDiff()
+})
 
 const loadFinishDiff = async () => {
   if (!finishTargetBranch.value) {
@@ -399,27 +397,11 @@ const openFinishDialog = async () => {
   finishError.value = ''
   finishDiff.value = ''
   showFinishDialog.value = true
-  finishLoading.value = true
-  try {
-    const res = await fetch(`${apiBase.value}/branches`)
-    if (!res.ok) throw new Error(await res.text())
-    const data = await res.json()
-    finishBranches.value = (data.branches ?? []) as string[]
-    finishCurrentBranch.value = (data.currentBranch ?? '') as string
-    const candidates = finishBranches.value.filter((b) => b !== finishCurrentBranch.value)
-    const preferred =
-      finishDefaultBranch.value && candidates.includes(finishDefaultBranch.value)
-        ? finishDefaultBranch.value
-        : candidates[0] ?? ''
-    if (!finishTargetBranch.value || !candidates.includes(finishTargetBranch.value)) {
-      finishTargetBranch.value = preferred
-    }
+  if (finishDefaultBranch.value && !finishTargetBranch.value) {
+    finishTargetBranch.value = finishDefaultBranch.value
+  }
+  if (finishTargetBranch.value) {
     await loadFinishDiff()
-  } catch (e) {
-    console.error('Failed to load finish IDD info:', e)
-    finishError.value = 'Failed to load branches'
-  } finally {
-    finishLoading.value = false
   }
 }
 
