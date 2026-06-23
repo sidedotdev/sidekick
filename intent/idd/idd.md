@@ -87,6 +87,7 @@ according to the human author/user.
 - Sidebars can be resized and minimized
 - Side view for sub tasks can be resized too
 
+
 #### Markdown Editor Component
 
   - Separate component from intent canvas
