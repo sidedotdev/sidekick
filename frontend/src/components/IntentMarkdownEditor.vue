@@ -140,9 +140,12 @@ const refreshUncommittedHighlight = () => {
 }
 
 // foldFrontmatter collapses the YAML frontmatter block so it gets out of the
-// way of the actual intent content. The range covers the content between the
-// two `---` DashLine nodes so the delimiter lines remain visible as a single
-// folded indicator.
+// way of the actual intent content. The range covers everything between the
+// opening and closing `---` DashLine nodes so the delimiter lines remain
+// visible as a single folded indicator. The yaml-frontmatter parser exposes
+// the inner YAML under a `Stream` node (the YAML grammar's root), not the
+// `FrontmatterContent` placeholder declared by lang-yaml, so we locate the
+// range positionally between the DashLine children instead of by node name.
 const foldFrontmatter = () => {
   if (!editorView) return
   const state = editorView.state
@@ -150,10 +153,14 @@ const foldFrontmatter = () => {
   if (!tree) return
   const frontmatter = tree.topNode.getChild('Frontmatter')
   if (!frontmatter) return
-  const content = frontmatter.getChild('FrontmatterContent')
-  if (!content || content.to <= content.from) return
+  const openDash = frontmatter.getChild('DashLine')
+  if (!openDash) return
+  const closeDash = frontmatter.getChild('DashLine', openDash.to)
+  const from = openDash.to
+  const to = closeDash ? closeDash.from : frontmatter.to
+  if (to <= from) return
   editorView.dispatch({
-    effects: foldEffect.of({ from: content.from, to: content.to }),
+    effects: foldEffect.of({ from, to }),
   })
 }
 
@@ -259,6 +266,10 @@ onBeforeUnmount(() => {
 
 defineExpose({
   focus: () => editorView?.focus(),
+  // Test-only handle. Returns the underlying CodeMirror EditorView so specs
+  // can inspect parser/fold state without dragging in a real browser. Not
+  // part of the component's public API and should not be used by app code.
+  __editorViewForTest: () => editorView,
 })
 </script>
 
