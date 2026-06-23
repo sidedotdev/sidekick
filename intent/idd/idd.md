@@ -133,7 +133,7 @@ according to the human author/user.
 
 - The canvas also has a right sidebar that supports showing the user:
   - The sidebar itself isn't scrollable, but items within it may be
-  - A button to start implementing the current intent state
+  - A button to [start a sub task] to implement the current intent state
   - A list of subtasks
       - Clicking them opens the existing flow view component (not iframe, and
         without header/editor links/sidebar nav/etc.), but in a side view. When
@@ -185,10 +185,16 @@ according to the human author/user.
   - The flow status is updated to complete
   - The parent task is marked completed too
 
-### Starting intent sub tasks
-    
-- Pressing the button to start results in saving and git committing the current
-  intent state and creating a sub task for implementing it
+### Start a sub task
+
+Pressing the button to start immediately results in these actions:
+
+1. Formatting all markdown files with changes and then immediately saving
+2. Git adding the intent files with modifications
+3. Creating a git commit and recording its sha at creation time
+4. Using the created sha & diff to create a title for the sub task
+5. Start a sub task to implement the change
+
 - cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add
   a newline in the editor if the editor is focused.
 - A new background orchestrator AI agent watches edits as they are made in
