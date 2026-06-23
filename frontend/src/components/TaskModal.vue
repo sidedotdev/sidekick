@@ -61,7 +61,7 @@
         <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
       </div>
 
-      <div v-if="isIdd">
+      <div v-if="isIdd" class="idd-row">
         <label for="title">Title</label>
         <input
           id="title"
@@ -1060,7 +1060,7 @@ label {
 
 .title-input {
   flex: 1;
-  max-width: 20rem;
+  width: 100%;
   padding: 0.5rem;
   font-size: 1rem;
   border: 1px solid var(--color-border);
@@ -1088,6 +1088,10 @@ label {
 
 .save-indicator.saved {
   opacity: 0.7;
+}
+
+.idd-row {
+  display: flex;
 }
 
 </style>
