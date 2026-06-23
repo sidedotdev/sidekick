@@ -582,6 +582,10 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		if info.Type == FeedbackTypeApplyError {
 			contextType = ContextTypeEditBlockReport
 		}
+	case ConflictResolutionInfo:
+		content = renderConflictResolutionPrompt(info)
+		cacheControl = "ephemeral"
+		contextType = ContextTypeInitialInstructions
 	default:
 		panic("Unsupported prompt type for authoring edit blocks: " + promptInfo.GetType())
 	}
@@ -712,6 +716,25 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 	}
 
 	return RenderPrompt(AuthorEditBlockInitialWithPlan, data)
+}
+
+// renderConflictResolutionPrompt formats the initial prompt for the
+// conflict resolution edit-code subflow. It includes the conflict diff
+// (with conflict markers in place) plus the original task requirements
+// and, when present, the latest review feedback, so the resolver keeps
+// behavior from both sides without rolling back recent review fixes.
+func renderConflictResolutionPrompt(info ConflictResolutionInfo) string {
+	paths := make([]map[string]string, 0, len(info.ConflictedPaths))
+	for _, p := range info.ConflictedPaths {
+		paths = append(paths, map[string]string{".": p})
+	}
+	data := map[string]interface{}{
+		"requirements":    info.Requirements,
+		"previousReview":  info.PreviousReview,
+		"conflictedPaths": paths,
+		"conflictDiff":    info.ConflictDiff,
+	}
+	return RenderPrompt(ConflictResolutionInitial, data)
 }
 
 // renderAuthorEditBlockFeedbackPrompt formats the author edit block feedback

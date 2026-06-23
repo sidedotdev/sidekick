@@ -188,6 +188,21 @@ func (p SkipInfo) GetType() string {
 	return "skip"
 }
 
+// ConflictResolutionInfo carries everything an edit-code subflow needs to
+// resolve merge conflicts: the original task requirements, optionally the
+// most recent review feedback (so the resolver doesn't undo the work it
+// addressed), the list of conflicted paths and the conflict-marker diff.
+type ConflictResolutionInfo struct {
+	Requirements    string
+	PreviousReview  string
+	ConflictedPaths []string
+	ConflictDiff    string
+}
+
+func (p ConflictResolutionInfo) GetType() string {
+	return "conflict_resolution"
+}
+
 // TODO include info about type feedback, eg test feedback vs apply edit feedback vs code review feedback etc
 type FeedbackInfo struct {
 	Feedback string
