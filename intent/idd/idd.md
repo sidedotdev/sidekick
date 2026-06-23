@@ -132,6 +132,7 @@ according to the human author/user.
 #### Right Sidebar
 
 - The canvas also has a right sidebar that supports showing the user:
+  - The sidebar itself isn't scrollable, but items within it may be
   - A button to start implementing the current intent state
   - A list of subtasks
       - Clicking them opens the existing flow view component (not iframe, and
@@ -144,7 +145,8 @@ according to the human author/user.
         others
       - Within group, ordered by last updated (fallback: created), reverse
         chronological
-      - Subtask list is a scrollable section
+      - Subtask list section is a scrollable section that extends until the dev
+        run section
       - When many have completed such that scrolling is required, the ones done
         over 1 hour ago are collapsed under "[caret] N Completed"
   - Any questions wrt highly ambiguous or contradictory intent that have
@@ -160,7 +162,8 @@ according to the human author/user.
     it.
   - There is a button to finish the idd flow. Uses a dismissable side view to
     show the finish UI
-  - Bottom right has a dev run play button, which will start a dev run
+  - Stuck to the bottom of the sidebar is section with a play button, which will
+    start a dev run.
   - There is some way to interact with the orchestrator agent that normally just
     runs in the background. Opens a side view with a new component. Allows
     viewing the full history of what happened with the agent as well as queuing
