@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"sidekick/coding/git"
 	"sidekick/common"
@@ -64,9 +65,11 @@ type FinishIddSignal struct {
 
 // IddSubtask tracks an intent sub-task launched by the IddWorkflow.
 type IddSubtask struct {
-	FlowId string `json:"flowId"`
-	Commit string `json:"commit"`
-	Status string `json:"status"`
+	FlowId    string    `json:"flowId"`
+	Commit    string    `json:"commit"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // IddClarification is a question surfaced by a sub-task about ambiguous or
@@ -178,7 +181,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			// TODO have the orchestrator attempt to resolve clarifications from
 			// intent itself before falling back to asking the user, and surface
 			// unresolved ones on the canvas.
-			setSubtaskStatus(state, req.OriginWorkflowId, "blocked")
+			setSubtaskStatus(state, req.OriginWorkflowId, "blocked", workflow.Now(dCtx))
 			parent := workflow.GetInfo(dCtx).ParentWorkflowExecution
 			if parent == nil {
 				workflow.GetLogger(dCtx).Error("Cannot forward intent sub-task user request: no parent workflow")
@@ -192,7 +195,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(subtaskUnblockedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var sig flow_action.SubtaskUnblocked
 			c.Receive(dCtx, &sig)
-			setSubtaskStatus(state, sig.FlowId, "in_progress")
+			setSubtaskStatus(state, sig.FlowId, "in_progress", workflow.Now(dCtx))
 		})
 
 		selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
@@ -208,7 +211,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(workflowClosedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var closure WorkflowClosure
 			c.Receive(dCtx, &closure)
-			setSubtaskStatus(state, closure.FlowId, closure.Reason)
+			setSubtaskStatus(state, closure.FlowId, closure.Reason, workflow.Now(dCtx))
 		})
 
 		selector.Select(dCtx)
@@ -226,10 +229,11 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	}
 }
 
-func setSubtaskStatus(state *IddState, flowId, status string) {
+func setSubtaskStatus(state *IddState, flowId, status string, now time.Time) {
 	for i := range state.Subtasks {
 		if state.Subtasks[i].FlowId == flowId {
 			state.Subtasks[i].Status = status
+			state.Subtasks[i].UpdatedAt = now
 			return
 		}
 	}
@@ -271,10 +275,13 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		log.Error("Intent sub-task failed to start", "Error", startErr)
 		return
 	}
+	now := workflow.Now(dCtx)
 	state.Subtasks = append(state.Subtasks, IddSubtask{
-		FlowId: we.ID,
-		Commit: reqInfo.Commit,
-		Status: "in_progress",
+		FlowId:    we.ID,
+		Commit:    reqInfo.Commit,
+		Status:    "in_progress",
+		CreatedAt: now,
+		UpdatedAt: now,
 	})
 
 	// Persist a flow record for the sub-task, parented to the IDD task, so its
@@ -303,7 +310,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			log.Error("Intent sub-task failed", "Error", childErr)
 		}
 	}
-	setSubtaskStatus(state, we.ID, status)
+	setSubtaskStatus(state, we.ID, status, workflow.Now(dCtx))
 
 	subtaskFlow.Status = status
 	if putErr := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, subtaskFlow).Get(actCtx, nil); putErr != nil {

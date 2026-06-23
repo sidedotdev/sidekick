@@ -226,6 +226,99 @@ describe('IntentCanvasView', () => {
     expect(wrapper.find('.side-panel').exists()).toBe(false)
   })
 
+  it('groups sub-tasks by status and orders them newest-first within a group', async () => {
+    const now = Date.now()
+    const iso = (msAgo: number) => new Date(now - msAgo).toISOString()
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({
+            result: {
+              subtasks: [
+                { flowId: 'done-new', commit: 'aaa0000', status: 'completed', updatedAt: iso(1000) },
+                { flowId: 'active-old', commit: 'bbb0000', status: 'in_progress', updatedAt: iso(5000) },
+                { flowId: 'active-new', commit: 'ccc0000', status: 'in_progress', updatedAt: iso(1000) },
+                { flowId: 'blocked-1', commit: 'ddd0000', status: 'blocked', updatedAt: iso(9000) },
+              ],
+              clarifications: [],
+            },
+          })
+        )
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    const statuses = wrapper.findAll('.subtask-row .subtask-status').map((s) => s.text())
+    expect(statuses).toEqual(['blocked', 'in_progress', 'in_progress', 'completed'])
+
+    const commits = wrapper.findAll('.subtask-row .subtask-commit').map((c) => c.text())
+    expect(commits).toEqual(['ddd0000', 'ccc0000', 'bbb0000', 'aaa0000'])
+  })
+
+  it('collapses stale completed sub-tasks only once the list is long enough to scroll', async () => {
+    const now = Date.now()
+    const twoHoursAgo = new Date(now - 2 * 60 * 60 * 1000).toISOString()
+    const recent = new Date(now - 1000).toISOString()
+    const makeSubtasks = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        flowId: `done-${i}`,
+        commit: `c${String(i).padStart(6, '0')}`,
+        status: 'completed',
+        updatedAt: twoHoursAgo,
+      }))
+
+    let subtasks = [
+      { flowId: 'active', commit: 'active0', status: 'in_progress', updatedAt: recent },
+      ...makeSubtasks(2),
+    ]
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ result: { subtasks, clarifications: [] } }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    // Short list: stale completed sub-tasks stay visible, no collapse toggle.
+    expect(wrapper.find('.subtask-collapse-toggle').exists()).toBe(false)
+    expect(wrapper.findAll('.subtask-row')).toHaveLength(3)
+
+    // Long list: stale completed sub-tasks fold behind a collapse toggle.
+    subtasks = [
+      { flowId: 'active', commit: 'active0', status: 'in_progress', updatedAt: recent },
+      ...makeSubtasks(10),
+    ]
+    await (wrapper.vm as unknown as { fetchIddState: () => Promise<void> }).fetchIddState()
+    await flushPromises()
+
+    const toggle = wrapper.find('.subtask-collapse-toggle')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.text()).toContain('10 Completed')
+    expect(wrapper.findAll('.subtask-row')).toHaveLength(1)
+
+    await toggle.trigger('click')
+    expect(wrapper.findAll('.subtask-row')).toHaveLength(11)
+  })
+
   it('starts an intent sub-task when the implement button is pressed', async () => {
     const startBodies: string[] = []
     const fetchSpy = installFetch((url, opts) => {

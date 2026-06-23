@@ -166,15 +166,34 @@
           <h2 class="rail-title">Sub-tasks</h2>
           <p v-if="!subtasks.length" class="rail-empty">No sub-tasks yet. Implement your intent to spin one up.</p>
           <ul v-else class="subtask-list">
-            <li v-for="(task, idx) in subtasks" :key="task.flowId">
+            <li v-for="task in visibleSubtasks" :key="task.flowId">
               <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
-                <span class="subtask-index">{{ String(idx + 1).padStart(2, '0') }}</span>
                 <span class="subtask-meta">
                   <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
                   <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
                 </span>
               </button>
             </li>
+            <li v-if="collapsedCompleted.length" class="subtask-collapse">
+              <button
+                type="button"
+                class="subtask-collapse-toggle"
+                @click="showCollapsedCompleted = !showCollapsedCompleted"
+              >
+                <span class="subtask-caret" :class="{ open: showCollapsedCompleted }">▸</span>
+                <span>{{ collapsedCompleted.length }} Completed</span>
+              </button>
+            </li>
+            <template v-if="showCollapsedCompleted">
+              <li v-for="task in collapsedCompleted" :key="task.flowId">
+                <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
+                  <span class="subtask-meta">
+                    <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
+                    <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
+                  </span>
+                </button>
+              </li>
+            </template>
           </ul>
         </section>
 
@@ -291,6 +310,8 @@ interface IddSubtask {
   flowId: string
   commit: string
   status: string
+  createdAt?: string
+  updatedAt?: string
 }
 
 interface IddClarification {
@@ -343,6 +364,8 @@ const saveLabel = computed(() => {
 
 const flow = ref<Flow | null>(null)
 const subtasks = ref<IddSubtask[]>([])
+const nowTick = ref(Date.now())
+let nowTickTimer: ReturnType<typeof setInterval> | null = null
 const clarifications = ref<IddClarification[]>([])
 const starting = ref(false)
 const activeSubtaskFlowId = ref<string | null>(null)
@@ -497,6 +520,52 @@ const statusClass = (status: string): string => {
   if (normalized.includes('block') || normalized.includes('pause')) return 'blocked'
   return 'active'
 }
+
+const ONE_HOUR_MS = 60 * 60 * 1000
+
+// Blocked sub-tasks need attention first, then ones still running, then the
+// rest. Anything outside the first two groups shares the lowest priority.
+const statusGroupRank = (status: string): number => {
+  const cls = statusClass(status)
+  if (cls === 'blocked') return 0
+  if (cls === 'active') return 1
+  return 2
+}
+
+const subtaskTime = (task: IddSubtask): number | null => {
+  const value = task.updatedAt || task.createdAt
+  const ms = value ? Date.parse(value) : NaN
+  return Number.isNaN(ms) ? null : ms
+}
+
+const sortedSubtasks = computed(() =>
+  [...subtasks.value].sort((a, b) => {
+    const rank = statusGroupRank(a.status) - statusGroupRank(b.status)
+    if (rank !== 0) return rank
+    return (subtaskTime(b) ?? 0) - (subtaskTime(a) ?? 0)
+  }),
+)
+
+const isStaleCompleted = (task: IddSubtask): boolean => {
+  if (statusClass(task.status) !== 'done') return false
+  const time = subtaskTime(task)
+  return time !== null && nowTick.value - time > ONE_HOUR_MS
+}
+
+// The scrollable sub-task section fits roughly this many rows before it starts
+// scrolling; only then do we fold away stale completed sub-tasks to keep active
+// ones in view.
+const SUBTASK_SCROLL_LIMIT = 8
+
+const collapsedCompleted = computed(() =>
+  sortedSubtasks.value.length > SUBTASK_SCROLL_LIMIT
+    ? sortedSubtasks.value.filter(isStaleCompleted)
+    : [],
+)
+const visibleSubtasks = computed(() =>
+  sortedSubtasks.value.filter((task) => !collapsedCompleted.value.includes(task)),
+)
+const showCollapsedCompleted = ref(false)
 
 const fetchIddState = async () => {
   try {
@@ -853,6 +922,9 @@ onMounted(async () => {
   await focusFirstFile()
   await fetchIddState()
   iddStateTimer = setInterval(fetchIddState, 5000)
+  nowTickTimer = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 60000)
   window.addEventListener('keydown', handleShortcut)
 })
 
@@ -860,6 +932,7 @@ onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
   if (savedTimer) clearTimeout(savedTimer)
   if (iddStateTimer) clearInterval(iddStateTimer)
+  if (nowTickTimer) clearInterval(nowTickTimer)
   window.removeEventListener('keydown', handleShortcut)
 })
 </script>
@@ -1052,6 +1125,43 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
+.subtask-list {
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.subtask-collapse {
+  display: flex;
+}
+
+.subtask-collapse-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0.35rem 0.65rem;
+  color: var(--color-text-2);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.subtask-collapse-toggle:hover {
+  color: var(--color-heading);
+}
+
+.subtask-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.subtask-caret.open {
+  transform: rotate(90deg);
+}
+
 .subtask-list,
 .clarify-list {
   list-style: none;
@@ -1080,12 +1190,6 @@ onBeforeUnmount(() => {
 .subtask-row:hover {
   border-color: var(--color-primary);
   background-color: var(--color-background-mute);
-}
-
-.subtask-index {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 0.75rem;
-  color: var(--color-text-2);
 }
 
 .subtask-meta {
