@@ -126,7 +126,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	s.Equal("/tmp/repo", capturedInput.RepoDir)
 	s.Require().NotNil(capturedInput.StartBranch)
 	s.Equal(iddBranch, *capturedInput.StartBranch)
-	s.Contains(capturedInput.Requirements, "Implement the following initial intent:")
+	s.Contains(capturedInput.Requirements, "The following new intent file has already been committed")
 	s.Contains(capturedInput.Requirements, "git show abc123")
 	s.Contains(capturedInput.Requirements, "diff body")
 }
