@@ -10,7 +10,7 @@ export interface ModelPreset {
 
 const modelConfigsEqual = (a: ModelConfig[], b: ModelConfig[]): boolean => {
   if (a.length !== b.length) return false
-  const normalize = (c: ModelConfig) => `${c.provider}|${c.model}|${c.reasoningEffort || ''}`
+  const normalize = (c: ModelConfig) => `${c.provider}|${c.model}|${c.reasoningEffort || ''}|${c.speed || ''}`
   const setA = new Set(a.map(normalize))
   const setB = new Set(b.map(normalize))
   if (setA.size !== setB.size) return false

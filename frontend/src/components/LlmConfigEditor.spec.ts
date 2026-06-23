@@ -335,6 +335,70 @@ describe('LlmConfigEditor', () => {
     })
   })
 
+  it('round-trips speed=fast for default config without further input', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '', speed: 'fast' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.provider-select').exists()).toBe(true)
+    })
+
+    const speedToggle = wrapper.find('.speed-toggle')
+    expect(speedToggle.exists()).toBe(true)
+    expect(speedToggle.classes()).toContain('active')
+
+    await speedToggle.trigger('click')
+
+    const emittedEvents = wrapper.emitted('update:modelValue')!
+    const emittedValue = emittedEvents[emittedEvents.length - 1][0] as LLMConfig
+    expect(emittedValue.defaults[0].speed).toBe('')
+
+    await speedToggle.trigger('click')
+    const reEnabled = (wrapper.emitted('update:modelValue')!.at(-1)![0]) as LLMConfig
+    expect(reEnabled.defaults[0].speed).toBe('fast')
+  })
+
+  it('initializes speed for use case config from props.modelValue', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '' }],
+      useCaseConfigs: {
+        planning: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '', speed: 'fast' }],
+      },
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.provider-select').exists()).toBe(true)
+    })
+
+    const useCaseToggles = wrapper.findAll('.speed-toggle')
+    const activeUseCaseToggle = useCaseToggles.find((t) => t.classes().includes('active'))
+    expect(activeUseCaseToggle).toBeDefined()
+  })
+
+  it('hides speed toggle for non-anthropic providers', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'gpt-4', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.provider-select').exists()).toBe(true)
+    })
+
+    expect(wrapper.find('.speed-toggle').exists()).toBe(false)
+  })
+
   it('keeps use case checkbox checked after parent updates modelValue with emitted config', async () => {
     const initialConfig: LLMConfig = {
       defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '' }],
