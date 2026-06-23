@@ -256,19 +256,38 @@ user to clarify their intent.
 Then we add a text block like this for the requirements prompt for a new intent
 file:
 
-````
-The following intent update has already been committed to intent/<path to file.md> (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself — treat the diff as a specification change that the code must now conform to.
+`````
+The following new intent file has already been committed to {{{ path/to/intent/file.md }}} (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself — treat the diff as a specification that the code must now conform to fully. It may be underspecified, but no code should be in contradiction with the intent. Infer intent as well as you can where it is underspecified.
 
-$ git show <sha>
-<diff>
-Identify which behaviors in the diff are newly required or changed, locate the corresponding code (frontend, backend, prompts, etc.), and make the code changes needed. If a change is purely editorial (whitespace, wording with no semantic effect), no code change is needed for that hunk.
-Implement the following initial intent:
-
-```md
-$ git show {{commit}}
-{{diff}}
+```sh
+$ git show {{{commit}}}
+{{{diff}}}
 ```
+
+Identify which behaviors in the diff are newly required or changed, locate the
+corresponding code (frontend, backend, prompts, etc.), and make the code changes
+needed. If a change is purely editorial (whitespace, wording with no semantic
+effect), no code change is needed for that hunk.
 ````
 
-When updating intent, it simply starts with "Implement the following intent
+Or like this when the file already existed but has an update:
+
+````
+The following intent update has already been committed to {{{ path/to/intent/file.md }}}
+(shown below for reference). Your job is to update the code so that the
+system's behavior matches the new intent. Do NOT re-edit the intent markdown
+file itself — treat the diff as a specification change that the code must now
+conform to.
+
+```sh
+$ git show {{{commit}}}
+{{{diff}}}
+```
+
+Identify which behaviors in the diff are newly required or changed, locate the
+corresponding code (frontend, backend, prompts, etc.), and make the code changes
+needed. If a change is purely editorial (whitespace, formatting or wording with no semantic
+effect), no code change is needed for that hunk. Just 
+`````
+
 update:", but is otherwise the same.
