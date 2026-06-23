@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mount, flushPromises, VueWrapper } from '@vue/test-utils'
 import { foldedRanges } from '@codemirror/language'
 import type { EditorView } from 'codemirror'
@@ -94,5 +94,43 @@ describe('IntentMarkdownEditor', () => {
     const view = getView(wrapper)
     expect(view).not.toBeNull()
     expect(collectFoldedRanges(view!)).toHaveLength(0)
+  })
+
+  it('auto-formats the document after the idle delay elapses', async () => {
+    vi.useFakeTimers()
+    try {
+      wrapper = mount(IntentMarkdownEditor, {
+        props: { modelValue: '# Heading\n\nstart\n', committedContent: '' },
+        attachTo: document.body,
+      })
+      await flushPromises()
+
+      const view = getView(wrapper)
+      expect(view).not.toBeNull()
+
+      // Simulate a user edit that introduces collapsible whitespace and
+      // soft-wrapped paragraph lines.
+      view!.dispatch({
+        changes: {
+          from: 0,
+          to: view!.state.doc.length,
+          insert: '# Heading\n\n\n\none two\nthree four\n',
+        },
+        userEvent: 'input.type',
+      })
+      await flushPromises()
+
+      const exposed = wrapper.vm as unknown as {
+        __hasIdleFormatTimerForTest?: () => boolean
+      }
+      expect(exposed.__hasIdleFormatTimerForTest?.()).toBe(true)
+
+      vi.advanceTimersByTime(15000)
+      await flushPromises()
+
+      expect(view!.state.doc.toString()).toBe('# Heading\n\none two three four\n')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

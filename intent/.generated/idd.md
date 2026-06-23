@@ -31,6 +31,10 @@ intent_links:
     code:
       - frontend/src/components/IntentMarkdownEditor.vue
       - frontend/src/views/IntentCanvasView.vue
+  - intent: "#idle-markdown-auto-formatting"
+    code:
+      - frontend/src/components/IntentMarkdownEditor.vue
+      - frontend/src/lib/markdown_format.ts
   - intent: "#uncommitted-intent-baseline-comes-from-head"
     code:
       - frontend/src/lib/intent_diff.ts
@@ -133,3 +137,14 @@ focus when opened, so pressing Escape while it has focus dismisses it via a
 `keydown.esc.stop` handler on the panel itself rather than a global listener.
 This keeps the intent canvas's own keyboard shortcuts unaffected when the side
 view isn't focused.
+
+## Idle markdown auto-formatting
+
+After the editor sits idle for 15 seconds following a user edit, the intent
+markdown editor reflows plain prose paragraphs and collapses runs of blank
+lines into single blank lines. Structural content -- YAML frontmatter, fenced
+code blocks, headings, list items, blockquotes, tables, horizontal rules, and
+indented code -- is left untouched so auto-formatting can never silently
+rewrite executable or structured content. External `modelValue` replacements
+cancel any pending idle timer so freshly-loaded content isn't reformatted on
+open.
