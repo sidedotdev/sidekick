@@ -229,6 +229,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.SummarizeDiffActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
+	w.RegisterActivity(dev.IddWatchEditIdleActivity)
 	w.RegisterActivity(chatHistoryActivities)
 	bulkReadFileActivities := &dev.BulkReadFileActivities{Storage: service}
 	w.RegisterActivity(bulkReadFileActivities)

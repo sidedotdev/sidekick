@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,5 +55,21 @@ func TestRenderIntentRequirements(t *testing.T) {
 
 		assert.Equal(t, withoutNewline, withNewline)
 		assert.NotContains(t, withNewline, "Build great things\n\n```")
+	})
+
+	t.Run("scope prompt narrows focus and is emitted before the diff", func(t *testing.T) {
+		t.Parallel()
+		out := renderIntentRequirements(IntentRequirementsInfo{
+			Commit:      "abc123",
+			Diff:        "diff --git a/intent/mission.md b/intent/mission.md\n+Build great things\n",
+			Update:      true,
+			ScopePrompt: "Focus only on the 'Background Orchestrator Agent' section.",
+		})
+
+		assert.Contains(t, out, "scoped as follows:")
+		assert.Contains(t, out, "Focus only on the 'Background Orchestrator Agent' section.")
+		assert.Contains(t, out, "$ git show abc123")
+		// The scope blurb must precede the diff fence.
+		assert.Less(t, strings.Index(out, "Focus only on"), strings.Index(out, "$ git show"))
 	})
 }

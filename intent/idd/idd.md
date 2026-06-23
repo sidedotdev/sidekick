@@ -38,6 +38,16 @@ intent_links:
       - dev/edit_code.go:renderAuthorEditBlockInitialPrompt
       - dev/prompts/intent/requirements.mustache
       - dev/intent_requirements.go:renderIntentRequirements
+  - intent: "#background-orchestrator-agent"
+    code:
+      - dev/idd_workflow.go:IddState
+      - dev/idd_workflow.go:SetIddAutoModeSignal
+      - dev/idd_workflow.go:RunIddOrchestratorSignal
+      - dev/idd_workflow.go:IddWorkflow
+      - dev/manage_chat_history.go
+      - api/intent_api.go:SetIddAutoModeHandler
+      - api/intent_api.go:RunIddOrchestratorHandler
+      - frontend/src/views/IntentCanvasView.vue
 ---
 # Seamless Intent Driven Development Flow
 

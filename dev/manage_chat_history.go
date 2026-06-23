@@ -40,6 +40,11 @@ const (
 	ContextTypeEditBlockReport     = persisted_ai.ContextTypeEditBlockReport
 	ContextTypeSelfReviewFeedback  = persisted_ai.ContextTypeSelfReviewFeedback
 	ContextTypeSummary             = persisted_ai.ContextTypeSummary
+	// ContextTypeIntentTaskStart marks an assistant tool-call message (and its
+	// matching tool result) where the background IDD orchestrator launched an
+	// intent sub-task. These are retained across trimming so the orchestrator
+	// always recalls which intent it has already dispatched.
+	ContextTypeIntentTaskStart = "IntentTaskStart"
 )
 
 // Retention reason constants for cache control optimization
@@ -54,6 +59,7 @@ const (
 	RetainReasonEditBlockProposal        = "EditBlockProposal"
 	RetainReasonForwardSegment           = "ForwardSegment"
 	RetainReasonUnderLimit               = "UnderLimit"
+	RetainReasonIntentTaskStart          = "IntentTaskStart"
 )
 
 //const defaultMaxChatHistoryLength = 12000
@@ -461,6 +467,17 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 	for i, msg := range chatHistory {
 		if msg.ContextType == ContextTypeInitialInstructions {
 			retainReasons[i][RetainReasonInitialInstructions] = true
+		}
+		if msg.ContextType == ContextTypeIntentTaskStart {
+			retainReasons[i][RetainReasonIntentTaskStart] = true
+			// An assistant tool-call message may have several matching
+			// tool-result messages immediately following it (one per tool
+			// call in the assistant turn); retain every consecutive tool
+			// message so the conversation stays valid after trimming and
+			// no start_intent_subtask call ends up without its result.
+			for j := i + 1; j < len(chatHistory) && chatHistory[j].Role == llm.ChatMessageRoleTool; j++ {
+				retainReasons[j][RetainReasonIntentTaskStart] = true
+			}
 		}
 	}
 
