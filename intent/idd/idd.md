@@ -146,7 +146,7 @@ according to the human author/user.
       - Within group, ordered by last updated (fallback: created), reverse
         chronological
       - Subtask list section is a scrollable section that extends until the dev
-        run section
+        run at the bottom
       - When many have completed such that scrolling is required, the ones done
         over 1 hour ago are collapsed under "[caret] N Completed"
   - Any questions wrt highly ambiguous or contradictory intent that have
@@ -271,24 +271,27 @@ If in doubt — e.g. the latest user request conflicts with the intent — ask t
 user to clarify their intent.
 ```
 
-Then we add a text block like this for the requirements prompt for a new intent
-file:
+Then we obtain a "clean diff", which ignores whitespace and renders word-level
+diffs at best effort (ideally matching the quality of results of our frontend
+in-editor diffing). We use the clean diff in an additional text block like this,
+making it the requirements prompt. For a new intent file, the prompt looks like
+this:
 
 `````
-The following new intent file has already been committed to {{{ path/to/intent/file.md }}} (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself — treat the diff as a specification that the code must now conform to fully. It may be underspecified, but no code should be in contradiction with the intent. Infer intent as well as you can where it is underspecified.
+The following new intent file has already been committed to {{{ path/to/intent/file.md }}} (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself - treat the diff as a specification that the code must now conform to fully. It may be underspecified, but no code should be in contradiction with the intent. Infer intent as well as you can where it is underspecified.
 
 ```sh
 $ git show {{{commit}}}
-{{{diff}}}
+{{{clean_diff}}}
 ```
 
 Identify which behaviors in the diff are newly required or changed, locate the
 corresponding code (frontend, backend, prompts, etc.), and make the code changes
 needed. If a change is purely editorial (whitespace, wording with no semantic
 effect), no code change is needed for that hunk.
-````
+`````
 
-Or like this when the file already existed but has an update:
+And like this when the file already existed but has an update:
 
 ````
 The following intent update has already been committed to {{{ path/to/intent/file.md }}}
@@ -299,7 +302,7 @@ conform to.
 
 ```sh
 $ git show {{{commit}}}
-{{{diff}}}
+{{{clean_diff}}}
 ```
 
 Identify which behaviors in the diff are newly required or changed, locate the
@@ -307,5 +310,3 @@ corresponding code (frontend, backend, prompts, etc.), and make the code changes
 needed. If a change is purely editorial (whitespace, formatting or wording with no semantic
 effect), no code change is needed for that hunk. Just 
 `````
-
-update:", but is otherwise the same.
