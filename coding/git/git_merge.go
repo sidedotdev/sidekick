@@ -125,7 +125,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 				resultErr = fmt.Errorf("failed to commit squash merge in worktree: %v", commitErr)
 				return
 			}
-			if commitOutput.ExitStatus != 0 {
+			if commitOutput.ExitStatus != 0 && !isNothingToCommitOutput(commitOutput.Stdout, commitOutput.Stderr) {
 				resultErr = fmt.Errorf("failed to commit squash merge in worktree: %s", commitOutput.Stderr)
 				return
 			}
@@ -253,7 +253,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 			resultErr = fmt.Errorf("failed to commit squash merge: %v", commitErr)
 			return
 		}
-		if commitOutput.ExitStatus != 0 {
+		if commitOutput.ExitStatus != 0 && !isNothingToCommitOutput(commitOutput.Stdout, commitOutput.Stderr) {
 			resultErr = fmt.Errorf("failed to commit squash merge: %s", commitOutput.Stderr)
 			return
 		}
