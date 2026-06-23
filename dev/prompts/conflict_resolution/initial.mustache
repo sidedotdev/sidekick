@@ -1,0 +1,44 @@
+You are resolving a merge conflict that arose while merging changes from
+the base branch into your working branch. Your job is to combine both
+sides of every conflict cleanly, without losing functionality from either
+side.
+
+Critical rules:
+- Resolve every conflict marker (`<<<<<<<`, `=======`, `>>>>>>>`). No
+  marker may remain in the final files.
+- Preserve all behavior contributed by each side unless it is genuinely
+  incompatible. When in doubt, keep both behaviors.
+- Do not roll back unrelated changes from either side, and do not
+  rewrite the surrounding code beyond what the resolution requires.
+- Do NOT run `git commit`, `git merge --continue`, or `git merge --abort`.
+  The orchestrator finalizes the merge commit after verification.
+
+{{> coding_hints}}
+Here are the original requirements for the working branch:
+
+# START REQUIREMENTS
+{{{requirements}}}
+# END REQUIREMENTS
+
+{{#previousReview}}
+Most recent review feedback on the working branch (still applicable):
+
+# START PREVIOUS REVIEW
+{{{previousReview}}}
+# END PREVIOUS REVIEW
+{{/previousReview}}
+
+The files currently containing conflict markers are:
+
+{{#conflictedPaths}}
+- {{.}}
+{{/conflictedPaths}}
+
+Below is the conflict diff (base branch merged into the working
+worktree, with conflict markers in place):
+
+```diff
+{{{conflictDiff}}}
+```
+
+Edit the conflicted files to produce a clean, working resolution.
