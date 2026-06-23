@@ -202,6 +202,15 @@
         >{{ finishing ? 'Merging…' : 'Confirm merge' }}</button>
       </footer>
     </div>
+
+    <DevRunControls
+      v-if="hasDevRunConfig && store.workspaceId"
+      class="dev-run-launcher"
+      :workspaceId="store.workspaceId"
+      :flowId="flowId"
+      @start="handleDevRunStart"
+      @stop="handleDevRunStop"
+    />
   </div>
 </template>
 
@@ -214,6 +223,7 @@ import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import IntentMarkdownEditor from '../components/IntentMarkdownEditor.vue'
 import FlowView from './FlowView.vue'
 import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
+import DevRunControls from '../components/DevRunControls.vue'
 import type { Flow } from '../lib/models'
 
 interface IntentFileEntry {
@@ -439,6 +449,43 @@ const handleShortcut = (event: KeyboardEvent) => {
   }
 }
 
+const hasDevRunConfig = ref(false)
+
+const queryDevRunConfig = async () => {
+  try {
+    const res = await fetch(`${flowBase.value}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'dev_run_config' }),
+    })
+    if (!res.ok) return
+    const data = await res.json()
+    if (data.result && typeof data.result === 'object' && Object.keys(data.result).length > 0) {
+      hasDevRunConfig.value = true
+    }
+  } catch (e) {
+    console.debug('Dev run config query error:', e)
+  }
+}
+
+const sendDevRunAction = async (actionType: 'dev_run_start' | 'dev_run_stop') => {
+  try {
+    const res = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}/user_action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actionType }),
+    })
+    if (!res.ok) {
+      console.error('Failed to send dev run action:', res.status, res.statusText)
+    }
+  } catch (e) {
+    console.error('Network error sending dev run action:', e)
+  }
+}
+
+const handleDevRunStart = () => sendDevRunAction('dev_run_start')
+const handleDevRunStop = () => sendDevRunAction('dev_run_stop')
+
 const newFileInputRef = ref<HTMLInputElement | null>(null)
 const welcomeInputRef = ref<HTMLInputElement | null>(null)
 
@@ -605,6 +652,7 @@ const focusFirstFile = async () => {
 
 onMounted(async () => {
   void fetchFlow()
+  void queryDevRunConfig()
   await fetchFiles()
   loading.value = false
   await focusFirstFile()
@@ -642,6 +690,16 @@ onBeforeUnmount(() => {
   border-left: 1px solid var(--color-border);
   background-color: var(--color-background-soft);
   overflow-y: auto;
+}
+
+:deep(.dev-run-launcher) {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  margin: 0;
+  z-index: 5;
+  max-width: min(28rem, calc(100% - 2rem));
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.18);
 }
 
 .rail-head {
