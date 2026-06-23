@@ -25,8 +25,8 @@
       </button>
     </div>
   </div>
-  <div class="flow-actions-container" :class="{ 'short-content': shortContent }">
-    <div class="scroll-container">
+  <div ref="flowActionsContainerRef" class="flow-actions-container" :class="{ 'short-content': shortContent }">
+    <div ref="scrollContainerRef" class="scroll-container">
       <div v-if="isLoadingFlow && !flow" class="loading-indicator">Loading...</div>
       <div v-else-if="flow && isStartingFlow" class="loading-indicator">Starting Task...</div>
       <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1" :subflowsById="subflowsById"/>
@@ -118,6 +118,8 @@ const updateSubflowTrees = () => {
 }
 
 let flow = ref<Flow | null>(null)
+const flowActionsContainerRef = ref<HTMLDivElement | null>(null)
+const scrollContainerRef = ref<HTMLDivElement | null>(null)
 let actionChangesSocket: WebSocket | null = null
 let actionChangesSocketClosed = false
 let eventsSocket: WebSocket | null = null
@@ -622,8 +624,8 @@ const goToNextStep = async () => {
 
 let setShortContent = () => {
   const innerSet = () => {
-    const contentHeight = document.querySelector('.scroll-container')?.scrollHeight || 0
-    const containerHeight = document.querySelector('.flow-actions-container')?.clientHeight || 0
+    const contentHeight = scrollContainerRef.value?.scrollHeight || 0
+    const containerHeight = flowActionsContainerRef.value?.clientHeight || 0
     shortContent.value = contentHeight <= containerHeight
   }
   // HACK: set it fast to get immediate feedback, but slower too when rendering takes longer

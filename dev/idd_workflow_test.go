@@ -140,6 +140,10 @@ func (s *IddWorkflowTestSuite) TestFinishIddSignalMergesAndCloses() {
 	const iddBranch = "side/idd-worktree"
 	const targetBranch = "main"
 
+	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.MatchedBy(func(input git.GitAddActivityInput) bool {
+		return input.Path == "."
+	})).Return(nil).Once()
+
 	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
 		return params.CommitAll && params.IgnoreNothingToCommit
 	})).Return("commit-sha", nil).Once()
