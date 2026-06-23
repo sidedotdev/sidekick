@@ -208,6 +208,10 @@ according to the human author/user.
   - The temporal ends immediately after sending the completion signal
   - The flow status is updated to complete
   - The parent task is marked completed too
+- Any errors in the IDD workflow after this point are prominently displayed in
+  the finish panel. Any pending user requests are also surfaced if any.
+  - The logic is very similar to that in the FlowView/SubflowContainer.
+- After finishing successfully, the user is redirected to the kanban board
 
 ### Start a sub task
 
