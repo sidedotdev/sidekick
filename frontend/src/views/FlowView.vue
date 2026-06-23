@@ -1,6 +1,7 @@
 <template>
   <div v-if="flow">
     <FlowEditorLinks v-if="!embedded" :flow-id="flow.id" :worktrees="flow.worktrees" />
+    <FlowEditorLinks v-else :flow-id="flow.id" :worktrees="flow.worktrees" subtask />
     <!-- TODO: In the future, we should allow going to next step even if currently paused -->
     <div 
       v-if="flow && !['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" 
