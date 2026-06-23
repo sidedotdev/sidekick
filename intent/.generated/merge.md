@@ -45,11 +45,17 @@ conflicts:
   for verification, which would otherwise be empty under regular `git diff`
   once markers are removed.
 - The `resolveMergeConflictsSubflow` then drives an `EditCode` loop using the
-  new `ConflictResolutionInfo` prompt type. After each pass it checks both
-  the unmerged index (`git ls-files -u`) AND a tracked-file grep for
-  literal `<<<<<<<`/`=======`/`>>>>>>>` markers (loop if either is
-  non-empty, so a faux-resolve that `git add`ed a still-marked file is
-  caught), re-runs configured tests (loop on failure), and runs
+  new `ConflictResolutionInfo` prompt type. The resolver prompt instructs
+  the agent to first `sed`-rename raw conflict markers to
+  `CONFLICT_START` / `CONFLICT_DIVIDER` / `CONFLICT_END` placeholders so
+  that subsequent edit blocks can safely quote those lines without their
+  SEARCH/REPLACE sections being mis-parsed by the edit-block extractor
+  (whose delimiters share the `<<<<<<<` / `=======` / `>>>>>>>` shape).
+  After each pass it checks both the unmerged index (`git ls-files -u`)
+  AND a tracked-file grep for literal `<<<<<<<`/`=======`/`>>>>>>>`
+  markers (loop if either is non-empty, so a faux-resolve that `git
+  add`ed a still-marked file is caught), re-runs configured tests (loop
+  on failure), and runs
   `CheckIfCriteriaFulfilled` with the snapshot-based diff as `Work` (loop
   on negative fulfillment). The resolver is explicitly told not to commit;
   the orchestrator finalizes the merge commit via `GitCommitMergeActivity`,
