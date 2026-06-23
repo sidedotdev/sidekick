@@ -300,6 +300,13 @@ onBeforeUnmount(() => {
 
 defineExpose({
   focus: () => editorView?.focus(),
+  // formatNow reflows the current document immediately, returning the resulting
+  // text. Used when launching an intent sub-task so the committed intent state
+  // is formatted before being saved, matching the idle-format behavior.
+  formatNow: (): string => {
+    runIdleFormat()
+    return editorView?.state.doc.toString() ?? ''
+  },
   // Test-only handle. Returns the underlying CodeMirror EditorView so specs
   // can inspect parser/fold state without dragging in a real browser. Not
   // part of the component's public API and should not be used by app code.

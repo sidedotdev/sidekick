@@ -66,6 +66,7 @@ type FinishIddSignal struct {
 // IddSubtask tracks an intent sub-task launched by the IddWorkflow.
 type IddSubtask struct {
 	FlowId    string    `json:"flowId"`
+	Title     string    `json:"title"`
 	Commit    string    `json:"commit"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -250,6 +251,19 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		return
 	}
 
+	// The sub-task gets its own descriptive title generated from the committed
+	// intent sha & diff, falling back to the IDD task title if generation fails.
+	// Gated by version so in-flight sub-tasks recorded before this change replay
+	// without the extra LLM activity.
+	title := input.Title
+	if workflow.GetVersion(dCtx, "idd-subtask-generated-title", workflow.DefaultVersion, 1) >= 1 {
+		if generatedTitle, titleErr := generateIntentSubtaskTitle(dCtx, reqInfo.Commit, reqInfo.Diff); titleErr != nil {
+			log.Error("Failed to generate intent sub-task title", "Error", titleErr)
+		} else {
+			title = generatedTitle
+		}
+	}
+
 	branch := dCtx.Worktree.Name
 	childCtx := workflow.WithChildOptions(dCtx, workflow.ChildWorkflowOptions{
 		WorkflowID:        "flow_" + ksuidSideEffect(dCtx),
@@ -278,6 +292,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	now := workflow.Now(dCtx)
 	state.Subtasks = append(state.Subtasks, IddSubtask{
 		FlowId:    we.ID,
+		Title:     title,
 		Commit:    reqInfo.Commit,
 		Status:    "in_progress",
 		CreatedAt: now,
