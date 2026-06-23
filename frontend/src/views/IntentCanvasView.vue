@@ -76,6 +76,7 @@
 
       <div v-if="activePath" class="sheet">
         <IntentMarkdownEditor
+          ref="editorRef"
           class="editor"
           :model-value="content"
           :committed-content="committedContent"
@@ -169,6 +170,7 @@
             <li v-for="task in visibleSubtasks" :key="task.flowId">
               <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
                 <span class="subtask-meta">
+                  <span v-if="task.title" class="subtask-title">{{ task.title }}</span>
                   <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
                   <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
                 </span>
@@ -188,6 +190,7 @@
               <li v-for="task in collapsedCompleted" :key="task.flowId">
                 <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
                   <span class="subtask-meta">
+                    <span v-if="task.title" class="subtask-title">{{ task.title }}</span>
                     <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
                     <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
                   </span>
@@ -294,7 +297,10 @@ import SubtaskSidePanel from '../components/SubtaskSidePanel.vue'
 import FlowView from './FlowView.vue'
 import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
 import DevRunControls from '../components/DevRunControls.vue'
+import { formatMarkdown } from '../lib/markdown_format'
 import type { Flow } from '../lib/models'
+
+const FORMAT_WRAP_COLUMN = 80
 
 interface IntentFileEntry {
   path: string
@@ -308,6 +314,7 @@ interface FileNode extends IntentFileEntry {
 
 interface IddSubtask {
   flowId: string
+  title?: string
   commit: string
   status: string
   createdAt?: string
@@ -362,6 +369,7 @@ const saveLabel = computed(() => {
   }
 })
 
+const editorRef = ref<InstanceType<typeof IntentMarkdownEditor> | null>(null)
 const flow = ref<Flow | null>(null)
 const subtasks = ref<IddSubtask[]>([])
 const nowTick = ref(Date.now())
@@ -603,10 +611,62 @@ const refreshCommittedBaseline = async () => {
   }
 }
 
+// putFile saves a file's content, throwing on failure so callers can abort
+// rather than silently proceeding from an unsaved/unformatted state.
+const putFile = async (path: string, body: string) => {
+  saveStatus.value = 'saving'
+  const res = await fetch(`${apiBase.value}/file`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content: body }),
+  })
+  if (!res.ok) {
+    saveStatus.value = 'error'
+    throw new Error(`Failed to save ${path}: ${await res.text()}`)
+  }
+  saveStatus.value = 'saved'
+  if (savedTimer) clearTimeout(savedTimer)
+  savedTimer = setTimeout(() => {
+    if (saveStatus.value === 'saved') saveStatus.value = 'idle'
+  }, 2000)
+}
+
+// formatChangedMarkdown formats and saves every markdown intent file that has
+// uncommitted changes, so the sub-task is built from formatted, fully-saved
+// intent state rather than only the file currently open in the editor. The
+// active file uses the editor's live (possibly unsaved) content; others are
+// read from the server and skipped when they match their committed baseline.
+// Failures propagate so the caller can abort before committing/starting.
+const formatChangedMarkdown = async () => {
+  for (const entry of files.value) {
+    if (entry.isDir || !entry.path.toLowerCase().endsWith('.md')) continue
+    if (entry.path === activePath.value && editorRef.value) {
+      const formatted = editorRef.value.formatNow()
+      content.value = formatted
+      if (formatted !== committedContent.value) {
+        await putFile(entry.path, formatted)
+      }
+      continue
+    }
+    const res = await fetch(`${apiBase.value}/file?path=${encodeURIComponent(entry.path)}`)
+    if (!res.ok) {
+      throw new Error(`Failed to read ${entry.path}: ${await res.text()}`)
+    }
+    const data = await res.json()
+    const current = (data.content ?? '') as string
+    const committed = (data.committedContent ?? '') as string
+    if (current === committed) continue
+    const formatted = formatMarkdown(current, FORMAT_WRAP_COLUMN)
+    await putFile(entry.path, formatted)
+  }
+}
+
 const startSubtask = async () => {
   if (starting.value) return
   starting.value = true
   try {
+    flushPendingSave()
+    await formatChangedMarkdown()
     const res = await fetch(`${apiBase.value}/start_subtask`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1199,10 +1259,18 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.subtask-title {
+  font-size: 0.85rem;
+  color: var(--color-heading);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .subtask-commit {
   font-family: "JetBrains Mono", monospace;
   font-size: 0.8rem;
-  color: var(--color-heading);
+  color: var(--color-text-muted, var(--color-text));
 }
 
 .subtask-status {
