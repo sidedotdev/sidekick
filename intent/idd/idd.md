@@ -173,7 +173,9 @@ according to the human author/user.
 
 #### Sub task component
 
-- Has an mini-button with icon to cancel that displays on hover (similar to task cards)
+- Has an mini-button with icon to cancel that displays on hover (similar to task
+  cards)
+  - After canceling, the sub task status changes to canceled.
 
 #### Finish UI
 
