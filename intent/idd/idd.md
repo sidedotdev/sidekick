@@ -104,7 +104,8 @@ according to the human author/user.
         away for those words immediately, not requiring a refresh (only new words
         that aren't yet committed show the style)
   - Tab character expands to 2 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
-  - YAML frontmatter is collapsed by default (all other sections expanded)
+  - YAML frontmatter is always collapsed by default in the editor (all other
+     sections are expanded by default)
 
 ##### Editor Styling
 
@@ -133,6 +134,8 @@ according to the human author/user.
     convenience. They are shown alongside the sub task that triggered it.
   - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI 
   - Bottom right has a dev run play button, which will start a dev run
+  - There is some way to interact with the orchestrator agent that normally just runs
+    in the background. Opens a side view with a new component. Allows viewing the full history of what happened with the agent as well as queuing messages to it.
 
 ### Finish UI
 
@@ -177,7 +180,10 @@ according to the human author/user.
 - Makes a worktree based off of HEAD of the worktree for the idd flow
 - Automatically gets merged into the idd worktree when completed (new basic
       dev / planned dev workflow option)
-    
+- User requests go to the parent flow, which is the idd flow in this case,
+  which passes them on to the task workflow for now.
+- Parent task remains blocked as long as any sub task is blocked
+
 
 ## IDD Instructions for Coding Agents
 
