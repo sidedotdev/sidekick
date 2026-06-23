@@ -190,7 +190,15 @@
       </div>
     </aside>
 
-    <div v-if="activeSubtaskFlowId" class="side-panel" role="dialog" aria-label="Sub-task">
+    <div
+      v-if="activeSubtaskFlowId"
+      ref="subtaskPanelRef"
+      class="side-panel"
+      role="dialog"
+      aria-label="Sub-task"
+      tabindex="-1"
+      @keydown.esc.stop="closeSubtask"
+    >
       <div
         class="side-panel-resize"
         role="separator"
@@ -560,8 +568,13 @@ const startSubtask = async () => {
   }
 }
 
+const subtaskPanelRef = ref<HTMLElement | null>(null)
+
 const openSubtask = (subtaskFlowId: string) => {
   activeSubtaskFlowId.value = subtaskFlowId
+  nextTick(() => {
+    subtaskPanelRef.value?.focus()
+  })
 }
 
 const closeSubtask = () => {
@@ -1143,6 +1156,10 @@ onBeforeUnmount(() => {
 
 .clarify-link:hover {
   color: var(--color-primary-hover);
+}
+
+.side-panel:focus {
+  outline: none;
 }
 
 .side-panel {
