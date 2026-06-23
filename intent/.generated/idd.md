@@ -30,6 +30,10 @@ intent_links:
     code:
       - frontend/src/components/IntentMarkdownEditor.vue
       - frontend/src/views/IntentCanvasView.vue
+  - intent: "#uncommitted-intent-baseline-comes-from-head"
+    code:
+      - frontend/src/lib/intent_diff.ts
+      - frontend/src/lib/intent_diff_editor.ts
 ---
 # Inferred IDD Implementation Notes
 

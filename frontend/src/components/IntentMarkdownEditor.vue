@@ -71,7 +71,9 @@ const markdownHighlightStyle = HighlightStyle.define([
 ])
 
 const buildEditorTheme = (isDark: boolean) => {
-  const selectionBg = isDark ? 'rgba(131, 58, 180, 0.65)' : 'rgba(131, 58, 180, 0.45)'
+  // A very transparent tint of the primary brand color keeps text legible
+  // while still standing out against the active-line background.
+  const selectionBg = `color-mix(in srgb, var(--color-primary) ${isDark ? 35 : 25}%, transparent)`
   return EditorView.theme(
     {
       '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
@@ -84,6 +86,25 @@ const buildEditorTheme = (isDark: boolean) => {
       // aligned with the (also vertically-centred) heading text and caret.
       '.cm-gutterElement': { display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
       '.cm-lineNumbers .cm-gutterElement': { paddingRight: '0.5em' },
+      // The default fold gutter ships separate glyphs for open ("⌄") and
+      // closed ("›") states. Replace both with the closed glyph and rotate
+      // it 90° when expanded so the indicator keeps a single shape that
+      // simply spins about its centerpoint.
+      '.cm-foldGutter .cm-gutterElement span': {
+        display: 'inline-block',
+        fontSize: '0',
+        lineHeight: '1',
+      },
+      '.cm-foldGutter .cm-gutterElement span::before': {
+        content: '"›"',
+        display: 'inline-block',
+        fontSize: '1rem',
+        lineHeight: '1',
+        transition: 'transform 0.1s',
+      },
+      '.cm-foldGutter .cm-gutterElement span[title="Fold line"]::before': {
+        transform: 'rotate(90deg)',
+      },
       '.cm-activeLine': { backgroundColor: 'var(--color-background-mute)' },
       '.cm-activeLineGutter': { backgroundColor: 'transparent' },
       '&.cm-focused': { outline: 'none' },
@@ -96,11 +117,12 @@ const buildEditorTheme = (isDark: boolean) => {
         backgroundColor: selectionBg,
       },
       '.cm-content ::selection': { backgroundColor: selectionBg },
+      // Uncommitted spans are merged across adjacent same-line additions
+      // (see intent_diff_editor.ts) so a flat background with no padding
+      // is enough to read as a single contiguous highlight.
       '.cm-intent-uncommitted': {
-        backgroundColor: isDark ? 'rgba(25, 197, 24, 0.10)' : 'rgba(25, 197, 24, 0.28)',
-        borderRadius: '4px',
-        padding: '0 0.5em',
-        margin: '0 -0.5em',
+        backgroundColor: isDark ? 'rgba(25, 197, 24, 0.18)' : 'rgba(25, 197, 24, 0.28)',
+        borderRadius: '2px',
       },
     },
     { dark: isDark },

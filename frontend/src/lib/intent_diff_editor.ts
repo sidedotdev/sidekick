@@ -39,10 +39,35 @@ const uncommittedField = StateField.define<DecorationSet>({
 // the highlighted ranges as the document or its committed baseline changes.
 export const uncommittedHighlightExtension = (): Extension => uncommittedField
 
+// mergeSameLineAdjacent collapses ranges whose gap on the document contains
+// only intra-line whitespace, so that consecutive uncommitted words on the
+// same line render as a single continuous highlight rather than several
+// abutting spans separated by visible dividers.
+const mergeSameLineAdjacent = (ranges: AddedRange[], text: string): AddedRange[] => {
+  if (ranges.length <= 1) return ranges
+  const sorted = ranges
+    .filter((r) => r.to > r.from)
+    .slice()
+    .sort((a, b) => a.from - b.from || a.to - b.to)
+  const merged: AddedRange[] = []
+  for (const range of sorted) {
+    const last = merged[merged.length - 1]
+    if (last && range.from >= last.to) {
+      const gap = text.slice(last.to, range.from)
+      if (!gap.includes('\n') && /^\s*$/.test(gap)) {
+        last.to = Math.max(last.to, range.to)
+        continue
+      }
+    }
+    merged.push({ from: range.from, to: range.to })
+  }
+  return merged
+}
+
 // applyUncommittedHighlight diffs `committed` against the editor's current
 // content and dispatches an effect to highlight the resulting added ranges.
 export const applyUncommittedHighlight = (view: EditorView, committed: string): void => {
   const current = view.state.doc.toString()
-  const ranges = diffAddedRanges(committed, current)
+  const ranges = mergeSameLineAdjacent(diffAddedRanges(committed, current), current)
   view.dispatch({ effects: setUncommittedRanges.of(ranges) })
 }
