@@ -30,10 +30,10 @@ func renderIntentRequirements(info IntentRequirementsInfo) string {
 		cleanDiff = info.Diff
 	}
 	data := map[string]interface{}{
-		"commit":     info.Commit,
-		"clean_diff": strings.TrimSuffix(cleanDiff, "\n"),
-		"update":     info.Update,
-		"path":       intentDiffPaths(info.Diff),
+		"commit":      info.Commit,
+		"clean_diff":  strings.TrimSuffix(cleanDiff, "\n"),
+		"update":      info.Update,
+		"path":        intentDiffPaths(info.Diff),
 		"scopePrompt": strings.TrimSpace(info.ScopePrompt),
 	}
 	return RenderPrompt(IntentRequirements, data)
