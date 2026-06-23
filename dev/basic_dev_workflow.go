@@ -67,13 +67,13 @@ func getDiffSinceLastReview(dCtx DevContext, lastReviewTreeHash string, ignoreWh
 
 func getDiffSinceLastReviewWithContext(dCtx DevContext, lastReviewTreeHash string, ignoreWhitespace bool, filePaths []string, contextLines *int) (string, error) {
 	var diffOutput string
-	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate diff since last review", git.GitDiffActivity, &diffOutput, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		BaseRef:          lastReviewTreeHash,
 		IgnoreWhitespace: ignoreWhitespace,
 		FilePaths:        filePaths,
 		ContextLines:     contextLines,
-	}).Get(dCtx, &diffOutput)
+	})
 	return diffOutput, err
 }
 
@@ -86,25 +86,25 @@ func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace 
 	v := workflow.GetVersion(dCtx, "three-dot-prefer-smaller", workflow.DefaultVersion, 1)
 
 	var gitDiff string
-	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &gitDiff, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		ThreeDotDiff:     true,
 		BaseRef:          baseBranch,
 		IgnoreWhitespace: ignoreWhitespace,
 		ContextLines:     contextLines,
-	}).Get(dCtx, &gitDiff)
+	})
 	if err != nil {
 		return "", err
 	}
 
 	if v >= 1 {
 		var directDiff string
-		err = workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &directDiff, *dCtx.EnvContainer, git.GitDiffParams{
 			Staged:           true,
 			BaseRef:          baseBranch,
 			IgnoreWhitespace: ignoreWhitespace,
 			ContextLines:     contextLines,
-		}).Get(dCtx, &directDiff)
+		})
 		if err == nil && len(directDiff) < len(gitDiff) {
 			return directDiff, nil
 		}
@@ -119,12 +119,12 @@ func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace 
 func getOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
 	var result string
 	var ca *coding.CodingActivities
-	err := workflow.ExecuteActivity(dCtx, ca.GetOwnChangesSinceReviewActivity, coding.GetOwnChangesSinceReviewParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate own changes since review", ca.GetOwnChangesSinceReviewActivity, &result, coding.GetOwnChangesSinceReviewParams{
 		EnvContainer:     *dCtx.EnvContainer,
 		BaseBranch:       baseBranch,
 		LastReviewTree:   lastReviewTreeHash,
 		IgnoreWhitespace: ignoreWhitespace,
-	}).Get(dCtx, &result)
+	})
 	return result, err
 }
 
