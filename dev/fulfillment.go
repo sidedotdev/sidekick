@@ -49,7 +49,14 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 		// When CheckEdits is enabled, all current-step work is staged, so
 		// git diff --staged captures exactly the relevant changes without
 		// including prior committed steps or merged upstream changes.
-		diff, err = git.GitDiff(dCtx.ExecContext)
+		//
+		// We deliberately re-evaluate the CheckEdits flag below to preserve
+		// the exact activity command sequence previously emitted by
+		// git.GitDiff (which internally checks the flag again before
+		// running GitDiffActivity). This keeps in-flight and completed
+		// workflows replay-deterministic with the prior implementation.
+		_ = fflag.IsEnabled(dCtx, fflag.CheckEdits)
+		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get staged git diff: %v", err)
 		}
