@@ -79,13 +79,13 @@ according to the human author/user.
   intent canvas to edit intent files in that worktree
 - The canvas is a custom interface for specifying intent, with a simple markdown
   editor + filetree browser.
-    - If no intent files exists, shows a prompt to create a new intent file in a
-      intent/ directory, prompting for the file name.
-    - Remember which intent file was last open and open it again when the
-      specific idd flow id is next accessed
-    - If intent files exist, on startup, do not open one: allow the user to
-      select one themselves first, with a prompt telling them to do so
-     - .generated files are shown last in filetree
+  - If no intent files exists, shows a prompt to create a new intent file in a
+    intent/ directory, prompting for the file name.
+  - Remember which intent file was last open and open it again when the
+    specific idd flow id is next accessed
+  - If intent files exist, on startup, do not open one: allow the user to
+    select one themselves first, with a prompt telling them to do so
+  - .generated files are shown last in filetree
 
 #### Styling
 
