@@ -323,7 +323,16 @@ defineExpose({
 <style scoped>
 .intent-markdown-editor {
   height: 100%;
-  max-height: 90vh; /* FIXME hack due to broken UI */
   width: 100%;
+}
+
+/* Pin CodeMirror to the container height so its line numbers + content
+   scroll internally, independent of the surrounding sidebars. */
+.intent-markdown-editor :deep(.cm-editor) {
+  height: 100%;
+}
+
+.intent-markdown-editor :deep(.cm-scroller) {
+  overflow: auto;
 }
 </style>
