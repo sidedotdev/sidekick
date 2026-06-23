@@ -54,7 +54,14 @@
       </header>
 
       <div v-if="activePath" class="sheet">
-        <div ref="editorParent" class="editor"></div>
+        <IntentMarkdownEditor
+          class="editor"
+          :model-value="content"
+          :committed-content="committedContent"
+          :tab-size="2"
+          @update:model-value="onEditorContentChange"
+          @shortcut-submit="startSubtask"
+        />
       </div>
 
       <div v-else-if="!loading && hasIntentFiles" class="welcome">
@@ -204,18 +211,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { EditorView, basicSetup } from 'codemirror'
-import { keymap } from '@codemirror/view'
-import { Compartment, EditorState, Prec } from '@codemirror/state'
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { tags as t } from '@lezer/highlight'
-import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { store } from '../lib/store'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
+import IntentMarkdownEditor from '../components/IntentMarkdownEditor.vue'
 import FlowView from './FlowView.vue'
 import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
-import { applyUncommittedHighlight, uncommittedHighlightExtension } from '../lib/intent_diff_editor'
 import type { Flow } from '../lib/models'
 
 interface IntentFileEntry {
@@ -459,17 +459,9 @@ const handleShortcut = (event: KeyboardEvent) => {
 
 const newFileInputRef = ref<HTMLInputElement | null>(null)
 const welcomeInputRef = ref<HTMLInputElement | null>(null)
-const editorParent = ref<HTMLElement | null>(null)
 
-let editorView: EditorView | null = null
-let applyingExternal = false
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let savedTimer: ReturnType<typeof setTimeout> | null = null
-const themeCompartment = new Compartment()
-const darkModeMedia =
-  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    ? window.matchMedia('(prefers-color-scheme: dark)')
-    : null
 // Snapshot of the document queued for a debounced save, captured at schedule
 // time so switching files before the timer fires can't save the wrong path.
 let pendingSave: { path: string; content: string } | null = null
@@ -509,20 +501,6 @@ const fetchFiles = async () => {
   }
 }
 
-const setEditorDoc = (text: string) => {
-  if (!editorView) return
-  applyingExternal = true
-  editorView.dispatch({
-    changes: { from: 0, to: editorView.state.doc.length, insert: text },
-  })
-  applyingExternal = false
-}
-
-const refreshUncommittedHighlight = () => {
-  if (!editorView) return
-  applyUncommittedHighlight(editorView, committedContent.value)
-}
-
 const openFile = async (path: string) => {
   if (path === activePath.value) return
   flushPendingSave()
@@ -535,13 +513,14 @@ const openFile = async (path: string) => {
     activePath.value = path
     rememberActiveFile(path)
     saveStatus.value = 'idle'
-    await nextTick()
-    if (!editorView) createEditor()
-    setEditorDoc(content.value)
-    refreshUncommittedHighlight()
   } catch (e) {
     console.error('Failed to read intent file:', e)
   }
+}
+
+const onEditorContentChange = (next: string) => {
+  content.value = next
+  scheduleSave()
 }
 
 const saveFile = async (path: string | null = activePath.value, body: string = content.value) => {
@@ -586,131 +565,6 @@ const flushPendingSave = () => {
   const queued = pendingSave
   pendingSave = null
   if (queued) void saveFile(queued.path, queued.content)
-}
-
-const TAB_INDENT = '    '
-
-const markdownHighlightStyle = HighlightStyle.define([
-  { tag: t.heading1, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.6em' },
-  { tag: t.heading2, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.35em' },
-  { tag: t.heading3, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.2em' },
-  { tag: t.heading4, color: 'var(--color-heading)', fontWeight: '700', fontSize: '1.1em' },
-  { tag: [t.heading5, t.heading6], color: 'var(--color-heading)', fontWeight: '700' },
-  { tag: t.strong, color: 'var(--color-heading)', fontWeight: '700' },
-  { tag: t.emphasis, fontStyle: 'italic' },
-  { tag: t.strikethrough, textDecoration: 'line-through' },
-  { tag: t.link, color: 'var(--color-link)' },
-  { tag: t.url, color: 'var(--color-link)', textDecoration: 'underline' },
-  { tag: t.monospace, fontFamily: '"JetBrains Mono", monospace', color: 'var(--color-text-2)' },
-  { tag: t.list, color: 'var(--color-text)' },
-  { tag: t.quote, color: 'var(--color-text-2)', fontStyle: 'italic' },
-  { tag: t.meta, color: 'var(--color-text-2)' },
-  { tag: t.processingInstruction, color: 'var(--color-text-2)' },
-  { tag: t.contentSeparator, color: 'var(--color-text-2)' },
-  { tag: t.atom, color: 'var(--color-primary)' },
-  { tag: t.bool, color: 'var(--color-primary)' },
-  { tag: t.number, color: 'var(--color-primary)' },
-  { tag: t.string, color: 'var(--color-green-dark)' },
-  { tag: t.keyword, color: 'var(--color-link)', fontWeight: '600' },
-  { tag: t.propertyName, color: 'var(--color-link)' },
-])
-
-const startSubtaskCommand = () => {
-  void startSubtask()
-  return true
-}
-
-const createEditor = () => {
-  if (editorView || !editorParent.value) return
-  try {
-    editorView = new EditorView({
-      parent: editorParent.value,
-      state: EditorState.create({
-        doc: content.value,
-        extensions: [
-          Prec.highest(
-            keymap.of([
-              { key: 'Mod-Enter', preventDefault: true, run: startSubtaskCommand },
-            ]),
-          ),
-          basicSetup,
-          yamlFrontmatter({ content: markdown({ base: markdownLanguage }) }),
-          syntaxHighlighting(markdownHighlightStyle),
-          EditorView.lineWrapping,
-          keymap.of([
-            {
-              key: 'Tab',
-              preventDefault: true,
-              run: (view) => {
-                view.dispatch(
-                  view.state.update(view.state.replaceSelection(TAB_INDENT), {
-                    scrollIntoView: true,
-                    userEvent: 'input.indent',
-                  }),
-                )
-                return true
-              },
-            },
-          ]),
-          uncommittedHighlightExtension(),
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged && !applyingExternal) {
-              content.value = update.state.doc.toString()
-              scheduleSave()
-              refreshUncommittedHighlight()
-            }
-          }),
-          themeCompartment.of(buildEditorTheme(darkModeMedia?.matches ?? false)),
-        ],
-      }),
-    })
-  } catch (e) {
-    console.error('Failed to initialize editor:', e)
-  }
-}
-
-const buildEditorTheme = (isDark: boolean) => {
-  const selectionBg = isDark ? 'rgba(131, 58, 180, 0.65)' : 'rgba(131, 58, 180, 0.45)'
-  return EditorView.theme(
-    {
-      '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
-      '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
-      '.cm-content': { padding: '1.75rem 2rem', lineHeight: '1.6' },
-      '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--color-text-2)' },
-      // CodeMirror sizes each gutter element to match its corresponding editor
-      // line's height. Markdown headings render with a larger font-size and
-      // therefore taller line boxes; centring keeps line numbers visually
-      // aligned with the (also vertically-centred) heading text and caret.
-      '.cm-gutterElement': { display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
-      '.cm-lineNumbers .cm-gutterElement': { paddingRight: '0.5em' },
-      '.cm-activeLine': { backgroundColor: 'var(--color-background-mute)' },
-      '.cm-activeLineGutter': { backgroundColor: 'transparent' },
-      '&.cm-focused': { outline: 'none' },
-      // CodeMirror applies an inline `z-index: -2` to the selection layer so
-      // that the host page's selection styles can sit beneath the content; we
-      // need it above .cm-activeLine so partial selections stay visible.
-      '.cm-selectionLayer': { zIndex: '2 !important' },
-      '.cm-selectionBackground, ::selection': { backgroundColor: selectionBg },
-      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
-        backgroundColor: selectionBg,
-      },
-      '.cm-content ::selection': { backgroundColor: selectionBg },
-      '.cm-intent-uncommitted': {
-        backgroundColor: isDark ? 'rgba(25, 197, 24, 0.10)' : 'rgba(25, 197, 24, 0.28)',
-        borderRadius: '4px',
-        padding: '0 0.5em',
-        margin: '0 -0.5em',
-      },
-    },
-    { dark: isDark },
-  )
-}
-
-const handleColorSchemeChange = (event: MediaQueryListEvent) => {
-  if (!editorView) return
-  editorView.dispatch({
-    effects: themeCompartment.reconfigure(buildEditorTheme(event.matches)),
-  })
 }
 
 const beginNewFile = async () => {
@@ -775,7 +629,6 @@ onMounted(async () => {
   await fetchIddState()
   iddStateTimer = setInterval(fetchIddState, 5000)
   window.addEventListener('keydown', handleShortcut)
-  darkModeMedia?.addEventListener('change', handleColorSchemeChange)
 })
 
 onBeforeUnmount(() => {
@@ -783,9 +636,6 @@ onBeforeUnmount(() => {
   if (savedTimer) clearTimeout(savedTimer)
   if (iddStateTimer) clearInterval(iddStateTimer)
   window.removeEventListener('keydown', handleShortcut)
-  darkModeMedia?.removeEventListener('change', handleColorSchemeChange)
-  editorView?.destroy()
-  editorView = null
 })
 </script>
 
