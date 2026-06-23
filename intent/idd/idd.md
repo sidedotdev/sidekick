@@ -83,22 +83,22 @@ according to the human author/user.
      
 #### Markdown Editor Component
 
-        - Uses monaco or codemirror, whatever is easier to get all our desired
+  - Separate component from intent canvas
+  - Uses monaco or codemirror, whatever is easier to get all our desired
           features working in for now.
-
-        - Remembers which file was open last
-        - Saves intent automatically as you type in the worktree
-        - Intent that is not yet committed is styled differently to committed
+  - Remembers which file was open last
+  - Saves intent automatically as you type in the worktree
+  - Intent that is not yet committed is styled differently to committed
           intent. This must use a diff algorithm that finds word-level changes
           even in multi-line markdown with newlines shifting around.
-        - Tab character expands to 4 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
+  - Tab character expands to 2 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
+  - YAML frontmatter is collapsed by default (all other sections expanded)
 
 ##### Editor Styling
-        - Theme of editor respects dark/light mode 
-            - Highlighting text has a separate color from the active line so it stands out better
-            - 
-        - Strong colors for markdown elements like headings or "-" for lists, etc
-        - YAML syntax highlighting for the frontmatter
+  - Theme of editor respects dark/light mode 
+  - Highlighting text has a separate color from the active line so it stands out better
+  - Strong colors to highlight markdown syntax like the "#" character for headings or the "-" character, etc
+- YAML syntax highlighting for the frontmatter
         
 
 #### Right Sidebar
