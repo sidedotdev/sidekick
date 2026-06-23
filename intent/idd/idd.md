@@ -118,6 +118,7 @@ according to the human author/user.
   - Sub tasks become blocked just like top-level flows do, when they wait on user request. normally this is something the task workflow handles, but the idd workflow has to handle it in this case
   - For pending user actions/user requests, the user can decide to unblock these at their convenience. They are shown alongside the sub task that triggered it.
   - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI
+  - Bottom right has a dev run play button, which will start a dev run
 
 ### Finish UI
 
