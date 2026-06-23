@@ -795,7 +795,11 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 16rem 1fr 18rem;
   height: 100%;
-  overflow: hidden;
+  /* `overflow: clip` (rather than `hidden`) prevents programmatic scrolling
+     (e.g. from descendant focus/scrollIntoView) that would otherwise shift the
+     absolutely-positioned side panel out of its containing block and let the
+     fixed FlowEditorLinks overlay cover the sub-task dismiss control. */
+  overflow: clip;
   background-color: var(--color-background);
   color: var(--color-text);
 }
@@ -985,7 +989,9 @@ onBeforeUnmount(() => {
   background-color: var(--color-background);
   border-left: 1px solid var(--color-border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
-  z-index: 10;
+  /* Must sit above the fixed FlowEditorLinks overlay (z-index 1000) so the
+     dismiss control and sticky sub-flow headers remain interactive. */
+  z-index: 1001;
 }
 
 .side-panel-head {
