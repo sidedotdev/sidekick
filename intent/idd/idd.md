@@ -81,10 +81,10 @@ according to the human author/user.
   editor + filetree browser.
   - If no intent files exists, shows a prompt to create a new intent file in a
     intent/ directory, prompting for the file name.
-  - Remember which intent file was last open and open it again when the
-    specific idd flow id is next accessed
-  - If intent files exist, on startup, do not open one: allow the user to
-    select one themselves first, with a prompt telling them to do so
+  - Remember which intent file was last open and open it again when the specific
+    idd flow id is next accessed
+  - If intent files exist, on startup, do not open one: allow the user to select
+    one themselves first, with a prompt telling them to do so
   - .generated files are shown last in filetree
 
 #### Styling
@@ -129,7 +129,7 @@ according to the human author/user.
 - The caret is the same shape when collapsed or expanded, just rotated about
   it's centerpoint.
 
-#### Right Sidebar
+##### Right Sidebar
 
 - The canvas also has a right sidebar that supports showing the user:
   - The sidebar itself isn't scrollable, but items within it may be
@@ -171,7 +171,11 @@ according to the human author/user.
     viewing the full history of what happened with the agent as well as queuing
     messages to it.
 
-### Finish UI
+#### Sub task component
+
+- Has an mini-button with icon to cancel that displays on hover (similar to task cards)
+
+#### Finish UI
 
 - UI where you can select the branch to merge back into (default: start branch),
   and shows you the diff that will be merged, and lets you confirm.
