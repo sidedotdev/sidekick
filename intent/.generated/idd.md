@@ -112,7 +112,8 @@ The CodeMirror-based intent editor lives in its own component
 listing, save orchestration, and IDD sub-task UI. The component owns its
 EditorView lifecycle, dark-mode reconfiguration, uncommitted-range highlight,
 tab-to-spaces handling (configurable indent size, defaulting to 2), and the
-default-collapsed YAML frontmatter fold. It communicates via `v-model` for the
+default-collapsed frontmatter fold (the whole section collapses onto the first
+line, including the closing `---`). It communicates via `v-model` for the
 working-copy text, a `committedContent` prop for the diff baseline, and a
 `shortcut-submit` event so the host view can decide what Mod-Enter does (start
 sub-task on the canvas).

@@ -46,7 +46,7 @@ describe('IntentMarkdownEditor', () => {
     wrapper = null
   })
 
-  it('folds YAML frontmatter by default on mount', async () => {
+  it('folds the entire frontmatter section onto the first line by default', async () => {
     wrapper = mount(IntentMarkdownEditor, {
       props: { modelValue: sampleWithFrontmatter, committedContent: '' },
       attachTo: document.body,
@@ -58,9 +58,15 @@ describe('IntentMarkdownEditor', () => {
     const ranges = collectFoldedRanges(view!)
     expect(ranges.length).toBe(1)
 
+    const firstLine = view!.state.doc.line(1)
+    expect(firstLine.text).toBe('---')
+    expect(ranges[0].from).toBeGreaterThanOrEqual(firstLine.to)
+    expect(ranges[0].from).toBeLessThanOrEqual(view!.state.doc.line(2).from)
+
     const folded = view!.state.doc.sliceString(ranges[0].from, ranges[0].to)
     expect(folded).toContain('intent_links')
     expect(folded).toContain('foo/bar.go:Baz')
+    expect(folded).toContain('---')
   })
 
   it('re-folds frontmatter when the bound document is replaced', async () => {
