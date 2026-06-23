@@ -807,21 +807,15 @@ sleep 30
 		<-outputChan
 	}
 
-	// Launch the restart and synchronize on the notification RestartProcess
-	// sends immediately after StopProcess. At that moment stopping=true is
-	// guaranteed, avoiding a race where the stopping window is shorter than
-	// waitForCondition's 10ms polling interval.
+	// Now restart the process
 	go sup.RestartProcess(ctx, p, outputChan)
 
-	select {
-	case <-outputChan:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for restart notification")
-	}
-
-	if !p.isStopping() {
-		t.Error("process should be in stopping state after restart begins")
-	}
+	// Check that stopping status is set. The SIGTERM trap above keeps the
+	// process in the stopping state for ~1s, comfortably longer than the
+	// waitForCondition polling interval.
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isStopping()
+	}, "process should be in stopping state after restart begins")
 
 	// Check that logs are cleared
 	outputAfterClear := p.getOutput()
