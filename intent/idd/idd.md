@@ -28,6 +28,10 @@ intent_links:
       - frontend/src/router/index.ts
       - frontend/src/lib/intent_diff.ts
       - frontend/src/lib/intent_diff_editor.ts
+  - intent: "#markdown-editor-component"
+    code:
+      - frontend/src/components/IntentMarkdownEditor.vue
+      - frontend/src/lib/markdown_format.ts
   - intent: "#idd-instructions-for-coding-agents"
     code:
       - dev/prompts/author_edit_block/idd_instructions.mustache

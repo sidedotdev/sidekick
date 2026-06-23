@@ -45,10 +45,41 @@ describe('formatMarkdown', () => {
     expect(out).toBe(input)
   })
 
-  it('leaves list items untouched', () => {
+  it('leaves short list items unchanged when already formatted', () => {
     const input = '- item one\n- item two\n- item three\n'
     const out = formatMarkdown(input, 80)
     expect(out).toBe(input)
+  })
+
+  it('wraps long list items with a hanging indent that aligns after the marker', () => {
+    const input =
+      '- this list item is intentionally long so that it needs to wrap onto multiple lines when formatted\n'
+    const out = formatMarkdown(input, 40)
+    const lines = out.split('\n').filter((l) => l.length > 0)
+    expect(lines.length).toBeGreaterThan(1)
+    expect(lines[0].startsWith('- ')).toBe(true)
+    for (const line of lines.slice(1)) {
+      expect(line.startsWith('  ')).toBe(true)
+      expect(line.startsWith('- ')).toBe(false)
+    }
+  })
+
+  it('merges soft-broken list item continuation lines before wrapping', () => {
+    const input = '- one two three\n  four five six\n'
+    const out = formatMarkdown(input, 80)
+    expect(out).toBe('- one two three four five six\n')
+  })
+
+  it('wraps ordered list items preserving the numeric marker', () => {
+    const input =
+      '1. an ordered list item that is sufficiently long to require wrapping at a narrow column\n'
+    const out = formatMarkdown(input, 40)
+    const lines = out.split('\n').filter((l) => l.length > 0)
+    expect(lines.length).toBeGreaterThan(1)
+    expect(lines[0].startsWith('1. ')).toBe(true)
+    for (const line of lines.slice(1)) {
+      expect(line.startsWith('   ')).toBe(true)
+    }
   })
 
   it('returns the same string when already formatted', () => {
