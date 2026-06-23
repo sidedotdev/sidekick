@@ -91,7 +91,7 @@ according to the human author/user.
   - Intent that is not yet committed has a special background color.
       - This must use a diff algorithm that finds word-level changes
         even in multi-line markdown with newlines shifting around. Words              right beside each other on the same line are merged so there is no            divider between multiple words added in terms of this styling
-      - After a commit happens, the this styling goes away for those words ()
+      - After a commit happens, the this styling goes away for those words (only new words that aren't yet committed show the style)
   - Tab character expands to 2 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
   - YAML frontmatter is collapsed by default (all other sections expanded)
 
@@ -106,38 +106,32 @@ according to the human author/user.
 
 #### Right Sidebar
 
-    - The canvas also has a right sidebar that supports showing the user:
-        - A button to start implementing the current intent state
-            - Clicking them opens the existing flow view component (not iframe, and without header/editor
-            
-              links/sidebar nav/etc.), but in a side view that can be
-              dismissed, so the intent canvas is always visible.
-        - Any questions wrt highly ambiguous or contradictory intent that have
-          surfaced. Note that some level of ambiguity is expected, but not when
-          a different answer than the one assumed would require a near-100%
-          rewrite of the implementation.
-        - Sub task statuses are shown: completed, failed, in progress, blocked and canceled
-        - sub tasks become blocked just like top-level flows do, when they wait on user request. normally this is something the task workflow handles, but the idd workflow has to handle it in this case
-        - For pending user actions/user requests, the user can decide to unblock these at their
-        
-      convenience. They are shown alongside the sub task that triggered it.
-
-      - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI
+- The canvas also has a right sidebar that supports showing the user:
+- A button to start implementing the current intent state
+  - Clicking them opens the existing flow view component (not iframe, and without header/editor links/sidebar nav/etc.), but in a side view that can be
+    dismissed, so the intent canvas is always visible.
+- Any questions wrt highly ambiguous or contradictory intent that have
+    surfaced. Note that some level of ambiguity is expected, but not when
+    a different answer than the one assumed would require a near-100%
+    rewrite of the implementation.
+- Sub task statuses are shown: completed, failed, in progress, blocked and canceled
+  - Sub tasks become blocked just like top-level flows do, when they wait on user request. normally this is something the task workflow handles, but the idd workflow has to handle it in this case
+  - For pending user actions/user requests, the user can decide to unblock these at their convenience. They are shown alongside the sub task that triggered it.
+  - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI
 
 ### Finish UI
 
-- UI where you can
-            select the branch to merge back into (default: start branch), and shows
-            you the diff that will be merged, and lets you confirm.
-          - Diff is displayed using existing unified diff viewer, with unexpanded files by default
-          - Finishing means that the idd flow
-              - Merges into the selected target branch
-              - Cleans up its worktree
-              - Cancels sub tasks that are still going
-              - And sends a completion signal
-              - The temporal ends immediately after sending the completion signal
-              - The flow status is updated to complete
-              - The parent task is marked completed too
+- UI where you can select the branch to merge back into (default: start branch), and shows you the diff that will be merged, and lets you confirm.
+- Diff is displayed using existing unified diff viewer, with unexpanded files by default
+- Branch selector also uses the standard component for selecting a branch
+- Finishing means that the idd flow:
+  - Merges into the selected target branch
+  - Cleans up its worktree
+  - Cancels sub tasks that are still going
+  - And sends a completion signal
+  - The temporal ends immediately after sending the completion signal
+  - The flow status is updated to complete
+  - The parent task is marked completed too
 
 ### Starting intent sub tasks
     - Pressing the button to start results in saving and git committing the
