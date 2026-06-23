@@ -32,6 +32,15 @@
       >
         <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Reasoning' }}</option>
       </select>
+      <button
+        v-if="providerSupportsSpeed(defaultConfig.provider)"
+        type="button"
+        class="speed-toggle"
+        :class="{ active: defaultConfig.speed === 'fast' }"
+        :title="defaultConfig.speed === 'fast' ? 'Fast mode on' : 'Fast mode off'"
+        :aria-pressed="defaultConfig.speed === 'fast'"
+        @click="toggleSpeed(defaultConfig)"
+      >⚡</button>
     </div>
 
     <!-- Use Case Models -->
@@ -71,6 +80,15 @@
         >
           <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Reasoning' }}</option>
         </select>
+        <button
+          v-if="useCaseStates[useCase].enabled && providerSupportsSpeed(useCaseStates[useCase].config.provider)"
+          type="button"
+          class="speed-toggle"
+          :class="{ active: useCaseStates[useCase].config.speed === 'fast' }"
+          :title="useCaseStates[useCase].config.speed === 'fast' ? 'Fast mode on' : 'Fast mode off'"
+          :aria-pressed="useCaseStates[useCase].config.speed === 'fast'"
+          @click="toggleSpeed(useCaseStates[useCase].config)"
+        >⚡</button>
       </div>
     </template>
   </div>
@@ -188,16 +206,26 @@ const modelSupportsReasoning = (provider: string, model: string): boolean => {
   return modelInfo?.reasoning === true
 }
 
+const providerSupportsSpeed = (provider: string): boolean => provider === 'anthropic'
+
+const toggleSpeed = (config: ModelConfig) => {
+  config.speed = config.speed === 'fast' ? '' : 'fast'
+  emitUpdate()
+}
+
 onMounted(() => {
   loadModelsData()
   fetchProviders()
 })
 
-const defaultConfig = reactive<ModelConfig>(
-  props.modelValue?.defaults?.[0]
-    ? { ...props.modelValue.defaults[0] }
-    : { provider: '', model: '', reasoningEffort: '' }
-)
+const initModelConfig = (source?: ModelConfig): ModelConfig => ({
+  provider: source?.provider ?? '',
+  model: source?.model ?? '',
+  reasoningEffort: source?.reasoningEffort ?? '',
+  speed: source?.speed ?? '',
+})
+
+const defaultConfig = reactive<ModelConfig>(initModelConfig(props.modelValue?.defaults?.[0]))
 
 type UseCaseState = { enabled: boolean; config: ModelConfig }
 
@@ -207,7 +235,7 @@ const initUseCaseStates = (): Record<UseCase, UseCaseState> => {
     const existingConfig = props.modelValue?.useCaseConfigs?.[useCase]?.[0]
     states[useCase] = {
       enabled: !!existingConfig,
-      config: existingConfig ? { ...existingConfig } : { provider: '', model: '', reasoningEffort: '' },
+      config: initModelConfig(existingConfig),
     }
   }
   return states
@@ -237,10 +265,11 @@ const emitUpdate = () => {
 
 watch(() => props.modelValue, (newValue) => {
   if (newValue) {
-    const newDefault = newValue.defaults?.[0] || { provider: '', model: '', reasoningEffort: '' }
+    const newDefault = newValue.defaults?.[0] || { provider: '', model: '', reasoningEffort: '', speed: '' }
     defaultConfig.provider = newDefault.provider
     defaultConfig.model = newDefault.model
     defaultConfig.reasoningEffort = newDefault.reasoningEffort || ''
+    defaultConfig.speed = newDefault.speed || ''
 
     for (const useCase of USE_CASES) {
       const existingConfig = newValue.useCaseConfigs?.[useCase]?.[0]
@@ -249,6 +278,7 @@ watch(() => props.modelValue, (newValue) => {
         useCaseStates[useCase].config.provider = existingConfig.provider
         useCaseStates[useCase].config.model = existingConfig.model
         useCaseStates[useCase].config.reasoningEffort = existingConfig.reasoningEffort || ''
+        useCaseStates[useCase].config.speed = existingConfig.speed || ''
       }
     }
   }
@@ -319,6 +349,24 @@ watch(() => props.modelValue, (newValue) => {
   color: var(--color-text);
   font-size: 0.875rem;
   min-width: 5.5rem;
+}
+
+.speed-toggle {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
+  font-size: 0.875rem;
+  cursor: pointer;
+  line-height: 1;
+  opacity: 0.5;
+}
+
+.speed-toggle.active {
+  opacity: 1;
+  border-color: var(--color-accent, var(--color-text));
+  background-color: var(--color-background-mute);
 }
 
 .providers-error {

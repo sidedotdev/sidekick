@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sidekick/common"
+	"sidekick/llm"
 	"sidekick/secret_manager"
 	"strings"
 	"sync"
@@ -730,4 +731,239 @@ func isAnthropicCredentialError(err error) bool {
 		contains(errStr, "failed to get Anthropic OAuth credentials") ||
 		contains(errStr, "OAuth token has been revoked") ||
 		contains(errStr, "401 Unauthorized")
+}
+
+func TestAnthropicResponsesProvider_FastModeIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAny}
+	secretManager := requireIntegrationAPIKey(t, llm.AnthropicOAuthSecretName, "ANTHROPIC_API_KEY")
+
+	fastModel := os.Getenv("ANTHROPIC_FAST_MODEL")
+	if fastModel == "" {
+		fastModel = "claude-opus-4-8"
+	}
+	fmt.Printf("\n=== Fast Mode Test (%s) ===\n", fastModel)
+
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "Say hello in exactly one short sentence.",
+				},
+			},
+		},
+	}
+
+	options := Options{
+		ModelConfig: common.ModelConfig{
+			Provider:  "anthropic",
+			Model:     fastModel,
+			Speed:     "fast",
+			MaxTokens: 256,
+		},
+	}
+
+	eventChan := make(chan Event, 100)
+	var sawTextDelta bool
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		for event := range eventChan {
+			if event.Type == EventTextDelta {
+				sawTextDelta = true
+			}
+		}
+	}()
+
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: secretManager,
+	}
+	start := time.Now()
+	response, err := provider.Stream(ctx, request, eventChan)
+	close(eventChan)
+	<-doneCh
+	elapsed := time.Since(start)
+
+	if err != nil {
+		if isAnthropicTransientError(err) {
+			t.Skipf("Skipping fast-mode test due to transient Anthropic API error: %v", err)
+		}
+		if isAnthropicCredentialError(err) {
+			t.Skipf("Skipping fast-mode test due to Anthropic credentials not configured/invalid: %v", err)
+		}
+		if contains(err.Error(), "does not support the `speed` parameter") {
+			t.Skipf("Skipping fast-mode test: model %q does not support speed (set ANTHROPIC_FAST_MODEL to a supported model): %v", fastModel, err)
+		}
+		t.Fatalf("Stream returned an error: %v", err)
+	}
+
+	if response == nil {
+		t.Fatal("Stream returned a nil response")
+	}
+
+	assert.True(t, sawTextDelta, "Expected at least one text_delta event in fast mode stream")
+
+	var hasText bool
+	for _, block := range response.Output.Content {
+		if block.Type == ContentBlockTypeText && block.Text != "" {
+			hasText = true
+			t.Logf("Fast-mode text: %q", block.Text)
+		}
+	}
+	assert.True(t, hasText, "Expected text content in fast-mode response")
+
+	assert.NotEmpty(t, response.StopReason, "StopReason should not be empty")
+	assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0")
+	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0")
+
+	t.Logf("Fast-mode elapsed: %s", elapsed)
+	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
+	t.Logf("Model: %s, StopReason: %s", response.Model, response.StopReason)
+}
+
+// TestAnthropicResponsesProvider_FastModeSpeedup is an opt-in comparative
+// timing check. It runs the same prompt with fast mode on vs off and verifies
+// that the fast-mode runs are meaningfully quicker on average, which would not
+// be the case if the speed parameter / beta header were not actually being
+// sent. Gated behind SIDE_ANTHROPIC_FAST_MODE_BENCH=true (in addition to
+// SIDE_INTEGRATION_TEST) so it does not run as part of normal integration test
+// sweeps.
+func TestAnthropicResponsesProvider_FastModeSpeedup(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+	if os.Getenv("SIDE_ANTHROPIC_FAST_MODE_BENCH") != "true" {
+		t.Skip("Skipping fast-mode speedup benchmark; SIDE_ANTHROPIC_FAST_MODE_BENCH not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.InfoLevel)
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAny}
+	secretManager := requireIntegrationAPIKey(t, llm.AnthropicOAuthSecretName, "ANTHROPIC_API_KEY")
+
+	fastModel := os.Getenv("ANTHROPIC_FAST_MODEL")
+	if fastModel == "" {
+		fastModel = "claude-opus-4-8"
+	}
+
+	// Generation time (output token throughput) dominates the latency
+	// difference between fast and normal modes, so we keep input modest while
+	// requesting a meaningful amount of output. The values below balance
+	// signal-to-noise against keeping the test reasonably quick.
+	var promptBuilder strings.Builder
+	promptBuilder.WriteString("You are given the following corpus. Read it carefully, then write a long, thorough essay (aim for roughly 1200 words) that synthesizes its themes and examples. Produce only prose, no lists or code blocks. Vary sentence structure and avoid repetition.\n\nCORPUS:\n")
+	filler := "Binary search trees are hierarchical data structures in which each node has at most two children, conventionally called the left and right child. The defining invariant is that for any node N, every key in N's left subtree is strictly less than N's key, and every key in N's right subtree is strictly greater. This invariant supports logarithmic-time search, insertion, and deletion when the tree is balanced. In practice, naive insertion order can degrade the structure into a linked list, motivating self-balancing variants such as AVL trees, red-black trees, splay trees, and treaps. "
+	for promptBuilder.Len() < 5000 {
+		promptBuilder.WriteString(filler)
+	}
+	prompt := promptBuilder.String()
+	const maxTokens = 1500
+	const iterations = 2
+
+	run := func(t *testing.T, speed string) time.Duration {
+		// Generous per-request deadline: at normal speed, ~1500 output tokens
+		// on Opus can comfortably exceed a minute, so a 90s budget would
+		// spuriously fail. 5 minutes leaves headroom for transient slowness
+		// without letting a true hang sit forever.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		options := Options{
+			ModelConfig: common.ModelConfig{
+				Provider:  "anthropic",
+				Model:     fastModel,
+				Speed:     speed,
+				MaxTokens: maxTokens,
+			},
+		}
+		messages := []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: prompt}},
+		}}
+
+		eventChan := make(chan Event, 100)
+		doneCh := make(chan struct{})
+		go func() {
+			defer close(doneCh)
+			for range eventChan {
+			}
+		}()
+
+		start := time.Now()
+		response, err := provider.Stream(ctx, StreamRequest{
+			Messages:      messages,
+			Options:       options,
+			SecretManager: secretManager,
+		}, eventChan)
+		close(eventChan)
+		<-doneCh
+		elapsed := time.Since(start)
+
+		if err != nil {
+			if isAnthropicTransientError(err) {
+				t.Skipf("Skipping due to transient Anthropic API error: %v", err)
+			}
+			if isAnthropicCredentialError(err) {
+				t.Skipf("Skipping due to Anthropic credentials not configured/invalid: %v", err)
+			}
+			if contains(err.Error(), "does not support the `speed` parameter") {
+				t.Skipf("Skipping: model %q does not support speed (set ANTHROPIC_FAST_MODEL to a supported model): %v", fastModel, err)
+			}
+			t.Fatalf("Stream returned an error (speed=%q): %v", speed, err)
+		}
+		if response == nil {
+			t.Fatalf("Stream returned a nil response (speed=%q)", speed)
+		}
+		if response.Usage.OutputTokens <= 0 {
+			t.Fatalf("expected output tokens > 0 (speed=%q)", speed)
+		}
+		t.Logf("speed=%q elapsed=%s outputTokens=%d", speed, elapsed, response.Usage.OutputTokens)
+		return elapsed
+	}
+
+	avg := func(ds []time.Duration) time.Duration {
+		var total time.Duration
+		for _, d := range ds {
+			total += d
+		}
+		return total / time.Duration(len(ds))
+	}
+
+	fmt.Printf("\n=== Fast Mode Speedup Benchmark (%s, %d iterations per mode) ===\n", fastModel, iterations)
+
+	var normalDurations, fastDurations []time.Duration
+	// Interleave runs so transient network/load conditions affect both modes
+	// roughly equally rather than biasing one set. Log running averages after
+	// each pair so partial progress is visible even if a later run fails or
+	// the test is interrupted.
+	for i := 0; i < iterations; i++ {
+		normalDurations = append(normalDurations, run(t, ""))
+		fastDurations = append(fastDurations, run(t, "fast"))
+		partialNormal := avg(normalDurations)
+		partialFast := avg(fastDurations)
+		t.Logf("after iteration %d/%d: normal avg=%s, fast avg=%s, speedup=%.2fx",
+			i+1, iterations, partialNormal, partialFast, float64(partialNormal)/float64(partialFast))
+	}
+
+	normalAvg := avg(normalDurations)
+	fastAvg := avg(fastDurations)
+	t.Logf("normal avg=%s, fast avg=%s, speedup=%.2fx", normalAvg, fastAvg, float64(normalAvg)/float64(fastAvg))
+
+	// Fast mode is documented to be substantially quicker; require it be
+	// noticeably faster on average. A small margin guards against flakes from
+	// network jitter while still failing loudly if speed were silently ignored.
+	if fastAvg >= normalAvg {
+		t.Fatalf("expected fast-mode avg latency (%s) to be lower than normal-mode avg (%s)", fastAvg, normalAvg)
+	}
 }

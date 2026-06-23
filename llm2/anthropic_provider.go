@@ -28,7 +28,12 @@ const (
 	anthropicOAuthBetaHeader                    = "oauth-2025-04-20"
 	anthropicFineGrainedToolStreamingBetaHeader = "fine-grained-tool-streaming-2025-05-14"
 	anthropicInterleavedThinkingBetaHeader      = "interleaved-thinking-2025-05-14"
+	anthropicFastModeBetaHeader                 = "fast-mode-2026-02-01"
 )
+
+// anthropicSpeedFast is the value of the Anthropic Messages API "speed" parameter
+// that enables fast mode. Empty means unset (fast mode off).
+const anthropicSpeedFast = "fast"
 
 type AnthropicProvider struct {
 	BaseURL             string
@@ -38,8 +43,8 @@ type AnthropicProvider struct {
 	CustomHeaders       map[string]string
 }
 
-func anthropicBetaHeader(model string, useOAuth bool, tools []*common.Tool, assumeAnthropicModelNames bool) string {
-	parts := make([]string, 0, 4)
+func anthropicBetaHeader(model string, useOAuth bool, tools []*common.Tool, assumeAnthropicModelNames, fastMode bool) string {
+	parts := make([]string, 0, 5)
 	if useOAuth {
 		hasNativeMappedTools := false
 		for _, tool := range tools {
@@ -63,14 +68,17 @@ func anthropicBetaHeader(model string, useOAuth bool, tools []*common.Tool, assu
 	if !assumeAnthropicModelNames || !anthropicSupportsAdaptiveThinking(model) {
 		parts = append(parts, anthropicInterleavedThinkingBetaHeader)
 	}
+	if fastMode {
+		parts = append(parts, anthropicFastModeBetaHeader)
+	}
 	return strings.Join(parts, ",")
 }
 
-func anthropicRequestHeaders(model string, useOAuth bool, accessToken string, tools []*common.Tool, assumeAnthropicModelNames bool) map[string]string {
+func anthropicRequestHeaders(model string, useOAuth bool, accessToken string, tools []*common.Tool, assumeAnthropicModelNames, fastMode bool) map[string]string {
 	headers := map[string]string{
 		"Accept": anthropicAcceptHeaderValue,
 		"anthropic-dangerous-direct-browser-access": anthropicDangerousBrowserAccessHeaderValue,
-		"anthropic-beta": anthropicBetaHeader(model, useOAuth, tools, assumeAnthropicModelNames),
+		"anthropic-beta": anthropicBetaHeader(model, useOAuth, tools, assumeAnthropicModelNames, fastMode),
 	}
 
 	if useOAuth {
@@ -115,8 +123,10 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	for k, v := range p.CustomHeaders {
 		clientOptions = append(clientOptions, option.WithHeader(k, v))
 	}
+	fastMode := options.Speed == anthropicSpeedFast
+
 	if useOAuth {
-		headers := anthropicRequestHeaders(model, true, oauthCreds.AccessToken, options.Tools, assumeAnthropicModelNames)
+		headers := anthropicRequestHeaders(model, true, oauthCreds.AccessToken, options.Tools, assumeAnthropicModelNames, fastMode)
 		clientOptions = append(
 			clientOptions,
 			option.WithHeader("Authorization", headers["Authorization"]),
@@ -128,7 +138,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		)
 		client = newAnthropicClient(clientOptions...)
 	} else {
-		headers := anthropicRequestHeaders(model, false, "", options.Tools, assumeAnthropicModelNames)
+		headers := anthropicRequestHeaders(model, false, "", options.Tools, assumeAnthropicModelNames, fastMode)
 		clientOptions = append(
 			clientOptions,
 			option.WithAPIKey(token),
@@ -198,14 +208,14 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	} else if anthropicSupportsAdaptiveThinking(model) && resolvedEffort != "" {
 		// Adaptive-capable models: thinking and effort are orthogonal.
 		// Enable adaptive thinking and set effort via OutputConfig.
-		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+		adaptive := anthropic.ThinkingConfigAdaptiveParam{}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 		params.OutputConfig = anthropic.OutputConfigParam{
 			Effort: anthropic.OutputConfigEffort(resolvedEffort),
 		}
 	} else if anthropicSupportsAdaptiveThinking(model) && resolvedEffort == "" && options.ReasoningEffort == "" {
 		// Adaptive-capable model with no explicit effort: enable adaptive thinking at defaults.
-		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+		adaptive := anthropic.ThinkingConfigAdaptiveParam{}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 	} else if resolvedEffort != "" {
 		// Non-adaptive models (or adaptive with future effort levels):
@@ -223,7 +233,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			useAdaptive = true
 		}
 		if useAdaptive {
-			adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+			adaptive := anthropic.ThinkingConfigAdaptiveParam{}
 			params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 		} else {
 			// max_tokens must be greater than thinking.budget_tokens
@@ -237,7 +247,14 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	// When resolvedEffort is "" and ReasoningEffort was "lowest", thinking is
 	// intentionally skipped (no params.Thinking set).
 
-	stream := client.Messages.NewStreaming(ctx, params)
+	var streamOpts []option.RequestOption
+	if fastMode {
+		// The non-beta MessageNewParams struct does not yet expose a Speed field
+		// in the SDK; inject it into the request body directly so we stay on
+		// client.Messages.NewStreaming.
+		streamOpts = append(streamOpts, option.WithJSONSet("speed", anthropicSpeedFast))
+	}
+	stream := client.Messages.NewStreaming(ctx, params, streamOpts...)
 
 	var finalMessage anthropic.Message
 	var events []Event

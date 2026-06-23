@@ -17,6 +17,10 @@ type ModelConfig struct {
 
 	// Optional service tier for provider-specific routing/prioritization.
 	ServiceTier string `koanf:"service_tier" json:"serviceTier,omitempty"`
+
+	// Optional opt-in to Anthropic's "fast mode". Anthropic-only.
+	// Empty string means unset (off); the value "fast" enables fast mode.
+	Speed string `koanf:"speed" json:"speed,omitempty"`
 }
 
 func (c ModelConfig) NormalizedProviderName() string {
