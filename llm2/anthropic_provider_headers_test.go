@@ -49,7 +49,7 @@ func TestAnthropicRequestHeadersAPIKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			headers := anthropicRequestHeaders(tt.model, false, "", tt.tools, tt.assumeAnthropicModelNames)
+			headers := anthropicRequestHeaders(tt.model, false, "", tt.tools, tt.assumeAnthropicModelNames, false)
 
 			if got := headers["Accept"]; got != "application/json" {
 				t.Fatalf("Accept = %q, want %q", got, "application/json")
@@ -132,7 +132,7 @@ func TestAnthropicRequestHeadersOAuth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			headers := anthropicRequestHeaders(tt.model, true, "oauth-token", tt.tools, tt.assumeAnthropicModelNames)
+			headers := anthropicRequestHeaders(tt.model, true, "oauth-token", tt.tools, tt.assumeAnthropicModelNames, false)
 
 			if got := headers["Authorization"]; got != "Bearer oauth-token" {
 				t.Fatalf("Authorization = %q, want %q", got, "Bearer oauth-token")
@@ -149,6 +149,61 @@ func TestAnthropicRequestHeadersOAuth(t *testing.T) {
 			if got := headers["anthropic-dangerous-direct-browser-access"]; got != "true" {
 				t.Fatalf("anthropic-dangerous-direct-browser-access = %q, want %q", got, "true")
 			}
+			if got := headers["anthropic-beta"]; got != tt.wantBeta {
+				t.Fatalf("anthropic-beta = %q, want %q", got, tt.wantBeta)
+			}
+		})
+	}
+}
+
+func TestAnthropicRequestHeadersFastMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                      string
+		model                     string
+		useOAuth                  bool
+		assumeAnthropicModelNames bool
+		fastMode                  bool
+		wantBeta                  string
+	}{
+		{
+			name:                      "fast mode off omits fast-mode beta",
+			model:                     "claude-opus-4-5",
+			assumeAnthropicModelNames: true,
+			fastMode:                  false,
+			wantBeta:                  "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+		},
+		{
+			name:                      "fast mode on appends fast-mode beta (non-adaptive model)",
+			model:                     "claude-opus-4-5",
+			assumeAnthropicModelNames: true,
+			fastMode:                  true,
+			wantBeta:                  "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,fast-mode-2026-02-01",
+		},
+		{
+			name:                      "fast mode on appends fast-mode beta (adaptive model)",
+			model:                     "claude-sonnet-4-6",
+			assumeAnthropicModelNames: true,
+			fastMode:                  true,
+			wantBeta:                  "fine-grained-tool-streaming-2025-05-14,fast-mode-2026-02-01",
+		},
+		{
+			name:                      "fast mode on for oauth includes oauth + fast-mode beta",
+			model:                     "claude-opus-4-5",
+			useOAuth:                  true,
+			assumeAnthropicModelNames: true,
+			fastMode:                  true,
+			wantBeta:                  "oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,fast-mode-2026-02-01",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			headers := anthropicRequestHeaders(tt.model, tt.useOAuth, "tok", nil, tt.assumeAnthropicModelNames, tt.fastMode)
 			if got := headers["anthropic-beta"]; got != tt.wantBeta {
 				t.Fatalf("anthropic-beta = %q, want %q", got, tt.wantBeta)
 			}
