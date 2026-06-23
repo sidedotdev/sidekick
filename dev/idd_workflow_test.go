@@ -14,6 +14,9 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/flow_action"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
+	"sidekick/secret_manager"
 	"sidekick/utils"
 )
 
@@ -34,6 +37,28 @@ func (s *IddWorkflowTestSuite) SetupTest() {
 
 func (s *IddWorkflowTestSuite) AfterTest(suiteName, testName string) {
 	s.env.AssertExpectations(s.T())
+}
+
+// setupTitleGenerationMocks stubs the chat-history and LLM stream activities used
+// by generateIntentSubtaskTitle so the sub-task gets a deterministic title.
+func (s *IddWorkflowTestSuite) setupTitleGenerationMocks() {
+	var fa *flow_action.FlowActivities
+	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	var cha *persisted_ai.ChatHistoryActivities
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
+		&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "user"}, nil,
+	).Maybe()
+
+	var la *persisted_ai.Llm2Activities
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{
+				{Type: llm2.ContentBlockTypeText, Text: "Generated Sub-task Title"},
+			},
+		},
+	}, nil).Maybe()
 }
 
 // TestRunIntentSubtaskCommitsAndStartsChild drives runIntentSubtask directly via
@@ -75,6 +100,8 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 		mock.AnythingOfType("domain.Flow"),
 	).Return(nil)
 
+	s.setupTitleGenerationMocks()
+
 	wrapper := func(ctx workflow.Context) (IddState, error) {
 		ctx = utils.NoRetryCtx(ctx)
 		gs := &flow_action.GlobalState{}
@@ -85,6 +112,10 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 				Context:     ctx,
 				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
 				GlobalState: gs,
+				Secrets:     &secret_manager.SecretManagerContainer{SecretManager: &secret_manager.EnvSecretManager{}},
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai"}},
+				},
 				EnvContainer: &env.EnvContainer{
 					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
 				},
@@ -119,6 +150,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	s.Require().Len(state.Subtasks, 1)
 	s.Equal("abc123", state.Subtasks[0].Commit)
 	s.Equal("completed", state.Subtasks[0].Status)
+	s.Equal("Generated Sub-task Title", state.Subtasks[0].Title)
 
 	s.False(capturedInput.DetermineRequirements)
 	s.True(capturedInput.AutoMerge)

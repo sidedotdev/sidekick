@@ -95,6 +95,7 @@ type RunIddOrchestratorSignal struct{}
 // IddSubtask tracks an intent sub-task launched by the IddWorkflow.
 type IddSubtask struct {
 	FlowId    string    `json:"flowId"`
+	Title     string    `json:"title"`
 	Commit    string    `json:"commit"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -495,9 +496,25 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 	reqInfo.ScopePrompt = sig.ScopePrompt
 
+<<<<<<< HEAD
 	if !preReserved {
 		flowId = "flow_" + ksuidSideEffect(dCtx)
 	}
+=======
+	// The sub-task gets its own descriptive title generated from the committed
+	// intent sha & diff, falling back to the IDD task title if generation fails.
+	// Gated by version so in-flight sub-tasks recorded before this change replay
+	// without the extra LLM activity.
+	title := input.Title
+	if workflow.GetVersion(dCtx, "idd-subtask-generated-title", workflow.DefaultVersion, 1) >= 1 {
+		if generatedTitle, titleErr := generateIntentSubtaskTitle(dCtx, reqInfo.Commit, reqInfo.Diff); titleErr != nil {
+			log.Error("Failed to generate intent sub-task title", "Error", titleErr)
+		} else {
+			title = generatedTitle
+		}
+	}
+
+>>>>>>> side/improve-intent-subtask-workflow
 	branch := dCtx.Worktree.Name
 	childCtx := workflow.WithChildOptions(dCtx, workflow.ChildWorkflowOptions{
 		WorkflowID:        flowId,
@@ -528,6 +545,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 
 	now := workflow.Now(dCtx)
+<<<<<<< HEAD
 	if preReserved {
 		for i := range state.Subtasks {
 			if state.Subtasks[i].FlowId == flowId {
@@ -550,6 +568,16 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			UpdatedAt:      now,
 		})
 	}
+=======
+	state.Subtasks = append(state.Subtasks, IddSubtask{
+		FlowId:    we.ID,
+		Title:     title,
+		Commit:    reqInfo.Commit,
+		Status:    "in_progress",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+>>>>>>> side/improve-intent-subtask-workflow
 
 	// Persist a flow record for the sub-task, parented to the IDD task, so its
 	// flow view (and any pending user requests it raises when intent is
