@@ -162,7 +162,7 @@
           {{ finishing ? 'Finishing…' : 'Finish IDD' }}
         </button>
 
-        <section class="rail-section">
+        <section class="rail-section subtask-section">
           <h2 class="rail-title">Sub-tasks</h2>
           <p v-if="!subtasks.length" class="rail-empty">No sub-tasks yet. Implement your intent to spin one up.</p>
           <ul v-else class="subtask-list">
@@ -188,6 +188,16 @@
           </ul>
         </section>
       </div>
+
+      <footer v-if="!rightMinimized && hasDevRunConfig && store.workspaceId" class="rail-dev-run">
+        <DevRunControls
+          class="dev-run-launcher"
+          :workspaceId="store.workspaceId"
+          :flowId="flowId"
+          @start="handleDevRunStart"
+          @stop="handleDevRunStop"
+        />
+      </footer>
     </aside>
 
     <SubtaskSidePanel
@@ -251,15 +261,6 @@
       aria-label="Resize implementation panel"
       @mousedown="(e) => startDrag('right', e)"
     ></div>
-
-    <DevRunControls
-      v-if="hasDevRunConfig && store.workspaceId"
-      class="dev-run-launcher"
-      :workspaceId="store.workspaceId"
-      :flowId="flowId"
-      @start="handleDevRunStart"
-      @stop="handleDevRunStop"
-    />
   </div>
 </template>
 
@@ -958,17 +959,18 @@ onBeforeUnmount(() => {
   flex-direction: column;
   border-left: 1px solid var(--color-border);
   background-color: var(--color-background-soft);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-:deep(.dev-run-launcher) {
-  position: absolute;
-  right: 1rem;
-  bottom: 1rem;
+.rail-dev-run {
+  margin-top: auto;
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.rail-dev-run :deep(.dev-run-launcher) {
   margin: 0;
-  z-index: 5;
-  max-width: min(28rem, calc(100% - 2rem));
-  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.18);
+  max-width: 100%;
 }
 
 .rail-head {
@@ -980,6 +982,21 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 1.5rem;
   padding: 0 1rem 1.5rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.subtask-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.subtask-section .subtask-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .implement-btn {
