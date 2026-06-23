@@ -1063,6 +1063,11 @@ onBeforeUnmount(() => {
   position: relative;
   display: grid;
   grid-template-columns: var(--left-col, 16rem) 1fr var(--right-col, 18rem);
+  /* Constrain the single grid row to the canvas height (minmax allows the
+     0-floor needed for descendants with `min-height: 0` to scroll internally
+     rather than letting the editor's content stretch the row past the
+     clipped container). */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   /* `overflow: clip` (rather than `hidden`) prevents programmatic scrolling
      (e.g. from descendant focus/scrollIntoView) that would otherwise shift the

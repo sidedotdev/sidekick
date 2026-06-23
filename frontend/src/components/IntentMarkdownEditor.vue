@@ -323,7 +323,6 @@ defineExpose({
 <style scoped>
 .intent-markdown-editor {
   height: 100%;
-  max-height: 90vh; /* FIXME brought back this hack due to broken UI. the agent reverted it recently without checking that it was still not working, assuming the fixes to style it added were doing anything (they don't do anything useful). should have checked by using playwright-cli instead on the sidekick workspace, "more idd improvements v2" task */
   width: 100%;
 }
 </style>
