@@ -101,7 +101,8 @@ according to the human author/user.
 
 - Editor is full-width between the sidebars and touching the file path header
   (no gaps) and the bottom of the viewport.
-  - The editor's line numbers + line content scroll independently of the sidebars.
+  - The editor's line numbers + line content scroll independently of the
+    sidebars.
 - Sidebars can be resized and minimized
 - Side view for sub tasks can be resized too
 
@@ -123,6 +124,7 @@ according to the human author/user.
   - Tab character expands to 2 spaces and does NOT switch to a different
     interface element as regular browser interactions work, but instead works
     like an editor is expected to
+  - When text is selected, tab indents it and shift+tab dedents it
   - YAML frontmatter is always collapsed by default in the editor (all other
     sections are expanded by default)
     - Rather than the YAML being collapsed, the entire frontmatter section is
