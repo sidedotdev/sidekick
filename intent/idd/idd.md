@@ -97,16 +97,20 @@ according to the human author/user.
   - Saves intent automatically as you type in the worktree
   - Intent that is not yet committed has a special background color.
       - This must use a diff algorithm that finds word-level changes
-        even in multi-line markdown with newlines shifting around. Words              right beside each other on the same line are merged so there is no            divider between multiple words added in terms of this styling
-      - After a commit happens, the this styling goes away for those words (only new words that aren't yet committed show the style)
+        even in multi-line markdown with newlines shifting around. Words
+        right beside each other on the same line are merged so there is no
+        divider between multiple words added in terms of this styling
+      - After a commit happens and a sub task is started, then this styling goes
+        away for those words immediately, not requiring a refresh (only new words
+        that aren't yet committed show the style)
   - Tab character expands to 2 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
   - YAML frontmatter is collapsed by default (all other sections expanded)
 
 ##### Editor Styling
 
-  - Theme of editor respects dark/light mode 
-  - Highlighting text uses a very transparent version of the primary color
-  - Strong colors to highlight markdown syntax like the "#" character for headings or the "-" character, etc
+- Theme of editor respects dark/light mode 
+- Highlighting text uses a very transparent version of the primary color
+- Strong colors to highlight markdown syntax like the "#" character for headings or the "-" character, etc
 - YAML syntax highlighting for the frontmatter
 - The caret is the same shape when collapsed or expanded, just rotated about it's centerpoint.
 
@@ -129,7 +133,8 @@ according to the human author/user.
     convenience. They are shown alongside the sub task that triggered it.
   - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI 
   - Bottom right has a dev run play button, which will start a dev run
-
+  - There is some way to interact with the orchestrator agent that normally just runs
+    in the background. Opens a side view with a new component. Allows viewing the full history of what happened with the agent as well as queuing messages to it.
 
 ### Finish UI
 
