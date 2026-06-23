@@ -46,6 +46,9 @@ intent_links:
   - intent: "#right-sidebar"
     code:
       - frontend/src/views/IntentCanvasView.vue
+      - dev/idd_workflow.go:IddSubtask
+      - dev/idd_workflow.go:setSubtaskStatus
+      - dev/idd_workflow.go:runIntentSubtask
 ---
 # Inferred IDD Implementation Notes
 
@@ -149,3 +152,14 @@ indented code -- is left untouched so auto-formatting can never silently
 rewrite executable or structured content. External `modelValue` replacements
 cancel any pending idle timer so freshly-loaded content isn't reformatted on
 open.
+
+## Sub-task list grouping and collapse
+
+The right-sidebar sub-task list is grouped by status -- blocked first, then
+in-progress, then everything else -- and within each group ordered by last
+update (falling back to creation time) newest-first. The list is a scrollable
+section, and completed sub-tasks whose last update is over an hour old are
+folded into a collapsible "N Completed" entry with a caret toggle so a long
+history of finished work doesn't crowd out active sub-tasks. Sub-tasks carry
+`createdAt`/`updatedAt` timestamps (set from the workflow clock when launched
+and on every status change) to drive this ordering and the staleness cutoff.
