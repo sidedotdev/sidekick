@@ -26,6 +26,18 @@ intent_links:
       - api/intent_api.go:FinishIntentDiffHandler
       - api/intent_api.go:FinishIntentHandler
       - frontend/src/views/IntentCanvasView.vue
+      - frontend/src/components/BranchSelector.vue
+  - intent: "#standalone-markdown-editor-component"
+    code:
+      - frontend/src/components/IntentMarkdownEditor.vue
+      - frontend/src/views/IntentCanvasView.vue
+  - intent: "#uncommitted-intent-baseline-comes-from-head"
+    code:
+      - frontend/src/lib/intent_diff.ts
+      - frontend/src/lib/intent_diff_editor.ts
+  - intent: "#resizable-and-minimizable-canvas-layout"
+    code:
+      - frontend/src/views/IntentCanvasView.vue
 ---
 # Inferred IDD Implementation Notes
 
@@ -64,14 +76,15 @@ merge-target option.
 ## Finishing IDD via confirmed merge
 
 A "Finish IDD" button on the canvas opens a dialog where the user picks the
-merge target branch (defaulting to the idd worktree's start branch, exposed via
-the `idd_state` query) and confirms after reviewing the diff that would be
-merged (`git diff <target>...HEAD` from the worktree). Confirmation signals the
-long-running IDD workflow, which first cancels any still in-flight sub-tasks
-(in_progress or blocked) and waits for them to settle so their auto-merges into
-the worktree branch don't race the finish-merge, then commits any pending
-intent, merges its branch into the chosen target, cleans up the worktree, and
-exits cleanly so the parent task workflow marks the IDD task completed.
+merge target branch using the shared `BranchSelector` component (defaulting to
+the idd worktree's start branch, exposed via the `idd_state` query) and
+confirms after reviewing the diff that would be merged (`git diff
+<target>...HEAD` from the worktree). Confirmation signals the long-running IDD
+workflow, which first cancels any still in-flight sub-tasks (in_progress or
+blocked) and waits for them to settle so their auto-merges into the worktree
+branch don't race the finish-merge, then commits any pending intent, merges
+its branch into the chosen target, cleans up the worktree, and exits cleanly
+so the parent task workflow marks the IDD task completed.
 
 ## Uncommitted intent baseline comes from HEAD
 
@@ -80,3 +93,28 @@ returns the file's content at `HEAD` alongside the working-copy content. The
 frontend diffs them at word granularity (whitespace runs compared loosely so
 newline shifts don't register as edits) and decorates the added ranges in the
 CodeMirror editor.
+
+## Standalone markdown editor component
+
+The CodeMirror-based intent editor lives in its own component
+(`IntentMarkdownEditor.vue`) so the intent canvas view can stay focused on file
+listing, save orchestration, and IDD sub-task UI. The component owns its
+EditorView lifecycle, dark-mode reconfiguration, uncommitted-range highlight,
+tab-to-spaces handling (configurable indent size, defaulting to 2), and the
+default-collapsed YAML frontmatter fold. It communicates via `v-model` for the
+working-copy text, a `committedContent` prop for the diff baseline, and a
+`shortcut-submit` event so the host view can decide what Mod-Enter does (start
+sub-task on the canvas).
+
+## Resizable and minimizable canvas layout
+
+The intent canvas uses a CSS-grid layout whose left/right sidebar widths are
+driven by CSS variables bound to reactive widths, with drag handles overlaid at
+the column boundaries so users can resize either rail; each rail also has a
+minimize toggle that collapses it to a thin strip exposing only an expand
+button. The sub-task side panel similarly has a left-edge drag handle and a
+variable-driven width. All widths and minimized states persist to
+`localStorage` (single shared key across flows since they're layout
+preferences, not per-flow content). The markdown editor itself is full-width
+between the rails and flush with the file-path header — no internal padding,
+border, or max-width — so the writing surface dominates the canvas.
