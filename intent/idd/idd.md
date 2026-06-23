@@ -116,18 +116,20 @@ according to the human author/user.
 - The canvas also has a right sidebar that supports showing the user:
   - A button to start implementing the current intent state
   - A list of subtasks
-      - Clicking them opens the existing flow view component (not iframe, and         without header/editor links/sidebar nav/etc.), but in a side view
+      - Clicking them opens the existing flow view component (not iframe, and without header/editor links/sidebar nav/etc.), but in a side view
         that can be dismissed, so the intent canvas is always visible.
       - Sub task statuses are shown: completed, failed, in progress, blocked and canceled
   - Any questions wrt highly ambiguous or contradictory intent that have
-    surfaced. Note that some level of ambiguity is expected, but not when
-    a different answer than the one assumed would require a near-100%
+    surfaced, either by sub tasks or the orchestrator agent. Note that some level of ambiguity
+    is expected, but not when a different answer than the one assumed would require a near-100%
     rewrite of the implementation.
 
   - Sub tasks become blocked just like top-level flows do, when they wait on user request. normally this is something the task workflow handles, but the idd workflow has to handle it in this case
-  - For pending user actions/user requests, the user can decide to unblock these at their convenience. They are shown alongside the sub task that triggered it.
+  - For pending user actions/user requests, the user can decide to unblock these at their
+    convenience. They are shown alongside the sub task that triggered it.
   - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI 
   - Bottom right has a dev run play button, which will start a dev run
+
 
 ### Finish UI
 
@@ -148,6 +150,23 @@ according to the human author/user.
 - Pressing the button to start results in saving and git committing the
       current intent state and creating a sub task for implementing it
 - cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add a newline in the editor if the editor is focused.
+- A new background orchestrator AI agent watches edits as they are made in
+  chunks (some heuristic to ensure LLM isn't invoked for partial edits, and
+  always invoked if there are unproceesed edits and there has been no
+  activity for a while)
+
+### Background Orchestrator Agent
+
+- This agent is implemented by the IDD flow (which includes this agent along
+  with other orchestration for IDD)
+- This AI agent automatically starts tasks if it thinks there is a good
+  chunk of intent to work on
+- Task start tool calls and responses are always retained when managing
+  chat history.
+- It can scope the intent to a specific section of an intent file, or
+  the entire intent diff, or just an arbitrary prompt that scopes and directs the subtask to a portion of the intent.
+
+
 
 ### Sub tasks
    
