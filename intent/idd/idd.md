@@ -105,6 +105,8 @@ according to the human author/user.
   - Tab character expands to 2 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
   - YAML frontmatter is always collapsed by default in the editor (all other
      sections are expanded by default)
+  - Supports auto-formatting markdown (collapsing whitespace and wrapping lines)
+    when editor has been idle for 15s
 
 ##### Editor Styling
 
