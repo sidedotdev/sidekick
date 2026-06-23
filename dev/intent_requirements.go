@@ -14,6 +14,10 @@ type IntentRequirementsInfo struct {
 	// Update is false for the initial intent and true when implementing an
 	// update to existing intent.
 	Update bool
+	// ScopePrompt, when non-empty, narrows the sub-task's focus to a chunk of
+	// the diff (used by the background orchestrator's "partial" scope). It is
+	// emitted ahead of the diff in the rendered requirements.
+	ScopePrompt string
 }
 
 // renderIntentRequirements builds the sub-task requirements text describing the
@@ -30,6 +34,7 @@ func renderIntentRequirements(info IntentRequirementsInfo) string {
 		"clean_diff": strings.TrimSuffix(cleanDiff, "\n"),
 		"update":     info.Update,
 		"path":       intentDiffPaths(info.Diff),
+		"scopePrompt": strings.TrimSpace(info.ScopePrompt),
 	}
 	return RenderPrompt(IntentRequirements, data)
 }

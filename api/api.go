@@ -245,6 +245,8 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.GET("/:id/intent/branches", ctrl.ListIntentBranchesHandler)
 	flowRoutes.GET("/:id/intent/finish_diff", ctrl.FinishIntentDiffHandler)
 	flowRoutes.POST("/:id/intent/finish", ctrl.FinishIntentHandler)
+	flowRoutes.POST("/:id/intent/auto_mode", ctrl.SetIddAutoModeHandler)
+	flowRoutes.POST("/:id/intent/run_orchestrator", ctrl.RunIddOrchestratorHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
