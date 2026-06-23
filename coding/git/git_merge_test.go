@@ -416,3 +416,269 @@ func TestGitMergeActivitySquash(t *testing.T) {
 		assert.Contains(t, logOutput, "Feature commit 2")
 	})
 }
+
+func evalSymlinks(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	return resolved
+}
+
+func TestGitMergeActivityDirtyTargetWorktree(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	setup := func(t *testing.T) (repoDir string, envContainer env.EnvContainer) {
+		worktreeBaseDir := filepath.Join(t.TempDir(), "dir with spaces")
+		require.NoError(t, os.Mkdir(worktreeBaseDir, 0755))
+
+		repoDir = setupTestGitRepo(t)
+
+		require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("initial content"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(repoDir, "other.txt"), []byte("other initial"), 0644))
+		runGitCommandInTestRepo(t, repoDir, "add", ".")
+		createCommit(t, repoDir, "Initial commit")
+
+		worktree := domain.Worktree{Name: "feature", WorkspaceId: t.Name()}
+		var err error
+		envContainer, err = env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+		})
+
+		featureDir := envContainer.Env.GetWorkingDirectory()
+		require.NoError(t, os.WriteFile(filepath.Join(featureDir, "file.txt"), []byte("feature content"), 0644))
+		runGitCommandInTestRepo(t, featureDir, "add", "file.txt")
+		createCommit(t, featureDir, "Feature commit")
+
+		return repoDir, envContainer
+	}
+
+	t.Run("non-conflicting dirty target is stashed, merged, and restored", func(t *testing.T) {
+		t.Parallel()
+		repoDir, envContainer := setup(t)
+
+		// Uncommitted local change to a file the merge does not touch.
+		require.NoError(t, os.WriteFile(filepath.Join(repoDir, "other.txt"), []byte("uncommitted local change"), 0644))
+
+		result, err := GitMergeActivity(ctx, envContainer, GitMergeParams{SourceBranch: "feature", TargetBranch: "main"})
+		require.NoError(t, err)
+		assert.False(t, result.HasConflicts)
+
+		mergedContent, err := os.ReadFile(filepath.Join(repoDir, "file.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "feature content", string(mergedContent))
+
+		restored, err := os.ReadFile(filepath.Join(repoDir, "other.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "uncommitted local change", string(restored))
+	})
+
+	t.Run("conflicting stash restore is relocated to the source worktree", func(t *testing.T) {
+		t.Parallel()
+		repoDir, envContainer := setup(t)
+		featureDir := envContainer.Env.GetWorkingDirectory()
+
+		// Uncommitted local change to the same file the merge modifies, so
+		// restoring the stash on top of the merged content conflicts.
+		require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("local uncommitted edit"), 0644))
+
+		result, err := GitMergeActivity(ctx, envContainer, GitMergeParams{SourceBranch: "feature", TargetBranch: "main"})
+		require.NoError(t, err)
+		assert.True(t, result.HasConflicts)
+		assert.False(t, result.ConflictOnTargetBranch)
+		assert.Equal(t, evalSymlinks(t, featureDir), evalSymlinks(t, result.ConflictDirPath))
+		assert.Equal(t, evalSymlinks(t, repoDir), evalSymlinks(t, result.BaseStashWorktreePath))
+		assert.NotEmpty(t, result.BaseStashSha)
+
+		// The base worktree keeps the clean merge result, with the conflicted
+		// stash pop discarded. The original stash entry is intentionally
+		// preserved (for recoverability) until the resolved changes are
+		// transferred back, so it still references BaseStashSha.
+		baseContent, err := os.ReadFile(filepath.Join(repoDir, "file.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "feature content", string(baseContent))
+		assert.Equal(t, result.BaseStashSha, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "stash@{0}")))
+
+		// The conflict markers are now present in the source worktree for the
+		// resolution agent to edit.
+		ownContent, err := os.ReadFile(filepath.Join(featureDir, "file.txt"))
+		require.NoError(t, err)
+		assert.Contains(t, string(ownContent), "<<<<<<<")
+		assert.Contains(t, string(ownContent), "local uncommitted edit")
+	})
+}
+
+func TestGitTransferWorktreeChangesActivity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	worktreeBaseDir := filepath.Join(t.TempDir(), "wt")
+	require.NoError(t, os.Mkdir(worktreeBaseDir, 0755))
+
+	repoDir := setupTestGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("base content\n"), 0644))
+	runGitCommandInTestRepo(t, repoDir, "add", ".")
+	createCommit(t, repoDir, "Initial commit")
+
+	worktree := domain.Worktree{Name: "feature", WorkspaceId: t.Name()}
+	envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+	})
+	sourceDir := envContainer.Env.GetWorkingDirectory()
+
+	// Uncommitted resolved changes live in the source worktree.
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
+
+	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+		SourceWorktreePath: sourceDir,
+		TargetWorktreePath: repoDir,
+	})
+	require.NoError(t, err)
+
+	// Changes moved to the base worktree as uncommitted changes.
+	baseContent, err := os.ReadFile(filepath.Join(repoDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "resolved content\n", string(baseContent))
+
+	// Source worktree is left clean and no stash entries linger.
+	assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "status", "--porcelain")))
+	assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "stash", "list")))
+}
+
+func TestGitTransferWorktreeChangesActivityDropsPreservedBaseStash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	worktreeBaseDir := filepath.Join(t.TempDir(), "wt")
+	require.NoError(t, os.Mkdir(worktreeBaseDir, 0755))
+
+	repoDir := setupTestGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("base content\n"), 0644))
+	runGitCommandInTestRepo(t, repoDir, "add", ".")
+	createCommit(t, repoDir, "Initial commit")
+
+	worktree := domain.Worktree{Name: "feature", WorkspaceId: t.Name()}
+	envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+	})
+	sourceDir := envContainer.Env.GetWorkingDirectory()
+
+	// Simulate the preserved base stash kept around for recoverability during
+	// resolution: a stash entry on the base worktree that the transfer should
+	// drop once the resolved changes are safely moved back.
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("preserved base work\n"), 0644))
+	runGitCommandInTestRepo(t, repoDir, "stash", "push", "-m", "preserved-base")
+	baseStashSha := strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "stash@{0}"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
+
+	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+		SourceWorktreePath: sourceDir,
+		TargetWorktreePath: repoDir,
+		BaseStashSha:       baseStashSha,
+	})
+	require.NoError(t, err)
+
+	baseContent, err := os.ReadFile(filepath.Join(repoDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "resolved content\n", string(baseContent))
+
+	// Both the transfer stash and the preserved base stash are dropped.
+	assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "stash", "list")))
+	assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "stash", "list")))
+}
+
+func TestGitTransferWorktreeChangesActivityDropsBaseStashOnNoOp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	worktreeBaseDir := filepath.Join(t.TempDir(), "wt")
+	require.NoError(t, os.Mkdir(worktreeBaseDir, 0755))
+
+	repoDir := setupTestGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("base content\n"), 0644))
+	runGitCommandInTestRepo(t, repoDir, "add", ".")
+	createCommit(t, repoDir, "Initial commit")
+
+	worktree := domain.Worktree{Name: "feature", WorkspaceId: t.Name()}
+	envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+	})
+	sourceDir := envContainer.Env.GetWorkingDirectory()
+
+	// Preserved base stash exists, but the source worktree has no changes to
+	// transfer (a successful no-op resolution).
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("preserved base work\n"), 0644))
+	runGitCommandInTestRepo(t, repoDir, "stash", "push", "-m", "preserved-base")
+	baseStashSha := strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "stash@{0}"))
+
+	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+		SourceWorktreePath: sourceDir,
+		TargetWorktreePath: repoDir,
+		BaseStashSha:       baseStashSha,
+	})
+	require.NoError(t, err)
+
+	// The preserved base stash is dropped even though there was nothing to
+	// transfer.
+	assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "stash", "list")))
+
+	// The no-op must not mistake the pre-existing (repository-wide) base stash
+	// for the transfer stash and apply it onto the target worktree.
+	baseContent, err := os.ReadFile(filepath.Join(repoDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "base content\n", string(baseContent))
+}
+
+func TestGitTransferWorktreeChangesActivityPreservesExistingStash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	worktreeBaseDir := filepath.Join(t.TempDir(), "wt")
+	require.NoError(t, os.Mkdir(worktreeBaseDir, 0755))
+
+	repoDir := setupTestGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("base content\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "stashed.txt"), []byte("original\n"), 0644))
+	runGitCommandInTestRepo(t, repoDir, "add", ".")
+	createCommit(t, repoDir, "Initial commit")
+
+	worktree := domain.Worktree{Name: "feature", WorkspaceId: t.Name()}
+	envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+	})
+	sourceDir := envContainer.Env.GetWorkingDirectory()
+
+	// A pre-existing, unrelated stash in the source worktree must not be
+	// touched by the transfer (which is namespaced by stash SHA).
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "stashed.txt"), []byte("preexisting work\n"), 0644))
+	runGitCommandInTestRepo(t, sourceDir, "stash", "push", "-m", "preexisting")
+	existingStashSha := strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "rev-parse", "stash@{0}"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
+
+	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+		SourceWorktreePath: sourceDir,
+		TargetWorktreePath: repoDir,
+	})
+	require.NoError(t, err)
+
+	baseContent, err := os.ReadFile(filepath.Join(repoDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "resolved content\n", string(baseContent))
+
+	// The pre-existing stash entry is still present and unchanged.
+	stashList := runGitCommandInTestRepo(t, sourceDir, "stash", "list")
+	assert.Contains(t, stashList, "preexisting")
+	assert.Equal(t, existingStashSha, strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "rev-parse", "stash@{0}")))
+}
