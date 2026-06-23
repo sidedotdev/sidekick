@@ -190,30 +190,13 @@
       </div>
     </aside>
 
-    <div
+    <SubtaskSidePanel
       v-if="activeSubtaskFlowId"
-      ref="subtaskPanelRef"
-      class="side-panel"
-      role="dialog"
-      aria-label="Sub-task"
-      tabindex="-1"
-      @keydown.esc.stop="closeSubtask"
+      @close="closeSubtask"
+      @resize-start="(e) => startDrag('side-panel', e)"
     >
-      <div
-        class="side-panel-resize"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize sub-task panel"
-        @mousedown="(e) => startDrag('side-panel', e)"
-      ></div>
-      <header class="side-panel-head">
-        <span class="eyebrow">Sub-task</span>
-        <button type="button" class="side-panel-close" @click="closeSubtask" aria-label="Dismiss sub-task">×</button>
-      </header>
-      <div class="side-panel-body">
-        <FlowView :key="activeSubtaskFlowId" :flow-id="activeSubtaskFlowId" embedded />
-      </div>
-    </div>
+      <FlowView :key="activeSubtaskFlowId" :flow-id="activeSubtaskFlowId" embedded />
+    </SubtaskSidePanel>
 
     <div v-if="showFinishDialog" class="finish-panel" role="dialog" aria-label="Finish IDD">
       <header class="finish-head">
@@ -287,6 +270,7 @@ import { store } from '../lib/store'
 import BranchSelector from '../components/BranchSelector.vue'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import IntentMarkdownEditor from '../components/IntentMarkdownEditor.vue'
+import SubtaskSidePanel from '../components/SubtaskSidePanel.vue'
 import FlowView from './FlowView.vue'
 import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
 import DevRunControls from '../components/DevRunControls.vue'
@@ -568,13 +552,8 @@ const startSubtask = async () => {
   }
 }
 
-const subtaskPanelRef = ref<HTMLElement | null>(null)
-
 const openSubtask = (subtaskFlowId: string) => {
   activeSubtaskFlowId.value = subtaskFlowId
-  nextTick(() => {
-    subtaskPanelRef.value?.focus()
-  })
 }
 
 const closeSubtask = () => {
@@ -1158,55 +1137,6 @@ onBeforeUnmount(() => {
   color: var(--color-primary-hover);
 }
 
-.side-panel:focus {
-  outline: none;
-}
-
-.side-panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(var(--side-panel-w, 60rem), 90vw);
-  display: flex;
-  flex-direction: column;
-  background-color: var(--color-background);
-  border-left: 1px solid var(--color-border);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
-  /* Must sit above the fixed FlowEditorLinks overlay (z-index 1000) so the
-     dismiss control and sticky sub-flow headers remain interactive. */
-  z-index: 1001;
-}
-
-.side-panel-resize {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -0.2rem;
-  width: 0.5rem;
-  cursor: col-resize;
-  z-index: 2;
-  background-color: transparent;
-  transition: background-color 120ms ease;
-}
-
-.side-panel-resize:hover,
-.side-panel-resize:active {
-  background-color: var(--color-primary);
-  opacity: 0.6;
-}
-
-.side-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.85rem 1.25rem;
-  border-bottom: 1px solid var(--color-border);
-  background-color: var(--color-background);
-  position: relative;
-  z-index: 1;
-}
-
 .side-panel-close {
   background: none;
   border: none;
@@ -1219,21 +1149,6 @@ onBeforeUnmount(() => {
 
 .side-panel-close:hover {
   color: var(--color-text);
-}
-
-.side-panel-body {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  isolation: isolate;
-}
-
-.side-panel-body :deep(.flow-actions-container) {
-  flex: 1;
-  min-height: 0;
 }
 
 .index {
