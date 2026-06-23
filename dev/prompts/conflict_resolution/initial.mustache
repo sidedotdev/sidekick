@@ -13,6 +13,27 @@ Critical rules:
 - Do NOT run `git commit`, `git merge --continue`, or `git merge --abort`.
   The orchestrator finalizes the merge commit after verification.
 
+Important workaround for the edit-block format: the raw git conflict
+markers (`<<<<<<<`, `=======`, `>>>>>>>`) collide with the edit block
+delimiters and will corrupt any edit block that tries to quote them
+verbatim in its SEARCH section. Before producing edit blocks for a
+conflicted file, first rename the markers in place using `sed` so the
+file uses placeholder tokens that edit blocks can safely reference:
+
+```bash
+sed -i.bak -E \
+  -e 's/^<<<<<<<.*$/CONFLICT_START/' \
+  -e 's/^=======$/CONFLICT_DIVIDER/' \
+  -e 's/^>>>>>>>.*$/CONFLICT_END/' <path> && rm <path>.bak
+```
+
+Then write edit blocks that match the `CONFLICT_START` /
+`CONFLICT_DIVIDER` / `CONFLICT_END` lines (plus the surrounding
+context) in their SEARCH section and replace them with the resolved
+content in the REPLACE section. No `CONFLICT_START`,
+`CONFLICT_DIVIDER`, `CONFLICT_END`, or original `<<<<<<<` / `=======`
+/ `>>>>>>>` line may remain in the final file.
+
 {{> coding_hints}}
 Here are the original requirements for the working branch:
 
