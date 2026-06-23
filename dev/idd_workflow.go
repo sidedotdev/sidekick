@@ -94,9 +94,9 @@ type RunIddOrchestratorSignal struct{}
 
 // IddSubtask tracks an intent sub-task launched by the IddWorkflow.
 type IddSubtask struct {
-	FlowId string `json:"flowId"`
-	Commit string `json:"commit"`
-	Status string `json:"status"`
+	FlowId    string    `json:"flowId"`
+	Commit    string    `json:"commit"`
+	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	// ScopePrompt, when non-empty, records the orchestrator's narrowed-scope
@@ -176,8 +176,8 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	state := &IddState{
 		Subtasks:       []IddSubtask{},
 		Clarifications: []IddClarification{},
-		Nudges:              []IddNudge{},
-		AutoMode:            autoModeDefaultVersion >= 1,
+		Nudges:         []IddNudge{},
+		AutoMode:       autoModeDefaultVersion >= 1,
 	}
 	_ = workflow.SetQueryHandler(ctx, QueryNameIddState, func() (IddState, error) {
 		return *state, nil
@@ -546,8 +546,8 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			Status:         "in_progress",
 			ScopePrompt:    sig.ScopePrompt,
 			DispatchedDiff: reqInfo.Diff,
-			CreatedAt: now,
-			UpdatedAt: now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		})
 	}
 
