@@ -80,6 +80,12 @@ according to the human author/user.
     - Remember which intent file was last open and open it again when the specific idd flow id is next accessed
     - If intent files exist, on startup, do not open one: allow the user to select one themselves first, with a prompt telling them to do so
      - .generated files are shown last in filetree
+
+#### Styling
+
+- Editor is full-width between the sidebars and touching the file path header (no gaps)
+- Sidebars can be resized and minimized
+- Side view for sub tasks can be resized too
      
 #### Markdown Editor Component
 
@@ -107,14 +113,16 @@ according to the human author/user.
 #### Right Sidebar
 
 - The canvas also has a right sidebar that supports showing the user:
-- A button to start implementing the current intent state
-  - Clicking them opens the existing flow view component (not iframe, and without header/editor links/sidebar nav/etc.), but in a side view that can be
-    dismissed, so the intent canvas is always visible.
-- Any questions wrt highly ambiguous or contradictory intent that have
+  - A button to start implementing the current intent state
+  - A list of subtasks
+      - Clicking them opens the existing flow view component (not iframe, and         without header/editor links/sidebar nav/etc.), but in a side view
+        that can be dismissed, so the intent canvas is always visible.
+      - Sub task statuses are shown: completed, failed, in progress, blocked and canceled
+  - Any questions wrt highly ambiguous or contradictory intent that have
     surfaced. Note that some level of ambiguity is expected, but not when
     a different answer than the one assumed would require a near-100%
     rewrite of the implementation.
-- Sub task statuses are shown: completed, failed, in progress, blocked and canceled
+
   - Sub tasks become blocked just like top-level flows do, when they wait on user request. normally this is something the task workflow handles, but the idd workflow has to handle it in this case
   - For pending user actions/user requests, the user can decide to unblock these at their convenience. They are shown alongside the sub task that triggered it.
   - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI
@@ -135,14 +143,16 @@ according to the human author/user.
   - The parent task is marked completed too
 
 ### Starting intent sub tasks
-    - Pressing the button to start results in saving and git committing the
+    
+- Pressing the button to start results in saving and git committing the
       current intent state and creating a sub task for implementing it
-    - cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add a newline in the editor if the editor is focused.
+- cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add a newline in the editor if the editor is focused.
 
 ### Sub tasks
-    - Uses basic dev flow type with determine requirements disabled
-    - Makes a worktree based off of HEAD of the worktree for the idd flow
-    - Automatically gets merged into the idd worktree when completed (new basic
+   
+- Uses basic dev flow type with determine requirements disabled
+- Makes a worktree based off of HEAD of the worktree for the idd flow
+- Automatically gets merged into the idd worktree when completed (new basic
       dev / planned dev workflow option)
     
 
