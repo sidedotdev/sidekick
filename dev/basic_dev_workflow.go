@@ -57,6 +57,12 @@ type MergeWithReviewParams struct {
 	StartBranch    *string
 	CommitRequired bool
 	AutoMerge      bool
+
+	// PreviousReview is the most recent reviewer feedback accumulated by
+	// reviewAndResolve. It is forwarded to the conflict-resolution
+	// subflow so the resolver can avoid undoing edits made specifically
+	// to address that feedback. Empty on the initial pre-review merge.
+	PreviousReview string
 }
 
 // getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes.
@@ -704,6 +710,13 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				// Add rejection message to history for next iteration
 				reviewMessages = append(reviewMessages, mergeInfo.Message)
 
+				// Surface accumulated review feedback to the conflict-
+				// resolution subflow so it doesn't undo edits made
+				// specifically to satisfy reviewers. The latest message
+				// is the most actionable, so list it last after prior
+				// messages.
+				params.PreviousReview = strings.Join(reviewMessages, "\n\n---\n\n")
+
 				// must commit before merge at this point, as codingSubflow
 				// doesn't do so inherently
 				params.CommitRequired = true
@@ -851,84 +864,148 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 	}
 
 	if mergeResult.HasConflicts {
-		// Present continue request with enhanced conflict message
-		var conflictMessage string
-		if mergeResult.ConflictOnTargetBranch {
-			conflictMessage = fmt.Sprintf("Merge conflicts detected at %s. Please resolve conflicts and commit the merge, then continue.", mergeResult.ConflictDirPath)
-		} else {
-			conflictMessage = fmt.Sprintf("Merge conflicts detected at %s. Conflicts are from merging %s into %s. Please resolve conflicts, commit the merge, then continue.", mergeResult.ConflictDirPath, mergeInfo.TargetBranch, dCtx.Worktree.Name)
-		}
-
-		err := GetUserContinue(dCtx, conflictMessage, map[string]any{
-			"continueTag": "done",
-		})
-		if err != nil {
-			return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get continue approval: %w", err)
-		}
-
-		// Handle reverse conflict scenario - need final merge from source to target
-		if !mergeResult.ConflictOnTargetBranch {
-			for {
-				// Verify conflicts are resolved by checking git status
-				// FIXME let's check if MERGE_HEAD exists instead as better way to confirm conflicts are resolved
-				var statusOutput env.EnvRunCommandActivityOutput
-				statusFuture := workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-					EnvContainer: *dCtx.EnvContainer,
-					Command:      "git",
-					Args:         []string{"status", "--porcelain"},
-				})
-				statusErr := statusFuture.Get(dCtx, &statusOutput)
-				if statusErr != nil {
-					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to check git status: %w", statusErr)
-				}
-
-				// Check if there are still unmerged files
-				if strings.Contains(statusOutput.Stdout, "UU ") || strings.Contains(statusOutput.Stdout, "AA ") || strings.Contains(statusOutput.Stdout, "DD ") {
-					message := "Merge conflicts are not fully resolved, please resolve all conflicts and commit. Git status:\n\n" + statusOutput.Stdout
-					err := GetUserContinue(dCtx, message, map[string]any{
-						"continueTag": "done",
-					})
-					if err != nil {
-						return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get continue approval: %w", err)
-					}
-				}
-				break
+		conflictResolutionVersion := workflow.GetVersion(dCtx, "conflict-resolution-v3", workflow.DefaultVersion, 1)
+		if conflictResolutionVersion >= 1 {
+			ownWorktreePath := ""
+			if dCtx.Worktree != nil {
+				ownWorktreePath = dCtx.EnvContainer.Env.GetWorkingDirectory()
 			}
 
-			mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "", params.AutoMerge)
-			if err != nil {
-				return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get final merge approval: %w", err)
+			if mergeResult.ConflictOnTargetBranch {
+				if err := recreateConflictOnOwnWorktree(dCtx, mergeResult.ConflictDirPath, ownWorktreePath, mergeInfo.TargetBranch, committerName, committerEmail); err != nil {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to recreate conflict on own worktree: %w", err)
+				}
 			}
 
-			if mergeInfo.Approved {
-				// Perform final merge from source to target
-				finalActionCtx := dCtx.NewActionContext("merge")
-				finalActionCtx.ActionParams = map[string]interface{}{
-					"sourceBranch": dCtx.Worktree.Name,
-					"targetBranch": mergeInfo.TargetBranch,
-				}
+			resolutionWorktree := ownWorktreePath
+			if resolutionWorktree == "" {
+				resolutionWorktree = mergeResult.ConflictDirPath
+			}
 
-				finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
-					var finalResult git.MergeActivityResult
-					err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
-						SourceBranch:   trackedCtx.Worktree.Name,
-						TargetBranch:   mergeInfo.TargetBranch,
-						MergeStrategy:  git.MergeStrategy(mergeInfo.MergeStrategy),
-						CommitMessage:  commitMessage,
-						CommitterName:  committerName,
-						CommitterEmail: committerEmail,
-					})
-					if err != nil {
-						return finalResult, fmt.Errorf("failed to perform final merge: %w", err)
-					}
-					return finalResult, nil
+			if err := resolveMergeConflictsSubflow(dCtx, ResolveMergeConflictsParams{
+				WorktreePath:       resolutionWorktree,
+				SourceBranchName:   mergeInfo.TargetBranch,
+				Requirements:       params.Requirements,
+				PreviousReview:     params.PreviousReview,
+				LastReviewTreeHash: lastReviewTreeHash,
+				BaseBranch:         mergeInfo.TargetBranch,
+				CommitterName:      committerName,
+				CommitterEmail:     committerEmail,
+			}); err != nil {
+				return "", MergeApprovalResponse{}, "", fmt.Errorf("conflict resolution subflow failed: %w", err)
+			}
+
+			// The conflict resolution finalized a merge commit on the
+			// source worktree whose second parent is the target branch
+			// tip. That makes target an ancestor of source, so merging
+			// source into target is a fast-forward and contains the
+			// resolution commit.
+			//
+			// Squash strategy must be overridden here: a squash would
+			// re-merge target's content into a single commit on top of
+			// target, discarding the merge commit (and thus the resolved
+			// conflict edits become indistinguishable from regular work).
+			// The resolution commit is the meaningful artifact, so we
+			// always do a regular (fast-forward) merge for the final
+			// step regardless of the originally requested strategy.
+			finalActionCtx := dCtx.NewActionContext("merge")
+			finalActionCtx.ActionParams = map[string]interface{}{
+				"sourceBranch": dCtx.Worktree.Name,
+				"targetBranch": mergeInfo.TargetBranch,
+			}
+			finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
+				var finalResult git.MergeActivityResult
+				err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
+					SourceBranch:   trackedCtx.Worktree.Name,
+					TargetBranch:   mergeInfo.TargetBranch,
+					MergeStrategy:  git.MergeStrategyMerge,
+					CommitMessage:  commitMessage,
+					CommitterName:  committerName,
+					CommitterEmail: committerEmail,
 				})
 				if err != nil {
-					return "", MergeApprovalResponse{}, "", err
+					return finalResult, fmt.Errorf("failed to perform final merge after conflict resolution: %w", err)
+				}
+				return finalResult, nil
+			})
+			if err != nil {
+				return "", MergeApprovalResponse{}, "", err
+			}
+			mergeResult = finalMergeResult
+		} else {
+			var conflictMessage string
+			if mergeResult.ConflictOnTargetBranch {
+				conflictMessage = fmt.Sprintf("Merge conflicts detected at %s. Please resolve conflicts and commit the merge, then continue.", mergeResult.ConflictDirPath)
+			} else {
+				conflictMessage = fmt.Sprintf("Merge conflicts detected at %s. Conflicts are from merging %s into %s. Please resolve conflicts, commit the merge, then continue.", mergeResult.ConflictDirPath, mergeInfo.TargetBranch, dCtx.Worktree.Name)
+			}
+
+			err := GetUserContinue(dCtx, conflictMessage, map[string]any{
+				"continueTag": "done",
+			})
+			if err != nil {
+				return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get continue approval: %w", err)
+			}
+
+			if !mergeResult.ConflictOnTargetBranch {
+				for {
+					// FIXME let's check if MERGE_HEAD exists instead as better way to confirm conflicts are resolved
+					var statusOutput env.EnvRunCommandActivityOutput
+					statusFuture := workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+						EnvContainer: *dCtx.EnvContainer,
+						Command:      "git",
+						Args:         []string{"status", "--porcelain"},
+					})
+					statusErr := statusFuture.Get(dCtx, &statusOutput)
+					if statusErr != nil {
+						return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to check git status: %w", statusErr)
+					}
+
+					if strings.Contains(statusOutput.Stdout, "UU ") || strings.Contains(statusOutput.Stdout, "AA ") || strings.Contains(statusOutput.Stdout, "DD ") {
+						message := "Merge conflicts are not fully resolved, please resolve all conflicts and commit. Git status:\n\n" + statusOutput.Stdout
+						err := GetUserContinue(dCtx, message, map[string]any{
+							"continueTag": "done",
+						})
+						if err != nil {
+							return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get continue approval: %w", err)
+						}
+					}
+					break
 				}
 
-				// Update mergeResult to reflect final merge result
-				mergeResult = finalMergeResult
+				mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "", params.AutoMerge)
+				if err != nil {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get final merge approval: %w", err)
+				}
+
+				if mergeInfo.Approved {
+					finalActionCtx := dCtx.NewActionContext("merge")
+					finalActionCtx.ActionParams = map[string]interface{}{
+						"sourceBranch": dCtx.Worktree.Name,
+						"targetBranch": mergeInfo.TargetBranch,
+					}
+
+					finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
+						var finalResult git.MergeActivityResult
+						err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
+							SourceBranch:   trackedCtx.Worktree.Name,
+							TargetBranch:   mergeInfo.TargetBranch,
+							MergeStrategy:  git.MergeStrategy(mergeInfo.MergeStrategy),
+							CommitMessage:  commitMessage,
+							CommitterName:  committerName,
+							CommitterEmail: committerEmail,
+						})
+						if err != nil {
+							return finalResult, fmt.Errorf("failed to perform final merge: %w", err)
+						}
+						return finalResult, nil
+					})
+					if err != nil {
+						return "", MergeApprovalResponse{}, "", err
+					}
+
+					mergeResult = finalMergeResult
+				}
 			}
 		}
 	}
