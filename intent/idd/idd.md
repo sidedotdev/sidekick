@@ -114,6 +114,8 @@ according to the human author/user.
     like an editor is expected to
   - YAML frontmatter is always collapsed by default in the editor (all other
     sections are expanded by default)
+    - Rather than the YAML being collapsed, the entire frontmatter section is
+      collapsed on the first line of the markdown file
   - Supports auto-formatting markdown (collapsing whitespace and wrapping lines,
     including list items) when editor has been idle for 15s
 
