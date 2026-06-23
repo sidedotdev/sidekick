@@ -34,6 +34,18 @@ func TestRenderIntentRequirements(t *testing.T) {
 		assert.Equal(t, expected, out)
 	})
 
+	t.Run("clean diff is preferred over raw diff in the prompt", func(t *testing.T) {
+		t.Parallel()
+		out := renderIntentRequirements(IntentRequirementsInfo{
+			Commit:    "abc123",
+			Diff:      "diff --git a/intent/mission.md b/intent/mission.md\n-Build great things\n+Build   great   things\n",
+			CleanDiff: "diff --git a/intent/mission.md b/intent/mission.md\nBuild great things\n",
+		})
+
+		assert.Contains(t, out, "Build great things\n```")
+		assert.NotContains(t, out, "Build   great   things")
+	})
+
 	t.Run("trailing newline in diff does not add a blank line before closing fence", func(t *testing.T) {
 		t.Parallel()
 		base := "diff --git a/intent/mission.md b/intent/mission.md\n+Build great things"

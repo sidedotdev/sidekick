@@ -67,7 +67,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
-	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Once()
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
 	s.env.OnActivity(
 		s.ima.PutWorkflow,
@@ -154,7 +154,7 @@ func (s *IddWorkflowTestSuite) TestFinishIddSignalMergesAndCloses() {
 
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
-	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Once()
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
 	var capturedMergeParams git.GitMergeParams
 	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitMergeParams) bool {
