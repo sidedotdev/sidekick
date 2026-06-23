@@ -88,18 +88,21 @@ according to the human author/user.
           features working in for now.
   - Remembers which file was open last
   - Saves intent automatically as you type in the worktree
-  - Intent that is not yet committed is styled differently to committed
-          intent. This must use a diff algorithm that finds word-level changes
-          even in multi-line markdown with newlines shifting around.
+  - Intent that is not yet committed has a special background color.
+      - This must use a diff algorithm that finds word-level changes
+        even in multi-line markdown with newlines shifting around. Words              right beside each other on the same line are merged so there is no            divider between multiple words added in terms of this styling
+      - After a commit happens, the this styling goes away for those words ()
   - Tab character expands to 2 spaces and does NOT switch to a different interface element as regular browser interactions work, but instead works like an editor is expected to
   - YAML frontmatter is collapsed by default (all other sections expanded)
 
 ##### Editor Styling
+
   - Theme of editor respects dark/light mode 
-  - Highlighting text has a separate color from the active line so it stands out better
+  - Highlighting text uses a very transparent version of the primary color
   - Strong colors to highlight markdown syntax like the "#" character for headings or the "-" character, etc
 - YAML syntax highlighting for the frontmatter
-        
+- The caret is the same shape when collapsed or expanded, just rotated about it's centerpoint.
+
 
 #### Right Sidebar
 
