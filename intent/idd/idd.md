@@ -136,8 +136,10 @@ according to the human author/user.
   - A button to [start a sub task] to implement the current intent state
   - A list of subtasks
       - Clicking them opens the existing flow view component (not iframe, and
-        without header/editor links/sidebar nav/etc.), but in a side view. When
-        the side view has focus, pressing escape dismisses it. that can be
+        without own header/sidebar nav/etc.), but in a side view. Includes
+        editor links rendered on top of the sub task header, offset to avoid
+        dismiss button
+      - When the side view has focus, pressing escape dismisses it. that can be
         dismissed, so the intent canvas is always visible.
       - Sub task statuses are shown: completed, failed, in progress, blocked and
         canceled
