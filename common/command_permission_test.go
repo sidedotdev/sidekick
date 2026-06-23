@@ -2012,3 +2012,196 @@ func TestBasePermissions_UvCommands(t *testing.T) {
 		}
 	})
 }
+
+func TestEvaluatePermissionOptions_SkipAbsolutePathEscalation(t *testing.T) {
+	t.Parallel()
+	config := CommandPermissionConfig{
+		AutoApprove: []CommandPattern{{Pattern: "ls"}},
+	}
+	cmd := "ls /etc/passwd"
+
+	result, _ := EvaluateCommandPermissionWithOptions(config, cmd, EvaluatePermissionOptions{})
+	assert.Equal(t, PermissionRequireApproval, result, "absolute paths should escalate by default")
+
+	result, _ = EvaluateCommandPermissionWithOptions(config, cmd, EvaluatePermissionOptions{
+		SkipAbsolutePathEscalation: true,
+	})
+	assert.Equal(t, PermissionAutoApprove, result, "absolute paths should not escalate when SkipAbsolutePathEscalation is set")
+}
+
+func TestEvaluatePermissionOptions_DefaultAutoApprove(t *testing.T) {
+	t.Parallel()
+	config := CommandPermissionConfig{
+		AutoApprove: []CommandPattern{{Pattern: "ls"}},
+	}
+
+	result, _ := EvaluateCommandPermissionWithOptions(config, "some-random-cmd", EvaluatePermissionOptions{})
+	assert.Equal(t, PermissionRequireApproval, result, "unmatched command should require approval by default")
+
+	result, _ = EvaluateCommandPermissionWithOptions(config, "some-random-cmd", EvaluatePermissionOptions{
+		DefaultAutoApprove: true,
+	})
+	assert.Equal(t, PermissionAutoApprove, result, "unmatched command should auto-approve with DefaultAutoApprove")
+}
+
+func TestEvaluateScriptPermission_HeredocWarnInsteadOfDeny(t *testing.T) {
+	t.Parallel()
+	config := CommandPermissionConfig{
+		AutoApprove: []CommandPattern{{Pattern: "cat"}},
+	}
+	opts := EvaluatePermissionOptions{
+		HeredocFileWriteWarnInsteadOfDeny: true,
+		DefaultAutoApprove:                true,
+	}
+
+	t.Run("plain heredoc file write auto-approves with advisory", func(t *testing.T) {
+		t.Parallel()
+		script := "cat > out.txt << EOF\nhi\nEOF"
+		result, msg := EvaluateScriptPermissionWithOptions(config, script, opts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, "edit blocks")
+	})
+
+	t.Run("escape-hatch heredoc auto-approves without requiring approval", func(t *testing.T) {
+		t.Parallel()
+		script := "cat > out.txt << ESCAPE_HATCH_EOF\nhi\nESCAPE_HATCH_EOF"
+		result, msg := EvaluateScriptPermissionWithOptions(config, script, opts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, "edit blocks")
+	})
+
+	t.Run("non-heredoc script does not carry the advisory", func(t *testing.T) {
+		t.Parallel()
+		script := "cat README.md"
+		result, msg := EvaluateScriptPermissionWithOptions(config, script, opts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Empty(t, msg)
+	})
+}
+
+func TestBaseCommandPermissionsForIsolatedEnv(t *testing.T) {
+	t.Parallel()
+	base := BaseCommandPermissionsForIsolatedEnv()
+	opts := EvaluatePermissionOptions{
+		DefaultAutoApprove:                true,
+		SkipAbsolutePathEscalation:        true,
+		HeredocFileWriteWarnInsteadOfDeny: true,
+	}
+
+	t.Run("catastrophic patterns are denied", func(t *testing.T) {
+		t.Parallel()
+		denied := []string{
+			"rm -rf /",
+			"rm -rf ~",
+			"rm -rf /*",
+			"rm -rf ~/*",
+			"rm -fr /",
+			"rm -fr ~",
+			":(){:|:&};:",
+			":(){ :|:& };:",
+		}
+		for _, cmd := range denied {
+			result, _ := EvaluateCommandPermissionWithOptions(base, cmd, opts)
+			assert.Equal(t, PermissionDeny, result, "expected deny for: %s", cmd)
+		}
+	})
+
+	t.Run("dangerous-but-sometimes-legit commands require approval", func(t *testing.T) {
+		t.Parallel()
+		needsApproval := []string{
+			"sudo apt update",
+			"su - root",
+			"doas mkdir /etc/foo",
+			"chmod 777 secret",
+			"chmod -R 777 secret",
+			"mkfs.ext4 /dev/sda1",
+			"dd if=/dev/zero of=/dev/sda",
+			"fdisk /dev/sda",
+			"parted /dev/sda",
+			"shutdown -h now",
+			"reboot",
+			"poweroff",
+			"halt",
+			"init 0",
+			"init 6",
+			"history -c",
+			"echo wiped > ~/.bash_history",
+		}
+		for _, cmd := range needsApproval {
+			result, _ := EvaluateCommandPermissionWithOptions(base, cmd, opts)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require_approval for: %s", cmd)
+		}
+	})
+
+	t.Run("network and exfiltration patterns auto-approve", func(t *testing.T) {
+		t.Parallel()
+		autoApproved := []string{
+			"curl https://example.com",
+			"wget https://example.com/file",
+			"nc -l 1234",
+			"netcat example.com 80",
+			"ncat -l 1234",
+			"socat - TCP:example.com:80",
+			"telnet example.com 23",
+			"ftp example.com",
+			"sftp user@host",
+			"scp file user@host:/tmp/",
+			"rsync -av src dst",
+			"ssh user@host",
+			"ping example.com",
+			"nslookup example.com",
+			"dig example.com",
+			"host example.com",
+			"env",
+			"printenv PATH",
+			"uvx some-pkg",
+			"cat .env",
+			"cat config.envrc",
+			"echo $HOME",
+			"ls ~",
+			"ls ../foo",
+			"echo hi > /dev/tcp/example.com/80",
+			`awk 'BEGIN{system("id")}'`,
+		}
+		for _, cmd := range autoApproved {
+			result, _ := EvaluateCommandPermissionWithOptions(base, cmd, opts)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("unmatched commands auto-approve", func(t *testing.T) {
+		t.Parallel()
+		result, _ := EvaluateCommandPermissionWithOptions(base, "some-random-cmd --flag value", opts)
+		assert.Equal(t, PermissionAutoApprove, result)
+	})
+
+	t.Run("cd to home/repo paths auto-approve with guidance message", func(t *testing.T) {
+		t.Parallel()
+		for _, cmd := range []string{"cd /home/user", "cd /Users/me", "cd /repo"} {
+			result, msg := EvaluateCommandPermissionWithOptions(base, cmd, opts)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+			assert.Contains(t, msg, "cd not needed", "expected guidance message for: %s", cmd)
+		}
+	})
+
+	t.Run("heredoc file write auto-approves with advisory in script eval", func(t *testing.T) {
+		t.Parallel()
+		script := "cat > out.txt << EOF\nhi\nEOF"
+		result, msg := EvaluateScriptPermissionWithOptions(base, script, opts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, "edit blocks")
+	})
+
+	t.Run("script with cd to home aggregates guidance message", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(base, "cd /home/user && ls", opts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, "cd not needed")
+	})
+
+	t.Run("absolute paths do not escalate", func(t *testing.T) {
+		t.Parallel()
+		result, _ := EvaluateCommandPermissionWithOptions(base, "ls /etc/passwd", opts)
+		assert.Equal(t, PermissionAutoApprove, result)
+	})
+}

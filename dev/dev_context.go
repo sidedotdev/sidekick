@@ -442,7 +442,11 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// Merge command permissions from all config sources: base → local → repo → workspace
 	var baseCommandPermissions common.CommandPermissionConfig
 	if v := workflow.GetVersion(ctx, "base-command-permissions-activity", workflow.DefaultVersion, 1); v >= 1 {
-		err = workflow.ExecuteActivity(ctx, common.BaseCommandPermissionsActivity).Get(ctx, &baseCommandPermissions)
+		var input common.BaseCommandPermissionsInput
+		if sv := workflow.GetVersion(ctx, "sandbox-command-permissions", workflow.DefaultVersion, 1); sv >= 1 {
+			input.EnvType = envType
+		}
+		err = workflow.ExecuteActivity(ctx, common.BaseCommandPermissionsActivity, input).Get(ctx, &baseCommandPermissions)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to get base command permissions: %v", err)
 		}
