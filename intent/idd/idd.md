@@ -227,6 +227,13 @@ Pressing the button to start immediately results in these actions:
 
 - This agent is implemented by the IDD flow (which includes this agent along
   with other orchestration for IDD)
+- IDD flow checks on intent updates via fsnotify and a long-running activity.
+  - The activity has a heartbeat to detect failures, and infinite retries and
+    infinite timeout.
+  - It returns the latest diff of changes
+  - This diff works for both existing tracked files, and new (untracked) files
+    (the diff is akin to the full intent content in this case). Existing git
+    diff helpers/activities are reused for this.
 - This AI agent automatically starts tasks if it thinks there is a good chunk of
   intent to work on
 - Task start tool calls and responses are always retained when managing chat

@@ -140,11 +140,14 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 	diff, err := pendingIntentDiff(dCtx, state)
 	if err != nil {
 		log.Error("Orchestrator: failed to read pending intent diff", "Error", err)
+		fmt.Printf("%v\n", err)
 		return
 	}
 	if strings.TrimSpace(diff) == "" {
+		fmt.Printf("empty\n")
 		return
 	}
+	fmt.Printf("here1\n")
 
 	if chatHistory.Len() == 0 {
 		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
