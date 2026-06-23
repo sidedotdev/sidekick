@@ -138,6 +138,13 @@ according to the human author/user.
         dismissed, so the intent canvas is always visible.
       - Sub task statuses are shown: completed, failed, in progress, blocked and
         canceled
+      - Grouped by status, with blocked at the top, then in progress, then
+        others
+      - Within group, ordered by last updated (fallback: created), reverse
+        chronological
+      - Subtask list is a scrollable section
+      - When many have completed such that scrolling is required, the ones done
+        over 1 hour ago are collapsed under "[caret] N Completed"
   - Any questions wrt highly ambiguous or contradictory intent that have
     surfaced, either by sub tasks or the orchestrator agent. Note that some
     level of ambiguity is expected, but not when a different answer than the one
