@@ -166,13 +166,20 @@
           <h2 class="rail-title">Sub-tasks</h2>
           <p v-if="!subtasks.length" class="rail-empty">No sub-tasks yet. Implement your intent to spin one up.</p>
           <ul v-else class="subtask-list">
-            <li v-for="task in visibleSubtasks" :key="task.flowId">
+            <li v-for="task in visibleSubtasks" :key="task.flowId" class="subtask-item">
               <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
                 <span class="subtask-meta">
                   <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
                   <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
                 </span>
               </button>
+              <button
+                v-if="canCancelSubtask(task)"
+                type="button"
+                class="subtask-cancel"
+                title="Cancel sub-task"
+                @click.stop="cancelSubtask(task)"
+              >✕</button>
             </li>
             <li v-if="collapsedCompleted.length" class="subtask-collapse">
               <button
@@ -619,6 +626,25 @@ const startSubtask = async () => {
     console.error('Failed to start intent sub-task:', e)
   } finally {
     starting.value = false
+  }
+}
+
+const canCancelSubtask = (task: IddSubtask): boolean => {
+  const cls = statusClass(task.status)
+  return cls === 'active' || cls === 'blocked'
+}
+
+const cancelSubtask = async (task: IddSubtask) => {
+  if (!canCancelSubtask(task)) return
+  if (!window.confirm('Are you sure you want to cancel this sub-task?')) return
+  try {
+    const res = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${task.flowId}/cancel`, {
+      method: 'POST',
+    })
+    if (!res.ok) throw new Error(await res.text())
+    await fetchIddState()
+  } catch (e) {
+    console.error('Failed to cancel intent sub-task:', e)
   }
 }
 
@@ -1170,6 +1196,38 @@ onBeforeUnmount(() => {
   gap: 0.4rem;
   margin: 0;
   padding: 0;
+}
+
+.subtask-item {
+  position: relative;
+}
+
+.subtask-cancel {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: var(--color-background-mute);
+  color: var(--color-text-muted, var(--color-text));
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.subtask-item:hover .subtask-cancel {
+  display: inline-flex;
+}
+
+.subtask-cancel:hover {
+  color: var(--color-heading);
+  background: var(--color-background);
 }
 
 .subtask-row {
