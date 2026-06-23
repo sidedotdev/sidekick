@@ -9,6 +9,8 @@ import (
 func TestRenderIntentRequirements(t *testing.T) {
 	t.Parallel()
 
+	preamble := "The following intent update has already been committed to intent/<path to file.md> (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself — treat the diff as a specification change that the code must now conform to.\n\n$ git show <sha>\n<diff>\nIdentify which behaviors in the diff are newly required or changed, locate the corresponding code (frontend, backend, prompts, etc.), and make the code changes needed. If a change is purely editorial (whitespace, wording with no semantic effect), no code change is needed for that hunk.\n"
+
 	t.Run("initial intent", func(t *testing.T) {
 		t.Parallel()
 		out := renderIntentRequirements(IntentRequirementsInfo{
@@ -16,7 +18,7 @@ func TestRenderIntentRequirements(t *testing.T) {
 			Diff:   "diff --git a/intent/mission.md b/intent/mission.md\n+if a < b && c > d {\n",
 		})
 
-		expected := "Implement the following initial intent:\n\n```md\n$ git show abc123\ndiff --git a/intent/mission.md b/intent/mission.md\n+if a < b && c > d {\n```\n"
+		expected := preamble + "Implement the following initial intent:\n\n```md\n$ git show abc123\ndiff --git a/intent/mission.md b/intent/mission.md\n+if a < b && c > d {\n```\n"
 		assert.Equal(t, expected, out)
 	})
 
@@ -28,7 +30,7 @@ func TestRenderIntentRequirements(t *testing.T) {
 			Update: true,
 		})
 
-		expected := "Implement the following intent update:\n\n```md\n$ git show def456\ndiff --git a/intent/mission.md b/intent/mission.md\n-Build great things\n+Build greater things\n```\n"
+		expected := preamble + "Implement the following intent update:\n\n```md\n$ git show def456\ndiff --git a/intent/mission.md b/intent/mission.md\n-Build great things\n+Build greater things\n```\n"
 		assert.Equal(t, expected, out)
 	})
 

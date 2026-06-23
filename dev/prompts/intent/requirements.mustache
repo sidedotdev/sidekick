@@ -1,3 +1,8 @@
+The following intent update has already been committed to intent/<path to file.md> (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself — treat the diff as a specification change that the code must now conform to.
+
+$ git show <sha>
+<diff>
+Identify which behaviors in the diff are newly required or changed, locate the corresponding code (frontend, backend, prompts, etc.), and make the code changes needed. If a change is purely editorial (whitespace, wording with no semantic effect), no code change is needed for that hunk.
 Implement the following {{#update}}intent update{{/update}}{{^update}}initial intent{{/update}}:
 
 ```md
