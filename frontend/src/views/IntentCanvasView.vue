@@ -524,6 +524,23 @@ const fetchIddState = async () => {
   }
 }
 
+// refreshCommittedBaseline re-reads only the committed (HEAD) content for the
+// active file so uncommitted-highlight styling clears as soon as the workflow
+// commits, without disturbing the user's in-progress edits.
+const refreshCommittedBaseline = async () => {
+  const path = activePath.value
+  if (!path) return
+  try {
+    const res = await fetch(`${apiBase.value}/file?path=${encodeURIComponent(path)}`)
+    if (!res.ok) return
+    const data = await res.json()
+    if (activePath.value !== path) return
+    committedContent.value = data.committedContent ?? ''
+  } catch (e) {
+    console.error('Failed to refresh committed baseline:', e)
+  }
+}
+
 const startSubtask = async () => {
   if (starting.value) return
   starting.value = true
@@ -535,6 +552,7 @@ const startSubtask = async () => {
     })
     if (!res.ok) throw new Error(await res.text())
     await fetchIddState()
+    await refreshCommittedBaseline()
   } catch (e) {
     console.error('Failed to start intent sub-task:', e)
   } finally {
