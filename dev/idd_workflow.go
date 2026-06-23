@@ -377,10 +377,31 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		return IntentRequirementsInfo{}, fmt.Errorf("failed to get intent diff: %w", err)
 	}
 
+	// A "clean" diff ignores whitespace and renders word-level changes so
+	// cosmetic reflow of markdown intent doesn't read as a real edit in the
+	// requirements prompt. Gate behind a version so older executions replay
+	// against the original activity sequence.
+	cleanDiff := showOutput.Stdout
+	cleanDiffVersion := workflow.GetVersion(dCtx, "idd-commit-intent-clean-diff", workflow.DefaultVersion, 1)
+	if cleanDiffVersion >= 1 {
+		var cleanOutput env.EnvRunCommandActivityOutput
+		err = workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer:       *dCtx.EnvContainer,
+			RelativeWorkingDir: "./",
+			Command:            "git",
+			Args:               []string{"show", "--word-diff=plain", "--ignore-all-space", commit},
+		}).Get(dCtx, &cleanOutput)
+		if err != nil {
+			return IntentRequirementsInfo{}, fmt.Errorf("failed to get clean intent diff: %w", err)
+		}
+		cleanDiff = cleanOutput.Stdout
+	}
+
 	return IntentRequirementsInfo{
-		Commit: commit,
-		Diff:   showOutput.Stdout,
-		Update: update,
+		Commit:    commit,
+		Diff:      showOutput.Stdout,
+		CleanDiff: cleanDiff,
+		Update:    update,
 	}, nil
 }
 
