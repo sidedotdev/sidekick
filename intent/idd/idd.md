@@ -100,7 +100,8 @@ according to the human author/user.
 #### Styling
 
 - Editor is full-width between the sidebars and touching the file path header
-  (no gaps) and the bottom of the viewport
+  (no gaps) and the bottom of the viewport.
+  - The editor's line numbers + line content scroll independently of the sidebars.
 - Sidebars can be resized and minimized
 - Side view for sub tasks can be resized too
 

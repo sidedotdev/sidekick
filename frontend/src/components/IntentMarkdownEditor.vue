@@ -312,6 +312,7 @@ defineExpose({
 <style scoped>
 .intent-markdown-editor {
   height: 100%;
+  max-height: 90vh; /* FIXME hack due to broken UI */
   width: 100%;
 }
 </style>
