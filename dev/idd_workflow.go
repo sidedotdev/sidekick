@@ -108,6 +108,17 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
+	// Register the idd_state query handler eagerly so the canvas UI can poll
+	// state even before SetupDevContext finishes (or if it fails). The handler
+	// closes over a pointer so later mutations are visible.
+	state := &IddState{
+		Subtasks:       []IddSubtask{},
+		Clarifications: []IddClarification{},
+	}
+	_ = workflow.SetQueryHandler(ctx, QueryNameIddState, func() (IddState, error) {
+		return *state, nil
+	})
+
 	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), string(input.RepoMode), input.StartBranch, input.Title, input.ConfigOverrides)
 	if err != nil {
 		signalWorkflowFailureOrCancel(ctx)
@@ -127,14 +138,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	SetupDevRunConfigQuery(dCtx)
 	SetupDevRunStateQuery(dCtx)
 
-	state := &IddState{
-		DefaultTargetBranch: dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch),
-		Subtasks:            []IddSubtask{},
-		Clarifications:      []IddClarification{},
-	}
-	_ = workflow.SetQueryHandler(dCtx, QueryNameIddState, func() (IddState, error) {
-		return *state, nil
-	})
+	state.DefaultTargetBranch = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 
 	startSubtaskCh := workflow.GetSignalChannel(dCtx, SignalNameStartIntentSubtask)
 	requestForUserCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameRequestForUser)
