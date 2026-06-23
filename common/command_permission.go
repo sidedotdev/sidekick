@@ -32,9 +32,100 @@ type CommandPermissionConfig struct {
 	ResetRequireApproval bool             `toml:"reset_require_approval,omitempty" json:"resetRequireApproval" koanf:"reset_require_approval"`
 }
 
-// BaseCommandPermissionsActivity is a Temporal activity wrapper for BaseCommandPermissions
-func BaseCommandPermissionsActivity(ctx context.Context) (CommandPermissionConfig, error) {
+// BaseCommandPermissionsInput selects which base permission policy
+// BaseCommandPermissionsActivity should return. The zero value (empty EnvType)
+// is interpreted as the local policy, so callers that have no env-specific
+// requirements can pass an empty struct.
+type BaseCommandPermissionsInput struct {
+	// EnvType is the active environment type string (e.g. "local", "devpod",
+	// "openshell"). Values matching the isolated-sandbox env types return the
+	// sandbox base policy; any other value (including the empty string)
+	// returns the local base policy.
+	EnvType string
+}
+
+// IsolatedSandboxEnvTypes is the set of env type strings that map to the
+// sandbox base permission policy. Kept here (rather than importing the env
+// package) to avoid a common→env import cycle.
+var IsolatedSandboxEnvTypes = map[string]bool{
+	"devpod":    true,
+	"openshell": true,
+}
+
+// BaseCommandPermissionsActivity is a Temporal activity wrapper that returns
+// the appropriate base permission policy for the given env type. An empty or
+// unrecognized EnvType returns the local base policy.
+func BaseCommandPermissionsActivity(ctx context.Context, input BaseCommandPermissionsInput) (CommandPermissionConfig, error) {
+	if IsolatedSandboxEnvTypes[input.EnvType] {
+		return BaseCommandPermissionsForIsolatedEnv(), nil
+	}
 	return BaseCommandPermissions(), nil
+}
+
+// SandboxHeredocFileWriteAdvisory is the advisory message appended to the
+// output of heredoc file-write commands run in an isolated sandbox env. The
+// command is still executed, but the agent is nudged toward edit blocks.
+const SandboxHeredocFileWriteAdvisory = "Advisory: this command wrote a file via a shell heredoc. " +
+	"Prefer edit blocks (APPEND_TO_FILE, or DELETE_FILE + CREATE_FILE) to create or modify files. " +
+	"Heredoc file writes are allowed in this sandbox but should be reserved for cases where edit blocks " +
+	"genuinely cannot be used."
+
+// BaseCommandPermissionsForIsolatedEnv returns the base permission policy used
+// when commands run inside an isolated sandbox (e.g. devpod or openshell).
+// Because the sandbox isolates the host, the strict local policy is relaxed:
+// only catastrophic-and-pointless operations are denied outright, a small set
+// of system-altering commands are escalated to the user, and everything else
+// (including network/exfiltration patterns) auto-approves. Callers must pair
+// this with EvaluatePermissionOptions{DefaultAutoApprove: true,
+// SkipAbsolutePathEscalation: true, HeredocFileWriteWarnInsteadOfDeny: true}.
+func BaseCommandPermissionsForIsolatedEnv() CommandPermissionConfig {
+	return CommandPermissionConfig{
+		AutoApprove: []CommandPattern{
+			// Surface the local-env 'cd not needed' guidance even in sandbox
+			// mode by carrying it on auto-approve patterns. The script
+			// evaluator collects these advisory messages and the runtime
+			// appends them to the command output.
+			{Pattern: `cd /home/`, Message: "cd not needed, the command will already be run in the correct working directory"},
+			{Pattern: `cd /Users/`, Message: "cd not needed, the command will already be run in the correct working directory"},
+			{Pattern: `cd /repo`, Message: "cd not needed, the command will already be run in the correct working directory"},
+		},
+		RequireApproval: []CommandPattern{
+			// Privilege escalation - still want a human in the loop.
+			{Pattern: "sudo"},
+			{Pattern: "su "},
+			{Pattern: "doas"},
+			// Dangerous permission changes.
+			{Pattern: "chmod 777"},
+			{Pattern: "chmod -R 777"},
+			// Disk/filesystem operations.
+			{Pattern: "mkfs"},
+			{Pattern: "dd if="},
+			{Pattern: "fdisk"},
+			{Pattern: "parted"},
+			// Shutdown/reboot.
+			{Pattern: "shutdown"},
+			{Pattern: "reboot"},
+			{Pattern: "poweroff"},
+			{Pattern: "halt"},
+			{Pattern: "init 0"},
+			{Pattern: "init 6"},
+			// History manipulation.
+			{Pattern: "history -c"},
+			{Pattern: `.*>\s*~/\.bash_history`},
+		},
+		Deny: []CommandPattern{
+			// Catastrophic-and-pointless: recursive force-delete of root or home.
+			{Pattern: `^rm -rf /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: `^rm -rf ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
+			{Pattern: `^rm -rf /\*`, Message: "Recursive force delete of root contents is extremely dangerous"},
+			{Pattern: `^rm -rf ~/\*`, Message: "Recursive force delete of home contents is extremely dangerous"},
+			{Pattern: `^rm -fr /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: `^rm -fr ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
+			// Fork bombs.
+			{Pattern: ":(){:|:&};:", Message: "Fork bomb detected - this will crash the system"},
+			{Pattern: ":(){ :|:& };:", Message: "Fork bomb detected - this will crash the system"},
+		},
+	}
 }
 
 // BaseCommandPermissions returns the hardcoded base permission configuration
@@ -868,6 +959,19 @@ type EvaluatePermissionOptions struct {
 	// does not recurse into list/pipeline bodies within redirected statements.
 	// This preserves determinism for in-workflow permission evaluation.
 	UseLegacyCommandExtraction bool
+	// DefaultAutoApprove makes commands that match no pattern auto-approve
+	// instead of requiring approval. Used for isolated sandbox envs where the
+	// strict local default does not apply.
+	DefaultAutoApprove bool
+	// SkipAbsolutePathEscalation disables the rule that bumps an otherwise
+	// auto-approved command containing an absolute path up to require_approval.
+	// Used for isolated sandbox envs where absolute paths are not a leak risk.
+	SkipAbsolutePathEscalation bool
+	// HeredocFileWriteWarnInsteadOfDeny makes heredoc file writes auto-approve
+	// with an advisory message appended to the script evaluator's output,
+	// instead of denying them. Also disables the escape-hatch require-approval
+	// escalation since the sandbox does not need an escape hatch.
+	HeredocFileWriteWarnInsteadOfDeny bool
 }
 
 // EvaluateCommandPermission evaluates a single command against the permission config.
@@ -925,7 +1029,7 @@ func EvaluateCommandPermissionWithOptions(config CommandPermissionConfig, comman
 		}
 		if matched, matches := matchPattern(p.Pattern, cmdToMatch); matched {
 			// Even if auto-approved, require approval for commands with absolute paths
-			if containsAbsolutePath(command) {
+			if !opts.SkipAbsolutePathEscalation && containsAbsolutePath(command) {
 				return PermissionRequireApproval, ""
 			}
 			msg := p.Message
@@ -936,6 +1040,9 @@ func EvaluateCommandPermissionWithOptions(config CommandPermissionConfig, comman
 		}
 	}
 
+	if opts.DefaultAutoApprove {
+		return PermissionAutoApprove, ""
+	}
 	// Default to require approval
 	return PermissionRequireApproval, ""
 }
@@ -959,10 +1066,22 @@ const heredocFileWriteDenyMessage = "Writing files via shell heredoc (e.g. `cat 
 	"the heredoc delimiter `ESCAPE_HATCH_EOF` is permitted but will require explicit approval."
 
 // EvaluateScriptPermissionWithOptions evaluates a shell script with configurable options.
+// When all commands auto-approve, the returned message aggregates any advisory
+// messages from matched auto-approve patterns (and from heredoc file writes in
+// sandbox mode), separated by blank lines, so callers can surface them to the
+// user/agent without blocking execution.
 func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script string, opts EvaluatePermissionOptions) (PermissionResult, string) {
-	for _, hw := range permission.DetectHeredocFileWrites(script) {
-		if !hw.UsesEscapeHatch() {
-			return PermissionDeny, heredocFileWriteDenyMessage
+	heredocWrites := permission.DetectHeredocFileWrites(script)
+	var advisories []string
+	if opts.HeredocFileWriteWarnInsteadOfDeny {
+		if len(heredocWrites) > 0 {
+			advisories = append(advisories, SandboxHeredocFileWriteAdvisory)
+		}
+	} else {
+		for _, hw := range heredocWrites {
+			if !hw.UsesEscapeHatch() {
+				return PermissionDeny, heredocFileWriteDenyMessage
+			}
 		}
 	}
 
@@ -973,18 +1092,21 @@ func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script 
 		commands = permission.ExtractCommands(script)
 	}
 
-	// If no commands extracted, default to require approval
 	if len(commands) == 0 {
+		if opts.DefaultAutoApprove {
+			return PermissionAutoApprove, joinAdvisories(advisories)
+		}
 		return PermissionRequireApproval, ""
 	}
 
 	hasRequireApproval := false
 
 	for _, cmd := range commands {
-		// Commands that use the documented heredoc escape-hatch delimiter
-		// bypass the heredoc deny patterns in the config and are forced
-		// through the approval flow so a human can vet them.
-		if commandUsesHeredocEscapeHatch(cmd) {
+		// Commands using the documented heredoc escape-hatch delimiter
+		// bypass the heredoc deny patterns and are forced through approval
+		// so a human can vet them. In sandbox mode the escape hatch is
+		// irrelevant (heredoc writes are allowed outright) so we skip this.
+		if !opts.HeredocFileWriteWarnInsteadOfDeny && commandUsesHeredocEscapeHatch(cmd) {
 			hasRequireApproval = true
 			continue
 		}
@@ -995,6 +1117,10 @@ func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script 
 			return PermissionDeny, msg
 		case PermissionRequireApproval:
 			hasRequireApproval = true
+		case PermissionAutoApprove:
+			if msg != "" {
+				advisories = append(advisories, msg)
+			}
 		}
 	}
 
@@ -1002,7 +1128,23 @@ func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script 
 		return PermissionRequireApproval, ""
 	}
 
-	return PermissionAutoApprove, ""
+	return PermissionAutoApprove, joinAdvisories(advisories)
+}
+
+func joinAdvisories(advisories []string) string {
+	if len(advisories) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(advisories))
+	var unique []string
+	for _, a := range advisories {
+		if _, ok := seen[a]; ok {
+			continue
+		}
+		seen[a] = struct{}{}
+		unique = append(unique, a)
+	}
+	return strings.Join(unique, "\n\n")
 }
 
 func commandUsesHeredocEscapeHatch(cmd string) bool {
