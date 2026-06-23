@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"sidekick/coding/git"
 	"sidekick/dev"
@@ -21,6 +22,15 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/api/serviceerror"
 )
+
+// flowWorktreeWaitTimeout bounds how long flowWorktreeDir polls for a
+// freshly-created worktree to appear in storage and on disk. It is a package
+// variable so tests can shorten it to keep the not-found path fast.
+var flowWorktreeWaitTimeout = 10 * time.Second
+
+// flowWorktreePollInterval is the gap between worktree lookup attempts while
+// waiting for a new flow's worktree to be persisted and materialized on disk.
+var flowWorktreePollInterval = 100 * time.Millisecond
 
 // IntentFileEntry describes a single node in a flow worktree's intent filetree.
 type IntentFileEntry struct {
@@ -45,7 +55,10 @@ type FinishIntentRequest struct {
 }
 
 // flowWorktreeDir resolves the working directory of the worktree backing a flow,
-// returning an HTTP status code and error suitable for direct responses.
+// returning an HTTP status code and error suitable for direct responses. A
+// freshly-started IDD flow can be navigated to before the worktree row is
+// persisted or its directory finishes materializing on disk, so this polls
+// until both conditions hold or flowWorktreeWaitTimeout elapses.
 func (ctrl *Controller) flowWorktreeDir(ctx context.Context, workspaceId, flowId string) (string, int, error) {
 	if _, err := ctrl.service.GetFlow(ctx, workspaceId, flowId); err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
@@ -54,14 +67,28 @@ func (ctrl *Controller) flowWorktreeDir(ctx context.Context, workspaceId, flowId
 		return "", http.StatusInternalServerError, err
 	}
 
-	worktrees, err := ctrl.service.GetWorktreesForFlow(ctx, workspaceId, flowId)
-	if err != nil {
-		return "", http.StatusInternalServerError, err
+	deadline := time.Now().Add(flowWorktreeWaitTimeout)
+	for {
+		worktrees, err := ctrl.service.GetWorktreesForFlow(ctx, workspaceId, flowId)
+		if err != nil {
+			return "", http.StatusInternalServerError, err
+		}
+		if len(worktrees) > 0 {
+			dir := worktrees[0].WorkingDirectory
+			if info, statErr := os.Stat(dir); statErr == nil && info.IsDir() {
+				return dir, 0, nil
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return "", http.StatusNotFound, fmt.Errorf("no worktree found for flow")
+		}
+		select {
+		case <-ctx.Done():
+			return "", http.StatusRequestTimeout, ctx.Err()
+		case <-time.After(flowWorktreePollInterval):
+		}
 	}
-	if len(worktrees) == 0 {
-		return "", http.StatusNotFound, fmt.Errorf("no worktree found for flow")
-	}
-	return worktrees[0].WorkingDirectory, 0, nil
 }
 
 // resolveWorktreeFilePath joins a worktree-relative path to its worktree dir,
