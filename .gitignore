@@ -44,6 +44,8 @@ local-temporal-db*
 # dlv bugs
 __debug_bin*
 
+.playwright-cli/
+
 # TODO: audit these and move into the sidekick workspace kanban board
 todo.md
 

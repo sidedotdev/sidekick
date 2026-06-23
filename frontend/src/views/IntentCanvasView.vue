@@ -670,18 +670,30 @@ const createEditor = () => {
 }
 
 const buildEditorTheme = (isDark: boolean) => {
-  const selectionBg = isDark ? 'rgba(131, 58, 180, 0.45)' : 'rgba(131, 58, 180, 0.28)'
+  const selectionBg = isDark ? 'rgba(131, 58, 180, 0.65)' : 'rgba(131, 58, 180, 0.45)'
   return EditorView.theme(
     {
       '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
       '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
       '.cm-content': { padding: '1.75rem 2rem', lineHeight: '1.6' },
       '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--color-text-2)' },
+      // CodeMirror sizes each gutter element to match its corresponding editor
+      // line's height. Markdown headings render with a larger font-size and
+      // therefore taller line boxes; centring keeps line numbers visually
+      // aligned with the (also vertically-centred) heading text and caret.
+      '.cm-gutterElement': { display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
+      '.cm-lineNumbers .cm-gutterElement': { paddingRight: '0.5em' },
       '.cm-activeLine': { backgroundColor: 'var(--color-background-mute)' },
       '.cm-activeLineGutter': { backgroundColor: 'transparent' },
       '&.cm-focused': { outline: 'none' },
+      // CodeMirror applies an inline `z-index: -2` to the selection layer so
+      // that the host page's selection styles can sit beneath the content; we
+      // need it above .cm-activeLine so partial selections stay visible.
+      '.cm-selectionLayer': { zIndex: '2 !important' },
       '.cm-selectionBackground, ::selection': { backgroundColor: selectionBg },
-      '&.cm-focused .cm-selectionBackground': { backgroundColor: selectionBg },
+      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+        backgroundColor: selectionBg,
+      },
       '.cm-content ::selection': { backgroundColor: selectionBg },
       '.cm-intent-uncommitted': {
         backgroundColor: isDark ? 'rgba(25, 197, 24, 0.10)' : 'rgba(25, 197, 24, 0.28)',
