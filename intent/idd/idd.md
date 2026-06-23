@@ -87,6 +87,7 @@ according to the human author/user.
 - Sidebars can be resized and minimized
 - Side view for sub tasks can be resized too
 
+
 #### Markdown Editor Component
 
   - Separate component from intent canvas
@@ -120,7 +121,7 @@ according to the human author/user.
 - The canvas also has a right sidebar that supports showing the user:
   - A button to start implementing the current intent state
   - A list of subtasks
-      - Clicking them opens the existing flow view component (not iframe, and without header/editor links/sidebar nav/etc.), but in a side view. When the side view has focus, pressing escape dismisses it.
+      - Clicking them opens the existing flow view component (not iframe, and without header/editor links/sidebar nav/etc.), but in a side view
         that can be dismissed, so the intent canvas is always visible.
       - Sub task statuses are shown: completed, failed, in progress, blocked and canceled
   - Any questions wrt highly ambiguous or contradictory intent that have
@@ -169,8 +170,9 @@ according to the human author/user.
 - Task start tool calls and responses are always retained when managing
   chat history.
 - It can scope the intent to a specific section of an intent file, or
-  the entire intent diff, or just an arbitrary prompt that scopes and directs
-  the subtask to a portion of the intent.
+  the entire intent diff, or just an arbitrary prompt that scopes and directs the subtask to a portion of the intent.
+
+
 
 ### Sub tasks
    
