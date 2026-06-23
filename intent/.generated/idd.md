@@ -35,6 +35,7 @@ intent_links:
     code:
       - frontend/src/lib/intent_diff.ts
       - frontend/src/lib/intent_diff_editor.ts
+      - frontend/src/views/IntentCanvasView.vue
   - intent: "#resizable-and-minimizable-canvas-layout"
     code:
       - frontend/src/views/IntentCanvasView.vue
@@ -92,7 +93,10 @@ To distinguish committed vs uncommitted intent in the canvas, the read handler
 returns the file's content at `HEAD` alongside the working-copy content. The
 frontend diffs them at word granularity (whitespace runs compared loosely so
 newline shifts don't register as edits) and decorates the added ranges in the
-CodeMirror editor.
+CodeMirror editor. After a sub-task is started (which commits the current
+intent), the canvas re-reads the committed baseline for the active file so the
+uncommitted-highlight styling clears immediately without waiting for the user
+to refresh or switch files.
 
 ## Standalone markdown editor component
 

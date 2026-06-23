@@ -133,8 +133,6 @@ according to the human author/user.
     convenience. They are shown alongside the sub task that triggered it.
   - There is a button to finish the idd flow. Uses a dismissable side view to show the finish UI 
   - Bottom right has a dev run play button, which will start a dev run
-  - There is some way to interact with the orchestrator agent that normally just runs
-    in the background. Opens a side view with a new component. Allows viewing the full history of what happened with the agent as well as queuing messages to it.
 
 ### Finish UI
 
