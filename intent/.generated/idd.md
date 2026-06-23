@@ -39,6 +39,9 @@ intent_links:
   - intent: "#resizable-and-minimizable-canvas-layout"
     code:
       - frontend/src/views/IntentCanvasView.vue
+  - intent: "#right-sidebar"
+    code:
+      - frontend/src/views/IntentCanvasView.vue
 ---
 # Inferred IDD Implementation Notes
 
@@ -122,3 +125,11 @@ variable-driven width. All widths and minimized states persist to
 preferences, not per-flow content). The markdown editor itself is full-width
 between the rails and flush with the file-path header — no internal padding,
 border, or max-width — so the writing surface dominates the canvas.
+
+## Side view escape dismissal
+
+The sub-task side panel is a focusable container (`tabindex="-1"`) that grabs
+focus when opened, so pressing Escape while it has focus dismisses it via a
+`keydown.esc.stop` handler on the panel itself rather than a global listener.
+This keeps the intent canvas's own keyboard shortcuts unaffected when the side
+view isn't focused.
