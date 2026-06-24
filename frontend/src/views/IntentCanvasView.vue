@@ -286,6 +286,20 @@
           <p v-else class="finish-empty">No changes to merge.</p>
         </section>
 
+        <section v-if="clarifications.length" class="finish-requests">
+          <span class="finish-label">Pending user requests</span>
+          <ul class="clarify-list">
+            <li
+              v-for="(item, idx) in clarifications"
+              :key="`finish-clarify-${item.subtaskFlowId}-${idx}`"
+              class="clarify-card"
+            >
+              <p class="clarify-question">{{ item.question }}</p>
+              <button type="button" class="clarify-link" @click="openSubtask(item.subtaskFlowId)">View sub-task</button>
+            </li>
+          </ul>
+        </section>
+
         <p v-if="finishError" class="finish-error">{{ finishError }}</p>
       </div>
       <footer class="finish-actions">
@@ -318,7 +332,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
 import BranchSelector from '../components/BranchSelector.vue'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
@@ -362,6 +376,7 @@ interface IddNudge {
 }
 
 const route = useRoute()
+const router = useRouter()
 const flowId = computed(() => route.params.id as string)
 const flowBase = computed(() => `/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}`)
 const apiBase = computed(() => `${flowBase.value}/intent`)
@@ -682,6 +697,7 @@ const fetchIddState = async () => {
     subtasks.value = (result.subtasks ?? []) as IddSubtask[]
     clarifications.value = (result.clarifications ?? []) as IddClarification[]
     nudges.value = (result.nudges ?? []) as IddNudge[]
+    finishWorkflowError.value = (result.finishError ?? '') as string
     const defaultTarget = (result.defaultTargetBranch ?? '') as string
     if (defaultTarget) finishDefaultBranch.value = defaultTarget
     if (typeof result.autoMode === 'boolean' && !autoModeUpdating.value) {
@@ -814,6 +830,11 @@ const finishDiff = ref('')
 const finishLoading = ref(false)
 const finishing = ref(false)
 const finishError = ref('')
+// finishWorkflowError mirrors IddState.finishError: a failure raised by the IDD
+// workflow itself while finishing (merge conflicts, cleanup, etc.), which the
+// finish panel surfaces prominently like FlowView/SubflowContainer do for failed
+// flows. Distinct from finishError, which also covers client-side request errors.
+const finishWorkflowError = ref('')
 
 watch(finishTargetBranch, (value, prev) => {
   if (!showFinishDialog.value) return
@@ -846,6 +867,7 @@ const loadFinishDiff = async () => {
 
 const openFinishDialog = async () => {
   finishError.value = ''
+  finishWorkflowError.value = ''
   finishDiff.value = ''
   showFinishDialog.value = true
   if (finishDefaultBranch.value && !finishTargetBranch.value) {
@@ -865,6 +887,7 @@ const confirmFinish = async () => {
   if (!finishTargetBranch.value || finishing.value) return
   finishing.value = true
   finishError.value = ''
+  finishWorkflowError.value = ''
   try {
     const res = await fetch(`${apiBase.value}/finish`, {
       method: 'POST',
@@ -872,12 +895,26 @@ const confirmFinish = async () => {
       body: JSON.stringify({ targetBranch: finishTargetBranch.value }),
     })
     if (!res.ok) throw new Error(await res.text())
-    showFinishDialog.value = false
-    await fetchIddState()
-    await fetchFlow()
+    // The merge, worktree cleanup and sub-task cancellation run asynchronously
+    // in the IDD workflow, so keep the panel open and poll its state until it
+    // either reports a finish error or the flow completes. On success the user
+    // is redirected to the kanban board.
+    while (showFinishDialog.value) {
+      await fetchIddState()
+      if (finishWorkflowError.value) {
+        finishError.value = finishWorkflowError.value
+        return
+      }
+      await fetchFlow()
+      if (flow.value?.status === 'complete') {
+        router.push({ name: 'kanban' })
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+    }
   } catch (e) {
     console.error('Failed to finish IDD:', e)
-    finishError.value = 'Failed to finish IDD'
+    finishError.value = e instanceof Error ? e.message : 'Failed to finish IDD'
   } finally {
     finishing.value = false
   }
@@ -1930,6 +1967,12 @@ onBeforeUnmount(() => {
   color: var(--color-error-text);
   font-size: 0.85rem;
   margin: 0;
+}
+
+.finish-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .finish-actions {
