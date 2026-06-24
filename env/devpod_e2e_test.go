@@ -48,8 +48,8 @@ func TestDevPodIntegration(t *testing.T) {
 
 	workspacePath := setupMinimalWorkspace(t)
 
-	// Start the DevPod workspace. When the container is already running
-	// (e.g. pre-warmed by `devpod up .` in side.yml), this returns quickly.
+	// Start the DevPod workspace. When the container is already running, this
+	// returns quickly.
 	workspaceName := "test-devpod-integration-sidekick-e2e" // use fixed value for faster runs (no repeated image build)
 	err := DevPodUpActivity(context.Background(), DevPodUpInput{WorkspacePath: workspacePath, IDE: "none", WorkspaceId: workspaceName})
 	require.NoError(t, err, "DevPodUpActivity failed")
