@@ -358,6 +358,35 @@ describe('IntentCanvasView', () => {
     expect(JSON.parse(startBodies[0])).toEqual({ update: false })
   })
 
+  it('starts an intent sub-task when Cmd/Ctrl+I is pressed', async () => {
+    const startBodies: string[] = []
+    const fetchSpy = installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.includes('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u.endsWith('/intent/start_subtask') && opts?.method === 'POST') {
+        startBodies.push(String(opts.body))
+        return Promise.resolve(jsonResponse({ message: 'Intent sub-task started' }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', ctrlKey: true }))
+    await flushPromises()
+
+    expect(fetchSpy).toHaveBeenCalledWith(`${intentBase}/start_subtask`, expect.objectContaining({ method: 'POST' }))
+    expect(startBodies).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
   it('reopens the last viewed file on mount when one is remembered', async () => {
     const fileReads: string[] = []
     installFetch((url) => {

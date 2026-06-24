@@ -151,7 +151,7 @@
           :disabled="starting"
         >
           <span class="implement-label">{{ starting ? 'Starting…' : 'Implement intent' }}</span>
-          <kbd class="implement-hint">{{ shortcutLabel }}</kbd>
+          <ShortcutHint :label="shortcutLabel" />
         </button>
 
         <button
@@ -338,6 +338,7 @@ import BranchSelector from '../components/BranchSelector.vue'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import IntentMarkdownEditor from '../components/IntentMarkdownEditor.vue'
 import SubtaskSidePanel from '../components/SubtaskSidePanel.vue'
+import ShortcutHint from '../components/ShortcutHint.vue'
 import FlowView from './FlowView.vue'
 import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
 import DevRunControls from '../components/DevRunControls.vue'
@@ -499,7 +500,7 @@ const fetchFlow = async () => {
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
-const shortcutLabel = isMac ? '⌘↵' : 'Ctrl+↵'
+const shortcutLabel = isMac ? '⌘I' : 'Ctrl+I'
 
 let iddStateTimer: ReturnType<typeof setInterval> | null = null
 
@@ -921,7 +922,7 @@ const confirmFinish = async () => {
 }
 
 const handleShortcut = (event: KeyboardEvent) => {
-  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+  if ((event.key === 'i' || event.key === 'I') && (event.metaKey || event.ctrlKey)) {
     event.preventDefault()
     startSubtask()
   }
@@ -1331,13 +1332,6 @@ onBeforeUnmount(() => {
 .implement-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.implement-hint {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 0.7rem;
-  opacity: 0.8;
-  letter-spacing: 0.04em;
 }
 
 .rail-section {

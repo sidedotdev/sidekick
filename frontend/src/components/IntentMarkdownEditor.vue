@@ -237,7 +237,7 @@ const createEditor = () => {
         extensions: [
           Prec.highest(
             keymap.of([
-              { key: 'Mod-Enter', preventDefault: true, run: submitShortcut },
+              { key: 'Mod-i', preventDefault: true, run: submitShortcut },
             ]),
           ),
           basicSetup,
