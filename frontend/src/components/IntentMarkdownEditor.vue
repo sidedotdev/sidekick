@@ -81,9 +81,12 @@ const buildEditorTheme = (isDark: boolean) => {
   return EditorView.theme(
     {
       '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
+<<<<<<< HEAD
       // overscrollBehavior 'none' stops the rubber-band/bounce animation when
       // scrolling fast past the content bounds; the scroller simply halts at
       // its edges instead of overshooting and springing back.
+=======
+>>>>>>> side/improve-scroller-behavior
       '.cm-scroller': {
         fontFamily: '"JetBrains Mono", monospace',
         overflow: 'auto',
@@ -245,8 +248,11 @@ const createEditor = () => {
           codeFolding(),
           syntaxHighlighting(markdownHighlightStyle),
           EditorView.lineWrapping,
+<<<<<<< HEAD
           // Allow scrolling until the last line reaches the top of the editor,
           // rather than stopping once the document's end is merely visible.
+=======
+>>>>>>> side/improve-scroller-behavior
           scrollPastEnd(),
           indentUnit.of(tabIndent()),
           keymap.of([
