@@ -85,7 +85,7 @@ according to the human author/user.
 - Doesn't ask for task description in the UI to start. In fact, it removes task
   fields other than model config, title (required for idd, unlike other flow
   types), and start branch.
-      
+  
 ### Interface
 
 - Starting an idd task/flow creates a new worktree and takes you directly to the
@@ -137,12 +137,18 @@ according to the human author/user.
     - Rather than the YAML being collapsed, the entire frontmatter section is
       collapsed on the first line of the markdown file
   - Saves intent automatically as you type in the worktree
-  - Auto-formats markdown (collapsing whitespace and wrapping lines, including
-    list items) on save
+  - Auto-formats markdown on save
+    - Collapses whitespace
+    - Removes trailing whitespace except in code blocks
+    - Wraps lines in paragraphs & list items
+    - Empty list items are left alone
+    - Tests confirm all scenarios
   - Auto-formatting & saving minimize disruption to the editor state:
-    - The cursor and selection state remains where it was if possible
-    - If not possible, it is kept as close as possible
+    - The cursor and selection state remains where it was exactly
+      - Never change characters to the left of the cursor on the active line
     - The vertical position of the cursor relative to the viewport is maintained
+      exactly
+    - Tests confirm these scenarios
 
 ##### Editor Styling
 
