@@ -266,17 +266,25 @@ func executeActivityDirect(activityName string, activityArgs []json.RawMessage, 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Build arguments: first arg is context, rest are from JSON
-	// FIXME only do this if it actually is the first argument, it does not have to be
-	args := make([]reflect.Value, fnType.NumIn())
-	args[0] = reflect.ValueOf(ctx)
+	// Only inject a context when the activity's first parameter is a
+	// context.Context; some activities take their input struct directly.
+	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
+	injectContext := fnType.NumIn() > 0 && fnType.In(0) == contextType
 
-	for i := 1; i < fnType.NumIn(); i++ {
+	args := make([]reflect.Value, fnType.NumIn())
+	firstJSONArg := 0
+	if injectContext {
+		args[0] = reflect.ValueOf(ctx)
+		firstJSONArg = 1
+	}
+
+	for i := firstJSONArg; i < fnType.NumIn(); i++ {
 		argType := fnType.In(i)
 		argPtr := reflect.New(argType)
-		if i-1 < len(activityArgs) {
-			if err := json.Unmarshal(activityArgs[i-1], argPtr.Interface()); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal argument %d: %w", i-1, err)
+		jsonArgIndex := i - firstJSONArg
+		if jsonArgIndex < len(activityArgs) {
+			if err := json.Unmarshal(activityArgs[jsonArgIndex], argPtr.Interface()); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal argument %d: %w", jsonArgIndex, err)
 			}
 		}
 		args[i] = argPtr.Elem()
