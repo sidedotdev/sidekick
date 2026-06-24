@@ -145,6 +145,12 @@ type IddState struct {
 	// AutoMode indicates whether the background orchestrator will auto-create
 	// sub-tasks when intent edits settle in the worktree.
 	AutoMode bool `json:"autoMode"`
+	// FinishError records the most recent failure encountered while finishing
+	// the IDD flow (e.g. missing target branch or merge conflicts) so the
+	// canvas finish panel can surface it prominently rather than leaving the
+	// user staring at a silently still-running workflow. It is cleared at the
+	// start of each finish attempt.
+	FinishError string `json:"finishError,omitempty"`
 }
 
 // IddWorkflow drives the Intent Driven Development canvas: it sets up a worktree
@@ -401,8 +407,10 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
 			var sig FinishIddSignal
 			c.Receive(dCtx, &sig)
+			state.FinishError = ""
 			if err := finishIdd(dCtx, input, sig, state); err != nil {
 				workflow.GetLogger(dCtx).Error("Failed to finish idd flow", "Error", err)
+				state.FinishError = err.Error()
 				return
 			}
 			finished = true
@@ -494,13 +502,13 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		}
 		return
 	}
+
 	reqInfo.ScopePrompt = sig.ScopePrompt
 
-<<<<<<< HEAD
 	if !preReserved {
 		flowId = "flow_" + ksuidSideEffect(dCtx)
 	}
-=======
+
 	// The sub-task gets its own descriptive title generated from the committed
 	// intent sha & diff, falling back to the IDD task title if generation fails.
 	// Gated by version so in-flight sub-tasks recorded before this change replay
@@ -514,7 +522,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		}
 	}
 
->>>>>>> side/improve-intent-subtask-workflow
 	branch := dCtx.Worktree.Name
 	childCtx := workflow.WithChildOptions(dCtx, workflow.ChildWorkflowOptions{
 		WorkflowID:        flowId,
@@ -545,10 +552,10 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 
 	now := workflow.Now(dCtx)
-<<<<<<< HEAD
 	if preReserved {
 		for i := range state.Subtasks {
 			if state.Subtasks[i].FlowId == flowId {
+				state.Subtasks[i].Title = title
 				state.Subtasks[i].Commit = reqInfo.Commit
 				state.Subtasks[i].Status = "in_progress"
 				state.Subtasks[i].DispatchedDiff = reqInfo.Diff
@@ -560,6 +567,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	} else {
 		state.Subtasks = append(state.Subtasks, IddSubtask{
 			FlowId:         we.ID,
+			Title:          title,
 			Commit:         reqInfo.Commit,
 			Status:         "in_progress",
 			ScopePrompt:    sig.ScopePrompt,
@@ -568,16 +576,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			UpdatedAt:      now,
 		})
 	}
-=======
-	state.Subtasks = append(state.Subtasks, IddSubtask{
-		FlowId:    we.ID,
-		Title:     title,
-		Commit:    reqInfo.Commit,
-		Status:    "in_progress",
-		CreatedAt: now,
-		UpdatedAt: now,
-	})
->>>>>>> side/improve-intent-subtask-workflow
 
 	// Persist a flow record for the sub-task, parented to the IDD task, so its
 	// flow view (and any pending user requests it raises when intent is

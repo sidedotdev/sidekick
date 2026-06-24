@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import IntentCanvasView from '../IntentCanvasView.vue'
 
+const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }))
+
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { id: 'flow-1' } }),
+  useRouter: () => ({ push: routerPush }),
 }))
 
 vi.mock('../../lib/store', () => ({
@@ -51,6 +54,14 @@ vi.mock('../FlowView.vue', () => ({
 vi.mock('../../lib/intent_diff_editor', () => ({
   uncommittedHighlightExtension: () => ({}),
   applyUncommittedHighlight: () => {},
+}))
+
+vi.mock('../../components/BranchSelector.vue', () => ({
+  default: {
+    name: 'BranchSelector',
+    props: { modelValue: { type: String, default: '' } },
+    template: '<div class="branch-selector-stub"></div>',
+  },
 }))
 
 const intentBase = '/api/v1/workspaces/ws-1/flows/flow-1/intent'
@@ -409,5 +420,91 @@ describe('IntentCanvasView', () => {
     await flushPromises()
 
     expect(window.localStorage.getItem('intent-canvas:last-file:flow-1')).toBe('intent/specs/auth.md')
+  })
+
+  it('redirects to the kanban board after the IDD flow finishes successfully', async () => {
+    routerPush.mockClear()
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({ result: { subtasks: [], clarifications: [], defaultTargetBranch: 'main' } }),
+        )
+      }
+      if (u.includes('/intent/finish_diff')) {
+        return Promise.resolve(jsonResponse({ diff: 'merge diff' }))
+      }
+      if (u.endsWith('/intent/finish') && opts?.method === 'POST') {
+        return Promise.resolve(jsonResponse({}))
+      }
+      if (u === flowBase) {
+        return Promise.resolve(jsonResponse({ flow: { status: 'complete' } }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    await wrapper.find('.finish-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.finish-actions .primary-btn').trigger('click')
+    await flushPromises()
+
+    expect(routerPush).toHaveBeenCalledWith({ name: 'kanban' })
+  })
+
+  it('surfaces a workflow finish error in the finish panel and does not redirect', async () => {
+    routerPush.mockClear()
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({
+            result: {
+              subtasks: [],
+              clarifications: [],
+              defaultTargetBranch: 'main',
+              finishError: 'Merge conflict on main',
+            },
+          }),
+        )
+      }
+      if (u.includes('/intent/finish_diff')) {
+        return Promise.resolve(jsonResponse({ diff: 'merge diff' }))
+      }
+      if (u.endsWith('/intent/finish') && opts?.method === 'POST') {
+        return Promise.resolve(jsonResponse({}))
+      }
+      if (u === flowBase) {
+        return Promise.resolve(jsonResponse({ flow: { status: 'in_progress' } }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    await wrapper.find('.finish-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.finish-actions .primary-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.finish-error').text()).toBe('Merge conflict on main')
+    expect(routerPush).not.toHaveBeenCalled()
   })
 })
