@@ -20,7 +20,7 @@ import { indentLess, indentMore } from '@codemirror/commands'
 import { tags as t } from '@lezer/highlight'
 import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { applyUncommittedHighlight, uncommittedHighlightExtension } from '../lib/intent_diff_editor'
-import { formatMarkdown } from '../lib/markdown_format'
+import { formatMarkdownPreservingSelection } from '../lib/markdown_format'
 
 const props = withDefaults(
   defineProps<{
@@ -164,24 +164,28 @@ const caretTop = (view: EditorView, pos: number): number | null => {
 // formatDocument reflows plain paragraphs and collapses extra blank lines,
 // leaving frontmatter and fenced code blocks alone so executable/structured
 // content is never silently rewritten. It runs as part of saving rather than
-// while editing, and minimizes disruption: the selection is kept where it
-// still fits (clamped as close as possible otherwise) and the caret is pinned
-// to the same vertical position within the viewport across the reflow.
+// while editing, and minimizes disruption: the block holding the caret is left
+// verbatim so text to the left of the cursor never changes, the selection maps
+// onto the same content after the reflow, and the caret is pinned to the same
+// vertical position within the viewport.
 const formatDocument = () => {
   if (!editorView) return
   const view = editorView
   const current = view.state.doc.toString()
-  const formatted = formatMarkdown(current, FORMAT_WRAP_COLUMN)
-  if (formatted === current) return
   const { anchor, head } = view.state.selection.main
+  const {
+    text: formatted,
+    anchor: newAnchor,
+    head: newHead,
+  } = formatMarkdownPreservingSelection(current, anchor, head, FORMAT_WRAP_COLUMN)
+  if (formatted === current) return
   const beforeTop = caretTop(view, head)
-  const length = formatted.length
   // Suppress the external-change emit so the host owns syncing the formatted
   // text back into its model, avoiding a redundant save round-trip.
   applyingExternal = true
   view.dispatch({
     changes: { from: 0, to: current.length, insert: formatted },
-    selection: { anchor: Math.min(anchor, length), head: Math.min(head, length) },
+    selection: { anchor: newAnchor, head: newHead },
     userEvent: 'input.format',
   })
   applyingExternal = false

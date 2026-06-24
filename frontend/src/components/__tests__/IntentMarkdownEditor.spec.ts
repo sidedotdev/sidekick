@@ -193,4 +193,73 @@ describe('IntentMarkdownEditor', () => {
 
     expect(view!.state.selection.main.head).toBe(view!.state.doc.length)
   })
+
+  it('never rewrites text to the left of the caret on the active line', async () => {
+    wrapper = mount(IntentMarkdownEditor, {
+      props: { modelValue: 'aaa   \n\n\n\nactive line here\n', committedContent: '' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
+
+    const offset = 'aaa   \n\n\n\nactive'.length
+    view!.dispatch({ selection: { anchor: offset, head: offset } })
+    const exposed = wrapper.vm as unknown as { formatNow: () => string }
+    exposed.formatNow()
+
+    const head = view!.state.selection.main.head
+    const line = view!.state.doc.lineAt(head)
+    expect(view!.state.doc.sliceString(line.from, head)).toBe('active')
+  })
+
+  it('preserves the selected text exactly across formatting', async () => {
+    wrapper = mount(IntentMarkdownEditor, {
+      props: { modelValue: 'aaa   \n\n\n\nbbb ccc ddd\n\n\n\neee   \n', committedContent: '' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
+
+    const doc = view!.state.doc.toString()
+    const anchor = doc.indexOf('bbb')
+    const head = doc.indexOf('ddd') + 'ddd'.length
+    view!.dispatch({ selection: { anchor, head } })
+    const exposed = wrapper.vm as unknown as { formatNow: () => string }
+    exposed.formatNow()
+
+    const sel = view!.state.selection.main
+    expect(view!.state.doc.sliceString(sel.from, sel.to)).toBe('bbb ccc ddd')
+  })
+
+  it('maintains the caret viewport-relative position by scrolling exactly', async () => {
+    wrapper = mount(IntentMarkdownEditor, {
+      props: { modelValue: 'aaa   \n\n\n\nbbb ccc\n', committedContent: '' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
+
+    const offset = 'aaa   \n\n\n\nbbb'.length
+    view!.dispatch({ selection: { anchor: offset, head: offset } })
+
+    // Simulate the caret rendering 30px higher after the reflow; the scroll
+    // position must move by the same delta so it stays put in the viewport.
+    let calls = 0
+    ;(view as unknown as { coordsAtPos: (pos: number) => { top: number } }).coordsAtPos = () => {
+      calls += 1
+      return { top: calls === 1 ? 100 : 70 }
+    }
+    view!.scrollDOM.scrollTop = 0
+
+    const exposed = wrapper.vm as unknown as { formatNow: () => string }
+    exposed.formatNow()
+
+    expect(view!.scrollDOM.scrollTop).toBe(-30)
+  })
 })
