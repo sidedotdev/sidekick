@@ -521,7 +521,10 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			title = generatedTitle
 		}
 	}
+<<<<<<< HEAD
 
+=======
+>>>>>>> side/fix-editor-scroll-bounds
 	branch := dCtx.Worktree.Name
 	childCtx := workflow.WithChildOptions(dCtx, workflow.ChildWorkflowOptions{
 		WorkflowID:        flowId,

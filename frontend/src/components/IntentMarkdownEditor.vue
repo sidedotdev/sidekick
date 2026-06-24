@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { EditorView, basicSetup } from 'codemirror'
-import { keymap } from '@codemirror/view'
+import { keymap, scrollPastEnd } from '@codemirror/view'
 import { Compartment, EditorState, Prec } from '@codemirror/state'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import {
@@ -83,7 +83,14 @@ const buildEditorTheme = (isDark: boolean) => {
   return EditorView.theme(
     {
       '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
-      '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
+      // overscrollBehavior 'none' stops the rubber-band/bounce animation when
+      // scrolling fast past the content bounds; the scroller simply halts at
+      // its edges instead of overshooting and springing back.
+      '.cm-scroller': {
+        fontFamily: '"JetBrains Mono", monospace',
+        overflow: 'auto',
+        overscrollBehavior: 'none',
+      },
       '.cm-content': { padding: '1.75rem 2rem', lineHeight: '1.6' },
       '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--color-text-2)' },
       // CodeMirror sizes each gutter element to match its corresponding editor
@@ -224,6 +231,9 @@ const createEditor = () => {
           codeFolding(),
           syntaxHighlighting(markdownHighlightStyle),
           EditorView.lineWrapping,
+          // Allow scrolling until the last line reaches the top of the editor,
+          // rather than stopping once the document's end is merely visible.
+          scrollPastEnd(),
           indentUnit.of(tabIndent()),
           keymap.of([
             {
