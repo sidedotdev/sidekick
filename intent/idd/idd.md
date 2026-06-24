@@ -105,7 +105,12 @@ according to the human author/user.
 - Editor is full-width between the sidebars and touching the file path header
   (no gaps) and the bottom of the viewport.
   - The editor's line numbers + line content scroll independently of the
-    sidebars.
+    sidebars
+  - The scrolling content keeps going until the *last* line of the content is
+    displayed at the top of the editor window
+  - Disable scroller "bouncing" animation when scrolling fast past bounds,
+    simply stop the content from scrolling at its bounds as soon as the bounds
+    are hit.
 - Sidebars can be resized and minimized
 - Side view for sub tasks can be resized too
 
