@@ -17,6 +17,24 @@ import (
 // repoConfigCandidates defines the precedence order for repo config files
 var repoConfigCandidates = []string{"side.yml", "side.yaml", "side.toml", "side.json"}
 
+// discoverRepoConfigFile searches for repo config files via the environment's
+// filesystem rather than the local OS, so remote environments (e.g. DevPod)
+// resolve config files against the actual working directory.
+func discoverRepoConfigFile(envContainer env.EnvContainer, candidates []string) common.ConfigDiscoveryResult {
+	workingDir := envContainer.Env.GetWorkingDirectory()
+	result := common.ConfigDiscoveryResult{}
+	for _, candidate := range candidates {
+		path := filepath.Join(workingDir, candidate)
+		if _, err := envContainer.Env.Stat(context.Background(), path); err == nil {
+			result.AllFound = append(result.AllFound, path)
+			if result.ChosenPath == "" {
+				result.ChosenPath = path
+			}
+		}
+	}
+	return result
+}
+
 // GetRepoConfigActivityResult wraps RepoConfig with discovery metadata
 type GetRepoConfigActivityResult struct {
 	Config     common.RepoConfig
@@ -29,7 +47,7 @@ type GetRepoConfigActivityResult struct {
 // inside it. write tests for get coding config activity too.
 func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, error) {
 	workingDir := envContainer.Env.GetWorkingDirectory()
-	discovery := common.DiscoverConfigFile(workingDir, repoConfigCandidates)
+	discovery := discoverRepoConfigFile(envContainer, repoConfigCandidates)
 
 	var config common.RepoConfig
 
@@ -112,7 +130,7 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 // It searches for config files in order: side.yml, side.yaml, side.toml, side.json.
 func GetRepoConfigActivityV2(envContainer env.EnvContainer) (GetRepoConfigActivityResult, error) {
 	workingDir := envContainer.Env.GetWorkingDirectory()
-	discovery := common.DiscoverConfigFile(workingDir, repoConfigCandidates)
+	discovery := discoverRepoConfigFile(envContainer, repoConfigCandidates)
 
 	var config common.RepoConfig
 

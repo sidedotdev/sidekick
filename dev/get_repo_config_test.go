@@ -6,11 +6,45 @@ import (
 	"os"
 	"path/filepath"
 	"sidekick/env"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// remoteLikeEnv simulates an environment (e.g. DevPod) whose working directory
+// does not exist on the local filesystem, serving files from a separate backing
+// directory via the env's own Stat/ReadFile. It exists to verify that repo
+// config discovery resolves files through the env filesystem rather than the
+// local OS.
+type remoteLikeEnv struct {
+	*mockEnv
+	remoteWorkingDir string
+	backingDir       string
+}
+
+func (e *remoteLikeEnv) GetWorkingDirectory() string { return e.remoteWorkingDir }
+
+func (e *remoteLikeEnv) resolve(p string) string {
+	// Mirror real Env implementations, which resolve relative paths against
+	// the working directory before hitting the (remote) filesystem.
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.remoteWorkingDir, p)
+	}
+	if rel, err := filepath.Rel(e.remoteWorkingDir, p); err == nil && !strings.HasPrefix(rel, "..") {
+		return filepath.Join(e.backingDir, rel)
+	}
+	return p
+}
+
+func (e *remoteLikeEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	return os.Stat(e.resolve(p))
+}
+
+func (e *remoteLikeEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	return os.ReadFile(e.resolve(p))
+}
 
 // mockEnv is a simple implementation of env.Env for testing purposes.
 type mockEnv struct {
@@ -527,5 +561,56 @@ agent_config:
 		require.NoError(t, err)
 
 		assert.Equal(t, resultV1, resultV2.Config)
+	})
+
+	t.Run("discovers config via env filesystem when working dir is not local", func(t *testing.T) {
+		backingDir := t.TempDir()
+		configContent := `
+mission: remote mission
+test_commands:
+  - command: go test ./...
+edit_code:
+  hints: inline hints
+`
+		require.NoError(t, os.WriteFile(filepath.Join(backingDir, "side.yml"), []byte(configContent), 0644))
+
+		remoteWorkingDir := filepath.Join(t.TempDir(), "nonexistent-remote-worktree")
+		mock := &remoteLikeEnv{
+			mockEnv:          &mockEnv{workingDir: remoteWorkingDir},
+			remoteWorkingDir: remoteWorkingDir,
+			backingDir:       backingDir,
+		}
+		envContainer := env.EnvContainer{Env: mock}
+
+		result, err := GetRepoConfigActivityV2(envContainer)
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(remoteWorkingDir, "side.yml"), result.ChosenPath)
+		assert.Equal(t, "remote mission", result.Config.Mission)
+		require.Len(t, result.Config.TestCommands, 1)
+		assert.Equal(t, "go test ./...", result.Config.TestCommands[0].Command)
+	})
+
+	t.Run("reads fallback hints via env filesystem when working dir is not local", func(t *testing.T) {
+		backingDir := t.TempDir()
+		configContent := `
+mission: remote mission
+test_commands:
+  - command: go test ./...
+`
+		require.NoError(t, os.WriteFile(filepath.Join(backingDir, "side.yml"), []byte(configContent), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(backingDir, "AGENTS.md"), []byte("fallback hints body"), 0644))
+
+		remoteWorkingDir := filepath.Join(t.TempDir(), "nonexistent-remote-worktree")
+		mock := &remoteLikeEnv{
+			mockEnv:          &mockEnv{workingDir: remoteWorkingDir},
+			remoteWorkingDir: remoteWorkingDir,
+			backingDir:       backingDir,
+		}
+		envContainer := env.EnvContainer{Env: mock}
+
+		result, err := GetRepoConfigActivityV2(envContainer)
+		require.NoError(t, err)
+		assert.Equal(t, "AGENTS.md", result.Config.EditCode.HintsPath)
+		assert.Equal(t, "fallback hints body", result.Config.EditCode.Hints)
 	})
 }
