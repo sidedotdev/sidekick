@@ -89,7 +89,7 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 	}
 
 	remoteCmd := shellQuote(remotePath)
-	runArgs := append(cloneArgs(sshArgs), remoteCmd)
+	runArgs := append(independentSSHArgs(sshArgs), remoteCmd)
 
 	log.Debug().Str("remotePath", remotePath).Msg("starting remote SFTP server")
 
@@ -362,6 +362,35 @@ func cloneArgs(args []string) []string {
 	c := make([]string, len(args))
 	copy(c, args)
 	return c
+}
+
+// independentSSHArgs returns a copy of sshArgs with SSH connection-multiplexing
+// options stripped, so the resulting connection neither becomes nor attaches to
+// the shared ControlMaster socket. The persistent SFTP connection is killed and
+// restarted on reconnect; if it owned the multiplexing master, killing it would
+// break concurrent command sessions multiplexed onto it ("mux_client_request_session:
+// read from master failed: Broken pipe") and leave a stale socket behind
+// ("ControlSocket ... already exists, disabling multiplexing").
+func independentSSHArgs(sshArgs []string) []string {
+	out := make([]string, 0, len(sshArgs))
+	for i := 0; i < len(sshArgs); i++ {
+		a := sshArgs[i]
+		if a == "-S" {
+			i++ // skip the control socket path value
+			continue
+		}
+		if a == "-o" && i+1 < len(sshArgs) {
+			opt := sshArgs[i+1]
+			if strings.HasPrefix(opt, "ControlMaster=") ||
+				strings.HasPrefix(opt, "ControlPersist=") ||
+				strings.HasPrefix(opt, "ControlPath=") {
+				i++ // skip the option value
+				continue
+			}
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // getRemoteEnvInfo runs `uname -sm` over ssh to detect the remote OS/arch so
