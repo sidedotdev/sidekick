@@ -1054,6 +1054,19 @@ const saveFile = async (path: string | null = activePath.value, body: string = c
   }
 }
 
+// persistQueued formats the queued file as part of saving when it is still the
+// one open in the editor, so persisted intent is always formatted; files that
+// have since been switched away from are saved from their captured snapshot.
+const persistQueued = (queued: { path: string; content: string }) => {
+  if (queued.path === activePath.value && editorRef.value) {
+    const formatted = editorRef.value.formatNow()
+    content.value = formatted
+    void saveFile(queued.path, formatted)
+  } else {
+    void saveFile(queued.path, queued.content)
+  }
+}
+
 const scheduleSave = () => {
   if (!activePath.value) return
   if (saveTimer) clearTimeout(saveTimer)
@@ -1062,7 +1075,7 @@ const scheduleSave = () => {
   saveTimer = setTimeout(() => {
     saveTimer = null
     pendingSave = null
-    void saveFile(queued.path, queued.content)
+    persistQueued(queued)
   }, 800)
 }
 
@@ -1074,7 +1087,7 @@ const flushPendingSave = () => {
   saveTimer = null
   const queued = pendingSave
   pendingSave = null
-  if (queued) void saveFile(queued.path, queued.content)
+  if (queued) persistQueued(queued)
 }
 
 const beginNewFile = async () => {
