@@ -415,6 +415,76 @@ func TestGitMergeActivitySquash(t *testing.T) {
 		assert.Contains(t, logOutput, "Feature commit 1")
 		assert.Contains(t, logOutput, "Feature commit 2")
 	})
+
+	t.Run("squash merge with nothing to commit no worktree", func(t *testing.T) {
+		t.Parallel()
+		// Setup
+		repoDir := setupTestGitRepo(t)
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+		createCommitWithFile(t, repoDir, "Initial commit on main", "initial.txt", "initial content")
+
+		// Feature branch adds a file with specific content
+		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+		createCommitWithFile(t, repoDir, "Feature commit", "dup.txt", "same content")
+
+		// Main independently adds the identical file, so squashing feature
+		// yields no net change to commit
+		runGitCommandInTestRepo(t, repoDir, "checkout", "main")
+		createCommitWithFile(t, repoDir, "Main commit", "dup.txt", "same content")
+
+		params := GitMergeParams{
+			SourceBranch:  "feature",
+			TargetBranch:  "main",
+			MergeStrategy: MergeStrategySquash,
+			CommitMessage: "Squashed feature changes",
+		}
+		result, err := GitMergeActivity(ctx, envContainer, params)
+
+		// A no-op squash must succeed rather than error on the empty commit
+		require.NoError(t, err)
+		assert.False(t, result.HasConflicts)
+	})
+
+	t.Run("squash merge with nothing to commit in worktree", func(t *testing.T) {
+		t.Parallel()
+		// Setup
+		repoDir := setupTestGitRepo(t)
+		createCommitWithFile(t, repoDir, "Initial commit", "initial.txt", "initial content")
+
+		// Target branch lives in a worktree
+		worktree := domain.Worktree{
+			Name:        "target",
+			WorkspaceId: t.Name(),
+		}
+		targetEnvContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir, WorktreeBaseDir: worktreeBaseDir}, worktree)
+		require.NoError(t, err)
+		defer func() {
+			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", targetEnvContainer.Env.GetWorkingDirectory())
+		}()
+
+		// Source feature branch adds a file with specific content
+		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+		createCommitWithFile(t, repoDir, "Feature commit", "dup.txt", "same content")
+		runGitCommandInTestRepo(t, repoDir, "checkout", "main")
+
+		// Target worktree independently adds the identical file, so squashing
+		// feature into it yields no net change to commit
+		createCommitWithFile(t, targetEnvContainer.Env.GetWorkingDirectory(), "Target commit", "dup.txt", "same content")
+
+		params := GitMergeParams{
+			SourceBranch:  "feature",
+			TargetBranch:  worktree.Name,
+			MergeStrategy: MergeStrategySquash,
+			CommitMessage: "Squashed feature changes",
+		}
+		result, err := GitMergeActivity(ctx, targetEnvContainer, params)
+
+		// A no-op squash must succeed rather than error on the empty commit
+		require.NoError(t, err)
+		assert.False(t, result.HasConflicts)
+	})
 }
 
 func evalSymlinks(t *testing.T, path string) string {
