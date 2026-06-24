@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"path"
 	"strings"
 
 	"github.com/cbroglie/mustache"
@@ -27,8 +28,11 @@ type fsPartialProvider struct {
 	prefix string
 }
 
+// Get resolves a partial by name relative to the referencing template's
+// directory. Names may include relative path segments (e.g.
+// "../shared/coding_hints") so partials can be shared across directories.
 func (epp *fsPartialProvider) Get(name string) (string, error) {
-	templatePath := fmt.Sprintf("prompts/%s%s.mustache", epp.prefix, name)
+	templatePath := path.Clean(fmt.Sprintf("prompts/%s%s.mustache", epp.prefix, name))
 	templateBytes, err := epp.fs.ReadFile(templatePath)
 	if err != nil {
 		return "", err

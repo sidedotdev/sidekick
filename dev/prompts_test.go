@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPanicParseMustacheWithPromptsFS(t *testing.T) {
@@ -126,3 +128,35 @@ func (m *mockFileInfo) Mode() fs.FileMode  { return 0 }
 func (m *mockFileInfo) ModTime() time.Time { return time.Time{} }
 func (m *mockFileInfo) IsDir() bool        { return false }
 func (m *mockFileInfo) Sys() interface{}   { return nil }
+
+var partialRefPattern = regexp.MustCompile(`{{>\s*([^}\s]+)\s*}}`)
+
+// TestAllPromptPartialsResolve guards against templates referencing partials
+// that cannot be located by the provider (e.g. a partial defined in another
+// directory). Partials are resolved lazily at render time, so a broken
+// reference would otherwise only surface in production.
+func TestAllPromptPartialsResolve(t *testing.T) {
+	t.Parallel()
+	err := fs.WalkDir(promptsFS, "prompts", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".mustache") {
+			return nil
+		}
+		data, err := promptsFS.ReadFile(path)
+		require.NoError(t, err)
+
+		name := strings.TrimSuffix(strings.TrimPrefix(path, "prompts/"), ".mustache")
+		prefix := name[:strings.LastIndex(name, "/")+1]
+		provider := &fsPartialProvider{fs: promptsFS, prefix: prefix}
+
+		for _, match := range partialRefPattern.FindAllSubmatch(data, -1) {
+			partialName := string(match[1])
+			_, err := provider.Get(partialName)
+			assert.NoErrorf(t, err, "template %q references unresolvable partial %q", path, partialName)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
