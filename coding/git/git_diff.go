@@ -95,6 +95,11 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	var cmdParts []string
 	cmdParts = append(cmdParts, "git", "diff", "--no-ext-diff")
 
+	// stagedInMainCmd records whether the primary diff command below already
+	// includes `--staged`. An explicit two-ref range can't take `--staged`, so
+	// for that branch the requested staged changes are composed in separately.
+	stagedInMainCmd := false
+
 	// Handle different combinations of flags
 	if params.EndRef != "" && params.BaseRef != "" {
 		// Direct diff between two refs
@@ -103,6 +108,7 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	} else if params.Staged && params.ThreeDotDiff {
 		cmdParts = append(cmdParts, "--staged")
 		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", shellQuote(params.BaseRef)))
+		stagedInMainCmd = true
 	} else if params.ThreeDotDiff {
 		cmdParts = append(cmdParts, fmt.Sprintf("%s...HEAD", shellQuote(params.BaseRef)))
 	} else if params.Staged {
@@ -110,6 +116,7 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 		if params.BaseRef != "" {
 			cmdParts = append(cmdParts, shellQuote(params.BaseRef))
 		}
+		stagedInMainCmd = true
 	}
 
 	if params.ContextLines != nil {
@@ -144,7 +151,135 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 		return "", fmt.Errorf("git diff command failed with exit status %d: %s", gitDiffRunOutput.ExitStatus, gitDiffRunOutput.Stderr)
 	}
 
-	return gitDiffRunOutput.Stdout, nil
+	diff := gitDiffRunOutput.Stdout
+
+	if params.Staged {
+		// An explicit two-ref range compares committed trees only and can't take
+		// `--staged`, so compose the requested staged changes in separately.
+		if !stagedInMainCmd {
+			stagedDiff, err := stagedIndexDiff(ctx, envContainer, params)
+			if err != nil {
+				return "", err
+			}
+			diff = appendDiffSection(diff, stagedDiff)
+		}
+
+		// `git diff --staged` only emits stage-0 index entries, so during a merge
+		// the unmerged (conflicted) paths are silently omitted. Append them
+		// explicitly so applied/conflicted changes aren't hidden from review.
+		unmergedDiff, err := unmergedFilesDiff(ctx, envContainer, params)
+		if err != nil {
+			return "", err
+		}
+		diff = appendDiffSection(diff, unmergedDiff)
+	}
+
+	return diff, nil
+}
+
+// appendDiffSection joins a diff section onto an existing diff with a separating
+// newline, ignoring empty sections.
+func appendDiffSection(diff, section string) string {
+	if section == "" {
+		return diff
+	}
+	if diff == "" {
+		return section
+	}
+	return diff + "\n" + section
+}
+
+// stagedIndexDiff returns the diff of staged (index) changes against HEAD, i.e.
+// `git diff --staged`, honoring the file path, context, and whitespace options.
+// It excludes unmerged (conflicted) paths, which lack a stage-0 index entry;
+// callers append unmergedFilesDiff for those.
+func stagedIndexDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+	args := []string{"diff", "--no-ext-diff", "--staged"}
+	if params.ContextLines != nil {
+		args = append(args, fmt.Sprintf("-U%d", *params.ContextLines))
+	}
+	if params.IgnoreWhitespace {
+		args = append(args, "-w")
+	}
+	if len(params.FilePaths) > 0 {
+		args = append(args, "--")
+		for _, fp := range params.FilePaths {
+			args = append(args, strings.TrimSpace(fp))
+		}
+	}
+	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "git",
+		Args:               args,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to diff staged changes: %w", err)
+	}
+	if output.ExitStatus != 0 && output.ExitStatus != 1 {
+		return "", fmt.Errorf("git diff of staged changes failed with exit status %d: %s", output.ExitStatus, output.Stderr)
+	}
+	return output.Stdout, nil
+}
+
+// unmergedFilesDiff returns the diff of unmerged (conflicted) paths against
+// HEAD, including conflict markers. These paths lack a stage-0 index entry
+// during a merge and are therefore omitted by `git diff --staged`.
+func unmergedFilesDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+	listArgs := []string{"diff", "--name-only", "--diff-filter=U", "-z"}
+	if len(params.FilePaths) > 0 {
+		listArgs = append(listArgs, "--")
+		for _, fp := range params.FilePaths {
+			listArgs = append(listArgs, strings.TrimSpace(fp))
+		}
+	}
+	listOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "git",
+		Args:               listArgs,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list unmerged files: %w", err)
+	}
+	if listOutput.ExitStatus != 0 {
+		return "", fmt.Errorf("listing unmerged files failed with exit status %d: %s", listOutput.ExitStatus, listOutput.Stderr)
+	}
+
+	var unmergedFiles []string
+	for _, f := range strings.Split(listOutput.Stdout, "\x00") {
+		if f != "" {
+			unmergedFiles = append(unmergedFiles, f)
+		}
+	}
+	if len(unmergedFiles) == 0 {
+		return "", nil
+	}
+
+	diffArgs := []string{"diff", "--no-ext-diff", "HEAD"}
+	if params.ContextLines != nil {
+		diffArgs = append(diffArgs, fmt.Sprintf("-U%d", *params.ContextLines))
+	}
+	if params.IgnoreWhitespace {
+		diffArgs = append(diffArgs, "-w")
+	}
+	diffArgs = append(diffArgs, "--")
+	diffArgs = append(diffArgs, unmergedFiles...)
+
+	diffOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "git",
+		Args:               diffArgs,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to diff unmerged files: %w", err)
+	}
+	if diffOutput.ExitStatus != 0 && diffOutput.ExitStatus != 1 {
+		return "", fmt.Errorf("git diff of unmerged files failed with exit status %d: %s", diffOutput.ExitStatus, diffOutput.Stderr)
+	}
+
+	return diffOutput.Stdout, nil
 }
 
 // DiffUntrackedFilesActivity is an activity that diffs untracked files using a temporary index.
