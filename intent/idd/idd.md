@@ -159,6 +159,7 @@ according to the human author/user.
 - The canvas also has a right sidebar that supports showing the user:
   - The sidebar itself isn't scrollable, but items within it may be
   - A button to [start a sub task] to implement the current intent state
+    - Uses standard keyboard shortcut component
   - A list of subtasks
       - Clicking them opens the existing flow view component (not iframe, and
         without own header/sidebar nav/etc.), but in a side view. Includes
@@ -232,8 +233,8 @@ Pressing the button to start immediately results in these actions:
 4. Using the created sha & diff to create a title for the sub task
 5. Start a sub task to implement the change
 
-- cmd/ctrl+enter to start a new intent sub task from the canvas. does *not* add
-  a newline in the editor if the editor is focused.
+- cmd/ctrl+I to start a new intent sub task from the canvas. does *not* add a
+  newline in the editor if the editor is focused.
 - A new background orchestrator AI agent watches edits as they are made in
   chunks (some heuristic to ensure LLM isn't invoked for partial edits, and
   always invoked if there are unproceesed edits and there has been no activity
