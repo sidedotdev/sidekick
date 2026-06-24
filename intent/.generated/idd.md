@@ -31,9 +31,6 @@ intent_links:
     code:
       - frontend/src/components/IntentMarkdownEditor.vue
       - frontend/src/views/IntentCanvasView.vue
-  - intent: "#idle-markdown-auto-formatting"
-    code:
-      - frontend/src/components/IntentMarkdownEditor.vue
       - frontend/src/lib/markdown_format.ts
   - intent: "#uncommitted-intent-baseline-comes-from-head"
     code:
@@ -248,16 +245,19 @@ focus when opened, so pressing Escape while it has focus dismisses it via a
 This keeps the intent canvas's own keyboard shortcuts unaffected when the side
 view isn't focused.
 
-## Idle markdown auto-formatting
+## Auto-formatting on save
 
-After the editor sits idle for 15 seconds following a user edit, the intent
-markdown editor reflows plain prose paragraphs and collapses runs of blank
-lines into single blank lines. Structural content -- YAML frontmatter, fenced
-code blocks, headings, list items, blockquotes, tables, horizontal rules, and
-indented code -- is left untouched so auto-formatting can never silently
-rewrite executable or structured content. External `modelValue` replacements
-cancel any pending idle timer so freshly-loaded content isn't reformatted on
-open.
+Intent saves automatically (debounced) as the author types. Each save of the
+file open in the editor first reflows it via the editor's `formatNow`, so
+persisted intent is always formatted -- there is no separate idle-format timer.
+The reflow collapses runs of blank lines and rewraps plain prose paragraphs,
+while structural content -- YAML frontmatter, fenced code blocks, headings,
+list items, blockquotes, tables, horizontal rules, and indented code -- is left
+untouched so it can never silently rewrite executable or structured content.
+
+Formatting minimizes editor disruption: the selection is preserved where it
+still fits and clamped as close as possible otherwise, and the caret is pinned
+to the same vertical position within the viewport across the reflow.
 
 ## Sub-task list grouping and collapse
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { mount, flushPromises, VueWrapper } from '@vue/test-utils'
 import { foldedRanges } from '@codemirror/language'
 import type { EditorView } from 'codemirror'
@@ -142,41 +142,55 @@ describe('IntentMarkdownEditor', () => {
     expect(view!.state.doc.toString()).toBe('  alpha\n')
   })
 
-  it('auto-formats the document after the idle delay elapses', async () => {
-    vi.useFakeTimers()
-    try {
-      wrapper = mount(IntentMarkdownEditor, {
-        props: { modelValue: '# Heading\n\nstart\n', committedContent: '' },
-        attachTo: document.body,
-      })
-      await flushPromises()
+  it('reflows the document on demand via formatNow', async () => {
+    wrapper = mount(IntentMarkdownEditor, {
+      props: { modelValue: '# Heading\n\n\n\none two\nthree four\n', committedContent: '' },
+      attachTo: document.body,
+    })
+    await flushPromises()
 
-      const view = getView(wrapper)
-      expect(view).not.toBeNull()
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
 
-      // Simulate a user edit that introduces collapsible whitespace and
-      // soft-wrapped paragraph lines.
-      view!.dispatch({
-        changes: {
-          from: 0,
-          to: view!.state.doc.length,
-          insert: '# Heading\n\n\n\none two\nthree four\n',
-        },
-        userEvent: 'input.type',
-      })
-      await flushPromises()
+    const exposed = wrapper.vm as unknown as { formatNow: () => string }
+    const result = exposed.formatNow()
 
-      const exposed = wrapper.vm as unknown as {
-        __hasIdleFormatTimerForTest?: () => boolean
-      }
-      expect(exposed.__hasIdleFormatTimerForTest?.()).toBe(true)
+    expect(result).toBe('# Heading\n\none two three four\n')
+    expect(view!.state.doc.toString()).toBe('# Heading\n\none two three four\n')
+  })
 
-      vi.advanceTimersByTime(15000)
-      await flushPromises()
+  it('keeps the caret in place when formatting leaves its text untouched', async () => {
+    wrapper = mount(IntentMarkdownEditor, {
+      props: { modelValue: '# Heading\n\n\n\none two\nthree four\n', committedContent: '' },
+      attachTo: document.body,
+    })
+    await flushPromises()
 
-      expect(view!.state.doc.toString()).toBe('# Heading\n\none two three four\n')
-    } finally {
-      vi.useRealTimers()
-    }
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
+
+    // Caret sits inside the heading, which the reflow does not move.
+    view!.dispatch({ selection: { anchor: 3, head: 3 } })
+    const exposed = wrapper.vm as unknown as { formatNow: () => string }
+    exposed.formatNow()
+
+    expect(view!.state.selection.main.head).toBe(3)
+  })
+
+  it('clamps the caret to the end when the document shrinks past it', async () => {
+    wrapper = mount(IntentMarkdownEditor, {
+      props: { modelValue: '# Heading\n\n\n\none two\nthree four\n', committedContent: '' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
+
+    view!.dispatch({ selection: { anchor: view!.state.doc.length, head: view!.state.doc.length } })
+    const exposed = wrapper.vm as unknown as { formatNow: () => string }
+    exposed.formatNow()
+
+    expect(view!.state.selection.main.head).toBe(view!.state.doc.length)
   })
 })

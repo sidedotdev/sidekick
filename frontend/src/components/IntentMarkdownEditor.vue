@@ -39,8 +39,6 @@ const emit = defineEmits<{
 const editorParent = ref<HTMLElement | null>(null)
 let editorView: EditorView | null = null
 let applyingExternal = false
-let idleFormatTimer: ReturnType<typeof setTimeout> | null = null
-const IDLE_FORMAT_DELAY_MS = 15000
 const FORMAT_WRAP_COLUMN = 80
 
 const themeCompartment = new Compartment()
@@ -152,30 +150,46 @@ const refreshUncommittedHighlight = () => {
   applyUncommittedHighlight(editorView, props.committedContent)
 }
 
-// Format-on-idle reflows plain paragraphs and collapses extra blank lines once
-// the user has paused editing. Frontmatter and fenced code blocks are left
-// alone so executable/structured content is never silently rewritten.
-const runIdleFormat = () => {
-  idleFormatTimer = null
+// caretTop reports the caret's vertical screen offset, or null when layout
+// measurement is unavailable (e.g. headless test environments, where
+// coordsAtPos throws because the DOM exposes no client rects).
+const caretTop = (view: EditorView, pos: number): number | null => {
+  try {
+    return view.coordsAtPos(pos)?.top ?? null
+  } catch {
+    return null
+  }
+}
+
+// formatDocument reflows plain paragraphs and collapses extra blank lines,
+// leaving frontmatter and fenced code blocks alone so executable/structured
+// content is never silently rewritten. It runs as part of saving rather than
+// while editing, and minimizes disruption: the selection is kept where it
+// still fits (clamped as close as possible otherwise) and the caret is pinned
+// to the same vertical position within the viewport across the reflow.
+const formatDocument = () => {
   if (!editorView) return
-  const current = editorView.state.doc.toString()
+  const view = editorView
+  const current = view.state.doc.toString()
   const formatted = formatMarkdown(current, FORMAT_WRAP_COLUMN)
   if (formatted === current) return
-  editorView.dispatch({
+  const { anchor, head } = view.state.selection.main
+  const beforeTop = caretTop(view, head)
+  const length = formatted.length
+  // Suppress the external-change emit so the host owns syncing the formatted
+  // text back into its model, avoiding a redundant save round-trip.
+  applyingExternal = true
+  view.dispatch({
     changes: { from: 0, to: current.length, insert: formatted },
+    selection: { anchor: Math.min(anchor, length), head: Math.min(head, length) },
     userEvent: 'input.format',
   })
-}
-
-const scheduleIdleFormat = () => {
-  if (idleFormatTimer !== null) clearTimeout(idleFormatTimer)
-  idleFormatTimer = setTimeout(runIdleFormat, IDLE_FORMAT_DELAY_MS)
-}
-
-const cancelIdleFormat = () => {
-  if (idleFormatTimer === null) return
-  clearTimeout(idleFormatTimer)
-  idleFormatTimer = null
+  applyingExternal = false
+  refreshUncommittedHighlight()
+  if (beforeTop === null) return
+  const afterTop = caretTop(view, view.state.selection.main.head)
+  if (afterTop === null) return
+  view.scrollDOM.scrollTop += afterTop - beforeTop
 }
 
 // foldFrontmatter collapses the YAML frontmatter block so it gets out of the
@@ -263,7 +277,6 @@ const createEditor = () => {
             if (update.docChanged && !applyingExternal) {
               emit('update:modelValue', update.state.doc.toString())
               refreshUncommittedHighlight()
-              scheduleIdleFormat()
             }
           }),
           themeCompartment.of(buildEditorTheme(darkModeMedia?.matches ?? false)),
@@ -295,7 +308,6 @@ watch(
     }
     if (!editorView) return
     if (editorView.state.doc.toString() === next) return
-    cancelIdleFormat()
     setEditorDoc(next)
     refreshUncommittedHighlight()
     foldFrontmatter()
@@ -314,7 +326,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   darkModeMedia?.removeEventListener('change', handleColorSchemeChange)
-  cancelIdleFormat()
   editorView?.destroy()
   editorView = null
 })
@@ -322,18 +333,17 @@ onBeforeUnmount(() => {
 defineExpose({
   focus: () => editorView?.focus(),
   // formatNow reflows the current document immediately, returning the resulting
-  // text. Used when launching an intent sub-task so the committed intent state
-  // is formatted before being saved, matching the idle-format behavior.
+  // text. Auto-saving runs this so persisted intent is always formatted; the
+  // selection and the caret's vertical viewport position are preserved across
+  // the reflow to keep editing undisturbed.
   formatNow: (): string => {
-    runIdleFormat()
+    formatDocument()
     return editorView?.state.doc.toString() ?? ''
   },
   // Test-only handle. Returns the underlying CodeMirror EditorView so specs
   // can inspect parser/fold state without dragging in a real browser. Not
   // part of the component's public API and should not be used by app code.
   __editorViewForTest: () => editorView,
-  __runIdleFormatForTest: () => runIdleFormat(),
-  __hasIdleFormatTimerForTest: () => idleFormatTimer !== null,
 })
 </script>
 
