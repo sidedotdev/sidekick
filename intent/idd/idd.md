@@ -120,7 +120,6 @@ according to the human author/user.
   - Uses monaco or codemirror, whatever is easier to get all our desired
     features working in for now.
   - Remembers which file was open last
-  - Saves intent automatically as you type in the worktree
   - Intent that is not yet committed has a special background color.
       - This must use a diff algorithm that finds word-level changes even in
         multi-line markdown with newlines shifting around. Words right beside
@@ -137,8 +136,13 @@ according to the human author/user.
     sections are expanded by default)
     - Rather than the YAML being collapsed, the entire frontmatter section is
       collapsed on the first line of the markdown file
-  - Supports auto-formatting markdown (collapsing whitespace and wrapping lines,
-    including list items) when editor has been idle for 15s
+  - Saves intent automatically as you type in the worktree
+  - Auto-formats markdown (collapsing whitespace and wrapping lines, including
+    list items) on save
+  - Auto-formatting & saving minimize disruption to the editor state:
+    - The cursor and selection state remains where it was if possible
+    - If not possible, it is kept as close as possible
+    - The vertical position of the cursor relative to the viewport is maintained
 
 ##### Editor Styling
 
