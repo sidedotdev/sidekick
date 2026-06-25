@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -31,7 +33,8 @@ func kanbanLink(workspaceId string) string {
 // checkServerStatus checks if the Sidekick server is responsive.
 func checkServerStatus() bool {
 	httpClient := &http.Client{Timeout: 1 * time.Second}
-	resp, err := httpClient.Get(fmt.Sprintf("http://localhost:%d/", common.GetServerPort()))
+	addr := net.JoinHostPort(common.GetServerHost(), strconv.Itoa(common.GetServerPort()))
+	resp, err := httpClient.Get(fmt.Sprintf("http://%s/", addr))
 	if err != nil {
 		return false
 	}
