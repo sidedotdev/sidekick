@@ -2,6 +2,7 @@ package env
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -195,4 +196,62 @@ func TestEnvRunCommandActivity_TruncatesLargeStderr(t *testing.T) {
 	assert.Contains(t, output.Stderr, "[... truncated")
 	assert.True(t, strings.HasPrefix(output.Stderr, "EEEE"))
 	assert.True(t, strings.HasSuffix(output.Stderr, "...]\n\n"), "trailing marker expected")
+}
+
+// TestBuildRemoteShellCommand verifies the POSIX command line used for SSH-based
+// environments (DevPod / OpenShell) changes into the intended working directory
+// before running the command, and fails loudly when that directory is missing
+// instead of silently running in the SSH session's default directory.
+func TestBuildRemoteShellCommand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("runs command in the working directory", func(t *testing.T) {
+		t.Parallel()
+		workDir := t.TempDir()
+
+		cmd := buildRemoteShellCommand(workDir, EnvRunCommandInput{
+			Command: "pwd",
+			EnvVars: []string{"FOO=bar"},
+		})
+
+		cdIdx := strings.Index(cmd, "cd "+shellQuote(workDir))
+		runIdx := strings.Index(cmd, "'pwd'")
+		require.GreaterOrEqual(t, cdIdx, 0, "expected command to cd into the working directory: %q", cmd)
+		require.GreaterOrEqual(t, runIdx, 0, "expected command to run pwd: %q", cmd)
+		assert.Less(t, cdIdx, runIdx, "cd must come before the command")
+		assert.Contains(t, cmd, "export "+shellQuote("FOO=bar"))
+		assert.Contains(t, cmd, "export "+shellQuote("GIT_EDITOR=true"))
+
+		out, err := exec.Command("sh", "-c", cmd).Output()
+		require.NoError(t, err)
+		// macOS /tmp is a symlink to /private/tmp, so resolve before comparing.
+		wantDir, err := filepath.EvalSymlinks(workDir)
+		require.NoError(t, err)
+		gotDir, err := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
+		require.NoError(t, err)
+		assert.Equal(t, wantDir, gotDir, "command should run inside the working directory")
+	})
+
+	t.Run("fails loudly when the working directory is missing", func(t *testing.T) {
+		t.Parallel()
+		missingDir := filepath.Join(t.TempDir(), "does-not-exist")
+
+		cmd := buildRemoteShellCommand(missingDir, EnvRunCommandInput{
+			Command: "echo",
+			Args:    []string{"should-not-print"},
+		})
+
+		var stdout, stderr strings.Builder
+		c := exec.Command("sh", "-c", cmd)
+		c.Stdout = &stdout
+		c.Stderr = &stderr
+		err := c.Run()
+
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr, "missing working directory must yield a non-zero exit")
+		assert.NotEqual(t, 0, exitErr.ExitCode())
+		assert.Empty(t, stdout.String(), "command must not run when cd fails")
+		assert.Contains(t, stderr.String(), "No such file or directory")
+		assert.Contains(t, stderr.String(), missingDir)
+	})
 }

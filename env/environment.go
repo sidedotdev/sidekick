@@ -470,15 +470,21 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 	return e.WorkingDirectory
 }
 
-func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-
-	allEnvVars := append(input.EnvVars, envVarsToInject...)
-	var shellParts []string
+// buildRemoteShellCommand builds a single POSIX shell command line that runs
+// input's command inside workDir over SSH. It exports the requested environment
+// variables, changes into workDir, and only then runs the command. A failed cd
+// (e.g. the directory does not exist in the remote container) aborts with a
+// non-zero exit and a clear message on stderr, so callers get an explicit error
+// instead of empty output from a command that silently ran in the SSH session's
+// default directory.
+func buildRemoteShellCommand(workDir string, input EnvRunCommandInput) string {
+	allEnvVars := append(append([]string{}, input.EnvVars...), envVarsToInject...)
+	shellParts := make([]string, 0, len(allEnvVars)+2)
 	for _, envVar := range allEnvVars {
 		shellParts = append(shellParts, "export "+shellQuote(envVar))
 	}
-	shellParts = append(shellParts, "cd "+shellQuote(workDir))
+	cdFailure := shellQuote("cd: " + workDir + ": No such file or directory")
+	shellParts = append(shellParts, "cd "+shellQuote(workDir)+" || { echo "+cdFailure+" >&2; exit 1; }")
 
 	cmdStr := shellQuote(input.Command)
 	for _, arg := range input.Args {
@@ -486,7 +492,12 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 	}
 	shellParts = append(shellParts, cmdStr)
 
-	fullCommand := strings.Join(shellParts, " && ")
+	return strings.Join(shellParts, " && ")
+}
+
+func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
+	fullCommand := buildRemoteShellCommand(workDir, input)
 
 	controlPath := devpodSSHControlPath(e.WorkspaceName)
 	sshHost := e.WorkspaceName + ".devpod"
@@ -598,21 +609,7 @@ func (e *OpenShellEnv) GetWorkingDirectory() string {
 
 func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-
-	allEnvVars := append(input.EnvVars, envVarsToInject...)
-	var shellParts []string
-	for _, envVar := range allEnvVars {
-		shellParts = append(shellParts, "export "+shellQuote(envVar))
-	}
-	shellParts = append(shellParts, "cd "+shellQuote(workDir))
-
-	cmdStr := shellQuote(input.Command)
-	for _, arg := range input.Args {
-		cmdStr += " " + shellQuote(arg)
-	}
-	shellParts = append(shellParts, cmdStr)
-
-	fullCommand := strings.Join(shellParts, " && ")
+	fullCommand := buildRemoteShellCommand(workDir, input)
 
 	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
 	if err != nil {
