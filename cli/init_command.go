@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"sidekick/env"
 	"sidekick/llm"
 	"sidekick/srv"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -806,7 +808,8 @@ func checkServerStatus() bool {
 		Timeout: 1 * time.Second,
 	}
 
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
+	addr := net.JoinHostPort(common.GetServerHost(), strconv.Itoa(common.GetServerPort()))
+	resp, err := client.Get(fmt.Sprintf("http://%s", addr))
 	if err != nil {
 		return false
 	}
