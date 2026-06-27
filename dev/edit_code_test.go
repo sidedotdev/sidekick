@@ -72,6 +72,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 		return authorEditBlocks(execContext, common.ModelConfig{}, 0, chatHistory, pic.PromptInfo, getEnvironmentContext())
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
+	s.env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
 	var fa *flow_action.FlowActivities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
 	s.env.OnActivity(ManageChatHistoryActivity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
