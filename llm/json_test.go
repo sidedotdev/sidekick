@@ -212,6 +212,11 @@ func TestRepairJson(t *testing.T) {
 			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true} </invoke>"}`,
 			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
 		},
+		{
+			name:     "leaked parameter markup left untouched by base RepairJson",
+			input:    `{"analysis": "Blah blah.... </analysis> <parameter name=\"steps\">[{\"key\": \"value\"}]", "other_fields": ["whatever"]}`,
+			expected: `{"analysis": "Blah blah.... </analysis> <parameter name=\"steps\">[{\"key\": \"value\"}]", "other_fields": ["whatever"]}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -228,6 +233,58 @@ func TestRepairJson(t *testing.T) {
 				return
 			}
 
+			assert.Equal(t, expectedJSON, gotJSON, "For input %q\nexpected JSON equivalent to %q\nbut got %q",
+				test.input, test.expected, got)
+		})
+	}
+}
+
+func TestRepairJsonFull(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "leaked parameter promoted to sibling field",
+			input:    `{"analysis": "Blah blah.... </analysis> <parameter name=\"steps\">[{\"key\": \"value\"}]", "other_fields": ["whatever"]}`,
+			expected: `{"analysis": "Blah blah.... ", "steps": [{"key": "value"}], "other_fields": ["whatever"]}`,
+		},
+		{
+			name:     "leaked parameter with different field names and object value",
+			input:    `{"reasoning": "Some thoughts here </reasoning> <parameter name=\"items\">{\"a\": 1}", "tail": 5}`,
+			expected: `{"reasoning": "Some thoughts here ", "items": {"a": 1}, "tail": 5}`,
+		},
+		{
+			name:     "multiple leaked parameters promoted to sibling fields",
+			input:    `{"analysis": "thinking </analysis> <parameter name=\"first\">[1,2]</parameter> <parameter name=\"second\">{\"x\": true}"}`,
+			expected: `{"analysis": "thinking ", "first": [1,2], "second": {"x": true}}`,
+		},
+		{
+			name:     "leaked parameter without preceding closing tag",
+			input:    `{"analysis": "content <parameter name=\"steps\">[1]", "keep": "ok"}`,
+			expected: `{"analysis": "content ", "steps": [1], "keep": "ok"}`,
+		},
+		{
+			name:     "no leaked params behaves like base RepairJson",
+			input:    `{"data": "{\"key\": \"value\"}</invoke>"}`,
+			expected: `{"data":{"key":"value"}}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := RepairJsonFull(test.input)
+
+			var expectedJSON, gotJSON interface{}
+			if err := json.Unmarshal([]byte(test.expected), &expectedJSON); err != nil {
+				t.Fatalf("Failed to parse expected JSON %q: %v", test.expected, err)
+			}
+			if err := json.Unmarshal([]byte(got), &gotJSON); err != nil {
+				t.Fatalf("Failed to parse actual JSON %q: %v", got, err)
+			}
 			assert.Equal(t, expectedJSON, gotJSON, "For input %q\nexpected JSON equivalent to %q\nbut got %q",
 				test.input, test.expected, got)
 		})

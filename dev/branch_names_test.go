@@ -64,6 +64,7 @@ func (s *BranchNameTestSuite) SetupTest() {
 		return GenerateBranchName(execContext, req)
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
+	s.env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
 	var fa *flow_action.FlowActivities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
 
