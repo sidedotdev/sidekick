@@ -122,15 +122,29 @@ func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace 
 // getOwnChangesSinceReview returns the shorter of the since-review diff and the
 // three-dot base-branch diff. A merge inflates the since-review diff with
 // base-branch changes, so falling back keeps the output focused.
+//
+// A failure here typically means the recorded review tree hash no longer exists
+// (e.g. a "bad object" after history was rewritten), which user-prompted retries
+// can never resolve. We therefore skip user-prompted retries and surface the
+// error to callers so they can recover gracefully (the merge-approval path shows
+// the error in place of the diff, while auto-review falls back to the full
+// base-branch diff), rather than trapping the user in an unresolvable retry loop.
 func getOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
 	var result string
 	var ca *coding.CodingActivities
-	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate own changes since review", ca.GetOwnChangesSinceReviewActivity, &result, coding.GetOwnChangesSinceReviewParams{
+	params := coding.GetOwnChangesSinceReviewParams{
 		EnvContainer:     *dCtx.EnvContainer,
 		BaseBranch:       baseBranch,
 		LastReviewTree:   lastReviewTreeHash,
 		IgnoreWhitespace: ignoreWhitespace,
-	})
+	}
+
+	if workflow.GetVersion(dCtx, "own-changes-fail-fast", workflow.DefaultVersion, 1) >= 1 {
+		err := workflow.ExecuteActivity(dCtx, ca.GetOwnChangesSinceReviewActivity, params).Get(dCtx, &result)
+		return result, err
+	}
+
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate own changes since review", ca.GetOwnChangesSinceReviewActivity, &result, params)
 	return result, err
 }
 
@@ -591,7 +605,9 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 			}
 			if err != nil {
 				workflow.GetLogger(dCtx).Warn("Failed to generate diff since last review, continuing without it", "error", err)
-				diffSinceLastReview = ""
+				// Surface the failure to reviewers instead of silently dropping
+				// the section, so they know the since-review diff is unavailable.
+				diffSinceLastReview = fmt.Sprintf("Failed to generate diff since last review: %v", err)
 			}
 		}
 	}
