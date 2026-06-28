@@ -102,6 +102,46 @@ describe('IntentMarkdownEditor', () => {
     expect(collectFoldedRanges(view!)).toHaveLength(0)
   })
 
+  const pressTab = (view: EditorView, shift: boolean) => {
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', shiftKey: shift, bubbles: true }),
+    )
+  }
+
+  it('indents the selected lines on Tab and dedents them on Shift+Tab', async () => {
+    wrapper = mount(IntentMarkdownEditor, {
+      props: { modelValue: 'alpha\nbeta\n', committedContent: '' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
+
+    view!.dispatch({ selection: { anchor: 0, head: view!.state.doc.length } })
+    pressTab(view!, false)
+    expect(view!.state.doc.toString()).toBe('  alpha\n  beta\n')
+
+    view!.dispatch({ selection: { anchor: 0, head: view!.state.doc.length } })
+    pressTab(view!, true)
+    expect(view!.state.doc.toString()).toBe('alpha\nbeta\n')
+  })
+
+  it('inserts spaces at the cursor on Tab when nothing is selected', async () => {
+    wrapper = mount(IntentMarkdownEditor, {
+      props: { modelValue: 'alpha\n', committedContent: '' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
+
+    view!.dispatch({ selection: { anchor: 0, head: 0 } })
+    pressTab(view!, false)
+    expect(view!.state.doc.toString()).toBe('  alpha\n')
+  })
+
   it('auto-formats the document after the idle delay elapses', async () => {
     vi.useFakeTimers()
     try {

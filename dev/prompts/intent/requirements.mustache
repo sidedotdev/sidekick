@@ -1,30 +1,65 @@
 {{^update}}
-The following new intent file has already been committed to {{{path}}} (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself — treat the diff as a specification that the code must now conform to fully. It may be underspecified, but no code should be in contradiction with the intent. Infer intent as well as you can where it is underspecified.
+The following new intent file has already been committed to {{{path}}} (shown
+below for reference). Your job is to update the code so that the system's
+behavior matches the new intent{{!
+}}{{/update}}{{!
+
+^ new file
+-------------------------------------------------------------------------------
+
+}}{{#update}}
+The following intent update has already been committed to {{{path}}} (shown
+below for reference). Your job is to analyze the changes to intent and update
+the code so that the system's behavior matches the updated intent{{!
+}}{{/update}}{{!
+
+^ edited file
+-------------------------------------------------------------------------------
+
+}}{{#scopePrompt}}, scoped as follows:
+
+{{{scopePrompt}}}
+
+The full intent commit is included below for context, but focus only on the
+scoped portion above{{!
+}}{{/scopePrompt}}.{{!
+
+^ scope
+-------------------------------------------------------------------------------
+}}
+
+Intent diff:
 
 ```sh
 $ git show {{{commit}}}
-{{{diff}}}
+{{{clean_diff}}}
 ```
 
-Identify which behaviors in the diff are newly required or changed, locate the
-corresponding code (frontend, backend, prompts, etc.), and make the code changes
-needed. If a change is purely editorial (whitespace, wording with no semantic
-effect), no code change is needed for that hunk.
-{{/update}}
-{{#update}}
-The following intent update has already been committed to {{{path}}}
-(shown below for reference). Your job is to update the code so that the
-system's behavior matches the new intent. Do NOT re-edit the intent markdown
-file itself — treat the diff as a specification change that the code must now
-conform to.
+Identify which behaviors in the diff are newly required or changed, and make
+the corresponding changes needed to the implementation. If an intent change is
+purely editorial (whitespace, moving items, formatting or minor wording with no
+semantic effect), no code change is needed for that hunk. For wording changes,
+avoid declaring semantic equivalence too eagerly after just reading the code.
+Instead, analyze carefully whether author's intent has actually been met and
+that no bugs remain, ensuring that there is a means to automatically verify
+that the intent has been met, e.g. via appropriate automated tests.
 
-```sh
-$ git show {{{commit}}}
-{{{diff}}}
-```
+Do NOT re-edit the intent markdown file itself, other than updating its intent
+links - treat the diff as a specification that the code must now conform to
+fully. It may be underspecified, but no code should be in contradiction with
+the intent. Infer intent as well as you can where it is underspecified.
 
-Identify which behaviors in the diff are newly required or changed, locate the
-corresponding code (frontend, backend, prompts, etc.), and make the code changes
-needed. If a change is purely editorial (whitespace, formatting or wording with no semantic
-effect), no code change is needed for that hunk.
-{{/update}}
+Note that all other intent beyond the diff is still in play but may or may not
+be implemented - if not implemented, we should expect that it will be in the
+near future, but that is outside our scope if that intent is not touched by the
+diff and not a dependency. For dependencies, you can unblock yourself by adding
+a minimal placeholder, just ensure that you make it clear via naming as well.
+
+{{#scopePrompt}}
+Remember, your focus must be scoped as follows:
+
+{{{scopePrompt}}}
+
+Scope exception: fixing any error/warning that may be blocking automated
+testing or otherwise hindering progress is always allowed.
+{{/scopePrompt}}

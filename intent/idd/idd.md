@@ -38,6 +38,19 @@ intent_links:
       - dev/edit_code.go:renderAuthorEditBlockInitialPrompt
       - dev/prompts/intent/requirements.mustache
       - dev/intent_requirements.go:renderIntentRequirements
+  - intent: "#background-orchestrator-agent"
+    code:
+      - dev/idd_workflow.go:IddState
+      - dev/idd_workflow.go:SetIddAutoModeSignal
+      - dev/idd_workflow.go:RunIddOrchestratorSignal
+      - dev/idd_workflow.go:IddWorkflow
+      - dev/idd_watcher_activity.go:IddWatchEditIdleActivity
+      - dev/idd_orchestrator.go:pendingIntentDiff
+      - coding/git/git_diff.go:DiffUntrackedFilesActivity
+      - dev/manage_chat_history.go
+      - api/intent_api.go:SetIddAutoModeHandler
+      - api/intent_api.go:RunIddOrchestratorHandler
+      - frontend/src/views/IntentCanvasView.vue
 ---
 # Seamless Intent Driven Development Flow
 
@@ -79,18 +92,20 @@ according to the human author/user.
   intent canvas to edit intent files in that worktree
 - The canvas is a custom interface for specifying intent, with a simple markdown
   editor + filetree browser.
-    - If no intent files exists, shows a prompt to create a new intent file in a
-      intent/ directory, prompting for the file name.
-    - Remember which intent file was last open and open it again when the
-      specific idd flow id is next accessed
-    - If intent files exist, on startup, do not open one: allow the user to
-      select one themselves first, with a prompt telling them to do so
-     - .generated files are shown last in filetree
+  - If no intent files exists, shows a prompt to create a new intent file in a
+    intent/ directory, prompting for the file name.
+  - Remember which intent file was last open and open it again when the specific
+    idd flow id is next accessed
+  - If intent files exist, on startup, do not open one: allow the user to select
+    one themselves first, with a prompt telling them to do so
+  - .generated files are shown last in filetree
 
 #### Styling
 
 - Editor is full-width between the sidebars and touching the file path header
-  (no gaps)
+  (no gaps) and the bottom of the viewport.
+  - The editor's line numbers + line content scroll independently of the
+    sidebars.
 - Sidebars can be resized and minimized
 - Side view for sub tasks can be resized too
 
@@ -112,6 +127,7 @@ according to the human author/user.
   - Tab character expands to 2 spaces and does NOT switch to a different
     interface element as regular browser interactions work, but instead works
     like an editor is expected to
+  - When text is selected, tab indents it and shift+tab dedents it
   - YAML frontmatter is always collapsed by default in the editor (all other
     sections are expanded by default)
     - Rather than the YAML being collapsed, the entire frontmatter section is
@@ -129,15 +145,17 @@ according to the human author/user.
 - The caret is the same shape when collapsed or expanded, just rotated about
   it's centerpoint.
 
-#### Right Sidebar
+##### Right Sidebar
 
 - The canvas also has a right sidebar that supports showing the user:
   - The sidebar itself isn't scrollable, but items within it may be
   - A button to [start a sub task] to implement the current intent state
   - A list of subtasks
       - Clicking them opens the existing flow view component (not iframe, and
-        without header/editor links/sidebar nav/etc.), but in a side view. When
-        the side view has focus, pressing escape dismisses it. that can be
+        without own header/sidebar nav/etc.), but in a side view. Includes
+        editor links rendered on top of the sub task header, offset to avoid
+        dismiss button
+      - When the side view has focus, pressing escape dismisses it. that can be
         dismissed, so the intent canvas is always visible.
       - Sub task statuses are shown: completed, failed, in progress, blocked and
         canceled
@@ -146,7 +164,7 @@ according to the human author/user.
       - Within group, ordered by last updated (fallback: created), reverse
         chronological
       - Subtask list section is a scrollable section that extends until the dev
-        run section
+        run at the bottom
       - When many have completed such that scrolling is required, the ones done
         over 1 hour ago are collapsed under "[caret] N Completed"
   - Any questions wrt highly ambiguous or contradictory intent that have
@@ -169,7 +187,13 @@ according to the human author/user.
     viewing the full history of what happened with the agent as well as queuing
     messages to it.
 
-### Finish UI
+#### Sub task component
+
+- Has an mini-button with icon to cancel that displays on hover (similar to task
+  cards)
+  - After canceling, the sub task status changes to canceled.
+
+#### Finish UI
 
 - UI where you can select the branch to merge back into (default: start branch),
   and shows you the diff that will be merged, and lets you confirm.
@@ -206,6 +230,13 @@ Pressing the button to start immediately results in these actions:
 
 - This agent is implemented by the IDD flow (which includes this agent along
   with other orchestration for IDD)
+- IDD flow checks on intent updates via fsnotify and a long-running activity.
+  - The activity has a heartbeat to detect failures, and infinite retries and
+    infinite timeout.
+  - It returns the latest diff of changes
+  - This diff works for both existing tracked files, and new (untracked) files
+    (the diff is akin to the full intent content in this case). Existing git
+    diff helpers/activities are reused for this.
 - This AI agent automatically starts tasks if it thinks there is a good chunk of
   intent to work on
 - Task start tool calls and responses are always retained when managing chat
@@ -271,24 +302,27 @@ If in doubt — e.g. the latest user request conflicts with the intent — ask t
 user to clarify their intent.
 ```
 
-Then we add a text block like this for the requirements prompt for a new intent
-file:
+Then we obtain a "clean diff", which ignores whitespace and renders word-level
+diffs at best effort (ideally matching the quality of results of our frontend
+in-editor diffing). We use the clean diff in an additional text block like this,
+making it the requirements prompt. For a new intent file, the prompt looks like
+this:
 
 `````
-The following new intent file has already been committed to {{{ path/to/intent/file.md }}} (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself — treat the diff as a specification that the code must now conform to fully. It may be underspecified, but no code should be in contradiction with the intent. Infer intent as well as you can where it is underspecified.
+The following new intent file has already been committed to {{{ path/to/intent/file.md }}} (shown below for reference). Your job is to update the code so that the system's behavior matches the new intent. Do NOT re-edit the intent markdown file itself - treat the diff as a specification that the code must now conform to fully. It may be underspecified, but no code should be in contradiction with the intent. Infer intent as well as you can where it is underspecified.
 
 ```sh
 $ git show {{{commit}}}
-{{{diff}}}
+{{{clean_diff}}}
 ```
 
 Identify which behaviors in the diff are newly required or changed, locate the
 corresponding code (frontend, backend, prompts, etc.), and make the code changes
 needed. If a change is purely editorial (whitespace, wording with no semantic
 effect), no code change is needed for that hunk.
-````
+`````
 
-Or like this when the file already existed but has an update:
+And like this when the file already existed but has an update:
 
 ````
 The following intent update has already been committed to {{{ path/to/intent/file.md }}}
@@ -299,7 +333,7 @@ conform to.
 
 ```sh
 $ git show {{{commit}}}
-{{{diff}}}
+{{{clean_diff}}}
 ```
 
 Identify which behaviors in the diff are newly required or changed, locate the
@@ -307,5 +341,3 @@ corresponding code (frontend, backend, prompts, etc.), and make the code changes
 needed. If a change is purely editorial (whitespace, formatting or wording with no semantic
 effect), no code change is needed for that hunk. Just 
 `````
-
-update:", but is otherwise the same.

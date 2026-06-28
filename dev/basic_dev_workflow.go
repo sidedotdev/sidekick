@@ -895,43 +895,58 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				return "", MergeApprovalResponse{}, "", fmt.Errorf("conflict resolution subflow failed: %w", err)
 			}
 
-			// The conflict resolution finalized a merge commit on the
-			// source worktree whose second parent is the target branch
-			// tip. That makes target an ancestor of source, so merging
-			// source into target is a fast-forward and contains the
-			// resolution commit.
-			//
-			// Squash strategy must be overridden here: a squash would
-			// re-merge target's content into a single commit on top of
-			// target, discarding the merge commit (and thus the resolved
-			// conflict edits become indistinguishable from regular work).
-			// The resolution commit is the meaningful artifact, so we
-			// always do a regular (fast-forward) merge for the final
-			// step regardless of the originally requested strategy.
-			finalActionCtx := dCtx.NewActionContext("merge")
-			finalActionCtx.ActionParams = map[string]interface{}{
-				"sourceBranch": dCtx.Worktree.Name,
-				"targetBranch": mergeInfo.TargetBranch,
-			}
-			finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
-				var finalResult git.MergeActivityResult
-				err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
-					SourceBranch:   trackedCtx.Worktree.Name,
-					TargetBranch:   mergeInfo.TargetBranch,
-					MergeStrategy:  git.MergeStrategyMerge,
-					CommitMessage:  commitMessage,
-					CommitterName:  committerName,
-					CommitterEmail: committerEmail,
+			if mergeResult.BaseStashWorktreePath != "" {
+				// The conflict was a dirty base worktree's stash restore,
+				// relocated to and resolved on the flow's own worktree. The
+				// merge itself already completed on the base worktree, so we
+				// only move the resolved (still uncommitted) changes back there.
+				if err := workflow.ExecuteActivity(dCtx, git.GitTransferWorktreeChangesActivity, *dCtx.EnvContainer, git.GitTransferWorktreeChangesParams{
+					SourceWorktreePath: resolutionWorktree,
+					TargetWorktreePath: mergeResult.BaseStashWorktreePath,
+					BaseStashSha:       mergeResult.BaseStashSha,
+				}).Get(dCtx, nil); err != nil {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to transfer resolved base changes: %w", err)
+				}
+				mergeResult = git.MergeActivityResult{}
+			} else {
+				// The conflict resolution finalized a merge commit on the
+				// source worktree whose second parent is the target branch
+				// tip. That makes target an ancestor of source, so merging
+				// source into target is a fast-forward and contains the
+				// resolution commit.
+				//
+				// Squash strategy must be overridden here: a squash would
+				// re-merge target's content into a single commit on top of
+				// target, discarding the merge commit (and thus the resolved
+				// conflict edits become indistinguishable from regular work).
+				// The resolution commit is the meaningful artifact, so we
+				// always do a regular (fast-forward) merge for the final
+				// step regardless of the originally requested strategy.
+				finalActionCtx := dCtx.NewActionContext("merge")
+				finalActionCtx.ActionParams = map[string]interface{}{
+					"sourceBranch": dCtx.Worktree.Name,
+					"targetBranch": mergeInfo.TargetBranch,
+				}
+				finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
+					var finalResult git.MergeActivityResult
+					err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
+						SourceBranch:   trackedCtx.Worktree.Name,
+						TargetBranch:   mergeInfo.TargetBranch,
+						MergeStrategy:  git.MergeStrategyMerge,
+						CommitMessage:  commitMessage,
+						CommitterName:  committerName,
+						CommitterEmail: committerEmail,
+					})
+					if err != nil {
+						return finalResult, fmt.Errorf("failed to perform final merge after conflict resolution: %w", err)
+					}
+					return finalResult, nil
 				})
 				if err != nil {
-					return finalResult, fmt.Errorf("failed to perform final merge after conflict resolution: %w", err)
+					return "", MergeApprovalResponse{}, "", err
 				}
-				return finalResult, nil
-			})
-			if err != nil {
-				return "", MergeApprovalResponse{}, "", err
+				mergeResult = finalMergeResult
 			}
-			mergeResult = finalMergeResult
 		} else {
 			var conflictMessage string
 			if mergeResult.ConflictOnTargetBranch {

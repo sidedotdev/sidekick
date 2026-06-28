@@ -1,5 +1,5 @@
 <template>
-  <div class="editor-links">
+  <div class="editor-links" :class="{ 'editor-links-subtask': subtask }">
     <p v-for="worktree in worktrees" :key="worktree.id">
       Open Worktree
       <a :href="`vscode://file/${worktree.workingDirectory}?windowId=_blank`">
@@ -27,6 +27,7 @@ import type { Worktree } from '@/lib/models'
 const props = defineProps<{
   flowId: string
   worktrees?: Worktree[] | null
+  subtask?: boolean
 }>()
 
 const worktrees = computed(() => props.worktrees ?? [])
@@ -39,6 +40,14 @@ const devMode = import.meta.env.MODE === 'development'
   z-index: 1000;
   top: 1rem;
   right: 1rem;
+  background-color: var(--color-background-soft);
+}
+
+/* When shown for a sub-task, the links overlay the side panel header, so they
+   must sit above the panel (z-index 1001) and clear its dismiss control. */
+.editor-links-subtask {
+  z-index: 1002;
+  right: 3rem;
 }
 
 .editor-links a > * {

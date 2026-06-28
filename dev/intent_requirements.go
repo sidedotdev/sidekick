@@ -7,9 +7,17 @@ import "strings"
 type IntentRequirementsInfo struct {
 	Commit string
 	Diff   string
+	// CleanDiff is a whitespace-insensitive, word-level rendering of Diff used
+	// in the requirements prompt so cosmetic reflow doesn't read as a change.
+	// It falls back to Diff when empty.
+	CleanDiff string
 	// Update is false for the initial intent and true when implementing an
 	// update to existing intent.
 	Update bool
+	// ScopePrompt, when non-empty, narrows the sub-task's focus to a chunk of
+	// the diff (used by the background orchestrator's "partial" scope). It is
+	// emitted ahead of the diff in the rendered requirements.
+	ScopePrompt string
 }
 
 // renderIntentRequirements builds the sub-task requirements text describing the
@@ -17,11 +25,16 @@ type IntentRequirementsInfo struct {
 // implement. The diff's trailing newline is trimmed so the template's own
 // newline before the closing fence does not produce an extra blank line.
 func renderIntentRequirements(info IntentRequirementsInfo) string {
+	cleanDiff := info.CleanDiff
+	if strings.TrimSpace(cleanDiff) == "" {
+		cleanDiff = info.Diff
+	}
 	data := map[string]interface{}{
-		"commit": info.Commit,
-		"diff":   strings.TrimSuffix(info.Diff, "\n"),
-		"update": info.Update,
-		"path":   intentDiffPaths(info.Diff),
+		"commit":      info.Commit,
+		"clean_diff":  strings.TrimSuffix(cleanDiff, "\n"),
+		"update":      info.Update,
+		"path":        intentDiffPaths(info.Diff),
+		"scopePrompt": strings.TrimSpace(info.ScopePrompt),
 	}
 	return RenderPrompt(IntentRequirements, data)
 }

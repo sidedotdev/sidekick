@@ -2426,3 +2426,87 @@ func TestApplyCacheControlBreakpoints_FirstAndLastAlwaysBreakpointWithoutInitial
 
 	assertMaxFourBreakpoints(t, chatHistory)
 }
+
+// TestManageChatHistoryV2_IntentTaskStartRetained verifies that an assistant
+// tool-call message marked with ContextTypeIntentTaskStart and its matching
+// tool result are both kept even when older filler messages are trimmed. This
+// supports the IDD background orchestrator's need to always recall which
+// intent chunks it has already dispatched to sub-tasks.
+func TestManageChatHistoryV2_IntentTaskStartRetained(t *testing.T) {
+	taskStartMsg := llm.ChatMessage{
+		Role:        llm.ChatMessageRoleAssistant,
+		ContextType: ContextTypeIntentTaskStart,
+		ToolCalls:   []llm.ToolCall{{Id: "call1", Name: "start_intent_subtask", Arguments: `{"prompt":"chunk A"}`}},
+	}
+	taskStartResult := llm.ChatMessage{
+		Role:       llm.ChatMessageRoleTool,
+		ToolCallId: "call1",
+		Name:       "start_intent_subtask",
+		Content:    "started",
+	}
+
+	chatHistory := []llm.ChatMessage{
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+		{Content: strings.Repeat("filler-", 50)},
+		taskStartMsg,
+		taskStartResult,
+		{Content: strings.Repeat("more-filler-", 50)},
+		{Content: "Latest"},
+	}
+
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 30)
+	assert.NoError(t, err)
+
+	cleared := clearCacheControl(result)
+	assert.Contains(t, cleared, chatHistory[0], "InitialInstructions must always be kept")
+	assert.Contains(t, cleared, taskStartMsg, "IntentTaskStart tool-call must be retained across trimming")
+	assert.Contains(t, cleared, taskStartResult, "IntentTaskStart tool-result must be retained alongside its tool-call")
+	assert.Equal(t, chatHistory[len(chatHistory)-1], cleared[len(cleared)-1], "last message retention preserved")
+}
+
+// TestManageChatHistoryV2_IntentTaskStartRetainsAllToolResults verifies that
+// when an assistant turn marked with ContextTypeIntentTaskStart emits multiple
+// tool calls (e.g. start_intent_subtask + add_nudge in the same turn), every
+// consecutive tool-result message is retained alongside the assistant
+// message. Dropping any of them would leave a tool_use without its matching
+// tool_result, which most providers reject.
+func TestManageChatHistoryV2_IntentTaskStartRetainsAllToolResults(t *testing.T) {
+	taskStartMsg := llm.ChatMessage{
+		Role:        llm.ChatMessageRoleAssistant,
+		ContextType: ContextTypeIntentTaskStart,
+		ToolCalls: []llm.ToolCall{
+			{Id: "call1", Name: "start_intent_subtask", Arguments: `{"prompt":"chunk A"}`},
+			{Id: "call2", Name: "add_nudge", Arguments: `{"text":"ambiguous bit"}`},
+		},
+	}
+	startResult := llm.ChatMessage{
+		Role:       llm.ChatMessageRoleTool,
+		ToolCallId: "call1",
+		Name:       "start_intent_subtask",
+		Content:    "started",
+	}
+	nudgeResult := llm.ChatMessage{
+		Role:       llm.ChatMessageRoleTool,
+		ToolCallId: "call2",
+		Name:       "add_nudge",
+		Content:    "noted",
+	}
+
+	chatHistory := []llm.ChatMessage{
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+		{Content: strings.Repeat("filler-", 50)},
+		taskStartMsg,
+		startResult,
+		nudgeResult,
+		{Content: strings.Repeat("more-filler-", 50)},
+		{Content: "Latest"},
+	}
+
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 30)
+	assert.NoError(t, err)
+
+	cleared := clearCacheControl(result)
+	assert.Contains(t, cleared, taskStartMsg, "IntentTaskStart tool-call must be retained")
+	assert.Contains(t, cleared, startResult, "start_intent_subtask tool-result must be retained")
+	assert.Contains(t, cleared, nudgeResult, "add_nudge tool-result emitted in the same turn must also be retained")
+}
