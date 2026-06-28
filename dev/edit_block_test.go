@@ -162,10 +162,10 @@ var newFile = EditBlockTestCase{
 ` + "```" + `go
 edit_block:1
 new.go
-<<<<<<< CREATE_FILE
+` + createFile + `
 ` + divider + `
 new
->>>>>>> NEW_LINES
+` + newLines + `
 ` + "```" + `
 `,
 	expectedResult: []*EditBlock{
@@ -186,10 +186,10 @@ var appendFile = EditBlockTestCase{
 ` + "```" + `go
 edit_block:1
 existing.go
-<<<<<<< APPEND_TO_FILE
+` + appendToFile + `
 ` + divider + `
 new
->>>>>>> NEW_LINES
+` + newLines + `
 ` + "```" + `
 `,
 	expectedResult: []*EditBlock{
@@ -210,9 +210,9 @@ var missingDividerAppendFile = EditBlockTestCase{
 ` + "```" + `go
 edit_block:1
 existing.go
-<<<<<<< APPEND_TO_FILE
+` + appendToFile + `
 new
->>>>>>> NEW_LINES
+` + newLines + `
 ` + "```" + `
 `,
 	expectedResult: []*EditBlock{
@@ -233,9 +233,9 @@ var missingDividerCreateFile = EditBlockTestCase{
 ` + "```" + `go
 edit_block:1
 new.go
-<<<<<<< CREATE_FILE
+` + createFile + `
 new
->>>>>>> NEW_LINES
+` + newLines + `
 ` + "```" + `
 `,
 	expectedResult: []*EditBlock{

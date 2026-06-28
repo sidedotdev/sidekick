@@ -336,10 +336,10 @@ onBeforeUnmount(() => {
 
 defineExpose({
   focus: () => editorView?.focus(),
-  // formatNow reflows the current document immediately, returning the resulting
-  // text. Auto-saving runs this so persisted intent is always formatted; the
-  // selection and the caret's vertical viewport position are preserved across
-  // the reflow to keep editing undisturbed.
+  // formatNow reflows the current document immediately, returning the resulting text.
+  // Auto-saving runs this so persisted intent is always formatted;
+  // the selection and the caret's vertical viewport position are preserved across the reflow to keep editing undisturbed.
+  // Also used when launching an intent sub-task so the committed intent state is formatted before being saved, matching the idle-format behavior.
   formatNow: (): string => {
     formatDocument()
     return editorView?.state.doc.toString() ?? ''
