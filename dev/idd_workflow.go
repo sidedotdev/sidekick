@@ -247,10 +247,16 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 
 	branch := dCtx.Worktree.Name
-	childCtx := workflow.WithChildOptions(dCtx, workflow.ChildWorkflowOptions{
+	childOptions := workflow.ChildWorkflowOptions{
 		WorkflowID:        "flow_" + ksuidSideEffect(dCtx),
 		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
-	})
+	}
+	if workflow.GetVersion(dCtx, "child-flow-sidekick-version-memo", workflow.DefaultVersion, 1) == 1 {
+		childOptions.Memo = map[string]interface{}{
+			"sidekickVersion": sidekickVersionSideEffect(dCtx),
+		}
+	}
+	childCtx := workflow.WithChildOptions(dCtx, childOptions)
 	childFuture := workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
 		WorkspaceId:  input.WorkspaceId,
 		Requirements: renderIntentRequirements(reqInfo),
