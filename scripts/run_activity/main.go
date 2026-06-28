@@ -211,6 +211,7 @@ func buildActivityRegistry() map[string]interface{} {
 		dev.CheckCommandPermissionActivity,
 		common.GetLocalConfig,
 		common.BaseCommandPermissionsActivity,
+		persisted_ai.RepairToolCallArgumentsActivity,
 	}
 	for _, fn := range standaloneFuncs {
 		registry[getFunctionName(fn)] = fn

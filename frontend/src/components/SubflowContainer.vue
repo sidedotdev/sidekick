@@ -1,6 +1,6 @@
 <template>
   <div class="subflow-container" :class="{ 'odd': level % 2 === 1, 'container-expanded': accordionState.expanded }" ref="container">
-    <div class="subflow-name-container" @click="toggleAccordion" ref="heading">
+    <div class="subflow-name-container" tabindex="-1" @click="toggleAccordion" ref="heading">
       <h2 class="subflow-name" :class="{'name-expanded': accordionState.expanded}">
           <span class="caret" :class="{ 'caret-expanded': accordionState.expanded }"></span>
           {{ subflowTree.name }}

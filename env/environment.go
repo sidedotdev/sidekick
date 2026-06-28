@@ -478,7 +478,7 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 // instead of empty output from a command that silently ran in the SSH session's
 // default directory.
 func buildRemoteShellCommand(workDir string, input EnvRunCommandInput) string {
-	allEnvVars := append(append([]string{}, input.EnvVars...), envVarsToInject...)
+	allEnvVars := append(input.EnvVars, envVarsToInject...)
 	shellParts := make([]string, 0, len(allEnvVars)+2)
 	for _, envVar := range allEnvVars {
 		shellParts = append(shellParts, "export "+shellQuote(envVar))
