@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -32,6 +33,20 @@ func tryParseStringAsJson(input string) interface{} {
 }
 
 func RepairJson(input string) string {
+	return repairJson(input, false)
+}
+
+// RepairJsonFull applies every JSON repair pass, including recovery of fields
+// whose values leaked into a preceding string value due to broken upstream
+// tool-call/XML parsing. It is intended to run inside activities so the
+// repaired result is persisted in workflow history. Deterministic workflow code
+// keeps calling RepairJson, so replay of in-flight executions is unaffected
+// until those executions drain and the workflow-side calls can be removed.
+func RepairJsonFull(input string) string {
+	return repairJson(input, true)
+}
+
+func repairJson(input string, recoverLeakedParams bool) string {
 	// First escape newlines in JSON strings
 	escaped := escapeNewLinesInJSON(input)
 
@@ -43,6 +58,12 @@ func RepairJson(input string) string {
 	var data interface{}
 	if err := json.Unmarshal([]byte(escaped), &data); err != nil {
 		return escaped // Return escaped string if not valid JSON
+	}
+
+	if recoverLeakedParams {
+		// Recover fields whose values leaked into a preceding string value due
+		// to broken upstream XML/tool-call parsing
+		data = repairLeakedXmlParams(data)
 	}
 
 	// Process all string values in the structure
@@ -58,6 +79,93 @@ func RepairJson(input string) string {
 	}
 
 	return strings.TrimSpace(buffer.String())
+}
+
+// leakedXmlJunkRe matches the point in a string value where a sibling field's
+// value leaked in, e.g. `... </analysis> <parameter name="steps">`. The optional
+// leading closing tag is stripped along with the parameter markup.
+var leakedXmlJunkRe = regexp.MustCompile(`(?:</[a-zA-Z][^>]*>\s*)?<parameter name="`)
+
+// leakedXmlParamRe matches the opening marker of a leaked parameter, capturing
+// its name.
+var leakedXmlParamRe = regexp.MustCompile(`<parameter name="([^"]+)">`)
+
+// repairLeakedXmlParams walks a parsed JSON structure and, for any string value
+// that contains leaked `<parameter name="...">` markup, truncates the string to
+// its real content and promotes the leaked parameters to sibling fields.
+func repairLeakedXmlParams(data interface{}) interface{} {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(v))
+		additions := make(map[string]interface{})
+		for key, value := range v {
+			processed := repairLeakedXmlParams(value)
+			if s, ok := processed.(string); ok {
+				if cleaned, params, found := extractLeakedXmlParams(s); found {
+					result[key] = cleaned
+					for name, val := range params {
+						additions[name] = val
+					}
+					continue
+				}
+			}
+			result[key] = processed
+		}
+		for name, val := range additions {
+			if _, exists := result[name]; !exists {
+				result[name] = val
+			}
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		for i, value := range v {
+			result[i] = repairLeakedXmlParams(value)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+// extractLeakedXmlParams splits a string value at the point where leaked
+// `<parameter name="...">` markup begins. It returns the cleaned string content
+// preceding the markup and a map of the leaked parameter names to their parsed
+// values. found is false when no leaked markup is present.
+func extractLeakedXmlParams(s string) (cleaned string, params map[string]interface{}, found bool) {
+	loc := leakedXmlJunkRe.FindStringIndex(s)
+	if loc == nil {
+		return s, nil, false
+	}
+	cleaned = s[:loc[0]]
+	rest := s[loc[0]:]
+
+	matches := leakedXmlParamRe.FindAllStringSubmatchIndex(rest, -1)
+	if len(matches) == 0 {
+		return s, nil, false
+	}
+
+	params = make(map[string]interface{}, len(matches))
+	for i, m := range matches {
+		name := rest[m[2]:m[3]]
+		valStart := m[1]
+		valEnd := len(rest)
+		if i+1 < len(matches) {
+			valEnd = matches[i+1][0]
+		}
+		raw := strings.TrimSpace(rest[valStart:valEnd])
+		raw = strings.TrimSuffix(raw, "</parameter>")
+		raw = strings.TrimSpace(raw)
+
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			params[name] = parsed
+		} else {
+			params[name] = raw
+		}
+	}
+
+	return cleaned, params, true
 }
 
 // check if treating any string values in maps as json.RawMessage results in an

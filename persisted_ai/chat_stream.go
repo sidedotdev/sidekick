@@ -2,6 +2,7 @@ package persisted_ai
 
 import (
 	"fmt"
+	"time"
 
 	"sidekick/common"
 	"sidekick/flow_action"
@@ -9,6 +10,7 @@ import (
 	"sidekick/llm2"
 	"sidekick/utils"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -82,6 +84,13 @@ func executeChatStreamV1(
 		response.Output.SanitizeToolNames()
 	}
 
+	eCtx := actionCtx.ExecContext
+	if workflow.GetVersion(eCtx, "repair-tool-call-args", workflow.DefaultVersion, 1) == 1 {
+		if err := repairLlm2MessageToolCalls(eCtx, &response.Output); err != nil {
+			return nil, err
+		}
+	}
+
 	return &response, nil
 }
 
@@ -132,5 +141,78 @@ func executeChatStreamLegacy(
 		return nil, err
 	}
 
+	eCtx := actionCtx.ExecContext
+	if workflow.GetVersion(eCtx, "repair-tool-call-args", workflow.DefaultVersion, 1) == 1 {
+		if err := repairLegacyToolCallArgs(eCtx, &chatResponse); err != nil {
+			return nil, err
+		}
+	}
+
 	return &chatResponse, nil
+}
+
+// repairActivityOptions configures the short, retried activity that repairs
+// tool-call JSON arguments.
+var repairActivityOptions = workflow.ActivityOptions{
+	StartToCloseTimeout: 10 * time.Second,
+	RetryPolicy: &temporal.RetryPolicy{
+		MaximumAttempts: 3,
+	},
+}
+
+// repairLlm2MessageToolCalls repairs the JSON arguments of every tool use block
+// in the message via the RepairToolCallArgumentsActivity, so the repaired
+// arguments are what gets recorded as the flow action result.
+func repairLlm2MessageToolCalls(eCtx flow_action.ExecContext, message *llm2.Message) error {
+	var args []string
+	var indices []int
+	for i := range message.Content {
+		if message.Content[i].ToolUse != nil {
+			indices = append(indices, i)
+			args = append(args, message.Content[i].ToolUse.Arguments)
+		}
+	}
+	if len(args) == 0 {
+		return nil
+	}
+
+	repaired, err := executeRepairToolCallArguments(eCtx, args)
+	if err != nil {
+		return err
+	}
+	for j, i := range indices {
+		message.Content[i].ToolUse.Arguments = repaired[j]
+	}
+	return nil
+}
+
+// repairLegacyToolCallArgs repairs the JSON arguments of every tool call in the
+// legacy chat response via the RepairToolCallArgumentsActivity.
+func repairLegacyToolCallArgs(eCtx flow_action.ExecContext, response *llm.ChatMessageResponse) error {
+	if len(response.ToolCalls) == 0 {
+		return nil
+	}
+	args := make([]string, len(response.ToolCalls))
+	for i := range response.ToolCalls {
+		args[i] = response.ToolCalls[i].Arguments
+	}
+
+	repaired, err := executeRepairToolCallArguments(eCtx, args)
+	if err != nil {
+		return err
+	}
+	for i := range response.ToolCalls {
+		response.ToolCalls[i].Arguments = repaired[i]
+	}
+	return nil
+}
+
+func executeRepairToolCallArguments(eCtx flow_action.ExecContext, args []string) ([]string, error) {
+	ctx := workflow.WithActivityOptions(eCtx, repairActivityOptions)
+	var output RepairToolCallArgsOutput
+	err := workflow.ExecuteActivity(ctx, RepairToolCallArgumentsActivity, RepairToolCallArgsInput{Arguments: args}).Get(ctx, &output)
+	if err != nil {
+		return nil, err
+	}
+	return output.Arguments, nil
 }

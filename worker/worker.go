@@ -237,6 +237,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(readImageActivities)
 	w.RegisterActivity(kvActivities)
 	w.RegisterActivity(llm2Activities)
+	w.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)

@@ -522,11 +522,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		flowId = "flow_" + ksuidSideEffect(dCtx)
 	}
 
-	// The sub-task gets its own descriptive title generated from the committed
-	// intent sha & diff, falling back to the IDD task title if generation fails.
-	// Gated by version so in-flight sub-tasks recorded before this change replay
-	// without the extra LLM activity.
-	title := input.Title
 	if workflow.GetVersion(dCtx, "idd-subtask-generated-title", workflow.DefaultVersion, 1) >= 1 {
 		if generatedTitle, titleErr := generateIntentSubtaskTitle(dCtx, reqInfo.Commit, reqInfo.Diff); titleErr != nil {
 			log.Error("Failed to generate intent sub-task title", "Error", titleErr)
@@ -536,10 +531,16 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 
 	branch := dCtx.Worktree.Name
-	childCtx := workflow.WithChildOptions(dCtx, workflow.ChildWorkflowOptions{
+	childOptions := workflow.ChildWorkflowOptions{
 		WorkflowID:        flowId,
 		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
-	})
+	}
+	if workflow.GetVersion(dCtx, "child-flow-sidekick-version-memo", workflow.DefaultVersion, 1) == 1 {
+		childOptions.Memo = map[string]interface{}{
+			"sidekickVersion": sidekickVersionSideEffect(dCtx),
+		}
+	}
+	childCtx := workflow.WithChildOptions(dCtx, childOptions)
 	childFuture := workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
 		WorkspaceId:  input.WorkspaceId,
 		Requirements: renderIntentRequirements(reqInfo),

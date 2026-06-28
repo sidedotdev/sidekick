@@ -55,10 +55,16 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		}
 
 		flowId := "flow_" + ksuidSideEffect(ctx)
-		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		childOptions := workflow.ChildWorkflowOptions{
 			WorkflowID:        flowId,
 			ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
-		})
+		}
+		if workflow.GetVersion(ctx, "child-flow-sidekick-version-memo", workflow.DefaultVersion, 1) == 1 {
+			childOptions.Memo = map[string]interface{}{
+				"sidekickVersion": sidekickVersionSideEffect(ctx),
+			}
+		}
+		childCtx := workflow.WithChildOptions(ctx, childOptions)
 
 		untypedOptions := input.FlowOptions
 		var configOverrides common.ConfigOverrides
