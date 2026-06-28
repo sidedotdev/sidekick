@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"path/filepath"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/utils"
@@ -293,6 +294,19 @@ func ksuidSideEffect(ctx workflow.Context) string {
 	return ksuidValue
 }
 
+// sidekickVersionSideEffect retrieves the build commit SHA in a workflow-safe
+// way so it can be recorded on child flow workflows' memo. The result is
+// captured via a side effect because GetBuildCommitSha may shell out to git and
+// is therefore not deterministic across replays.
+func sidekickVersionSideEffect(ctx workflow.Context) string {
+	encoded := workflow.SideEffect(ctx, func(ctx workflow.Context) interface{} {
+		return common.GetBuildCommitSha()
+	})
+	var version string
+	encoded.Get(&version)
+	return version
+}
+
 func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest WorkRequest, ima *DevAgentManagerActivities) (domain.Flow, error) {
 	// FIXME remove the argument and use the below commented out code instead
 	// var ima *DevAgentManagerActivities // use a nil struct pointer to call activities that are part of a structure
@@ -310,10 +324,16 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 
 	log := workflow.GetLogger(ctx)
 
-	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+	childOptions := workflow.ChildWorkflowOptions{
 		WorkflowID:        "flow_" + ksuidSideEffect(ctx),
 		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
-	})
+	}
+	if workflow.GetVersion(ctx, "child-flow-sidekick-version-memo", workflow.DefaultVersion, 1) == 1 {
+		childOptions.Memo = map[string]interface{}{
+			"sidekickVersion": sidekickVersionSideEffect(ctx),
+		}
+	}
+	childCtx := workflow.WithChildOptions(ctx, childOptions)
 
 	// TODO consider creating the requested workflow in an activity and making
 	// it an unrelated workflow rather than a child workflow: we aren't using

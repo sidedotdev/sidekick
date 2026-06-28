@@ -337,11 +337,11 @@ onMounted(() => {
     registerGlobalShortcut(props.flowAction.id, props.flowAction.created, () => {
       const requestKind = props.flowAction.actionParams.requestKind
       if (requestKind === 'free_form' && responseContent.value.length > 0) {
-        submitUserResponse(true)
+        submitAndRetainFocus(true)
       } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
-        submitUserResponse(!hasResponseText.value)
+        submitAndRetainFocus(!hasResponseText.value)
       } else if (requestKind === 'continue') {
-        submitUserResponse(true)
+        submitAndRetainFocus(true)
       }
     })
 
@@ -383,16 +383,29 @@ const handleKeyDown = (event: KeyboardEvent) => {
     if (requestKind === 'free_form' && responseContent.value.length > 0) {
       event.preventDefault()
       event.stopPropagation()
-      submitUserResponse(true)
+      submitAndRetainFocus(true)
     } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
       event.preventDefault()
       event.stopPropagation()
-      submitUserResponse(!hasResponseText.value)
+      submitAndRetainFocus(!hasResponseText.value)
     } else if (requestKind === 'continue') {
       event.preventDefault()
       event.stopPropagation()
-      submitUserResponse(true)
+      submitAndRetainFocus(true)
     }
+  }
+}
+
+// When a keyboard shortcut submits the response, the action collapses and the
+// form unmounts, dropping focus. Move focus to the nearest subflow heading so
+// subsequent keyboard events keep bubbling to the flow view.
+const submitAndRetainFocus = async (approved: boolean) => {
+  const heading = formRef.value
+    ?.closest('.subflow-container')
+    ?.querySelector<HTMLElement>('.subflow-name-container')
+  const result = await submitUserResponse(approved)
+  if (result !== false) {
+    heading?.focus()
   }
 }
 
