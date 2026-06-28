@@ -54,6 +54,10 @@ type FinishIntentRequest struct {
 	TargetBranch string `json:"targetBranch"`
 }
 
+type SetIddAutoModeRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
 // flowWorktreeDir resolves the working directory of the worktree backing a flow,
 // returning an HTTP status code and error suitable for direct responses. A
 // freshly-started IDD flow can be navigated to before the worktree row is
@@ -412,4 +416,72 @@ func (ctrl *Controller) FinishIntentHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Intent finish requested"})
+}
+
+// SetIddAutoModeHandler signals the IddWorkflow to enable or disable the
+// background orchestrator's auto sub-task creation.
+func (ctrl *Controller) SetIddAutoModeHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	var req SetIddAutoModeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	if _, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	err := ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameSetIddAutoMode, dev.SetIddAutoModeSignal{Enabled: req.Enabled})
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to signal idd auto-mode toggle")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to set auto-mode: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Auto-mode updated"})
+}
+
+// RunIddOrchestratorHandler asks the IddWorkflow's background orchestrator to
+// evaluate current intent state and, if auto-mode is on, launch a sub-task.
+// The frontend posts here after its edit-idle heuristic decides a chunk of
+// intent is ready, keeping the heuristic out of the workflow.
+func (ctrl *Controller) RunIddOrchestratorHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if _, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	err := ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameRunIddOrchestrator, dev.RunIddOrchestratorSignal{})
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to signal idd orchestrator run")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to run orchestrator: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Orchestrator run requested"})
 }

@@ -92,7 +92,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
-	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Once()
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
 	s.env.OnActivity(
 		s.ima.PutWorkflow,
@@ -124,6 +124,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 			RepoConfig: common.RepoConfig{},
 		}
 		state := &IddState{}
+		flowId := reservePendingSubtask(dCtx, state, "")
 		runIntentSubtask(dCtx, IddWorkflowInput{
 			WorkspaceId: "test-workspace",
 			RepoDir:     "/tmp/repo",
@@ -132,7 +133,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 				EnvType:  env.EnvTypeLocal,
 				RepoMode: env.RepoModeWorktree,
 			},
-		}, StartIntentSubtaskSignal{Update: false}, state)
+		}, StartIntentSubtaskSignal{Update: false}, state, flowId)
 		if len(state.Subtasks) != 1 {
 			return IddState{}, fmt.Errorf("expected 1 subtask, got %d", len(state.Subtasks))
 		}
@@ -186,7 +187,7 @@ func (s *IddWorkflowTestSuite) TestFinishIddSignalMergesAndCloses() {
 
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
-	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Once()
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
 	var capturedMergeParams git.GitMergeParams
 	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitMergeParams) bool {
@@ -272,6 +273,138 @@ func (s *IddWorkflowTestSuite) TestFinishIddSignalMergesAndCloses() {
 	s.Equal(iddBranch, capturedMergeParams.SourceBranch)
 	s.Equal(targetBranch, capturedMergeParams.TargetBranch)
 	s.Equal(git.MergeStrategyMerge, capturedMergeParams.MergeStrategy)
+}
+
+// TestRunOrchestratorTurn_EmptyDiffIsNoOp drives runIddOrchestratorTurn
+// directly to verify the only true no-op path inside the orchestrator:
+// when the pending intent diff is empty there is nothing to reason about,
+// so the turn returns before making any LLM call. This matters because
+// the canvas may trigger runs eagerly (on every idle tick, on the
+// edit-watcher returning, etc.) and we don't want a spurious LLM call per
+// trigger when the worktree is clean relative to the start branch. Note
+// that this is independent of AutoMode: with AutoMode off and a
+// non-empty diff the orchestrator does still call the LLM (nudge-only),
+// since the user opted into ambiguity-surfacing nudges by leaving the
+// orchestrator enabled at all.
+func (s *IddWorkflowTestSuite) TestRunOrchestratorTurn_EmptyDiffIsNoOp() {
+	const iddBranch = "side/idd-worktree"
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return in.Command == "git" && len(in.Args) >= 2 && in.Args[0] == "diff"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: ""}, nil).Once()
+	s.env.OnActivity(git.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.Anything).
+		Return("", nil).Once()
+
+	miniIdd := func(ctx workflow.Context) (IddState, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
+				GlobalState: gs,
+				EnvContainer: &env.EnvContainer{
+					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
+				},
+			},
+			Worktree:   &domain.Worktree{Name: iddBranch},
+			RepoConfig: common.RepoConfig{},
+		}
+		state := &IddState{DefaultTargetBranch: "main"}
+		chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		runIddOrchestratorTurn(dCtx, IddWorkflowInput{
+			WorkspaceId: "test-workspace",
+			RepoDir:     "/tmp/repo",
+			Title:       "My Intent",
+			IddOptions:  IddOptions{EnvType: env.EnvTypeLocal, RepoMode: env.RepoModeWorktree},
+		}, state, chatHistory, false)
+		s.Equal(0, chatHistory.Len(), "no chat messages should be appended on empty-diff no-op")
+		return *state, nil
+	}
+	s.env.RegisterWorkflow(miniIdd)
+
+	s.env.ExecuteWorkflow(miniIdd)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var state IddState
+	s.NoError(s.env.GetWorkflowResult(&state))
+	s.Empty(state.Subtasks)
+	s.Empty(state.Nudges)
+}
+
+// TestPendingIntentDiffIncludesUntrackedFiles verifies the orchestrator's
+// pending-intent diff covers both tracked modifications and brand-new
+// (untracked) intent files, reusing the shared untracked-diff activity.
+func (s *IddWorkflowTestSuite) TestPendingIntentDiffIncludesUntrackedFiles() {
+	const iddBranch = "side/idd-worktree"
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return in.Command == "git" && len(in.Args) >= 2 && in.Args[0] == "diff"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "tracked-intent-change"}, nil).Once()
+	s.env.OnActivity(git.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(paths []string) bool {
+		return len(paths) == 1 && paths[0] == "intent"
+	})).Return("untracked-intent-file", nil).Once()
+
+	miniIdd := func(ctx workflow.Context) (string, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
+				GlobalState: gs,
+				EnvContainer: &env.EnvContainer{
+					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
+				},
+			},
+			Worktree:   &domain.Worktree{Name: iddBranch},
+			RepoConfig: common.RepoConfig{},
+		}
+		state := &IddState{DefaultTargetBranch: "main"}
+		return pendingIntentDiff(dCtx, state)
+	}
+	s.env.RegisterWorkflow(miniIdd)
+
+	s.env.ExecuteWorkflow(miniIdd)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var diff string
+	s.NoError(s.env.GetWorkflowResult(&diff))
+	s.Contains(diff, "tracked-intent-change")
+	s.Contains(diff, "untracked-intent-file")
+}
+
+// TestSetAutoModeSignalTogglesState verifies the auto-mode toggle signal
+// updates IddState.AutoMode so that subsequent orchestrator runs gate on it.
+func (s *IddWorkflowTestSuite) TestSetAutoModeSignalTogglesState() {
+	miniIdd := func(ctx workflow.Context) (IddState, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		state := &IddState{}
+		setAutoCh := workflow.GetSignalChannel(ctx, SignalNameSetIddAutoMode)
+		var sig SetIddAutoModeSignal
+		setAutoCh.Receive(ctx, &sig)
+		state.AutoMode = sig.Enabled
+		return *state, nil
+	}
+	s.env.RegisterWorkflow(miniIdd)
+
+	s.env.RegisterDelayedCallback(func() {
+		s.env.SignalWorkflow(SignalNameSetIddAutoMode, SetIddAutoModeSignal{Enabled: true})
+	}, 0)
+
+	s.env.ExecuteWorkflow(miniIdd)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var state IddState
+	s.NoError(s.env.GetWorkflowResult(&state))
+	s.True(state.AutoMode)
 }
 
 func TestIddWorkflowTestSuite(t *testing.T) {

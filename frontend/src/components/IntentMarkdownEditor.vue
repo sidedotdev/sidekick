@@ -13,8 +13,10 @@ import {
   codeFolding,
   ensureSyntaxTree,
   foldEffect,
+  indentUnit,
   syntaxHighlighting,
 } from '@codemirror/language'
+import { indentLess, indentMore } from '@codemirror/commands'
 import { tags as t } from '@lezer/highlight'
 import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { applyUncommittedHighlight, uncommittedHighlightExtension } from '../lib/intent_diff_editor'
@@ -222,11 +224,15 @@ const createEditor = () => {
           codeFolding(),
           syntaxHighlighting(markdownHighlightStyle),
           EditorView.lineWrapping,
+          indentUnit.of(tabIndent()),
           keymap.of([
             {
               key: 'Tab',
               preventDefault: true,
               run: (view) => {
+                if (view.state.selection.ranges.some((range) => !range.empty)) {
+                  return indentMore(view)
+                }
                 view.dispatch(
                   view.state.update(view.state.replaceSelection(tabIndent()), {
                     scrollIntoView: true,
@@ -235,6 +241,11 @@ const createEditor = () => {
                 )
                 return true
               },
+            },
+            {
+              key: 'Shift-Tab',
+              preventDefault: true,
+              run: indentLess,
             },
           ]),
           uncommittedHighlightExtension(),

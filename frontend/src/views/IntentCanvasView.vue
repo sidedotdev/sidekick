@@ -163,11 +163,24 @@
           {{ finishing ? 'Finishing…' : 'Finish IDD' }}
         </button>
 
+        <label class="auto-mode-toggle">
+          <input
+            type="checkbox"
+            :checked="autoMode"
+            :disabled="autoModeUpdating"
+            @change="toggleAutoMode"
+          />
+          <span class="auto-mode-label">Auto-create sub-tasks</span>
+          <span class="auto-mode-hint">
+            Background agent watches edits and starts sub-tasks when intent settles.
+          </span>
+        </label>
+
         <section class="rail-section subtask-section">
           <h2 class="rail-title">Sub-tasks</h2>
           <p v-if="!subtasks.length" class="rail-empty">No sub-tasks yet. Implement your intent to spin one up.</p>
           <ul v-else class="subtask-list">
-            <li v-for="task in visibleSubtasks" :key="task.flowId">
+            <li v-for="task in visibleSubtasks" :key="task.flowId" class="subtask-item">
               <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
                 <span class="subtask-meta">
                   <span v-if="task.title" class="subtask-title">{{ task.title }}</span>
@@ -175,6 +188,13 @@
                   <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
                 </span>
               </button>
+              <button
+                v-if="canCancelSubtask(task)"
+                type="button"
+                class="subtask-cancel"
+                title="Cancel sub-task"
+                @click.stop="cancelSubtask(task)"
+              >✕</button>
             </li>
             <li v-if="collapsedCompleted.length" class="subtask-collapse">
               <button
@@ -206,6 +226,16 @@
             <li v-for="(item, idx) in clarifications" :key="`${item.subtaskFlowId}-${idx}`" class="clarify-card">
               <p class="clarify-question">{{ item.question }}</p>
               <button type="button" class="clarify-link" @click="openSubtask(item.subtaskFlowId)">View sub-task</button>
+            </li>
+          </ul>
+        </section>
+
+        <section v-if="nudges.length" class="rail-section">
+          <h2 class="rail-title">Orchestrator nudges</h2>
+          <ul class="clarify-list">
+            <li v-for="(item, idx) in nudges" :key="`nudge-${idx}`" class="clarify-card">
+              <p class="clarify-question">{{ item.text }}</p>
+              <p v-if="item.anchorText" class="nudge-anchor">“{{ item.anchorText }}”</p>
             </li>
           </ul>
         </section>
@@ -326,6 +356,11 @@ interface IddClarification {
   question: string
 }
 
+interface IddNudge {
+  text: string
+  anchorText?: string
+}
+
 const route = useRoute()
 const flowId = computed(() => route.params.id as string)
 const flowBase = computed(() => `/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}`)
@@ -375,8 +410,67 @@ const subtasks = ref<IddSubtask[]>([])
 const nowTick = ref(Date.now())
 let nowTickTimer: ReturnType<typeof setInterval> | null = null
 const clarifications = ref<IddClarification[]>([])
+const nudges = ref<IddNudge[]>([])
 const starting = ref(false)
 const activeSubtaskFlowId = ref<string | null>(null)
+const autoMode = ref(false)
+const autoModeUpdating = ref(false)
+
+// 30s of editor idleness with at least one edit since the last orchestrator
+// run is the heuristic that signals "intent has settled, evaluate it." Living
+// on the frontend keeps the workflow free of timer-driven activities.
+const ORCHESTRATOR_IDLE_MS = 30_000
+let orchestratorIdleTimer: ReturnType<typeof setTimeout> | null = null
+let pendingOrchestratorEdits = false
+
+const cancelOrchestratorIdleTimer = () => {
+  if (orchestratorIdleTimer) {
+    clearTimeout(orchestratorIdleTimer)
+    orchestratorIdleTimer = null
+  }
+}
+
+const fireOrchestratorRun = async () => {
+  orchestratorIdleTimer = null
+  if (!pendingOrchestratorEdits || !autoMode.value) return
+  pendingOrchestratorEdits = false
+  try {
+    await fetch(`${apiBase.value}/run_orchestrator`, { method: 'POST' })
+  } catch (e) {
+    console.error('Failed to trigger idd orchestrator:', e)
+  }
+}
+
+const noteIntentEdit = () => {
+  pendingOrchestratorEdits = true
+  if (!autoMode.value) return
+  cancelOrchestratorIdleTimer()
+  orchestratorIdleTimer = setTimeout(fireOrchestratorRun, ORCHESTRATOR_IDLE_MS)
+}
+
+const toggleAutoMode = async () => {
+  if (autoModeUpdating.value) return
+  const next = !autoMode.value
+  autoModeUpdating.value = true
+  try {
+    const res = await fetch(`${apiBase.value}/auto_mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    autoMode.value = next
+    if (!next) {
+      cancelOrchestratorIdleTimer()
+    } else if (pendingOrchestratorEdits) {
+      orchestratorIdleTimer = setTimeout(fireOrchestratorRun, ORCHESTRATOR_IDLE_MS)
+    }
+  } catch (e) {
+    console.error('Failed to toggle idd auto-mode:', e)
+  } finally {
+    autoModeUpdating.value = false
+  }
+}
 
 const fetchFlow = async () => {
   try {
@@ -587,8 +681,12 @@ const fetchIddState = async () => {
     const result = data.result ?? {}
     subtasks.value = (result.subtasks ?? []) as IddSubtask[]
     clarifications.value = (result.clarifications ?? []) as IddClarification[]
+    nudges.value = (result.nudges ?? []) as IddNudge[]
     const defaultTarget = (result.defaultTargetBranch ?? '') as string
     if (defaultTarget) finishDefaultBranch.value = defaultTarget
+    if (typeof result.autoMode === 'boolean' && !autoModeUpdating.value) {
+      autoMode.value = result.autoMode
+    }
   } catch (e) {
     console.error('Failed to query intent state:', e)
   }
@@ -679,6 +777,25 @@ const startSubtask = async () => {
     console.error('Failed to start intent sub-task:', e)
   } finally {
     starting.value = false
+  }
+}
+
+const canCancelSubtask = (task: IddSubtask): boolean => {
+  const cls = statusClass(task.status)
+  return cls === 'active' || cls === 'blocked'
+}
+
+const cancelSubtask = async (task: IddSubtask) => {
+  if (!canCancelSubtask(task)) return
+  if (!window.confirm('Are you sure you want to cancel this sub-task?')) return
+  try {
+    const res = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${task.flowId}/cancel`, {
+      method: 'POST',
+    })
+    if (!res.ok) throw new Error(await res.text())
+    await fetchIddState()
+  } catch (e) {
+    console.error('Failed to cancel intent sub-task:', e)
   }
 }
 
@@ -872,6 +989,9 @@ const openFile = async (path: string) => {
 }
 
 const onEditorContentChange = (next: string) => {
+  if (next !== content.value) {
+    noteIntentEdit()
+  }
   content.value = next
   scheduleSave()
 }
@@ -993,6 +1113,7 @@ onBeforeUnmount(() => {
   if (savedTimer) clearTimeout(savedTimer)
   if (iddStateTimer) clearInterval(iddStateTimer)
   if (nowTickTimer) clearInterval(nowTickTimer)
+  cancelOrchestratorIdleTimer()
   window.removeEventListener('keydown', handleShortcut)
 })
 </script>
@@ -1002,6 +1123,11 @@ onBeforeUnmount(() => {
   position: relative;
   display: grid;
   grid-template-columns: var(--left-col, 16rem) 1fr var(--right-col, 18rem);
+  /* Constrain the single grid row to the canvas height (minmax allows the
+     0-floor needed for descendants with `min-height: 0` to scroll internally
+     rather than letting the editor's content stretch the row past the
+     clipped container). */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   /* `overflow: clip` (rather than `hidden`) prevents programmatic scrolling
      (e.g. from descendant focus/scrollIntoView) that would otherwise shift the
@@ -1170,6 +1296,38 @@ onBeforeUnmount(() => {
   gap: 0.6rem;
 }
 
+.auto-mode-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.auto-mode-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.auto-mode-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.auto-mode-label {
+  font-weight: 500;
+}
+
+.auto-mode-hint {
+  grid-column: 1 / -1;
+  color: var(--color-text-2);
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+
 .rail-title {
   font-size: 0.7rem;
   letter-spacing: 0.16em;
@@ -1230,6 +1388,38 @@ onBeforeUnmount(() => {
   gap: 0.4rem;
   margin: 0;
   padding: 0;
+}
+
+.subtask-item {
+  position: relative;
+}
+
+.subtask-cancel {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: var(--color-background-mute);
+  color: var(--color-text-muted, var(--color-text));
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.subtask-item:hover .subtask-cancel {
+  display: inline-flex;
+}
+
+.subtask-cancel:hover {
+  color: var(--color-heading);
+  background: var(--color-background);
 }
 
 .subtask-row {
@@ -1324,6 +1514,60 @@ onBeforeUnmount(() => {
 
 .clarify-link:hover {
   color: var(--color-primary-hover);
+}
+
+.nudge-anchor {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  margin: 0;
+  color: var(--color-text-muted, var(--color-text));
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.side-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(var(--side-panel-w, 60rem), 90vw);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-background);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+  /* Must sit above the fixed FlowEditorLinks overlay (z-index 1000) so the
+     dismiss control and sticky sub-flow headers remain interactive. */
+  z-index: 1001;
+}
+
+.side-panel-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -0.2rem;
+  width: 0.5rem;
+  cursor: col-resize;
+  z-index: 2;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.side-panel-resize:hover,
+.side-panel-resize:active {
+  background-color: var(--color-primary);
+  opacity: 0.6;
+}
+
+.side-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-background);
+  position: relative;
+  z-index: 1;
 }
 
 .side-panel-close {
@@ -1488,7 +1732,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: 100vh;
+  height: 100%;
 }
 
 .canvas-head {

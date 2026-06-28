@@ -26,6 +26,19 @@ const SignalNameStartIntentSubtask = "startIntentSubtask"
 // requested target branch, cleanup the worktree, and exit cleanly.
 const SignalNameFinishIdd = "finishIdd"
 
+// SignalNameSetIddAutoMode toggles the background orchestrator's auto
+// task-creation mode. Other orchestrator behaviors (e.g. surfacing
+// clarifications) are unaffected by this toggle.
+const SignalNameSetIddAutoMode = "setIddAutoMode"
+
+// SignalNameRunIddOrchestrator asks the IddWorkflow's background orchestrator
+// to evaluate the current intent state. When AutoMode is on the orchestrator
+// may launch sub-tasks for unimplemented intent and/or surface nudges; when
+// AutoMode is off it runs in nudge-only mode (no sub-task creation). The
+// frontend fires this after its own idle/edit-activity heuristic decides
+// intent has settled, keeping the heuristic out of the workflow.
+const SignalNameRunIddOrchestrator = "runIddOrchestrator"
+
 // QueryNameIddState returns the current IddState, including ongoing sub-tasks
 // and any clarification questions surfaced by those sub-tasks.
 const QueryNameIddState = "idd_state"
@@ -55,6 +68,11 @@ type StartIntentSubtaskSignal struct {
 	// Update marks the sub-task as implementing an update to existing intent
 	// rather than the initial intent.
 	Update bool
+	// ScopePrompt, when non-empty, narrows the sub-task to a specific chunk
+	// of the pending intent (the orchestrator's "partial" scope). It is
+	// prepended to the rendered requirements so the sub-task focuses on that
+	// portion of the diff instead of implementing the entire pending intent.
+	ScopePrompt string
 }
 
 // FinishIddSignal is the payload for SignalNameFinishIdd, asking the workflow
@@ -62,6 +80,17 @@ type StartIntentSubtaskSignal struct {
 type FinishIddSignal struct {
 	TargetBranch string `json:"targetBranch"`
 }
+
+// SetIddAutoModeSignal toggles whether the background orchestrator will
+// automatically launch sub-tasks when prompted by RunIddOrchestratorSignal.
+type SetIddAutoModeSignal struct {
+	Enabled bool `json:"enabled"`
+}
+
+// RunIddOrchestratorSignal asks the background orchestrator to evaluate
+// current intent and, if auto-mode is enabled, start a sub-task for the
+// pending intent chunk. The frontend gates this on its edit-idle heuristic.
+type RunIddOrchestratorSignal struct{}
 
 // IddSubtask tracks an intent sub-task launched by the IddWorkflow.
 type IddSubtask struct {
@@ -71,13 +100,38 @@ type IddSubtask struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// ScopePrompt, when non-empty, records the orchestrator's narrowed-scope
+	// prompt for this sub-task so the canvas can surface what chunk of intent
+	// it was assigned. Empty for whole-diff/user-initiated sub-tasks.
+	ScopePrompt string `json:"scopePrompt,omitempty"`
+	// DispatchedDiff is the intent diff that was committed and handed to this
+	// sub-task as its requirements. The orchestrator includes it (truncated)
+	// in its turn prompt for still-in-flight sub-tasks so it can tell which
+	// slice of intent has already been assigned and avoid re-dispatching the
+	// same chunk on subsequent turns. It is intentionally not surfaced on the
+	// canvas — that information is already visible via the sub-task's flow
+	// view — and is only meaningful for whole-scope sub-tasks where the
+	// ScopePrompt is empty.
+	DispatchedDiff string `json:"-"`
 }
 
-// IddClarification is a question surfaced by a sub-task about ambiguous or
-// contradictory intent.
+// IddClarification is a question raised by a sub-task that blocks its progress
+// until the user answers it. This is the legacy operational channel inherited
+// from the task workflow's RequestForUser flow; orchestrator-surfaced
+// non-blocking food-for-thought lives in IddState.Nudges instead.
 type IddClarification struct {
 	SubtaskFlowId string `json:"subtaskFlowId"`
 	Question      string `json:"question"`
+}
+
+// IddNudge is a short, non-blocking thought the background orchestrator
+// surfaces about the current intent: "have you considered…?", "this looks
+// underspecified", etc. Nudges never block work; they're advisory hints the
+// human can take or ignore. AnchorText is an optional verbatim snippet from
+// the intent the nudge relates to, intended for future hover-highlight UX.
+type IddNudge struct {
+	Text       string `json:"text"`
+	AnchorText string `json:"anchorText,omitempty"`
 }
 
 // IddState is the query response describing an IddWorkflow's progress.
@@ -87,6 +141,10 @@ type IddState struct {
 	DefaultTargetBranch string             `json:"defaultTargetBranch"`
 	Subtasks            []IddSubtask       `json:"subtasks"`
 	Clarifications      []IddClarification `json:"clarifications"`
+	Nudges              []IddNudge         `json:"nudges"`
+	// AutoMode indicates whether the background orchestrator will auto-create
+	// sub-tasks when intent edits settle in the worktree.
+	AutoMode bool `json:"autoMode"`
 }
 
 // IddWorkflow drives the Intent Driven Development canvas: it sets up a worktree
@@ -115,9 +173,12 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	// Register the idd_state query handler eagerly so the canvas UI can poll
 	// state even before SetupDevContext finishes (or if it fails). The handler
 	// closes over a pointer so later mutations are visible.
+	autoModeDefaultVersion := workflow.GetVersion(ctx, "idd-auto-mode-default-on", workflow.DefaultVersion, 1)
 	state := &IddState{
 		Subtasks:       []IddSubtask{},
 		Clarifications: []IddClarification{},
+		Nudges:         []IddNudge{},
+		AutoMode:       autoModeDefaultVersion >= 1,
 	}
 	_ = workflow.SetQueryHandler(ctx, QueryNameIddState, func() (IddState, error) {
 		return *state, nil
@@ -144,10 +205,137 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 
 	state.DefaultTargetBranch = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 
+	// state is shared across the main selector loop, the orchestrator
+	// drainer coroutine, sub-task runner coroutines, and the query handler.
+	// This is safe because Temporal Go SDK coroutines are cooperatively
+	// scheduled — they only yield at workflow.* calls (Receive, Get, Sleep,
+	// etc.) — and query handlers run between workflow tasks, not concurrent
+	// with workflow code. A real mutex would break determinism; do not add
+	// one. Mutations to state must be single-statement (no yields mid-update)
+	// so concurrent readers always see a consistent snapshot.
+	_ = workflow.SetQueryHandler(dCtx, QueryNameIddState, func() (IddState, error) {
+		return *state, nil
+	})
+
+	// Background orchestrator setup (persisted chat history, coalescing
+	// trigger channel, drainer coroutine) is version-gated because older
+	// IDD workflow histories were recorded before any of these existed.
+	// Although NewBufferedChannel/workflow.Go emit no history events, the
+	// internal version marker recorded by NewVersionedChatHistory would
+	// shift the marker order observed on replay; keeping the whole
+	// orchestrator wiring behind one gate makes the feature atomically
+	// off for pre-existing workflows.
+	orchestratorVersion := workflow.GetVersion(dCtx, "idd-background-orchestrator", workflow.DefaultVersion, 1)
+	var orchestratorTriggerCh workflow.Channel
+	if orchestratorVersion >= 1 {
+		// orchestratorChat persists across orchestrator turns so the background
+		// agent can remember which intent chunks it has already dispatched
+		// (those tool calls are tagged with ContextTypeIntentTaskStart and
+		// retained by ManageChatHistory across trimming).
+		orchestratorChat := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+
+		// Capacity 1 so concurrent triggers (e.g. a fired idle signal
+		// followed quickly by a watcher-activity return) coalesce into at
+		// most one pending turn, and a dedicated coroutine drains it
+		// serially. This prevents racy parallel turns from both reading
+		// state, both deciding to dispatch, and double-creating sub-tasks
+		// for the same intent diff.
+		orchestratorTriggerCh = workflow.NewBufferedChannel(dCtx, 1)
+		workflow.Go(dCtx, func(goCtx workflow.Context) {
+			for {
+				var sig RunIddOrchestratorSignal
+				if !orchestratorTriggerCh.Receive(goCtx, &sig) {
+					return
+				}
+				// The orchestrator runs every turn so it can surface nudges
+				// about ambiguous/contradictory intent regardless of whether
+				// auto sub-task creation is enabled; AutoMode only gates the
+				// start_intent_subtask tool inside the turn.
+				runIddOrchestratorTurn(dCtx.WithContext(goCtx), input, state, orchestratorChat, !state.AutoMode)
+			}
+		})
+	}
+
+	requestOrchestratorTurn := func() {
+		if orchestratorTriggerCh == nil {
+			return
+		}
+		// Non-blocking send: if a turn is already queued the new trigger is
+		// dropped (it would observe the same or newer state anyway).
+		_ = orchestratorTriggerCh.SendAsync(RunIddOrchestratorSignal{})
+	}
+
+	// Background edit watcher: a long-running activity that returns when the
+	// IDD worktree has been quiet for a short idle window after at least one
+	// intent-file edit. The workflow re-launches it after each return so the
+	// orchestrator gets a steady, server-side trigger that does not depend on
+	// the canvas being open. Only enabled for local env types because remote
+	// containers do not expose the worktree path to the worker's filesystem.
+	startEditWatcher := func() {
+		envType := dCtx.EnvContainer.Env.GetType()
+		if envType != env.EnvTypeLocal && envType != env.EnvTypeLocalGitWorktree {
+			return
+		}
+		worktreeDir := dCtx.EnvContainer.Env.GetWorkingDirectory()
+		if worktreeDir == "" {
+			return
+		}
+		workflow.Go(dCtx, func(goCtx workflow.Context) {
+			watchCtx := workflow.WithActivityOptions(goCtx, workflow.ActivityOptions{
+				StartToCloseTimeout: 30 * time.Minute,
+				HeartbeatTimeout:    2 * time.Minute,
+				RetryPolicy: &temporal.RetryPolicy{
+					MaximumAttempts: 1,
+				},
+				WaitForCancellation: true,
+			})
+			for {
+				if goCtx.Err() != nil {
+					return
+				}
+				var out IddWatchEditIdleResult
+				err := workflow.ExecuteActivity(watchCtx, IddWatchEditIdleActivity, IddWatchEditIdleInput{
+					WorktreeDir:  worktreeDir,
+					WatchSubdir:  "intent",
+					IdleDuration: 8 * time.Second,
+					MaxWait:      25 * time.Minute,
+				}).Get(watchCtx, &out)
+				if err != nil {
+					if goCtx.Err() != nil {
+						return
+					}
+					workflow.GetLogger(goCtx).Warn("IDD edit watcher returned with error; restarting after backoff", "Error", err)
+					_ = workflow.Sleep(goCtx, 5*time.Second)
+					continue
+				}
+				// Trigger an orchestrator turn whenever the watcher observed
+				// edits, OR when it timed out: MaxWait timing out guarantees
+				// the orchestrator gets a chance to act even if the idle
+				// heuristic never fired (e.g. continuous trickling edits or
+				// edits made during the brief gap between activity
+				// invocations). Empty turns are cheap — runIddOrchestratorTurn
+				// no-ops on an empty pending diff.
+				if len(out.ChangedPaths) > 0 || out.TimedOut {
+					requestOrchestratorTurn()
+				}
+			}
+		})
+	}
+	// Old IDD workflow histories were recorded before the edit watcher
+	// existed; scheduling the watcher activity unconditionally would make
+	// them non-deterministic on replay. Gate behind a version so only
+	// workflows started at or after this change schedule the watcher.
+	editWatcherVersion := workflow.GetVersion(dCtx, "idd-edit-watcher", workflow.DefaultVersion, 1)
+	if editWatcherVersion >= 1 {
+		startEditWatcher()
+	}
+
 	startSubtaskCh := workflow.GetSignalChannel(dCtx, SignalNameStartIntentSubtask)
 	requestForUserCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameRequestForUser)
 	subtaskUnblockedCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameSubtaskUnblocked)
 	finishIddCh := workflow.GetSignalChannel(dCtx, SignalNameFinishIdd)
+	setAutoModeCh := workflow.GetSignalChannel(dCtx, SignalNameSetIddAutoMode)
+	runOrchestratorCh := workflow.GetSignalChannel(dCtx, SignalNameRunIddOrchestrator)
 	workflowClosedCh := workflow.GetSignalChannel(dCtx, SignalNameWorkflowClosed)
 	finished := false
 
@@ -160,10 +348,21 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(startSubtaskCh, func(c workflow.ReceiveChannel, _ bool) {
 			var sig StartIntentSubtaskSignal
 			c.Receive(dCtx, &sig)
+			// Pre-reserve the sub-task entry synchronously so the canvas (and
+			// any subsequent orchestrator turn) sees it immediately, before
+			// the commit and child-workflow start yields complete. Version-
+			// gated because the original code generated the flow id (via
+			// workflow.SideEffect) only after commitIntent had run, so older
+			// histories have the SideEffect marker after the commit activity
+			// rather than before the receive returns.
+			var flowId string
+			if workflow.GetVersion(dCtx, "idd-prereserve-subtask", workflow.DefaultVersion, 1) >= 1 {
+				flowId = reservePendingSubtask(dCtx, state, sig.ScopePrompt)
+			}
 			// Spawn a coroutine so committing and running the sub-task to
 			// completion doesn't block the selector from handling more signals.
 			workflow.Go(dCtx, func(goCtx workflow.Context) {
-				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state)
+				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId)
 			})
 		})
 
@@ -209,6 +408,22 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			finished = true
 		})
 
+		selector.AddReceive(setAutoModeCh, func(c workflow.ReceiveChannel, _ bool) {
+			var sig SetIddAutoModeSignal
+			c.Receive(dCtx, &sig)
+			state.AutoMode = sig.Enabled
+		})
+
+		selector.AddReceive(runOrchestratorCh, func(c workflow.ReceiveChannel, _ bool) {
+			var sig RunIddOrchestratorSignal
+			c.Receive(dCtx, &sig)
+			// Queue a turn unconditionally. The drainer runs the orchestrator
+			// in nudge-only mode when AutoMode is off so nudges about
+			// ambiguous/contradictory intent keep surfacing even when the
+			// user has disabled auto sub-task creation.
+			requestOrchestratorTurn()
+		})
+
 		selector.AddReceive(workflowClosedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var closure WorkflowClosure
 			c.Receive(dCtx, &closure)
@@ -240,16 +455,46 @@ func setSubtaskStatus(state *IddState, flowId, status string, now time.Time) {
 	}
 }
 
+// reservePendingSubtask synchronously reserves a flow id for an about-to-launch
+// sub-task and records it in state with status "pending". This must be called
+// from the workflow's selector coroutine (not from an inner workflow.Go) so
+// that subsequent orchestrator turns, query handlers, and the "update vs
+// initial" classification all observe the in-flight sub-task immediately —
+// before runIntentSubtask yields on commitIntent and child-workflow start.
+// Without this synchronous reservation the orchestrator could re-decide to
+// dispatch for the same pending intent diff, and len(state.Subtasks) would
+// mis-classify multiple concurrent first-time starts as "initial".
+func reservePendingSubtask(dCtx DevContext, state *IddState, scopePrompt string) string {
+	flowId := "flow_" + ksuidSideEffect(dCtx)
+	state.Subtasks = append(state.Subtasks, IddSubtask{
+		FlowId:      flowId,
+		Status:      "pending",
+		ScopePrompt: scopePrompt,
+	})
+	return flowId
+}
+
 // runIntentSubtask commits the current intent state and launches a BasicDev
-// sub-task that implements it, tracking the sub-task's status in state.
-func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSubtaskSignal, state *IddState) {
+// sub-task that implements it, tracking the sub-task's status in state. When
+// flowId is non-empty the caller has already recorded a pending IddSubtask
+// entry via reservePendingSubtask, and this function updates that entry in
+// place. When flowId is empty the function falls back to the original behavior
+// (generate the id after commitIntent, append the entry after the child
+// workflow starts) for replay compatibility with histories recorded before
+// the pre-reservation version.
+func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSubtaskSignal, state *IddState, flowId string) {
 	log := workflow.GetLogger(dCtx)
+	preReserved := flowId != ""
 
 	reqInfo, err := commitIntent(dCtx, input.Title, sig.Update)
 	if err != nil {
 		log.Error("Failed to commit intent for sub-task", "Error", err)
+		if preReserved {
+			setSubtaskStatus(state, flowId, "failed", workflow.Now(dCtx))
+		}
 		return
 	}
+	reqInfo.ScopePrompt = sig.ScopePrompt
 
 	// The sub-task gets its own descriptive title generated from the committed
 	// intent sha & diff, falling back to the IDD task title if generation fails.
@@ -264,9 +509,12 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		}
 	}
 
+	if !preReserved {
+		flowId = "flow_" + ksuidSideEffect(dCtx)
+	}
 	branch := dCtx.Worktree.Name
 	childCtx := workflow.WithChildOptions(dCtx, workflow.ChildWorkflowOptions{
-		WorkflowID:        "flow_" + ksuidSideEffect(dCtx),
+		WorkflowID:        flowId,
 		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
 	})
 	childFuture := workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
@@ -287,17 +535,37 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	var we workflow.Execution
 	if startErr := childFuture.GetChildWorkflowExecution().Get(childCtx, &we); startErr != nil {
 		log.Error("Intent sub-task failed to start", "Error", startErr)
+		if preReserved {
+			setSubtaskStatus(state, flowId, "failed", workflow.Now(dCtx))
+		}
 		return
 	}
+
 	now := workflow.Now(dCtx)
-	state.Subtasks = append(state.Subtasks, IddSubtask{
-		FlowId:    we.ID,
-		Title:     title,
-		Commit:    reqInfo.Commit,
-		Status:    "in_progress",
-		CreatedAt: now,
-		UpdatedAt: now,
-	})
+	if preReserved {
+		for i := range state.Subtasks {
+			if state.Subtasks[i].FlowId == flowId {
+				state.Subtasks[i].Title = title
+				state.Subtasks[i].Commit = reqInfo.Commit
+				state.Subtasks[i].Status = "in_progress"
+				state.Subtasks[i].DispatchedDiff = reqInfo.Diff
+				state.Subtasks[i].CreatedAt = now
+				state.Subtasks[i].UpdatedAt = now
+				break
+			}
+		}
+	} else {
+		state.Subtasks = append(state.Subtasks, IddSubtask{
+			FlowId:         we.ID,
+			Title:          title,
+			Commit:         reqInfo.Commit,
+			Status:         "in_progress",
+			ScopePrompt:    sig.ScopePrompt,
+			DispatchedDiff: reqInfo.Diff,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		})
+	}
 
 	// Persist a flow record for the sub-task, parented to the IDD task, so its
 	// flow view (and any pending user requests it raises when intent is
@@ -392,10 +660,31 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		return IntentRequirementsInfo{}, fmt.Errorf("failed to get intent diff: %w", err)
 	}
 
+	// A "clean" diff ignores whitespace and renders word-level changes so
+	// cosmetic reflow of markdown intent doesn't read as a real edit in the
+	// requirements prompt. Gate behind a version so older executions replay
+	// against the original activity sequence.
+	cleanDiff := showOutput.Stdout
+	cleanDiffVersion := workflow.GetVersion(dCtx, "idd-commit-intent-clean-diff", workflow.DefaultVersion, 1)
+	if cleanDiffVersion >= 1 {
+		var cleanOutput env.EnvRunCommandActivityOutput
+		err = workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer:       *dCtx.EnvContainer,
+			RelativeWorkingDir: "./",
+			Command:            "git",
+			Args:               []string{"show", "--word-diff=plain", "--ignore-all-space", commit},
+		}).Get(dCtx, &cleanOutput)
+		if err != nil {
+			return IntentRequirementsInfo{}, fmt.Errorf("failed to get clean intent diff: %w", err)
+		}
+		cleanDiff = cleanOutput.Stdout
+	}
+
 	return IntentRequirementsInfo{
-		Commit: commit,
-		Diff:   showOutput.Stdout,
-		Update: update,
+		Commit:    commit,
+		Diff:      showOutput.Stdout,
+		CleanDiff: cleanDiff,
+		Update:    update,
 	}, nil
 }
 
