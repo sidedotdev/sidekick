@@ -421,6 +421,60 @@ func runRemoteEnvFilesystemSubtests(t *testing.T, ctx context.Context, env Env) 
 	})
 }
 
+// runRemoteEnvStdinSubtests verifies that commands run over SSH get stdin
+// detached from the SSH channel, matching local commands which receive
+// /dev/null. Without this, tools that heuristically read from a non-tty stdin
+// (notably ripgrep) consume the empty SSH stream instead of operating on the
+// working directory, silently producing no results.
+func runRemoteEnvStdinSubtests(t *testing.T, ctx context.Context, env Env) {
+	t.Helper()
+	workingDir := env.GetWorkingDirectory()
+
+	t.Run("stdin is detached from the SSH stream", func(t *testing.T) {
+		t.Parallel()
+		out, err := env.RunCommand(ctx, EnvRunCommandInput{
+			Command: "sh",
+			Args:    []string{"-c", `if [ -p /dev/stdin ] || [ -S /dev/stdin ]; then echo STREAM; else echo NOSTREAM; fi`},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, out.ExitStatus, "stderr: %s", out.Stderr)
+		assert.Equal(t, "NOSTREAM", strings.TrimSpace(out.Stdout),
+			"remote command stdin must be detached from the SSH channel")
+	})
+
+	t.Run("ripgrep recurses the working directory instead of reading stdin", func(t *testing.T) {
+		t.Parallel()
+		rgCheck, err := env.RunCommand(ctx, EnvRunCommandInput{
+			Command: "sh",
+			Args:    []string{"-c", "command -v rg"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, rgCheck.ExitStatus, "ripgrep (rg) must be available in the environment")
+
+		base := "stdin-rg-" + ksuid.New().String()
+		token := "stdin-token-" + ksuid.New().String()
+		require.NoError(t, env.MkdirAll(ctx, base, 0o755))
+		t.Cleanup(func() {
+			_, _ = env.RunCommand(ctx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", path.Join(workingDir, base)},
+			})
+		})
+		require.NoError(t, env.WriteFile(ctx, path.Join(base, "match.txt"), []byte(token+"\n"), 0o644))
+
+		out, err := env.RunCommand(ctx, EnvRunCommandInput{
+			RelativeWorkingDir: base,
+			Command:            "rg",
+			Args:               []string{"--files-with-matches", token},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 0, out.ExitStatus,
+			"rg should find the seeded file by recursing the working directory; output: %s", out.Stdout+out.Stderr)
+		assert.Contains(t, out.Stdout, "match.txt",
+			"rg read the empty SSH stdin stream instead of recursing the working directory")
+	})
+}
+
 // remoteIsGitRepo reports whether dir is inside a git repository on the
 // remote env, used to gate Walk coverage which relies on git metadata.
 func remoteIsGitRepo(t *testing.T, ctx context.Context, env Env, dir string) bool {
