@@ -35,6 +35,22 @@ func setupMinimalWorkspace(t *testing.T) string {
 	devcontainerJSON := `{"name": "test", "build": {"dockerfile": "Dockerfile"}}`
 	require.NoError(t, os.WriteFile(filepath.Join(devcontainerDir, "devcontainer.json"), []byte(devcontainerJSON), 0644))
 
+	// Initialize a git repository so the synced container working directory is
+	// git-backed, which Env.Walk requires.
+	for _, args := range [][]string{
+		{"init"},
+		{"checkout", "-b", "main"},
+		{"config", "user.name", "Test"},
+		{"config", "user.email", "test@test.com"},
+		{"add", "-A"},
+		{"commit", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v failed: %s", args, out)
+	}
+
 	return dir
 }
 
@@ -91,6 +107,10 @@ func TestDevPodIntegration(t *testing.T) {
 
 	t.Run("filesystem methods via sftp", func(t *testing.T) {
 		runRemoteEnvFilesystemSubtests(t, ctx, devEnv)
+	})
+
+	t.Run("Env interface walk", func(t *testing.T) {
+		runRemoteEnvWalkSubtests(t, ctx, devEnv)
 	})
 
 	t.Run("create worktree inside container", func(t *testing.T) {

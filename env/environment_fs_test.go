@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/utils"
 	"strings"
@@ -338,4 +339,141 @@ func runRemoteEnvFilesystemSubtests(t *testing.T, ctx context.Context, env Env) 
 		assert.True(t, strings.HasPrefix(n3Base, "nostar"), "base=%s", n3Base)
 		assert.NotEqual(t, "nostar", n3Base)
 	})
+
+	t.Run("GetType is a remote env type", func(t *testing.T) {
+		t.Parallel()
+		typ := env.GetType()
+		assert.True(t, typ.IsValid(), "type %q should be valid", typ)
+		assert.NotEqual(t, EnvTypeLocal, typ)
+		assert.NotEqual(t, EnvTypeLocalGitWorktree, typ)
+	})
+
+	t.Run("GetWorkingDirectory is an absolute existing dir", func(t *testing.T) {
+		t.Parallel()
+		wd := env.GetWorkingDirectory()
+		require.NotEmpty(t, wd)
+		assert.True(t, path.IsAbs(wd), "working dir %q should be absolute", wd)
+		assert.True(t, remoteIsDir(t, wd), "working dir %q should exist as a directory", wd)
+	})
+
+	t.Run("RunCommand", func(t *testing.T) {
+		t.Parallel()
+		t.Run("success", func(t *testing.T) {
+			out, err := env.RunCommand(ctx, EnvRunCommandInput{
+				Command: "echo",
+				Args:    []string{"hello remote"},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 0, out.ExitStatus)
+			assert.Contains(t, out.Stdout, "hello remote")
+		})
+		t.Run("non-zero exit status", func(t *testing.T) {
+			out, err := env.RunCommand(ctx, EnvRunCommandInput{
+				Command: "sh",
+				Args:    []string{"-c", "exit 3"},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 3, out.ExitStatus)
+		})
+	})
+
+	t.Run("ReadFile", func(t *testing.T) {
+		t.Parallel()
+		relPath := path.Join(base, "read_file.txt")
+		want := []byte("read-me-" + ksuid.New().String())
+		require.NoError(t, env.WriteFile(ctx, relPath, want, 0o644))
+
+		t.Run("relative", func(t *testing.T) {
+			got, err := env.ReadFile(ctx, relPath)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+		t.Run("absolute", func(t *testing.T) {
+			got, err := env.ReadFile(ctx, path.Join(workingDir, relPath))
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+		t.Run("missing returns error", func(t *testing.T) {
+			_, err := env.ReadFile(ctx, path.Join(base, "missing-"+ksuid.New().String()+".txt"))
+			require.Error(t, err)
+		})
+	})
+
+	t.Run("ReadDir", func(t *testing.T) {
+		t.Parallel()
+		dir := path.Join(base, "read_dir")
+		require.NoError(t, env.MkdirAll(ctx, dir, 0o755))
+		require.NoError(t, env.WriteFile(ctx, path.Join(dir, "a.txt"), []byte("a"), 0o644))
+		require.NoError(t, env.WriteFile(ctx, path.Join(dir, "b.txt"), []byte("b"), 0o644))
+		require.NoError(t, env.MkdirAll(ctx, path.Join(dir, "sub"), 0o755))
+
+		entries, err := env.ReadDir(ctx, dir)
+		require.NoError(t, err)
+		byName := map[string]fs.DirEntry{}
+		for _, e := range entries {
+			byName[e.Name()] = e
+		}
+		require.Contains(t, byName, "a.txt")
+		require.Contains(t, byName, "b.txt")
+		require.Contains(t, byName, "sub")
+		assert.False(t, byName["a.txt"].IsDir())
+		assert.True(t, byName["sub"].IsDir())
+	})
+}
+
+// remoteIsGitRepo reports whether dir is inside a git repository on the
+// remote env, used to gate Walk coverage which relies on git metadata.
+func remoteIsGitRepo(t *testing.T, ctx context.Context, env Env, dir string) bool {
+	t.Helper()
+	out, err := env.RunCommand(ctx, EnvRunCommandInput{
+		Command: "git",
+		Args:    []string{"-C", dir, "rev-parse", "--show-toplevel"},
+	})
+	require.NoError(t, err)
+	return out.ExitStatus == 0
+}
+
+// runRemoteEnvWalkSubtests exercises Env.Walk against a git-backed remote env
+// (one whose working directory is a git repository and whose LocalRepoDir
+// points at a local clone). It seeds a known directory tree and asserts Walk
+// visits the seeded files while honoring ignore-file names. When the working
+// directory is not a git repository, Walk cannot be driven through gitwalk and
+// the subtest is skipped.
+func runRemoteEnvWalkSubtests(t *testing.T, ctx context.Context, env Env) {
+	t.Helper()
+	workingDir := env.GetWorkingDirectory()
+	if !remoteIsGitRepo(t, ctx, env, workingDir) {
+		t.Skipf("working directory %q is not a git repository; skipping Walk coverage", workingDir)
+	}
+
+	walkBase := "walk-test-" + ksuid.New().String()
+	walkBaseAbs := path.Join(workingDir, walkBase)
+	require.NoError(t, env.MkdirAll(ctx, walkBase, 0o755))
+	t.Cleanup(func() {
+		_, _ = env.RunCommand(ctx, EnvRunCommandInput{
+			Command: "rm",
+			Args:    []string{"-rf", walkBaseAbs},
+		})
+	})
+
+	keepRel := path.Join(walkBase, "keep.txt")
+	ignoredRel := path.Join(walkBase, "ignored.txt")
+	require.NoError(t, env.WriteFile(ctx, keepRel, []byte("keep"), 0o644))
+	require.NoError(t, env.WriteFile(ctx, ignoredRel, []byte("ignored"), 0o644))
+	require.NoError(t, env.WriteFile(ctx, path.Join(walkBase, ".gitignore"), []byte("ignored.txt\n"), 0o644))
+
+	keepAbs := path.Join(workingDir, keepRel)
+	ignoredAbs := path.Join(workingDir, ignoredRel)
+
+	var visited []string
+	visitedSet := map[string]bool{}
+	err := env.Walk(ctx, common.SidekickIgnoreFileNames, func(p string, isDir bool) error {
+		visited = append(visited, p)
+		visitedSet[p] = true
+		return nil
+	})
+	require.NoError(t, err)
+
+	assert.True(t, visitedSet[keepAbs], "expected Walk to visit %s; visited=%v", keepAbs, visited)
+	assert.False(t, visitedSet[ignoredAbs], "expected Walk to skip ignored file %s", ignoredAbs)
 }
