@@ -106,6 +106,10 @@ func TestOpenShellIntegration(t *testing.T) {
 		assert.Equal(t, 0, out.ExitStatus, "git log failed: %s", out.Stderr)
 		assert.Contains(t, out.Stdout, "init")
 		t.Logf("latest commit: %s", strings.TrimSpace(out.Stdout))
+
+		t.Run("Env interface walk", func(t *testing.T) {
+			runRemoteEnvWalkSubtests(t, ctx, repoEnv)
+		})
 	})
 
 	t.Run("create worktree inside sandbox", func(t *testing.T) {
