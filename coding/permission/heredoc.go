@@ -29,8 +29,8 @@ func (h HeredocFileWrite) UsesEscapeHatch() bool {
 // operator and a file-writing redirect must appear within the same simple
 // command on a single line to be considered a heredoc file write.
 var (
-	heredocBeforeRedirectRe = regexp.MustCompile(`<<-?\s*['"]?(\w+)['"]?[^\n;|&]*>`)
-	heredocAfterRedirectRe  = regexp.MustCompile(`>[^\n;|&]*<<-?\s*['"]?(\w+)['"]?`)
+	heredocBeforeRedirectRe = regexp.MustCompile(`(?:^|[^<])<<-?\s*['"]?(\w+)['"]?[^\n;|&]*>`)
+	heredocAfterRedirectRe  = regexp.MustCompile(`>[^\n;|&]*[^<\n;|&]<<-?\s*['"]?(\w+)['"]?`)
 )
 
 // DetectHeredocFileWrites returns one entry per command in the script that
