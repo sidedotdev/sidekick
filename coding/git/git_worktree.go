@@ -6,7 +6,70 @@ import (
 	"path/filepath"
 	"sidekick/env"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
+
+// removeBlockingUntrackedBinaries deletes untracked binary files from the
+// working tree so they don't block a non-forced `git worktree remove`. It only
+// acts when untracked binaries are the sole blocking changes; if any tracked
+// changes or non-binary untracked files are present, the working tree is left
+// untouched so genuine changes continue to block cleanup.
+func removeBlockingUntrackedBinaries(ctx context.Context, envContainer env.EnvContainer) error {
+	untracked, err := listUntrackedFiles(ctx, envContainer, nil)
+	if err != nil {
+		return err
+	}
+	nonBinary, binary, err := partitionUntrackedBinaries(ctx, envContainer, untracked)
+	if err != nil {
+		return err
+	}
+	if len(binary) == 0 || len(nonBinary) > 0 {
+		return nil
+	}
+
+	hasTrackedChanges, err := hasUncommittedTrackedChanges(ctx, envContainer)
+	if err != nil {
+		return err
+	}
+	if hasTrackedChanges {
+		return nil
+	}
+
+	rmOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "rm",
+		Args:               append([]string{"-f", "--"}, binary...),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove untracked binary files: %w", err)
+	}
+	if rmOutput.ExitStatus != 0 {
+		return fmt.Errorf("failed to remove untracked binary files: %s", rmOutput.Stderr)
+	}
+
+	log.Info().Strs("files", binary).Msg("removed untracked binary files to allow worktree cleanup")
+	return nil
+}
+
+// hasUncommittedTrackedChanges reports whether there are any staged or unstaged
+// changes to tracked files (untracked files are ignored).
+func hasUncommittedTrackedChanges(ctx context.Context, envContainer env.EnvContainer) (bool, error) {
+	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "git",
+		Args:               []string{"status", "--porcelain", "--untracked-files=no"},
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to check for tracked changes: %w", err)
+	}
+	if output.ExitStatus != 0 {
+		return false, fmt.Errorf("git status failed with exit status %d: %s", output.ExitStatus, output.Stderr)
+	}
+	return strings.TrimSpace(output.Stdout) != "", nil
+}
 
 // CleanupWorktreeActivity removes a git worktree and deletes the associated branch.
 // Before deletion, it creates an archive tag with format "archive/<branchName>" pointing to the branch.
@@ -63,6 +126,14 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	}
 	if deleteBranchResult.ExitStatus != 0 {
 		return fmt.Errorf("failed to delete branch %s: %s", branchName, deleteBranchResult.Stderr)
+	}
+
+	// Untracked binaries are usually build artifacts but would otherwise block
+	// the non-forced worktree removal below. Remove them so cleanup can proceed,
+	// but only when they are the sole blocking changes so that genuine
+	// uncommitted/untracked changes still block cleanup.
+	if err := removeBlockingUntrackedBinaries(ctx, envContainer); err != nil {
+		return err
 	}
 
 	// Remove the current worktree using "." since we're running from within the worktree

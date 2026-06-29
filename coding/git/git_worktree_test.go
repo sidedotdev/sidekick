@@ -229,6 +229,60 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		assert.Contains(t, tagMessageOutput, "Test cleanup with archive message", "Archive tag should have the correct message")
 	})
 
+	t.Run("Cleanup Succeeds With Only Untracked Binary", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit on main")
+
+		uniqueId := ksuid.New().String()
+		branchName := fmt.Sprintf("feature-cleanup-binary-%s", uniqueId)
+
+		worktree := domain.Worktree{
+			Name:        branchName,
+			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
+		}
+		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// Leave an untracked binary file in the worktree; it should not block cleanup.
+		err = os.WriteFile(filepath.Join(devEnv.GetWorkingDirectory(), "image.bin"), []byte{0x00, 0x01, 0x02, 0x00, 0xff}, 0o644)
+		require.NoError(t, err)
+
+		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
+		require.NoError(t, err, "Cleanup should succeed when only untracked binaries block removal")
+
+		_, err = os.Stat(devEnv.GetWorkingDirectory())
+		assert.True(t, os.IsNotExist(err), "Worktree directory should no longer exist")
+	})
+
+	t.Run("Cleanup Fails With Untracked Non-Binary", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit on main")
+
+		uniqueId := ksuid.New().String()
+		branchName := fmt.Sprintf("feature-cleanup-text-%s", uniqueId)
+
+		worktree := domain.Worktree{
+			Name:        branchName,
+			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
+		}
+		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// A genuine untracked non-binary change must still block cleanup.
+		err = os.WriteFile(filepath.Join(devEnv.GetWorkingDirectory(), "notes.txt"), []byte("real changes\n"), 0o644)
+		require.NoError(t, err)
+
+		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
+		require.Error(t, err, "Cleanup should fail when genuine untracked changes are present")
+
+		// Clean up the leftover worktree directory manually.
+		_ = os.RemoveAll(devEnv.GetWorkingDirectory())
+	})
+
 	t.Run("Missing Branch Name", func(t *testing.T) {
 		t.Parallel()
 		repoDir := setupTestGitRepo(t)
