@@ -113,6 +113,10 @@ func TestDevPodIntegration(t *testing.T) {
 		runRemoteEnvWalkSubtests(t, ctx, devEnv)
 	})
 
+	t.Run("stdin detached from SSH stream", func(t *testing.T) {
+		runRemoteEnvStdinSubtests(t, ctx, devEnv)
+	})
+
 	t.Run("create worktree inside container", func(t *testing.T) {
 		containerRepoDir := "/tmp/devpod-e2e-repo-" + ksuid.New().String()
 		initScript := strings.Join([]string{

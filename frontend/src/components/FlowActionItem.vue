@@ -262,8 +262,16 @@ const summary = computed<Summary | null>(() => {
           emoji: '🟡',
         };
       }
-      const totalEdits = editResults.length;
-      const successfulEdits = editResults.filter(result => result.didApply).length;
+      // Count total individual edit blocks, accounting for batch reports
+      let totalEdits = 0;
+      let successfulEdits = 0;
+      for (const result of editResults) {
+        const count = result.originalEditBlocks?.length || 1;
+        totalEdits += count;
+        if (result.didApply) {
+          successfulEdits += count;
+        }
+      }
       const allApplied = successfulEdits === totalEdits;
       return {
         text: allApplied ? `${successfulEdits} edit${ successfulEdits !== 1 ? 's' : ''} applied` : `${successfulEdits}/${totalEdits} edits applied`,

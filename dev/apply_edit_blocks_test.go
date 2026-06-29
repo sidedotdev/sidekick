@@ -2104,3 +2104,356 @@ func DoSomething() {
 	require.NoError(t, err)
 	assert.Empty(t, actions)
 }
+
+func TestApplyEditBlocks_BatchByFile_AllPass(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	runGitCommand(t, tmpDir, "init")
+	runGitCommand(t, tmpDir, "config", "user.email", "test@example.com")
+	runGitCommand(t, tmpDir, "config", "user.name", "Test User")
+
+	// Create and commit initial files
+	file1Content := "# File One\n\nHello world\n"
+	file2Content := "# File Two\n\nGoodbye world\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file1.md"), []byte(file1Content), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file2.md"), []byte(file2Content), 0644))
+
+	runGitCommand(t, tmpDir, "add", ".")
+	runGitCommand(t, tmpDir, "commit", "-m", "Initial commit")
+
+	// Two edits to file1, one edit to file2 — all should pass
+	editBlocks := []EditBlock{
+		{
+			FilePath: "file1.md",
+			EditType: "update",
+			OldLines: []string{"Hello world"},
+			NewLines: []string{"Hello updated world"},
+		},
+		{
+			FilePath: "file2.md",
+			EditType: "update",
+			OldLines: []string{"Goodbye world"},
+			NewLines: []string{"Goodbye updated world"},
+		},
+		{
+			FilePath: "file1.md",
+			EditType: "update",
+			OldLines: []string{"Hello updated world"},
+			NewLines: []string{"Hello updated world", "", "New line added"},
+		},
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{WorkingDirectory: tmpDir},
+	}
+
+	da := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+		EnvContainer: envContainer,
+		EditBlocks:   editBlocks,
+		EnabledFlags: []string{fflag.CheckEdits},
+	})
+
+	require.NoError(t, err)
+	// file1 has 2 blocks batched into 1 report, file2 has 1 block = 1 report
+	require.Len(t, reports, 2)
+
+	// Find the batch report (file1) and the single report (file2)
+	var file1Report, file2Report ApplyEditBlockReport
+	for _, r := range reports {
+		if r.IsBatch() && r.FilePath() == "file1.md" {
+			file1Report = r
+		} else if r.FilePath() == "file2.md" {
+			file2Report = r
+		}
+	}
+
+	// file1 batch report should have 2 original edit blocks
+	assert.True(t, file1Report.IsBatch(), "file1 report should be a batch")
+	assert.Len(t, file1Report.OriginalEditBlocks, 2)
+	assert.True(t, file1Report.DidApply, "file1 batch should have applied")
+	assert.Empty(t, file1Report.Error)
+	assert.NotEmpty(t, file1Report.FinalDiff, "batch report should have a combined diff")
+
+	// file2 single report
+	assert.True(t, file2Report.DidApply, "file2 should have applied")
+	assert.Empty(t, file2Report.Error)
+
+	// Verify final file contents
+	content1, err := os.ReadFile(filepath.Join(tmpDir, "file1.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content1), "Hello updated world")
+	assert.Contains(t, string(content1), "New line added")
+
+	content2, err := os.ReadFile(filepath.Join(tmpDir, "file2.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content2), "Goodbye updated world")
+
+	// Verify files are staged
+	stagedFiles := runGitCommand(t, tmpDir, "diff", "--cached", "--name-only")
+	assert.Contains(t, stagedFiles, "file1.md")
+	assert.Contains(t, stagedFiles, "file2.md")
+}
+
+func TestApplyEditBlocks_BatchByFile_SomeFailCheck(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	runGitCommand(t, tmpDir, "init")
+	runGitCommand(t, tmpDir, "config", "user.email", "test@example.com")
+	runGitCommand(t, tmpDir, "config", "user.name", "Test User")
+
+	// Create initial files. file1.md has two sections we'll edit.
+	// The check command will reject files containing "INVALID".
+	file1Content := "# Title\n\nSection A\n\nSection B\n"
+	file2Content := "# Other\n\nContent here\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file1.md"), []byte(file1Content), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file2.md"), []byte(file2Content), 0644))
+
+	runGitCommand(t, tmpDir, "add", ".")
+	runGitCommand(t, tmpDir, "commit", "-m", "Initial commit")
+
+	// Edit block 0: valid edit to file1 (Section A -> Section A updated)
+	// Edit block 1: valid edit to file2
+	// Edit block 2: INVALID edit to file1 (Section B -> INVALID)
+	// The batch for file1 should fail checks (because block 2 introduces
+	// "INVALID"), then fall back to sequential where block 0 passes but block 2
+	// fails. file2 should succeed independently.
+	editBlocks := []EditBlock{
+		{
+			FilePath: "file1.md",
+			EditType: "update",
+			OldLines: []string{"Section A"},
+			NewLines: []string{"Section A updated"},
+		},
+		{
+			FilePath: "file2.md",
+			EditType: "update",
+			OldLines: []string{"Content here"},
+			NewLines: []string{"Content here updated"},
+		},
+		{
+			FilePath: "file1.md",
+			EditType: "update",
+			OldLines: []string{"Section B"},
+			NewLines: []string{"INVALID"},
+		},
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{WorkingDirectory: tmpDir},
+	}
+
+	da := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	// Check command: reject any file containing "INVALID"
+	checkCmd := common.CommandConfig{
+		Command: "! grep -q INVALID {file}",
+	}
+
+	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+		EnvContainer:  envContainer,
+		EditBlocks:    editBlocks,
+		EnabledFlags:  []string{fflag.CheckEdits},
+		CheckCommands: []common.CommandConfig{checkCmd},
+	})
+
+	require.NoError(t, err)
+	// file1 batch fails -> falls back to sequential (2 individual reports),
+	// file2 has 1 block (1 report) = 3 total
+	require.Len(t, reports, 3)
+
+	// All reports should be individual (non-batch) since file1 fell back
+	for _, r := range reports {
+		assert.False(t, r.IsBatch(), "all reports should be individual after fallback")
+	}
+
+	// Find reports by file path and edit content
+	var file1ValidReport, file1InvalidReport, file2Report *ApplyEditBlockReport
+	for i := range reports {
+		r := &reports[i]
+		fp := r.FilePath()
+		if fp == "file2.md" {
+			file2Report = r
+		} else if fp == "file1.md" {
+			if len(r.OriginalEditBlocks) > 0 && len(r.OriginalEditBlocks[0].NewLines) > 0 && r.OriginalEditBlocks[0].NewLines[0] == "INVALID" {
+				file1InvalidReport = r
+			} else {
+				file1ValidReport = r
+			}
+		}
+	}
+
+	require.NotNil(t, file1ValidReport, "should have file1 valid report")
+	require.NotNil(t, file1InvalidReport, "should have file1 invalid report")
+	require.NotNil(t, file2Report, "should have file2 report")
+
+	// file1 valid edit: should succeed after sequential fallback
+	assert.True(t, file1ValidReport.DidApply, "file1 valid edit should apply")
+	assert.Empty(t, file1ValidReport.Error)
+
+	// file2 edit: should succeed (independent file)
+	assert.True(t, file2Report.DidApply, "file2 edit should apply")
+	assert.Empty(t, file2Report.Error)
+
+	// file1 invalid edit: should fail
+	assert.False(t, file1InvalidReport.DidApply, "file1 invalid edit should NOT apply")
+	assert.NotEmpty(t, file1InvalidReport.Error, "file1 invalid edit should have an error")
+
+	// Verify file1 has the valid edit but not the invalid one
+	content1, err := os.ReadFile(filepath.Join(tmpDir, "file1.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content1), "Section A updated")
+	assert.NotContains(t, string(content1), "INVALID")
+	assert.Contains(t, string(content1), "Section B")
+
+	// Verify file2 has the edit applied
+	content2, err := os.ReadFile(filepath.Join(tmpDir, "file2.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content2), "Content here updated")
+}
+
+func TestApplyEditBlocks_BatchByFile_ParallelExecution(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	runGitCommand(t, tmpDir, "init")
+	runGitCommand(t, tmpDir, "config", "user.email", "test@example.com")
+	runGitCommand(t, tmpDir, "config", "user.name", "Test User")
+
+	// Create multiple files
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("parallel_%d.md", i)
+		content := fmt.Sprintf("# File %d\n\nOriginal content %d\n", i, i)
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0644))
+	}
+
+	runGitCommand(t, tmpDir, "add", ".")
+	runGitCommand(t, tmpDir, "commit", "-m", "Initial commit")
+
+	// One edit per file — these should all run in parallel
+	var editBlocks []EditBlock
+	for i := 0; i < 5; i++ {
+		editBlocks = append(editBlocks, EditBlock{
+			FilePath: fmt.Sprintf("parallel_%d.md", i),
+			EditType: "update",
+			OldLines: []string{fmt.Sprintf("Original content %d", i)},
+			NewLines: []string{fmt.Sprintf("Updated content %d", i)},
+		})
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{WorkingDirectory: tmpDir},
+	}
+
+	da := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+		EnvContainer: envContainer,
+		EditBlocks:   editBlocks,
+		EnabledFlags: []string{fflag.CheckEdits},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, reports, 5)
+
+	// All should succeed; each file has 1 block so no batching
+	for i, report := range reports {
+		assert.True(t, report.DidApply, "report %d should apply", i)
+		assert.Empty(t, report.Error, "report %d error: %s", i, report.Error)
+		assert.False(t, report.IsBatch(), "single-block files should not produce batch reports")
+		assert.Equal(t, fmt.Sprintf("parallel_%d.md", i), report.FilePath(),
+			"report %d should correspond to file parallel_%d.md", i, i)
+	}
+
+	// Verify file contents
+	for i := 0; i < 5; i++ {
+		content, err := os.ReadFile(filepath.Join(tmpDir, fmt.Sprintf("parallel_%d.md", i)))
+		require.NoError(t, err)
+		assert.Contains(t, string(content), fmt.Sprintf("Updated content %d", i))
+	}
+}
+
+func TestApplyEditBlocks_BatchByFile_SingleBlockPerFile_NoFallback(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	runGitCommand(t, tmpDir, "init")
+	runGitCommand(t, tmpDir, "config", "user.email", "test@example.com")
+	runGitCommand(t, tmpDir, "config", "user.name", "Test User")
+
+	fileContent := "# Single\n\nContent\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "single.md"), []byte(fileContent), 0644))
+
+	runGitCommand(t, tmpDir, "add", ".")
+	runGitCommand(t, tmpDir, "commit", "-m", "Initial commit")
+
+	editBlocks := []EditBlock{
+		{
+			FilePath: "single.md",
+			EditType: "update",
+			OldLines: []string{"Content"},
+			NewLines: []string{"Updated Content"},
+		},
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{WorkingDirectory: tmpDir},
+	}
+
+	da := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	// With only a single block per file, batch mode is not attempted (len > 1 check).
+	// This goes straight to sequential.
+	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+		EnvContainer: envContainer,
+		EditBlocks:   editBlocks,
+		EnabledFlags: []string{fflag.CheckEdits},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	assert.True(t, reports[0].DidApply)
+	assert.Empty(t, reports[0].Error)
+
+	content, err := os.ReadFile(filepath.Join(tmpDir, "single.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "Updated Content")
+}

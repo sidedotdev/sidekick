@@ -479,7 +479,13 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 // default directory.
 func buildRemoteShellCommand(workDir string, input EnvRunCommandInput) string {
 	allEnvVars := append(input.EnvVars, envVarsToInject...)
-	shellParts := make([]string, 0, len(allEnvVars)+2)
+	shellParts := make([]string, 0, len(allEnvVars)+3)
+
+	// Detach stdin from the SSH channel so remote commands behave like local
+	// ones, which get /dev/null as stdin. Otherwise tools like ripgrep read
+	// from the (empty) SSH stream instead of recursing the working directory.
+	shellParts = append(shellParts, "exec 0</dev/null")
+
 	for _, envVar := range allEnvVars {
 		shellParts = append(shellParts, "export "+shellQuote(envVar))
 	}

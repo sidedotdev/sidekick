@@ -2,6 +2,7 @@ package dev /* TODO move to coding package */
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"sidekick/coding/check"
 	"sidekick/coding/git"
@@ -38,7 +40,7 @@ type DevActivities struct {
 }
 
 type ApplyEditBlockReport struct {
-	OriginalEditBlock EditBlock `json:"originalEditBlock"`
+	OriginalEditBlocks []EditBlock `json:"originalEditBlocks"`
 
 	DidApply bool   `json:"didApply"`
 	Error    string `json:"error"`
@@ -58,6 +60,47 @@ type ApplyEditBlockReport struct {
 	InitialDiff string `json:"initialDiff"`
 	/* FinalDiff records the diff after autofixes are applied (if any) */
 	FinalDiff string `json:"finalDiff"`
+}
+
+// FilePath returns the file path for this report.
+func (r ApplyEditBlockReport) FilePath() string {
+	if len(r.OriginalEditBlocks) > 0 {
+		return r.OriginalEditBlocks[0].FilePath
+	}
+	return ""
+}
+
+// SequenceNumbers returns the sequence numbers covered by this report.
+func (r ApplyEditBlockReport) SequenceNumbers() []int {
+	nums := make([]int, len(r.OriginalEditBlocks))
+	for i, b := range r.OriginalEditBlocks {
+		nums[i] = b.SequenceNumber
+	}
+	return nums
+}
+
+// IsBatch returns true if this report covers multiple edit blocks.
+func (r ApplyEditBlockReport) IsBatch() bool {
+	return len(r.OriginalEditBlocks) > 1
+}
+
+// UnmarshalJSON handles legacy JSON where the singular "originalEditBlock"
+// field was used instead of the plural "originalEditBlocks".
+func (r *ApplyEditBlockReport) UnmarshalJSON(data []byte) error {
+	type Alias ApplyEditBlockReport
+	aux := &struct {
+		*Alias
+		LegacySingular *EditBlock `json:"originalEditBlock,omitempty"`
+	}{
+		Alias: (*Alias)(r),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if len(r.OriginalEditBlocks) == 0 && aux.LegacySingular != nil {
+		r.OriginalEditBlocks = []EditBlock{*aux.LegacySingular}
+	}
+	return nil
 }
 
 type ApplyEditBlockActivityInput struct {
@@ -91,19 +134,362 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 		attribute.Int("editBlockCount", len(input.EditBlocks)),
 	)
 
-	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
-	var reports []ApplyEditBlockReport
-
+	// Group edit blocks by file path, preserving original order within each group.
+	fileOrder := []string{}
+	fileGroups := map[string][]indexedBlock{}
 	for i, block := range input.EditBlocks {
+		if _, exists := fileGroups[block.FilePath]; !exists {
+			fileOrder = append(fileOrder, block.FilePath)
+		}
+		fileGroups[block.FilePath] = append(fileGroups[block.FilePath], indexedBlock{
+			originalIndex: i,
+			block:         block,
+		})
+	}
+
+	checksEnabled := slices.Contains(input.EnabledFlags, fflag.CheckEdits)
+
+	// Git operations (add, restore, diff) lock the repo index, so we
+	// serialize them across all file groups sharing the same working directory.
+	var gitMu sync.Mutex
+
+	type fileResult struct {
+		fileIndex int
+		reports   []indexedReport
+	}
+	fileResults := make([]fileResult, len(fileOrder))
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for fi, filePath := range fileOrder {
+		blocks := fileGroups[filePath]
+		wg.Add(1)
+		go func(fi int, blocks []indexedBlock) {
+			defer wg.Done()
+			iReports := da.applyEditBlocksForFile(ctx, input, blocks, checksEnabled, &gitMu)
+			mu.Lock()
+			fileResults[fi] = fileResult{fileIndex: fi, reports: iReports}
+			mu.Unlock()
+		}(fi, blocks)
+	}
+	wg.Wait()
+
+	// Assemble reports sorted by original edit block index so the output
+	// order matches the input order, regardless of file grouping.
+	var allIndexedReports []indexedReport
+	for _, fr := range fileResults {
+		allIndexedReports = append(allIndexedReports, fr.reports...)
+	}
+	sort.Slice(allIndexedReports, func(i, j int) bool {
+		return allIndexedReports[i].originalIndex < allIndexedReports[j].originalIndex
+	})
+	reports := make([]ApplyEditBlockReport, len(allIndexedReports))
+	for i, ir := range allIndexedReports {
+		reports[i] = ir.report
+	}
+
+	return reports, nil
+}
+
+type indexedBlock struct {
+	originalIndex int
+	block         EditBlock
+}
+
+type indexedReport struct {
+	originalIndex int
+	report        ApplyEditBlockReport
+}
+
+// applyEditBlocksForFile processes all edit blocks for a single file. It first
+// tries applying all blocks as a batch and checking once. If the batch check
+// fails, it falls back to applying and checking each block individually.
+func (da *DevActivities) applyEditBlocksForFile(
+	ctx context.Context,
+	input ApplyEditBlockActivityInput,
+	blocks []indexedBlock,
+	checksEnabled bool,
+	gitMu *sync.Mutex,
+) []indexedReport {
+	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
+
+	// Try batch mode: apply all blocks, check once, fall back to sequential
+	// if the check fails.
+	if len(blocks) > 1 {
+		batchReports := da.tryBatchApply(ctx, input, blocks, baseDir, checksEnabled, gitMu)
+		if batchReports != nil {
+			return batchReports
+		}
+		// Batch check failed — fall back to sequential below.
+	}
+
+	// Sequential mode: apply and check each block individually.
+	return da.applyBlocksSequentially(ctx, input, blocks, baseDir, checksEnabled, gitMu)
+}
+
+// tryBatchApply applies all edit blocks for a file, then runs checks once. If
+// checks pass, returns the reports. If checks fail, restores the file and
+// returns nil to signal that sequential fallback is needed.
+func (da *DevActivities) tryBatchApply(
+	ctx context.Context,
+	input ApplyEditBlockActivityInput,
+	blocks []indexedBlock,
+	baseDir string,
+	checksEnabled bool,
+	gitMu *sync.Mutex,
+) []indexedReport {
+	filePath := blocks[0].block.FilePath
+
+	// Check pre-edit file validity once for the file.
+	preEditFileHadErrors := false
+	firstEditType := blocks[0].block.EditType
+	if firstEditType == "update" || firstEditType == "append" {
+		preEditValid, _, preEditErr := check.CheckFileValidity(input.EnvContainer, filePath)
+		preEditFileHadErrors = !preEditValid && preEditErr == nil
+	}
+
+	var appliedReports []indexedReport
+	allApplied := true
+
+	// Build a mutable slice so updateVisibleFileRanges can shift ranges for
+	// subsequent blocks in the same file.
+	editBlockSlice := make([]EditBlock, len(blocks))
+	for i, ib := range blocks {
+		editBlockSlice[i] = ib.block
+	}
+
+	for i, ib := range blocks {
+		block := editBlockSlice[i]
+
+		// Capture file content before the edit so we can compute a diff that
+		// includes autofix changes for accurate visible-range updates.
+		var preEditContent []byte
+		if block.EditType != "create" {
+			preEditContent, _ = input.EnvContainer.Env.ReadFile(ctx, block.FilePath)
+		}
+
+		var report ApplyEditBlockReport
+		var err error
+
+		switch block.EditType {
+		case "create":
+			report, err = ApplyCreateEditBlock(ctx, input.EnvContainer, block, baseDir)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
+		case "update":
+			report, err = ApplyUpdateEditBlock(ctx, input.EnvContainer, block, baseDir)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
+		case "append":
+			report, err = ApplyAppendEditBlock(ctx, input.EnvContainer, block, baseDir)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
+		case "delete":
+			report, err = ApplyDeleteEditBlock(ctx, input.EnvContainer, block, baseDir)
+		default:
+			report = ApplyEditBlockReport{
+				OriginalEditBlocks: []EditBlock{block},
+				Error:              fmt.Sprintf("Unknown edit type: %s", block.EditType),
+			}
+		}
+
+		if err != nil || report.Error != "" {
+			allApplied = false
+		} else {
+			report.DidApply = true
+		}
+
+		if report.DidApply {
+			// Use a diff that includes autofix changes (not just the raw edit)
+			// so that visible file ranges are shifted accurately for subsequent
+			// blocks in the same file.
+			postEditContent, _ := input.EnvContainer.Env.ReadFile(ctx, block.FilePath)
+			fullBlockDiff := string(diffp.Diff(block.FilePath, preEditContent, block.FilePath, postEditContent))
+			lineEdits := getLineEditsFromDiff(fullBlockDiff)
+			updateVisibleFileRanges(editBlockSlice[i:], block.FilePath, lineEdits)
+		}
+
+		appliedReports = append(appliedReports, indexedReport{
+			originalIndex: ib.originalIndex,
+			report:        report,
+		})
+	}
+
+	if !allApplied {
+		// Some blocks failed to apply — restore and fall back to sequential.
+		gitMu.Lock()
+		da.restoreFileForBatchFallback(input.EnvContainer, filePath, blocks)
+		gitMu.Unlock()
+		return nil
+	}
+
+	// All blocks applied successfully. Now stage (and optionally check).
+	isExistingFile := firstEditType != "create"
+	hasDeleteOnly := true
+	for _, ib := range blocks {
+		if ib.block.EditType != "delete" {
+			hasDeleteOnly = false
+			break
+		}
+	}
+
+	// Collect all edit blocks for the consolidated batch report.
+	allEditBlocks := make([]EditBlock, len(blocks))
+	for i, ib := range blocks {
+		allEditBlocks[i] = ib.block
+	}
+
+	// Merge autofix results/errors from individual per-block reports.
+	var mergedAutofixResult lsp.AutofixActivityOutput
+	var mergedAutofixError string
+	for _, ar := range appliedReports {
+		r := ar.report
+		mergedAutofixResult.AppliedEdits = append(mergedAutofixResult.AppliedEdits, r.AutofixResult.AppliedEdits...)
+		mergedAutofixResult.FailedEdits = append(mergedAutofixResult.FailedEdits, r.AutofixResult.FailedEdits...)
+		mergedAutofixResult.SkippedCodeActions = append(mergedAutofixResult.SkippedCodeActions, r.AutofixResult.SkippedCodeActions...)
+		if r.AutofixError != "" {
+			if mergedAutofixError != "" {
+				mergedAutofixError += "\n"
+			}
+			mergedAutofixError += r.AutofixError
+		}
+	}
+
+	batchReport := ApplyEditBlockReport{
+		OriginalEditBlocks: allEditBlocks,
+		DidApply:           true,
+		AutofixResult:      mergedAutofixResult,
+		AutofixError:       mergedAutofixError,
+	}
+
+	if hasDeleteOnly {
+		// Stage the deletions directly instead of using
+		// checkAndStageOrRestoreFile, since checking the file is not
+		// possible after deleting it.
+		gitMu.Lock()
+		pathForDiff := filepath.Join(baseDir, filePath)
+		unstagedDiff, _ := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+			FilePaths: []string{pathForDiff},
+			Staged:    false,
+		})
+		batchReport.FinalDiff = unstagedDiff
+		gitAddErr := gitAdd(input.EnvContainer, filePath)
+		if gitAddErr != nil {
+			batchReport.Error = fmt.Sprintf("Failed to git add deleted file: %v", gitAddErr)
+		} else {
+			batchReport.CheckResult.Success = true
+			batchReport.CheckResult.Message = "Skipped"
+		}
+		gitMu.Unlock()
+		return []indexedReport{{originalIndex: blocks[0].originalIndex, report: batchReport}}
+	}
+
+	// Calculate the diff of unstaged changes for the whole file (all edits +
+	// autofixes). This serves as FinalDiff, representing the total change.
+	gitMu.Lock()
+	pathForDiff := filepath.Join(baseDir, filePath)
+	combinedDiff, scdErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+		FilePaths: []string{pathForDiff},
+		Staged:    false,
+	})
+
+	if checksEnabled {
+		checkResult, checkErr := checkAndStageOrRestoreFile(
+			input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors,
+		)
+
+		if !checkResult.Success {
+			// Batch check failed — restore and fall back to sequential processing.
+			// Note: checkAndStageOrRestoreFile already restored the file.
+			da.restoreFileForBatchFallback(input.EnvContainer, filePath, blocks)
+			gitMu.Unlock()
+			return nil
+		}
+		gitMu.Unlock()
+
+		batchReport.FinalDiff = combinedDiff
+		batchReport.CheckResult = checkResult
+		if preEditFileHadErrors {
+			batchReport.CheckWarning = "file had pre-existing syntax errors; base file validity check was skipped"
+		}
+		if scdErr != nil {
+			batchReport.Error = fmt.Sprintf("Failure when getting unstaged git diff for block: %v", scdErr)
+		}
+		if checkErr != nil {
+			errMsg := fmt.Sprintf("Failure when checking/staging/restoring file: %v", checkErr)
+			if batchReport.Error != "" {
+				batchReport.Error += "\n" + errMsg
+			} else {
+				batchReport.Error = errMsg
+			}
+		}
+	} else {
+		// Checks disabled — just stage the file and populate diffs.
+		gitAddErr := gitAdd(input.EnvContainer, filePath)
+		gitMu.Unlock()
+
+		batchReport.FinalDiff = combinedDiff
+		if scdErr != nil {
+			batchReport.Error = fmt.Sprintf("Failure when getting unstaged git diff for block: %v", scdErr)
+		}
+		if gitAddErr != nil {
+			errMsg := fmt.Sprintf("Failed to git add file: %v", gitAddErr)
+			if batchReport.Error != "" {
+				batchReport.Error += "\n" + errMsg
+			} else {
+				batchReport.Error = errMsg
+			}
+		}
+	}
+
+	// Notify LSP once for the file after all edits are applied.
+	lastEditType := blocks[len(blocks)-1].block.EditType
+	err := da.notifyLSPServerOfFileChanges(ctx, input.EnvContainer, filePath, lastEditType)
+	if err != nil {
+		log.Warn().Err(err).Str("filePath", filePath).Msg("Failed to notify LSP server of file change")
+	}
+
+	return []indexedReport{{originalIndex: blocks[0].originalIndex, report: batchReport}}
+}
+
+// restoreFileForBatchFallback restores the file to its git state (or removes
+// it if it was created) to prepare for sequential fallback.
+func (da *DevActivities) restoreFileForBatchFallback(envContainer env.EnvContainer, filePath string, blocks []indexedBlock) {
+	// If the first block was a create, the file didn't exist before — remove it.
+	if blocks[0].block.EditType == "create" {
+		envContainer.Env.Remove(context.Background(), filePath)
+		return
+	}
+
+	err := git.GitRestoreActivity(context.Background(), envContainer, filePath)
+	if err != nil {
+		log.Warn().Err(err).Str("filePath", filePath).Msg("Failed to restore file for batch fallback")
+	}
+}
+
+// applyBlocksSequentially processes edit blocks one at a time with individual
+// checks, matching the original sequential behavior.
+func (da *DevActivities) applyBlocksSequentially(
+	ctx context.Context,
+	input ApplyEditBlockActivityInput,
+	blocks []indexedBlock,
+	baseDir string,
+	checksEnabled bool,
+	gitMu *sync.Mutex,
+) []indexedReport {
+	editBlockSlice := make([]EditBlock, len(blocks))
+	for i, ib := range blocks {
+		editBlockSlice[i] = ib.block
+	}
+
+	var results []indexedReport
+
+	for i, ib := range blocks {
+		block := editBlockSlice[i]
 		_, blockSpan := applyEditBlocksTracer.Start(ctx, "ApplyEditBlock")
 		blockSpan.SetAttributes(
-			attribute.Int("blockIndex", i),
+			attribute.Int("blockIndex", ib.originalIndex),
 			attribute.String("editType", block.EditType),
 			attribute.String("filePath", block.FilePath),
 		)
 
-		// Check pre-edit file validity for existing files so we can skip the
-		// post-edit syntax check if the file was already broken.
 		preEditFileHadErrors := false
 		if block.EditType == "update" || block.EditType == "append" {
 			preEditValid, _, preEditErr := check.CheckFileValidity(input.EnvContainer, block.FilePath)
@@ -127,27 +513,27 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 			report, err = ApplyDeleteEditBlock(ctx, input.EnvContainer, block, baseDir)
 		default:
 			report = ApplyEditBlockReport{
-				OriginalEditBlock: block,
-				Error:             fmt.Sprintf("Unknown edit type: %s", block.EditType),
+				OriginalEditBlocks: []EditBlock{block},
+				Error:              fmt.Sprintf("Unknown edit type: %s", block.EditType),
 			}
 		}
 
 		if err != nil {
-			reports = append(reports, report)
+			results = append(results, indexedReport{originalIndex: ib.originalIndex, report: report})
+			blockSpan.End()
 			continue
 		}
 		report.DidApply = true
 
-		if report.Error == "" && slices.Contains(input.EnabledFlags, fflag.CheckEdits) {
-			// This block executes if CheckEdits is enabled and no prior error occurred for this edit block.
-			// report.Error is guaranteed to be empty at the start of this block.
+		if report.Error == "" && checksEnabled {
+			gitMu.Lock()
 			var currentBlockError string
 			pathForDiff := filepath.Join(baseDir, block.FilePath)
 
 			// Calculate the diff of unstaged changes, which we assume are
 			// related to this edit block plus any autofixes that might have run
-			// after it was applied. This serves as the base for FinalDiff, representing the total
-			// change if successful.
+			// after it was applied. This serves as the base for FinalDiff,
+			// representing the total change if successful.
 			unstagedChangesDiff, scdErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
 				FilePaths: []string{pathForDiff},
 				Staged:    false,
@@ -178,7 +564,7 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 					report.CheckResult.Success = true
 					report.CheckResult.Message = "Skipped"
 				}
-			} else { // create, update, append
+			} else {
 				checkResult, checkErr := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors)
 				report.CheckResult = checkResult
 				if preEditFileHadErrors {
@@ -187,6 +573,9 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 
 				if !checkResult.Success {
 					report.DidApply = false
+					// report.FinalDiff remains as-is despite restoration having
+					// occurred: this is so that we can record and show the user
+					// the diff that failed checks clearly.
 					hint := fixCheckHint(report)
 					errMsg := fmt.Sprintf("Checks failed: %s\nHint: %s", checkResult.Message, hint)
 					if currentBlockError == "" {
@@ -194,9 +583,6 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 					} else {
 						currentBlockError += "\n" + errMsg
 					}
-					// report.FinalDiff remains as-is despite restoration having
-					// occurred: this is so that we can record and show the user
-					// the diff that failed checks clearly.
 				}
 
 				if checkErr != nil {
@@ -208,8 +594,8 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 					}
 				}
 			}
-			// Consolidate errors from this block
-			if report.Error != "" { // Error from ApplyXYZEditBlock or Autofix
+			gitMu.Unlock()
+			if report.Error != "" {
 				if currentBlockError != "" {
 					report.Error = report.Error + "\n" + currentBlockError
 				}
@@ -218,26 +604,17 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 			}
 		}
 
-		reports = append(reports, report)
+		results = append(results, indexedReport{originalIndex: ib.originalIndex, report: report})
 
 		if report.DidApply {
-			/*
-			* We use the visible file ranges to limit the scope of the edits
-			* done, in case of similar code in the same file that were not
-			* visible to the LLM. But these file ranges were originally
-			* calculated based on the original file and are no longer valid for
-			* later edit blocks, once any one edit block for a given file has
-			* been applied. Thus, we need to update the visible file ranges for
-			* all subsequent edit blocks for the same file.
-			*
-			* The final diff is used to determine the line edits that were
-			* made, because this takes into account both the edit and any
-			* autofixes that were applied.
-			 */
+			// Visible file ranges limit the scope of edits to code visible to the
+			// LLM, but they are calculated from the original file and become stale
+			// once any edit is applied. Update them for all subsequent blocks in
+			// this file using the final diff, which accounts for both the edit
+			// and any autofixes.
 			lineEdits := getLineEditsFromDiff(report.FinalDiff)
-			updateVisibleFileRanges(input.EditBlocks[i:], block.FilePath, lineEdits)
+			updateVisibleFileRanges(editBlockSlice[i:], block.FilePath, lineEdits)
 
-			// Notify LSP server about the file changes
 			err := da.notifyLSPServerOfFileChanges(ctx, input.EnvContainer, block.FilePath, block.EditType)
 			if err != nil {
 				log.Warn().Err(err).Str("filePath", block.FilePath).Msg("Failed to notify LSP server of file change")
@@ -251,16 +628,7 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 		blockSpan.End()
 	}
 
-	// TODO if more than one edit blocks failed checks and were restored, it's
-	// possible that they would pass checks if both are applied. this could
-	// happen even across files, since checks on specific files may depend on
-	// the state of other files. so in this case, we should try to apply each
-	// combination of failed edits to maximize the number of successful edits.
-
-	// FIXME for now, let's at least apply all edits without checks, then check
-	// them all
-
-	return reports, nil
+	return results
 }
 
 // notifyLSPServerOfFileChanges notifies the LSP server about file changes
@@ -398,23 +766,28 @@ func updateVisibleFileRanges(editBlocks []EditBlock, filePath string, lineEdits 
 func fixCheckHint(report ApplyEditBlockReport) string {
 	hint := ""
 
+	if len(report.OriginalEditBlocks) == 0 {
+		return hint
+	}
+	block := report.OriginalEditBlocks[0]
+
 	hasBalanceIssues := false
-	oldParens := countUnbalanced(report.OriginalEditBlock.OldLines, "(", ")")
-	newParens := countUnbalanced(report.OriginalEditBlock.NewLines, "(", ")")
+	oldParens := countUnbalanced(block.OldLines, "(", ")")
+	newParens := countUnbalanced(block.NewLines, "(", ")")
 	if oldParens != newParens {
 		hasBalanceIssues = true
 		hint = hint + fmt.Sprintf("The net number of unbalanced parentheses should be the same in the new lines vs old lines. But there are %d unbalanced parentheses in the old lines and %d in the new lines.\n", oldParens, newParens)
 	}
 
-	oldBraces := countUnbalanced(report.OriginalEditBlock.OldLines, "{", "}")
-	newBraces := countUnbalanced(report.OriginalEditBlock.NewLines, "{", "}")
+	oldBraces := countUnbalanced(block.OldLines, "{", "}")
+	newBraces := countUnbalanced(block.NewLines, "{", "}")
 	if oldBraces != newBraces {
 		hasBalanceIssues = true
 		hint = hint + fmt.Sprintf("The net number of unbalanced braces should be the same in the new lines vs old lines. But there are %d unbalanced braces in the old lines and %d in the new lines.\n", oldBraces, newBraces)
 	}
 
-	oldSquares := countUnbalanced(report.OriginalEditBlock.OldLines, "[", "]")
-	newSquares := countUnbalanced(report.OriginalEditBlock.NewLines, "[", "]")
+	oldSquares := countUnbalanced(block.OldLines, "[", "]")
+	newSquares := countUnbalanced(block.NewLines, "[", "]")
 	if oldSquares != newSquares {
 		hasBalanceIssues = true
 		hint = hint + fmt.Sprintf("The net number of unbalanced square brackets should be the same in the new lines vs old lines. But there are %d unbalanced square brackets in the old lines and %d in the new lines.\n", oldSquares, newSquares)
@@ -424,7 +797,7 @@ func fixCheckHint(report ApplyEditBlockReport) string {
 		hint = hint + fmt.Sprintf("Balance all the parentheses, braces, and square brackets within the %s section - keep going until closing any delimiters opened. Do the same for the %s section.\n", search, replace)
 
 		/*
-			lastChar := report.OriginalEditBlock.OldLines[len(report.OriginalEditBlock.OldLines)-1]
+			lastChar := block.OldLines[len(block.OldLines)-1]
 			// TODO custom hint for case where closing delimiters show up first
 			// early on without the corresponding opening delimiters in the old
 			// lines
@@ -436,7 +809,7 @@ func fixCheckHint(report ApplyEditBlockReport) string {
 		*/
 	}
 
-	if report.OriginalEditBlock.EditType == "update" && len(report.OriginalEditBlock.OldLines) <= 3 {
+	if block.EditType == "update" && len(block.OldLines) <= 3 {
 		hint = hint + "Make sure to add enough context in the old lines, more than just 2 or 3 lines, at least 5 if available.\n"
 	}
 
@@ -539,7 +912,7 @@ func gitAdd(envContainer env.EnvContainer, filePath string) error {
 
 func ApplyCreateEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	report := ApplyEditBlockReport{
-		OriginalEditBlock: block,
+		OriginalEditBlocks: []EditBlock{block},
 	}
 
 	absoluteFilePath := filepath.Join(baseDir, block.FilePath)
@@ -568,7 +941,7 @@ func ApplyCreateEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 
 func ApplyUpdateEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	report := ApplyEditBlockReport{
-		OriginalEditBlock: block,
+		OriginalEditBlocks: []EditBlock{block},
 	}
 
 	absoluteFilePath := filepath.Join(baseDir, block.FilePath)
@@ -597,7 +970,7 @@ func ApplyUpdateEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 
 func ApplyAppendEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	report := ApplyEditBlockReport{
-		OriginalEditBlock: block,
+		OriginalEditBlocks: []EditBlock{block},
 	}
 
 	absoluteFilePath := filepath.Join(baseDir, block.FilePath)
@@ -677,7 +1050,10 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 			editBlock.VisibleCodeBlocks = utils.Unique(editBlock.VisibleCodeBlocks)
 		}
 		for i := range invalidReports {
-			editBlock := &invalidReports[i].OriginalEditBlock
+			if len(invalidReports[i].OriginalEditBlocks) == 0 {
+				continue
+			}
+			editBlock := &invalidReports[i].OriginalEditBlocks[0]
 			for j := range editBlock.VisibleCodeBlocks {
 				codeBlock := &(editBlock.VisibleCodeBlocks[j])
 				codeBlock.Code = ""
@@ -716,7 +1092,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 
 		reports := append(validReports, invalidReports...)
 		sort.Slice(reports, func(i, j int) bool {
-			return reports[i].OriginalEditBlock.SequenceNumber < reports[j].OriginalEditBlock.SequenceNumber
+			return reports[i].SequenceNumbers()[0] < reports[j].SequenceNumbers()[0]
 		})
 
 		// visible stuff is very verbose, so we leave it out of the flow events,
@@ -724,8 +1100,10 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		// that here via the variable outside the closure.
 		fullReports = reports
 		trackedReports := utils.Map(reports, func(report ApplyEditBlockReport) ApplyEditBlockReport {
-			report.OriginalEditBlock.VisibleCodeBlocks = []tree_sitter.CodeBlock{}
-			report.OriginalEditBlock.VisibleFileRanges = []FileRange{}
+			for i := range report.OriginalEditBlocks {
+				report.OriginalEditBlocks[i].VisibleCodeBlocks = []tree_sitter.CodeBlock{}
+				report.OriginalEditBlocks[i].VisibleFileRanges = []FileRange{}
+			}
 			return report
 		})
 		return trackedReports, nil
@@ -783,8 +1161,8 @@ func validateEditBlocks(editBlocks []EditBlock) (validEditBlocks []EditBlock, in
 			}
 
 			invalidReports = append(invalidReports, ApplyEditBlockReport{
-				OriginalEditBlock: editBlock,
-				DidApply:          false,
+				OriginalEditBlocks: []EditBlock{editBlock},
+				DidApply:           false,
 				Error: fmt.Sprintf(`
 No code context found in the chat history that matches the edit
 block's old lines, which I'll repeat here:
@@ -797,9 +1175,9 @@ the tools before making an edit block.`, strings.Join(editBlock.OldLines, "\n"),
 			})
 		} else {
 			invalidReports = append(invalidReports, ApplyEditBlockReport{
-				OriginalEditBlock: editBlock,
-				DidApply:          false,
-				Error:             "No code context found in the chat history that matches this edit block's old lines. You must ensure the old lines are present in the code context by using one of the tools before making an edit block.",
+				OriginalEditBlocks: []EditBlock{editBlock},
+				DidApply:           false,
+				Error:              "No code context found in the chat history that matches this edit block's old lines. You must ensure the old lines are present in the code context by using one of the tools before making an edit block.",
 			})
 		}
 	}
@@ -933,13 +1311,13 @@ func ApplyDeleteEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ApplyEditBlockReport{
-				OriginalEditBlock: block,
-				Error:             fmt.Sprintf("File does not exist: %s", block.FilePath),
+				OriginalEditBlocks: []EditBlock{block},
+				Error:              fmt.Sprintf("File does not exist: %s", block.FilePath),
 			}, nil
 		} else {
 			return ApplyEditBlockReport{
-				OriginalEditBlock: block,
-				Error:             fmt.Sprintf("Failed to read file %s: %v", block.FilePath, err),
+				OriginalEditBlocks: []EditBlock{block},
+				Error:              fmt.Sprintf("Failed to read file %s: %v", block.FilePath, err),
 			}, nil
 		}
 	}
@@ -947,14 +1325,14 @@ func ApplyDeleteEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 	err = envContainer.Env.Remove(ctx, block.FilePath)
 	if err != nil {
 		return ApplyEditBlockReport{
-			OriginalEditBlock: block,
-			Error:             fmt.Sprintf("Failed to delete file: %s", block.FilePath),
+			OriginalEditBlocks: []EditBlock{block},
+			Error:              fmt.Sprintf("Failed to delete file: %s", block.FilePath),
 		}, nil
 	}
 
 	return ApplyEditBlockReport{
-		OriginalEditBlock: block,
-		InitialDiff:       string(diffp.Diff(block.FilePath, []byte(originalContents), block.FilePath, []byte{})),
+		OriginalEditBlocks: []EditBlock{block},
+		InitialDiff:        string(diffp.Diff(block.FilePath, []byte(originalContents), block.FilePath, []byte{})),
 	}, nil
 }
 
@@ -1412,11 +1790,17 @@ func getLineEditsFromDiff(diff string) []lineEdit {
 func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, envContainer env.EnvContainer, report *ApplyEditBlockReport) {
 	ctx, span := applyEditBlocksTracer.Start(ctx, "AutofixIfEditSucceeded")
 	defer span.End()
-	span.SetAttributes(attribute.String("filePath", report.OriginalEditBlock.FilePath))
+	span.SetAttributes(attribute.String("filePath", report.FilePath()))
 
 	if report.Error != "" {
 		span.SetAttributes(attribute.Bool("skipped", true))
 		return
+	}
+
+	filePath := report.FilePath()
+	editType := ""
+	if len(report.OriginalEditBlocks) > 0 {
+		editType = report.OriginalEditBlocks[0].EditType
 	}
 
 	// Command-based autofix
@@ -1425,12 +1809,12 @@ func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, e
 	// LSP-based autofix
 
 	// Notify LSP to ensure it's in sync before requesting autofixes
-	err := devActivities.notifyLSPServerOfFileChanges(ctx, envContainer, report.OriginalEditBlock.FilePath, report.OriginalEditBlock.EditType)
+	err := devActivities.notifyLSPServerOfFileChanges(ctx, envContainer, filePath, editType)
 	if err != nil {
-		log.Warn().Err(err).Str("filePath", report.OriginalEditBlock.FilePath).Msg("Failed to notify LSP server of file change")
+		log.Warn().Err(err).Str("filePath", filePath).Msg("Failed to notify LSP server of file change")
 	}
 
-	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
+	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), filePath)
 	autofixInput := lsp.AutofixActivityInput{
 		DocumentURI:  "file://" + absoluteFilePath,
 		EnvContainer: envContainer,
@@ -1470,7 +1854,7 @@ func runAutofixCommands(ctx context.Context, envContainer env.EnvContainer, repo
 		)
 
 		// allow the file path to be used in the command
-		shellCommand := strings.ReplaceAll(command.Command, "{file}", report.OriginalEditBlock.FilePath)
+		shellCommand := strings.ReplaceAll(command.Command, "{file}", report.FilePath())
 		output, err := envContainer.Env.RunCommand(context.Background(), env.EnvRunCommandInput{
 			RelativeWorkingDir: command.WorkingDir,
 			Command:            "/usr/bin/env",

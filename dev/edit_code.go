@@ -780,13 +780,15 @@ func feedbackFromApplyEditBlockReports(reports []ApplyEditBlockReport) string {
 	var messages []string
 	messages = append(messages, "Edit block application results:\n")
 	for _, report := range reports {
-		seqNum := report.OriginalEditBlock.SequenceNumber
+		seqNums := report.SequenceNumbers()
+		label := fmt.Sprintf("edit_block:%s", formatSequenceNumbers(seqNums))
+
 		if report.Error != "" {
-			messages = append(messages, fmt.Sprintf("- edit_block:%d application failed: %s", seqNum, report.Error))
+			messages = append(messages, fmt.Sprintf("- %s application failed: %s", label, report.Error))
 		} else if !report.DidApply {
-			messages = append(messages, fmt.Sprintf("- edit_block:%d application failed due to unknown reasons", seqNum))
+			messages = append(messages, fmt.Sprintf("- %s application failed due to unknown reasons", label))
 		} else {
-			msg := fmt.Sprintf("- edit_block:%d application succeeded", seqNum)
+			msg := fmt.Sprintf("- %s application succeeded", label)
 			if report.CheckWarning != "" {
 				msg += fmt.Sprintf(" (warning: %s)", report.CheckWarning)
 			}
@@ -794,6 +796,42 @@ func feedbackFromApplyEditBlockReports(reports []ApplyEditBlockReport) string {
 		}
 	}
 	return strings.Join(messages, "\n")
+}
+
+// formatSequenceNumbers renders a sorted list of integers with contiguous runs
+// of 3 or more collapsed into ranges, e.g. [2,3,4,5,6,9,10,11,20] → "2-6,9-11,20".
+func formatSequenceNumbers(nums []int) string {
+	if len(nums) == 0 {
+		return ""
+	}
+	sort.Ints(nums)
+
+	type span struct{ start, end int }
+	spans := []span{{nums[0], nums[0]}}
+	for _, n := range nums[1:] {
+		last := &spans[len(spans)-1]
+		if n == last.end+1 {
+			last.end = n
+		} else {
+			spans = append(spans, span{n, n})
+		}
+	}
+
+	parts := make([]string, len(spans))
+	for i, s := range spans {
+		if s.end-s.start >= 2 {
+			parts[i] = fmt.Sprintf("%d-%d", s.start, s.end)
+		} else {
+			// For runs of 1–2, list individually
+			for n := s.start; n <= s.end; n++ {
+				if parts[i] != "" {
+					parts[i] += ","
+				}
+				parts[i] += fmt.Sprintf("%d", n)
+			}
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 func codeBlocksToMergedFileRanges(filePath string, visibleCodeBlocks []tree_sitter.CodeBlock) []FileRange {

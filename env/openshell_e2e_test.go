@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,9 +48,12 @@ func TestOpenShellIntegration(t *testing.T) {
 		defer cancel()
 	}
 
-	// Use the pre-cached base community image so sandbox creation is fast.
+	// Build from a Dockerfile that layers ripgrep onto the base community image
+	// so the search subtests (which shell out to rg) can run; the base sandbox
+	// runs as a non-root user without a package manager available.
+	ripgrepDockerfile := filepath.Join(repoRoot(t), "env", "testdata", "Dockerfile.openshell-ripgrep")
 	createOutput, err := OpenShellCreateActivity(ctx, OpenShellCreateInput{
-		Source: "base",
+		Source: ripgrepDockerfile,
 	})
 	require.NoError(t, err, "OpenShellCreateActivity failed")
 	require.NotEmpty(t, createOutput.SandboxName)
@@ -81,6 +85,10 @@ func TestOpenShellIntegration(t *testing.T) {
 
 	t.Run("filesystem methods via sftp", func(t *testing.T) {
 		runRemoteEnvFilesystemSubtests(t, ctx, osEnv)
+	})
+
+	t.Run("stdin detached from SSH stream", func(t *testing.T) {
+		runRemoteEnvStdinSubtests(t, ctx, osEnv)
 	})
 
 	t.Run("sync and verify repo", func(t *testing.T) {

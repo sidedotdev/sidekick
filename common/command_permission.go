@@ -1062,8 +1062,21 @@ func EvaluateScriptPermission(config CommandPermissionConfig, script string) (Pe
 // heredocFileWriteDenyMessage is returned when a script writes a file using a
 // shell heredoc and the delimiter is not the documented escape hatch.
 const heredocFileWriteDenyMessage = "Writing files via shell heredoc (e.g. `cat > path << EOF`) is not allowed. " +
-	"Use edit blocks to create or modify files. If edit blocks truly cannot be used, " +
+	"Use edit blocks to create or modify files. This restriction applies regardless of target path, " +
+	"including temp dirs like /tmp. If edit blocks truly cannot be used, " +
 	"the heredoc delimiter `ESCAPE_HATCH_EOF` is permitted but will require explicit approval."
+
+// tempPathPattern matches references to system temp paths like /tmp and
+// /var/tmp anywhere in a script (heredoc redirects, `tee`, plain redirects,
+// etc.), so guidance toward in-repo locations can be surfaced for any of them.
+var tempPathPattern = regexp.MustCompile(`/(?:var/)?tmp(?:/|\b)`)
+
+// tempPathAdvisory steers commands away from system temp paths toward in-repo
+// locations. It is surfaced whenever a script references such a path.
+const tempPathAdvisory = "This command references a system temp path like `/tmp`. " +
+	"Prefer writing to real, non-scratch files in the repo where feasible. " +
+	"For genuine scratch files, use `.side/tmp` (which Sidekick keeps git-ignored and creates for you) instead of `/tmp`. " +
+	"Files under `.side/tmp` need no cleanup, but any scratch files created elsewhere in-repo must be removed with `git rm` once you're done with them."
 
 // EvaluateScriptPermissionWithOptions evaluates a shell script with configurable options.
 // When all commands auto-approve, the returned message aggregates any advisory
@@ -1072,7 +1085,11 @@ const heredocFileWriteDenyMessage = "Writing files via shell heredoc (e.g. `cat 
 // user/agent without blocking execution.
 func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script string, opts EvaluatePermissionOptions) (PermissionResult, string) {
 	heredocWrites := permission.DetectHeredocFileWrites(script)
+	usesTempPath := tempPathPattern.MatchString(script)
 	var advisories []string
+	if usesTempPath {
+		advisories = append(advisories, tempPathAdvisory)
+	}
 	if opts.HeredocFileWriteWarnInsteadOfDeny {
 		if len(heredocWrites) > 0 {
 			advisories = append(advisories, SandboxHeredocFileWriteAdvisory)
@@ -1080,7 +1097,11 @@ func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script 
 	} else {
 		for _, hw := range heredocWrites {
 			if !hw.UsesEscapeHatch() {
-				return PermissionDeny, heredocFileWriteDenyMessage
+				denyMsg := heredocFileWriteDenyMessage
+				if usesTempPath {
+					denyMsg += "\n\n" + tempPathAdvisory
+				}
+				return PermissionDeny, denyMsg
 			}
 		}
 	}

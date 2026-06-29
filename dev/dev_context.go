@@ -480,6 +480,22 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		}
 	}
 
+	// Ensure the sanctioned scratch directory exists so agents have a
+	// git-ignored location for temp files instead of system temp paths.
+	if v := workflow.GetVersion(ctx, "ensure-side-tmp-dir", workflow.DefaultVersion, 1); v >= 1 {
+		var mkdirOutput env.EnvRunCommandActivityOutput
+		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer: envContainer,
+			Command:      "mkdir",
+			Args:         []string{"-p", ".side/tmp"},
+		}).Get(ctx, &mkdirOutput)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to create .side/tmp scratch directory: %v", err)
+		} else if mkdirOutput.ExitStatus != 0 {
+			return DevContext{}, fmt.Errorf("failed to create .side/tmp scratch directory (exit status %d):\n\n%s", mkdirOutput.ExitStatus, mkdirOutput.Stderr)
+		}
+	}
+
 	devCtx := DevContext{
 		ExecContext: eCtx,
 		Worktree:    worktree,

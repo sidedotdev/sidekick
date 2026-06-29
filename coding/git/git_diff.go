@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"al.essio.dev/pkg/shellescape"
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -321,6 +322,22 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 	if len(untrackedPaths) == 0 {
 		return "", nil
 	}
+
+	// Untracked binaries are usually build artifacts rather than intended
+	// changes, so exclude them from the diff entirely (they should not even be
+	// referenced in the output). When they genuinely should be tracked, we rely
+	// on the agent staging them explicitly.
+	nonBinaryPaths, binaryPaths, err := partitionUntrackedBinaries(ctx, envContainer, untrackedPaths)
+	if err != nil {
+		return "", err
+	}
+	if len(binaryPaths) > 0 {
+		log.Info().Strs("files", binaryPaths).Msg("excluding untracked binary files from diff")
+	}
+	if len(nonBinaryPaths) == 0 {
+		return "", nil
+	}
+	untrackedPaths = nonBinaryPaths
 
 	// Step 2: Create a temporary index file
 	mkTempOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{

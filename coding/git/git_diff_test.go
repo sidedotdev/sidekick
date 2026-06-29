@@ -709,11 +709,12 @@ func TestGitDiffActivity_BinaryFilesNotShown(t *testing.T) {
 		require.NotContains(t, result, stagedBinarySentinel, "Binary file content should not appear in staged diff")
 	})
 
-	// Test 2: Working tree/untracked diff should mention untrackedbinary but NOT show its content
-	t.Run("untracked_binary_file_content_not_shown", func(t *testing.T) {
+	// Test 2: Working tree/untracked diff should not mention the untracked
+	// binary file at all, since untracked binaries are excluded from diffs.
+	t.Run("untracked_binary_file_not_mentioned", func(t *testing.T) {
 		result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{})
 		require.NoError(t, err)
-		require.Contains(t, result, "untrackedbinary", "Expected diff to mention the untracked binary file name")
+		require.NotContains(t, result, "untrackedbinary", "Untracked binary file name should not appear in diff")
 		require.NotContains(t, result, untrackedBinarySentinel, "Binary file content should not appear in untracked diff")
 	})
 }

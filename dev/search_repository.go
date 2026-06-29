@@ -289,6 +289,11 @@ type EnsureCoreIgnoreFileActivityOutput struct {
 	Path string
 }
 
+// coreIgnoreFileContent is the content sidekick writes to the core ignore file
+// it manages. Besides .git, it keeps .side/tmp ignored so agents have a
+// sanctioned scratch location that never pollutes search results.
+const coreIgnoreFileContent = ".git\n.side/tmp\n"
+
 // EnsureCoreIgnoreFileActivity creates a core ignore file inside the code
 // execution environment and returns its env-side path, suitable for passing to
 // commands like rg that run via env.RunCommand. A fresh temp file is created
@@ -298,7 +303,7 @@ func EnsureCoreIgnoreFileActivity(ctx context.Context, input EnsureCoreIgnoreFil
 	if err != nil {
 		return EnsureCoreIgnoreFileActivityOutput{}, fmt.Errorf("failed to create core ignore temp file: %w", err)
 	}
-	if err := input.EnvContainer.Env.WriteFile(ctx, path, []byte(".git\n"), 0644); err != nil {
+	if err := input.EnvContainer.Env.WriteFile(ctx, path, []byte(coreIgnoreFileContent), 0644); err != nil {
 		return EnsureCoreIgnoreFileActivityOutput{}, fmt.Errorf("failed to write core ignore file: %w", err)
 	}
 	return EnsureCoreIgnoreFileActivityOutput{Path: path}, nil
@@ -315,8 +320,7 @@ func getOrCreateCoreIgnoreFile() (string, error) {
 			return "", fmt.Errorf("failed to create config directory: %v", err)
 		}
 
-		// Create core_ignore file with .git exclusion
-		if err := os.WriteFile(coreIgnorePath, []byte(".git\n"), 0644); err != nil {
+		if err := os.WriteFile(coreIgnorePath, []byte(coreIgnoreFileContent), 0644); err != nil {
 			return "", fmt.Errorf("failed to create core_ignore file: %v", err)
 		}
 	} else if err != nil {
