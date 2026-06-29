@@ -553,3 +553,31 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIddInstructionsExcludedForNonId
 	s.NotEmpty(content)
 	s.NotContains(content, "intent/.generated")
 }
+
+func TestFormatSequenceNumbers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    []int
+		expected string
+	}{
+		{"empty", nil, ""},
+		{"single", []int{5}, "5"},
+		{"two consecutive", []int{1, 2}, "1,2"},
+		{"three consecutive becomes range", []int{1, 2, 3}, "1-3"},
+		{"mixed", []int{2, 3, 4, 5, 6, 9, 10, 11, 20}, "2-6,9-11,20"},
+		{"non-contiguous pairs", []int{1, 2, 5, 6}, "1,2,5,6"},
+		{"single gaps", []int{1, 3, 5}, "1,3,5"},
+		{"unsorted input", []int{10, 3, 1, 2, 9}, "1-3,9,10"},
+		{"long run", []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, "1-10"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := formatSequenceNumbers(tt.input)
+			if result != tt.expected {
+				t.Errorf("formatSequenceNumbers(%v) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}

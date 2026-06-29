@@ -2,7 +2,7 @@
   <div v-if="expand && actionResult.length > 0" class="apply-edit-blocks-results">
     <div v-for="(result, index) in actionResult" :key="index" class="edit-block-result">
       <h4>
-        Edit Block {{ index + 1 }} Result:
+        {{ editBlockLabel(result) }} Result:
         <span v-if="result.didApply" class="result-applied">✅ Applied</span>
         <span v-else class="result-not-applied">❌ Not Applied</span>
       </h4>
@@ -13,12 +13,12 @@
           :default-expanded="true"
         />
       </template>
-      <div v-else>
-        <p>File: {{ result.originalEditBlock.filePath }}</p>
+      <div v-else-if="result.originalEditBlocks?.[0]?.filePath">
+        <p>File: {{ result.originalEditBlocks[0].filePath }}</p>
         <p>Old:</p>
-        <pre>{{ result.originalEditBlock.oldLines?.join("\n") }}</pre>
+        <pre>{{ result.originalEditBlocks[0].oldLines?.join("\n") }}</pre>
         <p>New:</p>
-        <pre>{{ result.originalEditBlock.newLines?.join("\n") }}</pre>
+        <pre>{{ result.originalEditBlocks[0].newLines?.join("\n") }}</pre>
       </div>
     </div>
   </div>
@@ -29,20 +29,57 @@ import { computed } from 'vue';
 import type { FlowAction } from '../lib/models';
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 
-// FIXME /gen switch to camelCase in backend json struct tags and here
+interface EditBlockInfo {
+  filePath: string;
+  oldLines: string[];
+  newLines: string[];
+  sequenceNumber?: number;
+}
+
 export interface ApplyEditBlockResult {
   didApply: boolean;
-  originalEditBlock: {
-    filePath: string;
-    oldLines: string[];
-    newLines: string[];
-  };
+  originalEditBlocks: EditBlockInfo[];
   error: string,
   checkResult?: {
     success: boolean;
     message: string;
   };
   finalDiff?: string;
+}
+
+function formatSequenceNumbers(nums: number[]): string {
+  if (nums.length === 0) return '';
+  const sorted = [...nums].sort((a, b) => a - b);
+  const spans: { start: number; end: number }[] = [{ start: sorted[0], end: sorted[0] }];
+  for (let i = 1; i < sorted.length; i++) {
+    const last = spans[spans.length - 1];
+    if (sorted[i] === last.end + 1) {
+      last.end = sorted[i];
+    } else {
+      spans.push({ start: sorted[i], end: sorted[i] });
+    }
+  }
+  return spans
+    .map(s => {
+      if (s.end - s.start >= 2) return `${s.start}-${s.end}`;
+      const parts: number[] = [];
+      for (let n = s.start; n <= s.end; n++) parts.push(n);
+      return parts.join(',');
+    })
+    .join(',');
+}
+
+function editBlockLabel(result: ApplyEditBlockResult): string {
+  if (result.originalEditBlocks && result.originalEditBlocks.length > 1) {
+    const seqNums = result.originalEditBlocks
+      .map(b => b.sequenceNumber ?? 0)
+      .filter(n => n > 0);
+    if (seqNums.length > 1) {
+      return `Edit Blocks ${formatSequenceNumbers(seqNums)}`;
+    }
+    return `Edit Blocks (${result.originalEditBlocks.length} blocks)`;
+  }
+  return `Edit Block ${result.originalEditBlocks?.[0]?.sequenceNumber ?? '?'}`;
 }
 
 const props = defineProps({
