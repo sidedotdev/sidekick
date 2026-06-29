@@ -61,6 +61,16 @@ func TestDetectHeredocFileWrites(t *testing.T) {
 			wantCount: 1,
 			wantDelim: "EOF",
 		},
+		{
+			name:      "conflict markers in sed are not heredocs",
+			script:    "sed -i.bak -E -e 's/^<<<<<<< CREATE_FILE$/MARK_CREATE/' -e 's/^<<<<<<< APPEND_TO_FILE$/MARK_APPEND/' -e 's/^>>>>>>> NEW_LINES$/MARK_NEWLINES/' edit_block_test.go && rm edit_block_test.go.bak",
+			wantCount: 0,
+		},
+		{
+			name:      "here-string is not a heredoc file write",
+			script:    "cat > out.txt <<< word",
+			wantCount: 0,
+		},
 	}
 
 	for _, tt := range tests {
