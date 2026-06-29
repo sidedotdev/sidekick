@@ -2205,3 +2205,47 @@ func TestBaseCommandPermissionsForIsolatedEnv(t *testing.T) {
 		assert.Equal(t, PermissionAutoApprove, result)
 	})
 }
+
+func TestEvaluateScriptPermission_TempPathAdvisory(t *testing.T) {
+	t.Parallel()
+	config := CommandPermissionConfig{
+		AutoApprove: []CommandPattern{
+			{Pattern: "cat"},
+			{Pattern: "echo"},
+			{Pattern: "tee"},
+		},
+	}
+	autoApproveOpts := EvaluatePermissionOptions{SkipAbsolutePathEscalation: true}
+
+	t.Run("auto-approved command referencing /tmp surfaces advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee -a /tmp/out.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, ".side/tmp")
+		assert.Contains(t, msg, "git rm")
+	})
+
+	t.Run("auto-approved command without temp path has no advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee out.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.NotContains(t, msg, ".side/tmp")
+	})
+
+	t.Run("heredoc file write to /tmp appends temp guidance to deny message", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermission(config, "cat > /tmp/scratch.txt << 'EOF'\nhi\nEOF")
+		assert.Equal(t, PermissionDeny, result)
+		assert.Contains(t, msg, "edit blocks")
+		assert.Contains(t, msg, ".side/tmp")
+		assert.Contains(t, msg, "git rm")
+	})
+
+	t.Run("heredoc file write without temp path omits temp guidance", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermission(config, "cat > out.txt << 'EOF'\nhi\nEOF")
+		assert.Equal(t, PermissionDeny, result)
+		assert.Contains(t, msg, "edit blocks")
+		assert.NotContains(t, msg, ".side/tmp")
+	})
+}
