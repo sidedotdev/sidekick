@@ -108,6 +108,13 @@ func repairLeakedXmlParams(data interface{}) interface{} {
 					}
 					continue
 				}
+				if cleaned, params, found := extractLeakedXmlTagFields(s); found {
+					result[key] = cleaned
+					for name, val := range params {
+						additions[name] = val
+					}
+					continue
+				}
 			}
 			result[key] = processed
 		}
@@ -165,6 +172,70 @@ func extractLeakedXmlParams(s string) (cleaned string, params map[string]interfa
 		}
 	}
 
+	return cleaned, params, true
+}
+
+// leakedXmlTagFieldRe matches a sibling field that leaked into a string value as
+// an XML element, e.g. `<learnings>[...]</learnings>`. The opening tag may carry
+// stray markup such as a spurious `">`, as seen in broken tool-call output like
+// `<is_planning_complete">true</is_planning_complete>`. The closing tag name is
+// captured separately so callers can verify it matches the opening name, since
+// RE2 does not support backreferences.
+var leakedXmlTagFieldRe = regexp.MustCompile(`(?s)<([a-zA-Z_][a-zA-Z0-9_]*)[^>]*>(.*?)</([a-zA-Z_][a-zA-Z0-9_]*)>`)
+
+// trailingCloseTagRe matches a trailing XML closing tag (e.g. `</analysis>`) that
+// marks the end of a field's real content before its leaked siblings begin.
+var trailingCloseTagRe = regexp.MustCompile(`\s*</[a-zA-Z_][^>]*>\s*$`)
+
+// extractLeakedXmlTagFields splits a string value at the point where leaked
+// sibling fields encoded as XML elements (e.g. `<steps>[...]</steps>`) begin. It
+// returns the cleaned content preceding the leak and a map of the leaked field
+// names to their parsed values. found is false when the string does not end its
+// real content with a closing tag immediately followed by such elements, or when
+// any candidate element's opening and closing tag names disagree.
+//
+// To avoid over-eager repair, promotion only happens when the content preceding
+// the first candidate element ends with a closing tag (marking the real end of
+// the field) and every candidate is a well-formed element whose opening and
+// closing names match. Anything less is treated as legitimate inline markup.
+//
+// TODO: accept an expected JSON schema so the true field boundaries can be
+// resolved even when a leaked value itself contains XML-like markup (which makes
+// the non-greedy match terminate early at an inner closing tag).
+func extractLeakedXmlTagFields(s string) (cleaned string, params map[string]interface{}, found bool) {
+	matches := leakedXmlTagFieldRe.FindAllStringSubmatchIndex(s, -1)
+	if len(matches) == 0 {
+		return s, nil, false
+	}
+
+	cleaned = s[:matches[0][0]]
+	stripped := trailingCloseTagRe.ReplaceAllString(cleaned, "")
+	if stripped == cleaned {
+		// Without a closing tag ending the real content, the matched elements are
+		// more likely legitimate markup than leaked sibling fields.
+		return s, nil, false
+	}
+
+	params = make(map[string]interface{}, len(matches))
+	for _, m := range matches {
+		name := s[m[2]:m[3]]
+		closeName := s[m[6]:m[7]]
+		if name != closeName {
+			// Mismatched opening/closing tags indicate malformed or nested markup
+			// rather than a cleanly leaked sibling field; decline to repair.
+			return s, nil, false
+		}
+		raw := strings.TrimSpace(s[m[4]:m[5]])
+
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			params[name] = parsed
+		} else {
+			params[name] = raw
+		}
+	}
+
+	cleaned = stripped
 	return cleaned, params, true
 }
 
