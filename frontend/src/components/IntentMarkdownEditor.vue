@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { EditorView, basicSetup } from 'codemirror'
-import { keymap } from '@codemirror/view'
+import { keymap, scrollPastEnd } from '@codemirror/view'
 import { Compartment, EditorState, Prec } from '@codemirror/state'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import {
@@ -13,11 +13,14 @@ import {
   codeFolding,
   ensureSyntaxTree,
   foldEffect,
+  indentUnit,
   syntaxHighlighting,
 } from '@codemirror/language'
+import { indentLess, indentMore } from '@codemirror/commands'
 import { tags as t } from '@lezer/highlight'
 import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import { applyUncommittedHighlight, uncommittedHighlightExtension } from '../lib/intent_diff_editor'
+import { formatMarkdownPreservingSelection } from '../lib/markdown_format'
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +39,7 @@ const emit = defineEmits<{
 const editorParent = ref<HTMLElement | null>(null)
 let editorView: EditorView | null = null
 let applyingExternal = false
+const FORMAT_WRAP_COLUMN = 80
 
 const themeCompartment = new Compartment()
 const darkModeMedia =
@@ -77,7 +81,14 @@ const buildEditorTheme = (isDark: boolean) => {
   return EditorView.theme(
     {
       '&': { backgroundColor: 'transparent', color: 'var(--color-text)', height: '100%' },
-      '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', overflow: 'auto' },
+      // overscrollBehavior 'none' stops the rubber-band/bounce animation when
+      // scrolling fast past the content bounds; the scroller simply halts at
+      // its edges instead of overshooting and springing back.
+      '.cm-scroller': {
+        fontFamily: '"JetBrains Mono", monospace',
+        overflow: 'auto',
+        overscrollBehavior: 'none',
+      },
       '.cm-content': { padding: '1.75rem 2rem', lineHeight: '1.6' },
       '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--color-text-2)' },
       // CodeMirror sizes each gutter element to match its corresponding editor
@@ -139,10 +150,61 @@ const refreshUncommittedHighlight = () => {
   applyUncommittedHighlight(editorView, props.committedContent)
 }
 
+// caretTop reports the caret's vertical screen offset, or null when layout
+// measurement is unavailable (e.g. headless test environments, where
+// coordsAtPos throws because the DOM exposes no client rects).
+const caretTop = (view: EditorView, pos: number): number | null => {
+  try {
+    return view.coordsAtPos(pos)?.top ?? null
+  } catch {
+    return null
+  }
+}
+
+// formatDocument reflows plain paragraphs and collapses extra blank lines,
+// leaving frontmatter and fenced code blocks alone so executable/structured
+// content is never silently rewritten. It runs as part of saving rather than
+// while editing, and minimizes disruption: the block holding the caret is left
+// verbatim so text to the left of the cursor never changes, the selection maps
+// onto the same content after the reflow, and the caret is pinned to the same
+// vertical position within the viewport.
+const formatDocument = () => {
+  if (!editorView) return
+  const view = editorView
+  const current = view.state.doc.toString()
+  const { anchor, head } = view.state.selection.main
+  const {
+    text: formatted,
+    anchor: newAnchor,
+    head: newHead,
+  } = formatMarkdownPreservingSelection(current, anchor, head, FORMAT_WRAP_COLUMN)
+  if (formatted === current) return
+  const beforeTop = caretTop(view, head)
+  // Suppress the external-change emit so the host owns syncing the formatted
+  // text back into its model, avoiding a redundant save round-trip.
+  applyingExternal = true
+  view.dispatch({
+    changes: { from: 0, to: current.length, insert: formatted },
+    selection: { anchor: newAnchor, head: newHead },
+    userEvent: 'input.format',
+  })
+  applyingExternal = false
+  refreshUncommittedHighlight()
+  if (beforeTop === null) return
+  const afterTop = caretTop(view, view.state.selection.main.head)
+  if (afterTop === null) return
+  view.scrollDOM.scrollTop += afterTop - beforeTop
+}
+
 // foldFrontmatter collapses the YAML frontmatter block so it gets out of the
-// way of the actual intent content. The range covers the content between the
-// two `---` DashLine nodes so the delimiter lines remain visible as a single
-// folded indicator.
+// way of the actual intent content. The range covers everything between the
+// opening and closing `---` DashLine nodes so the delimiter lines remain
+// visible as a single folded indicator. The yaml-frontmatter parser exposes
+// the inner YAML under a `Stream` node (the YAML grammar's root), not the
+// `FrontmatterContent` placeholder declared by lang-yaml, so we locate the
+// opening DashLine positionally instead of by node name. We fold from the end
+// of the opening `---` line through the end of the whole frontmatter section
+// so the entire block collapses onto the first line of the document.
 const foldFrontmatter = () => {
   if (!editorView) return
   const state = editorView.state
@@ -150,10 +212,13 @@ const foldFrontmatter = () => {
   if (!tree) return
   const frontmatter = tree.topNode.getChild('Frontmatter')
   if (!frontmatter) return
-  const content = frontmatter.getChild('FrontmatterContent')
-  if (!content || content.to <= content.from) return
+  const openDash = frontmatter.getChild('DashLine')
+  if (!openDash) return
+  const from = openDash.to
+  const to = frontmatter.to
+  if (to <= from) return
   editorView.dispatch({
-    effects: foldEffect.of({ from: content.from, to: content.to }),
+    effects: foldEffect.of({ from, to }),
   })
 }
 
@@ -176,7 +241,7 @@ const createEditor = () => {
         extensions: [
           Prec.highest(
             keymap.of([
-              { key: 'Mod-Enter', preventDefault: true, run: submitShortcut },
+              { key: 'Mod-i', preventDefault: true, run: submitShortcut },
             ]),
           ),
           basicSetup,
@@ -184,11 +249,18 @@ const createEditor = () => {
           codeFolding(),
           syntaxHighlighting(markdownHighlightStyle),
           EditorView.lineWrapping,
+          // Allow scrolling until the last line reaches the top of the editor,
+          // rather than stopping once the document's end is merely visible.
+          scrollPastEnd(),
+          indentUnit.of(tabIndent()),
           keymap.of([
             {
               key: 'Tab',
               preventDefault: true,
               run: (view) => {
+                if (view.state.selection.ranges.some((range) => !range.empty)) {
+                  return indentMore(view)
+                }
                 view.dispatch(
                   view.state.update(view.state.replaceSelection(tabIndent()), {
                     scrollIntoView: true,
@@ -197,6 +269,11 @@ const createEditor = () => {
                 )
                 return true
               },
+            },
+            {
+              key: 'Shift-Tab',
+              preventDefault: true,
+              run: indentLess,
             },
           ]),
           uncommittedHighlightExtension(),
@@ -259,6 +336,18 @@ onBeforeUnmount(() => {
 
 defineExpose({
   focus: () => editorView?.focus(),
+  // formatNow reflows the current document immediately, returning the resulting text.
+  // Auto-saving runs this so persisted intent is always formatted;
+  // the selection and the caret's vertical viewport position are preserved across the reflow to keep editing undisturbed.
+  // Also used when launching an intent sub-task so the committed intent state is formatted before being saved, matching the idle-format behavior.
+  formatNow: (): string => {
+    formatDocument()
+    return editorView?.state.doc.toString() ?? ''
+  },
+  // Test-only handle. Returns the underlying CodeMirror EditorView so specs
+  // can inspect parser/fold state without dragging in a real browser. Not
+  // part of the component's public API and should not be used by app code.
+  __editorViewForTest: () => editorView,
 })
 </script>
 

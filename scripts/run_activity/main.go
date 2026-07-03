@@ -187,6 +187,7 @@ func buildActivityRegistry() map[string]interface{} {
 		git.GitMergeAbortActivity,
 		git.GitMergeInProgressActivity,
 		git.GitMergeIntoWorktreeActivity,
+		git.GitTransferWorktreeChangesActivity,
 		git.GitListUnmergedActivity,
 		git.GitSnapshotConflictMarkersActivity,
 		git.GitConflictResolutionDiffActivity,

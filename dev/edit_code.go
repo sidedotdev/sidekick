@@ -649,6 +649,9 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 const search = "<<<<<<< SEARCH_EXACT"
 const divider = "======="
 const replace = ">>>>>>> REPLACE_EXACT"
+const createFile = "<<<<<<< CREATE_FILE"
+const appendToFile = "<<<<<<< APPEND_TO_FILE"
+const newLines = ">>>>>>> NEW_LINES"
 
 const startInitialCodeContext = "#START INITIAL CODE CONTEXT"
 const endInitialCodeContext = "#END INITIAL CODE CONTEXT"
@@ -666,6 +669,9 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"search":                          search,
 		"divider":                         divider,
 		"replace":                         replace,
+		"createFile":                      createFile,
+		"appendToFile":                    appendToFile,
+		"newLines":                        newLines,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,
@@ -697,6 +703,9 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"search":                          search,
 		"divider":                         divider,
 		"replace":                         replace,
+		"createFile":                      createFile,
+		"appendToFile":                    appendToFile,
+		"newLines":                        newLines,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,

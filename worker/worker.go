@@ -201,6 +201,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(git.GitMergeAbortActivity)
 	w.RegisterActivity(git.GitMergeInProgressActivity)
 	w.RegisterActivity(git.GitMergeIntoWorktreeActivity)
+	w.RegisterActivity(git.GitTransferWorktreeChangesActivity)
 	w.RegisterActivity(git.GitListUnmergedActivity)
 	w.RegisterActivity(git.GitSnapshotConflictMarkersActivity)
 	w.RegisterActivity(git.GitConflictResolutionDiffActivity)
@@ -229,6 +230,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.SummarizeDiffActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
+	w.RegisterActivity(dev.IddWatchEditIdleActivity)
 	w.RegisterActivity(chatHistoryActivities)
 	bulkReadFileActivities := &dev.BulkReadFileActivities{Storage: service}
 	w.RegisterActivity(bulkReadFileActivities)
