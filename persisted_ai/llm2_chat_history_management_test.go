@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"strings"
 	"testing"
 
@@ -53,6 +54,13 @@ func toolResultMsg(toolCallId, name, text string) llm2.Message {
 			},
 		}},
 	}
+}
+
+// oversizedFiller returns a large droppable message used to push a chat
+// history's total length above the truncation trigger so that retention and
+// dropping logic engages in these unit tests.
+func oversizedFiller(size int) llm2.Message {
+	return textMsg(llm2.RoleAssistant, strings.Repeat("z", size))
 }
 
 func TestManageLlm2ChatHistory_InitialInstructions(t *testing.T) {
@@ -273,14 +281,15 @@ func TestManageLlm2ChatHistory_OrphanedToolResult(t *testing.T) {
 }
 
 func TestManageLlm2ChatHistory_LargeToolResponseTruncation(t *testing.T) {
-	// threshold = MaxCharsForModel / 4 = int(1000*1.9)/4 = 475
-	// 800-char content exceeds 475, so it gets truncated even though retained
+	// maxInput = int(100000*1.9) = 190000, threshold = maxInput/4 = 47500.
+	// The total length exceeds the truncation trigger, and the retained tool
+	// result exceeds the threshold, so it is truncated even though retained.
 	common.ClearModelsCache()
 	t.Cleanup(common.ClearModelsCache)
-	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "1000")
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
 	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
 	ca := &ChatHistoryActivities{}
-	largeContent := strings.Repeat("X", 800)
+	largeContent := strings.Repeat("X", 60000)
 
 	// The last message is a tool result, which makes it retained along with
 	// the preceding assistant message. The retained truncation path should
@@ -298,7 +307,7 @@ func TestManageLlm2ChatHistory_LargeToolResponseTruncation(t *testing.T) {
 	toolResultText := result[2].Content[0].ToolResult.TextContent()
 	assert.Contains(t, toolResultText, "truncated")
 	assert.Contains(t, toolResultText, "NOTE:")
-	assert.LessOrEqual(t, len(toolResultText), 475, "Truncated result should fit within threshold")
+	assert.LessOrEqual(t, len(toolResultText), 47500, "Truncated result should fit within threshold")
 }
 
 func TestManageLlm2ChatHistory_MessageLengthLimits(t *testing.T) {
@@ -338,6 +347,7 @@ func TestManageLlm2ChatHistory_LastMessageRetention(t *testing.T) {
 		{
 			name: "Last message is a regular message and should be retained",
 			messages: []llm2.Message{
+				oversizedFiller(2000),
 				textMsg(llm2.RoleUser, "Message 1"),
 				textMsg(llm2.RoleAssistant, "Message 2"),
 				textMsg(llm2.RoleUser, "Message 3"),
@@ -350,6 +360,7 @@ func TestManageLlm2ChatHistory_LastMessageRetention(t *testing.T) {
 		{
 			name: "Last message is a tool response, its call should also be retained",
 			messages: []llm2.Message{
+				oversizedFiller(2000),
 				textMsg(llm2.RoleUser, strings.Repeat("x", 60)),
 				toolUseMsg("123", "test", "{}"),
 				toolResultMsg("123", "test", "Tool Response"),
@@ -386,6 +397,7 @@ func TestManageLlm2ChatHistory_LastMessageRetention(t *testing.T) {
 			name: "Last message retention with other retained messages",
 			messages: []llm2.Message{
 				textMsgWithCtx(llm2.RoleUser, "Initial Instructions", ContextTypeInitialInstructions),
+				oversizedFiller(2000),
 				textMsg(llm2.RoleAssistant, "Message 2"),
 				textMsg(llm2.RoleUser, "Message 3"),
 			},
@@ -398,7 +410,7 @@ func TestManageLlm2ChatHistory_LastMessageRetention(t *testing.T) {
 		{
 			name: "Last message is tool response, but history has only one message",
 			messages: []llm2.Message{
-				toolResultMsg("123", "test", "Tool Response"),
+				toolResultMsg("123", "test", strings.Repeat("x", 2000)),
 			},
 			maxLength: 5,
 			expected:  []llm2.Message{},
@@ -454,6 +466,7 @@ func TestManageLlm2ChatHistory_ParallelToolCalls_MissingOneResult(t *testing.T) 
 	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "II", ContextTypeInitialInstructions),
+		oversizedFiller(34000), // droppable, keeps total above the trigger
 		{
 			Role: llm2.RoleAssistant,
 			Content: []llm2.ContentBlock{
@@ -660,9 +673,10 @@ func TestManageLlm2ChatHistory_Trimming_Basic(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions), // len 7
-		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                     // len 50
-		textMsg(llm2.RoleAssistant, strings.Repeat("B", 50)),                     // len 50
-		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)),                     // len 50
+		oversizedFiller(2000),                                // droppable, keeps total above the trigger
+		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)), // len 50
+		textMsg(llm2.RoleAssistant, strings.Repeat("B", 50)), // len 50
+		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)), // len 50
 	}
 
 	expected := []llm2.Message{
@@ -685,6 +699,7 @@ func TestManageLlm2ChatHistory_Trimming_Basic(t *testing.T) {
 func TestManageLlm2ChatHistory_Trimming_InitialInstructionsProtected(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
+		oversizedFiller(2000),                                                    // droppable, keeps total above the trigger
 		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                     // len 50
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions), // len 7
 		textMsg(llm2.RoleAssistant, strings.Repeat("B", 50)),                     // len 50
@@ -702,6 +717,7 @@ func TestManageLlm2ChatHistory_Trimming_InitialInstructionsProtected(t *testing.
 func TestManageLlm2ChatHistory_Trimming_SoftLimit(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
+		oversizedFiller(2000), // droppable, keeps total above the trigger
 		textMsgWithCtx(llm2.RoleUser, "Initial One", ContextTypeInitialInstructions), // len 11
 		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                         // len 50, droppable
 		textMsgWithCtx(llm2.RoleUser, "Initial Two", ContextTypeInitialInstructions), // len 11
@@ -732,6 +748,7 @@ func TestManageLlm2ChatHistory_ToolCallArgumentsInLength(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions), // len 4
+		oversizedFiller(2000), // droppable, keeps total above the trigger
 		{
 			Role: llm2.RoleAssistant,
 			Content: []llm2.ContentBlock{
@@ -757,11 +774,12 @@ func TestManageLlm2ChatHistory_DropAllOlderBehavior(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions), // len 4, retained
-		textMsg(llm2.RoleAssistant, "A"),                                      // len 1, unretained
-		textMsg(llm2.RoleAssistant, "B"),                                      // len 1, unretained
-		textMsg(llm2.RoleAssistant, "CC"),                                     // len 2, unretained - this one exceeds limit
-		textMsg(llm2.RoleAssistant, "D"),                                      // len 1, unretained
-		textMsg(llm2.RoleAssistant, "E"),                                      // len 1, unretained, last message retained
+		oversizedFiller(2000),             // droppable, keeps total above the trigger
+		textMsg(llm2.RoleAssistant, "A"),  // len 1, unretained
+		textMsg(llm2.RoleAssistant, "B"),  // len 1, unretained
+		textMsg(llm2.RoleAssistant, "CC"), // len 2, unretained - this one exceeds limit
+		textMsg(llm2.RoleAssistant, "D"),  // len 1, unretained
+		textMsg(llm2.RoleAssistant, "E"),  // len 1, unretained, last message retained
 	}
 
 	result, err := ca.ManageLlm2ChatHistory(messages, 7, common.ModelConfig{})
@@ -776,15 +794,16 @@ func TestManageLlm2ChatHistory_DropAllOlderBehavior(t *testing.T) {
 }
 
 func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
-	// threshold = MaxCharsForModel / 4 = int(1000*1.9)/4 = 475
-	// 800-char content exceeds threshold, gets truncated oldest first
+	// maxInput = int(100000*1.9) = 190000, threshold = maxInput/4 = 47500.
+	// Total exceeds the truncation trigger; truncating the oldest oversized
+	// response alone brings the total under the keep length, sparing the newer.
 	common.ClearModelsCache()
 	t.Cleanup(common.ClearModelsCache)
-	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "1000")
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
 	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
 	ca := &ChatHistoryActivities{}
-	largeContent1 := strings.Repeat("A", 800)
-	largeContent2 := strings.Repeat("B", 800)
+	largeContent1 := strings.Repeat("A", 130000)
+	largeContent2 := strings.Repeat("B", 50000)
 
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions),
@@ -807,8 +826,8 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Last"),
 	}
 
-	// maxLength set so truncating the oldest candidate alone brings total under limit
-	result, err := ca.ManageLlm2ChatHistory(messages, 1400, common.ModelConfig{})
+	// keep length set so truncating the oldest candidate alone brings total under limit
+	result, err := ca.ManageLlm2ChatHistory(messages, 100000, common.ModelConfig{})
 	assert.NoError(t, err)
 
 	var toolResp1Text, toolResp2Text string
@@ -827,7 +846,7 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 
 	assert.Contains(t, toolResp1Text, "truncated", "Oldest tool response should be truncated")
 	assert.Contains(t, toolResp1Text, "NOTE:")
-	assert.LessOrEqual(t, len(toolResp1Text), 475, "Truncated result should fit within threshold")
+	assert.LessOrEqual(t, len(toolResp1Text), 47500, "Truncated result should fit within threshold")
 	assert.Equal(t, largeContent2, toolResp2Text, "Newer tool response should not be truncated")
 }
 
@@ -940,4 +959,81 @@ func TestLlm2MessageLength_IncludesImageAndFileURLs(t *testing.T) {
 			assert.Equal(t, tc.expected, llm2MessageLength("", tc.msg))
 		})
 	}
+}
+
+func TestManageLlm2ChatHistory_BelowTriggerLeftUnchanged(t *testing.T) {
+	// requestedKeepLength=10000 => buffer=235*sqrt(10000)=23500, trigger=33500.
+	// A large model window avoids the 70/30 split, so total length between the
+	// keep length and the trigger must leave history untouched.
+	common.ClearModelsCache()
+	t.Cleanup(common.ClearModelsCache)
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
+	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+	ca := &ChatHistoryActivities{}
+
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleAssistant, strings.Repeat("A", 8000)),
+		toolUseMsg("tc1", "tool1", "{}"),
+		toolResultMsg("tc1", "tool1", strings.Repeat("B", 8000)),
+		textMsg(llm2.RoleUser, strings.Repeat("C", 4000)),
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 10000, common.ModelConfig{})
+	assert.NoError(t, err)
+	assert.Equal(t, messages, result, "history below the trigger should be returned unchanged")
+}
+
+func TestManageLlm2ChatHistory_AboveTriggerDropsOlder(t *testing.T) {
+	// requestedKeepLength=10000 => trigger=33500. Total ~45000 exceeds the
+	// trigger, so older non-retained messages are dropped toward the keep length.
+	common.ClearModelsCache()
+	t.Cleanup(common.ClearModelsCache)
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
+	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+	ca := &ChatHistoryActivities{}
+
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleAssistant, strings.Repeat("A", 15000)),
+		textMsg(llm2.RoleUser, strings.Repeat("B", 15000)),
+		textMsg(llm2.RoleAssistant, strings.Repeat("C", 15000)),
+		textMsg(llm2.RoleUser, "Last"),
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 10000, common.ModelConfig{})
+	assert.NoError(t, err)
+
+	// Init (retained) and Last (retained) survive; the large unretained middle
+	// messages are dropped since re-adding any exceeds the keep length.
+	expected := []llm2.Message{messages[0], messages[4]}
+	assert.Equal(t, expected, result)
+}
+
+func TestResolveKeepAndTrigger_NoWindowSplit(t *testing.T) {
+	common.ClearModelsCache()
+	t.Cleanup(common.ClearModelsCache)
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
+	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+
+	keep, trigger := resolveKeepAndTrigger(10000, common.ModelConfig{})
+	assert.Equal(t, 10000, keep)
+	expectedBuffer := int(235 * math.Sqrt(10000))
+	assert.Equal(t, 10000+expectedBuffer, trigger)
+}
+
+func TestResolveKeepAndTrigger_WindowSplit(t *testing.T) {
+	// A tiny model window forces keep+buffer to be scaled down to a 70/30 split
+	// of the model's max input chars (int(1000*1.9)=1900).
+	common.ClearModelsCache()
+	t.Cleanup(common.ClearModelsCache)
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "1000")
+	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+
+	maxInput := common.MaxCharsForModel("", "")
+	require.Equal(t, 1900, maxInput)
+
+	keep, trigger := resolveKeepAndTrigger(10000, common.ModelConfig{})
+	assert.Equal(t, int(0.7*float64(maxInput)), keep)
+	assert.Equal(t, maxInput, trigger)
 }

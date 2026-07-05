@@ -22,8 +22,8 @@ import (
 // summarizing the history via an LLM may be cost-effective since summarization
 // is a one-time cost, but we hit the LLM multiple times for each subsequent
 // call to openai and reap the benefit of summarization each time.
-var defaultMaxChatHistoryLength = 100000
-var extendedMaxChatHistoryLength = 200000
+var defaultRequestedKeepLength = 100000
+var extendedRequestedKeepLength = 200000
 
 const testReviewStart = "# START TEST & REVIEW"
 const testReviewEnd = "# END TEST & REVIEW"
@@ -62,16 +62,16 @@ const (
 	RetainReasonIntentTaskStart          = "IntentTaskStart"
 )
 
-//const defaultMaxChatHistoryLength = 12000
+//const defaultRequestedKeepLength = 12000
 
-//const defaultMaxChatHistoryLength = 20000 // Adjusted temporarily for gpt4-turbo
+//const defaultRequestedKeepLength = 20000 // Adjusted temporarily for gpt4-turbo
 
 // ManageChatHistory manages history based on certain conditions. Mostly trying to keep the
 // length reasonable.
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int, modelConfig common.ModelConfig) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, requestedKeepLength int, modelConfig common.ModelConfig) {
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
@@ -89,10 +89,10 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 		if vManage == 1 {
 			var manageOutput persisted_ai.ManageOutput
 			err := workflow.ExecuteActivity(ctx, cha.ManageV4, persisted_ai.ManageInput{
-				ChatHistory: chatHistory,
-				WorkspaceId: workspaceId,
-				MaxLength:   maxLength,
-				ModelConfig: modelConfig,
+				ChatHistory:         chatHistory,
+				WorkspaceId:         workspaceId,
+				RequestedKeepLength: requestedKeepLength,
+				ModelConfig:         modelConfig,
 			}).Get(ctx, &manageOutput)
 			if err != nil {
 				wrapErr := fmt.Errorf("ManageChatHistory ManageV4 activity returned an error: %w", err)
@@ -101,7 +101,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 			}
 			managedChatHistory = manageOutput.ChatHistory
 		} else {
-			err := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength).Get(ctx, &managedChatHistory)
+			err := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, requestedKeepLength).Get(ctx, &managedChatHistory)
 			if err != nil {
 				wrapErr := fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
 				workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
@@ -131,9 +131,9 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 	var activityFuture workflow.Future
 	vLegacy := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
 	if vLegacy == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
-		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, chatMessages, maxLength)
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, chatMessages, requestedKeepLength)
 	} else {
-		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatMessages, maxLength)
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatMessages, requestedKeepLength)
 	}
 	err := activityFuture.Get(ctx, &newChatHistory)
 

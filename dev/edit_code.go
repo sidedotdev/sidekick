@@ -163,7 +163,7 @@ editLoop:
 			return ErrMaxAttemptsReached
 		}
 
-		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
+		maxLength := min(defaultRequestedKeepLength+contextSizeExtension, extendedRequestedKeepLength)
 		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig)
 
 		// Step 1: Get a list of *edit blocks* from the LLM
@@ -353,7 +353,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if v := workflow.GetVersion(dCtx, "fix-pause-duplicate-initial-prompt", workflow.DefaultVersion, 1); v >= 1 {
 			promptInfo = SkipInfo{}
 		}
-		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
+		maxLength := min(defaultRequestedKeepLength+contextSizeExtension, extendedRequestedKeepLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
 		// responses are retained and we keep enough history.

@@ -202,7 +202,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 				// field for detailed info, and also change how we pass the
 				// variables to render the prompts later based on this more
 				// detailed metadata with context of max history limits.
-				lengthThreshold := min(defaultMaxChatHistoryLength/2, maxRetrieveCodeContextLength)
+				lengthThreshold := min(defaultRequestedKeepLength/2, maxRetrieveCodeContextLength)
 				return RetrieveCodeContext(trackedDCtx, requiredCodeContext, lengthThreshold)
 			})
 		case bulkReadFileTool.Name:

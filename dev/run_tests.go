@@ -17,7 +17,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-var maxTestOutputSize = min(4000, defaultMaxChatHistoryLength/4)
+var maxTestOutputSize = min(4000, defaultRequestedKeepLength/4)
 
 // TestResult holds a detailed information about test run
 type TestResult struct {
