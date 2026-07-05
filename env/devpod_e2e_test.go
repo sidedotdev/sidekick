@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/common"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,11 @@ func setupMinimalWorkspace(t *testing.T) string {
 func TestDevPodIntegration(t *testing.T) {
 	if os.Getenv("SIDE_E2E_TEST") != "true" {
 		t.Skip("skipping DevPod integration test; SIDE_E2E_TEST not set to true")
+	}
+	// TODO: instead of skipping, use some TBD mechanism to run this test on
+	// the host, where containers can be created.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping DevPod integration test; container-in-container is not supported in non-local sidekick environments")
 	}
 	if _, err := exec.LookPath("devpod"); err != nil {
 		t.Skip("devpod command not found in PATH")

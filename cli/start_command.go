@@ -139,9 +139,28 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 
 			temporalServer := temporalsrv.Start()
 
+			// Dev builds (no injected version) also expose a read-only
+			// Temporal endpoint, which is safe to reverse-forward into
+			// sandboxed environments so tests there can read workflow
+			// histories without gaining mutating access (see port_forwards
+			// in side.yml).
+			var readOnlyProxy *temporalsrv.ReadOnlyProxy
+			if version == "" {
+				proxy, err := temporalsrv.StartReadOnlyProxy(common.GetTemporalReadOnlyServerHostPort(), common.GetTemporalServerHostPort())
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to start read-only temporal proxy")
+				} else {
+					readOnlyProxy = proxy
+					log.Info().Str("component", "Temporal Read-Only Proxy").Msg(proxy.Addr())
+				}
+			}
+
 			// Wait for cancellation
 			<-ctx.Done()
 			log.Info().Msg("Stopping temporal...")
+			if readOnlyProxy != nil {
+				readOnlyProxy.Stop()
+			}
 			temporalServer.Stop()
 		}()
 	}

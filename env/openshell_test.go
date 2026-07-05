@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/common"
 	"strings"
 	"testing"
 
@@ -138,12 +139,14 @@ func TestOpenShellEnvironment_MarshalUnmarshal(t *testing.T) {
 		WorkingDirectory: "/workspaces/myrepo",
 		SandboxName:      "anointed-smelt",
 		LocalRepoDir:     "/host/path/to/repo",
+		PortForwards:     []common.PortForwardConfig{{HostPort: 18855}},
 	}
 	envContainer := EnvContainer{Env: originalEnv}
 
 	jsonBytes, err := json.Marshal(envContainer)
 	assert.NoError(t, err)
 	assert.Contains(t, string(jsonBytes), `"localRepoDir":"/host/path/to/repo"`)
+	assert.Contains(t, string(jsonBytes), `"portForwards":[{"hostPort":18855}]`)
 
 	var unmarshaledEnvContainer EnvContainer
 	err = json.Unmarshal(jsonBytes, &unmarshaledEnvContainer)

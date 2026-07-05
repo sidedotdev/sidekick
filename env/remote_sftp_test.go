@@ -16,6 +16,7 @@ func TestIndependentSSHArgs(t *testing.T) {
 		"-o", "ControlPersist=3600",
 		"-o", "BatchMode=yes",
 		"-o", "ServerAliveInterval=10",
+		"-R", "127.0.0.1:18855:127.0.0.1:18855",
 		"some-host.devpod",
 		"--",
 	}
@@ -28,6 +29,8 @@ func TestIndependentSSHArgs(t *testing.T) {
 	assert.NotContains(t, joined, "ControlPath")
 	assert.NotContains(t, joined, "-S")
 	assert.NotContains(t, joined, "/tmp/devpod-ssh-myapp")
+	assert.NotContains(t, joined, "-R")
+	assert.NotContains(t, joined, "18855")
 
 	// Non-multiplexing options and the destination must be preserved in order.
 	assert.Equal(t, []string{

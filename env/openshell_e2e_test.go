@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/common"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,11 @@ func setupMinimalGitRepo(t *testing.T) string {
 func TestOpenShellIntegration(t *testing.T) {
 	if os.Getenv("SIDE_E2E_TEST") != "true" {
 		t.Skip("skipping OpenShell e2e test; SIDE_E2E_TEST not set to true")
+	}
+	// TODO: instead of skipping, use some TBD mechanism to run this test on
+	// the host, where containers can be created.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping OpenShell e2e test; container-in-container is not supported in non-local sidekick environments")
 	}
 	if _, err := exec.LookPath("openshell"); err != nil {
 		t.Skip("openshell command not found in PATH")

@@ -79,6 +79,27 @@ func GetTemporalServerHostPort() string {
 	return fmt.Sprintf("%s:%d", GetTemporalServerHost(), GetTemporalServerPort())
 }
 
+// GetTemporalReadOnlyServerPort returns the port of the read-only Temporal
+// proxy endpoint that dev builds of `side start` expose (see
+// temporal.StartReadOnlyProxy). It only allows listing workflows and reading
+// histories, making it safe to reverse-forward into sandboxed environments.
+func GetTemporalReadOnlyServerPort() int {
+	port := os.Getenv("SIDE_TEMPORAL_READONLY_SERVER_PORT")
+	if port == "" {
+		return GetTemporalServerPort() + 3000
+	}
+
+	intPort, err := strconv.Atoi(port)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to parse temporal read-only server port: %s", port))
+	}
+	return intPort
+}
+
+func GetTemporalReadOnlyServerHostPort() string {
+	return fmt.Sprintf("%s:%d", GetTemporalServerHost(), GetTemporalReadOnlyServerPort())
+}
+
 const DefaultNatsServerHost = "127.0.0.1"
 
 func GetNatsServerHost() string {

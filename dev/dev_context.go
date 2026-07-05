@@ -226,9 +226,11 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 		devPodUpInput := env.DevPodUpInput{WorkspacePath: repoDir}
 		// Check for a custom workspace ID from repo config
+		var portForwards []common.PortForwardConfig
 		tempRepoConfigForDevPod, configErr := GetRepoConfig(tempLocalExecContext)
 		if configErr == nil {
 			configOverrides.ApplyToRepoConfig(&tempRepoConfigForDevPod)
+			portForwards = tempRepoConfigForDevPod.PortForwards
 			if tempRepoConfigForDevPod.DevPodConfig.WorkspaceId != "" {
 				devpodWorkspaceName = tempRepoConfigForDevPod.DevPodConfig.WorkspaceId
 				devPodUpInput.WorkspaceId = devpodWorkspaceName
@@ -248,6 +250,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -276,12 +279,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: worktree.WorkingDirectory,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		}
 	case string(env.EnvTypeOpenShell):
@@ -290,6 +295,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			configOverrides.ApplyToRepoConfig(&tempRepoConfigForOpenShell)
 		}
 		osConfig := tempRepoConfigForOpenShell.OpenShellConfig
+		portForwards := tempRepoConfigForOpenShell.PortForwards
 
 		sandboxName := env.OpenShellSandboxName(repoDir)
 		// Reuse an existing sandbox for this workspace if it is still alive.
@@ -344,6 +350,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: containerWorkDir,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -372,12 +379,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: worktree.WorkingDirectory,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.OpenShellEnv{
 				WorkingDirectory: containerWorkDir,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		}
 	default:

@@ -2,6 +2,7 @@ package llm2
 
 import (
 	"os"
+	"sidekick/common"
 	"sidekick/secret_manager"
 	"strings"
 	"testing"
@@ -12,6 +13,12 @@ func requireIntegrationAPIKey(t *testing.T, names ...string) secret_manager.Secr
 
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	// TODO: instead of skipping, use some TBD mechanism to run this test on
+	// the host, where API keys are available.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("Skipping integration test; LLM API keys are unavailable in non-local sidekick environments")
 	}
 
 	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
@@ -48,6 +55,12 @@ func requireAWSCredentialsForIntegration(t *testing.T) string {
 
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	// TODO: instead of skipping, use some TBD mechanism to run this test on
+	// the host, where AWS credentials are available.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("Skipping integration test; AWS credentials are unavailable in non-local sidekick environments")
 	}
 
 	if os.Getenv("AWS_PROFILE") == "" &&

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -133,7 +134,18 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to initialize storage for codec: %v", err)
 	}
-	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	// Inside a remote container the host's Temporal server is not reachable;
+	// only its read-only proxy is reverse-forwarded (see port_forwards in
+	// side.yml), which suffices here since this test only lists workflows and
+	// reads histories. The default port may instead belong to a
+	// container-local Temporal instance started via `side start`.
+	temporalHostPort := common.GetTemporalServerHostPort()
+	if common.IsActiveEnvNonLocal() {
+		if forwardedPort, ok := common.LookupForwardedPort(common.GetTemporalReadOnlyServerPort()); ok {
+			temporalHostPort = fmt.Sprintf("127.0.0.1:%d", forwardedPort)
+		}
+	}
+	clientOptions, err := common.NewTemporalClientOptions(service, temporalHostPort)
 	if err != nil {
 		t.Fatalf("Failed to create Temporal client options: %v", err)
 	}
