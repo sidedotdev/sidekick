@@ -13,6 +13,7 @@ import (
 	"sidekick/persisted_ai"
 
 	"github.com/invopop/jsonschema"
+	"go.temporal.io/sdk/workflow"
 )
 
 const (
@@ -128,14 +129,22 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 		}
 	}
 
-	turnPrompt := RenderPrompt(AdvisorTurn, map[string]string{
-		"recentHistory": summarizeExecutorHistory(executorHistory),
-	})
-	if err := AppendChatHistory(dCtx.ExecContext, a.ChatHistory, llm.ChatMessage{
-		Role:    llm.ChatMessageRoleUser,
-		Content: turnPrompt,
-	}); err != nil {
-		return fmt.Errorf("advisor: failed to append turn prompt: %w", err)
+	if llm2Hist, ok := a.ChatHistory.History.(*persisted_ai.Llm2ChatHistory); ok {
+		ref, err := summarizeExecutorHistory(dCtx, executorHistory, llm2Hist.FlowId(), llm2Hist.WorkspaceId())
+		if err != nil {
+			return fmt.Errorf("advisor: failed to summarize executor history: %w", err)
+		}
+		llm2Hist.AppendRef(*ref)
+	} else {
+		turnPrompt := RenderPrompt(AdvisorTurn, map[string]string{
+			"recentHistory": legacyExecutorTranscript(executorHistory),
+		})
+		if err := AppendChatHistory(dCtx.ExecContext, a.ChatHistory, llm.ChatMessage{
+			Role:    llm.ChatMessageRoleUser,
+			Content: turnPrompt,
+		}); err != nil {
+			return fmt.Errorf("advisor: failed to append turn prompt: %w", err)
+		}
 	}
 
 	tools := append([]*llm.Tool{&advisorProceedTool, &advisorGuideTool}, executorTools...)
@@ -228,29 +237,34 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 	return nil
 }
 
-// summarizeExecutorHistory renders the trailing executor messages into a plain
-// text transcript for the advisor prompt.
-func summarizeExecutorHistory(history *persisted_ai.ChatHistoryContainer) string {
+// summarizeExecutorHistory renders the trailing executor messages into the
+// advisor turn prompt, persists it, and returns a ref to the persisted content.
+// The in-workflow chat history is refs-only (not hydrated), so rendering and
+// persistence happen inside an activity that hydrates from storage.
+func summarizeExecutorHistory(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, flowId, workspaceId string) (*persisted_ai.MessageRef, error) {
+	var aa *AdvisorActivities
+	var ref *persisted_ai.MessageRef
+	err := workflow.ExecuteActivity(dCtx, aa.SummarizeExecutorHistoryActivity, SummarizeExecutorHistoryInput{
+		ExecutorHistory:   executorHistory,
+		MaxRecentMessages: advisorMaxRecentMessages,
+		FlowId:            flowId,
+		WorkspaceId:       workspaceId,
+	}).Get(dCtx, &ref)
+	if err != nil {
+		return nil, fmt.Errorf("failed to summarize executor history: %w", err)
+	}
+	return ref, nil
+}
+
+// legacyExecutorTranscript renders the trailing messages of a legacy history
+// directly, since legacy content lives in-memory in the workflow and does not
+// require hydration.
+func legacyExecutorTranscript(history *persisted_ai.ChatHistoryContainer) string {
 	if history == nil {
 		return "(no executor history yet)"
 	}
-	msgs := history.Messages()
-	start := 0
-	if len(msgs) > advisorMaxRecentMessages {
-		start = len(msgs) - advisorMaxRecentMessages
+	if rendered := renderExecutorTranscript(history.Messages(), advisorMaxRecentMessages); rendered != "" {
+		return rendered
 	}
-	var b strings.Builder
-	for _, m := range msgs[start:] {
-		content := strings.TrimSpace(m.GetContentString())
-		if content != "" {
-			b.WriteString(fmt.Sprintf("[%s] %s\n", m.GetRole(), content))
-		}
-		for _, tc := range m.GetToolCalls() {
-			b.WriteString(fmt.Sprintf("[%s] tool_call %s(%s)\n", m.GetRole(), tc.Name, tc.Arguments))
-		}
-	}
-	if b.Len() == 0 {
-		return "(no executor history yet)"
-	}
-	return b.String()
+	return "(no executor history yet)"
 }

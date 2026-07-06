@@ -116,6 +116,9 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	readImageActivities := &dev.ReadImageActivities{
 		Storage: service,
 	}
+	advisorActivities := &dev.AdvisorActivities{
+		Storage: service,
+	}
 	kvActivities := &common.KVActivities{
 		Storage: service,
 	}
@@ -238,6 +241,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	bulkReadFileActivities := &dev.BulkReadFileActivities{Storage: service}
 	w.RegisterActivity(bulkReadFileActivities)
 	w.RegisterActivity(readImageActivities)
+	w.RegisterActivity(advisorActivities)
 	w.RegisterActivity(kvActivities)
 	w.RegisterActivity(llm2Activities)
 	w.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
