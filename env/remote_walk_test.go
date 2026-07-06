@@ -150,6 +150,10 @@ func (m *mockNonSSHEnv) Remove(ctx context.Context, path string) error {
 func (m *mockNonSSHEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
 	return "", fmt.Errorf("createtemp not supported on mock env")
 }
+func (m *mockNonSSHEnv) Hibernate(ctx context.Context, branchName string) (HibernationMetadata, error) {
+	return HibernationMetadata{}, fmt.Errorf("hibernate not supported on mock env")
+}
+func (m *mockNonSSHEnv) WakeIfHibernated(ctx context.Context) error { return nil }
 
 // fakeSSHEnv is a LocalEnv-backed SSHCapableEnv used to exercise the
 // gitwalk-backed SSH walker without requiring a real ssh server. Real

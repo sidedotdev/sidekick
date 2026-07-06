@@ -273,6 +273,16 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	SetupDevRunStateQuery(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
+	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
+	if hibernateVersion >= 1 {
+		SetupHibernateHandler(dCtx)
+	}
+	if hibernateVersion == 1 {
+		// v1 replay compatibility: explicit wake activity is in history
+		if _, err = WakeIfHibernated(dCtx); err != nil {
+			return "", fmt.Errorf("failed to wake hibernated worktree: %w", err)
+		}
+	}
 	err = EnsurePrerequisites(dCtx)
 	if err != nil {
 		return "", err
@@ -766,6 +776,14 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 }
 
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string) (string, MergeApprovalResponse, string, error) {
+	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
+	case 2:
+		clearHibernationGlobalState(dCtx)
+	default:
+		if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+			return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+		}
+	}
 
 	// GlobalState is the single source of truth for the target branch, updated
 	// by set_base_branch tool and UI. Fallback covers workflow replays from

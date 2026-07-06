@@ -195,4 +195,112 @@ func TestDevPodIntegration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 0, verifyOut.ExitStatus, "worktree directory does not exist in container")
 	})
+
+	t.Run("hibernate and wake worktree inside container", func(t *testing.T) {
+		containerRepoDir := "/tmp/devpod-e2e-hib-repo-" + ksuid.New().String()
+		initScript := strings.Join([]string{
+			"mkdir -p " + containerRepoDir,
+			"cd " + containerRepoDir,
+			"git init",
+			"git checkout -b main",
+			"git config user.name 'Test'",
+			"git config user.email 'test@test.com'",
+			"printf 'hello\\n' > tracked.txt",
+			"git add tracked.txt",
+			"git commit -m 'init'",
+		}, " && ")
+		initOut, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "bash",
+			Args:    []string{"-c", initScript},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, initOut.ExitStatus, "repo init failed: %s", initOut.Stderr)
+
+		repoEnv := &DevPodEnv{WorkingDirectory: containerRepoDir, WorkspaceName: workspaceName}
+		wsId := "ws-" + ksuid.New().String()
+		branchName := "side/devpod-e2e-hib-" + ksuid.New().String()
+		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
+			EnvContainer: EnvContainer{Env: repoEnv},
+			RepoDir:      containerRepoDir,
+			BranchName:   branchName,
+			WorkspaceId:  wsId,
+		})
+		require.NoError(t, err, "CreateDevPodWorktreeActivity failed")
+		worktreePath := output.WorktreePath
+
+		// The workspace container is reused across runs, so clean up both the
+		// per-run repo and its worktree to avoid unbounded layer growth.
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = devEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", containerRepoDir, worktreePath},
+			})
+		})
+
+		wtEnv := &DevPodEnv{
+			WorkingDirectory: worktreePath,
+			WorkspaceName:    workspaceName,
+			LocalRepoDir:     workspacePath,
+		}
+
+		// Representative dirty state: a staged modification to a tracked file with
+		// a further unstaged change on top, plus an untracked text file.
+		setupDirty := strings.Join([]string{
+			"cd " + worktreePath,
+			"printf 'hello world\\n' > tracked.txt",
+			"git add tracked.txt",
+			"printf 'unstaged\\n' >> tracked.txt",
+			"printf 'brand new\\n' > untracked.txt",
+		}, " && ")
+		dirtyOut, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "bash",
+			Args:    []string{"-c", setupDirty},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, dirtyOut.ExitStatus, "dirty setup failed: %s", dirtyOut.Stderr)
+
+		_, err = wtEnv.Hibernate(ctx, branchName)
+		require.NoError(t, err, "Hibernate failed")
+
+		// While hibernated, the working files are deleted but the tiny .git link is
+		// retained so the worktree stays registered. Use SkipWaking so these checks
+		// observe the hibernated state directly.
+		lsOut, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			SkipWaking: true,
+			Command:    "sh",
+			Args:       []string{"-c", "ls -A"},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, lsOut.Stdout, ".sidekick-hibernation.json", "sentinel should be present while hibernated")
+		assert.NotContains(t, lsOut.Stdout, "tracked.txt", "working files should be deleted while hibernated")
+		gitKept, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			SkipWaking: true,
+			Command:    "sh",
+			Args:       []string{"-c", "test -e .git; echo $?"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "0", strings.TrimSpace(gitKept.Stdout), ".git link should be retained while hibernated")
+
+		// A normal command transparently wakes the worktree (auto-wake path),
+		// after which the branch, staged+unstaged changes, and untracked file are
+		// all restored.
+		statusOut, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "git",
+			Args:    []string{"status", "--porcelain", "-b"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, statusOut.ExitStatus, "git status after wake failed: %s", statusOut.Stderr)
+		assert.Contains(t, statusOut.Stdout, branchName, "branch should be reattached after wake")
+		assert.Contains(t, statusOut.Stdout, "MM tracked.txt", "tracked.txt should keep its staged+unstaged modifications")
+		assert.Contains(t, statusOut.Stdout, "?? untracked.txt", "untracked text file should be restored")
+
+		lsOut2, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "sh",
+			Args:    []string{"-c", "ls -A"},
+		})
+		require.NoError(t, err)
+		assert.NotContains(t, lsOut2.Stdout, ".sidekick-hibernation", "sentinels should be gone after wake")
+	})
 }

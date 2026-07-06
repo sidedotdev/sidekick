@@ -640,6 +640,24 @@ func handleFlowCancel(dCtx DevContext) {
 	}
 
 	if dCtx.Worktree != nil {
+		// If hibernated, wake the worktree first so CleanupWorktreeActivity can operate on it.
+		// The explicit WakeWorktreeActivity call (rather than relying on auto-wake)
+		// is necessary here because CleanupWorktreeActivity needs a functional
+		// worktree and we're in a cancellation context where auto-wake may not
+		// trigger in time.
+		val := dCtx.ExecContext.GlobalState.GetValue(globalStateKeyHibernated)
+		hibernated, _ := val.(bool)
+		if hibernated {
+			var wakeOutput git.WakeWorktreeOutput
+			err := workflow.ExecuteActivity(disconnectedCtx, git.WakeWorktreeActivity, git.WakeWorktreeInput{
+				EnvContainer: *dCtx.EnvContainer,
+			}).Get(disconnectedCtx, &wakeOutput)
+			if err != nil {
+				workflow.GetLogger(dCtx).Error("Failed to wake hibernated worktree during cancellation", "error", err)
+			}
+			dCtx.ExecContext.GlobalState.SetValue(globalStateKeyHibernated, nil)
+		}
+
 		future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
 		if err := future.Get(disconnectedCtx, nil); err != nil {
 			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree during workflow cancellation", "error", err, "worktree", dCtx.Worktree.Name)

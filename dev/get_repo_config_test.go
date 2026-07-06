@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -126,6 +127,11 @@ func (m *mockEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, 
 	}
 	return name, nil
 }
+func (m *mockEnv) Hibernate(ctx context.Context, branchName string) (env.HibernationMetadata, error) {
+	return env.HibernationMetadata{}, fmt.Errorf("hibernate not supported on mock env")
+}
+
+func (m *mockEnv) WakeIfHibernated(ctx context.Context) error { return nil }
 
 // setupTestEnv creates a test environment with a repo config file and optional hints file.
 // configFilename defaults to "side.yml" if empty.

@@ -75,6 +75,15 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	SetupDevRunStateQuery(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
+	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
+	if hibernateVersion >= 1 {
+		SetupHibernateHandler(dCtx)
+	}
+	if hibernateVersion == 1 {
+		if _, err = WakeIfHibernated(dCtx); err != nil {
+			return DevPlanExecution{}, fmt.Errorf("failed to wake hibernated worktree: %w", err)
+		}
+	}
 	err = EnsurePrerequisites(dCtx)
 	if err != nil {
 		return DevPlanExecution{}, err

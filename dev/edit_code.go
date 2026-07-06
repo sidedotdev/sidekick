@@ -102,6 +102,15 @@ func applyEditBlocksAndReport(dCtx DevContext, editBlocks []EditBlock) (applyEdi
 }
 
 func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
+	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
+	case 2:
+		clearHibernationGlobalState(dCtx)
+	default:
+		if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+			return fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+		}
+	}
+
 	var err error
 	var editBlocks []EditBlock
 

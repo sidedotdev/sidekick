@@ -15,15 +15,37 @@ import (
 
 // GetUserResponse wraps TrackHuman and delegates to flow_action.GetUserResponse
 func GetUserResponse(actionCtx DevActionContext, req flow_action.RequestForUser) (*flow_action.UserResponse, error) {
-	return TrackHuman(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
+	resp, err := TrackHuman(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 		return flow_action.GetUserResponse(trackedCtx.ExecContext, req)
 	})
+	if err == nil {
+		switch workflow.GetVersion(actionCtx.DevContext, "hibernate-worktree", workflow.DefaultVersion, 3) {
+		case 2:
+			clearHibernationGlobalState(actionCtx.DevContext)
+		default:
+			if _, wakeErr := WakeIfHibernated(actionCtx.DevContext); wakeErr != nil {
+				return resp, fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+			}
+		}
+	}
+	return resp, err
 }
 
 // GetUserContinue wraps flow_action.GetUserContinue with DevActionContext
 func GetUserContinue(dCtx DevContext, prompt string, params map[string]any) error {
-	return flow_action.GetUserContinue(dCtx.ExecContext, prompt, params)
+	err := flow_action.GetUserContinue(dCtx.ExecContext, prompt, params)
+	if err == nil {
+		switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
+		case 2:
+			clearHibernationGlobalState(dCtx)
+		default:
+			if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+				return fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+			}
+		}
+	}
+	return err
 }
 
 // GetUserGuidance wraps flow_action.GetUserGuidance with DevActionContext
@@ -217,6 +239,15 @@ func GetUserMergeApproval(
 
 	if err != nil {
 		return MergeApprovalResponse{}, err
+	}
+
+	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
+	case 2:
+		clearHibernationGlobalState(dCtx)
+	default:
+		if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+			return MergeApprovalResponse{}, fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+		}
 	}
 
 	return MergeApprovalResponse{

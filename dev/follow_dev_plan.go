@@ -144,6 +144,15 @@ func completeDevStep(dCtx DevContext, requirements string, planExecution DevPlan
 }
 
 func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution DevPlanExecution, step DevStep) (result DevStepResult, err error) {
+	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
+	case 2:
+		clearHibernationGlobalState(dCtx)
+	default:
+		if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+			return result, fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+		}
+	}
+
 	// Step 1: prepare code context
 	//prompt := fmt.Sprintf("#START Background Info\n%s\n#END Background Info\n#START Plan#\n%s\n", requirements, planExecution.String(), step.Title)
 	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, &planExecution, &step)
