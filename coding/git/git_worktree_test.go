@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sidekick/domain"
 	"sidekick/env"
+	"strings"
 	"testing"
 
 	"github.com/segmentio/ksuid"
@@ -434,4 +435,103 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		expectedFallbackTag := fmt.Sprintf("archive/%s-4", branchName)
 		assert.Contains(t, tagOutput, expectedFallbackTag, "Should create tag with next available suffix")
 	})
+}
+
+// hasLockedWorktreeLine reports whether "git worktree list --porcelain" output
+// marks any worktree as locked.
+func hasLockedWorktreeLine(porcelain string) bool {
+	for _, line := range strings.Split(porcelain, "\n") {
+		if line == "locked" || strings.HasPrefix(line, "locked ") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNewLocalGitWorktreeEnvCreatesLockedWorktree(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	repoDir := setupTestGitRepo(t)
+	createCommit(t, repoDir, "Initial commit on main")
+
+	worktree := domain.Worktree{
+		Name:        fmt.Sprintf("feature-lock-%s", ksuid.New().String()),
+		WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
+	}
+	devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir, WorktreeBaseDir: t.TempDir()}, worktree)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", devEnv.GetWorkingDirectory())
+	})
+
+	porcelain := runGitCommandInTestRepo(t, repoDir, "worktree", "list", "--porcelain")
+	assert.True(t, hasLockedWorktreeLine(porcelain), "new worktree should be created locked; porcelain output:\n%s", porcelain)
+}
+
+func TestParseLockedWorktrees(t *testing.T) {
+	t.Parallel()
+
+	porcelain := strings.Join([]string{
+		"worktree /repo",
+		"HEAD 1111111111111111111111111111111111111111",
+		"branch refs/heads/main",
+		"",
+		"worktree /repo/wt-locked-reason",
+		"HEAD 2222222222222222222222222222222222222222",
+		"branch refs/heads/feature-a",
+		"locked sidekick",
+		"",
+		"worktree /repo/wt-locked-bare",
+		"HEAD 3333333333333333333333333333333333333333",
+		"branch refs/heads/feature-b",
+		"locked",
+		"",
+		"worktree /repo/wt-unlocked",
+		"HEAD 4444444444444444444444444444444444444444",
+		"branch refs/heads/feature-c",
+		"",
+	}, "\n")
+
+	locked := parseLockedWorktrees(porcelain)
+
+	assert.True(t, locked[resolveWorktreePath("/repo/wt-locked-reason")], "worktree with a lock reason should be detected")
+	assert.True(t, locked[resolveWorktreePath("/repo/wt-locked-bare")], "worktree with a bare locked line should be detected")
+	assert.False(t, locked[resolveWorktreePath("/repo/wt-unlocked")], "unlocked worktree must not be reported as locked")
+	assert.False(t, locked[resolveWorktreePath("/repo")], "main worktree without a locked line must not be reported as locked")
+}
+
+func TestLockExistingSidekickWorktrees(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	baseDir := t.TempDir()
+	repoDir := setupTestGitRepo(t)
+	createCommit(t, repoDir, "Initial commit on main")
+
+	worktree := domain.Worktree{
+		Name:        fmt.Sprintf("feature-startup-lock-%s", ksuid.New().String()),
+		WorkspaceId: fmt.Sprintf("ws-%s", ksuid.New().String()),
+	}
+	devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir, WorktreeBaseDir: baseDir}, worktree)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", devEnv.GetWorkingDirectory())
+	})
+
+	worktreesRoot := filepath.Join(baseDir, "worktrees")
+
+	// Simulate a worktree created before locking was introduced.
+	runGitCommandInTestRepo(t, devEnv.GetWorkingDirectory(), "worktree", "unlock", ".")
+	require.False(t, hasLockedWorktreeLine(runGitCommandInTestRepo(t, repoDir, "worktree", "list", "--porcelain")))
+
+	require.False(t, worktreeIsLocked(devEnv.GetWorkingDirectory()), "unlocked worktree should not be reported as locked")
+
+	lockWorktreesUnder(ctx, worktreesRoot)
+	assert.True(t, hasLockedWorktreeLine(runGitCommandInTestRepo(t, repoDir, "worktree", "list", "--porcelain")), "startup pass should lock the worktree")
+	assert.True(t, worktreeIsLocked(devEnv.GetWorkingDirectory()), "locked worktree should be detected by the filesystem fast-path")
+
+	// Running again must be a no-op that tolerates the already-locked state.
+	lockWorktreesUnder(ctx, worktreesRoot)
+	assert.True(t, hasLockedWorktreeLine(runGitCommandInTestRepo(t, repoDir, "worktree", "list", "--porcelain")), "startup pass should remain idempotent")
 }

@@ -118,8 +118,9 @@ func TestGitMergeActivity(t *testing.T) {
 		envContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir, WorktreeBaseDir: worktreeBaseDir}, worktree)
 		require.NoError(t, err)
 		defer func() {
-			// Clean up worktree
-			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", envContainer.Env.GetWorkingDirectory())
+			// Clean up worktree. Sidekick worktrees are created locked, so
+			// removal requires --force twice.
+			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", envContainer.Env.GetWorkingDirectory())
 		}()
 
 		featureCommit := createCommit(t, envContainer.Env.GetWorkingDirectory(), "Feature commit")
@@ -325,7 +326,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 		envContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir, WorktreeBaseDir: worktreeBaseDir}, worktree)
 		require.NoError(t, err)
 		defer func() {
-			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", envContainer.Env.GetWorkingDirectory())
+			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", envContainer.Env.GetWorkingDirectory())
 		}()
 
 		// Add multiple commits with file changes to feature branch
@@ -461,7 +462,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 		targetEnvContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir, WorktreeBaseDir: worktreeBaseDir}, worktree)
 		require.NoError(t, err)
 		defer func() {
-			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", targetEnvContainer.Env.GetWorkingDirectory())
+			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", targetEnvContainer.Env.GetWorkingDirectory())
 		}()
 
 		// Source feature branch adds a file with specific content
@@ -514,7 +515,7 @@ func TestGitMergeActivityDirtyTargetWorktree(t *testing.T) {
 		envContainer, err = env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
 		require.NoError(t, err)
 		t.Cleanup(func() {
-			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", envContainer.Env.GetWorkingDirectory())
 		})
 
 		featureDir := envContainer.Env.GetWorkingDirectory()
@@ -596,7 +597,7 @@ func TestGitTransferWorktreeChangesActivity(t *testing.T) {
 	envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", envContainer.Env.GetWorkingDirectory())
 	})
 	sourceDir := envContainer.Env.GetWorkingDirectory()
 
@@ -635,7 +636,7 @@ func TestGitTransferWorktreeChangesActivityDropsPreservedBaseStash(t *testing.T)
 	envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", envContainer.Env.GetWorkingDirectory())
 	})
 	sourceDir := envContainer.Env.GetWorkingDirectory()
 
@@ -680,7 +681,7 @@ func TestGitTransferWorktreeChangesActivityDropsBaseStashOnNoOp(t *testing.T) {
 	envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", envContainer.Env.GetWorkingDirectory())
 	})
 	sourceDir := envContainer.Env.GetWorkingDirectory()
 
@@ -725,7 +726,7 @@ func TestGitTransferWorktreeChangesActivityPreservesExistingStash(t *testing.T) 
 	envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", envContainer.Env.GetWorkingDirectory())
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", "--force", envContainer.Env.GetWorkingDirectory())
 	})
 	sourceDir := envContainer.Env.GetWorkingDirectory()
 

@@ -136,6 +136,21 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 		return err
 	}
 
+	// Sidekick worktrees are created locked (to survive "git worktree prune"),
+	// so they must be unlocked before removal. Tolerate a "not locked" failure
+	// for worktrees created before locking was introduced.
+	unlockResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         []string{"worktree", "unlock", "."},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to execute worktree unlock command: %v", err)
+	}
+	if unlockResult.ExitStatus != 0 && !strings.Contains(unlockResult.Stderr, "not locked") {
+		return fmt.Errorf("failed to unlock current worktree: %s", unlockResult.Stderr)
+	}
+
 	// Remove the current worktree using "." since we're running from within the worktree
 	// The working directory is the same as the worktree path that needs to be removed
 	removeResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{

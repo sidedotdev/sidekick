@@ -46,6 +46,13 @@ func envVarsToInject(envType EnvType, portForwards []common.PortForwardConfig) [
 // with a branch name that already exists
 var ErrBranchAlreadyExists = errors.New("branch already exists")
 
+// WorktreeLockReason explains why Sidekick locks its git worktrees. Locking
+// prevents "git worktree prune" (including via auto-gc) from deleting a
+// worktree's admin directory under .git/worktrees/ when its working tree is not
+// visible from the environment running prune (e.g. host vs devcontainer sharing
+// the same .git).
+const WorktreeLockReason = "Sidekick-managed worktree; locked to prevent git worktree prune from removing it when the working tree is not visible from this environment"
+
 // ErrTypeBranchAlreadyExists is the application error type for branch already exists errors
 const ErrTypeBranchAlreadyExists = "BranchAlreadyExists"
 
@@ -312,11 +319,13 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 	if params.StartBranch != nil && *params.StartBranch != "" {
 		worktreeBaseRef = *params.StartBranch
 	}
-	// Add the worktree, creating a new branch based on the target branch
+	// Add the worktree, creating a new branch based on the target branch. The
+	// worktree is created locked so that "git worktree prune" won't remove it
+	// from an environment that can't see its working tree.
 	addWorktreeInput := unix.RunCommandActivityInput{
 		WorkingDir: params.RepoDir,
 		Command:    "git",
-		Args:       []string{"worktree", "add", "-b", newBranchName, workingDir, worktreeBaseRef},
+		Args:       []string{"worktree", "add", "--lock", "--reason", WorktreeLockReason, "-b", newBranchName, workingDir, worktreeBaseRef},
 	}
 	addWorktreeOutput, err := unix.RunCommandActivity(ctx, addWorktreeInput)
 	if err != nil {

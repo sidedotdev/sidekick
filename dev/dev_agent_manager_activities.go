@@ -415,10 +415,11 @@ func (ima *DevAgentManagerActivities) CleanupStaleWorktrees(ctx context.Context,
 				}
 			}
 
-			removeCmd := exec.CommandContext(ctx, "git", "--git-dir", commonGitDir, "worktree", "remove", dirPath, "--force")
+			// Sidekick worktrees are created locked, so removal requires --force twice.
+			removeCmd := exec.CommandContext(ctx, "git", "--git-dir", commonGitDir, "worktree", "remove", dirPath, "--force", "--force")
 			removeOut, err := removeCmd.CombinedOutput()
 			if err != nil {
-				fallbackCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "worktree", "remove", ".", "--force")
+				fallbackCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "worktree", "remove", ".", "--force", "--force")
 				fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
 				if fallbackErr != nil {
 					if rmErr := safeRemoveAll(); rmErr != nil {

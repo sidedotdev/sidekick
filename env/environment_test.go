@@ -119,7 +119,8 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 
 	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
 	defer func() {
-		cmd := exec.Command("git", "worktree", "remove", env.GetWorkingDirectory())
+		// Sidekick worktrees are created locked, so removal requires --force twice.
+		cmd := exec.Command("git", "worktree", "remove", "--force", "--force", env.GetWorkingDirectory())
 		cmd.Dir = repoDir
 		err = cmd.Run()
 		if err != nil {

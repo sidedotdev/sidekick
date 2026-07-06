@@ -50,7 +50,7 @@ func TestLocalGitWorktreeEnv_FilesystemMethods(t *testing.T) {
 	}, worktree)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cmd := exec.Command("git", "worktree", "remove", "--force", env.GetWorkingDirectory())
+		cmd := exec.Command("git", "worktree", "remove", "--force", "--force", env.GetWorkingDirectory())
 		cmd.Dir = repoDir
 		_ = cmd.Run()
 	})

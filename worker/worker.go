@@ -263,6 +263,10 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	common.StartCodecCleanupWorkflow(context.Background(), temporalClient, taskQueue)
 	dev.StartCleanupWorktreesSchedule(context.Background(), temporalClient, taskQueue)
 
+	// Lock any pre-existing Sidekick worktrees so "git worktree prune" won't
+	// remove them from environments that can't see their working trees.
+	go git.LockExistingSidekickWorktrees(context.Background())
+
 	return &Worker{
 		Worker:         w,
 		shutdownTracer: shutdownTracer,
