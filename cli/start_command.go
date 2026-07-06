@@ -102,6 +102,11 @@ func NewStartCommand() *cli.Command {
 				Usage:   "Enable the NATS server component",
 			},
 			&cli.BoolFlag{
+				Name:    "remote",
+				Aliases: []string{"r"},
+				Usage:   "Enable the remote (iroh) API server component",
+			},
+			&cli.BoolFlag{
 				Name:    "disable-auto-open",
 				Aliases: []string{"x"},
 				Usage:   "Disable automatic browser opening",
@@ -116,14 +121,16 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 	worker := cmd.Bool("worker")
 	temporal := cmd.Bool("temporal")
 	natsServer := cmd.Bool("nats")
+	remote := cmd.Bool("remote")
 	disableAutoOpen := cmd.Bool("disable-auto-open")
 
 	// If no services specified, enable all by default
-	if !server && !worker && !temporal && !natsServer {
+	if !server && !worker && !temporal && !natsServer && !remote {
 		server = true
 		worker = true
 		temporal = true
 		natsServer = true
+		remote = true
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -225,6 +232,30 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 
 			if err := nats.Stop(); err != nil {
 				log.Error().Err(err).Msg("Error stopping NATS server")
+			}
+		}()
+	}
+
+	if remote {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info().Msg("Starting remote (iroh) API server...")
+
+			remoteServer, err := api.RunRemoteServer(ctx)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to start remote (iroh) API server")
+				return
+			}
+
+			fmt.Printf("\nRemote access enabled. Pair a device using this iroh ticket:\n\n  %s\n\n", remoteServer.Ticket())
+
+			// Wait for cancellation
+			<-ctx.Done()
+			log.Info().Msg("Stopping remote (iroh) API server...")
+
+			if err := remoteServer.Shutdown(context.Background()); err != nil {
+				log.Error().Err(err).Msg("Error stopping remote (iroh) API server")
 			}
 		}()
 	}
