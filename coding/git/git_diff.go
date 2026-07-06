@@ -128,11 +128,12 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 		cmdParts = append(cmdParts, "-w")
 	}
 
-	if len(params.FilePaths) > 0 {
-		cmdParts = append(cmdParts, "--")
-		for _, fp := range params.FilePaths {
-			cmdParts = append(cmdParts, shellQuote(strings.TrimSpace(fp)))
-		}
+	// Always emit the `--` separator so a ref that shares its name with a path
+	// (e.g. a "dev" branch alongside a "dev" directory) isn't treated as an
+	// ambiguous argument by git.
+	cmdParts = append(cmdParts, "--")
+	for _, fp := range params.FilePaths {
+		cmdParts = append(cmdParts, shellQuote(strings.TrimSpace(fp)))
 	}
 
 	shellCommand := strings.Join(cmdParts, " ")
