@@ -51,8 +51,8 @@ COPY . .
 # Create placeholder frontend dist for tests (embed pattern requires it)
 RUN mkdir -p frontend/dist && touch frontend/dist/.gitkeep
 
-# Install gopls for LSP tests (v0.17.1 is compatible with Go 1.24)
-RUN go install golang.org/x/tools/gopls@v0.17.1
+# Install gopls for LSP tests (v0.19.1 builds against Go 1.26)
+RUN go install golang.org/x/tools/gopls@v0.19.1
 
 # Default command runs tests
 CMD ["go", "test", "-timeout", "5m", "./..."]

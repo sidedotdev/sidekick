@@ -33,7 +33,7 @@ ENV CGO_ENABLED=1
 ENV CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm"
 
 # gopls for LSP tests
-RUN go install golang.org/x/tools/gopls@v0.17.1
+RUN go install golang.org/x/tools/gopls@v0.19.1
 
 # Install bun and pre-warm the dependency cache
 USER vscode
