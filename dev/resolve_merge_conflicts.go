@@ -88,6 +88,11 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
+	var advisor *Advisor
+	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+	}
+
 	conflictDiff, err := computeConflictResolutionDiff(dCtx, params.WorktreePath, snapshot)
 	if err != nil {
 		return fmt.Errorf("failed to compute initial conflict diff: %w", err)
@@ -101,7 +106,7 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 	}
 
 	for attempt := 0; attempt < maxConflictResolutionAttempts; attempt++ {
-		if err := EditCode(dCtx, codingModelConfig, 0, chatHistory, promptInfo); err != nil {
+		if err := EditCode(dCtx, codingModelConfig, 0, chatHistory, promptInfo, advisor); err != nil {
 			if errors.Is(err, flow_action.PendingActionError) {
 				return err
 			}

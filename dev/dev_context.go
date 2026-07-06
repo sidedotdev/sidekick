@@ -28,6 +28,9 @@ type DevContext struct {
 	// Idd indicates the work originates from an Intent Driven Development flow,
 	// enabling the intent/ directory guidance in coding-agent prompts.
 	Idd bool
+	// AdvisorEnabled is a per-run toggle (chosen in the task modal) for the
+	// background advisor. It defaults to true when unset in ConfigOverrides.
+	AdvisorEnabled bool
 }
 
 // WithContext returns a new DevContext with the workflow.Context updated.
@@ -515,9 +518,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	devCtx := DevContext{
-		ExecContext: eCtx,
-		Worktree:    worktree,
-		RepoConfig:  repoConfig,
+		ExecContext:    eCtx,
+		Worktree:       worktree,
+		RepoConfig:     repoConfig,
+		AdvisorEnabled: configOverrides.IsAdvisorEnabled(),
 	}
 
 	// Fetch and store git user config for commit authorship

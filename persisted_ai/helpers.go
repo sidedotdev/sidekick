@@ -33,15 +33,18 @@ func GetOpenaiFuncArgs(ctx context.Context, la LlmActivities, toolOptions llm.To
 	return json.Unmarshal([]byte(llm.RepairJson(jsonStr)), funcArgs)
 }
 
-// ForceToolCallWithTrackOptionsV2 forces the LLM to produce a tool call using the given
+// forceToolCallV2 forces the LLM to produce a tool call using the given
 // ChatHistoryContainer and delegates to ExecuteChatStream for LLM calls.
+// parallelToolCalls, when non-nil, explicitly enables/disables parallel tool
+// calls for providers that support the toggle.
 // Returns common.MessageResponse which provides GetMessage().GetToolCalls() for accessing tool calls.
-func ForceToolCallWithTrackOptionsV2(
+func forceToolCallV2(
 	actionCtx flow_action.ActionContext,
 	trackOptions flow_action.TrackOptions,
 	modelConfig common.ModelConfig,
 	chatHistory *ChatHistoryContainer,
 	toolNameMapping *ToolNameMappingConfig,
+	parallelToolCalls *bool,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
 
@@ -55,9 +58,10 @@ func ForceToolCallWithTrackOptionsV2(
 
 	streamInput := StreamInput{
 		Options: llm2.Options{
-			ModelConfig: modelConfig,
-			Tools:       tools,
-			ToolChoice:  toolChoice,
+			ModelConfig:       modelConfig,
+			Tools:             tools,
+			ToolChoice:        toolChoice,
+			ParallelToolCalls: parallelToolCalls,
 		},
 		Secrets:     *actionCtx.Secrets,
 		ChatHistory: chatHistory,
@@ -126,8 +130,28 @@ func ForceToolCallWithTrackOptionsV2(
 	return response, err
 }
 
+// ForceToolCallWithTrackOptionsV2 forces a single required tool call, leaving
+// parallel tool calls at the provider default.
+func ForceToolCallWithTrackOptionsV2(
+	actionCtx flow_action.ActionContext,
+	trackOptions flow_action.TrackOptions,
+	modelConfig common.ModelConfig,
+	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
+	tools ...*llm.Tool,
+) (common.MessageResponse, error) {
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, chatHistory, toolNameMapping, nil, tools...)
+}
+
 func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
-	return ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, tools...)
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, nil, tools...)
+}
+
+// ForceParallelToolCall forces at least one tool call while explicitly enabling
+// parallel tool calls for providers that support the toggle.
+func ForceParallelToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
+	parallel := true
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, &parallel, tools...)
 }
 
 // AppendChatHistory appends a message to chat history, using an activity to

@@ -346,6 +346,11 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 	// id to the activities to avoid bloating temporal db
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
+	var advisor *Advisor
+	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+	}
+
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
@@ -417,7 +422,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		}
 
 		// Step 2: edit code
-		err = EditCode(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo)
+		err = EditCode(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
 		if err != nil {
 			return "", fmt.Errorf("failed to write edit blocks: %w", err)
 		}

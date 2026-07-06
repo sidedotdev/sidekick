@@ -37,9 +37,9 @@ var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
 var ErrExtractEditBlocks = fmt.Errorf("failed to extract edit blocks")
 
 // edits code in the envContainer based on code context + requirements
-func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
+func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
-		return editCodeSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
+		return editCodeSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
 	})
 }
 
@@ -101,7 +101,7 @@ func applyEditBlocksAndReport(dCtx DevContext, editBlocks []EditBlock) (applyEdi
 	}, nil
 }
 
-func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
+func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
 	var err error
 	var editBlocks []EditBlock
 
@@ -167,7 +167,7 @@ editLoop:
 		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig)
 
 		// Step 1: Get a list of *edit blocks* from the LLM
-		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, environmentContext)
+		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, environmentContext, advisor)
 		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			v := workflow.GetVersion(dCtx, "edit-code-max-attempts-bugfix", workflow.DefaultVersion, 1)
 			isMaxAttempts := errors.Is(err, ErrMaxAttemptsReached)
@@ -233,7 +233,7 @@ editLoop:
 	return nil
 }
 
-func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, environmentContext string) ([]EditBlock, error) {
+func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, environmentContext string, advisor *Advisor) ([]EditBlock, error) {
 	var extractedEditBlocks []EditBlock
 
 	attemptCount := 0
@@ -370,6 +370,12 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				Content: content,
 			}); err != nil {
 				return nil, err
+			}
+		}
+
+		if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 && advisor != nil {
+			if err := advisor.MaybeAdvise(dCtx, chatHistory, authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan)); err != nil {
+				return nil, fmt.Errorf("error running advisor: %w", err)
 			}
 		}
 
@@ -549,6 +555,39 @@ func appendEditFeedback(eCtx flow_action.ExecContext, chatHistory *persisted_ai.
 	})
 }
 
+// authorEditBlockTools builds the tool slice shared by the coding executor and
+// its advisor so both operate over an identical tool set each turn.
+func authorEditBlockTools(dCtx DevContext, codingModelConfig common.ModelConfig, doneRequired bool, hasPlan bool) []*llm.Tool {
+	tools := []*llm.Tool{
+		&bulkSearchRepositoryTool,
+		currentGetSymbolDefinitionsTool(),
+		&bulkReadFileTool,
+		&runCommandTool,
+	}
+
+	if supportsImageToolResults(codingModelConfig) {
+		tools = append(tools, &readImageTool)
+	}
+
+	if dCtx.Worktree != nil {
+		tools = append(tools, &setBaseBranchTool)
+	}
+
+	if doneRequired {
+		if hasPlan {
+			tools = append(tools, &doneToolWithPlan)
+		} else {
+			tools = append(tools, &doneTool)
+		}
+	}
+
+	if !dCtx.RepoConfig.DisableHumanInTheLoop {
+		tools = append(tools, &getHelpOrInputTool)
+	}
+
+	return tools
+}
+
 // buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
 // Returns the options and the visible messages (for edit block extraction).
 func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, doneRequired bool, hasPlan bool, environmentContext string) (llm2.Options, error) {
@@ -606,31 +645,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		}
 	}
 
-	var tools []*llm.Tool
-	tools = append(tools, &bulkSearchRepositoryTool)
-	tools = append(tools, currentGetSymbolDefinitionsTool())
-	tools = append(tools, &bulkReadFileTool)
-	tools = append(tools, &runCommandTool)
-
-	if supportsImageToolResults(codingModelConfig) {
-		tools = append(tools, &readImageTool)
-	}
-
-	if dCtx.Worktree != nil {
-		tools = append(tools, &setBaseBranchTool)
-	}
-
-	if doneRequired {
-		if hasPlan {
-			tools = append(tools, &doneToolWithPlan)
-		} else {
-			tools = append(tools, &doneTool)
-		}
-	}
-
-	if !dCtx.RepoConfig.DisableHumanInTheLoop {
-		tools = append(tools, &getHelpOrInputTool)
-	}
+	tools := authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan)
 
 	options := llm2.Options{
 		Tools: tools,

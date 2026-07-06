@@ -232,6 +232,7 @@ func (r DevRequirements) String() string {
 type buildDevRequirementsState struct {
 	contextSizeExtension int
 	devRequirements      DevRequirements
+	advisor              *Advisor
 }
 
 func BuildDevRequirements(dCtx DevContext, initialInfo InitialDevRequirementsInfo) (*DevRequirements, error) {
@@ -273,6 +274,9 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 	initialState := &buildDevRequirementsState{
 		contextSizeExtension: contextSizeExtension,
 	}
+	if v := workflow.GetVersion(dCtx, "dev-requirements-advisor", workflow.DefaultVersion, 1); v == 1 {
+		initialState.advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+	}
 
 	feedbackIterations := 5
 	v := workflow.GetVersion(dCtx, "dev-requirements-feedback-iterations", workflow.DefaultVersion, 1)
@@ -303,6 +307,12 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig)
 
 	hasExistingRequirements := len(state.devRequirements.AcceptanceCriteria) > 0 || state.devRequirements.Overview != ""
+
+	if v := workflow.GetVersion(iteration.ExecCtx, "dev-requirements-advisor", workflow.DefaultVersion, 1); v == 1 {
+		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devRequirementsTools(iteration.ExecCtx, hasExistingRequirements)); err != nil {
+			return nil, fmt.Errorf("error running advisor: %w", err)
+		}
+	}
 
 	var chatResponse common.MessageResponse
 	var err error
@@ -422,7 +432,9 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	return nil, nil // continue the loop
 }
 
-func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingRequirements bool) (common.MessageResponse, error) {
+// devRequirementsTools builds the tool slice shared by the requirements
+// executor and its advisor so both operate over an identical tool set each turn.
+func devRequirementsTools(dCtx DevContext, hasExistingRequirements bool) []*llm.Tool {
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
 	tools := []*llm.Tool{
@@ -443,6 +455,12 @@ func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHist
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
 	}
+	return tools
+}
+
+func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingRequirements bool) (common.MessageResponse, error) {
+	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
+	tools := devRequirementsTools(dCtx, hasExistingRequirements)
 
 	// random order of tools to avoid bias in the LLM's use of the tools
 	// NOTE: disabled shuffling as it can mess with cache hit rate

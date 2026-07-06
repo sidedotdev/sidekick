@@ -28,6 +28,17 @@ type ConfigOverrides struct {
 	LLM       *LLMConfig                   `json:"llm,omitempty"`
 	Embedding *EmbeddingConfig             `json:"embedding,omitempty"`
 	Providers *[]ModelProviderPublicConfig `json:"providers,omitempty"`
+
+	// AdvisorEnabled is a per-run choice (from the task modal) rather than a
+	// RepoConfig setting, toggling the background advisor. Nil means unset and
+	// is treated as enabled by default.
+	AdvisorEnabled *bool `json:"advisorEnabled,omitempty"`
+}
+
+// IsAdvisorEnabled reports whether the background advisor should run for this
+// run, defaulting to true when unset.
+func (o ConfigOverrides) IsAdvisorEnabled() bool {
+	return o.AdvisorEnabled == nil || *o.AdvisorEnabled
 }
 
 // ApplyToRepoConfig updates the provided RepoConfig with any non-nil override values.

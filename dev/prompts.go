@@ -72,3 +72,5 @@ var FulfillmentInitialWithPlan = panicParseMustache(promptsFS, "fulfillment/init
 var FulfillmentConflictResolution = panicParseMustache(promptsFS, "fulfillment/conflict_resolution")
 var ConflictResolutionInitial = panicParseMustache(promptsFS, "conflict_resolution/initial")
 var IntentRequirements = panicParseMustache(promptsFS, "intent/requirements")
+var AdvisorSystem = panicParseMustache(promptsFS, "advisor/system")
+var AdvisorTurn = panicParseMustache(promptsFS, "advisor/turn")

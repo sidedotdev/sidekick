@@ -108,7 +108,7 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: LLMConfig): void
 }>()
 
-const USE_CASES = ['planning', 'judging', 'code_localization'] as const
+const USE_CASES = ['planning', 'judging', 'code_localization', 'advising'] as const
 type UseCase = typeof USE_CASES[number]
 
 const getUseCaseLabel = (useCase: UseCase): string => {
@@ -116,6 +116,7 @@ const getUseCaseLabel = (useCase: UseCase): string => {
     planning: 'Plan',
     judging: 'Review',
     code_localization: 'Context',
+    advising: 'Advisor',
   }
   return labels[useCase]
 }

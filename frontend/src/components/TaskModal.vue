@@ -99,6 +99,11 @@
         Determine Requirements
       </label>
 
+      <label>
+        <input type="checkbox" v-model="advisorEnabled" />
+        Enable Advisor
+      </label>
+
       <div v-if="!isIdd">
         <AutogrowTextarea ref="descriptionRef" id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
@@ -293,6 +298,9 @@ const userModifiedDetermineRequirements = ref(false)
 const isApplyingTaskConfig = ref(false)
 const taskConfig = ref<TaskConfigData | null>(store.getTaskConfigCache(workspaceId.value)?.data ?? null)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
+const advisorEnabled = ref<boolean>(
+  props.task?.flowOptions?.configOverrides?.advisorEnabled ?? true
+)
 const selectedBranch = ref<string | null>(initialBranchValue)
 
 // Auto-save state
@@ -319,6 +327,7 @@ interface FormState {
   selectedBranch: string | null
   determineRequirements: boolean
   planningPrompt: string
+  advisorEnabled: boolean
   selectedPresetValue: string
   llmConfig: LLMConfig
   newPresetName: string
@@ -337,6 +346,7 @@ const captureFormState = (): FormState => ({
   selectedBranch: selectedBranch.value,
   determineRequirements: determineRequirements.value,
   planningPrompt: planningPrompt.value,
+  advisorEnabled: advisorEnabled.value,
   selectedPresetValue: selectedPresetValue.value,
   llmConfig: JSON.parse(JSON.stringify(llmConfig.value)),
   newPresetName: newPresetName.value,
@@ -352,6 +362,7 @@ const restoreFormState = (state: FormState) => {
   selectedBranch.value = state.selectedBranch
   determineRequirements.value = state.determineRequirements
   planningPrompt.value = state.planningPrompt
+  advisorEnabled.value = state.advisorEnabled
   selectedPresetValue.value = state.selectedPresetValue
   llmConfig.value = JSON.parse(JSON.stringify(state.llmConfig))
   newPresetName.value = state.newPresetName
@@ -523,6 +534,10 @@ const buildFlowOptions = (): Record<string, any> => {
     flowOptions.configOverrides = { llm: llmConfig.value }
   }
 
+  if (!advisorEnabled.value) {
+    flowOptions.configOverrides = { ...flowOptions.configOverrides, advisorEnabled: false }
+  }
+
   Object.keys(flowOptions).forEach(key => {
     if (flowOptions[key] === null || flowOptions[key] === '') {
       delete flowOptions[key];
@@ -613,7 +628,7 @@ const scheduleAutoSave = () => {
 }
 
 // Watch all form fields for auto-save
-watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
+watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, advisorEnabled, selectedPresetValue, llmConfig, newPresetName], () => {
   if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()

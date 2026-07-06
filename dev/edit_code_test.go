@@ -69,7 +69,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 				},
 			},
 		}
-		return authorEditBlocks(execContext, common.ModelConfig{}, 0, chatHistory, pic.PromptInfo, getEnvironmentContext())
+		return authorEditBlocks(execContext, common.ModelConfig{}, 0, chatHistory, pic.PromptInfo, getEnvironmentContext(), nil)
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 	s.env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
