@@ -174,6 +174,16 @@ type CheckWorkInfo struct {
 	AutoChecks         string
 	LastReviewTreeHash string
 	BaseBranch         string
+
+	// ResolvingMergeConflicts selects the conflict-resolution fulfillment
+	// prompt, where Requirements and PreviousReview are treated as context for
+	// intent rather than as acceptance criteria to (re)fulfill in the diff.
+	ResolvingMergeConflicts bool
+	// PreviousReview is the accumulated reviewer feedback across all review
+	// rounds (the same feedback reviewAndResolve keeps), so the resolution
+	// doesn't undo edits made to address it. Only used when
+	// ResolvingMergeConflicts is set.
+	PreviousReview string
 }
 
 // Implement the PromptInfo interface for InitialDevStepInfo

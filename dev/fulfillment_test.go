@@ -108,3 +108,47 @@ func TestRenderFulfillmentInitialWithPlan(t *testing.T) {
 		assert.Contains(t, out, "thing is done")
 	})
 }
+
+func TestRenderFulfillmentConflictResolution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("frames requirements and review as context, not criteria", func(t *testing.T) {
+		t.Parallel()
+		data := map[string]interface{}{
+			"editCodeHints":  "Use tabs for indentation.",
+			"requirements":   "Implement feature X with steps a, b, c.",
+			"previousReview": "Please rename the helper to doThing.",
+			"work":           "conflict resolution diff here",
+			"autoChecks":     "all passed",
+		}
+		out := RenderPrompt(FulfillmentConflictResolution, data)
+
+		assert.Contains(t, out, "merge conflict resolution")
+		assert.Contains(t, out, "ONLY criterion")
+		assert.Contains(t, out, "# START CONTEXT: REQUIREMENTS")
+		assert.Contains(t, out, "Implement feature X with steps a, b, c.")
+		assert.Contains(t, out, "# START CONTEXT: ACCUMULATED REVIEW FEEDBACK")
+		assert.Contains(t, out, "Please rename the helper to doThing.")
+		assert.Contains(t, out, "conflict resolution diff here")
+		assert.Contains(t, out, "all passed")
+
+		// It must not frame the original requirements as the thing being fulfilled.
+		assert.NotContains(t, out, "# START REQUIREMENTS")
+	})
+
+	t.Run("omits optional sections when empty", func(t *testing.T) {
+		t.Parallel()
+		data := map[string]interface{}{
+			"editCodeHints":  "",
+			"requirements":   "Implement feature X.",
+			"previousReview": "",
+			"work":           "conflict resolution diff here",
+			"autoChecks":     "",
+		}
+		out := RenderPrompt(FulfillmentConflictResolution, data)
+
+		assert.NotContains(t, out, "ACCUMULATED REVIEW FEEDBACK")
+		assert.NotContains(t, out, "automated check results")
+		assert.Contains(t, out, "conflict resolution diff here")
+	})
+}

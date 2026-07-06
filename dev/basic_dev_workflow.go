@@ -58,10 +58,11 @@ type MergeWithReviewParams struct {
 	CommitRequired bool
 	AutoMerge      bool
 
-	// PreviousReview is the most recent reviewer feedback accumulated by
-	// reviewAndResolve. It is forwarded to the conflict-resolution
-	// subflow so the resolver can avoid undoing edits made specifically
-	// to address that feedback. Empty on the initial pre-review merge.
+	// PreviousReview is the accumulated reviewer feedback across all review
+	// rounds, as kept by reviewAndResolve. It is forwarded to the conflict-
+	// resolution subflow so the resolver can avoid undoing edits made
+	// specifically to address that feedback. Empty on the initial pre-review
+	// merge.
 	PreviousReview string
 }
 
@@ -726,12 +727,11 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				// Add rejection message to history for next iteration
 				reviewMessages = append(reviewMessages, mergeInfo.Message)
 
-				// Surface accumulated review feedback to the conflict-
-				// resolution subflow so it doesn't undo edits made
-				// specifically to satisfy reviewers. The latest message
-				// is the most actionable, so list it last after prior
-				// messages.
-				params.PreviousReview = strings.Join(reviewMessages, "\n\n---\n\n")
+				// Surface the accumulated review feedback from all rounds to
+				// the conflict-resolution subflow so it doesn't undo edits made
+				// specifically to satisfy reviewers. The latest message is the
+				// most actionable, so it's listed last after prior messages.
+				params.PreviousReview = reviewMessagesToText(reviewMessages)
 
 				// must commit before merge at this point, as codingSubflow
 				// doesn't do so inherently

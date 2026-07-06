@@ -210,19 +210,23 @@ func getCriteriaFulfillmentPrompt(eCtx flow_action.ExecContext, workspaceId stri
 	chatHistory := NewVersionedChatHistory(eCtx, workspaceId)
 
 	data := map[string]interface{}{
-		"editCodeHints": editCodeHints,
-		"requirements":  promptInfo.Requirements,
-		"work":          promptInfo.Work,
-		"autoChecks":    promptInfo.AutoChecks,
+		"editCodeHints":  editCodeHints,
+		"requirements":   promptInfo.Requirements,
+		"previousReview": promptInfo.PreviousReview,
+		"work":           promptInfo.Work,
+		"autoChecks":     promptInfo.AutoChecks,
 	}
 
 	var content string
-	if promptInfo.Step.Definition != "" {
+	switch {
+	case promptInfo.ResolvingMergeConflicts:
+		content = RenderPrompt(FulfillmentConflictResolution, data)
+	case promptInfo.Step.Definition != "":
 		data["planContext"] = promptInfo.PlanExecution.String()
 		data["currentStep"] = promptInfo.Step.Definition
 		data["completionCriteria"] = promptInfo.Step.CompletionAnalysis
 		content = RenderPrompt(FulfillmentInitialWithPlan, data)
-	} else {
+	default:
 		content = RenderPrompt(FulfillmentInitial, data)
 	}
 

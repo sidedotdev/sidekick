@@ -31,9 +31,10 @@ type ResolveMergeConflictsParams struct {
 	// has the same task context as the coding subflow did.
 	Requirements string
 
-	// PreviousReview, when non-empty, is the most recent review feedback.
-	// Included verbatim so the resolver doesn't accidentally undo edits
-	// that were made specifically to address that feedback.
+	// PreviousReview, when non-empty, is the accumulated reviewer feedback
+	// across all review rounds. Included verbatim so the resolver doesn't
+	// accidentally undo edits that were made specifically to address that
+	// feedback.
 	PreviousReview string
 
 	// LastReviewTreeHash optionally narrows criteria-fulfillment context
@@ -186,26 +187,18 @@ func computeConflictResolutionDiff(dCtx DevContext, worktreePath string, snapsho
 }
 
 func checkConflictResolutionFulfillment(dCtx DevContext, params ResolveMergeConflictsParams, resolutionDiff string) (CriteriaFulfillment, error) {
-	requirements := strings.TrimSpace(params.Requirements)
-	criteria := requirements + "\n\nAdditional acceptance criteria for this step:\n" +
-		"- Every merge conflict marker must be resolved.\n" +
-		"- The resolution must preserve behavior contributed by both sides, unless they are genuinely incompatible.\n" +
-		"- Edits to conflicted regions must be limited to the resolution itself; unrelated rewrites are not acceptable."
-
-	if strings.TrimSpace(params.PreviousReview) != "" {
-		criteria += "\n\nMost recent review feedback that must still be honored:\n" + strings.TrimSpace(params.PreviousReview)
-	}
-
 	work := strings.TrimSpace(resolutionDiff)
 	if work == "" {
 		work = "Conflict resolution diff is empty: no resolution changes detected."
 	}
 
 	return CheckIfCriteriaFulfilled(dCtx, CheckWorkInfo{
-		Requirements:       criteria,
-		Work:               work,
-		BaseBranch:         params.BaseBranch,
-		LastReviewTreeHash: params.LastReviewTreeHash,
+		ResolvingMergeConflicts: true,
+		Requirements:            strings.TrimSpace(params.Requirements),
+		PreviousReview:          strings.TrimSpace(params.PreviousReview),
+		Work:                    work,
+		BaseBranch:              params.BaseBranch,
+		LastReviewTreeHash:      params.LastReviewTreeHash,
 	})
 }
 
