@@ -214,6 +214,11 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)
 	r.POST("/api/v1/open-in-ide", ctrl.OpenInIdeHandler)
 
+	remotePairingRoutes := r.Group("/api/v1/remote/pairings")
+	remotePairingRoutes.GET("/", ctrl.ListPairingsHandler)
+	remotePairingRoutes.POST("/", ctrl.CreatePairingHandler)
+	remotePairingRoutes.DELETE("/:id", ctrl.DeletePairingHandler)
+
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
 
