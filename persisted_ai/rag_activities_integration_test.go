@@ -78,6 +78,13 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set to true")
 	}
+	// TODO this could be made to work by initializing a workspace (side init)
+	// inside the container, but that's deferred as too much work for now.
+	// Alternatively, use some TBD mechanism to run this test on the host,
+	// where an initialized workspace and API keys are available.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("Skipping integration test; no initialized workspace or API keys in non-local sidekick environments")
+	}
 
 	ctx := context.Background()
 	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
@@ -109,7 +116,7 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 				Provider: "openai",
 			},
 		},
-		CharLimit: 24000,
+		CharLimit: 32000,
 	}
 
 	// Execute the function under test
@@ -208,7 +215,7 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 				Provider: "openai",
 			},
 		},
-		CharLimit: 24000,
+		CharLimit: 32000,
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, 120*time.Second)

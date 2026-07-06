@@ -379,6 +379,12 @@ func independentSSHArgs(sshArgs []string) []string {
 			i++ // skip the control socket path value
 			continue
 		}
+		if a == "-R" {
+			// Reverse port forwards belong to the shared master connection;
+			// short-lived independent connections must not compete for them.
+			i++ // skip the forward spec value
+			continue
+		}
 		if a == "-o" && i+1 < len(sshArgs) {
 			opt := sshArgs[i+1]
 			if strings.HasPrefix(opt, "ControlMaster=") ||

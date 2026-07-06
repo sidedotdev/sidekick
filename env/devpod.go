@@ -27,10 +27,21 @@ func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
 	if input.WorkspaceId != "" {
 		args = append(args, "--id", input.WorkspaceId)
 	}
-	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: ".",
-		Command:    "devpod",
-		Args:       args,
+	// A stopped or wedged docker daemon makes `devpod up` hang forever at
+	// "creating devcontainer". Ensure the daemon is ready before starting, then
+	// guard the run so a hang that begins mid-build is detected and recovered.
+	if err := ensureDockerReady(ctx); err != nil {
+		return fmt.Errorf("docker engine not ready for devpod up: %w", err)
+	}
+	var output unix.RunCommandActivityOutput
+	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
+		var runErr error
+		output, runErr = unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+			WorkingDir: ".",
+			Command:    "devpod",
+			Args:       args,
+		})
+		return runErr
 	})
 	if err != nil {
 		return fmt.Errorf("devpod up failed: %w", err)
@@ -103,10 +114,15 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 // DevPodDeleteActivity force-deletes a DevPod workspace.
 func DevPodDeleteActivity(ctx context.Context, workspaceName string) error {
 	CloseDevPodSSHMaster(workspaceName)
-	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: ".",
-		Command:    "devpod",
-		Args:       []string{"delete", workspaceName, "--force"},
+	var output unix.RunCommandActivityOutput
+	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
+		var runErr error
+		output, runErr = unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+			WorkingDir: ".",
+			Command:    "devpod",
+			Args:       []string{"delete", workspaceName, "--force"},
+		})
+		return runErr
 	})
 	if err != nil {
 		return fmt.Errorf("devpod delete failed: %w", err)
@@ -120,10 +136,15 @@ func DevPodDeleteActivity(ctx context.Context, workspaceName string) error {
 // DevPodStopActivity stops a DevPod workspace without deleting it.
 func DevPodStopActivity(ctx context.Context, workspaceName string) error {
 	CloseDevPodSSHMaster(workspaceName)
-	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: ".",
-		Command:    "devpod",
-		Args:       []string{"stop", workspaceName},
+	var output unix.RunCommandActivityOutput
+	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
+		var runErr error
+		output, runErr = unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+			WorkingDir: ".",
+			Command:    "devpod",
+			Args:       []string{"stop", workspaceName},
+		})
+		return runErr
 	})
 	if err != nil {
 		return fmt.Errorf("devpod stop failed: %w", err)

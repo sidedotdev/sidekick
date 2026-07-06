@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sidekick/common"
 	"sidekick/env"
 	"strings"
 	"testing"
@@ -613,4 +614,23 @@ test_commands:
 		assert.Equal(t, "AGENTS.md", result.Config.EditCode.HintsPath)
 		assert.Equal(t, "fallback hints body", result.Config.EditCode.Hints)
 	})
+}
+
+func TestGetRepoConfigActivity_PortForwards(t *testing.T) {
+	yamlContent := `
+port_forwards:
+  - host_port: 18855
+  - host_port: 8080
+    container_port: 9090
+`
+	envContainer := setupTestEnv(t, yamlContent, "", "")
+
+	config, err := GetRepoConfigActivity(envContainer)
+
+	require.NoError(t, err)
+	require.Len(t, config.PortForwards, 2)
+	assert.Equal(t, common.PortForwardConfig{HostPort: 18855}, config.PortForwards[0])
+	assert.Equal(t, 18855, config.PortForwards[0].ContainerPortOrDefault())
+	assert.Equal(t, common.PortForwardConfig{HostPort: 8080, ContainerPort: 9090}, config.PortForwards[1])
+	assert.Equal(t, 9090, config.PortForwards[1].ContainerPortOrDefault())
 }

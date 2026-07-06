@@ -196,17 +196,17 @@ func TestResolveGoogleReasoningEffort(t *testing.T) {
 		expected string
 	}{
 		// Non-meta values pass through unchanged
-		{"passthrough empty", "", "gemini-3-pro-preview", ""},
+		{"passthrough empty", "", "gemini-3.1-pro-preview", ""},
 		{"passthrough low", "low", "gemini-2.5-pro", "low"},
-		{"passthrough high", "high", "gemini-3-pro-preview", "high"},
+		{"passthrough high", "high", "gemini-3.1-pro-preview", "high"},
 
 		// lowest → none (thinking disabled)
-		{"lowest newer model", "lowest", "gemini-3-pro-preview", "none"},
+		{"lowest newer model", "lowest", "gemini-3.1-pro-preview", "none"},
 		{"lowest legacy 2.5-pro", "lowest", "gemini-2.5-pro", "none"},
 		{"lowest legacy 2.5-flash", "lowest", "gemini-2.5-flash", "none"},
 
 		// highest → max
-		{"highest newer model", "highest", "gemini-3-pro-preview", "max"},
+		{"highest newer model", "highest", "gemini-3.1-pro-preview", "max"},
 		{"highest legacy model", "highest", "gemini-2.5-pro", "max"},
 
 		// GPT mappings are provider-agnostic

@@ -108,7 +108,7 @@ func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, plan
 	}
 
 	// Step 3: Refine and rank the code context, if needed
-	if len(codeContext) > min(defaultMaxChatHistoryLength/2, refineContextLengthThreshold) {
+	if len(codeContext) > min(defaultRequestedKeepLength/2, refineContextLengthThreshold) {
 		refinePromptInfo := RefineCodeContextInfo{
 			DetermineCodeContextInfo:   initialPromptInfo,
 			OriginalCodeContext:        codeContext,
@@ -125,7 +125,7 @@ func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, plan
 }
 
 func PrepareRepoSummary(dCtx DevContext, requirements string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (string, string, error) {
-	repoSummary, err := GetRankedRepoSummary(dCtx, requirements, min(defaultMaxChatHistoryLength/2, 15000), weightedRankQueries...)
+	repoSummary, err := GetRankedRepoSummary(dCtx, requirements, min(defaultRequestedKeepLength/2, 15000), weightedRankQueries...)
 	if err != nil {
 		return "", "", err
 	}
@@ -143,7 +143,7 @@ func PrepareRepoSummary(dCtx DevContext, requirements string, weightedRankQuerie
 
 	// Append the identified needs to the requirements for second round of ranked signatures
 	rankQuery := fmt.Sprintf("%s\n\n%s", requirements, strings.Join(infoNeeds.Needs, "\n"))
-	repoSummary, err = GetRankedRepoSummary(dCtx, rankQuery, min(defaultMaxChatHistoryLength/2, 15000), weightedRankQueries...)
+	repoSummary, err = GetRankedRepoSummary(dCtx, rankQuery, min(defaultRequestedKeepLength/2, 15000), weightedRankQueries...)
 
 	return repoSummary, needs, err
 }
@@ -204,7 +204,7 @@ func GetRelevantCodeContext(dCtx DevContext, promptInfo DetermineCodeContextInfo
 	longestFirst := true
 
 	// we don't need room for other messages since we'll refine later if needed
-	threshold := defaultMaxChatHistoryLength
+	threshold := defaultRequestedKeepLength
 
 	// TODO move up to PrepareInitialCodeContext and beyond
 	return codeContextLoop(dCtx.NewActionContext("generate.code_context"), promptInfo, longestFirst, threshold)
@@ -221,7 +221,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 
 	// leave some room for other messages in other subflows after code context
 	// is finalized
-	threshold := min(defaultMaxChatHistoryLength/2, refineContextLengthThreshold)
+	threshold := min(defaultRequestedKeepLength/2, refineContextLengthThreshold)
 
 	// TODO move up to PrepareInitialCodeContext and beyond
 	requiredCodeContext, codeContext, err := codeContextLoop(dCtx.NewActionContext("generate.refine_code_context"), promptInfo, longestFirst, threshold)
@@ -231,7 +231,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 	// TODO /gen include the symbolized code context for the symbols that were
 	// removed from context after refining, and add that to the end of the
 	// codeContext string
-	fullCodeContext, err := RetrieveCodeContext(dCtx, *requiredCodeContext, 1000*defaultMaxChatHistoryLength)
+	fullCodeContext, err := RetrieveCodeContext(dCtx, *requiredCodeContext, 1000*defaultRequestedKeepLength)
 	return codeContext, fullCodeContext, err
 }
 
@@ -286,7 +286,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		if v := workflow.GetVersion(actionCtx, "chat-history-manage-v4", workflow.DefaultVersion, 1); v == 1 {
 			modelConfig = actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 		}
-		ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultMaxChatHistoryLength, modelConfig)
+		ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultRequestedKeepLength, modelConfig)
 
 		attempts++
 		iterationsSinceLastFeedback++

@@ -24,9 +24,23 @@ import (
 	"go.temporal.io/sdk/temporal"
 )
 
-// envVarsToInject are environment variables injected into all commands run via Env.
-// GIT_EDITOR=true prevents git from opening an editor for interactive commands.
-var envVarsToInject = []string{"GIT_EDITOR=true"}
+// envVarsToInject returns environment variables injected into all commands run
+// via Env. GIT_EDITOR=true prevents git from opening an editor for interactive
+// commands. common.ActiveEnvTypeEnvVar lets spawned processes (e.g. tests)
+// detect which kind of Sidekick environment they run inside, and
+// common.PortForwardsEnvVar (set only when forwards are configured) tells them
+// the container-local ports at which reverse-forwarded host ports are
+// reachable.
+func envVarsToInject(envType EnvType, portForwards []common.PortForwardConfig) []string {
+	envVars := []string{
+		"GIT_EDITOR=true",
+		common.ActiveEnvTypeEnvVar + "=" + string(envType),
+	}
+	if len(portForwards) > 0 {
+		envVars = append(envVars, common.PortForwardsEnvVar+"="+common.FormatPortForwards(portForwards))
+	}
+	return envVars
+}
 
 // ErrBranchAlreadyExists is returned when attempting to create a worktree
 // with a branch name that already exists
@@ -205,6 +219,9 @@ type DevPodEnv struct {
 	// to read tracked content from local git objects instead of paying the
 	// per-file SSH/sftp cost.
 	LocalRepoDir string `json:"localRepoDir,omitempty"`
+	// PortForwards are host ports reverse-forwarded into the container over
+	// the SSH connection used to run commands.
+	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
 	sftp         sftpConn
 }
 
@@ -216,6 +233,9 @@ type OpenShellEnv struct {
 	// to read tracked content from local git objects instead of paying the
 	// per-file SSH/sftp cost.
 	LocalRepoDir string `json:"localRepoDir,omitempty"`
+	// PortForwards are host ports reverse-forwarded into the container over
+	// the SSH connection used to run commands.
+	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
 	sftp         sftpConn
 }
 
@@ -317,7 +337,7 @@ func (e *LocalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		WorkingDir: filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir),
 		Command:    input.Command,
 		Args:       input.Args,
-		EnvVars:    append(input.EnvVars, envVarsToInject...),
+		EnvVars:    append(input.EnvVars, envVarsToInject(e.GetType(), nil)...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
@@ -396,7 +416,7 @@ func (e *LocalGitWorktreeEnv) RunCommand(ctx context.Context, input EnvRunComman
 		WorkingDir: filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir),
 		Command:    input.Command,
 		Args:       input.Args,
-		EnvVars:    append(input.EnvVars, envVarsToInject...),
+		EnvVars:    append(input.EnvVars, envVarsToInject(e.GetType(), nil)...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
@@ -477,8 +497,8 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 // non-zero exit and a clear message on stderr, so callers get an explicit error
 // instead of empty output from a command that silently ran in the SSH session's
 // default directory.
-func buildRemoteShellCommand(workDir string, input EnvRunCommandInput) string {
-	allEnvVars := append(input.EnvVars, envVarsToInject...)
+func buildRemoteShellCommand(workDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) string {
+	allEnvVars := append(input.EnvVars, envVarsToInject(envType, portForwards)...)
 	shellParts := make([]string, 0, len(allEnvVars)+3)
 
 	// Detach stdin from the SSH channel so remote commands behave like local
@@ -501,9 +521,37 @@ func buildRemoteShellCommand(workDir string, input EnvRunCommandInput) string {
 	return strings.Join(shellParts, " && ")
 }
 
+// reverseForwardArgs returns ssh -R flags exposing the configured host ports
+// on the container's loopback interface, so services bound to 127.0.0.1 on the
+// host are reachable from inside the container. When commands multiplex onto
+// an existing ControlMaster connection, the master recognizes repeated
+// identical forward requests as already established, so these flags are safe
+// to include on every invocation and forwards self-heal if the master
+// connection is ever restarted.
+func reverseForwardArgs(forwards []common.PortForwardConfig) []string {
+	args := make([]string, 0, len(forwards)*2)
+	for _, forward := range forwards {
+		args = append(args, "-R", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", forward.ContainerPortOrDefault(), forward.HostPort))
+	}
+	return args
+}
+
+// insertBeforeSSHDestination inserts extra ssh option args before the
+// destination, which must be the last element of sshArgs.
+func insertBeforeSSHDestination(sshArgs []string, extra []string) []string {
+	if len(extra) == 0 {
+		return sshArgs
+	}
+	out := make([]string, 0, len(sshArgs)+len(extra))
+	out = append(out, sshArgs[:len(sshArgs)-1]...)
+	out = append(out, extra...)
+	out = append(out, sshArgs[len(sshArgs)-1])
+	return out
+}
+
 func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, input)
+	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
 
 	controlPath := devpodSSHControlPath(e.WorkspaceName)
 	sshHost := e.WorkspaceName + ".devpod"
@@ -515,17 +563,24 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 		"-o", "ServerAliveInterval=10",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "LogLevel=ERROR",
-		sshHost,
-		"--",
-		fullCommand,
 	}
+	sshArgs = append(sshArgs, reverseForwardArgs(e.PortForwards)...)
+	sshArgs = append(sshArgs, sshHost, "--", fullCommand)
 
 	runCommandInput := unix.RunCommandActivityInput{
 		WorkingDir: os.TempDir(),
 		Command:    "ssh",
 		Args:       sshArgs,
 	}
-	output, err := unix.RunCommandActivity(ctx, runCommandInput)
+	// Commands run over SSH into the container ultimately depend on the docker
+	// engine; a hung engine makes them block forever. Guard so such a hang is
+	// detected and the engine restarted instead of stalling the activity.
+	var output EnvRunCommandOutput
+	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
+		var runErr error
+		output, runErr = unix.RunCommandActivity(ctx, runCommandInput)
+		return runErr
+	})
 	if err != nil {
 		return output, err
 	}
@@ -537,7 +592,7 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 func (e *DevPodEnv) SSHArgs(ctx context.Context) ([]string, error) {
 	controlPath := devpodSSHControlPath(e.WorkspaceName)
 	sshHost := e.WorkspaceName + ".devpod"
-	return []string{
+	sshArgs := []string{
 		"-o", "ControlMaster=auto",
 		"-S", controlPath,
 		"-o", "ControlPersist=3600",
@@ -545,9 +600,9 @@ func (e *DevPodEnv) SSHArgs(ctx context.Context) ([]string, error) {
 		"-o", "ServerAliveInterval=10",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "LogLevel=ERROR",
-		sshHost,
-		"--",
-	}, nil
+	}
+	sshArgs = append(sshArgs, reverseForwardArgs(e.PortForwards)...)
+	return append(sshArgs, sshHost, "--"), nil
 }
 
 func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
@@ -615,12 +670,13 @@ func (e *OpenShellEnv) GetWorkingDirectory() string {
 
 func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, input)
+	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
 
 	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
 	if err != nil {
 		return EnvRunCommandOutput{}, fmt.Errorf("failed to get SSH config for sandbox %s: %w", e.SandboxName, err)
 	}
+	sshArgs = insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards))
 	sshArgs = append(sshArgs, fullCommand)
 
 	runCommandInput := unix.RunCommandActivityInput{
@@ -632,7 +688,11 @@ func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput)
 }
 
 func (e *OpenShellEnv) SSHArgs(ctx context.Context) ([]string, error) {
-	return openShellSSHArgs(ctx, e.SandboxName)
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return nil, err
+	}
+	return insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards)), nil
 }
 
 func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {

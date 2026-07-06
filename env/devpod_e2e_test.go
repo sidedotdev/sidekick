@@ -2,9 +2,12 @@ package env
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/common"
 	"strings"
 	"testing"
 	"time"
@@ -22,14 +25,33 @@ func repoRoot(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
-func setupMinimalWorkspace(t *testing.T) string {
+// minimalDockerfileHash returns a short content hash of the minimal devcontainer
+// Dockerfile fixture, used to key the cached workspace so repeated runs reuse the
+// previously built image instead of rebuilding.
+func minimalDockerfileHash(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	devcontainerDir := filepath.Join(dir, ".devcontainer")
-	require.NoError(t, os.MkdirAll(devcontainerDir, 0755))
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "env", "testdata", "Dockerfile.minimal"))
+	require.NoError(t, err)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])[:12]
+}
 
+// setupMinimalWorkspace materializes the devcontainer workspace at a stable path
+// keyed by the fixture Dockerfile content hash (rather than a per-run temp dir),
+// so devpod reuses the previously built image. It is idempotent: an already
+// materialized workspace is reused as-is.
+func setupMinimalWorkspace(t *testing.T, hash string) string {
+	t.Helper()
 	dockerfile, err := os.ReadFile(filepath.Join(repoRoot(t), "env", "testdata", "Dockerfile.minimal"))
 	require.NoError(t, err)
+
+	dir := filepath.Join(os.TempDir(), "sidekick-e2e-devpod-"+hash)
+	if _, err := os.Stat(filepath.Join(dir, ".devcontainer", "devcontainer.json")); err == nil {
+		return dir
+	}
+
+	devcontainerDir := filepath.Join(dir, ".devcontainer")
+	require.NoError(t, os.MkdirAll(devcontainerDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(devcontainerDir, "Dockerfile"), dockerfile, 0644))
 
 	devcontainerJSON := `{"name": "test", "build": {"dockerfile": "Dockerfile"}}`
@@ -58,15 +80,24 @@ func TestDevPodIntegration(t *testing.T) {
 	if os.Getenv("SIDE_E2E_TEST") != "true" {
 		t.Skip("skipping DevPod integration test; SIDE_E2E_TEST not set to true")
 	}
+	// TODO: instead of skipping, use some TBD mechanism to run this test on
+	// the host, where containers can be created.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping DevPod integration test; container-in-container is not supported in non-local sidekick environments")
+	}
 	if _, err := exec.LookPath("devpod"); err != nil {
 		t.Skip("devpod command not found in PATH")
 	}
 
-	workspacePath := setupMinimalWorkspace(t)
+	// Key the cached workspace + built image by the fixture Dockerfile hash so
+	// repeated runs reuse them. The workspace is intentionally not deleted on
+	// cleanup so it persists for reuse.
+	hash := minimalDockerfileHash(t)
+	workspacePath := setupMinimalWorkspace(t, hash)
+	workspaceName := "side-e2e-devpod-" + hash
 
 	// Start the DevPod workspace. When the container is already running, this
 	// returns quickly.
-	workspaceName := "test-devpod-integration-sidekick-e2e" // use fixed value for faster runs (no repeated image build)
 	err := DevPodUpActivity(context.Background(), DevPodUpInput{WorkspacePath: workspacePath, IDE: "none", WorkspaceId: workspaceName})
 	require.NoError(t, err, "DevPodUpActivity failed")
 
@@ -77,14 +108,6 @@ func TestDevPodIntegration(t *testing.T) {
 		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
 		defer cancel()
 	}
-
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := DevPodDeleteActivity(cleanupCtx, workspaceName); err != nil {
-			t.Logf("DevPodDeleteActivity cleanup error: %v", err)
-		}
-	})
 
 	containerWorkDir := "/workspaces/" + workspaceName
 
@@ -134,6 +157,17 @@ func TestDevPodIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, 0, initOut.ExitStatus, "repo init failed: %s", initOut.Stderr)
+
+		// The workspace container is reused across runs, so remove this per-run
+		// repo and its worktree to avoid unbounded writable-layer growth.
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = devEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", containerRepoDir},
+			})
+		})
 
 		repoEnv := &DevPodEnv{
 			WorkingDirectory: containerRepoDir,

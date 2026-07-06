@@ -226,16 +226,24 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 		devPodUpInput := env.DevPodUpInput{WorkspacePath: repoDir}
 		// Check for a custom workspace ID from repo config
+		var portForwards []common.PortForwardConfig
 		tempRepoConfigForDevPod, configErr := GetRepoConfig(tempLocalExecContext)
 		if configErr == nil {
 			configOverrides.ApplyToRepoConfig(&tempRepoConfigForDevPod)
+			portForwards = tempRepoConfigForDevPod.PortForwards
 			if tempRepoConfigForDevPod.DevPodConfig.WorkspaceId != "" {
 				devpodWorkspaceName = tempRepoConfigForDevPod.DevPodConfig.WorkspaceId
 				devPodUpInput.WorkspaceId = devpodWorkspaceName
 			}
 		}
 
-		err = workflow.ExecuteActivity(ctx, env.DevPodUpActivity, devPodUpInput).Get(ctx, nil)
+		// Provisioning can hit transient docker/network failures, and devpod up
+		// can legitimately take many minutes (image builds). ProvisioningRetryCtx
+		// gives it a generous timeout and a small bounded number of automatic
+		// retries before surfacing the failure for user-initiated retry rather
+		// than retrying indefinitely.
+		provisionCtx := utils.ProvisioningRetryCtx(ctx)
+		err = workflow.ExecuteActivity(provisionCtx, env.DevPodUpActivity, devPodUpInput).Get(provisionCtx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to start DevPod workspace: %v", err)
 		}
@@ -248,6 +256,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -276,12 +285,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: worktree.WorkingDirectory,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		}
 	case string(env.EnvTypeOpenShell):
@@ -290,6 +301,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			configOverrides.ApplyToRepoConfig(&tempRepoConfigForOpenShell)
 		}
 		osConfig := tempRepoConfigForOpenShell.OpenShellConfig
+		portForwards := tempRepoConfigForOpenShell.PortForwards
 
 		sandboxName := env.OpenShellSandboxName(repoDir)
 		// Reuse an existing sandbox for this workspace if it is still alive.
@@ -314,13 +326,16 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				}
 			}
 
-			// TODO increase timeout for sandbox creation
 			var createOutput env.OpenShellCreateOutput
-			err = workflow.ExecuteActivity(ctx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
+			// Provisioning can hit transient docker/network failures, so retry a
+			// small bounded number of times before surfacing the failure for
+			// user-initiated retry.
+			provisionCtx := utils.ProvisioningRetryCtx(ctx)
+			err = workflow.ExecuteActivity(provisionCtx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
 				Name:    sandboxName,
 				Source:  osConfig.From,
 				RepoDir: repoDir,
-			}).Get(ctx, &createOutput)
+			}).Get(provisionCtx, &createOutput)
 			if err != nil {
 				return DevContext{}, fmt.Errorf("failed to create OpenShell sandbox: %v", err)
 			}
@@ -344,6 +359,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: containerWorkDir,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -372,12 +388,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: worktree.WorkingDirectory,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.OpenShellEnv{
 				WorkingDirectory: containerWorkDir,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		}
 	default:

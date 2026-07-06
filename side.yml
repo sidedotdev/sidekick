@@ -29,7 +29,7 @@ integration_test_commands:
   - command: "SIDE_INTEGRATION_TEST=true go run ./scripts/affected_tests/ -test.timeout 120s ./..."
   - command: "go run ./scripts/lint_chat_history_append/"
   - command: "go run ./scripts/lint_track_callback/ ./..."
-  - command: "SIDE_E2E_TEST=true go run ./scripts/affected_tests/ -test.timeout 300s ./..."
+  - command: "SIDE_E2E_TEST=true go run ./scripts/affected_tests/ -test.timeout 295s ./..."
 
 agent_config:
   coding:
@@ -58,6 +58,17 @@ command_permissions:
 
 openshell:
   from: "Dockerfile.openshell"
+
+# Reverse-forward the host's read-only Temporal proxy (exposed by dev builds
+# of `side start`) into devpod/openshell containers so integration tests that
+# read workflow histories (e.g. workflow replay) can connect. The proxy only
+# allows listing workflows and fetching histories, so the sandbox cannot
+# mutate the host's Temporal state. A non-default container port keeps the
+# host-default ports free inside the container, so an in-container
+# `side start` can still bind its own Temporal server and proxy normally.
+port_forwards:
+  - host_port: 21855
+    container_port: 28855
 
 dev_run:
   supervisor:

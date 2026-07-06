@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/common"
 	"strings"
 	"testing"
 
@@ -209,7 +210,7 @@ func TestBuildRemoteShellCommand(t *testing.T) {
 		t.Parallel()
 		workDir := t.TempDir()
 
-		cmd := buildRemoteShellCommand(workDir, EnvRunCommandInput{
+		cmd := buildRemoteShellCommand(workDir, EnvTypeDevPod, nil, EnvRunCommandInput{
 			Command: "pwd",
 			EnvVars: []string{"FOO=bar"},
 		})
@@ -221,6 +222,7 @@ func TestBuildRemoteShellCommand(t *testing.T) {
 		assert.Less(t, cdIdx, runIdx, "cd must come before the command")
 		assert.Contains(t, cmd, "export "+shellQuote("FOO=bar"))
 		assert.Contains(t, cmd, "export "+shellQuote("GIT_EDITOR=true"))
+		assert.Contains(t, cmd, "export "+shellQuote("SIDE_ACTIVE_ENV_TYPE=devpod"))
 
 		out, err := exec.Command("sh", "-c", cmd).Output()
 		require.NoError(t, err)
@@ -236,7 +238,7 @@ func TestBuildRemoteShellCommand(t *testing.T) {
 		t.Parallel()
 		missingDir := filepath.Join(t.TempDir(), "does-not-exist")
 
-		cmd := buildRemoteShellCommand(missingDir, EnvRunCommandInput{
+		cmd := buildRemoteShellCommand(missingDir, EnvTypeDevPod, nil, EnvRunCommandInput{
 			Command: "echo",
 			Args:    []string{"should-not-print"},
 		})
@@ -253,5 +255,19 @@ func TestBuildRemoteShellCommand(t *testing.T) {
 		assert.Empty(t, stdout.String(), "command must not run when cd fails")
 		assert.Contains(t, stderr.String(), "No such file or directory")
 		assert.Contains(t, stderr.String(), missingDir)
+	})
+
+	t.Run("exports configured port forwards", func(t *testing.T) {
+		t.Parallel()
+
+		forwards := []common.PortForwardConfig{
+			{HostPort: 18855, ContainerPort: 28855},
+			{HostPort: 8080},
+		}
+		cmd := buildRemoteShellCommand(t.TempDir(), EnvTypeOpenShell, forwards, EnvRunCommandInput{Command: "true"})
+		assert.Contains(t, cmd, "export "+shellQuote("SIDE_PORT_FORWARDS=18855:28855,8080:8080"))
+
+		cmd = buildRemoteShellCommand(t.TempDir(), EnvTypeOpenShell, nil, EnvRunCommandInput{Command: "true"})
+		assert.NotContains(t, cmd, "SIDE_PORT_FORWARDS")
 	})
 }
