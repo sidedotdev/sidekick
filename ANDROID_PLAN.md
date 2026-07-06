@@ -10,7 +10,11 @@ notes below.
 ================= PART A — BUILD NOW =================
 
 1. TOOLCHAIN (skip anything already present)
-- JDK 17 active (java -version → 17); install Temurin 17 if missing.
+- JDK 21 active (java -version → 21); install Temurin 21 if missing. Run the Gradle
+  daemon on 21 (current LTS) and set the bytecode/language target below to 21 as well.
+  Fallback: if Robolectric or an annotation processor chokes on 21 bytecode, drop the
+  toolchain/compileOptions to 17 and enable the foojay-resolver (auto-download) in
+  settings.gradle.kts so Gradle can fetch a 17 toolchain.
 - If sdkmanager is absent, install the Android SDK headlessly: download the latest
   commandline-tools, unzip to $ANDROID_HOME/cmdline-tools/latest; yes | sdkmanager --licenses;
   sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" — if 36 is no
@@ -23,7 +27,9 @@ notes below.
   mavenCentral(); rootProject.name="app"; include(":app").
 - gradle/libs.versions.toml — pin and reference everything from here:
   plugins:
-    com.android.application (latest stable AGP),
+    com.android.application (latest stable AGP in the 8.x line — AGP 9.0 folds Kotlin
+      support into the Android plugin and rejects the standalone org.jetbrains.kotlin.android
+      plugin below, breaking the three-plugin setup, so pin the newest 8.x, e.g. 8.13.x),
     org.jetbrains.kotlin.android (latest stable Kotlin 2.x — 2.0+ is required for the
       compose plugin),
     org.jetbrains.kotlin.plugin.compose (same Kotlin version).
@@ -45,7 +51,7 @@ notes below.
       defaultConfig { applicationId; minSdk=24; targetSdk=compileSdk; versionCode=1;
         versionName="1.0"; testInstrumentationRunner="androidx.test.runner.AndroidJUnitRunner" }
       buildFeatures { compose=true }
-      compileOptions { source/target 17 }; kotlin { jvmToolchain(17) }
+      compileOptions { source/target 21 }; kotlin { jvmToolchain(21) }
       testOptions { unitTests { isIncludeAndroidResources = true } } }  // required by Robolectric
     dependencies wired from the catalog exactly as grouped above
       (implementation(platform(bom)); testImplementation(platform(bom));
