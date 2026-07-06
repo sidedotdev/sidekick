@@ -1839,6 +1839,48 @@ func TestBasePermissions_RmRfPatterns(t *testing.T) {
 	})
 }
 
+func TestBasePermissions_ParentDirectoryTraversal(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("parent directory traversal requires approval", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"cd ..",
+			"cd ../",
+			"cd ../..",
+			"cd ../sibling",
+			"cd foo/../..",
+			"cat ../secret",
+			"ls ..",
+		}
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require_approval for: %s", cmd)
+		}
+	})
+
+	t.Run("cd .. inside a compound script requires approval", func(t *testing.T) {
+		t.Parallel()
+		result, _ := EvaluateScriptPermission(config, "cd .. && pwd && ls -la")
+		assert.Equal(t, PermissionRequireApproval, result)
+	})
+
+	t.Run("commands without parent navigation still auto-approve", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"cd",
+			"cd subdir",
+			"cd ./subdir",
+			"git diff HEAD~1 -- coding/git/",
+		}
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto_approve for: %s", cmd)
+		}
+	})
+}
+
 func TestBasePermissions_CatHeredocPatterns(t *testing.T) {
 	t.Parallel()
 	config := BaseCommandPermissions()

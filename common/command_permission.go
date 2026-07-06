@@ -380,8 +380,12 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `.*(^|[^a-zA-Z0-9])~[a-zA-Z]`},
 			{Pattern: `.*\$HOME`},
 			{Pattern: `.*\$\{HOME\}`},
-			// Parent directory traversal (escaping repo context)
-			{Pattern: `.*\.\./`},
+			// Parent directory traversal (escaping repo context). Matches ".."
+			// as a standalone path segment (bounded by start/space/slash on the
+			// left and slash/space/end on the right) so bare navigation like
+			// "cd .." is caught alongside "../foo", without misfiring on Go's
+			// "./..." package idiom.
+			{Pattern: `.*(^|[\s/])\.\.($|/|\s)`},
 			// Additional network commands
 			{Pattern: "nc"},
 			{Pattern: "netcat"},
