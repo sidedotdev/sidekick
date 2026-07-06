@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -136,7 +137,11 @@ func TestRemoteServerEndToEnd(t *testing.T) {
 	}
 	require.NoError(t, ctrl.service.PersistTask(ctx, task))
 
-	rs, err := serveRemote(ctx, ctrl, TestAllowedOrigins())
+	// Bind to loopback so the endpoint advertises a directly reachable address,
+	// letting the same-machine client connect without a relay or discovery.
+	loopback := netip.MustParseAddrPort("127.0.0.1:0")
+
+	rs, err := serveRemote(ctx, ctrl, TestAllowedOrigins(), irohlib.WithBindAddr(loopback))
 	require.NoError(t, err)
 	defer rs.Shutdown(context.Background())
 
@@ -153,7 +158,7 @@ func TestRemoteServerEndToEnd(t *testing.T) {
 	require.Equal(t, rs.Ticket(), pairing.Ticket)
 
 	// Dial the remote node over iroh using the ticket.
-	clientEp, err := irohlib.Bind(ctx)
+	clientEp, err := irohlib.Bind(ctx, irohlib.WithBindAddr(loopback))
 	require.NoError(t, err)
 	defer clientEp.Shutdown(ctx)
 

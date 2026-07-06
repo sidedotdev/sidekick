@@ -34,12 +34,15 @@ type Endpoint struct {
 
 // NewEndpoint loads or generates a persistent iroh identity key under the
 // Sidekick data home and starts an iroh endpoint bound to the Sidekick ALPN.
-func NewEndpoint(ctx context.Context) (*Endpoint, error) {
+// Additional iroh options may be supplied (e.g. to bind a specific address in
+// tests); they are applied after the identity and ALPN defaults.
+func NewEndpoint(ctx context.Context, opts ...iroh.Option) (*Endpoint, error) {
 	sk, err := loadOrCreateSecretKey()
 	if err != nil {
 		return nil, err
 	}
-	ep, err := iroh.Bind(ctx, iroh.WithSecretKey(sk), iroh.WithALPNs(ALPN))
+	bindOpts := append([]iroh.Option{iroh.WithSecretKey(sk), iroh.WithALPNs(ALPN)}, opts...)
+	ep, err := iroh.Bind(ctx, bindOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to bind iroh endpoint: %w", err)
 	}

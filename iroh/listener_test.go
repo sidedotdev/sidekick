@@ -3,6 +3,7 @@ package iroh
 import (
 	"context"
 	"io"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -19,7 +20,11 @@ func TestListenerRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	serverEp, err := iroh.Bind(ctx, iroh.WithALPNs(ALPN))
+	// Bind to loopback so the server advertises a directly reachable address,
+	// letting the client connect without a relay or address discovery.
+	loopback := netip.MustParseAddrPort("127.0.0.1:0")
+
+	serverEp, err := iroh.Bind(ctx, iroh.WithALPNs(ALPN), iroh.WithBindAddr(loopback))
 	require.NoError(t, err)
 	defer serverEp.Shutdown(ctx)
 
@@ -35,7 +40,7 @@ func TestListenerRoundTrip(t *testing.T) {
 		io.Copy(conn, conn)
 	}()
 
-	clientEp, err := iroh.Bind(ctx)
+	clientEp, err := iroh.Bind(ctx, iroh.WithBindAddr(loopback))
 	require.NoError(t, err)
 	defer clientEp.Shutdown(ctx)
 

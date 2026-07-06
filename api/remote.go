@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	irohlib "github.com/tmc/go-iroh/iroh"
 )
 
 // currentRemoteTicket holds the iroh connection ticket of the running remote
@@ -229,8 +230,9 @@ func RunRemoteServer(ctx context.Context) (*RemoteServer, error) {
 
 // serveRemote wraps the existing REST API with device-token authentication and
 // serves it over an iroh endpoint. It is split from RunRemoteServer so tests can
-// exercise the full serving path with a test controller.
-func serveRemote(ctx context.Context, ctrl Controller, allowedOrigins *AllowedOrigins) (*RemoteServer, error) {
+// exercise the full serving path with a test controller. Additional iroh
+// endpoint options may be supplied, e.g. to bind a loopback address in tests.
+func serveRemote(ctx context.Context, ctrl Controller, allowedOrigins *AllowedOrigins, endpointOpts ...irohlib.Option) (*RemoteServer, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	apiRouter := DefineRoutes(ctrl, allowedOrigins)
@@ -244,7 +246,7 @@ func serveRemote(ctx context.Context, ctrl Controller, allowedOrigins *AllowedOr
 	authRouter.Use(blockRemotePairingMiddleware())
 	authRouter.NoRoute(gin.WrapH(apiRouter.Handler()))
 
-	endpoint, err := iroh.NewEndpoint(ctx)
+	endpoint, err := iroh.NewEndpoint(ctx, endpointOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start iroh endpoint: %w", err)
 	}
