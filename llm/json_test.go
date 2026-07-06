@@ -67,6 +67,33 @@ func TestParseJsonValue(t *testing.T) {
 	}
 }
 
+func TestRepairJsonPassesThroughUnrepairableInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "unquoted value from broken tool-call parsing",
+			input: `{"requests": <parameter name="content">...}`,
+		},
+		{
+			name:  "completely malformed",
+			input: `{not json at all`,
+		},
+		{
+			name:  "leaked xml parameter tag from broken tool-call parsing",
+			input: `{"requests": <parameter name="content">Please review the changes and let me know if anything needs adjustment.</parameter>}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := RepairJson(test.input)
+			assert.Equal(t, test.input, got, "expected unrepairable input to pass through unchanged")
+		})
+	}
+}
+
 func TestRepairJson(t *testing.T) {
 	tests := []struct {
 		name     string

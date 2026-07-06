@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"sidekick/logger"
 	"strings"
 )
 
@@ -57,7 +58,12 @@ func repairJson(input string, recoverLeakedParams bool) string {
 	// Parse the JSON structure
 	var data interface{}
 	if err := json.Unmarshal([]byte(escaped), &data); err != nil {
-		return escaped // Return escaped string if not valid JSON
+		// The input couldn't be repaired into valid JSON. Pass it through
+		// unchanged rather than returning a partially-transformed string that
+		// downstream consumers may treat as (invalid) json.RawMessage.
+		l := logger.Get()
+		l.Info().Err(err).Msg("could not repair JSON, passing through original value unchanged")
+		return input
 	}
 
 	if recoverLeakedParams {
@@ -75,7 +81,9 @@ func repairJson(input string, recoverLeakedParams bool) string {
 	encoder.SetEscapeHTML(false)
 	err := encoder.Encode(processed)
 	if err != nil {
-		return escaped // Return escaped string if marshaling fails
+		l := logger.Get()
+		l.Info().Err(err).Msg("could not re-marshal repaired JSON, passing through original value unchanged")
+		return input
 	}
 
 	return strings.TrimSpace(buffer.String())
