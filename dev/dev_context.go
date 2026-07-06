@@ -237,9 +237,11 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			}
 		}
 
-		// Provisioning can hit transient docker/network failures, so retry a
-		// small bounded number of times before surfacing the failure for
-		// user-initiated retry.
+		// Provisioning can hit transient docker/network failures, and devpod up
+		// can legitimately take many minutes (image builds). ProvisioningRetryCtx
+		// gives it a generous timeout and a small bounded number of automatic
+		// retries before surfacing the failure for user-initiated retry rather
+		// than retrying indefinitely.
 		provisionCtx := utils.ProvisioningRetryCtx(ctx)
 		err = workflow.ExecuteActivity(provisionCtx, env.DevPodUpActivity, devPodUpInput).Get(provisionCtx, nil)
 		if err != nil {

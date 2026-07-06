@@ -8,13 +8,29 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"sidekick/coding/unix"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/temporal"
 )
 
+// openShellGatewayProbeTimeout bounds the fast `sandbox list` gateway
+// reachability probe so a wedged gateway cannot make the probe itself hang.
+const openShellGatewayProbeTimeout = 15 * time.Second
+
 var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// autoRecreateOpenShellGatewayEnvVar controls whether sidekick recreates the
+// OpenShell gateway when sandbox creation fails or times out because the gateway
+// is unreachable. Enabled by default; disable with a falsy value (0, false, no,
+// off).
+const autoRecreateOpenShellGatewayEnvVar = "SIDE_AUTO_RECREATE_OPENSHELL_GATEWAY"
+
+func openShellGatewayRecreateEnabled() bool {
+	return envFlagEnabled(autoRecreateOpenShellGatewayEnvVar)
+}
 
 type OpenShellCreateInput struct {
 	// Source for --from: a Dockerfile path, community sandbox name, or image reference.
@@ -40,6 +56,21 @@ func OpenShellSandboxName(repoDir string) string {
 
 // OpenShellCreateActivity creates an OpenShell sandbox.
 func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (OpenShellCreateOutput, error) {
+	if err := ensureDockerReady(ctx); err != nil {
+		return OpenShellCreateOutput{}, err
+	}
+
+	// A non-interactive `sandbox create` against an unreachable gateway hangs
+	// instead of failing fast, and legitimate creates (which build images) can
+	// run long, so we cannot simply bound create with a short timeout. Instead,
+	// probe reachability up front with the fast `sandbox list` and heal the
+	// gateway before attempting create.
+	if openShellGatewayRecreateEnabled() && openShellGatewayUnreachableViaList(ctx) {
+		if err := recreateOpenShellGateway(ctx); err != nil {
+			return OpenShellCreateOutput{}, err
+		}
+	}
+
 	args := []string{"sandbox", "create"}
 	if input.Name != "" {
 		args = append(args, "--name", input.Name)
@@ -54,13 +85,20 @@ func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (O
 		workingDir = "."
 	}
 
-	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: workingDir,
-		Command:    "openshell",
-		Args:       args,
-	})
+	output, err := runOpenShellSandboxCreate(ctx, workingDir, args)
+
+	// A stopped or crashed gateway leaves stale metadata that openshell reuses
+	// silently in non-interactive mode, so a plain "gateway start" cannot revive
+	// it. Detect that failure mode, recreate the gateway, and retry once.
+	if openShellGatewayRecreateEnabled() && shouldRecreateOpenShellGateway(ctx, output, err) {
+		if recreateErr := recreateOpenShellGateway(ctx); recreateErr != nil {
+			return OpenShellCreateOutput{}, recreateErr
+		}
+		output, err = runOpenShellSandboxCreate(ctx, workingDir, args)
+	}
+
 	if err != nil {
-		return OpenShellCreateOutput{}, fmt.Errorf("openshell sandbox create failed: %w", err)
+		return OpenShellCreateOutput{}, err
 	}
 	if output.ExitStatus != 0 {
 		// When a specific name is requested, concurrent creates for that same
@@ -84,6 +122,77 @@ func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (O
 // failed because a sandbox with the requested name is already present.
 func sandboxAlreadyExists(output string) bool {
 	return strings.Contains(strings.ToLower(output), "already exists")
+}
+
+func runOpenShellSandboxCreate(ctx context.Context, workingDir string, args []string) (unix.RunCommandActivityOutput, error) {
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: workingDir,
+		Command:    "openshell",
+		Args:       args,
+	})
+	if err != nil {
+		return output, fmt.Errorf("openshell sandbox create failed: %w", err)
+	}
+	return output, nil
+}
+
+// isOpenShellGatewayUnreachable reports whether the failed sandbox-create output
+// indicates that the openshell gateway exists but is not currently reachable.
+func isOpenShellGatewayUnreachable(output unix.RunCommandActivityOutput) bool {
+	combined := output.Stderr + "\n" + output.Stdout
+	return strings.Contains(combined, "is not reachable") ||
+		strings.Contains(combined, "Connection refused") ||
+		strings.Contains(combined, "transport error")
+}
+
+// shouldRecreateOpenShellGateway decides whether the openshell gateway should be
+// recreated based on the sandbox-create result. When the create command itself
+// errors (for example because it timed out), the gateway state is probed via
+// the faster sandbox-list command, whose output reveals an unreachable gateway.
+func shouldRecreateOpenShellGateway(ctx context.Context, output unix.RunCommandActivityOutput, createErr error) bool {
+	if createErr != nil {
+		return openShellGatewayUnreachableViaList(ctx)
+	}
+	if output.ExitStatus != 0 {
+		return isOpenShellGatewayUnreachable(output)
+	}
+	return false
+}
+
+// openShellGatewayUnreachableViaList probes the gateway state using the
+// sandbox-list command, which fails fast instead of hanging like sandbox-create
+// can when the gateway is unreachable.
+func openShellGatewayUnreachableViaList(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, openShellGatewayProbeTimeout)
+	defer cancel()
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: ".",
+		Command:    "openshell",
+		Args:       []string{"sandbox", "list"},
+	})
+	if err != nil || output.ExitStatus == 0 {
+		return false
+	}
+	return isOpenShellGatewayUnreachable(output)
+}
+
+// recreateOpenShellGateway destroys and recreates the openshell gateway. This is
+// required to revive a stopped gateway, since non-interactive "gateway start"
+// reuses stale metadata without bringing the gateway back up.
+func recreateOpenShellGateway(ctx context.Context) error {
+	log.Info().Msg("OpenShell gateway not reachable; recreating it")
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: ".",
+		Command:    "openshell",
+		Args:       []string{"gateway", "start", "--recreate"},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to recreate openshell gateway: %w", err)
+	}
+	if output.ExitStatus != 0 {
+		return fmt.Errorf("openshell gateway start --recreate exited with status %d: %s", output.ExitStatus, output.Stderr)
+	}
+	return nil
 }
 
 func parseCreatedSandboxName(output string) string {

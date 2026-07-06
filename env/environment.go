@@ -572,7 +572,15 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 		Command:    "ssh",
 		Args:       sshArgs,
 	}
-	output, err := unix.RunCommandActivity(ctx, runCommandInput)
+	// Commands run over SSH into the container ultimately depend on the docker
+	// engine; a hung engine makes them block forever. Guard so such a hang is
+	// detected and the engine restarted instead of stalling the activity.
+	var output EnvRunCommandOutput
+	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
+		var runErr error
+		output, runErr = unix.RunCommandActivity(ctx, runCommandInput)
+		return runErr
+	})
 	if err != nil {
 		return output, err
 	}
