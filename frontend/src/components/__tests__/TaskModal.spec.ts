@@ -1359,8 +1359,8 @@ describe('TaskModal determineRequirements behavior', () => {
 
       expect(wrapper.find('#title').exists()).toBe(true)
       expect(wrapper.find('#description').exists()).toBe(false)
-      // Only the Flow control remains; environment and repo mode are hidden.
-      expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(1)
+      // Flow, environment, and repo mode controls all remain available for idd.
+      expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(3)
     })
 
     it('does not start an idd task without a title', async () => {
@@ -1414,6 +1414,9 @@ describe('TaskModal determineRequirements behavior', () => {
       expect(body.description).toBeUndefined()
       expect(body.flowType).toBe('idd')
       expect(body.status).toBe('to_do')
+      // Environment, repo mode, and starting branch are configurable for idd too.
+      expect(body.flowOptions.envType).toBe('local')
+      expect(body.flowOptions.repoMode).toBe('worktree')
     })
 
     it('navigates to the intent canvas after starting an idd task', async () => {

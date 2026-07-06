@@ -73,17 +73,17 @@
         />
       </div>
 
-      <div v-if="!isIdd">
+      <div>
         <label>Environment</label>
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
       </div>
 
-      <div v-if="!isIdd">
+      <div>
         <label>Repo Mode</label>
         <SegmentedControl v-model="repoMode" :options="repoModeOptions" />
       </div>
 
-      <div v-if="!isIdd">
+      <div>
         <div v-if="repoMode === 'worktree'" style="display: flex;">
           <label for="startBranch">Start Branch</label>
           <BranchSelector
