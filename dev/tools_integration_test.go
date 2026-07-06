@@ -2,6 +2,8 @@ package dev
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -209,16 +211,40 @@ func devToolsRepoRoot(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
-// setupMinimalDevPodWorkspace creates a minimal devcontainer workspace using the
-// shared minimal Dockerfile from env/testdata.
-func setupMinimalDevPodWorkspace(t *testing.T) string {
+// fixtureContentHash returns a short content hash of the given fixture file,
+// used to key cached E2E artifacts so repeated runs reuse them.
+func fixtureContentHash(t *testing.T, path string) string {
 	t.Helper()
-	dir := t.TempDir()
-	devcontainerDir := filepath.Join(dir, ".devcontainer")
-	require.NoError(t, os.MkdirAll(devcontainerDir, 0755))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])[:12]
+}
 
+// openshellFixtureSandboxName derives a deterministic sandbox name from the
+// content hash of the fixture Dockerfile so repeated runs reuse the cached
+// sandbox (and its built image) instead of rebuilding.
+func openshellFixtureSandboxName(t *testing.T, dockerfilePath string) string {
+	t.Helper()
+	return "side-e2e-openshell-" + fixtureContentHash(t, dockerfilePath)
+}
+
+// setupMinimalDevPodWorkspace materializes a minimal devcontainer workspace at a
+// stable path keyed by the fixture Dockerfile content hash (rather than a per-run
+// temp dir), so devpod reuses the previously built image. It is idempotent: an
+// already materialized workspace is reused as-is.
+func setupMinimalDevPodWorkspace(t *testing.T, hash string) string {
+	t.Helper()
 	dockerfile, err := os.ReadFile(filepath.Join(devToolsRepoRoot(t), "env", "testdata", "Dockerfile.minimal"))
 	require.NoError(t, err)
+
+	dir := filepath.Join(os.TempDir(), "sidekick-e2e-devpod-tools-"+hash)
+	if _, err := os.Stat(filepath.Join(dir, ".devcontainer", "devcontainer.json")); err == nil {
+		return dir
+	}
+
+	devcontainerDir := filepath.Join(dir, ".devcontainer")
+	require.NoError(t, os.MkdirAll(devcontainerDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(devcontainerDir, "Dockerfile"), dockerfile, 0644))
 
 	devcontainerJSON := `{"name": "test", "build": {"dockerfile": "Dockerfile"}}`
@@ -246,6 +272,19 @@ func initContainerGitRepo(t *testing.T, ctx context.Context, baseEnv env.Env, re
 	})
 	require.NoError(t, err)
 	require.Equal(t, 0, out.ExitStatus, "repo init failed: %s", out.Stderr)
+
+	// The sandbox/container is reused across runs, so remove this per-run repo
+	// (and any worktrees created under it) to avoid unbounded growth of the
+	// shared container's writable layer.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = baseEnv.RunCommand(cleanupCtx, env.EnvRunCommandInput{
+			Command: "rm",
+			Args:    []string{"-rf", repoDir},
+		})
+	})
+
 	return repoDir
 }
 
@@ -262,20 +301,12 @@ func TestDevPodToolsIntegration(t *testing.T) {
 		t.Skip("devpod command not found in PATH")
 	}
 
-	workspacePath := setupMinimalDevPodWorkspace(t)
-
-	// Fixed workspace name avoids repeated image builds across runs.
-	workspaceName := "test-devpod-tools-integration-sidekick-e2e"
-
-	// Register cleanup before bringing the workspace up so a partial/failed
-	// DevPodUpActivity does not leak a workspace.
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := env.DevPodDeleteActivity(cleanupCtx, workspaceName); err != nil {
-			t.Logf("DevPodDeleteActivity cleanup error: %v", err)
-		}
-	})
+	// Key the cached workspace + built image by the fixture Dockerfile hash so
+	// repeated runs reuse them. The workspace is intentionally not deleted on
+	// cleanup so it persists for reuse.
+	hash := fixtureContentHash(t, filepath.Join(devToolsRepoRoot(t), "env", "testdata", "Dockerfile.minimal"))
+	workspacePath := setupMinimalDevPodWorkspace(t, hash)
+	workspaceName := "side-e2e-devpod-tools-" + hash
 
 	err := env.DevPodUpActivity(context.Background(), env.DevPodUpInput{
 		WorkspacePath: workspacePath,
@@ -326,31 +357,34 @@ func TestOpenShellToolsIntegration(t *testing.T) {
 		defer cancel()
 	}
 
-	// Build from a Dockerfile that layers ripgrep onto the base community image
-	// so the search tool (which shells out to rg) can be exercised; the base
-	// sandbox runs as a non-root user without a package manager available.
+	// Reuse a cached sandbox keyed by the fixture Dockerfile content hash so
+	// repeated runs skip the image build. The base sandbox layers ripgrep onto
+	// the base community image (which runs as a non-root user without a package
+	// manager) so the search tool that shells out to rg can be exercised. The
+	// sandbox is intentionally not deleted on cleanup so it persists for reuse.
 	ripgrepDockerfile := filepath.Join(devToolsRepoRoot(t), "env", "testdata", "Dockerfile.openshell-ripgrep")
-	createOutput, err := env.OpenShellCreateActivity(ctx, env.OpenShellCreateInput{Source: ripgrepDockerfile})
-	require.NoError(t, err, "OpenShellCreateActivity failed")
-	require.NotEmpty(t, createOutput.SandboxName)
+	sandboxName := openshellFixtureSandboxName(t, ripgrepDockerfile)
 
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := env.OpenShellStopActivity(cleanupCtx, createOutput.SandboxName); err != nil {
-			t.Logf("OpenShellStopActivity cleanup error: %v", err)
-		}
-	})
+	checkOutput, err := env.OpenShellCheckSandboxActivity(ctx, env.OpenShellCheckSandboxInput{SandboxName: sandboxName})
+	require.NoError(t, err, "OpenShellCheckSandboxActivity failed")
+	if !checkOutput.Alive {
+		createOutput, err := env.OpenShellCreateActivity(ctx, env.OpenShellCreateInput{
+			Source: ripgrepDockerfile,
+			Name:   sandboxName,
+		})
+		require.NoError(t, err, "OpenShellCreateActivity failed")
+		require.Equal(t, sandboxName, createOutput.SandboxName)
+	}
 
 	baseEnv := &env.OpenShellEnv{
 		WorkingDirectory: "/tmp",
-		SandboxName:      createOutput.SandboxName,
+		SandboxName:      sandboxName,
 	}
 	containerRepoDir := initContainerGitRepo(t, ctx, baseEnv, "/tmp/openshell-tools-repo-"+ksuid.New().String())
 
 	repoEnv := &env.OpenShellEnv{
 		WorkingDirectory: containerRepoDir,
-		SandboxName:      createOutput.SandboxName,
+		SandboxName:      sandboxName,
 	}
 	runHandleToolCallToolSubtests(t, ctx, env.EnvContainer{Env: repoEnv})
 }

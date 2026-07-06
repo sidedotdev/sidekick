@@ -237,7 +237,11 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			}
 		}
 
-		err = workflow.ExecuteActivity(ctx, env.DevPodUpActivity, devPodUpInput).Get(ctx, nil)
+		// Provisioning can hit transient docker/network failures, so retry a
+		// small bounded number of times before surfacing the failure for
+		// user-initiated retry.
+		provisionCtx := utils.ProvisioningRetryCtx(ctx)
+		err = workflow.ExecuteActivity(provisionCtx, env.DevPodUpActivity, devPodUpInput).Get(provisionCtx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to start DevPod workspace: %v", err)
 		}
@@ -320,13 +324,16 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				}
 			}
 
-			// TODO increase timeout for sandbox creation
 			var createOutput env.OpenShellCreateOutput
-			err = workflow.ExecuteActivity(ctx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
+			// Provisioning can hit transient docker/network failures, so retry a
+			// small bounded number of times before surfacing the failure for
+			// user-initiated retry.
+			provisionCtx := utils.ProvisioningRetryCtx(ctx)
+			err = workflow.ExecuteActivity(provisionCtx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
 				Name:    sandboxName,
 				Source:  osConfig.From,
 				RepoDir: repoDir,
-			}).Get(ctx, &createOutput)
+			}).Get(provisionCtx, &createOutput)
 			if err != nil {
 				return DevContext{}, fmt.Errorf("failed to create OpenShell sandbox: %v", err)
 			}

@@ -2,6 +2,8 @@ package env
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// openshellFixtureSandboxName derives a deterministic sandbox name from the
+// content hash of the fixture Dockerfile so repeated runs reuse the cached
+// sandbox (and its built image) instead of rebuilding.
+func openshellFixtureSandboxName(t *testing.T, dockerfilePath string) string {
+	t.Helper()
+	data, err := os.ReadFile(dockerfilePath)
+	require.NoError(t, err, "failed to read fixture Dockerfile")
+	sum := sha256.Sum256(data)
+	return "side-e2e-openshell-" + hex.EncodeToString(sum[:])[:12]
+}
 
 // setupMinimalGitRepo creates a small local git repo for sync testing.
 func setupMinimalGitRepo(t *testing.T) string {
@@ -54,28 +67,29 @@ func TestOpenShellIntegration(t *testing.T) {
 		defer cancel()
 	}
 
-	// Build from a Dockerfile that layers ripgrep onto the base community image
-	// so the search subtests (which shell out to rg) can run; the base sandbox
-	// runs as a non-root user without a package manager available.
+	// Reuse a cached sandbox keyed by the fixture Dockerfile content hash so
+	// repeated runs skip the image build. The base sandbox layers ripgrep onto
+	// the base community image (which runs as a non-root user without a package
+	// manager) so the search subtests that shell out to rg can run. The sandbox
+	// is intentionally not deleted on cleanup so it persists for reuse.
 	ripgrepDockerfile := filepath.Join(repoRoot(t), "env", "testdata", "Dockerfile.openshell-ripgrep")
-	createOutput, err := OpenShellCreateActivity(ctx, OpenShellCreateInput{
-		Source: ripgrepDockerfile,
-	})
-	require.NoError(t, err, "OpenShellCreateActivity failed")
-	require.NotEmpty(t, createOutput.SandboxName)
-	t.Logf("sandbox created: %s", createOutput.SandboxName)
+	sandboxName := openshellFixtureSandboxName(t, ripgrepDockerfile)
 
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := OpenShellStopActivity(cleanupCtx, createOutput.SandboxName); err != nil {
-			t.Logf("OpenShellStopActivity cleanup error: %v", err)
-		}
-	})
+	checkOutput, err := OpenShellCheckSandboxActivity(ctx, OpenShellCheckSandboxInput{SandboxName: sandboxName})
+	require.NoError(t, err, "OpenShellCheckSandboxActivity failed")
+	if !checkOutput.Alive {
+		createOutput, err := OpenShellCreateActivity(ctx, OpenShellCreateInput{
+			Source: ripgrepDockerfile,
+			Name:   sandboxName,
+		})
+		require.NoError(t, err, "OpenShellCreateActivity failed")
+		require.Equal(t, sandboxName, createOutput.SandboxName)
+	}
+	t.Logf("using sandbox: %s", sandboxName)
 
 	osEnv := &OpenShellEnv{
 		WorkingDirectory: "/tmp",
-		SandboxName:      createOutput.SandboxName,
+		SandboxName:      sandboxName,
 	}
 
 	t.Run("basic command execution", func(t *testing.T) {
@@ -101,15 +115,26 @@ func TestOpenShellIntegration(t *testing.T) {
 		localRepo := setupMinimalGitRepo(t)
 
 		syncOutput, err := OpenShellSyncRepoActivity(ctx, OpenShellSyncRepoInput{
-			SandboxName:  createOutput.SandboxName,
+			SandboxName:  sandboxName,
 			LocalRepoDir: localRepo,
 		})
 		require.NoError(t, err, "OpenShellSyncRepoActivity failed")
 		assert.NotEmpty(t, syncOutput.ContainerRepoDir)
 
+		// Remove the synced repo from the reused sandbox to avoid unbounded
+		// growth of its writable layer across runs.
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = osEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", syncOutput.ContainerRepoDir},
+			})
+		})
+
 		repoEnv := &OpenShellEnv{
 			WorkingDirectory: syncOutput.ContainerRepoDir,
-			SandboxName:      createOutput.SandboxName,
+			SandboxName:      sandboxName,
 			LocalRepoDir:     localRepo,
 		}
 		out, err := repoEnv.RunCommand(ctx, EnvRunCommandInput{
@@ -144,9 +169,20 @@ func TestOpenShellIntegration(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, initOut.ExitStatus, "repo init failed: %s", initOut.Stderr)
 
+		// The sandbox is reused across runs, so remove this per-run repo and its
+		// worktree at the end to avoid unbounded writable-layer growth.
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = osEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", containerRepoDir},
+			})
+		})
+
 		repoEnv := &OpenShellEnv{
 			WorkingDirectory: containerRepoDir,
-			SandboxName:      createOutput.SandboxName,
+			SandboxName:      sandboxName,
 		}
 		envContainer := EnvContainer{Env: repoEnv}
 

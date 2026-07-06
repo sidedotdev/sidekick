@@ -63,6 +63,13 @@ func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (O
 		return OpenShellCreateOutput{}, fmt.Errorf("openshell sandbox create failed: %w", err)
 	}
 	if output.ExitStatus != 0 {
+		// When a specific name is requested, concurrent creates for that same
+		// deterministic name race: one wins and the others see "already
+		// exists". An existing sandbox is the reuse outcome callers want, so
+		// treat it as success rather than surfacing a spurious error.
+		if input.Name != "" && sandboxAlreadyExists(output.Stderr+"\n"+output.Stdout) {
+			return OpenShellCreateOutput{SandboxName: input.Name}, nil
+		}
 		return OpenShellCreateOutput{}, fmt.Errorf("openshell sandbox create exited with status %d: %s", output.ExitStatus, output.Stderr)
 	}
 
@@ -71,6 +78,12 @@ func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (O
 		return OpenShellCreateOutput{}, fmt.Errorf("could not determine sandbox name from openshell output")
 	}
 	return OpenShellCreateOutput{SandboxName: name}, nil
+}
+
+// sandboxAlreadyExists reports whether openshell output indicates a create
+// failed because a sandbox with the requested name is already present.
+func sandboxAlreadyExists(output string) bool {
+	return strings.Contains(strings.ToLower(output), "already exists")
 }
 
 func parseCreatedSandboxName(output string) string {

@@ -40,6 +40,26 @@ func RetryCtx(ctx workflow.Context, maxAttempts int32, maxInterval time.Duration
 	return ctx
 }
 
+// ProvisioningRetryCtx returns a context for environment-provisioning
+// activities (starting a DevPod workspace, creating an OpenShell sandbox).
+// These can hit transient docker/network failures, so they get a small,
+// bounded number of automatic retries; once exhausted the failure surfaces
+// for user-initiated retry rather than retrying indefinitely. The longer
+// timeout accommodates image builds.
+func ProvisioningRetryCtx(ctx workflow.Context) workflow.Context {
+	retrypolicy := &temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2.0,
+		MaximumInterval:    30 * time.Second,
+		MaximumAttempts:    3,
+	}
+	options := workflow.ActivityOptions{
+		StartToCloseTimeout: 15 * time.Minute,
+		RetryPolicy:         retrypolicy,
+	}
+	return workflow.WithActivityOptions(ctx, options)
+}
+
 var LlmNumRetries = 4
 
 func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
