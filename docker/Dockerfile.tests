@@ -54,5 +54,9 @@ RUN mkdir -p frontend/dist && touch frontend/dist/.gitkeep
 # Install gopls for LSP tests (v0.19.1 builds against Go 1.26)
 RUN go install golang.org/x/tools/gopls@v0.19.1
 
+# Install golangci-lint, built with the image's Go toolchain so its internal
+# type checker can read this repo's compiler export data.
+RUN go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+
 # Default command runs tests
 CMD ["go", "test", "-timeout", "5m", "./..."]

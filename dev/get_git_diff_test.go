@@ -37,6 +37,7 @@ func (s *GetGitDiffTestSuite) SetupTest() {
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
 
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.env.SetTestTimeout(30 * time.Second)
 	s.env.RegisterActivity(git.GitDiffActivity)
 	s.env.RegisterActivity(env.EnvRunCommandActivity)

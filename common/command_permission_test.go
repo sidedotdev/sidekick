@@ -1908,6 +1908,26 @@ func TestBasePermissions_BunxTsc(t *testing.T) {
 	})
 }
 
+func TestBasePermissions_GolangciLint(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("golangci-lint commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"golangci-lint run",
+			"golangci-lint run ./...",
+			"golangci-lint run --timeout 5m",
+			"golangci-lint version",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+}
+
 func TestBasePermissions_NpxTsc(t *testing.T) {
 	t.Parallel()
 	config := BaseCommandPermissions()

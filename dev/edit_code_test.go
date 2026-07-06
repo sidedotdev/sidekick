@@ -47,6 +47,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 
 	// setup workflow environment
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 
 	// s.NewTestActivityEnvironment()
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
@@ -388,6 +389,7 @@ type BuildAuthorEditBlockInputTestSuite struct {
 
 func (s *BuildAuthorEditBlockInputTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
 func (s *BuildAuthorEditBlockInputTestSuite) AfterTest(suiteName, testName string) {

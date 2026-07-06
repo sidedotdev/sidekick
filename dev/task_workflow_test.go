@@ -15,6 +15,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
+	"sidekick/utils"
 	"sidekick/workspace"
 )
 
@@ -27,6 +28,7 @@ type TaskWorkflowTestSuite struct {
 
 func (s *TaskWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.ima = nil
 }
 

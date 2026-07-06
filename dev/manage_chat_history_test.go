@@ -710,6 +710,7 @@ type ManageChatHistoryWorkflowTestSuite struct {
 // SetupTest is called before each test in the suite
 func (s *ManageChatHistoryWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
 		ctx = utils.NoRetryCtx(ctx)
 		ManageChatHistory(ctx, chatHistory, "test-workspace-id", maxLength, common.ModelConfig{})

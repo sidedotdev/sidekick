@@ -209,6 +209,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "go doc"},
 			{Pattern: "gofmt"},
 			{Pattern: "golint"},
+			{Pattern: "golangci-lint"},
 			{Pattern: "staticcheck"},
 			// Node.js/npm commands
 			{Pattern: "npm test"},

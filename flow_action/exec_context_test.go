@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"sidekick/common"
+	"sidekick/utils"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,7 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
 	env.SetTestTimeout(30 * time.Second)
 	env.RegisterActivity(&FlowActivities{})
 	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
@@ -96,6 +98,7 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
 	env.SetTestTimeout(30 * time.Second)
 	env.RegisterActivity(&FlowActivities{})
 	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
@@ -139,6 +142,7 @@ func TestGetModelConfig_SmallFallback_ClaudeModel(t *testing.T) {
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
 	env.RegisterActivity(&FlowActivities{})
 	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
 	require.True(t, env.IsWorkflowCompleted())
@@ -177,6 +181,7 @@ func TestGetModelConfig_NoReasoningForNonReasoningModel(t *testing.T) {
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
 	env.RegisterActivity(&FlowActivities{})
 	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "default"))
 	require.True(t, env.IsWorkflowCompleted())

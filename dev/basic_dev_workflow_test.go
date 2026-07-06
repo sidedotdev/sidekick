@@ -27,6 +27,7 @@ type AutoMergeApprovalTestSuite struct {
 
 func (s *AutoMergeApprovalTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
 func (s *AutoMergeApprovalTestSuite) AfterTest(suiteName, testName string) {

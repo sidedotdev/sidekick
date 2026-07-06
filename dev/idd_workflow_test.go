@@ -32,6 +32,7 @@ type IddWorkflowTestSuite struct {
 
 func (s *IddWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.ima = nil
 }
 

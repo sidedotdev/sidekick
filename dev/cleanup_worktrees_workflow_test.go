@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/testsuite"
+
+	"sidekick/utils"
 )
 
 type CleanupWorktreesWorkflowTestSuite struct {
@@ -17,6 +19,7 @@ type CleanupWorktreesWorkflowTestSuite struct {
 
 func (s *CleanupWorktreesWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
 func (s *CleanupWorktreesWorkflowTestSuite) TestCleansUpAllWorkspaces() {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"sidekick/utils"
 	sidekick_worker "sidekick/worker"
 
 	"go.temporal.io/sdk/worker"
@@ -89,7 +90,10 @@ func TestReplayFromS3Integration(t *testing.T) {
 						t.Fatalf("cachedHistoryFile failed for workflowID %s, version %s: %v", workflowId, version, errFetch)
 					}
 
-					replayer := worker.NewWorkflowReplayer()
+					replayer, errReplayer := worker.NewWorkflowReplayerWithOptions(utils.TestReplayerOptions())
+					if errReplayer != nil {
+						t.Fatalf("failed to create workflow replayer: %v", errReplayer)
+					}
 					sidekick_worker.RegisterWorkflows(replayer) // Register current workflows.
 
 					errReplay := replayer.ReplayWorkflowHistoryFromJSONFile(nil, historyFile) // Logger can be nil for replayer.

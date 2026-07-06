@@ -551,6 +551,7 @@ type BulkReadFileV2TestSuite struct {
 
 func (s *BulkReadFileV2TestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
 func (s *BulkReadFileV2TestSuite) TearDownTest() {

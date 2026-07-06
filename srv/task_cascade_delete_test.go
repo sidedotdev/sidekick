@@ -17,6 +17,7 @@ import (
 	"sidekick/domain"
 	"sidekick/llm2"
 	"sidekick/srv/sqlite"
+	"sidekick/utils"
 )
 
 // noopStreamer implements Streamer with no-op methods for testing
@@ -62,6 +63,7 @@ type CascadeDeleteTaskTestSuite struct {
 
 func (s *CascadeDeleteTaskTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.storage = sqlite.NewTestSqliteStorage(s.T(), "cascade_delete_test")
 }
 
