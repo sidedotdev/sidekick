@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	googleDefaultModel     = "gemini-3-pro-preview"
+	googleDefaultModel     = "gemini-3.1-pro-preview"
 	googleApiKeySecretName = "GOOGLE_API_KEY"
 	geminiApiKeySecretName = "GEMINI_API_KEY"
 )
