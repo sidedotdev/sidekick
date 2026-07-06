@@ -94,12 +94,11 @@ func (s *AdvisorWorkflowTestSuite) SetupTest() {
 	var fa *flow_action.FlowActivities
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// The advisor's own chat history is persisted via activity-backed appends,
-	// which we can stub since this test focuses on the executor-history flow.
-	var cha *persisted_ai.ChatHistoryActivities
-	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
-		&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "user"}, nil,
-	).Maybe()
+	// Persist advisor and executor appends for real so injected messages can be
+	// hydrated and their serialized content blocks inspected (e.g. to confirm no
+	// empty text block is emitted alongside a puppeted tool call).
+	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{Storage: s.storage}
+	s.env.RegisterActivity(chatHistoryActivities)
 
 	var ka *common.KVActivities
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -196,4 +195,59 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_Guide() {
 	s.NoError(s.env.GetWorkflowError())
 
 	s.Len(s.executorRefsFromResult(), originalRefs+1, "guidance must append one message to the executor history")
+}
+
+// TestMaybeAdvise_ExecutorToolCall_NoEmptyTextBlock reproduces the reported
+// failure: the advisor puppets an executor tool call while its output has no
+// delimited puppet content, so executorPuppetContent is empty. The injected
+// assistant message must not carry an empty text content block, which Anthropic
+// rejects with a 400 "text content blocks must be non-empty". This test would
+// fail against the pre-fix conversion that always emitted a text block.
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextBlock() {
+	const flowId = "exec_flow_tool_call"
+	executorHistory, originalRefs := s.persistExecutorHistory(flowId)
+
+	var la *persisted_ai.Llm2Activities
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
+		StopReason: "tool_use",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeToolUse,
+				ToolUse: &llm2.ToolUseBlock{
+					Id:        "call_exec_tool",
+					Name:      "run_command",
+					Arguments: `{"command": "go test ./..."}`,
+				},
+			}},
+		},
+	}, nil)
+
+	s.env.ExecuteWorkflow(s.adviseWorkflow, executorHistory)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	refs := s.executorRefsFromResult()
+	s.Require().Len(refs, originalRefs+1, "an injected executor tool call must append one message")
+
+	hydrated := persisted_ai.NewLlm2ChatHistory(flowId, advisorTestWorkspaceId)
+	hydrated.SetRefs(refs)
+	s.Require().NoError(hydrated.Hydrate(context.Background(), s.storage))
+
+	messages := hydrated.Llm2Messages()
+	s.Require().NotEmpty(messages)
+	last := messages[len(messages)-1]
+	s.Equal(llm2.RoleAssistant, last.Role)
+
+	toolUseBlocks := 0
+	for _, block := range last.Content {
+		if block.Type == llm2.ContentBlockTypeText {
+			s.NotEmpty(block.Text, "assistant message must not contain an empty text content block")
+		}
+		if block.Type == llm2.ContentBlockTypeToolUse {
+			toolUseBlocks++
+		}
+	}
+	s.Equal(1, toolUseBlocks, "expected exactly one tool_use block")
+	s.Len(last.Content, 1, "empty puppet content must not add a text block alongside the tool call")
 }

@@ -389,17 +389,35 @@ func MessageFromChatMessage(cm common.ChatMessage) llm2.Message {
 			Content: []llm2.ContentBlock{block},
 		}
 	}
-	block := llm2.ContentBlock{
-		Type:         llm2.ContentBlockTypeText,
-		Text:         cm.Content,
-		CacheControl: cm.CacheControl,
+	blocks := make([]llm2.ContentBlock, 0, 1+len(cm.ToolCalls))
+	// Only emit a text block when there is text; an empty text block alongside
+	// tool calls is rejected by providers (e.g. Anthropic 400 "text content
+	// blocks must be non-empty").
+	if cm.Content != "" || len(cm.ToolCalls) == 0 {
+		block := llm2.ContentBlock{
+			Type:         llm2.ContentBlockTypeText,
+			Text:         cm.Content,
+			CacheControl: cm.CacheControl,
+		}
+		if cm.ContextType != "" {
+			SetContextType(&block, cm.ContextType)
+		}
+		blocks = append(blocks, block)
 	}
-	if cm.ContextType != "" {
-		SetContextType(&block, cm.ContextType)
+	for _, tc := range cm.ToolCalls {
+		blocks = append(blocks, llm2.ContentBlock{
+			Type: llm2.ContentBlockTypeToolUse,
+			ToolUse: &llm2.ToolUseBlock{
+				Id:        tc.Id,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+				Signature: tc.Signature,
+			},
+		})
 	}
 	return llm2.Message{
 		Role:    llm2.Role(cm.Role),
-		Content: []llm2.ContentBlock{block},
+		Content: blocks,
 	}
 }
 
