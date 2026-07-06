@@ -214,8 +214,6 @@ func (s *RemoteServer) Shutdown(ctx context.Context) error {
 // authentication. The returned RemoteServer exposes the iroh ticket and a
 // matching Shutdown.
 func RunRemoteServer(ctx context.Context) (*RemoteServer, error) {
-	gin.SetMode(gin.ReleaseMode)
-
 	allowedOrigins, err := GetAllowedOrigins()
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse allowed origins: %w", err)
@@ -225,6 +223,15 @@ func RunRemoteServer(ctx context.Context) (*RemoteServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize controller: %w", err)
 	}
+
+	return serveRemote(ctx, ctrl, allowedOrigins)
+}
+
+// serveRemote wraps the existing REST API with device-token authentication and
+// serves it over an iroh endpoint. It is split from RunRemoteServer so tests can
+// exercise the full serving path with a test controller.
+func serveRemote(ctx context.Context, ctrl Controller, allowedOrigins *AllowedOrigins) (*RemoteServer, error) {
+	gin.SetMode(gin.ReleaseMode)
 
 	apiRouter := DefineRoutes(ctrl, allowedOrigins)
 
