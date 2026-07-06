@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sidekick/domain"
+	"time"
 )
 
 /* Delegates calls, but also decorates storage with streaming for events/change
@@ -47,6 +48,26 @@ func (d Delegator) GetWorktreesForFlow(ctx context.Context, workspaceId string, 
 
 func (d Delegator) DeleteWorktree(ctx context.Context, workspaceId, worktreeId string) error {
 	return d.storage.DeleteWorktree(ctx, workspaceId, worktreeId)
+}
+
+func (d Delegator) CreateRemoteDevice(ctx context.Context, device domain.RemoteDevice) error {
+	return d.storage.CreateRemoteDevice(ctx, device)
+}
+
+func (d Delegator) GetRemoteDeviceByTokenHash(ctx context.Context, tokenHash string) (domain.RemoteDevice, error) {
+	return d.storage.GetRemoteDeviceByTokenHash(ctx, tokenHash)
+}
+
+func (d Delegator) GetAllRemoteDevices(ctx context.Context) ([]domain.RemoteDevice, error) {
+	return d.storage.GetAllRemoteDevices(ctx)
+}
+
+func (d Delegator) UpdateRemoteDeviceLastUsed(ctx context.Context, deviceId string, lastUsed time.Time) error {
+	return d.storage.UpdateRemoteDeviceLastUsed(ctx, deviceId, lastUsed)
+}
+
+func (d Delegator) DeleteRemoteDevice(ctx context.Context, deviceId string) error {
+	return d.storage.DeleteRemoteDevice(ctx, deviceId)
 }
 
 /* implements Storage interface */
