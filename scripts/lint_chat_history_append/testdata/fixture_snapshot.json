@@ -1,5 +1,5 @@
 {
-  "goplsVersion": "golang.org/x/tools/gopls v0.21.0",
+  "goplsVersion": "golang.org/x/tools/gopls v0.17.1",
   "codeChecksum": "7b93d59c3667177d1dbfd8a70bae87d92ba5b3d3c521c755424c966ef98d1a72",
   "prepare": {
     "fixture://callers/activity.go:5:5": [
@@ -287,46 +287,6 @@
     "fixture://chathistory/container.go:9:31": [
       {
         "from": {
-          "name": "testWorkflowHelper",
-          "kind": 12,
-          "detail": "fixture/chathistory • callers_test.go",
-          "uri": "fixture://callers/callers_test.go",
-          "range": {
-            "start": {
-              "line": 10,
-              "character": 5
-            },
-            "end": {
-              "line": 10,
-              "character": 23
-            }
-          },
-          "selectionRange": {
-            "start": {
-              "line": 10,
-              "character": 5
-            },
-            "end": {
-              "line": 10,
-              "character": 23
-            }
-          }
-        },
-        "fromRanges": [
-          {
-            "start": {
-              "line": 11,
-              "character": 3
-            },
-            "end": {
-              "line": 11,
-              "character": 9
-            }
-          }
-        ]
-      },
-      {
-        "from": {
           "name": "DevContextCaller",
           "kind": 12,
           "detail": "fixture/chathistory • devctx.go",
@@ -520,6 +480,46 @@
             },
             "end": {
               "line": 6,
+              "character": 9
+            }
+          }
+        ]
+      },
+      {
+        "from": {
+          "name": "testWorkflowHelper",
+          "kind": 12,
+          "detail": "fixture/chathistory • callers_test.go",
+          "uri": "fixture://callers/callers_test.go",
+          "range": {
+            "start": {
+              "line": 10,
+              "character": 5
+            },
+            "end": {
+              "line": 10,
+              "character": 23
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 10,
+              "character": 5
+            },
+            "end": {
+              "line": 10,
+              "character": 23
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 11,
+              "character": 3
+            },
+            "end": {
+              "line": 11,
               "character": 9
             }
           }
