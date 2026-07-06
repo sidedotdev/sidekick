@@ -208,6 +208,7 @@ func buildActivityRegistry() map[string]interface{} {
 		dev.ManageChatHistoryActivity,
 		dev.ManageChatHistoryV2Activity,
 		dev.SummarizeDiffActivity,
+		dev.AssessResolutionSubstantialityActivity,
 		dev.CheckCommandPermissionActivity,
 		common.GetLocalConfig,
 		common.BaseCommandPermissionsActivity,

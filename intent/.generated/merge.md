@@ -8,6 +8,7 @@ intent_links:
       - dev/resolve_merge_conflicts.go:recreateConflictOnOwnWorktree
       - dev/resolve_merge_conflicts.go:finalizeMergeCommit
       - dev/resolve_merge_conflicts.go:checkConflictResolutionFulfillment
+      - dev/resolution_substantiality.go:AssessResolutionSubstantialityActivity
       - dev/prompt_info.go:ConflictResolutionInfo
       - dev/edit_code.go:renderConflictResolutionPrompt
       - dev/prompts/conflict_resolution/initial.mustache
@@ -78,6 +79,22 @@ conflicts:
   squash request, so the resolution commit itself is preserved on the
   target branch — squashing would collapse it away and lose the explicit
   record of how the conflict was resolved.
+
+- After a conflict is auto-resolved (gated by the workflow version
+  `conflict-resolution-rereview`), the resolution may include changes the
+  user never reviewed. Before merging back, `mergeWorktreeIfApproved`
+  recomputes the diff against the target branch and runs
+  `AssessResolutionSubstantialityActivity`, which takes a
+  whitespace-insensitive interdiff between the pre-resolution diff (the one
+  the user already approved) and the post-resolution diff. The changed line
+  count is expressed as a percentage of the larger diff; when it stays below
+  a threshold (default 4%, overridable via `SIDE_CONFLICT_REREVIEW_PERCENT`)
+  the resolution is deemed insubstantial and merged without re-prompting.
+  Otherwise the user is re-asked for merge approval showing the
+  post-resolution diff, and a rejection feeds back into the normal
+  review-and-resolve loop. Executions predating the
+  `conflict-resolution-rereview` version skip this check so they replay
+  deterministically.
 
 Pre-v3 executions retain the legacy human-in-the-loop `GetUserContinue`
 fallback so in-flight workflows replay deterministically.

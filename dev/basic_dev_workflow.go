@@ -911,6 +911,37 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				return "", MergeApprovalResponse{}, "", fmt.Errorf("conflict resolution subflow failed: %w", err)
 			}
 
+			rereviewVersion := workflow.GetVersion(dCtx, "conflict-resolution-rereview", workflow.DefaultVersion, 1)
+			if rereviewVersion >= 1 {
+				// The resolution may have introduced changes the user never
+				// reviewed. Compare the diff against the target branch before
+				// vs after resolution (ignoring whitespace) and only re-request
+				// approval when the resolution changed things substantially.
+				afterDiff, err := GetGitDiff(dCtx, mergeInfo.TargetBranch, true)
+				if err != nil {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to compute post-resolution diff: %w", err)
+				}
+
+				var assessment AssessResolutionSubstantialityResult
+				if err := workflow.ExecuteActivity(dCtx, AssessResolutionSubstantialityActivity, AssessResolutionSubstantialityInput{
+					BeforeDiff: gitDiff,
+					AfterDiff:  afterDiff,
+				}).Get(dCtx, &assessment); err != nil {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to assess conflict resolution substantiality: %w", err)
+				}
+
+				if assessment.Substantial {
+					reapproval, reDiff, reTreeHash, err := getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, lastReviewTreeHash, params.AutoMerge)
+					if err != nil {
+						return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get post-resolution merge approval: %w", err)
+					}
+					if !reapproval.Approved {
+						return reDiff, reapproval, reTreeHash, nil
+					}
+					mergeInfo = reapproval
+				}
+			}
+
 			if mergeResult.BaseStashWorktreePath != "" {
 				// The conflict was a dirty base worktree's stash restore,
 				// relocated to and resolved on the flow's own worktree. The

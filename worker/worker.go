@@ -228,6 +228,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.BulkReadFileActivity)
 	w.RegisterActivity(dev.SummarizeDiffActivity)
+	w.RegisterActivity(dev.AssessResolutionSubstantialityActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
 	w.RegisterActivity(dev.IddWatchEditIdleActivity)
