@@ -31,8 +31,9 @@ const IntentSubtaskScopePartial = "partial"
 // specific paragraph, or any other narrow focus the orchestrator can
 // describe in the prompt.
 type StartIntentSubtaskToolArgs struct {
-	Scope  string `json:"scope" jsonschema:"description=Either 'whole' to implement the full pending intent diff or 'partial' to implement just the chunk described by 'prompt'.,enum=whole,enum=partial"`
-	Prompt string `json:"prompt,omitempty" jsonschema:"description=Required when scope is 'partial'. A short prompt scoping the sub-task to a specific chunk of intent. May name a section heading (e.g. \"only the '### Finish UI' section of intent/idd/idd.md\"), a paragraph, or describe any other narrow focus. Ignored when scope is 'whole'."`
+	Scope   string `json:"scope" jsonschema:"description=Either 'whole' to implement the full pending intent diff or 'partial' to implement just the chunk described by 'prompt'.,enum=whole,enum=partial"`
+	Prompt  string `json:"prompt,omitempty" jsonschema:"description=Required when scope is 'partial'. A short prompt scoping the sub-task to a specific chunk of intent. May name a section heading (e.g. \"only the '### Finish UI' section of intent/idd/idd.md\"), a paragraph, or describe any other narrow focus. Ignored when scope is 'whole'."`
+	Planned bool   `json:"planned,omitempty" jsonschema:"description=Set true to run the sub-task as a planned-dev flow\\, which builds an explicit multi-step plan before coding. Prefer this for larger sub-tasks that span disparate changes or multiple areas of the codebase. Leave false (the default) for focused sub-tasks a single coding pass can handle."`
 }
 
 // AddNudgeToolArgs is the LLM-facing schema for the add_nudge tool. Nudges
@@ -67,6 +68,7 @@ Your job, every time intent settles after a burst of edits, is to decide:
    (b) scope='partial' with a prompt naming a specific section of an intent file (e.g. "implement only the '### Finish UI' section of intent/idd/idd.md").
    (c) scope='partial' with an arbitrary free-form prompt that directs the sub-task to a portion of the intent without naming a heading.
    Prefer (b) or (c) over (a). Once any sub-task exists, always use partial scoping so each sub-task targets just the slice it owns.
+   Also decide how the sub-task should run: set planned=true to have it build an explicit multi-step plan before coding, which is preferred for larger sub-tasks that span disparate changes or multiple areas of the codebase. Leave planned=false (the default) for focused sub-tasks a single coding pass can handle.
 
 2. Is there anything in the current intent that looks highly ambiguous, contradictory, or load-bearing-but-underspecified — where a wrong assumption would cause a near-total rewrite of the implementation? If yes, call add_nudge once for each such concern.
 
@@ -309,6 +311,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 			sig := StartIntentSubtaskSignal{
 				Update:      update,
 				ScopePrompt: scopePrompt,
+				Planned:     args.Planned,
 			}
 			// Reserve the sub-task entry synchronously so the very next
 			// iteration of this tool-call loop (and any subsequent
@@ -328,9 +331,9 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 			})
 			startedAny = true
 
-			confirmation := fmt.Sprintf("Sub-task launched (scope=%s).", scope)
+			confirmation := fmt.Sprintf("Sub-task launched (scope=%s, planned=%t).", scope, args.Planned)
 			if scope == IntentSubtaskScopePartial {
-				confirmation = fmt.Sprintf("Sub-task launched (scope=partial, prompt=%q).", scopePrompt)
+				confirmation = fmt.Sprintf("Sub-task launched (scope=partial, planned=%t, prompt=%q).", args.Planned, scopePrompt)
 			}
 			if err := addToolCallResponse(dCtx.ExecContext, chatHistory, llm2.ToolResultBlock{
 				Name:       tc.Name,

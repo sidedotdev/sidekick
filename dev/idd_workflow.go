@@ -73,6 +73,10 @@ type StartIntentSubtaskSignal struct {
 	// prepended to the rendered requirements so the sub-task focuses on that
 	// portion of the diff instead of implementing the entire pending intent.
 	ScopePrompt string
+	// Planned runs the sub-task as a PlannedDev child (an explicit multi-step
+	// plan is built before coding) rather than the default BasicDev child. The
+	// orchestrator sets this for larger sub-tasks spanning disparate changes.
+	Planned bool
 }
 
 // FinishIddSignal is the payload for SignalNameFinishIdd, asking the workflow
@@ -541,20 +545,39 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		}
 	}
 	childCtx := workflow.WithChildOptions(dCtx, childOptions)
-	childFuture := workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
-		WorkspaceId:  input.WorkspaceId,
-		Requirements: renderIntentRequirements(reqInfo),
-		RepoDir:      input.RepoDir,
-		BasicDevOptions: BasicDevOptions{
-			DetermineRequirements: false,
-			EnvType:               input.EnvType,
-			RepoMode:              input.RepoMode,
-			StartBranch:           &branch,
-			ConfigOverrides:       input.ConfigOverrides,
-			AutoMerge:             true,
-			Idd:                   true,
-		},
-	})
+	requirements := renderIntentRequirements(reqInfo)
+	var childFuture workflow.ChildWorkflowFuture
+	if sig.Planned {
+		childFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
+			WorkspaceId:  input.WorkspaceId,
+			Requirements: requirements,
+			RepoDir:      input.RepoDir,
+			PlannedDevOptions: PlannedDevOptions{
+				DetermineRequirements: false,
+				EnvType:               input.EnvType,
+				RepoMode:              input.RepoMode,
+				StartBranch:           &branch,
+				ConfigOverrides:       input.ConfigOverrides,
+				AutoMerge:             true,
+				Idd:                   true,
+			},
+		})
+	} else {
+		childFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
+			WorkspaceId:  input.WorkspaceId,
+			Requirements: requirements,
+			RepoDir:      input.RepoDir,
+			BasicDevOptions: BasicDevOptions{
+				DetermineRequirements: false,
+				EnvType:               input.EnvType,
+				RepoMode:              input.RepoMode,
+				StartBranch:           &branch,
+				ConfigOverrides:       input.ConfigOverrides,
+				AutoMerge:             true,
+				Idd:                   true,
+			},
+		})
+	}
 
 	var we workflow.Execution
 	if startErr := childFuture.GetChildWorkflowExecution().Get(childCtx, &we); startErr != nil {
