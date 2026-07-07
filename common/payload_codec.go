@@ -13,7 +13,7 @@ const (
 	codecWorkspaceID      = "__temporal_codec"
 	codecKeyPrefix        = "codec/"
 	codecMetadataKey      = "sidekick-payload-codec-key"
-	DefaultCodecThreshold = 10 * 1024 // 10KB
+	DefaultCodecThreshold = 1024 * 1024 // 1MB
 )
 
 // PayloadCodec offloads large Temporal payloads to KV storage, replacing them
