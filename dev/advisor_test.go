@@ -120,7 +120,7 @@ func TestApplyAdvisorToolCalls(t *testing.T) {
 			var eCtx flow_action.ExecContext
 			executor := newLegacyTestHistory()
 			advisor := newLegacyTestHistory()
-			err := applyAdvisorToolCalls(eCtx, executor, advisor, tt.content, tt.toolCalls)
+			_, err := applyAdvisorToolCalls(eCtx, executor, advisor, tt.content, tt.toolCalls)
 			require.NoError(t, err)
 			tt.assert(t, executor, advisor)
 		})

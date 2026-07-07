@@ -155,7 +155,20 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 	}
 
 	respMsg := response.GetMessage()
-	return applyAdvisorToolCalls(dCtx.ExecContext, executorHistory, a.ChatHistory, respMsg.GetContentString(), respMsg.GetToolCalls())
+	injectedToolCalls, err := applyAdvisorToolCalls(dCtx.ExecContext, executorHistory, a.ChatHistory, respMsg.GetContentString(), respMsg.GetToolCalls())
+	if err != nil {
+		return err
+	}
+
+	// Tool calls the advisor puppeted into the executor history leave dangling
+	// tool_use blocks. They must be resolved with matching tool results before
+	// the executor's LLM runs again, otherwise the provider rejects the request.
+	if len(injectedToolCalls) > 0 {
+		if _, err := handleToolCalls(dCtx, injectedToolCalls, executorHistory, nil); err != nil {
+			return fmt.Errorf("advisor: failed to handle injected executor tool calls: %w", err)
+		}
+	}
+	return nil
 }
 
 // executorPuppetRegexp matches the segments of the advisor's output that it
@@ -180,7 +193,7 @@ func executorPuppetContent(advisorContent string) string {
 
 // applyAdvisorToolCalls routes each advisor tool call to the appropriate side
 // effect and records the corresponding tool result in the advisor history.
-func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, advisorHistory *persisted_ai.ChatHistoryContainer, advisorContent string, toolCalls []llm.ToolCall) error {
+func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, advisorHistory *persisted_ai.ChatHistoryContainer, advisorContent string, toolCalls []llm.ToolCall) ([]llm.ToolCall, error) {
 	var executorToolCalls []llm.ToolCall
 	for _, tc := range toolCalls {
 		switch tc.Name {
@@ -190,7 +203,7 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 				ToolCallId: tc.Id,
 				Content:    llm2.TextContentBlocks("Acknowledged; no interjection this turn."),
 			}); err != nil {
-				return err
+				return nil, err
 			}
 		case advisorGuideToolName:
 			var args AdvisorGuideToolArgs
@@ -203,7 +216,7 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 					Role:    llm.ChatMessageRoleUser,
 					Content: "Guidance from your advisor: " + feedback,
 				}); err != nil {
-					return err
+					return nil, err
 				}
 			}
 			if err := addToolCallResponse(eCtx, advisorHistory, llm2.ToolResultBlock{
@@ -211,7 +224,7 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 				ToolCallId: tc.Id,
 				Content:    llm2.TextContentBlocks("Guidance delivered to executor."),
 			}); err != nil {
-				return err
+				return nil, err
 			}
 		default:
 			executorToolCalls = append(executorToolCalls, tc)
@@ -220,7 +233,7 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 				ToolCallId: tc.Id,
 				Content:    llm2.TextContentBlocks("Submitted to executor."),
 			}); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -231,10 +244,10 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 			Content:   executorPuppetContent(advisorContent),
 			ToolCalls: executorToolCalls,
 		}); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return executorToolCalls, nil
 }
 
 // summarizeExecutorHistory renders the trailing executor messages into the

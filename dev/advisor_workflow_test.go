@@ -216,8 +216,8 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextB
 				Type: llm2.ContentBlockTypeToolUse,
 				ToolUse: &llm2.ToolUseBlock{
 					Id:        "call_exec_tool",
-					Name:      "run_command",
-					Arguments: `{"command": "go test ./..."}`,
+					Name:      recordDevPlanTool.Name,
+					Arguments: `{}`,
 				},
 			}},
 		},
@@ -228,7 +228,7 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextB
 	s.NoError(s.env.GetWorkflowError())
 
 	refs := s.executorRefsFromResult()
-	s.Require().Len(refs, originalRefs+1, "an injected executor tool call must append one message")
+	s.Require().Len(refs, originalRefs+2, "an injected executor tool call must append the assistant tool call and its tool result")
 
 	hydrated := persisted_ai.NewLlm2ChatHistory(flowId, advisorTestWorkspaceId)
 	hydrated.SetRefs(refs)
@@ -236,11 +236,24 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextB
 
 	messages := hydrated.Llm2Messages()
 	s.Require().NotEmpty(messages)
-	last := messages[len(messages)-1]
-	s.Equal(llm2.RoleAssistant, last.Role)
+
+	// The injected assistant message carries the puppeted tool call. With empty
+	// puppet content it must not include an empty text content block.
+	var assistantMsg llm2.Message
+	foundAssistant := false
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.Type == llm2.ContentBlockTypeToolUse {
+				assistantMsg = msg
+				foundAssistant = true
+			}
+		}
+	}
+	s.Require().True(foundAssistant, "expected an injected assistant tool_use message")
+	s.Equal(llm2.RoleAssistant, assistantMsg.Role)
 
 	toolUseBlocks := 0
-	for _, block := range last.Content {
+	for _, block := range assistantMsg.Content {
 		if block.Type == llm2.ContentBlockTypeText {
 			s.NotEmpty(block.Text, "assistant message must not contain an empty text content block")
 		}
@@ -249,5 +262,17 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextB
 		}
 	}
 	s.Equal(1, toolUseBlocks, "expected exactly one tool_use block")
-	s.Len(last.Content, 1, "empty puppet content must not add a text block alongside the tool call")
+	s.Len(assistantMsg.Content, 1, "empty puppet content must not add a text block alongside the tool call")
+
+	// The dangling tool_use must be resolved with a matching tool_result before
+	// the executor's LLM runs again, otherwise the provider rejects the request.
+	last := messages[len(messages)-1]
+	s.Equal(llm2.RoleUser, last.Role)
+	toolResultBlocks := 0
+	for _, block := range last.Content {
+		if block.Type == llm2.ContentBlockTypeToolResult {
+			toolResultBlocks++
+		}
+	}
+	s.Equal(1, toolResultBlocks, "expected the injected tool call to be resolved with a tool_result")
 }
