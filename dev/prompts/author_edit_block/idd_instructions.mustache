@@ -24,8 +24,24 @@ heading href (e.g. this section's is `#intent`):
         code:
             - main.go:main
 
-Add these links as code changes are made, to keep intent and code in sync. Do
-this for both human-authored and LLM-generated intent files.
+You MUST keep these links in sync as you work, for both human-authored and
+LLM-generated intent files:
+
+- For every code file or symbol you create or modify to satisfy an intent
+  change, add or update a corresponding `intent_links` entry mapping the
+  affected intent section to that code, before you call `done`. This is
+  mandatory, not optional.
+- If the target intent file has no `intent_links` frontmatter yet, create the
+  YAML frontmatter block (delimited by `---` lines at the top of the file) and
+  add the links there. A missing frontmatter block is not an excuse to skip
+  linking.
+- Choose the right granularity: link a specific symbol (e.g.
+  `scripts/release.sh:EXPECTED_ASSETS`) when the intent section maps to a
+  particular function/type/symbol, or link the whole file (e.g. `build.yml`, by
+  omitting the symbol) when the intent section corresponds to the file as a
+  whole rather than one symbol within it.
+- Before calling `done`, verify each code file/symbol you edited for the intent
+  change is referenced by an intent link; if any is missing, add it first.
 
 The human-authored intent files are the source of truth, above the LLM-generated
 ones and even above the code itself. Anything LLM-generated, like code is the
