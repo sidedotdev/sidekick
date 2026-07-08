@@ -73,4 +73,34 @@ const task: FullTask = {
       method: 'DELETE',
     })
   })
+
+  it.each([
+    ['local', { envType: 'local' }],
+    ['local_git_worktree', { envType: 'local_git_worktree' }],
+    ['undefined envType', { envType: undefined }],
+  ])('renders no env indicator for %s', (_name, flowOptions) => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, flowOptions } },
+    })
+    expect(wrapper.find('.env-indicator').exists()).toBe(false)
+  })
+
+  it('renders no env indicator when flowOptions is null', () => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, flowOptions: null } },
+    })
+    expect(wrapper.find('.env-indicator').exists()).toBe(false)
+  })
+
+  it.each([
+    ['devpod', 'DevPod'],
+    ['openshell', 'OpenShell'],
+  ])('renders a Container indicator with tooltip for %s', (envType, title) => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, flowOptions: { envType } } },
+    })
+    const indicator = wrapper.get('.env-indicator')
+    expect(indicator.text()).toContain('Container')
+    expect(indicator.attributes('title')).toBe(title)
+  })
 })
