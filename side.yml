@@ -63,12 +63,14 @@ openshell:
 # of `side start`) into devpod/openshell containers so integration tests that
 # read workflow histories (e.g. workflow replay) can connect. The proxy only
 # allows listing workflows and fetching histories, so the sandbox cannot
-# mutate the host's Temporal state. A non-default container port keeps the
-# host-default ports free inside the container, so an in-container
-# `side start` can still bind its own Temporal server and proxy normally.
+# mutate the host's Temporal state. The container port must avoid every default
+# Sidekick port (8855 api, 18855 temporal, 21855 readonly proxy, 28855 nats) so
+# an in-container `side start` can still bind its own services; in particular
+# 28855 collides with the embedded NATS server and would make it fail to bind
+# ("address already in use").
 port_forwards:
   - host_port: 21855
-    container_port: 28855
+    container_port: 31855
 
 dev_run:
   supervisor:
