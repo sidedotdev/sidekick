@@ -44,7 +44,7 @@ type FindReferencesActivityInput struct {
 func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input FindReferencesActivityInput) ([]Location, error) {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	lang := utils.InferLanguageNameFromFilePath(input.RelativeFilePath)
-	lspClient, err := lspa.findOrInitClient(ctx, baseDir, lang)
+	lspClient, err := lspa.findOrInitClient(ctx, baseDir, lang, &input.EnvContainer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find or initialize lsp client: %w", err)
 	}
@@ -73,7 +73,7 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 	return references, nil
 }
 
-func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string, lang string) (LSPClient, error) {
+func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string, lang string, envContainer *env.EnvContainer) (LSPClient, error) {
 	_, span := lspTracer.Start(ctx, "findOrInitClient")
 	defer span.End()
 	span.SetAttributes(attribute.String("language", lang), attribute.String("baseDir", baseDir))
@@ -94,6 +94,9 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 		span.SetAttributes(attribute.Bool("initialized", true))
 		// Initialize LSP client
 		lspClient = lspa.LSPClientProvider(lang)
+		if jsonrpcClient, ok := lspClient.(*Jsonrpc2LSPClient); ok {
+			jsonrpcClient.EnvContainer = envContainer
+		}
 		rootUri, err := url.Parse("file://" + baseDir)
 		if err != nil {
 			err = fmt.Errorf("failed to parse rootUri file://%s: %w", baseDir, err)

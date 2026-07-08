@@ -51,8 +51,8 @@ COPY . .
 # Create placeholder frontend dist for tests (embed pattern requires it)
 RUN mkdir -p frontend/dist && touch frontend/dist/.gitkeep
 
-# Install gopls for LSP tests (v0.19.1 builds against Go 1.26)
-RUN go install golang.org/x/tools/gopls@v0.19.1
+# Install gopls for LSP tests (keep in sync with common.GoplsVersion)
+RUN go install golang.org/x/tools/gopls@v0.21.0
 
 # Install golangci-lint, built with the image's Go toolchain so its internal
 # type checker can read this repo's compiler export data.

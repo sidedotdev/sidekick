@@ -37,8 +37,8 @@ RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-clo
 ENV CGO_ENABLED=1
 ENV CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm"
 
-# gopls for LSP tests
-RUN go install golang.org/x/tools/gopls@v0.19.1
+# gopls for LSP tests (keep in sync with common.GoplsVersion)
+RUN go install golang.org/x/tools/gopls@v0.21.0
 
 # --- Sandbox-specific additions ---
 

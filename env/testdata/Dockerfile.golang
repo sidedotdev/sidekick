@@ -1,0 +1,8 @@
+FROM golang:1.26.0-alpine
+
+RUN apk add --no-cache git openssh-client bash curl ca-certificates
+
+# Preinstall gopls so the language server is available in the container without
+# requiring network access at test time. Keep this version in sync with
+# common.GoplsVersion and the repo's other Dockerfiles.
+RUN go install golang.org/x/tools/gopls@v0.21.0

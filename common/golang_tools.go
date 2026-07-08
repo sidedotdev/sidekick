@@ -13,6 +13,16 @@ import (
 
 var ErrGoplsInstallFailed = errors.New("failed to install gopls after multiple attempts")
 
+// GoplsVersion is the pinned gopls version installed by FindOrInstallGopls and
+// lsp.findOrInstallGopls. Pinning (rather than @latest) keeps behavior stable
+// across hosts and CI and avoids snapshot churn. The gopls install lines in
+// these Dockerfiles cannot reference this constant and must be kept in sync:
+//   - .devcontainer/Dockerfile
+//   - Dockerfile.openshell
+//   - docker/Dockerfile.tests
+//   - env/testdata/Dockerfile.golang
+const GoplsVersion = "v0.21.0"
+
 // FindOrInstallGopls attempts to find gopls in PATH or XDG bin directory,
 // installing it if necessary. Returns a command that can be used to execute
 // gopls.
@@ -36,7 +46,7 @@ func FindOrInstallGopls() (string, error) {
 
 	// Install gopls to XDG bin directory
 	for i := 0; i < 3; i++ {
-		cmd := exec.Command("go", "install", "golang.org/x/tools/gopls@latest")
+		cmd := exec.Command("go", "install", "golang.org/x/tools/gopls@"+GoplsVersion)
 		cmd.Env = append(os.Environ(), fmt.Sprintf("GOBIN=%s", xdg.BinHome))
 
 		if err = cmd.Run(); err == nil {
