@@ -40,11 +40,15 @@ func GetOpenaiFuncArgs(ctx context.Context, la LlmActivities, toolOptions llm.To
 // refusals distinctly from other failures.
 var ErrLLMRefusal = errors.New("llm refused to respond")
 
-// responseHasRefusal reports whether the response's message contains a refusal
-// content block.
+// responseHasRefusal reports whether the response represents a refusal, either
+// via a "refusal" stop reason or a refusal content block. Some providers signal
+// a refusal purely through the stop reason with no accompanying content blocks.
 func responseHasRefusal(response common.MessageResponse) bool {
 	if response == nil {
 		return false
+	}
+	if response.GetStopReason() == "refusal" {
+		return true
 	}
 	var msg llm2.Message
 	switch m := response.GetMessage().(type) {
