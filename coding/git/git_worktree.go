@@ -3,7 +3,6 @@ package git
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sidekick/env"
 	"strings"
 
@@ -232,19 +231,16 @@ func findNextAvailableTagName(baseTagName, existingTagsOutput string) string {
 	}
 }
 
-// ListWorktreesActivity lists all Git worktrees for a given repository directory.
-// It returns a slice of GitWorktree structs, each containing the absolute,
-// symlink-resolved path and the corresponding branch name.
-// Worktrees with a detached HEAD are excluded.
-// FIXME: adjust to take in an env.EnvContainer instead of repoDir, and use
-// EnvRunCommand instead of runGitCommand
-func ListWorktreesActivity(ctx context.Context, repoDir string) ([]GitWorktree, error) {
-	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
-	if err != nil {
-		return nil, err
-	}
-
-	commandResult, err := devEnv.RunCommand(ctx, env.EnvRunCommandInput{
+// ListWorktrees lists all Git worktrees for the repository in the given
+// environment. It returns a slice of GitWorktree structs, each containing the
+// absolute, symlink-resolved path and the corresponding branch name. Worktrees
+// with a detached HEAD are excluded.
+//
+// Running the git command inside the provided environment (local, devpod,
+// openshell, etc.) ensures container-relative paths resolve correctly rather
+// than being interpreted against the host filesystem.
+func ListWorktrees(ctx context.Context, envContainer env.EnvContainer) ([]GitWorktree, error) {
+	commandResult, err := envContainer.Env.RunCommand(ctx, env.EnvRunCommandInput{
 		Command: "git",
 		Args:    []string{"worktree", "list", "--porcelain"},
 	})
@@ -276,22 +272,11 @@ func ListWorktreesActivity(ctx context.Context, repoDir string) ([]GitWorktree, 
 			}
 		}
 
-		// Only add if we found a path and a non-detached branch
+		// Only add if we found a path and a non-detached branch. A worktree
+		// without a branch ref (e.g. the main worktree before its first commit)
+		// is intentionally skipped since callers key on branch names.
 		if path != "" && branch != "" && !isDetached {
 			worktrees = append(worktrees, GitWorktree{Path: path, Branch: branch})
-		} else if path != "" && !isDetached && branch == "" {
-			// This case might occur for the main worktree if it's somehow detached
-			// but the 'detached' line wasn't present, or if parsing failed.
-			// Or, more likely, the main worktree before the first commit.
-			// Let's check if it's the main worktree path.
-			absRepoDir, _ := filepath.Abs(repoDir)
-			if path == absRepoDir {
-				// It's the main worktree, possibly without a branch yet (pre-commit).
-				// Or it could be detached without the 'detached' flag (less common).
-				// We need a branch name for the map value. Let's skip it if no branch is found.
-				// Alternatively, we could try GetCurrentBranch, but let's keep this focused.
-				// For now, skip if no branch ref is explicitly listed.
-			}
 		}
 	}
 

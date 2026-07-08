@@ -131,6 +131,16 @@ type SSHCapableEnv interface {
 	SSHArgs(ctx context.Context) ([]string, error)
 }
 
+// MergeResultSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. After a
+// successful merge performed inside such an environment, the merged branch
+// must be propagated back to the host repository that is the source of truth.
+type MergeResultSyncer interface {
+	// SyncMergeResultToLocal transfers the given branch's merged state from the
+	// environment back to the host repository.
+	SyncMergeResultToLocal(ctx context.Context, branch string) error
+}
+
 // EnvSeparator returns the path separator string for the env.
 func EnvSeparator(e Env) string {
 	switch e.GetType() {

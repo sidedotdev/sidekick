@@ -52,6 +52,23 @@ type MergeActivityResult struct {
 // Otherwise, a temporary checkout of the target branch will be used.
 // It returns MergeActivityResult indicating if conflicts occurred, and an error if any operational failure happened.
 func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params GitMergeParams) (result MergeActivityResult, resultErr error) {
+	// Some environments (notably OpenShell) hold an independent clone of the
+	// repo rather than sharing the host checkout via a bind mount, so a merge
+	// performed here does not otherwise reach the host repo that is the source
+	// of truth. When the env supports it, sync the merged target branch back to
+	// the host after a clean merge. Conflict and error results are skipped
+	// because there is no finished merge to propagate yet.
+	defer func() {
+		if resultErr != nil || result.HasConflicts {
+			return
+		}
+		if syncer, ok := envContainer.Env.(env.MergeResultSyncer); ok {
+			if err := syncer.SyncMergeResultToLocal(ctx, params.TargetBranch); err != nil {
+				resultErr = fmt.Errorf("merge succeeded but failed to sync result to local repo: %w", err)
+			}
+		}
+	}()
+
 	if params.SourceBranch == "" || params.TargetBranch == "" {
 		resultErr = fmt.Errorf("both source and target branches are required for merge")
 		return
@@ -80,7 +97,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		return
 	}
 
-	worktrees, listWorktreesErr := ListWorktreesActivity(ctx, repoDir)
+	worktrees, listWorktreesErr := ListWorktrees(ctx, envContainer)
 	if listWorktreesErr != nil {
 		resultErr = fmt.Errorf("failed to list worktrees: %v", listWorktreesErr)
 		return
@@ -355,7 +372,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		}
 	}
 	// result.HasConflicts is false (default).
-	// resultErr is nil (unless defer sets it to a restore error).
+	// resultErr is nil (unless the deferred local sync-back sets it).
 	return
 }
 

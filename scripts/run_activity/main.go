@@ -192,7 +192,6 @@ func buildActivityRegistry() map[string]interface{} {
 		git.GitSnapshotConflictMarkersActivity,
 		git.GitConflictResolutionDiffActivity,
 		git.GitCommitMergeActivity,
-		git.ListWorktreesActivity,
 		git.CleanupWorktreeActivity,
 		git.GetCurrentBranch,
 		git.GetDefaultBranch,

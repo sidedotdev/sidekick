@@ -209,7 +209,6 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(git.GitSnapshotConflictMarkersActivity)
 	w.RegisterActivity(git.GitConflictResolutionDiffActivity)
 	w.RegisterActivity(git.GitCommitMergeActivity)
-	w.RegisterActivity(git.ListWorktreesActivity)
 	w.RegisterActivity(git.CleanupWorktreeActivity)
 	w.RegisterActivity(git.HibernateWorktreeActivity)
 	w.RegisterActivity(git.WakeWorktreeActivity)

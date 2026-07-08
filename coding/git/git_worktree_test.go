@@ -15,6 +15,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// listWorktreesForLocalRepo lists worktrees for a local repo directory, adapting the
+// env-aware ListWorktrees to the repoDir-based inputs used throughout these tests.
+func listWorktreesForLocalRepo(t *testing.T, ctx context.Context, repoDir string) ([]GitWorktree, error) {
+	t.Helper()
+	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+	return ListWorktrees(ctx, env.EnvContainer{Env: devEnv})
+}
+
 func TestListWorktrees(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -24,7 +33,7 @@ func TestListWorktrees(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit")
 
-		worktrees, err := ListWorktreesActivity(ctx, repoDir)
+		worktrees, err := listWorktreesForLocalRepo(t, ctx, repoDir)
 		require.NoError(t, err)
 
 		absRepoDir, err := filepath.Abs(repoDir)
@@ -60,7 +69,7 @@ func TestListWorktrees(t *testing.T) {
 		createCommit(t, wtBDir, "Commit 3 on feature-b")
 
 		// List worktrees
-		worktrees, err := ListWorktreesActivity(ctx, repoDir)
+		worktrees, err := listWorktreesForLocalRepo(t, ctx, repoDir)
 		require.NoError(t, err)
 
 		// Get absolute, resolved paths for assertion keys
@@ -108,7 +117,7 @@ func TestListWorktrees(t *testing.T) {
 		runGitCommandInTestRepo(t, repoDir, "worktree", "add", "--detach", wtDetachedDirRelative, hash1)
 
 		// List worktrees
-		worktrees, err := ListWorktreesActivity(ctx, repoDir)
+		worktrees, err := listWorktreesForLocalRepo(t, ctx, repoDir)
 		require.NoError(t, err)
 
 		// Get absolute, resolved path for assertion key
@@ -133,7 +142,7 @@ func TestListWorktrees(t *testing.T) {
 		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main, but no commits
 
-		worktrees, err := ListWorktreesActivity(ctx, repoDir)
+		worktrees, err := listWorktreesForLocalRepo(t, ctx, repoDir)
 		require.NoError(t, err)
 
 		// Before the first commit, `git worktree list --porcelain` *does* list the
@@ -155,7 +164,7 @@ func TestListWorktrees(t *testing.T) {
 		nonExistentDir := filepath.Join(t.TempDir(), "non-existent-dir")
 		_ = os.RemoveAll(nonExistentDir) // Ensure it doesn't exist
 
-		_, err := ListWorktreesActivity(ctx, nonExistentDir)
+		_, err := listWorktreesForLocalRepo(t, ctx, nonExistentDir)
 		require.Error(t, err, "Should return an error for a non-existent directory")
 		// Error comes from runGitCommand's os.Stat check
 		assert.Contains(t, err.Error(), "no such file or directory", "Error message should indicate directory not found")
@@ -164,7 +173,7 @@ func TestListWorktrees(t *testing.T) {
 	t.Run("Not a Git Repository", func(t *testing.T) {
 		t.Parallel()
 		notRepoDir := t.TempDir()
-		_, err := ListWorktreesActivity(ctx, notRepoDir)
+		_, err := listWorktreesForLocalRepo(t, ctx, notRepoDir)
 		require.Error(t, err, "Should return an error for a directory that is not a git repository")
 		// Error comes from git command failing inside runGitCommand
 		assert.Contains(t, err.Error(), "not a git repository", "Error message should indicate it's not a git repository")
@@ -195,7 +204,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		envContainer := env.EnvContainer{Env: devEnv}
 
 		// Verify the worktree and branch exist before cleanup
-		worktrees, err := ListWorktreesActivity(ctx, repoDir)
+		worktrees, err := listWorktreesForLocalRepo(t, ctx, repoDir)
 		require.NoError(t, err)
 		require.Len(t, worktrees, 2, "Should have main worktree and feature worktree")
 
@@ -207,7 +216,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		require.NoError(t, err, "Cleanup should succeed")
 
 		// Verify the worktree was removed
-		worktreesAfter, err := ListWorktreesActivity(ctx, repoDir)
+		worktreesAfter, err := listWorktreesForLocalRepo(t, ctx, repoDir)
 		require.NoError(t, err)
 		require.Len(t, worktreesAfter, 1, "Should only have main worktree after cleanup")
 		assert.Equal(t, "main", worktreesAfter[0].Branch, "Remaining worktree should be main")
@@ -334,7 +343,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		require.NoError(t, err, "Cleanup should succeed with empty archive message")
 
 		// Verify the worktree was removed
-		worktreesAfter, err := ListWorktreesActivity(ctx, repoDir)
+		worktreesAfter, err := listWorktreesForLocalRepo(t, ctx, repoDir)
 		require.NoError(t, err)
 		require.Len(t, worktreesAfter, 1, "Should only have main worktree after cleanup")
 		assert.Equal(t, "main", worktreesAfter[0].Branch, "Remaining worktree should be main")
@@ -396,7 +405,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		assert.Contains(t, tagOutput, expectedFallbackTag, "Fallback archive tag should be created")
 
 		// Verify the worktree was removed
-		worktreesAfter, err := ListWorktreesActivity(ctx, repoDir)
+		worktreesAfter, err := listWorktreesForLocalRepo(t, ctx, repoDir)
 		require.NoError(t, err)
 		require.Len(t, worktreesAfter, 1, "Should only have main worktree after cleanup")
 	})

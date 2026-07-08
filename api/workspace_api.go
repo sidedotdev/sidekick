@@ -14,6 +14,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/srv"
 
 	"github.com/gin-gonic/gin"
@@ -403,7 +404,11 @@ func (c *Controller) GetWorkspacesHandler(ctx *gin.Context) {
 // It excludes branches associated with managed worktrees.
 // It requires the context, repository directory path, workspace domain object, and pre-fetched worktree activity.
 func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.Workspace) ([]BranchInfo, error) {
-	gitWorktrees, err := git.ListWorktreesActivity(ctx, repoDir)
+	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create local environment: %w", err)
+	}
+	gitWorktrees, err := git.ListWorktrees(ctx, env.EnvContainer{Env: devEnv})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list worktrees: %w", err)
 	}

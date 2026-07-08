@@ -346,6 +346,105 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 	return OpenShellSyncRepoOutput{ContainerRepoDir: containerRepoDir}, nil
 }
 
+// SyncMergeResultToLocal transfers the given branch from the OpenShell sandbox
+// back to the local host repository. OpenShell holds an independent clone of
+// the repo (synced in via a git bundle) rather than a bind mount, so a merge
+// performed inside the sandbox does not otherwise reach the host checkout that
+// is the source of truth. This bundles the branch out of the sandbox and
+// fast-forwards the local branch, updating its worktree in place when it is
+// checked out.
+var _ MergeResultSyncer = (*OpenShellEnv)(nil)
+
+func (e *OpenShellEnv) SyncMergeResultToLocal(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync merge result to local: OpenShellEnv has no LocalRepoDir")
+	}
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return fmt.Errorf("failed to get SSH args: %w", err)
+	}
+
+	// Bundle the branch inside the sandbox. The working directory is a worktree
+	// that shares the object store, so the branch ref is reachable from here.
+	remoteBundlePath := "/tmp/repo-back-" + e.SandboxName + ".bundle"
+	bundleScript := fmt.Sprintf(
+		"cd %s && rm -f %s && git bundle create %s %s",
+		shellQuote(e.WorkingDirectory),
+		shellQuote(remoteBundlePath),
+		shellQuote(remoteBundlePath),
+		shellQuote(branch),
+	)
+	bundleArgs := append(append([]string{}, sshArgs...), bundleScript)
+	bundleOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       bundleArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create git bundle in sandbox: %w", err)
+	}
+	if bundleOutput.ExitStatus != 0 {
+		return fmt.Errorf("git bundle create in sandbox failed (exit %d): %s", bundleOutput.ExitStatus, bundleOutput.Stderr)
+	}
+
+	localBundle, err := os.CreateTemp("", fmt.Sprintf("openshell-back-%s-*.bundle", e.SandboxName))
+	if err != nil {
+		return fmt.Errorf("failed to allocate bundle temp file: %w", err)
+	}
+	localBundlePath := localBundle.Name()
+	localBundle.Close()
+	defer os.Remove(localBundlePath)
+
+	downloadArgs := append(append([]string{}, sshArgs...), fmt.Sprintf("cat %s", shellQuote(remoteBundlePath)))
+	downloadOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "sh",
+		Args:       []string{"-c", fmt.Sprintf("ssh %s > %s", strings.Join(quoteArgs(downloadArgs), " "), shellQuote(localBundlePath))},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to download bundle from sandbox: %w", err)
+	}
+	if downloadOutput.ExitStatus != 0 {
+		return fmt.Errorf("bundle download failed (exit %d): %s", downloadOutput.ExitStatus, downloadOutput.Stderr)
+	}
+
+	// Best-effort cleanup of the sandbox-side bundle.
+	cleanupArgs := append(append([]string{}, sshArgs...), fmt.Sprintf("rm -f %s", shellQuote(remoteBundlePath)))
+	_, _ = unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       cleanupArgs,
+	})
+
+	// Apply the branch to the local repo. The bundle path and branch are passed
+	// as positional arguments ($1, $2) rather than interpolated into the script
+	// so that arbitrary branch names cannot alter the shell command. Fetch into
+	// a temporary ref first, which is always permitted (even for the currently
+	// checked-out branch), then advance the local branch: when a worktree has it
+	// checked out, merge --ff-only there so both the ref and the working tree
+	// move; otherwise update the ref directly.
+	applyScript := `set -e
+bundle="$1"
+branch="$2"
+tempref="refs/sidekick-sync/$branch"
+git fetch "$bundle" "+refs/heads/$branch:$tempref"
+wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p; exit}')
+if [ -n "$wt" ]; then git -C "$wt" merge --ff-only "$tempref"; else git update-ref "refs/heads/$branch" "$tempref"; fi
+git update-ref -d "$tempref"`
+	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: e.LocalRepoDir,
+		Command:    "sh",
+		Args:       []string{"-c", applyScript, "sh", localBundlePath, branch},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to apply synced branch to local repo: %w", err)
+	}
+	if applyOutput.ExitStatus != 0 {
+		return fmt.Errorf("applying synced branch to local repo failed (exit %d): %s", applyOutput.ExitStatus, applyOutput.Stderr)
+	}
+	return nil
+}
+
 // quoteArgs shell-quotes each argument for use in a sh -c command.
 func quoteArgs(args []string) []string {
 	quoted := make([]string, len(args))
