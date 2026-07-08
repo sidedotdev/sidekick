@@ -3,6 +3,7 @@ package persisted_ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
@@ -31,6 +32,35 @@ func GetOpenaiFuncArgs(ctx context.Context, la LlmActivities, toolOptions llm.To
 
 	jsonStr := chatResponse.ToolCalls[0].Arguments
 	return json.Unmarshal([]byte(llm.RepairJson(jsonStr)), funcArgs)
+}
+
+// ErrLLMRefusal indicates the model explicitly refused to respond, returning a
+// refusal content block instead of the required tool call. Retrying will not
+// elicit a tool call, so callers can check for this via errors.Is to handle
+// refusals distinctly from other failures.
+var ErrLLMRefusal = errors.New("llm refused to respond")
+
+// responseHasRefusal reports whether the response's message contains a refusal
+// content block.
+func responseHasRefusal(response common.MessageResponse) bool {
+	if response == nil {
+		return false
+	}
+	var msg llm2.Message
+	switch m := response.GetMessage().(type) {
+	case *llm2.Message:
+		msg = *m
+	case llm2.Message:
+		msg = m
+	default:
+		return false
+	}
+	for _, block := range msg.Content {
+		if block.Type == llm2.ContentBlockTypeRefusal {
+			return true
+		}
+	}
+	return false
 }
 
 // forceToolCallV2 forces the LLM to produce a tool call using the given
@@ -89,6 +119,12 @@ func forceToolCallV2(
 		if appendErr := AppendChatHistory(actionCtx.ExecContext, chatHistory, response.GetMessage()); appendErr != nil {
 			return nil, appendErr
 		}
+	}
+
+	// A refusal is a definitive response; retrying won't produce a tool call, so
+	// surface it distinctly instead of masking it as a generic failure.
+	if err == nil && responseHasRefusal(response) {
+		return response, ErrLLMRefusal
 	}
 
 	// single retry in case the llm is being dumb and not returning a tool call

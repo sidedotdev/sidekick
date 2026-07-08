@@ -2,6 +2,7 @@ package dev
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -151,6 +152,11 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.advise")
 	response, err := persisted_ai.ForceParallelToolCall(actionCtx, a.ModelConfig, a.ChatHistory, tools...)
 	if err != nil {
+		// Treat a refusal like "proceed": skip advising this turn so the
+		// executor continues unchanged rather than failing the workflow.
+		if errors.Is(err, persisted_ai.ErrLLMRefusal) {
+			return nil
+		}
 		return fmt.Errorf("advisor: force tool call failed: %w", err)
 	}
 

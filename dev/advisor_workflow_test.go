@@ -169,6 +169,34 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_Proceed() {
 	s.Len(s.executorRefsFromResult(), originalRefs, "proceed must not modify the executor history")
 }
 
+// TestMaybeAdvise_Refusal verifies that when the advisor's model refuses to
+// respond (returning a refusal content block instead of a tool call), the
+// advisor treats it like "proceed": the executor history is left untouched and
+// the workflow completes without error rather than failing.
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_Refusal() {
+	executorHistory, originalRefs := s.persistExecutorHistory("exec_flow_refusal")
+
+	var la *persisted_ai.Llm2Activities
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
+		StopReason: "refusal",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeRefusal,
+				Refusal: &llm2.RefusalBlock{
+					Reason: "I can't help with that.",
+				},
+			}},
+		},
+	}, nil)
+
+	s.env.ExecuteWorkflow(s.adviseWorkflow, executorHistory)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	s.Len(s.executorRefsFromResult(), originalRefs, "a refusal must not modify the executor history")
+}
+
 // TestMaybeAdvise_Guide verifies that guidance from the advisor is appended to
 // the (initially non-hydrated) executor history, again without panicking.
 func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_Guide() {
