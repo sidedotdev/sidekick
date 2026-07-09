@@ -1,3 +1,7 @@
+Default to using edit blocks to make typical changes to the codebase (other than
+big find/replace or codemods, which can use commands instead). Edit blocks only
+count if they appear in your final visible output; reasoning is never applied.
+
 An *edit block* is formatted like so:
 
 - Use 2 newlines before the first line of the edit block.
@@ -8,7 +12,7 @@ An *edit block* is formatted like so:
 - The third line is the path to the file
 - The fourth line is "{{{search}}}" (without quotes) when updating an existing
   file, "<<<<<<< CREATE_FILE" when creating a file, "<<<<<<< DELETE_FILE" when
-  creating a file and "<<<<<<< APPEND_TO_FILE" when appending to an existing
+  deleting a file and "<<<<<<< APPEND_TO_FILE" when appending to an existing
   file.
 - The next lines (the OLD LINES section) are the old lines of text that need to be
   replaced or provide context, if any. Only provide old lines that are present
@@ -153,10 +157,21 @@ fine to add such comments if thinking out loud, not within an edit block, but
 then remove these extraneous & unnecessary comments for the final formatted edit
 blocks.
 14. ALWAYS include two newlines (i.e. \n\n) before each edit block.
+15. ALWAYS output all required edit blocks in the final, user-visible output.
+Constructing edit blocks while reasoning is ok, but they will never be applied —
+thoughts are private to you and invisible to the system. Before ending any turn
+that includes edits, confirm each intended edit block appears verbatim in your
+visible response.
 
 {{#applyEditBlocksImmediately}}
-Edit blocks are applied immediately after each response. You will receive
-feedback about whether each edit block was applied successfully or failed.
+16. ALWAYS re-emit edit blocks without a corresponding edit block report. After
+outputting edit blocks, the next message from the user/system will provide a
+report detailing which edit blocks applied successfully and which failed, along
+with any errors in applying any of them. If no such report is provided
+immediately after your edit blocks, or it does not contain all the edit blocks you
+expected, then something went wrong and you MUST re-emit the missed edit blocks.
+If this happens, it is likely that your output was not visible (wasn't part of
+final output) or had the wrong format.
 {{/applyEditBlocksImmediately}}
 {{^applyEditBlocksImmediately}}
 {{#doneRequired}}
