@@ -62,6 +62,11 @@ type Advisor struct {
 	ChatHistory *persisted_ai.ChatHistoryContainer
 
 	turnsSinceAdvice int
+
+	// requirementsLength is the retention-accounting length of the executor's
+	// initial-instructions message seeded into the advisor history. It sizes
+	// the trimming keep window and is cached after the one-time seeding.
+	requirementsLength int
 }
 
 // newAdvisor constructs an Advisor, resolving the advising model (falling back
@@ -121,12 +126,24 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 		a.ChatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	}
 
+	// Seeding the requirements block and trimming the advisor history are gated
+	// so that workflows started before this change keep their original command
+	// sequence during replay.
+	manageAdvisorHistory := workflow.GetVersion(dCtx, "advisor-manage-history", workflow.DefaultVersion, 1) == 1
+
 	if a.ChatHistory.Len() == 0 {
 		if err := AppendChatHistory(dCtx.ExecContext, a.ChatHistory, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleSystem,
 			Content: RenderPrompt(AdvisorSystem, nil),
 		}); err != nil {
 			return fmt.Errorf("advisor: failed to seed system prompt: %w", err)
+		}
+		if manageAdvisorHistory {
+			requirementsLength, err := a.seedRequirements(dCtx, executorHistory)
+			if err != nil {
+				return fmt.Errorf("advisor: failed to seed requirements: %w", err)
+			}
+			a.requirementsLength = requirementsLength
 		}
 	}
 
@@ -146,6 +163,11 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 		}); err != nil {
 			return fmt.Errorf("advisor: failed to append turn prompt: %w", err)
 		}
+	}
+
+	if manageAdvisorHistory {
+		keepLength := min(defaultRequestedKeepLength+a.requirementsLength, extendedRequestedKeepLength)
+		ManageChatHistory(dCtx, a.ChatHistory, dCtx.WorkspaceId, keepLength, a.ModelConfig)
 	}
 
 	tools := append([]*llm.Tool{&advisorProceedTool, &advisorGuideTool}, executorTools...)
@@ -175,6 +197,54 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 		}
 	}
 	return nil
+}
+
+// seedRequirements extracts the executor's initial-instructions (requirements)
+// message and seeds it once into the advisor history as a standalone,
+// always-retained block carrying the ContextTypeInitialInstructions marker. It
+// returns the length of that message, measured with the same accounting as the
+// retention logic, for sizing the trimming keep window. When the executor
+// history has no such message, seeding is skipped and 0 is returned.
+func (a *Advisor) seedRequirements(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer) (int, error) {
+	if executorHistory == nil {
+		return 0, nil
+	}
+
+	if llm2Hist, ok := a.ChatHistory.History.(*persisted_ai.Llm2ChatHistory); ok {
+		var aa *AdvisorActivities
+		var out *SeedAdvisorRequirementsOutput
+		err := workflow.ExecuteActivity(dCtx, aa.SeedAdvisorRequirementsActivity, SeedAdvisorRequirementsInput{
+			ExecutorHistory: executorHistory,
+			Provider:        a.ModelConfig.Provider,
+			FlowId:          llm2Hist.FlowId(),
+			WorkspaceId:     llm2Hist.WorkspaceId(),
+		}).Get(dCtx, &out)
+		if err != nil {
+			return 0, fmt.Errorf("failed to seed advisor requirements: %w", err)
+		}
+		if out == nil || out.Ref == nil {
+			return 0, nil
+		}
+		llm2Hist.AppendRef(*out.Ref)
+		return out.Length, nil
+	}
+
+	for _, msg := range executorHistory.Messages() {
+		cm, ok := msg.(common.ChatMessage)
+		if !ok || cm.ContextType != ContextTypeInitialInstructions {
+			continue
+		}
+		seed := llm.ChatMessage{
+			Role:        cm.Role,
+			Content:     cm.Content,
+			ContextType: ContextTypeInitialInstructions,
+		}
+		if err := AppendChatHistory(dCtx.ExecContext, a.ChatHistory, seed); err != nil {
+			return 0, err
+		}
+		return messageLength(seed), nil
+	}
+	return 0, nil
 }
 
 // executorPuppetRegexp matches the segments of the advisor's output that it

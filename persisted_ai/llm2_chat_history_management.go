@@ -52,6 +52,13 @@ func llm2MessageLength(provider string, msg llm2.Message) int {
 	return length
 }
 
+// Llm2MessageLength returns the retention-accounting length of an llm2 message
+// for the given provider, exposing llm2MessageLength to callers that size
+// history windows outside this package.
+func Llm2MessageLength(provider string, msg llm2.Message) int {
+	return llm2MessageLength(provider, msg)
+}
+
 // imageCharEstimate returns the estimated character-equivalent length of an
 // image by computing token estimates from its dimensions for the given provider.
 func imageCharEstimate(provider string, url string) int {

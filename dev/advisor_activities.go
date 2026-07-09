@@ -69,3 +69,66 @@ func renderExecutorTranscript(msgs []common.Message, maxRecent int) string {
 	}
 	return b.String()
 }
+
+// SeedAdvisorRequirementsInput is the activity input for extracting the
+// executor's initial-instructions (requirements) message and persisting it as a
+// standalone block for the advisor history.
+type SeedAdvisorRequirementsInput struct {
+	ExecutorHistory *persisted_ai.ChatHistoryContainer `json:"executorHistory"`
+	Provider        string                             `json:"provider"`
+	FlowId          string                             `json:"flowId"`
+	WorkspaceId     string                             `json:"workspaceId"`
+}
+
+// SeedAdvisorRequirementsOutput carries the persisted requirements ref and its
+// length, measured with the same accounting used by the retention logic. Ref is
+// nil when the executor history has no initial-instructions message.
+type SeedAdvisorRequirementsOutput struct {
+	Ref    *persisted_ai.MessageRef `json:"ref"`
+	Length int                      `json:"length"`
+}
+
+// SeedAdvisorRequirementsActivity hydrates the executor chat history, locates
+// the message whose content is marked ContextTypeInitialInstructions, persists
+// it as a standalone block (preserving the marker), and returns a ref plus the
+// message length. Hydration happens inside the activity because the in-workflow
+// chat history is refs-only (not hydrated).
+func (a *AdvisorActivities) SeedAdvisorRequirementsActivity(ctx context.Context, input SeedAdvisorRequirementsInput) (*SeedAdvisorRequirementsOutput, error) {
+	if input.ExecutorHistory == nil {
+		return &SeedAdvisorRequirementsOutput{}, nil
+	}
+	if err := input.ExecutorHistory.Hydrate(ctx, a.Storage); err != nil {
+		return nil, fmt.Errorf("failed to hydrate executor history: %w", err)
+	}
+
+	for _, msg := range input.ExecutorHistory.Llm2Messages() {
+		if llm2MessageContextType(msg) != persisted_ai.ContextTypeInitialInstructions {
+			continue
+		}
+		cha := &persisted_ai.ChatHistoryActivities{Storage: a.Storage}
+		ref, err := cha.AppendMessage(ctx, persisted_ai.AppendMessageInput{
+			FlowId:      input.FlowId,
+			WorkspaceId: input.WorkspaceId,
+			Message:     msg,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to persist advisor requirements: %w", err)
+		}
+		return &SeedAdvisorRequirementsOutput{
+			Ref:    ref,
+			Length: persisted_ai.Llm2MessageLength(input.Provider, msg),
+		}, nil
+	}
+	return &SeedAdvisorRequirementsOutput{}, nil
+}
+
+// llm2MessageContextType returns the context type of the first content block
+// that carries one, matching the accounting used by the retention logic.
+func llm2MessageContextType(msg llm2.Message) string {
+	for _, block := range msg.Content {
+		if ct := persisted_ai.GetContextType(block); ct != "" {
+			return ct
+		}
+	}
+	return ""
+}

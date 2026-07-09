@@ -36,6 +36,10 @@ type AdvisorWorkflowTestSuite struct {
 	env     *testsuite.TestWorkflowEnvironment
 	storage common.KeyValueStorage
 
+	// manageV4Calls counts how many times the advisor triggered history
+	// management (ManageV4) during a workflow run.
+	manageV4Calls int
+
 	// adviseWorkflow wraps MaybeAdvise so the executor history round-trips
 	// through the data converter and arrives refs-only, mirroring production.
 	adviseWorkflow func(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer) (*persisted_ai.ChatHistoryContainer, error)
@@ -99,6 +103,18 @@ func (s *AdvisorWorkflowTestSuite) SetupTest() {
 	// empty text block is emitted alongside a puppeted tool call).
 	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{Storage: s.storage}
 	s.env.RegisterActivity(chatHistoryActivities)
+
+	// Advisor history management is exercised as a fast pass-through here; its
+	// trimming behavior is covered by persisted_ai retention tests. Mocking it
+	// avoids real per-turn storage round-trips (and the resulting deadlock
+	// detector flakiness under load) while still proving MaybeAdvise invokes it.
+	s.manageV4Calls = 0
+	var manageActivities *persisted_ai.ChatHistoryActivities
+	s.env.OnActivity(manageActivities.ManageV4, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, input persisted_ai.ManageInput) (*persisted_ai.ManageOutput, error) {
+			s.manageV4Calls++
+			return &persisted_ai.ManageOutput{ChatHistory: input.ChatHistory}, nil
+		}).Maybe()
 
 	var ka *common.KVActivities
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -303,4 +319,32 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextB
 		}
 	}
 	s.Equal(1, toolResultBlocks, "expected the injected tool call to be resolved with a tool_result")
+}
+
+// TestMaybeAdvise_ManagesHistoryEachTurn verifies that a full advisor turn runs
+// history management over its own chat history, so the advisor history is
+// trimmed rather than growing unbounded across turns.
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ManagesHistoryEachTurn() {
+	executorHistory, _ := s.persistExecutorHistory("exec_flow_manage")
+
+	var la *persisted_ai.Llm2Activities
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
+		StopReason: "tool_use",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeToolUse,
+				ToolUse: &llm2.ToolUseBlock{
+					Id:        "call_proceed",
+					Name:      advisorProceedToolName,
+					Arguments: "{}",
+				},
+			}},
+		},
+	}, nil)
+
+	s.env.ExecuteWorkflow(s.adviseWorkflow, executorHistory)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.GreaterOrEqual(s.manageV4Calls, 1, "advisor must manage its own history during a turn")
 }
