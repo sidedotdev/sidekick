@@ -33,6 +33,29 @@ type sftpConn struct {
 	latency time.Duration
 }
 
+// sftpPool holds one shared sftpConn per remote identity so that all envs
+// pointing at the same remote reuse a single running side-sftp server instead
+// of each dialing (and leaking) its own ssh+side-sftp process chain. Pooling
+// is required because envs are frequently serialized/deserialized, which drops
+// the per-struct conn and would otherwise force a fresh dial on every op.
+var sftpPool = struct {
+	mu    sync.Mutex
+	conns map[string]*sftpConn
+}{conns: map[string]*sftpConn{}}
+
+// getPooledSFTPConn returns the shared sftpConn for key, creating one if none
+// exists yet.
+func getPooledSFTPConn(key string) *sftpConn {
+	sftpPool.mu.Lock()
+	defer sftpPool.mu.Unlock()
+	if sc, ok := sftpPool.conns[key]; ok {
+		return sc
+	}
+	sc := &sftpConn{}
+	sftpPool.conns[key] = sc
+	return sc
+}
+
 // getOrDial returns the cached SFTP client, dialing a new connection if needed.
 func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.Client, error) {
 	sc.mu.Lock()
