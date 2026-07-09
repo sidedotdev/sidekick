@@ -62,16 +62,12 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 	return strings.Join(results, "\n"), nil
 }
 
-// ForceToolBulkSearchRepository forces a bulk_search_repository tool call and
-// returns the tool calls alongside the raw response. The caller appends the
-// response to chat history so the append lives in the agent loop that owns the
-// history rather than inside this helper.
-func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]llm.ToolCall, common.MessageResponse, error) {
+func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]llm.ToolCall, error) {
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
 	modelConfig := dCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	toolNameMapping, err := resolveStreamToolNameMapping(actionCtx, modelConfig, *actionCtx.Secrets)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+		return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 	}
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
 		actionCtx,
@@ -82,9 +78,9 @@ func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *persisted_ai.Ch
 		&bulkSearchRepositoryTool,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to force tool call: %v", err)
+		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}
-	return response.GetMessage().GetToolCalls(), response, nil
+	return response.GetMessage().GetToolCalls(), nil
 }
 
 // isExistentFilePath returns true if the given path is a specific file path rather than a glob pattern

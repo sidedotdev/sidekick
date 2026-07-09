@@ -178,9 +178,6 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %w", err)
 		}
-		if err := persisted_ai.MaybeAppendChatHistory(dCtx.ExecContext, chatHistory, response.GetMessage()); err != nil {
-			return CriteriaFulfillment{}, err
-		}
 		toolCalls := response.GetMessage().GetToolCalls()
 		toolCall := toolCalls[0]
 		jsonStr := toolCall.Arguments

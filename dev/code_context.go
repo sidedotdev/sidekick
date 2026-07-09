@@ -307,15 +307,12 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			iterationsSinceLastFeedback = 0
 		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
-			toolCalls, response, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
+			toolCalls, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
 			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
 				continue // UserRequestIfPaused will handle the pause
 			}
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to force searching repository: %v", err)
-			}
-			if err := persisted_ai.MaybeAppendChatHistory(actionCtx.ExecContext, chatHistory, response.GetMessage()); err != nil {
-				return nil, "", err
 			}
 			if _, err := handleToolCalls(actionCtx.DevContext, toolCalls, chatHistory, nil); err != nil {
 				return nil, "", err
@@ -331,15 +328,12 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		// one of get_symbol_definitions or bulk_search_repository. if given
 		// bulk_search_repository,
 		chatCtx := actionCtx.WithCancelOnPause()
-		toolCallResults, response, err := ForceToolRetrieveCodeContext(chatCtx, chatHistory)
+		toolCallResults, err := ForceToolRetrieveCodeContext(chatCtx, chatHistory)
 		if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to determine required code context: %v", err)
-		}
-		if err := persisted_ai.MaybeAppendChatHistory(actionCtx.ExecContext, chatHistory, response.GetMessage()); err != nil {
-			return nil, "", err
 		}
 
 		// Check for unmarshal errors in any tool call and provide feedback
@@ -566,17 +560,14 @@ type ToolCallWithCodeContext struct {
 }
 
 // ForceToolRetrieveCodeContext forces the LLM to call get_symbol_definitions and
-// returns all tool calls with their parsed RequiredCodeContext along with the raw
-// response. Each tool call is parsed independently; if parsing fails for a tool
-// call, its Err field is set. The caller appends the response to chat history so
-// the append lives in the agent loop that owns the history rather than inside
-// this helper.
-func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, common.MessageResponse, error) {
+// returns all tool calls with their parsed RequiredCodeContext. Each tool call is
+// parsed independently; if parsing fails for a tool call, its Err field is set.
+func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	flowActionCtx := actionCtx.FlowActionContext()
 	toolNameMapping, err := resolveStreamToolNameMapping(flowActionCtx, modelConfig, *flowActionCtx.Secrets)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+		return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 	}
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
 		flowActionCtx,
@@ -587,9 +578,9 @@ func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persi
 		currentGetSymbolDefinitionsTool(),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to force tool call: %v", err)
+		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}
-	return parseToolCallsToCodeContext(response.GetMessage().GetToolCalls()), response, nil
+	return parseToolCallsToCodeContext(response.GetMessage().GetToolCalls()), nil
 }
 
 // parseToolCallsToCodeContext parses multiple tool calls into ToolCallWithCodeContext structs.

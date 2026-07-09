@@ -118,16 +118,8 @@ func forceToolCallV2(
 		return msgResponse, nil
 	})
 
-	refusal := err == nil && responseHasRefusal(response)
-
-	// Under the new version callers append the returned response so they can
-	// decide whether to keep it: the advisor drops refusals from its reusable
-	// history to recover on a later turn. Old executions append internally to keep
-	// history-append activities deterministic across replays. The version is read
-	// unconditionally so its marker is recorded at a stable point.
-	externalizeAppend := workflow.GetVersion(actionCtx.ExecContext, "externalize-chat-history-append", workflow.DefaultVersion, 1) >= 1
-
-	if !externalizeAppend && err == nil {
+	// Append the response to chat history
+	if err == nil {
 		if appendErr := AppendChatHistory(actionCtx.ExecContext, chatHistory, response.GetMessage()); appendErr != nil {
 			return nil, appendErr
 		}
@@ -135,37 +127,19 @@ func forceToolCallV2(
 
 	// A refusal is a definitive response; retrying won't produce a tool call, so
 	// surface it distinctly instead of masking it as a generic failure.
-	if refusal {
+	if err == nil && responseHasRefusal(response) {
 		return response, ErrLLMRefusal
 	}
 
 	// single retry in case the llm is being dumb and not returning a tool call
 	if err == nil && len(response.GetMessage().GetToolCalls()) == 0 {
-		// The failed response and the corrective prompt below are retry
-		// scaffolding intrinsic to this helper's own retry, distinct from the
-		// caller-owned final response append: the caller never observes this
-		// intermediate attempt, so it cannot own these appends. They must be in
-		// history for the retry to make sense. Under the externalized version the
-		// caller owns the returned history and decides whether to keep the final
-		// response, so the scaffolding goes onto a clone to keep this discarded
-		// attempt out of that history while still improving the retry's odds; old
-		// executions already appended the response above and mutate history directly.
-		retryHistory := chatHistory
-		if externalizeAppend {
-			clone := chatHistory.Clone()
-			retryHistory = &clone
-			if appendErr := AppendChatHistory(actionCtx.ExecContext, retryHistory, response.GetMessage()); appendErr != nil {
-				return nil, appendErr
-			}
-		}
 		retryMsg := common.ChatMessage{
 			Role:    common.ChatMessageRoleSystem,
 			Content: "Expected a tool call, but didn't get it. Embedding the json in the content is not sufficient. Please use the provided tool(s).",
 		}
-		if appendErr := AppendChatHistory(actionCtx.ExecContext, retryHistory, retryMsg); appendErr != nil {
+		if appendErr := AppendChatHistory(actionCtx.ExecContext, chatHistory, retryMsg); appendErr != nil {
 			return nil, appendErr
 		}
-		streamInput.ChatHistory = retryHistory
 
 		for k, v := range streamInput.ActionParams() {
 			actionCtx.ActionParams[k] = v
@@ -185,9 +159,8 @@ func forceToolCallV2(
 			return msgResponse, nil
 		})
 
-		// Old executions append the retry response internally; new executions leave
-		// it to the caller.
-		if !externalizeAppend && err == nil {
+		// Append the retry response to chat history
+		if err == nil {
 			if appendErr := AppendChatHistory(actionCtx.ExecContext, chatHistory, response.GetMessage()); appendErr != nil {
 				return nil, appendErr
 			}
@@ -219,26 +192,6 @@ func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.Model
 func ForceParallelToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
 	parallel := true
 	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, &parallel, tools...)
-}
-
-// MaybeAppendChatHistory appends a message to chat history only under the
-// externalize-chat-history-append version. Callers that need to decide whether a
-// message stays in history append it explicitly rather than relying on an
-// internal append at the wrong point: for example, the advisor drops refusals
-// (surfaced as ErrLLMRefusal) so it can recover on a later turn. Old executions
-// appended internally, so this is a no-op under the pre-externalization version
-// to keep history-append activities deterministic across replays.
-//
-// This reads the same externalize-chat-history-append change ID that
-// forceToolCallV2 reads unconditionally before returning. Because that earlier
-// read records the version marker at a stable point, reading it again here (or
-// skipping it entirely, as callers do on a refusal) is replay-safe: Temporal
-// returns the cached value without recording an additional marker.
-func MaybeAppendChatHistory(eCtx flow_action.ExecContext, chatHistory *ChatHistoryContainer, msg common.Message) error {
-	if workflow.GetVersion(eCtx, "externalize-chat-history-append", workflow.DefaultVersion, 1) < 1 {
-		return nil
-	}
-	return AppendChatHistory(eCtx, chatHistory, msg)
 }
 
 // AppendChatHistory appends a message to chat history, using an activity to
