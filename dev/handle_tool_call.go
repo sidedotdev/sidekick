@@ -166,6 +166,13 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 		response, err := unmarshalAndInvoke(toolCall, &wrapper, func() (string, error) {
 			return GetHelpOrInput(dCtx, wrapper.Requests)
 		})
+		if errors.Is(err, ErrEmptyHelpOrInputRequests) {
+			// Self-correctable: surface the error as tool result content so the
+			// model can retry with valid arguments, without retrying the workflow.
+			toolCallResult.IsError = true
+			toolCallResult.Content = llm2.TextContentBlocks(err.Error())
+			return ToolCallOutput{ToolResultBlock: toolCallResult}, nil
+		}
 		toolCallResult.Content = llm2.TextContentBlocks(response)
 		return ToolCallOutput{ToolResultBlock: toolCallResult}, err
 	}
