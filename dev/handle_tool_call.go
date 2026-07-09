@@ -207,7 +207,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 			})
 		case bulkReadFileTool.Name:
 			var bulkReadFileParams BulkReadFileParams
-			response, err = unmarshalAndInvoke(toolCall, &bulkReadFileParams, func() (string, error) {
+			invokeBulkReadFile := func() (string, error) {
 				v := workflow.GetVersion(trackedDCtx, "bulk_read_file_ref", workflow.DefaultVersion, 1)
 				if v == workflow.DefaultVersion {
 					return BulkReadFile(trackedDCtx, bulkReadFileParams)
@@ -218,7 +218,16 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 				}
 				ref = &output.Ref
 				return "", nil
-			})
+			}
+			lenientArgs := workflow.GetVersion(trackedDCtx, "read_file_lines_lenient_args", workflow.DefaultVersion, 1)
+			if lenientArgs == workflow.DefaultVersion {
+				response, err = unmarshalAndInvoke(toolCall, &bulkReadFileParams, invokeBulkReadFile)
+			} else {
+				bulkReadFileParams, err = parseBulkReadFileParamsLenient(toolCall.Arguments)
+				if err == nil {
+					response, err = invokeBulkReadFile()
+				}
+			}
 		case bulkSearchRepositoryTool.Name:
 			var bulkSearchRepositoryParams BulkSearchRepositoryParams
 			response, err = unmarshalAndInvoke(toolCall, &bulkSearchRepositoryParams, func() (string, error) {

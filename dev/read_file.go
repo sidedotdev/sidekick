@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -16,6 +17,7 @@ import (
 	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/invopop/jsonschema"
@@ -159,10 +161,75 @@ type FileLine struct {
 	LineNumber int    `json:"line_number" jsonschema:"description=The line number to center the window around."`
 }
 
+// flexInt unmarshals from either a JSON number or a JSON string containing a
+// number, tolerating models that quote numeric arguments.
+type flexInt int
+
+func (fi *flexInt) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return err
+		}
+		*fi = flexInt(n)
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*fi = flexInt(n)
+	return nil
+}
+
 type BulkReadFileParams struct {
 	FileLines    []FileLine `json:"file_lines"`
 	WindowSize   int        `json:"window_size"`
 	AllowAnyPath bool       `json:"allow_any_path,omitempty"`
+}
+
+// parseBulkReadFileParamsLenient accepts both the canonical form (file_lines
+// array) and a flat single-file form with top-level file_path/line_number, and
+// tolerates numeric fields provided as strings. It changes which arguments
+// deserialize successfully, so callers must gate it behind workflow versioning
+// to keep existing workflow replays deterministic.
+func parseBulkReadFileParamsLenient(args string) (BulkReadFileParams, error) {
+	var aux struct {
+		FileLines []struct {
+			FilePath   string  `json:"file_path"`
+			LineNumber flexInt `json:"line_number"`
+		} `json:"file_lines"`
+		WindowSize   flexInt `json:"window_size"`
+		AllowAnyPath bool    `json:"allow_any_path"`
+		FilePath     string  `json:"file_path"`
+		LineNumber   flexInt `json:"line_number"`
+	}
+	if err := json.Unmarshal([]byte(llm.RepairJson(args)), &aux); err != nil {
+		return BulkReadFileParams{}, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
+	}
+	params := BulkReadFileParams{
+		WindowSize:   int(aux.WindowSize),
+		AllowAnyPath: aux.AllowAnyPath,
+	}
+	for _, fl := range aux.FileLines {
+		params.FileLines = append(params.FileLines, FileLine{FilePath: fl.FilePath, LineNumber: int(fl.LineNumber)})
+	}
+	if len(params.FileLines) == 0 && aux.FilePath != "" {
+		params.FileLines = []FileLine{{FilePath: aux.FilePath, LineNumber: int(aux.LineNumber)}}
+	}
+	return params, nil
 }
 
 type MergedCodeBlock struct {

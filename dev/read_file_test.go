@@ -799,3 +799,66 @@ func TestBulkReadFileActivityV2_OutOfRangeIncludesValidRange(t *testing.T) {
 		})
 	}
 }
+
+func TestParseBulkReadFileParamsLenient(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    BulkReadFileParams
+		wantErr bool
+	}{
+		{
+			name:  "canonical form with numeric fields",
+			input: `{"file_lines":[{"file_path":"a.go","line_number":3}],"window_size":5}`,
+			want: BulkReadFileParams{
+				FileLines:  []FileLine{{FilePath: "a.go", LineNumber: 3}},
+				WindowSize: 5,
+			},
+		},
+		{
+			name:  "canonical form with string numbers",
+			input: `{"file_lines":[{"file_path":"a.go","line_number":"3"}],"window_size":"5"}`,
+			want: BulkReadFileParams{
+				FileLines:  []FileLine{{FilePath: "a.go", LineNumber: 3}},
+				WindowSize: 5,
+			},
+		},
+		{
+			name:  "flat single-file form with string line number",
+			input: `{"file_path":"dev/git_merge_integration_test.go","line_number":"1","window_size":130}`,
+			want: BulkReadFileParams{
+				FileLines:  []FileLine{{FilePath: "dev/git_merge_integration_test.go", LineNumber: 1}},
+				WindowSize: 130,
+			},
+		},
+		{
+			name:  "flat single-file form with numeric line number",
+			input: `{"file_path":"dev/git_merge_integration_test.go","line_number":1,"window_size":"130"}`,
+			want: BulkReadFileParams{
+				FileLines:  []FileLine{{FilePath: "dev/git_merge_integration_test.go", LineNumber: 1}},
+				WindowSize: 130,
+			},
+		},
+		{
+			name:    "invalid string line number",
+			input:   `{"file_path":"a.go","line_number":"abc"}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseBulkReadFileParamsLenient(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
