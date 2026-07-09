@@ -128,6 +128,9 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 		if err != nil {
 			return nil, fmt.Errorf("failed to force tool call: %v", err)
 		}
+		if err := persisted_ai.MaybeAppendChatHistory(eCtx, chatHistory, msgResponse.GetMessage()); err != nil {
+			return nil, err
+		}
 
 		toolCalls := msgResponse.GetMessage().GetToolCalls()
 		toolCall := toolCalls[0]

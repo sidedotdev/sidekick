@@ -175,11 +175,16 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 	response, err := persisted_ai.ForceParallelToolCall(actionCtx, a.ModelConfig, a.ChatHistory, tools...)
 	if err != nil {
 		// Treat a refusal like "proceed": skip advising this turn so the
-		// executor continues unchanged rather than failing the workflow.
+		// executor continues unchanged rather than failing the workflow. The
+		// refusal is never appended to the advisor history, so it can recover on a
+		// later turn.
 		if errors.Is(err, persisted_ai.ErrLLMRefusal) {
 			return nil
 		}
 		return fmt.Errorf("advisor: force tool call failed: %w", err)
+	}
+	if err := persisted_ai.MaybeAppendChatHistory(dCtx.ExecContext, a.ChatHistory, response.GetMessage()); err != nil {
+		return fmt.Errorf("advisor: failed to append advisor response: %w", err)
 	}
 
 	respMsg := response.GetMessage()
