@@ -524,12 +524,15 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		AdvisorEnabled: configOverrides.IsAdvisorEnabled(),
 	}
 
-	// Fetch and store git user config for commit authorship
+	// Fetch and store git user config for commit authorship. This must run
+	// against the local env (the developer's machine) rather than the flow's
+	// env, since containerized environments (devpod/open shell) generally lack
+	// the developer's git identity and we want commits attributed to them.
 	if v := workflow.GetVersion(ctx, "git-user-config-in-global-state", workflow.DefaultVersion, 1); v >= 1 {
 		var gitUserConfig git.GitUserConfig
-		err = workflow.ExecuteActivity(ctx, git.GetGitUserConfigActivity, envContainer).Get(ctx, &gitUserConfig)
+		err = workflow.ExecuteActivity(ctx, git.GetGitUserConfigActivity, *tempLocalExecContext.EnvContainer).Get(ctx, &gitUserConfig)
 		if err != nil {
-			// Log but don't fail - the activity will fall back to git config lookup
+			// Log but don't fail - commit authorship falls back to git config lookup
 			log.Warn().Err(err).Msg("Failed to get git user config, will fall back to git config lookup")
 		} else {
 			eCtx.GlobalState.SetValue("committerName", gitUserConfig.Name)
