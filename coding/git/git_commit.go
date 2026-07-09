@@ -44,13 +44,13 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 	if params.CommitAll {
 		args = append(args, "-a")
 	}
-	gitCommitOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	gitCommitOutput, err := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
 		Args:               args,
 		EnvVars:            envVars,
-	})
+	}, "")
 	if err != nil {
 		return "", fmt.Errorf("failed to git commit: %v", err)
 	}

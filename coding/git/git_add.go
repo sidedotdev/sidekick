@@ -24,12 +24,12 @@ func GitAddActivity(ctx context.Context, input GitAddActivityInput) error {
 	}
 
 	args := []string{"add", input.Path}
-	gitAddOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	gitAddOutput, err := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       input.EnvContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
 		Args:               args,
-	})
+	}, "")
 	if err != nil {
 		return fmt.Errorf("failed to git add: %v", err)
 	}

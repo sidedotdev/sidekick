@@ -123,12 +123,12 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		}
 		if baseDirty {
 			stashCmd := fmt.Sprintf("cd %s && git stash push --include-untracked", shellQuote(targetWorktree.Path))
-			stashOutput, stashErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			stashOutput, stashErr := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
 				Command:      "sh",
 				Args:         []string{"-c", stashCmd},
 				EnvVars:      envVars,
-			})
+			}, targetWorktree.Path)
 			if stashErr != nil {
 				resultErr = fmt.Errorf("failed to stash dirty target worktree: %v", stashErr)
 				return
