@@ -73,3 +73,19 @@ func TestSummarizeSubtasksForOrchestrator(t *testing.T) {
 		assert.NotContains(t, got, strings.Repeat("x", maxDispatchedDiffPerSubtask+1))
 	})
 }
+
+func TestResolveSubtaskScope(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		IntentSubtaskScopeWhole:   IntentSubtaskScopeWhole,
+		IntentSubtaskScopeSection: IntentSubtaskScopeSection,
+		IntentSubtaskScopePrompt:  IntentSubtaskScopePrompt,
+		// legacy value from before the section/prompt split
+		IntentSubtaskScopePartial: IntentSubtaskScopeSection,
+		"":                        IntentSubtaskScopeSection,
+		"bogus":                   IntentSubtaskScopeSection,
+	}
+	for raw, want := range cases {
+		assert.Equal(t, want, resolveSubtaskScope(raw), "raw scope %q", raw)
+	}
+}

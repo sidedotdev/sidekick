@@ -51,6 +51,11 @@ intent_links:
       - api/intent_api.go:SetIddAutoModeHandler
       - api/intent_api.go:RunIddOrchestratorHandler
       - frontend/src/views/IntentCanvasView.vue
+      - dev/idd_orchestrator.go:StartIntentSubtaskToolArgs
+      - dev/idd_orchestrator.go:resolveSubtaskScope
+      - dev/idd_workflow.go:StartIntentSubtaskSignal
+      - dev/intent_requirements.go:renderIntentRequirements
+      - dev/prompts/intent/requirements_prompt_only.mustache
 ---
 # Seamless Intent Driven Development Flow
 

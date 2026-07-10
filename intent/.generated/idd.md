@@ -52,6 +52,11 @@ intent_links:
       - dev/idd_orchestrator.go:runIddOrchestratorTurn
       - dev/idd_orchestrator.go:startIntentSubtaskTool
       - dev/idd_orchestrator.go:addNudgeTool
+      - dev/idd_orchestrator.go:StartIntentSubtaskToolArgs
+      - dev/idd_orchestrator.go:resolveSubtaskScope
+      - dev/idd_workflow.go:StartIntentSubtaskSignal
+      - dev/intent_requirements.go:renderIntentRequirements
+      - dev/prompts/intent/requirements_prompt_only.mustache
       - dev/idd_workflow.go:IddState
       - dev/idd_workflow.go:IddNudge
       - dev/idd_workflow.go:SetIddAutoModeSignal
@@ -188,15 +193,16 @@ freeze every subsequent turn until that sub-task finishes. The
 fire-and-forget shape mirrors the user-signal handler in `IddWorkflow`
 and keeps each turn (and the drainer) snappy.
 
-Partial-scope sub-tasks pass their scoping intent through the
-`start_intent_subtask` tool's free-form `prompt` argument: the agent can
-name a section heading from an intent file, pick out a paragraph, or
-describe any other narrow focus in plain language, and that string flows
-directly into the sub-task's requirements text. A dedicated structured
-field for "intent file path + section heading" was considered and
-rejected because the intent explicitly lists free-form prompt as one of
-the allowed scope shapes, and the existing prompt already accommodates
-both file-section references and arbitrary narrowing instructions.
+Sub-task scoping is a three-way `scope` enum on the `start_intent_subtask`
+tool: 'whole' (full intent diff), 'section' (the `prompt` names a specific
+intent-file section; the sub-task still receives the full intent diff for
+context), and 'prompt' (arbitrary free-form `prompt`). Prompt-scoped
+sub-tasks receive only that prompt in their requirements — the intent diff
+is deliberately omitted, per the intent's scoping bullet — so the prompt
+must be self-contained and the orchestrator remains responsible for
+following up on intent the prompt does not cover. The legacy 'partial'
+scope value from older histories is still accepted and treated as
+'section'.
 
 The intent diff the orchestrator sees each turn is computed against the
 IDD flow's start branch (`state.DefaultTargetBranch`), not the worktree
