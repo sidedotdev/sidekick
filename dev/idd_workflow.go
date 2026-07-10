@@ -155,6 +155,13 @@ type IddState struct {
 	// user staring at a silently still-running workflow. It is cleared at the
 	// start of each finish attempt.
 	FinishError string `json:"finishError,omitempty"`
+	// PendingSubtaskNotices queues human-readable notices about sub-tasks
+	// that reached a terminal status since the last orchestrator turn. The
+	// next turn that actually runs drains them into its prompt so the
+	// orchestrator knows exactly which sub-task just finished (and how)
+	// instead of inferring it from the sub-task summary. Workflow-internal
+	// only; never surfaced on the canvas.
+	PendingSubtaskNotices []string `json:"-"`
 }
 
 // IddWorkflow drives the Intent Driven Development canvas: it sets up a worktree
@@ -237,6 +244,18 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	// off for pre-existing workflows.
 	orchestratorVersion := workflow.GetVersion(dCtx, "idd-background-orchestrator", workflow.DefaultVersion, 1)
 	var orchestratorTriggerCh workflow.Channel
+	// Defined before the drainer coroutine below so the trigger can be handed
+	// to runIddOrchestratorTurn (and from there to runIntentSubtask), which
+	// request a turn whenever a sub-task reaches a terminal status. No-op
+	// while orchestratorTriggerCh is nil (pre-orchestrator histories).
+	requestOrchestratorTurn := func() {
+		if orchestratorTriggerCh == nil {
+			return
+		}
+		// Non-blocking send: if a turn is already queued the new trigger is
+		// dropped (it would observe the same or newer state anyway).
+		_ = orchestratorTriggerCh.SendAsync(RunIddOrchestratorSignal{})
+	}
 	if orchestratorVersion >= 1 {
 		// orchestratorChat persists across orchestrator turns so the background
 		// agent can remember which intent chunks it has already dispatched
@@ -261,18 +280,9 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 				// about ambiguous/contradictory intent regardless of whether
 				// auto sub-task creation is enabled; AutoMode only gates the
 				// start_intent_subtask tool inside the turn.
-				runIddOrchestratorTurn(dCtx.WithContext(goCtx), input, state, orchestratorChat, !state.AutoMode)
+				runIddOrchestratorTurn(dCtx.WithContext(goCtx), input, state, orchestratorChat, !state.AutoMode, requestOrchestratorTurn)
 			}
 		})
-	}
-
-	requestOrchestratorTurn := func() {
-		if orchestratorTriggerCh == nil {
-			return
-		}
-		// Non-blocking send: if a turn is already queued the new trigger is
-		// dropped (it would observe the same or newer state anyway).
-		_ = orchestratorTriggerCh.SendAsync(RunIddOrchestratorSignal{})
 	}
 
 	// Background edit watcher: a long-running activity that returns when the
@@ -372,7 +382,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			// Spawn a coroutine so committing and running the sub-task to
 			// completion doesn't block the selector from handling more signals.
 			workflow.Go(dCtx, func(goCtx workflow.Context) {
-				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId)
+				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId, requestOrchestratorTurn)
 			})
 		})
 
@@ -494,7 +504,11 @@ func reservePendingSubtask(dCtx DevContext, state *IddState, scopePrompt string)
 // (generate the id after commitIntent, append the entry after the child
 // workflow starts) for replay compatibility with histories recorded before
 // the pre-reservation version.
-func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSubtaskSignal, state *IddState, flowId string) {
+//
+// requestOrchestratorTurn, when non-nil, is invoked once the child workflow
+// reaches a terminal status so the orchestrator promptly re-evaluates any
+// remaining un-dispatched intent.
+func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSubtaskSignal, state *IddState, flowId string, requestOrchestratorTurn func()) {
 	log := workflow.GetLogger(dCtx)
 	preReserved := flowId != ""
 
@@ -632,7 +646,17 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 
 	status := "completed"
-	if childErr := childFuture.Get(childCtx, nil); childErr != nil {
+	// The child result is only decoded for BasicDev sub-tasks, where it's a
+	// plain summary string; PlannedDevWorkflow returns a plan-execution struct
+	// that isn't worth surfacing to the orchestrator.
+	var childResult string
+	var childErr error
+	if sig.Planned {
+		childErr = childFuture.Get(childCtx, nil)
+	} else {
+		childErr = childFuture.Get(childCtx, &childResult)
+	}
+	if childErr != nil {
 		if temporal.IsCanceledError(childErr) {
 			status = "canceled"
 		} else {
@@ -642,9 +666,54 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 	setSubtaskStatus(state, we.ID, status, workflow.Now(dCtx))
 
+	// Prompt the orchestrator to re-evaluate remaining un-dispatched intent as
+	// soon as a sub-task lands (or fails/cancels) instead of waiting for the
+	// next intent edit or the edit watcher's MaxWait backstop. The queued
+	// notice tells the next turn which sub-task finished and how; because it
+	// is queued before the coalescing SendAsync trigger, it is delivered even
+	// when this trigger coalesces with an already-queued turn. Version-gated
+	// so histories recorded before this change replay without the extra
+	// version marker.
+	if workflow.GetVersion(dCtx, "idd-subtask-terminal-orchestrator-turn", workflow.DefaultVersion, 1) >= 1 && requestOrchestratorTurn != nil {
+		state.PendingSubtaskNotices = append(state.PendingSubtaskNotices,
+			subtaskTerminalNotice(title, we.ID, status, childResult, childErr))
+		requestOrchestratorTurn()
+	}
+
 	subtaskFlow.Status = status
 	if putErr := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, subtaskFlow).Get(actCtx, nil); putErr != nil {
 		log.Error("Failed to update intent sub-task flow record", "Error", putErr)
+	}
+}
+
+// maxSubtaskNoticeResultLen caps the child-result excerpt embedded in a
+// terminal-status notice so a verbose sub-task result can't bloat the
+// orchestrator's turn prompt.
+const maxSubtaskNoticeResultLen = 2000
+
+// subtaskTerminalNotice renders a human-readable event line describing a
+// sub-task that reached a terminal status, for inclusion in the next
+// orchestrator turn prompt. childResult, when non-empty, is the sub-task
+// child workflow's result summary.
+func subtaskTerminalNotice(title, flowId, status, childResult string, childErr error) string {
+	switch status {
+	case "completed":
+		notice := fmt.Sprintf("Sub-task %q (%s) is now complete; its changes were merged into the IDD worktree branch.", title, flowId)
+		if result := strings.TrimSpace(childResult); result != "" {
+			if len(result) > maxSubtaskNoticeResultLen {
+				result = result[:maxSubtaskNoticeResultLen] + "…"
+			}
+			notice += " Result: " + result
+		}
+		return notice
+	case "canceled":
+		return fmt.Sprintf("Sub-task %q (%s) was canceled; its slice of intent was NOT implemented or merged.", title, flowId)
+	default:
+		notice := fmt.Sprintf("Sub-task %q (%s) failed; its slice of intent was NOT implemented or merged.", title, flowId)
+		if childErr != nil {
+			notice += " Error: " + childErr.Error()
+		}
+		return notice
 	}
 }
 
