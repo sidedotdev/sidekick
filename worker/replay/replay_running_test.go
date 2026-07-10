@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,8 +18,10 @@ import (
 	"sidekick/utils"
 	sidekick_worker "sidekick/worker"
 
+	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/history/v1"
+	"go.temporal.io/api/proxy"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
@@ -214,9 +217,9 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 	// Fetch all histories concurrently, then replay concurrently in subtests.
 	type historyResult struct {
-		id      string
-		err     error
-		skipped bool
+		id         string
+		err        error
+		skipReason string
 	}
 
 	terminalEventTypes := map[enums.EventType]bool{
@@ -254,7 +257,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				return
 			}
 			if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
-				result.skipped = true
+				result.skipReason = "completed before replay"
 				return
 			}
 			// Drop any in-flight WorkflowTask tail to avoid the
@@ -262,7 +265,27 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			// history mid workflow-task on a running workflow.
 			hist.Events = dropInFlightWFTTail(hist.Events)
 			if len(hist.Events) == 0 {
-				result.skipped = true
+				result.skipReason = "no replayable events"
+				return
+			}
+
+			// Resolve payloads the codec offloaded to KV storage up front:
+			// unresolvable references (e.g. histories read over the read-only
+			// proxy of a host that does not inline them) would otherwise
+			// derail replay with misleading non-determinism errors.
+			codec := common.NewPayloadCodec(service, common.DefaultCodecThreshold)
+			err = proxy.VisitPayloads(ctx, hist, proxy.VisitPayloadsOptions{
+				SkipSearchAttributes: true,
+				Visitor: func(_ *proxy.VisitPayloadsContext, payloads []*commonpb.Payload) ([]*commonpb.Payload, error) {
+					return codec.Decode(payloads)
+				},
+			})
+			if err != nil {
+				if errors.Is(err, common.ErrCodecPayloadMissing) {
+					result.skipReason = fmt.Sprintf("offloaded payloads unavailable in this environment: %v", err)
+					return
+				}
+				result.err = err
 				return
 			}
 			replayerOptions := utils.TestReplayerOptions()
@@ -285,8 +308,8 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		result := histories[id]
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
-			if result.skipped {
-				t.Skipf("Workflow %s completed before replay; skipping", result.id)
+			if result.skipReason != "" {
+				t.Skipf("Workflow %s: %s", result.id, result.skipReason)
 			}
 			if result.err != nil {
 				t.Errorf("Replay failed for workflow %s: %v", result.id, result.err)
