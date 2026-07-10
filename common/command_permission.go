@@ -1074,7 +1074,9 @@ const heredocFileWriteDenyMessage = "Writing files via shell heredoc (e.g. `cat 
 // tempPathPattern matches references to system temp paths like /tmp and
 // /var/tmp anywhere in a script (heredoc redirects, `tee`, plain redirects,
 // etc.), so guidance toward in-repo locations can be surfaced for any of them.
-var tempPathPattern = regexp.MustCompile(`/(?:var/)?tmp(?:/|\b)`)
+// Only absolute paths are matched: a preceding path-like character (as in
+// `.side/tmp` or `~/tmp`) means the reference is not the system temp dir.
+var tempPathPattern = regexp.MustCompile(`(?:^|[^\w.~-])/(?:var/)?tmp(?:/|\b)`)
 
 // tempPathAdvisory steers commands away from system temp paths toward in-repo
 // locations. It is surfaced whenever a script references such a path.

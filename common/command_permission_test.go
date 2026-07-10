@@ -2294,6 +2294,34 @@ func TestEvaluateScriptPermission_TempPathAdvisory(t *testing.T) {
 		assert.NotContains(t, msg, ".side/tmp")
 	})
 
+	t.Run("path under .side/tmp does not trigger advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee -a .side/tmp/ghostty-refs/out.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Empty(t, msg)
+	})
+
+	t.Run("relative parent or home tmp paths do not trigger advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee ../tmp/a.log ~/tmp/b.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Empty(t, msg)
+	})
+
+	t.Run("absolute /var/tmp path still triggers advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee /var/tmp/out.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, ".side/tmp")
+	})
+
+	t.Run("quoted absolute /tmp path still triggers advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, `echo hi | tee "/tmp/out.log"`, autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, ".side/tmp")
+	})
+
 	t.Run("heredoc file write to /tmp appends temp guidance to deny message", func(t *testing.T) {
 		t.Parallel()
 		result, msg := EvaluateScriptPermission(config, "cat > /tmp/scratch.txt << 'EOF'\nhi\nEOF")
