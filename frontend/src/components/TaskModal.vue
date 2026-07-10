@@ -148,7 +148,7 @@ import ShortcutHint from './ShortcutHint.vue'
 import { store, type TaskConfigData } from '../lib/store'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
-import type { Task, TaskStatus, LLMConfig } from '../lib/models'
+import type { Flow, Task, TaskStatus, LLMConfig } from '../lib/models'
 
 type PresetOption = 
   | { value: 'default'; label: string }
@@ -758,7 +758,8 @@ const navigateToIntentCanvas = async (taskId: string) => {
       const res = await fetch(`/api/v1/workspaces/${workspaceId.value}/tasks/${taskId}`)
       if (res.ok) {
         const data = await res.json()
-        const intentFlowId = data?.task?.flows?.[0]?.id
+        const flows: Flow[] = data?.task?.flows ?? []
+        const intentFlowId = (flows.find((f) => f.type === 'idd') ?? flows[0])?.id
         if (intentFlowId) {
           router.push({ name: 'intent-canvas', params: { id: intentFlowId } })
           return
