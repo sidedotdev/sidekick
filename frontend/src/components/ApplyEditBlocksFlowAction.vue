@@ -11,6 +11,7 @@
         <UnifiedDiffViewer
           :diff-string="result.finalDiff"
           :default-expanded="true"
+          :level="level"
         />
       </template>
       <div v-else-if="result.originalEditBlocks?.[0]?.filePath">
