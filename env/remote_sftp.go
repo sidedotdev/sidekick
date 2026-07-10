@@ -31,11 +31,119 @@ type sftpConn struct {
 	client  *sftp.Client
 	cmd     *exec.Cmd
 	latency time.Duration
+	// key is this connection's identity in sharedSFTPConns; empty for
+	// connections that are not cache-managed.
+	key string
+	// lastUsed and evicted are maintained by lockLive, the idle reaper and
+	// CloseAllSharedSFTPConns.
+	lastUsed time.Time
+	evicted  bool
+}
+
+// Env structs are serialized into workflow/activity payloads and deserialized
+// afresh per activity invocation, so a connection stored on the env struct
+// itself would be re-dialed (remote env detection, sftp binary upload check,
+// server spawn) on nearly every filesystem operation. Caching connections per
+// remote environment identity lets all deserialized copies of the same env
+// share one long-lived session within the worker process.
+//
+// Keys are the stable SSH destination identity of the environment (env type
+// plus devpod workspace name / openshell sandbox name). A container restarted
+// or recreated under the same name resolves to the same SSH destination, so
+// it maps to the same entry; its now-dead session is detected on the first
+// failing operation and replaced (see the resetAndDial retries in the sftp
+// helpers below). Entries idle for sftpIdleTimeout are closed and evicted by
+// a background reaper so a long-running worker does not accumulate sessions
+// and ssh child processes without bound.
+var (
+	sharedSFTPConnsMu sync.Mutex
+	sharedSFTPConns   = make(map[string]*sftpConn)
+
+	startSFTPReaperOnce sync.Once
+)
+
+const (
+	// sftpIdleTimeout is how long a cached connection may go unused before
+	// the reaper closes it and evicts its cache entry.
+	sftpIdleTimeout = 15 * time.Minute
+	// sftpReapInterval is how often the reaper scans for idle connections.
+	sftpReapInterval = time.Minute
+)
+
+// sharedSFTPConnFor returns the process-wide SFTP connection for the given
+// environment identity key, creating an un-dialed entry if needed.
+func sharedSFTPConnFor(key string) *sftpConn {
+	startSFTPReaperOnce.Do(func() {
+		go func() {
+			for range time.Tick(sftpReapInterval) {
+				reapIdleSFTPConns(time.Now().Add(-sftpIdleTimeout))
+			}
+		}()
+	})
+
+	sharedSFTPConnsMu.Lock()
+	defer sharedSFTPConnsMu.Unlock()
+	conn, ok := sharedSFTPConns[key]
+	if !ok {
+		conn = &sftpConn{key: key, lastUsed: time.Now()}
+		sharedSFTPConns[key] = conn
+	}
+	return conn
+}
+
+// reapIdleSFTPConns closes and evicts cache entries unused since cutoff.
+// Entries busy with an in-flight operation are skipped; they are not idle.
+func reapIdleSFTPConns(cutoff time.Time) {
+	sharedSFTPConnsMu.Lock()
+	defer sharedSFTPConnsMu.Unlock()
+	for key, conn := range sharedSFTPConns {
+		if !conn.mu.TryLock() {
+			continue
+		}
+		if conn.lastUsed.Before(cutoff) {
+			conn.closeLocked()
+			conn.evicted = true
+			delete(sharedSFTPConns, key)
+		}
+		conn.mu.Unlock()
+	}
+}
+
+// CloseAllSharedSFTPConns closes every cached SFTP connection along with its
+// ssh child process. Intended for worker shutdown.
+func CloseAllSharedSFTPConns() {
+	sharedSFTPConnsMu.Lock()
+	defer sharedSFTPConnsMu.Unlock()
+	for key, conn := range sharedSFTPConns {
+		conn.mu.Lock()
+		conn.closeLocked()
+		conn.evicted = true
+		conn.mu.Unlock()
+		delete(sharedSFTPConns, key)
+	}
+}
+
+// lockLive locks and returns the current live cache entry for this
+// connection, following the replacement entry when the reaper evicted this
+// one between lookup and use (which prevents dialing orphan sessions that no
+// reaper would ever close). It also refreshes the idle timestamp. The caller
+// must unlock the returned conn.
+func (sc *sftpConn) lockLive() *sftpConn {
+	for {
+		sc.mu.Lock()
+		if !sc.evicted {
+			sc.lastUsed = time.Now()
+			return sc
+		}
+		key := sc.key
+		sc.mu.Unlock()
+		sc = sharedSFTPConnFor(key)
+	}
 }
 
 // getOrDial returns the cached SFTP client, dialing a new connection if needed.
 func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.Client, error) {
-	sc.mu.Lock()
+	sc = sc.lockLive()
 	defer sc.mu.Unlock()
 
 	if sc.client != nil {
@@ -46,7 +154,7 @@ func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.
 
 // resetAndDial closes any existing connection and establishes a new one.
 func (sc *sftpConn) resetAndDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.Client, error) {
-	sc.mu.Lock()
+	sc = sc.lockLive()
 	defer sc.mu.Unlock()
 	sc.closeLocked()
 	return sc.dialLocked(ctx, sshEnv)

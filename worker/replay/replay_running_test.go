@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"sidekick/common"
+	"sidekick/utils"
 	sidekick_worker "sidekick/worker"
 
 	"go.temporal.io/api/enums/v1"
@@ -264,9 +265,9 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				result.skipped = true
 				return
 			}
-			replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
-				DataConverter: clientOptions.DataConverter,
-			})
+			replayerOptions := utils.TestReplayerOptions()
+			replayerOptions.DataConverter = clientOptions.DataConverter
+			replayer, err := worker.NewWorkflowReplayerWithOptions(replayerOptions)
 			if err != nil {
 				result.err = err
 				return

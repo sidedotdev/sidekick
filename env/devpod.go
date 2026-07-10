@@ -72,7 +72,10 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 	repoName := filepath.Base(input.RepoDir)
 	branchSuffix := strings.TrimPrefix(input.BranchName, "side/")
 	dirName := repoName + "-" + branchSuffix
-	worktreePath := filepath.Join("/tmp", "sidekick-worktrees", input.WorkspaceId, dirName)
+	// Worktrees live next to the repo inside the workspace mount (e.g. under
+	// /workspaces, which is backed by the devpod workspace volume) rather than
+	// /tmp, so they survive container restarts and rebuilds.
+	worktreePath := filepath.Join(filepath.Dir(input.RepoDir), "sidekick-worktrees", input.WorkspaceId, dirName)
 
 	mkdirOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "mkdir",
