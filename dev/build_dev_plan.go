@@ -654,6 +654,14 @@ func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, p
 }
 
 func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*flow_action.UserResponse, error) {
+	// IDD sub-task plans are auto-approved: the intent author reviews outcomes
+	// when the sub-task auto-merges back into the idd worktree, so pausing for
+	// plan approval would only stall the background sub-task. Version-gated so
+	// in-flight sub-tasks that already requested approval replay correctly.
+	if dCtx.Idd && workflow.GetVersion(dCtx, "idd-auto-approve-plan", workflow.DefaultVersion, 1) == 1 {
+		approved := true
+		return &flow_action.UserResponse{Approved: &approved, Content: "Plan auto-approved for IDD sub-task."}, nil
+	}
 	req := flow_action.RequestForUser{
 		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
