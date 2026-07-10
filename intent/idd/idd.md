@@ -274,7 +274,8 @@ Pressing the button to start immediately results in these actions:
 - The agent makes sure to either provide very strong interfaces between the
   subtasks such that they can operate in parallel, or it serializes execution to
   ensure.
-- When subtasks complete, the orchestrator is notified and can take an action, such as invoking the next subtask, if it wants to.
+- When subtasks complete, the orchestrator is notified and can take an action,
+  such as invoking the next subtask, if it wants to.
 
 ### Sub tasks
 - When manually created, uses planned dev flow type with determine requirements disabled
