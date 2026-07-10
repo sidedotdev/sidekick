@@ -85,7 +85,7 @@ according to the human author/user.
 - Doesn't ask for task description in the UI to start. In fact, it removes task
   fields other than model config, title (required for idd, unlike other flow
   types), and start branch.
-  
+
 ### Interface
 
 - Starting an idd task/flow creates a new worktree and takes you directly to the
@@ -266,8 +266,7 @@ Pressing the button to start immediately results in these actions:
   to a portion of the intent.
 
 ### Sub tasks
-   
-- Uses basic dev flow type with determine requirements disabled
+- When manually created, uses planned dev flow type with determine requirements disabled
 - Makes a worktree based off of HEAD of the worktree for the idd flow
 - Automatically gets merged into the idd worktree when completed (new basic dev
   / planned dev workflow option)
