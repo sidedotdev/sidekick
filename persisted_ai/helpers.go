@@ -79,6 +79,7 @@ func forceToolCallV2(
 	chatHistory *ChatHistoryContainer,
 	toolNameMapping *ToolNameMappingConfig,
 	parallelToolCalls *bool,
+	disableUserRetry bool,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
 
@@ -110,7 +111,7 @@ func forceToolCallV2(
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping)
+		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping, disableUserRetry)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +148,7 @@ func forceToolCallV2(
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			streamInput.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping)
+			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping, disableUserRetry)
 			if err != nil {
 				return nil, err
 			}
@@ -180,18 +181,36 @@ func ForceToolCallWithTrackOptionsV2(
 	toolNameMapping *ToolNameMappingConfig,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
-	return forceToolCallV2(actionCtx, trackOptions, modelConfig, chatHistory, toolNameMapping, nil, tools...)
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, chatHistory, toolNameMapping, nil, false, tools...)
+}
+
+// ForceToolCallWithFallbackV2 is like ForceToolCallWithTrackOptionsV2 but, when
+// disableUserRetry is true, bounds the LLM invocation to a few quick automatic
+// retries and surfaces failures as errors instead of prompting the user to
+// retry. Intended for callers that have their own fallback and should not block
+// indefinitely on user input. Exposing disableUserRetry as a flag lets callers
+// gate the behavior (e.g. behind a workflow version) at a single call site.
+func ForceToolCallWithFallbackV2(
+	actionCtx flow_action.ActionContext,
+	trackOptions flow_action.TrackOptions,
+	disableUserRetry bool,
+	modelConfig common.ModelConfig,
+	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
+	tools ...*llm.Tool,
+) (common.MessageResponse, error) {
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, chatHistory, toolNameMapping, nil, disableUserRetry, tools...)
 }
 
 func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
-	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, nil, tools...)
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, nil, false, tools...)
 }
 
 // ForceParallelToolCall forces at least one tool call while explicitly enabling
 // parallel tool calls for providers that support the toggle.
 func ForceParallelToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
 	parallel := true
-	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, &parallel, tools...)
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, &parallel, false, tools...)
 }
 
 // AppendChatHistory appends a message to chat history, using an activity to

@@ -515,6 +515,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 			trackedCtx.FlowActionContext(),
 			streamInput,
 			toolNameMapping,
+			false,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
