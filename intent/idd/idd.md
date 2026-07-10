@@ -263,7 +263,7 @@ Pressing the button to start immediately results in these actions:
   history.
 - It can scope the intent to a specific section of an intent file, or the entire
   intent diff, or just an arbitrary prompt that scopes and directs the subtask
-  to a portion of the intent.
+  to a portion of the intent (not providing it the entire intent diff in this case). In the latter situation, the orchestrator is responsible for following up
 
 ### Sub tasks
 - When manually created, uses planned dev flow type with determine requirements disabled
