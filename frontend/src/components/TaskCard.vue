@@ -191,9 +191,13 @@ const cardClicked = async () => {
   }
 
   if (props.task.flows && props.task.flows.length > 0) {
-    const firstFlowId = props.task.flows[0].id
+    // A task's flows may include sub-task flows (e.g. IDD sub-tasks share the
+    // task as parent), so pick the flow matching the task's flow type instead
+    // of relying on ordering.
+    const flows = props.task.flows
+    const targetFlow = flows.find((f) => f.type === props.task.flowType) ?? flows[0]
     const routeName = props.task.flowType === 'idd' ? 'intent-canvas' : 'flow'
-    router.push({ name: routeName, params: { id: firstFlowId } })
+    router.push({ name: routeName, params: { id: targetFlow.id } })
   } else {
     openEditModal()
   }

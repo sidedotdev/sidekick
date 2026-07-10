@@ -103,6 +103,36 @@ func TestPersistFlow(t *testing.T) {
 		assert.True(t, updatedFlow.Created.Equal(created))
 		assert.True(t, updatedFlow.Updated.Equal(updated))
 	})
+
+	t.Run("Update with zero created preserves original created", func(t *testing.T) {
+		t.Parallel()
+		storage := NewTestSqliteStorage(t, "flow_test")
+		created := time.Date(2025, 3, 1, 12, 0, 0, 0, time.UTC)
+		flow := domain.Flow{
+			WorkspaceId: "workspace4",
+			Id:          "flow4",
+			Type:        domain.FlowTypeBasicDev,
+			ParentId:    "parent4",
+			Status:      "in_progress",
+			Created:     created,
+			Updated:     created,
+		}
+		require.NoError(t, storage.PersistFlow(ctx, flow))
+
+		update := domain.Flow{
+			WorkspaceId: "workspace4",
+			Id:          "flow4",
+			Type:        domain.FlowTypeBasicDev,
+			ParentId:    "parent4",
+			Status:      "completed",
+		}
+		require.NoError(t, storage.PersistFlow(ctx, update))
+
+		persistedFlow, err := storage.GetFlow(ctx, flow.WorkspaceId, flow.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "completed", persistedFlow.Status)
+		assert.True(t, persistedFlow.Created.Equal(created))
+	})
 }
 
 func TestGetFlow(t *testing.T) {
@@ -219,6 +249,31 @@ func TestGetFlowsForTask(t *testing.T) {
 			assert.Equal(t, time.UTC, flow.Created.Location())
 			assert.Equal(t, time.UTC, flow.Updated.Location())
 		}
+	})
+
+	t.Run("Flows are ordered by creation even after updates", func(t *testing.T) {
+		t.Parallel()
+		storage := NewTestSqliteStorage(t, "flow_test")
+		workspaceId := "workspace_task_order"
+		taskId := "task_order"
+
+		first := domain.Flow{WorkspaceId: workspaceId, Id: "flow_first", Type: domain.FlowTypeBasicDev, ParentId: taskId, Status: "in_progress", Created: time.Date(2025, 4, 1, 8, 0, 0, 0, time.UTC)}
+		second := domain.Flow{WorkspaceId: workspaceId, Id: "flow_second", Type: domain.FlowTypeBasicDev, ParentId: taskId, Status: "in_progress", Created: time.Date(2025, 4, 2, 8, 0, 0, 0, time.UTC)}
+		require.NoError(t, storage.PersistFlow(ctx, first))
+		require.NoError(t, storage.PersistFlow(ctx, second))
+
+		// Updating the first flow, even without a created timestamp, must not
+		// reorder it behind flows created later.
+		first.Status = "paused"
+		first.Created = time.Time{}
+		require.NoError(t, storage.PersistFlow(ctx, first))
+
+		flows, err := storage.GetFlowsForTask(ctx, workspaceId, taskId)
+		require.NoError(t, err)
+		require.Len(t, flows, 2)
+		assert.Equal(t, "flow_first", flows[0].Id)
+		assert.Equal(t, "paused", flows[0].Status)
+		assert.Equal(t, "flow_second", flows[1].Id)
 	})
 
 	t.Run("Get flows for a task with no flows", func(t *testing.T) {
