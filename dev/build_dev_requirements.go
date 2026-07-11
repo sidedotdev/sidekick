@@ -503,7 +503,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 			streamInput.Options = options
 		}
 
-		toolNameMapping, err := resolveStreamToolNameMapping(trackedCtx.Context, streamInput.Options.ModelConfig, *trackedCtx.Secrets)
+		toolNameMapping, err := resolveStreamToolNameMapping(trackedCtx.ExecContext, streamInput.Options.ModelConfig, *trackedCtx.Secrets)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 		}
