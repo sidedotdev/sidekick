@@ -583,3 +583,37 @@ func TestFormatSequenceNumbers(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderConflictResolutionPrompt(t *testing.T) {
+	t.Parallel()
+
+	dCtx := DevContext{
+		RepoConfig: common.RepoConfig{
+			EditCode: common.EditCodeConfig{Hints: "repo-specific edit hints"},
+		},
+	}
+	info := ConflictResolutionInfo{
+		Requirements:    "original task requirements",
+		PreviousReview:  "latest review feedback",
+		ConflictedPaths: []string{"a.go", "b.go"},
+		ConflictDiff:    "diff with conflict markers",
+	}
+
+	prompt := renderConflictResolutionPrompt(dCtx, info, true, false)
+	assert.Contains(t, prompt, search)
+	assert.Contains(t, prompt, divider)
+	assert.Contains(t, prompt, replace)
+	assert.Contains(t, prompt, createFile)
+	assert.Contains(t, prompt, "edit_block:1")
+	assert.Contains(t, prompt, "re-emit edit blocks")
+	assert.Contains(t, prompt, "original task requirements")
+	assert.Contains(t, prompt, "latest review feedback")
+	assert.Contains(t, prompt, "a.go")
+	assert.Contains(t, prompt, "diff with conflict markers")
+	assert.Contains(t, prompt, "repo-specific edit hints")
+
+	promptDoneRequired := renderConflictResolutionPrompt(dCtx, info, false, true)
+	assert.Contains(t, promptDoneRequired, search)
+	assert.NotContains(t, promptDoneRequired, "re-emit edit blocks")
+	assert.Contains(t, promptDoneRequired, doneTool.Name)
+}

@@ -631,7 +631,9 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			contextType = ContextTypeEditBlockReport
 		}
 	case ConflictResolutionInfo:
-		content = renderConflictResolutionPrompt(info)
+		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
+		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
+		content = renderConflictResolutionPrompt(dCtx, info, applyImmediately, doneRequired)
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	default:
@@ -756,16 +758,26 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 // (with conflict markers in place) plus the original task requirements
 // and, when present, the latest review feedback, so the resolver keeps
 // behavior from both sides without rolling back recent review fixes.
-func renderConflictResolutionPrompt(info ConflictResolutionInfo) string {
+func renderConflictResolutionPrompt(dCtx DevContext, info ConflictResolutionInfo, applyEditBlocksImmediately, doneRequired bool) string {
 	paths := make([]map[string]string, 0, len(info.ConflictedPaths))
 	for _, p := range info.ConflictedPaths {
 		paths = append(paths, map[string]string{".": p})
 	}
 	data := map[string]interface{}{
-		"requirements":    info.Requirements,
-		"previousReview":  info.PreviousReview,
-		"conflictedPaths": paths,
-		"conflictDiff":    info.ConflictDiff,
+		"requirements":               info.Requirements,
+		"previousReview":             info.PreviousReview,
+		"conflictedPaths":            paths,
+		"conflictDiff":               info.ConflictDiff,
+		"search":                     search,
+		"divider":                    divider,
+		"replace":                    replace,
+		"createFile":                 createFile,
+		"appendToFile":               appendToFile,
+		"newLines":                   newLines,
+		"applyEditBlocksImmediately": applyEditBlocksImmediately,
+		"doneRequired":               doneRequired,
+		"doneFunctionName":           doneTool.Name,
+		"editCodeHints":              dCtx.RepoConfig.EditCode.Hints,
 	}
 	return RenderPrompt(ConflictResolutionInitial, data)
 }
