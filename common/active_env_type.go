@@ -5,7 +5,7 @@ import "os"
 // ActiveEnvTypeEnvVar is injected into every command run via an Env so that
 // spawned processes (e.g. tests) can detect which kind of Sidekick environment
 // they are running inside. Its value is the env type string, e.g. "local",
-// "local_git_worktree", "devpod" or "openshell".
+// "local_git_worktree", "devpod", "openshell" or "modal".
 const ActiveEnvTypeEnvVar = "SIDE_ACTIVE_ENV_TYPE"
 
 // localEnvTypes mirrors env.EnvTypeLocal and env.EnvTypeLocalGitWorktree,

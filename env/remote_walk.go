@@ -96,6 +96,9 @@ func WalkCodeDirectoryEntriesViaEnv(
 	case *OpenShellEnv:
 		return walkCodeDirectorySSHEntries(ctx, env, env.LocalRepoDir, env.WorkingDirectory,
 			common.SidekickIgnoreFileNames, remoteWalkContentMode(), handleEntry)
+	case *ModalEnv:
+		return walkCodeDirectorySSHEntries(ctx, env, env.LocalRepoDir, env.WorkingDirectory,
+			common.SidekickIgnoreFileNames, remoteWalkContentMode(), handleEntry)
 	default:
 		return fmt.Errorf("unsupported env type %s for entry walk", ec.Env.GetType())
 	}

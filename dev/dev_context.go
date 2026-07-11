@@ -401,6 +401,83 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				PortForwards:     portForwards,
 			}}
 		}
+	case string(env.EnvTypeModal):
+		tempRepoConfigForModal, configErr := GetRepoConfig(tempLocalExecContext)
+		if configErr == nil {
+			configOverrides.ApplyToRepoConfig(&tempRepoConfigForModal)
+		}
+		modalConfig := tempRepoConfigForModal.ModalConfig
+		portForwards := tempRepoConfigForModal.PortForwards
+
+		// The sandbox name is scoped to this flow so concurrent tasks never
+		// share (or terminate) each other's sandbox; sandbox creation is
+		// reuse-aware, so retries of this flow re-attach to its live sandbox
+		// instead of creating a new one. Provisioning can hit transient
+		// network failures and includes image builds, so ProvisioningRetryCtx
+		// gives it a generous timeout and a small bounded number of automatic
+		// retries before surfacing the failure for user-initiated retry.
+		sandboxName := env.ModalSandboxName(workspaceId, repoDir, workflow.GetInfo(ctx).WorkflowExecution.ID)
+		var createOutput env.ModalCreateSandboxOutput
+		provisionCtx := utils.ProvisioningRetryCtx(ctx)
+		err = workflow.ExecuteActivity(provisionCtx, env.ModalCreateSandboxActivity, env.ModalCreateSandboxInput{
+			Name:   sandboxName,
+			Config: modalConfig,
+		}).Get(provisionCtx, &createOutput)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to create Modal sandbox: %v", err)
+		}
+
+		var syncOutput env.ModalSyncRepoOutput
+		err = workflow.ExecuteActivity(ctx, env.ModalSyncRepoActivity, env.ModalSyncRepoInput{
+			SandboxName:  createOutput.SandboxName,
+			SSHHost:      createOutput.SSHHost,
+			SSHPort:      createOutput.SSHPort,
+			LocalRepoDir: repoDir,
+		}).Get(ctx, &syncOutput)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to sync repo to Modal sandbox: %v", err)
+		}
+		containerWorkDir := syncOutput.ContainerRepoDir
+
+		newModalEnv := func(workingDir string) *env.ModalEnv {
+			return &env.ModalEnv{
+				WorkingDirectory: workingDir,
+				SandboxName:      createOutput.SandboxName,
+				SSHHost:          createOutput.SSHHost,
+				SSHPort:          createOutput.SSHPort,
+				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
+			}
+		}
+
+		if repoMode == string(env.RepoModeWorktree) {
+			startBranchStr := ""
+			if startBranch != nil {
+				startBranchStr = *startBranch
+			}
+
+			worktree, err = createWorktree(func(wt domain.Worktree) (string, error) {
+				var wtOutput env.CreateModalWorktreeOutput
+				err := workflow.ExecuteActivity(ctx, env.CreateModalWorktreeActivity, env.CreateModalWorktreeInput{
+					EnvContainer: env.EnvContainer{Env: newModalEnv(containerWorkDir)},
+					RepoDir:      containerWorkDir,
+					BranchName:   wt.Name,
+					StartBranch:  startBranchStr,
+					WorkspaceId:  workspaceId,
+				}).Get(ctx, &wtOutput)
+				if err != nil {
+					return "", err
+				}
+				return wtOutput.WorktreePath, nil
+			})
+			if err != nil {
+				return DevContext{}, err
+			}
+
+			envContainer = env.EnvContainer{Env: newModalEnv(worktree.WorkingDirectory)}
+		} else {
+			envContainer = env.EnvContainer{Env: newModalEnv(containerWorkDir)}
+		}
 	default:
 		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
 	}
@@ -687,6 +764,14 @@ func handleFlowCancel(dCtx DevContext) {
 		err := workflow.ExecuteActivity(disconnectedCtx, env.OpenShellStopActivity, openShellEnv.SandboxName).Get(disconnectedCtx, nil)
 		if err != nil {
 			workflow.GetLogger(dCtx).Error("Failed to stop OpenShell sandbox during cancellation", "error", err)
+		}
+	}
+
+	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env.GetType() == env.EnvTypeModal {
+		modalEnv := dCtx.EnvContainer.Env.(*env.ModalEnv)
+		err := workflow.ExecuteActivity(disconnectedCtx, env.ModalStopActivity, env.ModalStopInput{SandboxName: modalEnv.SandboxName}).Get(disconnectedCtx, nil)
+		if err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to stop Modal sandbox during cancellation", "error", err)
 		}
 	}
 }

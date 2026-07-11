@@ -53,6 +53,7 @@ type EnvIndicator = { label: string; title: string }
 const envIndicatorMap: Record<string, EnvIndicator> = {
   devpod: { label: 'Container', title: 'DevPod' },
   openshell: { label: 'Container', title: 'OpenShell' },
+  modal: { label: 'Cloud', title: 'Modal' },
 }
 
 const envIndicator = computed<EnvIndicator | null>(() => {

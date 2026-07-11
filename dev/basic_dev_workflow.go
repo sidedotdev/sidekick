@@ -1135,5 +1135,13 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
+	if !mergeResult.HasConflicts && dCtx.EnvContainer.Env.GetType() == env.EnvTypeModal {
+		modalEnv := dCtx.EnvContainer.Env.(*env.ModalEnv)
+		err := workflow.ExecuteActivity(dCtx, env.ModalStopActivity, env.ModalStopInput{SandboxName: modalEnv.SandboxName}).Get(dCtx, nil)
+		if err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to stop Modal sandbox", "error", err)
+		}
+	}
+
 	return gitDiff, mergeInfo, currentTreeHash, err
 }

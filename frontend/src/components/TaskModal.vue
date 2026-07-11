@@ -511,6 +511,7 @@ const envTypeOptions = [
   { label: 'Local', value: 'local' },
   { label: 'DevPod', value: 'devpod' },
   { label: 'OpenShell', value: 'openshell' },
+  { label: 'Modal', value: 'modal' },
 ]
 
 const repoModeOptions = [

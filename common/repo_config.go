@@ -67,7 +67,7 @@ type RepoConfig struct {
 	// for pre-approval manual QA in the worktree environment.
 	DevRun DevRunConfig `toml:"dev_run,omitempty"`
 
-	// EnvType specifies the default environment type for this repo (e.g., "local", "devpod", "openshell").
+	// EnvType specifies the default environment type for this repo (e.g., "local", "devpod", "openshell", "modal").
 	EnvType string `toml:"env_type,omitempty"`
 
 	// RepoMode specifies the default repo mode for this repo (e.g., "worktree", "in_place").
@@ -81,6 +81,7 @@ type RepoConfig struct {
 
 	DevPodConfig    DevPodEnvConfig    `toml:"devpod,omitempty"`
 	OpenShellConfig OpenShellEnvConfig `toml:"openshell,omitempty"`
+	ModalConfig     ModalEnvConfig     `toml:"modal,omitempty"`
 }
 
 // PortForwardConfig declares a single host port to reverse-forward into a
@@ -118,6 +119,28 @@ type OpenShellEnvConfig struct {
 	PrebuildCommand string `toml:"prebuild_command,omitempty"`
 	// From is passed as the --from flag to "openshell sandbox create".
 	From string `toml:"from,omitempty"`
+}
+
+// ModalEnvConfig holds configuration specific to the Modal environment type.
+type ModalEnvConfig struct {
+	// VM runs the sandbox on Modal's VM runtime (alpha) — a real Linux kernel
+	// instead of gVisor — enabling tools that need kernel features (e.g.
+	// perf). Memory is statically provisioned on the VM runtime.
+	VM bool `toml:"vm,omitempty" json:"vm,omitempty"`
+	// Image is the base container image reference. It must be Debian-based
+	// and run as root, since sidekick layers openssh-server and git on top.
+	// Defaults to ubuntu:24.04.
+	Image string `toml:"image,omitempty" json:"image,omitempty"`
+	// CPU is the number of CPU cores to reserve for the sandbox.
+	CPU float64 `toml:"cpu,omitempty" json:"cpu,omitempty"`
+	// MemoryMiB is the sandbox memory reservation in MiB.
+	MemoryMiB int `toml:"memory_mib,omitempty" json:"memoryMiB,omitempty"`
+	// IdleSeconds arms the in-sandbox idle watchdog: after this many seconds
+	// without activity the sandbox snapshots its filesystem and terminates
+	// itself (via the sidekick guard app), stopping billing even when the
+	// sidekick host is offline. It is restored from the snapshot on next
+	// use. 0 disables the watchdog.
+	IdleSeconds int `toml:"idle_seconds,omitempty" json:"idleSeconds,omitempty"`
 }
 
 // GlobalState keys for workflow-specific state

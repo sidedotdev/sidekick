@@ -50,6 +50,7 @@ type BaseCommandPermissionsInput struct {
 var IsolatedSandboxEnvTypes = map[string]bool{
 	"devpod":    true,
 	"openshell": true,
+	"modal":     true,
 }
 
 // BaseCommandPermissionsActivity is a Temporal activity wrapper that returns

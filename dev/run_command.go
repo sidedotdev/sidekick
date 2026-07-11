@@ -65,7 +65,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 	sandboxMode := false
 	if workflow.GetVersion(dCtx, "sandbox-command-permissions", workflow.DefaultVersion, 1) >= 1 {
 		switch dCtx.EnvContainer.Env.GetType() {
-		case env.EnvTypeDevPod, env.EnvTypeOpenShell:
+		case env.EnvTypeDevPod, env.EnvTypeOpenShell, env.EnvTypeModal:
 			sandboxMode = true
 		}
 	}
