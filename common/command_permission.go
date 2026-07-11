@@ -175,6 +175,19 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "wait"},
 			{Pattern: "seq"},
 			{Pattern: "printf"},
+			// Shell syntax check: -n (noexec) parses the script without
+			// executing it. Beyond -n, only whitelisted argument-less short
+			// options (v, x, c) may appear, alone or clustered: options that
+			// take arguments (e.g. zsh -o interactive, ksh -R file) could
+			// consume the 'n' or re-enable execution, -i makes interactive
+			// shells ignore -n, and csh/tcsh -b stops option processing. The
+			// first operand must not start with + or -, so a +n toggle
+			// cannot cancel noexec before option parsing ends.
+			{Pattern: `(bash|sh|zsh|dash|ksh|ksh93|mksh|ash|yash|posh|csh|tcsh)(\s+-[nvxc]+)*\s+-[nvxc]*n[nvxc]*(\s+-[nvxc]+)*(\s+[^-+\s].*)?$`},
+			// fish's other short options take possibly-attached arguments
+			// (e.g. -pn is -p with profile file "n"), so only standalone -n
+			// flags are accepted for fish.
+			{Pattern: `fish(\s+-n)+(\s+[^-+\s].*)?$`},
 			// Git read operations
 			{Pattern: "git status"},
 			{Pattern: "git log"},
