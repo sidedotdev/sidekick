@@ -109,7 +109,7 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 				Provider: "openai",
 			},
 		},
-		CharLimit: 24000,
+		CharLimit: 32000,
 	}
 
 	// Execute the function under test
@@ -208,7 +208,7 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 				Provider: "openai",
 			},
 		},
-		CharLimit: 24000,
+		CharLimit: 32000,
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
