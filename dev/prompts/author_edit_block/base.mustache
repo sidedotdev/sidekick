@@ -14,9 +14,11 @@ may be either the file where the symbol is defined OR any file that
 references/uses it: when the symbol isn't defined in `file_path`, the tool
 automatically resolves the real definition via LSP go-to-definition, including
 definitions that live in another repo file or in a third-party library/stdlib.
-Use the optional `reference_line` argument (a literal line or distinctive
-substring from `file_path` where the symbol is used) to disambiguate when the
-symbol text appears multiple times in `file_path`.
+`reference_line` is only an optional disambiguator. Omit it normally: without
+it, all occurrences are resolved and the resulting definitions are
+de-duplicated. Set it only when you need to choose among reference/usage
+occurrences that could resolve to different definitions. Its value must identify
+the intended usage, not a declaration such as `func Something`.
 
 {{> edit_block}}
 

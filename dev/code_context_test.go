@@ -697,3 +697,16 @@ func TestTruncateCodeContextWithSummary(t *testing.T) {
 		assert.True(t, strings.Contains(content, lastLine), "truncation should occur at a line boundary")
 	})
 }
+func TestGetSymbolDefinitionsToolReferenceLineGuidance(t *testing.T) {
+	t.Parallel()
+
+	schemaJSON, err := json.Marshal(getSymbolDefinitionsTool.Parameters)
+	require.NoError(t, err)
+	schema := string(schemaJSON)
+
+	assert.NotContains(t, getSymbolDefinitionsTool.Description, "reference_line")
+	assert.Contains(t, schema, "only for disambiguation")
+	assert.Contains(t, schema, "leave it unset by default")
+	assert.Contains(t, schema, "every occurrence of the symbol in file_path is resolved")
+	assert.Contains(t, schema, "Do not use it when file_path contains the requested definition")
+}
