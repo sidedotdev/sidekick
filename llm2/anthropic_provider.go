@@ -17,7 +17,7 @@ import (
 )
 
 const anthropicDefaultModel = "claude-opus-4-5"
-const anthropicDefaultMaxTokens = 16000
+const anthropicDefaultMaxTokens = 24000
 
 const (
 	anthropicAcceptHeaderValue                  = "application/json"
