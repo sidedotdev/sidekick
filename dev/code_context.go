@@ -378,11 +378,11 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			}
 
 			// STEP 3: Read the code for each tool call separately and concatenate
-			var retrievalFeedbacks []llm2.ToolResultBlock
-			allSymbolDefinitions, retrievalFeedbacks = retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
-			if len(retrievalFeedbacks) > 0 {
-				for _, feedback := range retrievalFeedbacks {
-					if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
+			var retryToolResults []llm2.ToolResultBlock
+			allSymbolDefinitions, retryToolResults = retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
+			if len(retryToolResults) > 0 {
+				for _, toolResult := range retryToolResults {
+					if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, toolResult); err != nil {
 						return nil, "", err
 					}
 				}
@@ -667,21 +667,20 @@ func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]llm2.Too
 	return feedbacks, hasUnmarshalError, nil
 }
 
-// retrieveCodeContextForToolCalls retrieves code context for each tool call and returns
-// the concatenated symbol definitions. If any retrieval fails, it returns feedback for
-// those failures instead of symbol definitions.
+// retrieveCodeContextForToolCalls retrieves code context for every tool call and
+// returns retry results for the complete batch if any retrieval fails.
 func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.EnvContainer, results []ToolCallWithCodeContext) ([]string, []llm2.ToolResultBlock) {
 	var allSymbolDefinitions []string
-	var feedbacks []llm2.ToolResultBlock
+	toolResults := make([]llm2.ToolResultBlock, len(results))
+	anyRetrievalFailed := false
 
-	v := workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
+	workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
 	for i, tcResult := range results {
-		if v == workflow.DefaultVersion && i > 0 {
-			// legacy behavior: only use the first tool call
-			break
-		}
+		toolResults[i].ToolCallId = tcResult.ToolCall.Id
+		toolResults[i].Name = tcResult.ToolCall.Name
 
 		if len(tcResult.RequiredCodeContext.Requests) == 0 {
+			toolResults[i].Content = llm2.TextContentBlocks("No code context was retrieved, since no symbol definition requests were provided.")
 			continue
 		}
 
@@ -692,18 +691,20 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 		})
 
 		if err != nil || result.Failures != "" {
-			feedback := codeContextRetrievalFailureFeedback(err, result.Failures)
-			feedbacks = append(feedbacks, llm2.ToolResultBlock{
-				Content:    llm2.TextContentBlocks(feedback),
-				ToolCallId: tcResult.ToolCall.Id,
-				Name:       tcResult.ToolCall.Name,
-			})
-		} else {
-			allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
+			toolResults[i].Content = llm2.TextContentBlocks(codeContextRetrievalFailureFeedback(err, result.Failures))
+			toolResults[i].IsError = true
+			anyRetrievalFailed = true
+			continue
 		}
+
+		allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
+		toolResults[i].Content = llm2.TextContentBlocks(result.SymbolDefinitions)
 	}
 
-	return allSymbolDefinitions, feedbacks
+	if anyRetrievalFailed {
+		return allSymbolDefinitions, toolResults
+	}
+	return allSymbolDefinitions, nil
 }
 
 func codeContextUnmarshalErrorFeedback(err error) string {

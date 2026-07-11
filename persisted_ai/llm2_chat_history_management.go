@@ -189,13 +189,15 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 
 	keepLength, truncationTrigger := resolveKeepAndTrigger(requestedKeepLength, modelConfig)
 
-	// Leave history untouched while below the trigger to preserve the cached
-	// prefix; truncating only past the buffer keeps cache invalidations rare.
+	// Leave valid history untouched while below the trigger to preserve the
+	// cached prefix; malformed tool-call turns still need repair because
+	// providers reject calls without corresponding outputs.
 	totalLength := 0
 	for _, msg := range messages {
 		totalLength += llm2MessageLength(provider, msg)
 	}
 	if totalLength < truncationTrigger {
+		cleanLlm2ToolCallsAndResponses(&messages)
 		return messages, nil
 	}
 
