@@ -81,6 +81,29 @@ func noopManageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.M
 	return messages, nil
 }
 
+func TestManageInput_UnmarshalJSON_LegacyKeys(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{"new key", `{"RequestedKeepLength": 123}`, 123},
+		{"legacy MaxLength", `{"MaxLength": 456}`, 456},
+		{"legacy max_length", `{"max_length": 789}`, 789},
+		{"new key takes precedence over legacy", `{"RequestedKeepLength": 1, "MaxLength": 2}`, 1},
+		{"absent", `{"WorkspaceId": "ws"}`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var m ManageInput
+			require.NoError(t, json.Unmarshal([]byte(tt.input), &m))
+			assert.Equal(t, tt.expected, m.RequestedKeepLength)
+		})
+	}
+}
+
 func TestManageV4_HydratesHistory(t *testing.T) {
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
@@ -241,7 +264,7 @@ func TestManageV4_PreservesRefsForUnchangedMessages(t *testing.T) {
 
 	// Run ManageV4 with large maxLength to prevent trimming
 	output, err := activities.ManageV4(context.Background(), ManageInput{
-		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 100000,
+		ChatHistory: container, WorkspaceId: "workspace-456", RequestedKeepLength: 100000,
 	})
 	require.NoError(t, err)
 
@@ -293,7 +316,7 @@ func TestManageV4_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 
 	// Run ManageV4 with large maxLength - this will clear and re-apply cache control
 	output, err := activities.ManageV4(context.Background(), ManageInput{
-		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 100000,
+		ChatHistory: container, WorkspaceId: "workspace-456", RequestedKeepLength: 100000,
 	})
 	require.NoError(t, err)
 
@@ -332,7 +355,7 @@ func TestManageV4_HydratingFromRefsRestoresMarkers(t *testing.T) {
 
 	// Run ManageV4 to apply cache control and persist
 	output, err := activities.ManageV4(context.Background(), ManageInput{
-		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 100000,
+		ChatHistory: container, WorkspaceId: "workspace-456", RequestedKeepLength: 100000,
 	})
 	require.NoError(t, err)
 
@@ -387,7 +410,7 @@ func TestManageV4_PreservesContextType(t *testing.T) {
 
 	// Run ManageV4 with large maxLength
 	output, err := activities.ManageV4(context.Background(), ManageInput{
-		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 100000,
+		ChatHistory: container, WorkspaceId: "workspace-456", RequestedKeepLength: 100000,
 	})
 	require.NoError(t, err)
 
@@ -449,7 +472,7 @@ func TestManageV4_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 
 	// Run ManageV4 with small maxLength to trigger trimming of middle messages
 	output, err := activities.ManageV4(context.Background(), ManageInput{
-		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 50,
+		ChatHistory: container, WorkspaceId: "workspace-456", RequestedKeepLength: 50,
 	})
 	require.NoError(t, err)
 
@@ -520,7 +543,7 @@ func TestManageV4_LegacyChatMessageRetainsInitialInstructions(t *testing.T) {
 
 	// Small maxLength to trigger trimming of middle messages
 	output, err := activities.ManageV4(context.Background(), ManageInput{
-		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 30,
+		ChatHistory: container, WorkspaceId: "workspace-456", RequestedKeepLength: 30,
 	})
 	require.NoError(t, err)
 

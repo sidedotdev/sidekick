@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"errors"
 	"fmt"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -10,6 +11,11 @@ import (
 	"github.com/invopop/jsonschema"
 	"go.temporal.io/sdk/workflow"
 )
+
+// ErrEmptyHelpOrInputRequests indicates that a get_help_or_input tool call
+// contained no request with non-empty content. It is self-correctable: the
+// message restates the required JSON format so the model can retry.
+var ErrEmptyHelpOrInputRequests = errors.New("the `requests` array is empty or invalid: it must contain at least one request with a non-empty `content` string. Provide a JSON object with a `requests` array where each element is an object containing a non-empty `content` string and a `selfHelp` object (with `analysis`, `tools`, and `alreadyAttemptedTools`). A wrong or misspelled JSON key may be the cause")
 
 // GetHelpOrInputArguments  struct maps to the parameters for the get_help_or_input openai function
 type GetHelpOrInputArguments struct {
@@ -44,7 +50,46 @@ var getHelpOrInputTool = llm.Tool{
 // future, if we have longer ancestry of workflows, the parent workflow would
 // have to pass on the signal its own parent workflow, unless it can handle the
 // signal itself by looking at its own context
+// placeholderContent holds normalized (lowercased, trimmed) content values that
+// carry no real request and should be treated as empty.
+var placeholderContent = map[string]struct{}{
+	"placeholder": {},
+	"-":           {},
+	"--":          {},
+	"n/a":         {},
+	"na":          {},
+	"none":        {},
+	"tbd":         {},
+	"todo":        {},
+	"...":         {},
+	".":           {},
+}
+
+// isMeaningfulContent reports whether the request content carries an actual
+// request rather than whitespace or a placeholder value.
+func isMeaningfulContent(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	if _, ok := placeholderContent[strings.ToLower(trimmed)]; ok {
+		return false
+	}
+	return true
+}
+
 func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, error) {
+	validRequests := make([]HelpOrInputRequest, 0, len(requests))
+	for _, r := range requests {
+		if isMeaningfulContent(r.Content) {
+			validRequests = append(validRequests, r)
+		}
+	}
+	if len(validRequests) == 0 {
+		return "", ErrEmptyHelpOrInputRequests
+	}
+	requests = validRequests
+
 	messageBuilder := strings.Builder{}
 	allSelfHelp := true
 	selfHelpFunctions := make([]string, 0)

@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import IntentCanvasView from '../IntentCanvasView.vue'
 
+const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }))
+
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { id: 'flow-1' } }),
+  useRouter: () => ({ push: routerPush }),
 }))
 
 vi.mock('../../lib/store', () => ({
@@ -51,6 +54,14 @@ vi.mock('../FlowView.vue', () => ({
 vi.mock('../../lib/intent_diff_editor', () => ({
   uncommittedHighlightExtension: () => ({}),
   applyUncommittedHighlight: () => {},
+}))
+
+vi.mock('../../components/BranchSelector.vue', () => ({
+  default: {
+    name: 'BranchSelector',
+    props: { modelValue: { type: String, default: '' } },
+    template: '<div class="branch-selector-stub"></div>',
+  },
 }))
 
 const intentBase = '/api/v1/workspaces/ws-1/flows/flow-1/intent'
@@ -226,6 +237,99 @@ describe('IntentCanvasView', () => {
     expect(wrapper.find('.side-panel').exists()).toBe(false)
   })
 
+  it('groups sub-tasks by status and orders them newest-first within a group', async () => {
+    const now = Date.now()
+    const iso = (msAgo: number) => new Date(now - msAgo).toISOString()
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({
+            result: {
+              subtasks: [
+                { flowId: 'done-new', commit: 'aaa0000', status: 'completed', updatedAt: iso(1000) },
+                { flowId: 'active-old', commit: 'bbb0000', status: 'in_progress', updatedAt: iso(5000) },
+                { flowId: 'active-new', commit: 'ccc0000', status: 'in_progress', updatedAt: iso(1000) },
+                { flowId: 'blocked-1', commit: 'ddd0000', status: 'blocked', updatedAt: iso(9000) },
+              ],
+              clarifications: [],
+            },
+          })
+        )
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    const statuses = wrapper.findAll('.subtask-row .subtask-status').map((s) => s.text())
+    expect(statuses).toEqual(['blocked', 'in_progress', 'in_progress', 'completed'])
+
+    const commits = wrapper.findAll('.subtask-row .subtask-commit').map((c) => c.text())
+    expect(commits).toEqual(['ddd0000', 'ccc0000', 'bbb0000', 'aaa0000'])
+  })
+
+  it('collapses stale completed sub-tasks only once the list is long enough to scroll', async () => {
+    const now = Date.now()
+    const twoHoursAgo = new Date(now - 2 * 60 * 60 * 1000).toISOString()
+    const recent = new Date(now - 1000).toISOString()
+    const makeSubtasks = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        flowId: `done-${i}`,
+        commit: `c${String(i).padStart(6, '0')}`,
+        status: 'completed',
+        updatedAt: twoHoursAgo,
+      }))
+
+    let subtasks = [
+      { flowId: 'active', commit: 'active0', status: 'in_progress', updatedAt: recent },
+      ...makeSubtasks(2),
+    ]
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ result: { subtasks, clarifications: [] } }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    // Short list: stale completed sub-tasks stay visible, no collapse toggle.
+    expect(wrapper.find('.subtask-collapse-toggle').exists()).toBe(false)
+    expect(wrapper.findAll('.subtask-row')).toHaveLength(3)
+
+    // Long list: stale completed sub-tasks fold behind a collapse toggle.
+    subtasks = [
+      { flowId: 'active', commit: 'active0', status: 'in_progress', updatedAt: recent },
+      ...makeSubtasks(10),
+    ]
+    await (wrapper.vm as unknown as { fetchIddState: () => Promise<void> }).fetchIddState()
+    await flushPromises()
+
+    const toggle = wrapper.find('.subtask-collapse-toggle')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.text()).toContain('10 Completed')
+    expect(wrapper.findAll('.subtask-row')).toHaveLength(1)
+
+    await toggle.trigger('click')
+    expect(wrapper.findAll('.subtask-row')).toHaveLength(11)
+  })
+
   it('starts an intent sub-task when the implement button is pressed', async () => {
     const startBodies: string[] = []
     const fetchSpy = installFetch((url, opts) => {
@@ -252,6 +356,35 @@ describe('IntentCanvasView', () => {
     expect(fetchSpy).toHaveBeenCalledWith(`${intentBase}/start_subtask`, expect.objectContaining({ method: 'POST' }))
     expect(startBodies).toHaveLength(1)
     expect(JSON.parse(startBodies[0])).toEqual({ update: false })
+  })
+
+  it('starts an intent sub-task when Cmd/Ctrl+I is pressed', async () => {
+    const startBodies: string[] = []
+    const fetchSpy = installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.includes('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u.endsWith('/intent/start_subtask') && opts?.method === 'POST') {
+        startBodies.push(String(opts.body))
+        return Promise.resolve(jsonResponse({ message: 'Intent sub-task started' }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', ctrlKey: true }))
+    await flushPromises()
+
+    expect(fetchSpy).toHaveBeenCalledWith(`${intentBase}/start_subtask`, expect.objectContaining({ method: 'POST' }))
+    expect(startBodies).toHaveLength(1)
+
+    wrapper.unmount()
   })
 
   it('reopens the last viewed file on mount when one is remembered', async () => {
@@ -316,5 +449,91 @@ describe('IntentCanvasView', () => {
     await flushPromises()
 
     expect(window.localStorage.getItem('intent-canvas:last-file:flow-1')).toBe('intent/specs/auth.md')
+  })
+
+  it('redirects to the kanban board after the IDD flow finishes successfully', async () => {
+    routerPush.mockClear()
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({ result: { subtasks: [], clarifications: [], defaultTargetBranch: 'main' } }),
+        )
+      }
+      if (u.includes('/intent/finish_diff')) {
+        return Promise.resolve(jsonResponse({ diff: 'merge diff' }))
+      }
+      if (u.endsWith('/intent/finish') && opts?.method === 'POST') {
+        return Promise.resolve(jsonResponse({}))
+      }
+      if (u === flowBase) {
+        return Promise.resolve(jsonResponse({ flow: { status: 'complete' } }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    await wrapper.find('.finish-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.finish-actions .primary-btn').trigger('click')
+    await flushPromises()
+
+    expect(routerPush).toHaveBeenCalledWith({ name: 'kanban' })
+  })
+
+  it('surfaces a workflow finish error in the finish panel and does not redirect', async () => {
+    routerPush.mockClear()
+    installFetch((url, opts) => {
+      const u = url.toString()
+      if (u.endsWith('/intent/files')) {
+        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
+      }
+      if (u.includes('/intent/file?path=')) {
+        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
+      }
+      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({
+            result: {
+              subtasks: [],
+              clarifications: [],
+              defaultTargetBranch: 'main',
+              finishError: 'Merge conflict on main',
+            },
+          }),
+        )
+      }
+      if (u.includes('/intent/finish_diff')) {
+        return Promise.resolve(jsonResponse({ diff: 'merge diff' }))
+      }
+      if (u.endsWith('/intent/finish') && opts?.method === 'POST') {
+        return Promise.resolve(jsonResponse({}))
+      }
+      if (u === flowBase) {
+        return Promise.resolve(jsonResponse({ flow: { status: 'in_progress' } }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    const wrapper = mount(IntentCanvasView)
+    await flushPromises()
+
+    await wrapper.find('.finish-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.finish-actions .primary-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.finish-error').text()).toBe('Merge conflict on main')
+    expect(routerPush).not.toHaveBeenCalled()
   })
 })

@@ -31,6 +31,7 @@
 
 frontend/node_modules
 main
+!app/android/app/src/main/
 side
 side-temporal
 side-worker

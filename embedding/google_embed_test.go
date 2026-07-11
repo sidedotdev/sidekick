@@ -17,6 +17,11 @@ func TestGoogleEmbedderIntegration(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
+	// TODO: instead of skipping, use some TBD mechanism to run this test on
+	// the host, where API keys are available.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("Skipping integration test; API keys are unavailable in non-local sidekick environments")
+	}
 
 	ctx := context.Background()
 	embedder := GoogleEmbedder{}

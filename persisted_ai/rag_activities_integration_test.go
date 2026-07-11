@@ -78,6 +78,13 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set to true")
 	}
+	// TODO this could be made to work by initializing a workspace (side init)
+	// inside the container, but that's deferred as too much work for now.
+	// Alternatively, use some TBD mechanism to run this test on the host,
+	// where an initialized workspace and API keys are available.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("Skipping integration test; no initialized workspace or API keys in non-local sidekick environments")
+	}
 
 	ctx := context.Background()
 	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
@@ -112,14 +119,16 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 		CharLimit: 32000,
 	}
 
-	// Execute the function under test
-	// Use a shorter timeout than the test timeout (30s) to allow for cleanup/reporting
-	runCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// Execute the function under test. Use a timeout comfortably below the
+	// suite's -test.timeout so failures still surface with cleanup/reporting
+	// instead of a hard test-binary kill, but large enough that walking and
+	// chunking the whole repo isn't killed on slow or heavily loaded machines.
+	runCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	output, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
-	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
+	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 
 	// Verify expected directory paths are present
 	expectedPaths := []string{

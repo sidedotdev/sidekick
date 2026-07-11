@@ -76,6 +76,7 @@
 
       <div v-if="activePath" class="sheet">
         <IntentMarkdownEditor
+          ref="editorRef"
           class="editor"
           :model-value="content"
           :committed-content="committedContent"
@@ -150,7 +151,7 @@
           :disabled="starting"
         >
           <span class="implement-label">{{ starting ? 'Starting…' : 'Implement intent' }}</span>
-          <kbd class="implement-hint">{{ shortcutLabel }}</kbd>
+          <ShortcutHint :label="shortcutLabel" />
         </button>
 
         <button
@@ -162,19 +163,60 @@
           {{ finishing ? 'Finishing…' : 'Finish IDD' }}
         </button>
 
-        <section class="rail-section">
+        <label class="auto-mode-toggle">
+          <input
+            type="checkbox"
+            :checked="autoMode"
+            :disabled="autoModeUpdating"
+            @change="toggleAutoMode"
+          />
+          <span class="auto-mode-label">Auto-create sub-tasks</span>
+          <span class="auto-mode-hint">
+            Background agent watches edits and starts sub-tasks when intent settles.
+          </span>
+        </label>
+
+        <section class="rail-section subtask-section">
           <h2 class="rail-title">Sub-tasks</h2>
           <p v-if="!subtasks.length" class="rail-empty">No sub-tasks yet. Implement your intent to spin one up.</p>
           <ul v-else class="subtask-list">
-            <li v-for="(task, idx) in subtasks" :key="task.flowId">
+            <li v-for="task in visibleSubtasks" :key="task.flowId" class="subtask-item">
               <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
-                <span class="subtask-index">{{ String(idx + 1).padStart(2, '0') }}</span>
                 <span class="subtask-meta">
+                  <span v-if="task.title" class="subtask-title">{{ task.title }}</span>
                   <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
                   <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
                 </span>
               </button>
+              <button
+                v-if="canCancelSubtask(task)"
+                type="button"
+                class="subtask-cancel"
+                title="Cancel sub-task"
+                @click.stop="cancelSubtask(task)"
+              >✕</button>
             </li>
+            <li v-if="collapsedCompleted.length" class="subtask-collapse">
+              <button
+                type="button"
+                class="subtask-collapse-toggle"
+                @click="showCollapsedCompleted = !showCollapsedCompleted"
+              >
+                <span class="subtask-caret" :class="{ open: showCollapsedCompleted }">▸</span>
+                <span>{{ collapsedCompleted.length }} Completed</span>
+              </button>
+            </li>
+            <template v-if="showCollapsedCompleted">
+              <li v-for="task in collapsedCompleted" :key="task.flowId">
+                <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
+                  <span class="subtask-meta">
+                    <span v-if="task.title" class="subtask-title">{{ task.title }}</span>
+                    <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
+                    <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
+                  </span>
+                </button>
+              </li>
+            </template>
           </ul>
         </section>
 
@@ -187,25 +229,36 @@
             </li>
           </ul>
         </section>
+
+        <section v-if="nudges.length" class="rail-section">
+          <h2 class="rail-title">Orchestrator nudges</h2>
+          <ul class="clarify-list">
+            <li v-for="(item, idx) in nudges" :key="`nudge-${idx}`" class="clarify-card">
+              <p class="clarify-question">{{ item.text }}</p>
+              <p v-if="item.anchorText" class="nudge-anchor">“{{ item.anchorText }}”</p>
+            </li>
+          </ul>
+        </section>
       </div>
+
+      <footer v-if="!rightMinimized && hasDevRunConfig && store.workspaceId" class="rail-dev-run">
+        <DevRunControls
+          class="dev-run-launcher"
+          :workspaceId="store.workspaceId"
+          :flowId="flowId"
+          @start="handleDevRunStart"
+          @stop="handleDevRunStop"
+        />
+      </footer>
     </aside>
 
-    <div v-if="activeSubtaskFlowId" class="side-panel" role="dialog" aria-label="Sub-task">
-      <div
-        class="side-panel-resize"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize sub-task panel"
-        @mousedown="(e) => startDrag('side-panel', e)"
-      ></div>
-      <header class="side-panel-head">
-        <span class="eyebrow">Sub-task</span>
-        <button type="button" class="side-panel-close" @click="closeSubtask" aria-label="Dismiss sub-task">×</button>
-      </header>
-      <div class="side-panel-body">
-        <FlowView :key="activeSubtaskFlowId" :flow-id="activeSubtaskFlowId" embedded />
-      </div>
-    </div>
+    <SubtaskSidePanel
+      v-if="activeSubtaskFlowId"
+      @close="closeSubtask"
+      @resize-start="(e) => startDrag('side-panel', e)"
+    >
+      <FlowView :key="activeSubtaskFlowId" :flow-id="activeSubtaskFlowId" embedded />
+    </SubtaskSidePanel>
 
     <div v-if="showFinishDialog" class="finish-panel" role="dialog" aria-label="Finish IDD">
       <header class="finish-head">
@@ -231,6 +284,20 @@
           />
           <p v-else-if="finishLoading" class="finish-empty">Loading diff…</p>
           <p v-else class="finish-empty">No changes to merge.</p>
+        </section>
+
+        <section v-if="clarifications.length" class="finish-requests">
+          <span class="finish-label">Pending user requests</span>
+          <ul class="clarify-list">
+            <li
+              v-for="(item, idx) in clarifications"
+              :key="`finish-clarify-${item.subtaskFlowId}-${idx}`"
+              class="clarify-card"
+            >
+              <p class="clarify-question">{{ item.question }}</p>
+              <button type="button" class="clarify-link" @click="openSubtask(item.subtaskFlowId)">View sub-task</button>
+            </li>
+          </ul>
         </section>
 
         <p v-if="finishError" class="finish-error">{{ finishError }}</p>
@@ -260,29 +327,25 @@
       aria-label="Resize implementation panel"
       @mousedown="(e) => startDrag('right', e)"
     ></div>
-
-    <DevRunControls
-      v-if="hasDevRunConfig && store.workspaceId"
-      class="dev-run-launcher"
-      :workspaceId="store.workspaceId"
-      :flowId="flowId"
-      @start="handleDevRunStart"
-      @stop="handleDevRunStop"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
 import BranchSelector from '../components/BranchSelector.vue'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import IntentMarkdownEditor from '../components/IntentMarkdownEditor.vue'
+import SubtaskSidePanel from '../components/SubtaskSidePanel.vue'
+import ShortcutHint from '../components/ShortcutHint.vue'
 import FlowView from './FlowView.vue'
 import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
 import DevRunControls from '../components/DevRunControls.vue'
+import { formatMarkdown } from '../lib/markdown_format'
 import type { Flow } from '../lib/models'
+
+const FORMAT_WRAP_COLUMN = 80
 
 interface IntentFileEntry {
   path: string
@@ -296,8 +359,11 @@ interface FileNode extends IntentFileEntry {
 
 interface IddSubtask {
   flowId: string
+  title?: string
   commit: string
   status: string
+  createdAt?: string
+  updatedAt?: string
 }
 
 interface IddClarification {
@@ -305,7 +371,13 @@ interface IddClarification {
   question: string
 }
 
+interface IddNudge {
+  text: string
+  anchorText?: string
+}
+
 const route = useRoute()
+const router = useRouter()
 const flowId = computed(() => route.params.id as string)
 const flowBase = computed(() => `/api/v1/workspaces/${store.workspaceId}/flows/${flowId.value}`)
 const apiBase = computed(() => `${flowBase.value}/intent`)
@@ -348,11 +420,73 @@ const saveLabel = computed(() => {
   }
 })
 
+const editorRef = ref<InstanceType<typeof IntentMarkdownEditor> | null>(null)
 const flow = ref<Flow | null>(null)
 const subtasks = ref<IddSubtask[]>([])
+const nowTick = ref(Date.now())
+let nowTickTimer: ReturnType<typeof setInterval> | null = null
 const clarifications = ref<IddClarification[]>([])
+const nudges = ref<IddNudge[]>([])
 const starting = ref(false)
 const activeSubtaskFlowId = ref<string | null>(null)
+const autoMode = ref(false)
+const autoModeUpdating = ref(false)
+
+// 30s of editor idleness with at least one edit since the last orchestrator
+// run is the heuristic that signals "intent has settled, evaluate it." Living
+// on the frontend keeps the workflow free of timer-driven activities.
+const ORCHESTRATOR_IDLE_MS = 30_000
+let orchestratorIdleTimer: ReturnType<typeof setTimeout> | null = null
+let pendingOrchestratorEdits = false
+
+const cancelOrchestratorIdleTimer = () => {
+  if (orchestratorIdleTimer) {
+    clearTimeout(orchestratorIdleTimer)
+    orchestratorIdleTimer = null
+  }
+}
+
+const fireOrchestratorRun = async () => {
+  orchestratorIdleTimer = null
+  if (!pendingOrchestratorEdits || !autoMode.value) return
+  pendingOrchestratorEdits = false
+  try {
+    await fetch(`${apiBase.value}/run_orchestrator`, { method: 'POST' })
+  } catch (e) {
+    console.error('Failed to trigger idd orchestrator:', e)
+  }
+}
+
+const noteIntentEdit = () => {
+  pendingOrchestratorEdits = true
+  if (!autoMode.value) return
+  cancelOrchestratorIdleTimer()
+  orchestratorIdleTimer = setTimeout(fireOrchestratorRun, ORCHESTRATOR_IDLE_MS)
+}
+
+const toggleAutoMode = async () => {
+  if (autoModeUpdating.value) return
+  const next = !autoMode.value
+  autoModeUpdating.value = true
+  try {
+    const res = await fetch(`${apiBase.value}/auto_mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    autoMode.value = next
+    if (!next) {
+      cancelOrchestratorIdleTimer()
+    } else if (pendingOrchestratorEdits) {
+      orchestratorIdleTimer = setTimeout(fireOrchestratorRun, ORCHESTRATOR_IDLE_MS)
+    }
+  } catch (e) {
+    console.error('Failed to toggle idd auto-mode:', e)
+  } finally {
+    autoModeUpdating.value = false
+  }
+}
 
 const fetchFlow = async () => {
   try {
@@ -366,7 +500,7 @@ const fetchFlow = async () => {
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
-const shortcutLabel = isMac ? '⌘↵' : 'Ctrl+↵'
+const shortcutLabel = isMac ? '⌘I' : 'Ctrl+I'
 
 let iddStateTimer: ReturnType<typeof setInterval> | null = null
 
@@ -505,6 +639,52 @@ const statusClass = (status: string): string => {
   return 'active'
 }
 
+const ONE_HOUR_MS = 60 * 60 * 1000
+
+// Blocked sub-tasks need attention first, then ones still running, then the
+// rest. Anything outside the first two groups shares the lowest priority.
+const statusGroupRank = (status: string): number => {
+  const cls = statusClass(status)
+  if (cls === 'blocked') return 0
+  if (cls === 'active') return 1
+  return 2
+}
+
+const subtaskTime = (task: IddSubtask): number | null => {
+  const value = task.updatedAt || task.createdAt
+  const ms = value ? Date.parse(value) : NaN
+  return Number.isNaN(ms) ? null : ms
+}
+
+const sortedSubtasks = computed(() =>
+  [...subtasks.value].sort((a, b) => {
+    const rank = statusGroupRank(a.status) - statusGroupRank(b.status)
+    if (rank !== 0) return rank
+    return (subtaskTime(b) ?? 0) - (subtaskTime(a) ?? 0)
+  }),
+)
+
+const isStaleCompleted = (task: IddSubtask): boolean => {
+  if (statusClass(task.status) !== 'done') return false
+  const time = subtaskTime(task)
+  return time !== null && nowTick.value - time > ONE_HOUR_MS
+}
+
+// The scrollable sub-task section fits roughly this many rows before it starts
+// scrolling; only then do we fold away stale completed sub-tasks to keep active
+// ones in view.
+const SUBTASK_SCROLL_LIMIT = 8
+
+const collapsedCompleted = computed(() =>
+  sortedSubtasks.value.length > SUBTASK_SCROLL_LIMIT
+    ? sortedSubtasks.value.filter(isStaleCompleted)
+    : [],
+)
+const visibleSubtasks = computed(() =>
+  sortedSubtasks.value.filter((task) => !collapsedCompleted.value.includes(task)),
+)
+const showCollapsedCompleted = ref(false)
+
 const fetchIddState = async () => {
   try {
     const res = await fetch(`${flowBase.value}/query`, {
@@ -517,10 +697,82 @@ const fetchIddState = async () => {
     const result = data.result ?? {}
     subtasks.value = (result.subtasks ?? []) as IddSubtask[]
     clarifications.value = (result.clarifications ?? []) as IddClarification[]
+    nudges.value = (result.nudges ?? []) as IddNudge[]
+    finishWorkflowError.value = (result.finishError ?? '') as string
     const defaultTarget = (result.defaultTargetBranch ?? '') as string
     if (defaultTarget) finishDefaultBranch.value = defaultTarget
+    if (typeof result.autoMode === 'boolean' && !autoModeUpdating.value) {
+      autoMode.value = result.autoMode
+    }
   } catch (e) {
     console.error('Failed to query intent state:', e)
+  }
+}
+
+// refreshCommittedBaseline re-reads only the committed (HEAD) content for the
+// active file so uncommitted-highlight styling clears as soon as the workflow
+// commits, without disturbing the user's in-progress edits.
+const refreshCommittedBaseline = async () => {
+  const path = activePath.value
+  if (!path) return
+  try {
+    const res = await fetch(`${apiBase.value}/file?path=${encodeURIComponent(path)}`)
+    if (!res.ok) return
+    const data = await res.json()
+    if (activePath.value !== path) return
+    committedContent.value = data.committedContent ?? ''
+  } catch (e) {
+    console.error('Failed to refresh committed baseline:', e)
+  }
+}
+
+// putFile saves a file's content, throwing on failure so callers can abort
+// rather than silently proceeding from an unsaved/unformatted state.
+const putFile = async (path: string, body: string) => {
+  saveStatus.value = 'saving'
+  const res = await fetch(`${apiBase.value}/file`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content: body }),
+  })
+  if (!res.ok) {
+    saveStatus.value = 'error'
+    throw new Error(`Failed to save ${path}: ${await res.text()}`)
+  }
+  saveStatus.value = 'saved'
+  if (savedTimer) clearTimeout(savedTimer)
+  savedTimer = setTimeout(() => {
+    if (saveStatus.value === 'saved') saveStatus.value = 'idle'
+  }, 2000)
+}
+
+// formatChangedMarkdown formats and saves every markdown intent file that has
+// uncommitted changes, so the sub-task is built from formatted, fully-saved
+// intent state rather than only the file currently open in the editor. The
+// active file uses the editor's live (possibly unsaved) content; others are
+// read from the server and skipped when they match their committed baseline.
+// Failures propagate so the caller can abort before committing/starting.
+const formatChangedMarkdown = async () => {
+  for (const entry of files.value) {
+    if (entry.isDir || !entry.path.toLowerCase().endsWith('.md')) continue
+    if (entry.path === activePath.value && editorRef.value) {
+      const formatted = editorRef.value.formatNow()
+      content.value = formatted
+      if (formatted !== committedContent.value) {
+        await putFile(entry.path, formatted)
+      }
+      continue
+    }
+    const res = await fetch(`${apiBase.value}/file?path=${encodeURIComponent(entry.path)}`)
+    if (!res.ok) {
+      throw new Error(`Failed to read ${entry.path}: ${await res.text()}`)
+    }
+    const data = await res.json()
+    const current = (data.content ?? '') as string
+    const committed = (data.committedContent ?? '') as string
+    if (current === committed) continue
+    const formatted = formatMarkdown(current, FORMAT_WRAP_COLUMN)
+    await putFile(entry.path, formatted)
   }
 }
 
@@ -528,6 +780,8 @@ const startSubtask = async () => {
   if (starting.value) return
   starting.value = true
   try {
+    flushPendingSave()
+    await formatChangedMarkdown()
     const res = await fetch(`${apiBase.value}/start_subtask`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -535,10 +789,30 @@ const startSubtask = async () => {
     })
     if (!res.ok) throw new Error(await res.text())
     await fetchIddState()
+    await refreshCommittedBaseline()
   } catch (e) {
     console.error('Failed to start intent sub-task:', e)
   } finally {
     starting.value = false
+  }
+}
+
+const canCancelSubtask = (task: IddSubtask): boolean => {
+  const cls = statusClass(task.status)
+  return cls === 'active' || cls === 'blocked'
+}
+
+const cancelSubtask = async (task: IddSubtask) => {
+  if (!canCancelSubtask(task)) return
+  if (!window.confirm('Are you sure you want to cancel this sub-task?')) return
+  try {
+    const res = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${task.flowId}/cancel`, {
+      method: 'POST',
+    })
+    if (!res.ok) throw new Error(await res.text())
+    await fetchIddState()
+  } catch (e) {
+    console.error('Failed to cancel intent sub-task:', e)
   }
 }
 
@@ -557,6 +831,11 @@ const finishDiff = ref('')
 const finishLoading = ref(false)
 const finishing = ref(false)
 const finishError = ref('')
+// finishWorkflowError mirrors IddState.finishError: a failure raised by the IDD
+// workflow itself while finishing (merge conflicts, cleanup, etc.), which the
+// finish panel surfaces prominently like FlowView/SubflowContainer do for failed
+// flows. Distinct from finishError, which also covers client-side request errors.
+const finishWorkflowError = ref('')
 
 watch(finishTargetBranch, (value, prev) => {
   if (!showFinishDialog.value) return
@@ -589,6 +868,7 @@ const loadFinishDiff = async () => {
 
 const openFinishDialog = async () => {
   finishError.value = ''
+  finishWorkflowError.value = ''
   finishDiff.value = ''
   showFinishDialog.value = true
   if (finishDefaultBranch.value && !finishTargetBranch.value) {
@@ -608,6 +888,7 @@ const confirmFinish = async () => {
   if (!finishTargetBranch.value || finishing.value) return
   finishing.value = true
   finishError.value = ''
+  finishWorkflowError.value = ''
   try {
     const res = await fetch(`${apiBase.value}/finish`, {
       method: 'POST',
@@ -615,19 +896,33 @@ const confirmFinish = async () => {
       body: JSON.stringify({ targetBranch: finishTargetBranch.value }),
     })
     if (!res.ok) throw new Error(await res.text())
-    showFinishDialog.value = false
-    await fetchIddState()
-    await fetchFlow()
+    // The merge, worktree cleanup and sub-task cancellation run asynchronously
+    // in the IDD workflow, so keep the panel open and poll its state until it
+    // either reports a finish error or the flow completes. On success the user
+    // is redirected to the kanban board.
+    while (showFinishDialog.value) {
+      await fetchIddState()
+      if (finishWorkflowError.value) {
+        finishError.value = finishWorkflowError.value
+        return
+      }
+      await fetchFlow()
+      if (flow.value?.status === 'complete') {
+        router.push({ name: 'kanban' })
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+    }
   } catch (e) {
     console.error('Failed to finish IDD:', e)
-    finishError.value = 'Failed to finish IDD'
+    finishError.value = e instanceof Error ? e.message : 'Failed to finish IDD'
   } finally {
     finishing.value = false
   }
 }
 
 const handleShortcut = (event: KeyboardEvent) => {
-  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+  if ((event.key === 'i' || event.key === 'I') && (event.metaKey || event.ctrlKey)) {
     event.preventDefault()
     startSubtask()
   }
@@ -732,6 +1027,9 @@ const openFile = async (path: string) => {
 }
 
 const onEditorContentChange = (next: string) => {
+  if (next !== content.value) {
+    noteIntentEdit()
+  }
   content.value = next
   scheduleSave()
 }
@@ -757,6 +1055,19 @@ const saveFile = async (path: string | null = activePath.value, body: string = c
   }
 }
 
+// persistQueued formats the queued file as part of saving when it is still the
+// one open in the editor, so persisted intent is always formatted; files that
+// have since been switched away from are saved from their captured snapshot.
+const persistQueued = (queued: { path: string; content: string }) => {
+  if (queued.path === activePath.value && editorRef.value) {
+    const formatted = editorRef.value.formatNow()
+    content.value = formatted
+    void saveFile(queued.path, formatted)
+  } else {
+    void saveFile(queued.path, queued.content)
+  }
+}
+
 const scheduleSave = () => {
   if (!activePath.value) return
   if (saveTimer) clearTimeout(saveTimer)
@@ -765,7 +1076,7 @@ const scheduleSave = () => {
   saveTimer = setTimeout(() => {
     saveTimer = null
     pendingSave = null
-    void saveFile(queued.path, queued.content)
+    persistQueued(queued)
   }, 800)
 }
 
@@ -777,7 +1088,7 @@ const flushPendingSave = () => {
   saveTimer = null
   const queued = pendingSave
   pendingSave = null
-  if (queued) void saveFile(queued.path, queued.content)
+  if (queued) persistQueued(queued)
 }
 
 const beginNewFile = async () => {
@@ -842,6 +1153,9 @@ onMounted(async () => {
   await focusFirstFile()
   await fetchIddState()
   iddStateTimer = setInterval(fetchIddState, 5000)
+  nowTickTimer = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 60000)
   window.addEventListener('keydown', handleShortcut)
 })
 
@@ -849,6 +1163,8 @@ onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
   if (savedTimer) clearTimeout(savedTimer)
   if (iddStateTimer) clearInterval(iddStateTimer)
+  if (nowTickTimer) clearInterval(nowTickTimer)
+  cancelOrchestratorIdleTimer()
   window.removeEventListener('keydown', handleShortcut)
 })
 </script>
@@ -858,6 +1174,11 @@ onBeforeUnmount(() => {
   position: relative;
   display: grid;
   grid-template-columns: var(--left-col, 16rem) 1fr var(--right-col, 18rem);
+  /* Constrain the single grid row to the canvas height (minmax allows the
+     0-floor needed for descendants with `min-height: 0` to scroll internally
+     rather than letting the editor's content stretch the row past the
+     clipped container). */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   /* `overflow: clip` (rather than `hidden`) prevents programmatic scrolling
      (e.g. from descendant focus/scrollIntoView) that would otherwise shift the
@@ -948,17 +1269,18 @@ onBeforeUnmount(() => {
   flex-direction: column;
   border-left: 1px solid var(--color-border);
   background-color: var(--color-background-soft);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-:deep(.dev-run-launcher) {
-  position: absolute;
-  right: 1rem;
-  bottom: 1rem;
+.rail-dev-run {
+  margin-top: auto;
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.rail-dev-run :deep(.dev-run-launcher) {
   margin: 0;
-  z-index: 5;
-  max-width: min(28rem, calc(100% - 2rem));
-  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.18);
+  max-width: 100%;
 }
 
 .rail-head {
@@ -970,6 +1292,21 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 1.5rem;
   padding: 0 1rem 1.5rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.subtask-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.subtask-section .subtask-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .implement-btn {
@@ -997,17 +1334,42 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
-.implement-hint {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 0.7rem;
-  opacity: 0.8;
-  letter-spacing: 0.04em;
-}
-
 .rail-section {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+
+.auto-mode-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.auto-mode-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.auto-mode-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.auto-mode-label {
+  font-weight: 500;
+}
+
+.auto-mode-hint {
+  grid-column: 1 / -1;
+  color: var(--color-text-2);
+  font-size: 0.75rem;
+  line-height: 1.3;
 }
 
 .rail-title {
@@ -1025,6 +1387,43 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
+.subtask-list {
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.subtask-collapse {
+  display: flex;
+}
+
+.subtask-collapse-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0.35rem 0.65rem;
+  color: var(--color-text-2);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.subtask-collapse-toggle:hover {
+  color: var(--color-heading);
+}
+
+.subtask-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.subtask-caret.open {
+  transform: rotate(90deg);
+}
+
 .subtask-list,
 .clarify-list {
   list-style: none;
@@ -1033,6 +1432,38 @@ onBeforeUnmount(() => {
   gap: 0.4rem;
   margin: 0;
   padding: 0;
+}
+
+.subtask-item {
+  position: relative;
+}
+
+.subtask-cancel {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: var(--color-background-mute);
+  color: var(--color-text-muted, var(--color-text));
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.subtask-item:hover .subtask-cancel {
+  display: inline-flex;
+}
+
+.subtask-cancel:hover {
+  color: var(--color-heading);
+  background: var(--color-background);
 }
 
 .subtask-row {
@@ -1055,12 +1486,6 @@ onBeforeUnmount(() => {
   background-color: var(--color-background-mute);
 }
 
-.subtask-index {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 0.75rem;
-  color: var(--color-text-2);
-}
-
 .subtask-meta {
   display: flex;
   flex-direction: column;
@@ -1068,10 +1493,18 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.subtask-title {
+  font-size: 0.85rem;
+  color: var(--color-heading);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .subtask-commit {
   font-family: "JetBrains Mono", monospace;
   font-size: 0.8rem;
-  color: var(--color-heading);
+  color: var(--color-text-muted, var(--color-text));
 }
 
 .subtask-status {
@@ -1125,6 +1558,15 @@ onBeforeUnmount(() => {
 
 .clarify-link:hover {
   color: var(--color-primary-hover);
+}
+
+.nudge-anchor {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  margin: 0;
+  color: var(--color-text-muted, var(--color-text));
+  font-style: italic;
+  opacity: 0.85;
 }
 
 .side-panel {
@@ -1184,21 +1626,6 @@ onBeforeUnmount(() => {
 
 .side-panel-close:hover {
   color: var(--color-text);
-}
-
-.side-panel-body {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  isolation: isolate;
-}
-
-.side-panel-body :deep(.flow-actions-container) {
-  flex: 1;
-  min-height: 0;
 }
 
 .index {
@@ -1349,7 +1776,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: 100vh;
+  height: 100%;
 }
 
 .canvas-head {
@@ -1547,6 +1974,12 @@ onBeforeUnmount(() => {
   color: var(--color-error-text);
   font-size: 0.85rem;
   margin: 0;
+}
+
+.finish-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .finish-actions {

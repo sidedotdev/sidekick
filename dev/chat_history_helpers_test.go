@@ -2,6 +2,7 @@ package dev
 
 import (
 	"sidekick/persisted_ai"
+	"sidekick/utils"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -17,6 +18,7 @@ type NewVersionedChatHistoryTestSuite struct {
 
 func (s *NewVersionedChatHistoryTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
 func (s *NewVersionedChatHistoryTestSuite) TearDownTest() {

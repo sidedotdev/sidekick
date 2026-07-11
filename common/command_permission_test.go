@@ -1839,6 +1839,48 @@ func TestBasePermissions_RmRfPatterns(t *testing.T) {
 	})
 }
 
+func TestBasePermissions_ParentDirectoryTraversal(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("parent directory traversal requires approval", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"cd ..",
+			"cd ../",
+			"cd ../..",
+			"cd ../sibling",
+			"cd foo/../..",
+			"cat ../secret",
+			"ls ..",
+		}
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require_approval for: %s", cmd)
+		}
+	})
+
+	t.Run("cd .. inside a compound script requires approval", func(t *testing.T) {
+		t.Parallel()
+		result, _ := EvaluateScriptPermission(config, "cd .. && pwd && ls -la")
+		assert.Equal(t, PermissionRequireApproval, result)
+	})
+
+	t.Run("commands without parent navigation still auto-approve", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"cd",
+			"cd subdir",
+			"cd ./subdir",
+			"git diff HEAD~1 -- coding/git/",
+		}
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto_approve for: %s", cmd)
+		}
+	})
+}
+
 func TestBasePermissions_CatHeredocPatterns(t *testing.T) {
 	t.Parallel()
 	config := BaseCommandPermissions()
@@ -1899,6 +1941,26 @@ func TestBasePermissions_BunxTsc(t *testing.T) {
 			"bunx tsc --noEmit",
 			"bunx tsc --build",
 			"bunx tsc -p tsconfig.json",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+}
+
+func TestBasePermissions_GolangciLint(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("golangci-lint commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"golangci-lint run",
+			"golangci-lint run ./...",
+			"golangci-lint run --timeout 5m",
+			"golangci-lint version",
 		}
 
 		for _, cmd := range commands {
@@ -2230,6 +2292,34 @@ func TestEvaluateScriptPermission_TempPathAdvisory(t *testing.T) {
 		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee out.log", autoApproveOpts)
 		assert.Equal(t, PermissionAutoApprove, result)
 		assert.NotContains(t, msg, ".side/tmp")
+	})
+
+	t.Run("path under .side/tmp does not trigger advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee -a .side/tmp/ghostty-refs/out.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Empty(t, msg)
+	})
+
+	t.Run("relative parent or home tmp paths do not trigger advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee ../tmp/a.log ~/tmp/b.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Empty(t, msg)
+	})
+
+	t.Run("absolute /var/tmp path still triggers advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee /var/tmp/out.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, ".side/tmp")
+	})
+
+	t.Run("quoted absolute /tmp path still triggers advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, `echo hi | tee "/tmp/out.log"`, autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, ".side/tmp")
 	})
 
 	t.Run("heredoc file write to /tmp appends temp guidance to deny message", func(t *testing.T) {

@@ -3,6 +3,7 @@ package persisted_ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
@@ -33,15 +34,52 @@ func GetOpenaiFuncArgs(ctx context.Context, la LlmActivities, toolOptions llm.To
 	return json.Unmarshal([]byte(llm.RepairJson(jsonStr)), funcArgs)
 }
 
-// ForceToolCallWithTrackOptionsV2 forces the LLM to produce a tool call using the given
+// ErrLLMRefusal indicates the model explicitly refused to respond, returning a
+// refusal content block instead of the required tool call. Retrying will not
+// elicit a tool call, so callers can check for this via errors.Is to handle
+// refusals distinctly from other failures.
+var ErrLLMRefusal = errors.New("llm refused to respond")
+
+// responseHasRefusal reports whether the response represents a refusal, either
+// via a "refusal" stop reason or a refusal content block. Some providers signal
+// a refusal purely through the stop reason with no accompanying content blocks.
+func responseHasRefusal(response common.MessageResponse) bool {
+	if response == nil {
+		return false
+	}
+	if response.GetStopReason() == "refusal" {
+		return true
+	}
+	var msg llm2.Message
+	switch m := response.GetMessage().(type) {
+	case *llm2.Message:
+		msg = *m
+	case llm2.Message:
+		msg = m
+	default:
+		return false
+	}
+	for _, block := range msg.Content {
+		if block.Type == llm2.ContentBlockTypeRefusal {
+			return true
+		}
+	}
+	return false
+}
+
+// forceToolCallV2 forces the LLM to produce a tool call using the given
 // ChatHistoryContainer and delegates to ExecuteChatStream for LLM calls.
+// parallelToolCalls, when non-nil, explicitly enables/disables parallel tool
+// calls for providers that support the toggle.
 // Returns common.MessageResponse which provides GetMessage().GetToolCalls() for accessing tool calls.
-func ForceToolCallWithTrackOptionsV2(
+func forceToolCallV2(
 	actionCtx flow_action.ActionContext,
 	trackOptions flow_action.TrackOptions,
 	modelConfig common.ModelConfig,
 	chatHistory *ChatHistoryContainer,
 	toolNameMapping *ToolNameMappingConfig,
+	parallelToolCalls *bool,
+	disableUserRetry bool,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
 
@@ -55,9 +93,10 @@ func ForceToolCallWithTrackOptionsV2(
 
 	streamInput := StreamInput{
 		Options: llm2.Options{
-			ModelConfig: modelConfig,
-			Tools:       tools,
-			ToolChoice:  toolChoice,
+			ModelConfig:       modelConfig,
+			Tools:             tools,
+			ToolChoice:        toolChoice,
+			ParallelToolCalls: parallelToolCalls,
 		},
 		Secrets:     *actionCtx.Secrets,
 		ChatHistory: chatHistory,
@@ -72,7 +111,7 @@ func ForceToolCallWithTrackOptionsV2(
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping)
+		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping, disableUserRetry)
 		if err != nil {
 			return nil, err
 		}
@@ -85,6 +124,12 @@ func ForceToolCallWithTrackOptionsV2(
 		if appendErr := AppendChatHistory(actionCtx.ExecContext, chatHistory, response.GetMessage()); appendErr != nil {
 			return nil, appendErr
 		}
+	}
+
+	// A refusal is a definitive response; retrying won't produce a tool call, so
+	// surface it distinctly instead of masking it as a generic failure.
+	if err == nil && responseHasRefusal(response) {
+		return response, ErrLLMRefusal
 	}
 
 	// single retry in case the llm is being dumb and not returning a tool call
@@ -103,7 +148,7 @@ func ForceToolCallWithTrackOptionsV2(
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			streamInput.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping)
+			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping, disableUserRetry)
 			if err != nil {
 				return nil, err
 			}
@@ -126,8 +171,46 @@ func ForceToolCallWithTrackOptionsV2(
 	return response, err
 }
 
+// ForceToolCallWithTrackOptionsV2 forces a single required tool call, leaving
+// parallel tool calls at the provider default.
+func ForceToolCallWithTrackOptionsV2(
+	actionCtx flow_action.ActionContext,
+	trackOptions flow_action.TrackOptions,
+	modelConfig common.ModelConfig,
+	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
+	tools ...*llm.Tool,
+) (common.MessageResponse, error) {
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, chatHistory, toolNameMapping, nil, false, tools...)
+}
+
+// ForceToolCallWithFallbackV2 is like ForceToolCallWithTrackOptionsV2 but, when
+// disableUserRetry is true, bounds the LLM invocation to a few quick automatic
+// retries and surfaces failures as errors instead of prompting the user to
+// retry. Intended for callers that have their own fallback and should not block
+// indefinitely on user input. Exposing disableUserRetry as a flag lets callers
+// gate the behavior (e.g. behind a workflow version) at a single call site.
+func ForceToolCallWithFallbackV2(
+	actionCtx flow_action.ActionContext,
+	trackOptions flow_action.TrackOptions,
+	disableUserRetry bool,
+	modelConfig common.ModelConfig,
+	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
+	tools ...*llm.Tool,
+) (common.MessageResponse, error) {
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, chatHistory, toolNameMapping, nil, disableUserRetry, tools...)
+}
+
 func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
-	return ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, tools...)
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, nil, false, tools...)
+}
+
+// ForceParallelToolCall forces at least one tool call while explicitly enabling
+// parallel tool calls for providers that support the toggle.
+func ForceParallelToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
+	parallel := true
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, &parallel, false, tools...)
 }
 
 // AppendChatHistory appends a message to chat history, using an activity to

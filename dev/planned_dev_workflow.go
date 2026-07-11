@@ -28,6 +28,13 @@ type PlannedDevOptions struct {
 	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
 	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
+	// AutoMerge skips the human merge approval and merges automatically into the
+	// start branch. Used by IDD sub-tasks so their worktree merges back into the
+	// parent idd worktree.
+	AutoMerge bool `json:"autoMerge,omitempty"`
+	// Idd marks the sub-task as originating from an Intent Driven Development
+	// flow, enabling the intent/ directory guidance in coding-agent prompts.
+	Idd bool `json:"idd,omitempty"`
 }
 
 var SideAppEnv = os.Getenv("SIDE_APP_ENV")
@@ -59,6 +66,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 		signalWorkflowFailureOrCancel(ctx)
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
 	}
+	dCtx.Idd = input.PlannedDevOptions.Idd
 	defer handleFlowCancel(dCtx)
 	defer stopActiveDevRun(dCtx)
 	defer func() {
@@ -75,6 +83,15 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	SetupDevRunStateQuery(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
+	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
+	if hibernateVersion >= 1 {
+		SetupHibernateHandler(dCtx)
+	}
+	if hibernateVersion == 1 {
+		if _, err = WakeIfHibernated(dCtx); err != nil {
+			return DevPlanExecution{}, fmt.Errorf("failed to wake hibernated worktree: %w", err)
+		}
+	}
 	err = EnsurePrerequisites(dCtx)
 	if err != nil {
 		return DevPlanExecution{}, err
@@ -124,6 +141,7 @@ Here is the plan for meeting the requirements, along with updates per step:
 
 ` + devPlan.String(),
 			StartBranch: input.StartBranch,
+			AutoMerge:   input.AutoMerge,
 		})
 		if err != nil {
 			return DevPlanExecution{}, err

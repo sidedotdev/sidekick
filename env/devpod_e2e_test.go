@@ -2,9 +2,12 @@ package env
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/common"
 	"strings"
 	"testing"
 	"time"
@@ -22,14 +25,33 @@ func repoRoot(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
-func setupMinimalWorkspace(t *testing.T) string {
+// minimalDockerfileHash returns a short content hash of the minimal devcontainer
+// Dockerfile fixture, used to key the cached workspace so repeated runs reuse the
+// previously built image instead of rebuilding.
+func minimalDockerfileHash(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	devcontainerDir := filepath.Join(dir, ".devcontainer")
-	require.NoError(t, os.MkdirAll(devcontainerDir, 0755))
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "env", "testdata", "Dockerfile.minimal"))
+	require.NoError(t, err)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])[:12]
+}
 
+// setupMinimalWorkspace materializes the devcontainer workspace at a stable path
+// keyed by the fixture Dockerfile content hash (rather than a per-run temp dir),
+// so devpod reuses the previously built image. It is idempotent: an already
+// materialized workspace is reused as-is.
+func setupMinimalWorkspace(t *testing.T, hash string) string {
+	t.Helper()
 	dockerfile, err := os.ReadFile(filepath.Join(repoRoot(t), "env", "testdata", "Dockerfile.minimal"))
 	require.NoError(t, err)
+
+	dir := filepath.Join(os.TempDir(), "sidekick-e2e-devpod-"+hash)
+	if _, err := os.Stat(filepath.Join(dir, ".devcontainer", "devcontainer.json")); err == nil {
+		return dir
+	}
+
+	devcontainerDir := filepath.Join(dir, ".devcontainer")
+	require.NoError(t, os.MkdirAll(devcontainerDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(devcontainerDir, "Dockerfile"), dockerfile, 0644))
 
 	devcontainerJSON := `{"name": "test", "build": {"dockerfile": "Dockerfile"}}`
@@ -58,15 +80,24 @@ func TestDevPodIntegration(t *testing.T) {
 	if os.Getenv("SIDE_E2E_TEST") != "true" {
 		t.Skip("skipping DevPod integration test; SIDE_E2E_TEST not set to true")
 	}
+	// TODO: instead of skipping, use some TBD mechanism to run this test on
+	// the host, where containers can be created.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping DevPod integration test; container-in-container is not supported in non-local sidekick environments")
+	}
 	if _, err := exec.LookPath("devpod"); err != nil {
 		t.Skip("devpod command not found in PATH")
 	}
 
-	workspacePath := setupMinimalWorkspace(t)
+	// Key the cached workspace + built image by the fixture Dockerfile hash so
+	// repeated runs reuse them. The workspace is intentionally not deleted on
+	// cleanup so it persists for reuse.
+	hash := minimalDockerfileHash(t)
+	workspacePath := setupMinimalWorkspace(t, hash)
+	workspaceName := "side-e2e-devpod-" + hash
 
 	// Start the DevPod workspace. When the container is already running, this
 	// returns quickly.
-	workspaceName := "test-devpod-integration-sidekick-e2e" // use fixed value for faster runs (no repeated image build)
 	err := DevPodUpActivity(context.Background(), DevPodUpInput{WorkspacePath: workspacePath, IDE: "none", WorkspaceId: workspaceName})
 	require.NoError(t, err, "DevPodUpActivity failed")
 
@@ -77,14 +108,6 @@ func TestDevPodIntegration(t *testing.T) {
 		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
 		defer cancel()
 	}
-
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := DevPodDeleteActivity(cleanupCtx, workspaceName); err != nil {
-			t.Logf("DevPodDeleteActivity cleanup error: %v", err)
-		}
-	})
 
 	containerWorkDir := "/workspaces/" + workspaceName
 
@@ -135,6 +158,17 @@ func TestDevPodIntegration(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, initOut.ExitStatus, "repo init failed: %s", initOut.Stderr)
 
+		// The workspace container is reused across runs, so remove this per-run
+		// repo and its worktree to avoid unbounded writable-layer growth.
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = devEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", containerRepoDir},
+			})
+		})
+
 		repoEnv := &DevPodEnv{
 			WorkingDirectory: containerRepoDir,
 			WorkspaceName:    workspaceName,
@@ -152,7 +186,23 @@ func TestDevPodIntegration(t *testing.T) {
 		})
 		require.NoError(t, err, "CreateDevPodWorktreeActivity failed")
 		assert.NotEmpty(t, output.WorktreePath)
+		// The worktree must be created beside the repo dir so that in
+		// production (repo under /workspaces) it lands in the persistent
+		// workspace mount rather than the ephemeral container layer.
+		assert.Equal(t, filepath.Join(filepath.Dir(containerRepoDir), "sidekick-worktrees", wsId),
+			filepath.Dir(output.WorktreePath))
 		t.Logf("worktree created at: %s", output.WorktreePath)
+
+		// The workspace volume is reused across runs, so remove this run's
+		// unique worktree dir to avoid unbounded accumulation.
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = devEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", filepath.Dir(output.WorktreePath)},
+			})
+		})
 
 		verifyOut, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
 			Command: "test",
@@ -160,5 +210,113 @@ func TestDevPodIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 0, verifyOut.ExitStatus, "worktree directory does not exist in container")
+	})
+
+	t.Run("hibernate and wake worktree inside container", func(t *testing.T) {
+		containerRepoDir := "/tmp/devpod-e2e-hib-repo-" + ksuid.New().String()
+		initScript := strings.Join([]string{
+			"mkdir -p " + containerRepoDir,
+			"cd " + containerRepoDir,
+			"git init",
+			"git checkout -b main",
+			"git config user.name 'Test'",
+			"git config user.email 'test@test.com'",
+			"printf 'hello\\n' > tracked.txt",
+			"git add tracked.txt",
+			"git commit -m 'init'",
+		}, " && ")
+		initOut, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "bash",
+			Args:    []string{"-c", initScript},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, initOut.ExitStatus, "repo init failed: %s", initOut.Stderr)
+
+		repoEnv := &DevPodEnv{WorkingDirectory: containerRepoDir, WorkspaceName: workspaceName}
+		wsId := "ws-" + ksuid.New().String()
+		branchName := "side/devpod-e2e-hib-" + ksuid.New().String()
+		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
+			EnvContainer: EnvContainer{Env: repoEnv},
+			RepoDir:      containerRepoDir,
+			BranchName:   branchName,
+			WorkspaceId:  wsId,
+		})
+		require.NoError(t, err, "CreateDevPodWorktreeActivity failed")
+		worktreePath := output.WorktreePath
+
+		// The workspace container is reused across runs, so clean up both the
+		// per-run repo and its worktree to avoid unbounded layer growth.
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = devEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", containerRepoDir, worktreePath},
+			})
+		})
+
+		wtEnv := &DevPodEnv{
+			WorkingDirectory: worktreePath,
+			WorkspaceName:    workspaceName,
+			LocalRepoDir:     workspacePath,
+		}
+
+		// Representative dirty state: a staged modification to a tracked file with
+		// a further unstaged change on top, plus an untracked text file.
+		setupDirty := strings.Join([]string{
+			"cd " + worktreePath,
+			"printf 'hello world\\n' > tracked.txt",
+			"git add tracked.txt",
+			"printf 'unstaged\\n' >> tracked.txt",
+			"printf 'brand new\\n' > untracked.txt",
+		}, " && ")
+		dirtyOut, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "bash",
+			Args:    []string{"-c", setupDirty},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, dirtyOut.ExitStatus, "dirty setup failed: %s", dirtyOut.Stderr)
+
+		_, err = wtEnv.Hibernate(ctx, branchName)
+		require.NoError(t, err, "Hibernate failed")
+
+		// While hibernated, the working files are deleted but the tiny .git link is
+		// retained so the worktree stays registered. Use SkipWaking so these checks
+		// observe the hibernated state directly.
+		lsOut, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			SkipWaking: true,
+			Command:    "sh",
+			Args:       []string{"-c", "ls -A"},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, lsOut.Stdout, ".sidekick-hibernation.json", "sentinel should be present while hibernated")
+		assert.NotContains(t, lsOut.Stdout, "tracked.txt", "working files should be deleted while hibernated")
+		gitKept, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			SkipWaking: true,
+			Command:    "sh",
+			Args:       []string{"-c", "test -e .git; echo $?"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "0", strings.TrimSpace(gitKept.Stdout), ".git link should be retained while hibernated")
+
+		// A normal command transparently wakes the worktree (auto-wake path),
+		// after which the branch, staged+unstaged changes, and untracked file are
+		// all restored.
+		statusOut, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "git",
+			Args:    []string{"status", "--porcelain", "-b"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, statusOut.ExitStatus, "git status after wake failed: %s", statusOut.Stderr)
+		assert.Contains(t, statusOut.Stdout, branchName, "branch should be reattached after wake")
+		assert.Contains(t, statusOut.Stdout, "MM tracked.txt", "tracked.txt should keep its staged+unstaged modifications")
+		assert.Contains(t, statusOut.Stdout, "?? untracked.txt", "untracked text file should be restored")
+
+		lsOut2, err := wtEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "sh",
+			Args:    []string{"-c", "ls -A"},
+		})
+		require.NoError(t, err)
+		assert.NotContains(t, lsOut2.Stdout, ".sidekick-hibernation", "sentinels should be gone after wake")
 	})
 }

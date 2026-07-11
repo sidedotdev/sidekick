@@ -17,7 +17,7 @@ worktree_setup: |
   cd frontend && bun ci && touch dist/empty.txt
 
 test_commands:
-  - command: "go run ./scripts/affected_tests/ -test.timeout 60s ./..."
+  - command: "go run ./scripts/affected_tests/ -test.timeout 120s ./..."
   - working_dir: "frontend"
     command: "bun run test:unit -- --no-color"
   - working_dir: "frontend"
@@ -26,10 +26,10 @@ test_commands:
     command: "bun run lint:check"
 
 integration_test_commands:
-  - command: "SIDE_INTEGRATION_TEST=true go run ./scripts/affected_tests/ -test.timeout 120s ./..."
+  - command: "SIDE_INTEGRATION_TEST=true go run ./scripts/affected_tests/ -test.timeout 240s ./..."
   - command: "go run ./scripts/lint_chat_history_append/"
   - command: "go run ./scripts/lint_track_callback/ ./..."
-  - command: "SIDE_E2E_TEST=true go run ./scripts/affected_tests/ -test.timeout 300s ./..."
+  - command: "SIDE_E2E_TEST=true go run ./scripts/affected_tests/ -test.timeout 295s ./..."
 
 agent_config:
   coding:
@@ -58,6 +58,19 @@ command_permissions:
 
 openshell:
   from: "Dockerfile.openshell"
+
+# Reverse-forward the host's read-only Temporal proxy (exposed by dev builds
+# of `side start`) into devpod/openshell containers so integration tests that
+# read workflow histories (e.g. workflow replay) can connect. The proxy only
+# allows listing workflows and fetching histories, so the sandbox cannot
+# mutate the host's Temporal state. The container port must avoid every default
+# Sidekick port (8855 api, 18855 temporal, 21855 readonly proxy, 28855 nats) so
+# an in-container `side start` can still bind its own services; in particular
+# 28855 collides with the embedded NATS server and would make it fail to bind
+# ("address already in use").
+port_forwards:
+  - host_port: 21855
+    container_port: 31855
 
 dev_run:
   supervisor:

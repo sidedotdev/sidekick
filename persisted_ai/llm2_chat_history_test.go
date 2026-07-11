@@ -482,6 +482,56 @@ func TestMessageFromChatMessage_ToolRole(t *testing.T) {
 		assert.Equal(t, llm2.ContentBlockTypeText, msg.Content[0].Type)
 		assert.Equal(t, "response", msg.Content[0].Text)
 	})
+
+	t.Run("empty content with tool calls omits empty text block", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []common.ToolCall{{
+				Id:        "call_1",
+				Name:      "read_file",
+				Arguments: `{"path":"main.go"}`,
+			}},
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, llm2.RoleAssistant, msg.Role)
+		require.Len(t, msg.Content, 1)
+		require.Equal(t, llm2.ContentBlockTypeToolUse, msg.Content[0].Type)
+		require.NotNil(t, msg.Content[0].ToolUse)
+		assert.Equal(t, "call_1", msg.Content[0].ToolUse.Id)
+		assert.Equal(t, "read_file", msg.Content[0].ToolUse.Name)
+		assert.Equal(t, `{"path":"main.go"}`, msg.Content[0].ToolUse.Arguments)
+		for _, block := range msg.Content {
+			if block.Type == llm2.ContentBlockTypeText {
+				assert.NotEmpty(t, block.Text, "must not emit empty text block")
+			}
+		}
+	})
+
+	t.Run("non-empty content with tool calls keeps text and tool_use blocks", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:    "assistant",
+			Content: "let me check",
+			ToolCalls: []common.ToolCall{{
+				Id:        "call_2",
+				Name:      "read_file",
+				Arguments: `{"path":"main.go"}`,
+			}},
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		require.Len(t, msg.Content, 2)
+		assert.Equal(t, llm2.ContentBlockTypeText, msg.Content[0].Type)
+		assert.Equal(t, "let me check", msg.Content[0].Text)
+		assert.Equal(t, llm2.ContentBlockTypeToolUse, msg.Content[1].Type)
+		require.NotNil(t, msg.Content[1].ToolUse)
+		assert.Equal(t, "call_2", msg.Content[1].ToolUse.Id)
+	})
 }
 
 func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {

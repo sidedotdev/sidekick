@@ -12,6 +12,9 @@
     <p class="task-description" @mouseleave.self="handleDescriptionBlur">{{ task.description }}</p>
     <div class="card-footer">
       <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
+      <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
+        <ContainerIcon/>{{ envIndicator.label }}
+      </span>
       <span v-if="task.archived" class="archived-label">Archived</span>
     </div>
 
@@ -30,6 +33,7 @@ import { loadPresets, llmConfigsEqual } from '../lib/llmPresetStorage'
 import TaskModal from './TaskModal.vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import TrashIcon from './icons/TrashIcon.vue'
+import ContainerIcon from './icons/ContainerIcon.vue'
 import router from '@/router'
 
 const props = defineProps({
@@ -37,6 +41,24 @@ const props = defineProps({
     type: Object as () => FullTask,
     required: true,
   },
+})
+
+type EnvIndicator = { label: string; title: string }
+
+// Maps concrete env types to their execution-location category. Only env types
+// that deviate from the default (local machine) are listed, so unmapped types
+// (local, local_git_worktree, unknown) render no indicator. Adding a future
+// remote/cloud category is a matter of adding entries here, not new template
+// branches.
+const envIndicatorMap: Record<string, EnvIndicator> = {
+  devpod: { label: 'Container', title: 'DevPod' },
+  openshell: { label: 'Container', title: 'OpenShell' },
+}
+
+const envIndicator = computed<EnvIndicator | null>(() => {
+  const envType = props.task.flowOptions?.envType as string | undefined
+  if (!envType) return null
+  return envIndicatorMap[envType] ?? null
 })
 
 const llmPresetLabel = computed(() => {
@@ -169,9 +191,13 @@ const cardClicked = async () => {
   }
 
   if (props.task.flows && props.task.flows.length > 0) {
-    const firstFlowId = props.task.flows[0].id
+    // A task's flows may include sub-task flows (e.g. IDD sub-tasks share the
+    // task as parent), so pick the flow matching the task's flow type instead
+    // of relying on ordering.
+    const flows = props.task.flows
+    const targetFlow = flows.find((f) => f.type === props.task.flowType) ?? flows[0]
     const routeName = props.task.flowType === 'idd' ? 'intent-canvas' : 'flow'
-    router.push({ name: routeName, params: { id: firstFlowId } })
+    router.push({ name: routeName, params: { id: targetFlow.id } })
   } else {
     openEditModal()
   }
@@ -424,6 +450,24 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   background-color: #808080;
   color: var(--status-label-color);
   font-family: "JetBrains Mono", monospace;
+}
+
+.env-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+  padding: 0 0.4375rem;
+  border-radius: 0.0625rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background-color: var(--color-background-mute);
+  color: var(--color-text);
+  font-family: "JetBrains Mono", monospace;
+}
+.env-indicator svg {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 .llm-preset-label {

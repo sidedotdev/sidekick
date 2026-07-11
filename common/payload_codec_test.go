@@ -3,6 +3,7 @@ package common
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -217,6 +218,9 @@ func TestPayloadCodec_DecodeNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected 'not found' in error, got: %v", err)
+	}
+	if !errors.Is(err, ErrCodecPayloadMissing) {
+		t.Fatalf("expected ErrCodecPayloadMissing, got: %v", err)
 	}
 }
 

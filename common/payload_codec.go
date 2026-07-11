@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/segmentio/ksuid"
@@ -9,11 +10,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ErrCodecPayloadMissing indicates a payload was offloaded to KV storage but
+// the referenced key no longer exists there: either data loss, or the payload
+// lives in a different environment's KV store.
+var ErrCodecPayloadMissing = errors.New("referenced payload not found in KV store")
+
 const (
 	codecWorkspaceID      = "__temporal_codec"
 	codecKeyPrefix        = "codec/"
 	codecMetadataKey      = "sidekick-payload-codec-key"
-	DefaultCodecThreshold = 10 * 1024 // 10KB
+	DefaultCodecThreshold = 1024 * 1024 // 1MB
 )
 
 // PayloadCodec offloads large Temporal payloads to KV storage, replacing them
@@ -91,7 +97,7 @@ func (c *PayloadCodec) Decode(payloads []*commonpb.Payload) ([]*commonpb.Payload
 			return nil, fmt.Errorf("payload codec: failed to read key %q: %w", key, err)
 		}
 		if len(values) == 0 || values[0] == nil {
-			return nil, fmt.Errorf("payload codec: referenced key %q not found in KV store (data loss)", key)
+			return nil, fmt.Errorf("payload codec: key %q: %w", key, ErrCodecPayloadMissing)
 		}
 
 		restored := &commonpb.Payload{}

@@ -1,4 +1,4 @@
-FROM golang:1.24.0-alpine
+FROM golang:1.26.0-alpine
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -51,8 +51,12 @@ COPY . .
 # Create placeholder frontend dist for tests (embed pattern requires it)
 RUN mkdir -p frontend/dist && touch frontend/dist/.gitkeep
 
-# Install gopls for LSP tests (v0.17.1 is compatible with Go 1.24)
-RUN go install golang.org/x/tools/gopls@v0.17.1
+# Install gopls for LSP tests (keep in sync with common.GoplsVersion)
+RUN go install golang.org/x/tools/gopls@v0.21.0
+
+# Install golangci-lint, built with the image's Go toolchain so its internal
+# type checker can read this repo's compiler export data.
+RUN go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
 
 # Default command runs tests
 CMD ["go", "test", "-timeout", "5m", "./..."]

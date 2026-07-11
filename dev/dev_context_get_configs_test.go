@@ -36,6 +36,7 @@ func (s *GetConfigsTestSuite) SetupTest() {
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
 
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 
 	s.wrapperWorkflow = func(ctx workflow.Context, workspaceId string) (GetConfigsResult, error) {
 		ctx = utils.NoRetryCtx(ctx)

@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"sidekick/domain"
+	"sidekick/utils"
 )
 
 type DevAgentManagerWorkflowTestSuite struct {
@@ -20,6 +21,7 @@ type DevAgentManagerWorkflowTestSuite struct {
 
 func (s *DevAgentManagerWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.ima = nil
 }
 

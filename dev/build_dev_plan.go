@@ -25,6 +25,7 @@ type buildDevPlanState struct {
 	devPlan                     DevPlan
 	planningPrompt              string
 	reproduceIssue              bool
+	advisor                     *Advisor
 }
 
 var recordDevPlanTool = llm.Tool{
@@ -300,6 +301,9 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		planningPrompt:              planningPrompt,
 		reproduceIssue:              reproduceIssue,
 	}
+	if v := workflow.GetVersion(dCtx, "dev-plan-advisor", workflow.DefaultVersion, 1); v == 1 {
+		initialState.advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+	}
 
 	feedbackIterations := 5
 	v := workflow.GetVersion(dCtx, "dev-planning-feedback-iterations", workflow.DefaultVersion, 1)
@@ -339,10 +343,16 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	if v := workflow.GetVersion(iteration.ExecCtx, "chat-history-manage-v4", workflow.DefaultVersion, 1); v == 1 {
 		modelConfig = iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	}
-	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
+	maxLength := min(defaultRequestedKeepLength+state.contextSizeExtension, extendedRequestedKeepLength)
 	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig)
 
 	hasExistingPlan := len(state.devPlan.Steps) > 0
+
+	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-advisor", workflow.DefaultVersion, 1); v == 1 {
+		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devPlanTools(iteration.ExecCtx, hasExistingPlan)); err != nil {
+			return nil, fmt.Errorf("error running advisor: %w", err)
+		}
+	}
 
 	var chatResponse common.MessageResponse
 	var err error
@@ -583,7 +593,9 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 	return plan, nil
 }
 
-func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
+// devPlanTools builds the tool slice shared by the planning executor and its
+// advisor so both operate over an identical tool set each turn.
+func devPlanTools(dCtx DevContext, hasExistingPlan bool) []*llm.Tool {
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
 	tools := []*llm.Tool{
@@ -604,6 +616,12 @@ func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryConta
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
 	}
+	return tools
+}
+
+func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
+	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
+	tools := devPlanTools(dCtx, hasExistingPlan)
 
 	chatOptions := llm2.Options{
 		Tools: tools,
@@ -636,6 +654,14 @@ func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, p
 }
 
 func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*flow_action.UserResponse, error) {
+	// IDD sub-task plans are auto-approved: the intent author reviews outcomes
+	// when the sub-task auto-merges back into the idd worktree, so pausing for
+	// plan approval would only stall the background sub-task. Version-gated so
+	// in-flight sub-tasks that already requested approval replay correctly.
+	if dCtx.Idd && workflow.GetVersion(dCtx, "idd-auto-approve-plan", workflow.DefaultVersion, 1) == 1 {
+		approved := true
+		return &flow_action.UserResponse{Approved: &approved, Content: "Plan auto-approved for IDD sub-task."}, nil
+	}
 	req := flow_action.RequestForUser{
 		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},

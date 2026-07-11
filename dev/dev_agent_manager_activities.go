@@ -415,10 +415,11 @@ func (ima *DevAgentManagerActivities) CleanupStaleWorktrees(ctx context.Context,
 				}
 			}
 
-			removeCmd := exec.CommandContext(ctx, "git", "--git-dir", commonGitDir, "worktree", "remove", dirPath, "--force")
+			// Sidekick worktrees are created locked, so removal requires --force twice.
+			removeCmd := exec.CommandContext(ctx, "git", "--git-dir", commonGitDir, "worktree", "remove", dirPath, "--force", "--force")
 			removeOut, err := removeCmd.CombinedOutput()
 			if err != nil {
-				fallbackCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "worktree", "remove", ".", "--force")
+				fallbackCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "worktree", "remove", ".", "--force", "--force")
 				fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
 				if fallbackErr != nil {
 					if rmErr := safeRemoveAll(); rmErr != nil {
@@ -531,4 +532,83 @@ func (ima *DevAgentManagerActivities) isWorktreeActive(ctx context.Context, work
 type CleanupStaleWorktreesInput struct {
 	WorkspaceId string `json:"workspaceId"`
 	DryRun      bool   `json:"dryRun"`
+}
+
+// HibernationCandidate represents an active worktree that qualifies for hibernation.
+type HibernationCandidate struct {
+	FlowId       string `json:"flowId"`
+	WorktreePath string `json:"worktreePath"`
+	BranchName   string `json:"branchName"`
+	Reason       string `json:"reason"`
+}
+
+// HibernationCandidatesInput is the input for FindHibernationCandidates.
+type HibernationCandidatesInput struct {
+	WorkspaceId       string        `json:"workspaceId"`
+	InactivityTimeout time.Duration `json:"inactivityTimeout"`
+}
+
+// HibernationCandidatesOutput is the output of FindHibernationCandidates.
+type HibernationCandidatesOutput struct {
+	Candidates []HibernationCandidate `json:"candidates"`
+}
+
+// FindHibernationCandidates returns worktrees tied to active flows whose tasks
+// are idle (blocked or in_review) and haven't been updated within the inactivity
+// timeout. Task status is the idle signal, which works reliably across local and
+// remote environments without filesystem access.
+//
+// The scope is intentionally limited to flows waiting on user input (blocked or
+// in_review) rather than any long-idle flow. Hibernation is delivered as a signal
+// that cannot safely interrupt a flow actively using its worktree, so we only
+// target flows that are already parked: these have a deterministic resume point
+// (the user response, or the next worktree-dependent step) where the worktree
+// auto-wakes and the hibernation global state is reconciled. A blocked/in_review
+// task untouched for the timeout is precisely the "not touched in a long while"
+// worktree we want to reclaim disk from.
+func (ima *DevAgentManagerActivities) FindHibernationCandidates(ctx context.Context, input HibernationCandidatesInput) (HibernationCandidatesOutput, error) {
+	worktrees, err := ima.Storage.GetWorktrees(ctx, input.WorkspaceId)
+	if err != nil {
+		return HibernationCandidatesOutput{}, err
+	}
+
+	var candidates []HibernationCandidate
+	for _, wt := range worktrees {
+		workingDir := strings.TrimSpace(wt.WorkingDirectory)
+		if workingDir == "" || strings.TrimSpace(wt.FlowId) == "" {
+			continue
+		}
+
+		flow, err := ima.Storage.GetFlow(ctx, input.WorkspaceId, wt.FlowId)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(flow.ParentId, "task_") {
+			continue
+		}
+
+		task, err := ima.Storage.GetTask(ctx, input.WorkspaceId, flow.ParentId)
+		if err != nil {
+			continue
+		}
+
+		// Only hibernate worktrees whose tasks are waiting on user action
+		if task.Status != domain.TaskStatusBlocked && task.Status != domain.TaskStatusInReview {
+			continue
+		}
+
+		idleDuration := time.Since(task.Updated)
+		if idleDuration < input.InactivityTimeout {
+			continue
+		}
+
+		candidates = append(candidates, HibernationCandidate{
+			FlowId:       wt.FlowId,
+			WorktreePath: workingDir,
+			BranchName:   wt.Name,
+			Reason:       fmt.Sprintf("task %s in %s status, idle for %s", task.Id, task.Status, idleDuration.Round(time.Minute)),
+		})
+	}
+
+	return HibernationCandidatesOutput{Candidates: candidates}, nil
 }

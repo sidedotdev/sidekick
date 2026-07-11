@@ -74,10 +74,34 @@ func (ca *ChatHistoryActivities) ManageV3(
 
 // ManageInput is the input for the ManageV4 activity.
 type ManageInput struct {
-	ChatHistory *ChatHistoryContainer
-	WorkspaceId string
-	MaxLength   int
-	ModelConfig common.ModelConfig
+	ChatHistory         *ChatHistoryContainer
+	WorkspaceId         string
+	RequestedKeepLength int `json:"RequestedKeepLength"`
+	ModelConfig         common.ModelConfig
+}
+
+// UnmarshalJSON populates RequestedKeepLength from the legacy JSON keys
+// ("MaxLength"/"max_length") when the new key is absent. This keeps Temporal
+// activity inputs serialized by older, in-flight workflow executions decodable
+// after the field rename.
+func (m *ManageInput) UnmarshalJSON(data []byte) error {
+	type alias ManageInput
+	aux := struct {
+		*alias
+		LegacyMaxLength      *int `json:"MaxLength"`
+		LegacyMaxLengthSnake *int `json:"max_length"`
+	}{alias: (*alias)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if m.RequestedKeepLength == 0 {
+		if aux.LegacyMaxLength != nil {
+			m.RequestedKeepLength = *aux.LegacyMaxLength
+		} else if aux.LegacyMaxLengthSnake != nil {
+			m.RequestedKeepLength = *aux.LegacyMaxLengthSnake
+		}
+	}
+	return nil
 }
 
 // ManageOutput is the output for the ManageV4 activity.
@@ -104,7 +128,7 @@ func (ca *ChatHistoryActivities) ManageV4(
 	originalMessages := deepCopyMessages(llm2History.Llm2Messages())
 
 	messages := llm2History.Llm2Messages()
-	managedMessages, err := ca.ManageLlm2ChatHistory(messages, input.MaxLength, input.ModelConfig)
+	managedMessages, err := ca.ManageLlm2ChatHistory(messages, input.RequestedKeepLength, input.ModelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to manage chat history: %w", err)
 	}

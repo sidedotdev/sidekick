@@ -209,6 +209,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "go doc"},
 			{Pattern: "gofmt"},
 			{Pattern: "golint"},
+			{Pattern: "golangci-lint"},
 			{Pattern: "staticcheck"},
 			// Node.js/npm commands
 			{Pattern: "npm test"},
@@ -379,8 +380,12 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `.*(^|[^a-zA-Z0-9])~[a-zA-Z]`},
 			{Pattern: `.*\$HOME`},
 			{Pattern: `.*\$\{HOME\}`},
-			// Parent directory traversal (escaping repo context)
-			{Pattern: `.*\.\./`},
+			// Parent directory traversal (escaping repo context). Matches ".."
+			// as a standalone path segment (bounded by start/space/slash on the
+			// left and slash/space/end on the right) so bare navigation like
+			// "cd .." is caught alongside "../foo", without misfiring on Go's
+			// "./..." package idiom.
+			{Pattern: `.*(^|[\s/])\.\.($|/|\s)`},
 			// Additional network commands
 			{Pattern: "nc"},
 			{Pattern: "netcat"},
@@ -1069,7 +1074,9 @@ const heredocFileWriteDenyMessage = "Writing files via shell heredoc (e.g. `cat 
 // tempPathPattern matches references to system temp paths like /tmp and
 // /var/tmp anywhere in a script (heredoc redirects, `tee`, plain redirects,
 // etc.), so guidance toward in-repo locations can be surfaced for any of them.
-var tempPathPattern = regexp.MustCompile(`/(?:var/)?tmp(?:/|\b)`)
+// Only absolute paths are matched: a preceding path-like character (as in
+// `.side/tmp` or `~/tmp`) means the reference is not the system temp dir.
+var tempPathPattern = regexp.MustCompile(`(?:^|[^\w.~-])/(?:var/)?tmp(?:/|\b)`)
 
 // tempPathAdvisory steers commands away from system temp paths toward in-repo
 // locations. It is surfaced whenever a script references such a path.

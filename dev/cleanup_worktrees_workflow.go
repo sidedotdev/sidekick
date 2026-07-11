@@ -13,6 +13,8 @@ import (
 
 const CleanupWorktreesWorkflowID = "cleanup_stale_worktrees"
 
+const HibernationInactivityTimeout = 24 * time.Hour
+
 func CleanupWorktreesWorkflow(ctx workflow.Context) error {
 	log := workflow.GetLogger(ctx)
 
@@ -46,6 +48,28 @@ func CleanupWorktreesWorkflow(ctx workflow.Context) error {
 			continue
 		}
 		log.Info("Stale worktree cleanup completed", "WorkspaceId", wsId, "Candidates", len(report.Candidates))
+
+		// Signal inactive-but-active worktrees to hibernate
+		v := workflow.GetVersion(ctx, "hibernate-inactive-worktrees", workflow.DefaultVersion, 1)
+		if v >= 1 {
+			var hibernationOutput HibernationCandidatesOutput
+			err := workflow.ExecuteActivity(ctx, ima.FindHibernationCandidates, HibernationCandidatesInput{
+				WorkspaceId:       wsId,
+				InactivityTimeout: HibernationInactivityTimeout,
+			}).Get(ctx, &hibernationOutput)
+			if err != nil {
+				log.Error("Failed to find hibernation candidates", "WorkspaceId", wsId, "Error", err)
+				continue
+			}
+			for _, candidate := range hibernationOutput.Candidates {
+				err := workflow.SignalExternalWorkflow(ctx, candidate.FlowId, "", SignalNameHibernate, HibernateSignal{}).Get(ctx, nil)
+				if err != nil {
+					log.Warn("Failed to signal flow for hibernation", "FlowId", candidate.FlowId, "Error", err)
+				} else {
+					log.Info("Signaled flow for hibernation", "FlowId", candidate.FlowId, "Reason", candidate.Reason)
+				}
+			}
+		}
 	}
 
 	return nil

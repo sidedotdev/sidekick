@@ -20,6 +20,7 @@ type Storage interface {
 	domain.FlowActionStorage
 	domain.WorkspaceStorage
 	domain.WorktreeStorage
+	domain.RemoteDeviceStorage
 	common.KeyValueStorage
 
 	CheckConnection(ctx context.Context) error

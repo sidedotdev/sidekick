@@ -73,8 +73,35 @@ type RepoConfig struct {
 	// RepoMode specifies the default repo mode for this repo (e.g., "worktree", "in_place").
 	RepoMode string `toml:"repo_mode,omitempty"`
 
+	// PortForwards declares host ports to reverse-forward into remote
+	// container environments (devpod/openshell) over SSH, making services
+	// bound to the host's loopback interface reachable from inside the
+	// container.
+	PortForwards []PortForwardConfig `toml:"port_forwards,omitempty"`
+
 	DevPodConfig    DevPodEnvConfig    `toml:"devpod,omitempty"`
 	OpenShellConfig OpenShellEnvConfig `toml:"openshell,omitempty"`
+}
+
+// PortForwardConfig declares a single host port to reverse-forward into a
+// remote container environment over SSH, exposing a service listening on the
+// host's 127.0.0.1 to the container's 127.0.0.1.
+type PortForwardConfig struct {
+	// HostPort is the port on the host (bound to 127.0.0.1) to forward.
+	HostPort int `toml:"host_port" json:"hostPort"`
+
+	// ContainerPort is the loopback port inside the container on which the
+	// forwarded host port is exposed. Defaults to HostPort when zero.
+	ContainerPort int `toml:"container_port,omitempty" json:"containerPort,omitempty"`
+}
+
+// ContainerPortOrDefault returns ContainerPort, defaulting to HostPort when
+// unset.
+func (c PortForwardConfig) ContainerPortOrDefault() int {
+	if c.ContainerPort != 0 {
+		return c.ContainerPort
+	}
+	return c.HostPort
 }
 
 // DevPodEnvConfig holds configuration specific to the DevPod environment type.

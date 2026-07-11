@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
+
+	"sidekick/utils"
 )
 
 // runReceiveUserResponseWorkflow drives ReceiveUserResponse from a workflow
@@ -21,6 +23,7 @@ func runReceiveUserResponseWorkflow(expectedFlowActionId string) func(ctx workfl
 func TestReceiveUserResponse_OnlyReceivesSignalForOwnFlowActionId(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
 	env.SetTestTimeout(10 * time.Second)
 
 	expected := "action-current"
@@ -62,6 +65,7 @@ func TestUserResponseSignalName(t *testing.T) {
 func TestReceiveUserResponse_AcceptsAnyWhenExpectedIsEmpty(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
 	env.SetTestTimeout(10 * time.Second)
 
 	approved := true

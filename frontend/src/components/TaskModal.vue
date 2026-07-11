@@ -73,17 +73,17 @@
         />
       </div>
 
-      <div v-if="!isIdd">
+      <div>
         <label>Environment</label>
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
       </div>
 
-      <div v-if="!isIdd">
+      <div>
         <label>Repo Mode</label>
         <SegmentedControl v-model="repoMode" :options="repoModeOptions" />
       </div>
 
-      <div v-if="!isIdd">
+      <div>
         <div v-if="repoMode === 'worktree'" style="display: flex;">
           <label for="startBranch">Start Branch</label>
           <BranchSelector
@@ -97,6 +97,11 @@
       <label v-if="!isIdd">
         <input type="checkbox" v-model="determineRequirements" />
         Determine Requirements
+      </label>
+
+      <label>
+        <input type="checkbox" v-model="advisorEnabled" />
+        Enable Advisor
       </label>
 
       <div v-if="!isIdd">
@@ -143,7 +148,7 @@ import ShortcutHint from './ShortcutHint.vue'
 import { store, type TaskConfigData } from '../lib/store'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
-import type { Task, TaskStatus, LLMConfig } from '../lib/models'
+import type { Flow, Task, TaskStatus, LLMConfig } from '../lib/models'
 
 type PresetOption = 
   | { value: 'default'; label: string }
@@ -293,6 +298,9 @@ const userModifiedDetermineRequirements = ref(false)
 const isApplyingTaskConfig = ref(false)
 const taskConfig = ref<TaskConfigData | null>(store.getTaskConfigCache(workspaceId.value)?.data ?? null)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
+const advisorEnabled = ref<boolean>(
+  props.task?.flowOptions?.configOverrides?.advisorEnabled ?? true
+)
 const selectedBranch = ref<string | null>(initialBranchValue)
 
 // Auto-save state
@@ -319,6 +327,7 @@ interface FormState {
   selectedBranch: string | null
   determineRequirements: boolean
   planningPrompt: string
+  advisorEnabled: boolean
   selectedPresetValue: string
   llmConfig: LLMConfig
   newPresetName: string
@@ -337,6 +346,7 @@ const captureFormState = (): FormState => ({
   selectedBranch: selectedBranch.value,
   determineRequirements: determineRequirements.value,
   planningPrompt: planningPrompt.value,
+  advisorEnabled: advisorEnabled.value,
   selectedPresetValue: selectedPresetValue.value,
   llmConfig: JSON.parse(JSON.stringify(llmConfig.value)),
   newPresetName: newPresetName.value,
@@ -352,6 +362,7 @@ const restoreFormState = (state: FormState) => {
   selectedBranch.value = state.selectedBranch
   determineRequirements.value = state.determineRequirements
   planningPrompt.value = state.planningPrompt
+  advisorEnabled.value = state.advisorEnabled
   selectedPresetValue.value = state.selectedPresetValue
   llmConfig.value = JSON.parse(JSON.stringify(state.llmConfig))
   newPresetName.value = state.newPresetName
@@ -523,6 +534,10 @@ const buildFlowOptions = (): Record<string, any> => {
     flowOptions.configOverrides = { llm: llmConfig.value }
   }
 
+  if (!advisorEnabled.value) {
+    flowOptions.configOverrides = { ...flowOptions.configOverrides, advisorEnabled: false }
+  }
+
   Object.keys(flowOptions).forEach(key => {
     if (flowOptions[key] === null || flowOptions[key] === '') {
       delete flowOptions[key];
@@ -613,7 +628,7 @@ const scheduleAutoSave = () => {
 }
 
 // Watch all form fields for auto-save
-watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
+watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, advisorEnabled, selectedPresetValue, llmConfig, newPresetName], () => {
   if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()
@@ -743,7 +758,8 @@ const navigateToIntentCanvas = async (taskId: string) => {
       const res = await fetch(`/api/v1/workspaces/${workspaceId.value}/tasks/${taskId}`)
       if (res.ok) {
         const data = await res.json()
-        const intentFlowId = data?.task?.flows?.[0]?.id
+        const flows: Flow[] = data?.task?.flows ?? []
+        const intentFlowId = (flows.find((f) => f.type === 'idd') ?? flows[0])?.id
         if (intentFlowId) {
           router.push({ name: 'intent-canvas', params: { id: intentFlowId } })
           return

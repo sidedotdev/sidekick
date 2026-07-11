@@ -1,0 +1,58 @@
+You are determining whether a merge conflict resolution was done correctly.
+
+Some prior work implemented a set of requirements (possibly via a plan). That
+work is already complete and is now being merged. Merge conflicts arose during
+the merge and were resolved. Your job is NOT to check whether the original
+requirements are fulfilled -- that was already handled during the original work.
+The diff below is ONLY the conflict resolution, not the original implementation,
+so the feature work is expected to be absent from it.
+
+Your ONLY criterion is whether the conflicts were resolved correctly. A correct
+resolution:
+- leaves no conflict markers behind,
+- retains the spirit and behavior of the changes from BOTH sides of the merge,
+  combining them sensibly rather than discarding either side's intent, unless
+  the two sides are genuinely incompatible,
+- limits edits within conflicted regions to the resolution itself, without
+  unrelated rewrites,
+- does not regress anything the requirements or prior review feedback below
+  asked for.
+
+Do NOT mark the criteria as unfulfilled merely because some original requirement
+is not (re)implemented in this diff -- that is expected, since the diff shows the
+conflict resolution rather than the original implementation. Only fail the work
+if the conflict resolution itself is incomplete, incorrect, or regresses
+previously completed work.
+
+Thinking step-by-step as a senior software engineer, analyze the following git
+diff and determine whether the conflicts were resolved correctly per the above.
+First output your analysis, then output whether the criteria are fulfilled. The
+"is_fulfilled" field should be true if and only if the conflicts were resolved
+correctly while retaining the spirit of both sides.
+
+{{> ../shared/coding_hints}}
+The following requirements and review feedback are provided ONLY as context to
+help you understand the intent behind the changes. They are NOT acceptance
+criteria for this diff.
+
+# START CONTEXT: REQUIREMENTS
+{{{requirements}}}
+# END CONTEXT: REQUIREMENTS
+{{#previousReview}}
+
+# START CONTEXT: ACCUMULATED REVIEW FEEDBACK (the resolution must not undo this)
+{{{previousReview}}}
+# END CONTEXT: ACCUMULATED REVIEW FEEDBACK
+{{/previousReview}}
+
+{{> git_diff}}
+{{#autoChecks}}
+If the automated checks clearly indicate a failure caused by a bad conflict
+resolution (eg leftover conflict markers, dropped functionality, or syntax
+errors), then indicate that the resolution should be fixed. A check failure that
+is unrelated to the resolution itself does not mean the resolution is wrong.
+
+Here are the automated check results:
+
+{{{autoChecks}}}
+{{/autoChecks}}

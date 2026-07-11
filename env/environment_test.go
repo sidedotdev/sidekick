@@ -119,7 +119,8 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 
 	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
 	defer func() {
-		cmd := exec.Command("git", "worktree", "remove", env.GetWorkingDirectory())
+		// Sidekick worktrees are created locked, so removal requires --force twice.
+		cmd := exec.Command("git", "worktree", "remove", "--force", "--force", env.GetWorkingDirectory())
 		cmd.Dir = repoDir
 		err = cmd.Run()
 		if err != nil {
@@ -209,12 +210,14 @@ func TestDevPodEnvironment_MarshalUnmarshal(t *testing.T) {
 		WorkingDirectory: "/some/workspace/dir",
 		WorkspaceName:    "my-workspace",
 		LocalRepoDir:     "/host/path/to/repo",
+		PortForwards:     []common.PortForwardConfig{{HostPort: 18855, ContainerPort: 28855}},
 	}
 	envContainer := EnvContainer{Env: originalEnv}
 
 	jsonBytes, err := json.Marshal(envContainer)
 	assert.NoError(t, err)
 	assert.Contains(t, string(jsonBytes), `"localRepoDir":"/host/path/to/repo"`)
+	assert.Contains(t, string(jsonBytes), `"portForwards":[{"hostPort":18855,"containerPort":28855}]`)
 
 	var unmarshaledEnvContainer EnvContainer
 	err = json.Unmarshal(jsonBytes, &unmarshaledEnvContainer)
@@ -224,6 +227,54 @@ func TestDevPodEnvironment_MarshalUnmarshal(t *testing.T) {
 	assert.Equal(t, EnvTypeDevPod, unmarshaledEnvContainer.Env.GetType())
 	assert.Equal(t, "/some/workspace/dir", unmarshaledEnvContainer.Env.GetWorkingDirectory())
 	assert.Equal(t, "/host/path/to/repo", unmarshaledEnvContainer.Env.(*DevPodEnv).LocalRepoDir)
+}
+
+func TestRunCommandInjectsActiveEnvType(t *testing.T) {
+	t.Parallel()
+
+	envs := []Env{
+		&LocalEnv{WorkingDirectory: t.TempDir()},
+		&LocalGitWorktreeEnv{WorkingDirectory: t.TempDir()},
+	}
+	for _, e := range envs {
+		e := e
+		t.Run(string(e.GetType()), func(t *testing.T) {
+			t.Parallel()
+			out, err := e.RunCommand(context.Background(), EnvRunCommandInput{
+				Command: "sh",
+				Args:    []string{"-c", "printf %s \"$" + common.ActiveEnvTypeEnvVar + "\""},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 0, out.ExitStatus, "stderr: %s", out.Stderr)
+			assert.Equal(t, string(e.GetType()), strings.TrimSpace(out.Stdout))
+		})
+	}
+}
+
+func TestReverseForwardArgs(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, reverseForwardArgs(nil))
+
+	args := reverseForwardArgs([]common.PortForwardConfig{
+		{HostPort: 18855},
+		{HostPort: 8080, ContainerPort: 9090},
+	})
+	assert.Equal(t, []string{
+		"-R", "127.0.0.1:18855:127.0.0.1:18855",
+		"-R", "127.0.0.1:9090:127.0.0.1:8080",
+	}, args)
+}
+
+func TestInsertBeforeSSHDestination(t *testing.T) {
+	t.Parallel()
+
+	sshArgs := []string{"-o", "BatchMode=yes", "user@host"}
+	assert.Equal(t, sshArgs, insertBeforeSSHDestination(sshArgs, nil))
+	assert.Equal(t,
+		[]string{"-o", "BatchMode=yes", "-R", "127.0.0.1:1:127.0.0.1:1", "user@host"},
+		insertBeforeSSHDestination(sshArgs, []string{"-R", "127.0.0.1:1:127.0.0.1:1"}),
+	)
 }
 
 func TestEnvContainer_MarshalJSON_NilEnv(t *testing.T) {
@@ -383,6 +434,10 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
+		// Worktrees must live beside the repo (inside the persistent workspace
+		// mount) rather than in a system temp path.
+		assert.Equal(t, filepath.Join(filepath.Dir(repoDir), "sidekick-worktrees"),
+			filepath.Dir(filepath.Dir(output.WorktreePath)))
 		assert.DirExists(t, output.WorktreePath)
 
 		// Verify the branch was created inside the worktree

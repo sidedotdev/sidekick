@@ -38,9 +38,11 @@ type Worker struct {
 	shutdownTracer func(context.Context) error
 }
 
-// Stop stops the worker and shuts down the tracer
+// Stop stops the worker, closes shared remote-env connections and shuts down
+// the tracer
 func (w *Worker) Stop() {
 	w.Worker.Stop()
+	env.CloseAllSharedSFTPConns()
 	if w.shutdownTracer != nil {
 		if err := w.shutdownTracer(context.Background()); err != nil {
 			log.Error().Err(err).Msg("Failed to shutdown telemetry tracer")
@@ -114,6 +116,9 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		Storage: service,
 	}
 	readImageActivities := &dev.ReadImageActivities{
+		Storage: service,
+	}
+	advisorActivities := &dev.AdvisorActivities{
 		Storage: service,
 	}
 	kvActivities := &common.KVActivities{
@@ -201,12 +206,14 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(git.GitMergeAbortActivity)
 	w.RegisterActivity(git.GitMergeInProgressActivity)
 	w.RegisterActivity(git.GitMergeIntoWorktreeActivity)
+	w.RegisterActivity(git.GitTransferWorktreeChangesActivity)
 	w.RegisterActivity(git.GitListUnmergedActivity)
 	w.RegisterActivity(git.GitSnapshotConflictMarkersActivity)
 	w.RegisterActivity(git.GitConflictResolutionDiffActivity)
 	w.RegisterActivity(git.GitCommitMergeActivity)
-	w.RegisterActivity(git.ListWorktreesActivity)
 	w.RegisterActivity(git.CleanupWorktreeActivity)
+	w.RegisterActivity(git.HibernateWorktreeActivity)
+	w.RegisterActivity(git.WakeWorktreeActivity)
 	w.RegisterActivity(git.GetCurrentBranch)
 	w.RegisterActivity(git.GetDefaultBranch)
 	w.RegisterActivity(git.ListLocalBranches)
@@ -227,12 +234,15 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.BulkReadFileActivity)
 	w.RegisterActivity(dev.SummarizeDiffActivity)
+	w.RegisterActivity(dev.AssessResolutionSubstantialityActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
+	w.RegisterActivity(dev.IddWatchEditIdleActivity)
 	w.RegisterActivity(chatHistoryActivities)
 	bulkReadFileActivities := &dev.BulkReadFileActivities{Storage: service}
 	w.RegisterActivity(bulkReadFileActivities)
 	w.RegisterActivity(readImageActivities)
+	w.RegisterActivity(advisorActivities)
 	w.RegisterActivity(kvActivities)
 	w.RegisterActivity(llm2Activities)
 	w.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
@@ -257,6 +267,10 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 
 	common.StartCodecCleanupWorkflow(context.Background(), temporalClient, taskQueue)
 	dev.StartCleanupWorktreesSchedule(context.Background(), temporalClient, taskQueue)
+
+	// Lock any pre-existing Sidekick worktrees so "git worktree prune" won't
+	// remove them from environments that can't see their working trees.
+	go git.LockExistingSidekickWorktrees(context.Background())
 
 	return &Worker{
 		Worker:         w,

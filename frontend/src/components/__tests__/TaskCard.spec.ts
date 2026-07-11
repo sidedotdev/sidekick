@@ -4,6 +4,9 @@ import TaskCard from '../TaskCard.vue'
 import TaskModal from '../TaskModal.vue'
 import type { FullTask } from '../../lib/models'
 
+const { routerPushMock } = vi.hoisted(() => ({ routerPushMock: vi.fn() }))
+vi.mock('@/router', () => ({ default: { push: routerPushMock } }))
+
 describe('TaskCard', () => {
 const task: FullTask = {
   id: 'task_1',
@@ -56,6 +59,23 @@ const task: FullTask = {
     expect(wrapper.findComponent(TaskModal).exists()).toBe(true)
   })
 
+  it('routes an idd task to the intent canvas using the idd flow, not a sub-task flow', async () => {
+    routerPushMock.mockClear()
+    const iddTask: FullTask = {
+      ...task,
+      flowType: 'idd',
+      flows: [
+        { workspaceId: 'ws_1', id: 'flow_subtask', type: 'basic_dev', parentId: 'task_1', status: 'in_progress' },
+        { workspaceId: 'ws_1', id: 'flow_idd', type: 'idd', parentId: 'task_1', status: 'in_progress' },
+      ],
+    }
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: iddTask },
+    })
+    await wrapper.find('.task-card').trigger('click')
+    expect(routerPushMock).toHaveBeenCalledWith({ name: 'intent-canvas', params: { id: 'flow_idd' } })
+  })
+
   it('calls the correct endpoint when delete button is clicked', async () => {
     const wrapper = shallowMount(TaskCard, {
       props: { task },
@@ -72,5 +92,35 @@ const task: FullTask = {
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/workspaces/ws_1/tasks/task_1', {
       method: 'DELETE',
     })
+  })
+
+  it.each([
+    ['local', { envType: 'local' }],
+    ['local_git_worktree', { envType: 'local_git_worktree' }],
+    ['undefined envType', { envType: undefined }],
+  ])('renders no env indicator for %s', (_name, flowOptions) => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, flowOptions } },
+    })
+    expect(wrapper.find('.env-indicator').exists()).toBe(false)
+  })
+
+  it('renders no env indicator when flowOptions is null', () => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, flowOptions: null } },
+    })
+    expect(wrapper.find('.env-indicator').exists()).toBe(false)
+  })
+
+  it.each([
+    ['devpod', 'DevPod'],
+    ['openshell', 'OpenShell'],
+  ])('renders a Container indicator with tooltip for %s', (envType, title) => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, flowOptions: { envType } } },
+    })
+    const indicator = wrapper.get('.env-indicator')
+    expect(indicator.text()).toContain('Container')
+    expect(indicator.attributes('title')).toBe(title)
   })
 })

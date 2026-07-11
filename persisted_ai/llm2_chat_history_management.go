@@ -7,6 +7,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"strings"
 
 	"sidekick/common"
@@ -49,6 +50,13 @@ func llm2MessageLength(provider string, msg llm2.Message) int {
 		length += contentBlockLength(provider, block)
 	}
 	return length
+}
+
+// Llm2MessageLength returns the retention-accounting length of an llm2 message
+// for the given provider, exposing llm2MessageLength to callers that size
+// history windows outside this package.
+func Llm2MessageLength(provider string, msg llm2.Message) int {
+	return llm2MessageLength(provider, msg)
 }
 
 // imageCharEstimate returns the estimated character-equivalent length of an
@@ -133,12 +141,64 @@ func getToolResultBlocks(msg llm2.Message) []*llm2.ToolResultBlock {
 	return blocks
 }
 
+// resolveKeepAndTrigger derives the effective keep length (the target size we
+// drop down to when truncating) and the truncation trigger (the size at which
+// truncation begins) from a requested keep length and the model window.
+//
+// The returned keepLength may be below the requested value on small-window
+// models, where keep+buffer cannot fit alongside output headroom.
+//
+// Buffer sizing model — why ~75k at K=100k.
+//
+// Head-truncation invalidates the cached prefix, forcing a full re-write of the
+// kept context K. With trigger T and keep K, the buffer is B = T - K, and we
+// truncate once every B/g turns (g = avg tokens added per turn). Amortized input
+// cost per turn:
+//
+//	C(B) = p_r·(K + B/2)   +   g·K·(p_w - p_r)/B
+//	       \__ reads, grow \      \__ re-write penalty, shrinks as 1/B __/
+//	         linearly w/ B _/
+//
+// Bigger B => rarer invalidations (penalty term down) but larger avg cached
+// prefix to read each turn (read term up). Minimizing dC/dB = 0 gives
+// B* = sqrt(2·g·K·(p_w - p_r)/p_r). With our blended g (~2k tok/turn) and
+// Anthropic's write/read price ratio (~12x), the coefficient collapses to
+// ~235·sqrt(K): 100k->75k, 200k->105k. Re-derive if K, g, or cache pricing
+// shifts materially.
+func resolveKeepAndTrigger(requestedKeepLength int, modelConfig common.ModelConfig) (keepLength, truncationTrigger int) {
+	keepLength = requestedKeepLength
+	buffer := int(235 * math.Sqrt(float64(keepLength)))
+
+	maxInput := common.MaxCharsForModel(modelConfig.Provider, modelConfig.Model)
+	if keepLength+buffer > maxInput {
+		// TODO: make the 70/30 keep/buffer split per-model configurable.
+		keepLength = int(0.7 * float64(maxInput))
+		buffer = maxInput - keepLength
+	}
+
+	return keepLength, keepLength + buffer
+}
+
 // ManageLlm2ChatHistory applies retention logic to llm2 messages.
 // This mirrors the logic in manageChatHistoryV2 but operates on llm2.Message types.
-func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, maxLength int, modelConfig common.ModelConfig) ([]llm2.Message, error) {
+func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, requestedKeepLength int, modelConfig common.ModelConfig) ([]llm2.Message, error) {
 	provider := modelConfig.Provider
 	if len(messages) == 0 {
 		return []llm2.Message{}, nil
+	}
+
+	keepLength, truncationTrigger := resolveKeepAndTrigger(requestedKeepLength, modelConfig)
+
+	// Leave valid history untouched while below the trigger to preserve the
+	// cached prefix; malformed tool-call turns still need repair because
+	// providers reject calls without corresponding outputs.
+	totalLength := 0
+	for _, msg := range messages {
+		totalLength += llm2MessageLength(provider, msg)
+	}
+	if totalLength < truncationTrigger {
+		cleanLlm2ToolCallsAndResponses(&messages)
+		return messages, nil
 	}
 
 	isRetained := make([]bool, len(messages))
@@ -241,9 +301,9 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 	}
 
 	// Truncate large tool responses before dropping messages
-	messages, isRetained = truncateLargeLlm2ToolResponses(messages, isRetained, maxLength, provider, modelConfig)
+	messages, isRetained = truncateLargeLlm2ToolResponses(messages, isRetained, keepLength, provider, modelConfig)
 
-	var totalLength = 0
+	totalLength = 0
 	for i, msg := range messages {
 		if isRetained[i] {
 			totalLength += llm2MessageLength(provider, msg)
@@ -258,7 +318,7 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 		if isRetained[i] {
 			newMessages = append(newMessages, msg)
 		} else if !limitExceeded {
-			if llm2MessageLength(provider, msg)+totalLength <= maxLength {
+			if llm2MessageLength(provider, msg)+totalLength <= keepLength {
 				newMessages = append(newMessages, msg)
 				totalLength += llm2MessageLength(provider, msg)
 			} else {

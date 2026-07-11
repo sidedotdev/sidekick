@@ -17,7 +17,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-var maxTestOutputSize = min(4000, defaultMaxChatHistoryLength/4)
+var maxTestOutputSize = min(4000, defaultRequestedKeepLength/4)
 
 // TestResult holds a detailed information about test run
 type TestResult struct {
@@ -31,6 +31,14 @@ func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult
 	if len(commandsToRun) == 0 {
 		log.Warn().Msg("No test commands configured, skipping tests")
 		return TestResult{TestsSkipped: true}, nil
+	}
+	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
+	case 2:
+		clearHibernationGlobalState(dCtx)
+	default:
+		if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+			return TestResult{}, fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+		}
 	}
 	for _, testCommand := range commandsToRun {
 		if testCommand.Command == "" {
@@ -169,6 +177,15 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		userErr := flow_action.GetUserContinue(actionCtx.ExecContext, prompt, requestParams)
 		if userErr != nil {
 			return nil, userErr
+		}
+
+		switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
+		case 2:
+			clearHibernationGlobalState(dCtx)
+		default:
+			if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+				return nil, fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+			}
 		}
 
 		// Clear failures and retry

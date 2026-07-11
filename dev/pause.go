@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"fmt"
 	"sidekick/flow_action"
 
 	"go.temporal.io/sdk/workflow"
@@ -43,5 +44,17 @@ func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams 
 	response, err := GetUserResponse(actionCtx, *guidanceRequest)
 
 	dCtx.ExecContext.GlobalState.Paused = false
+
+	// Restore hibernated worktree after the user signals to resume, not before,
+	// so the worktree stays hibernated while waiting for user input.
+	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
+	if err == nil && hibernateVersion == 2 {
+		clearHibernationGlobalState(dCtx)
+	} else if err == nil {
+		if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+			return nil, fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+		}
+	}
+
 	return response, err
 }

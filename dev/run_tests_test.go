@@ -46,6 +46,7 @@ func (s *RunTestsTestSuite) SetupTest() {
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
 
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 
 	s.devContext = &DevContext{
 		ExecContext: flow_action.ExecContext{

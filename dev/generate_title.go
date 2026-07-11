@@ -143,6 +143,58 @@ func (ima *DevAgentManagerActivities) GenerateTaskTitle(ctx context.Context, inp
 
 const titleSystemPrompt = "Generate a short, descriptive title (max 10 words) for a task. Return ONLY the title text, nothing else."
 
+const intentSubtaskTitleSystemPrompt = "Generate a short, descriptive title (max 10 words) for a coding sub-task that implements the intent change described by the following git commit and diff. Return ONLY the title text, nothing else."
+
+// generateIntentSubtaskTitle produces a concise title for an intent-driven
+// development sub-task from the committed intent's sha and diff, reusing the
+// already-set-up dev context rather than constructing a temporary one.
+func generateIntentSubtaskTitle(dCtx DevContext, commit, diff string) (string, error) {
+	eCtx := dCtx.ExecContext
+	eCtx.FlowScope = &flow_action.FlowScope{SubflowName: "Generate Sub-task Title"}
+
+	modelConfig := eCtx.GetModelConfig(common.SummarizationKey, 0, "small")
+
+	chatHistory := NewVersionedChatHistory(eCtx, eCtx.WorkspaceId)
+	if err := AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
+		Role:    llm.ChatMessageRoleSystem,
+		Content: intentSubtaskTitleSystemPrompt,
+	}); err != nil {
+		return "", err
+	}
+	if err := AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
+		Role:    llm.ChatMessageRoleUser,
+		Content: fmt.Sprintf("Commit: %s\n\n%s", commit, diff),
+	}); err != nil {
+		return "", err
+	}
+
+	actionCtx := eCtx.NewActionContext("generate.intent_subtask_title")
+	streamInput := persisted_ai.StreamInput{
+		Options:     llm2.Options{ModelConfig: modelConfig},
+		Secrets:     *eCtx.Secrets,
+		ChatHistory: chatHistory,
+		WorkspaceId: eCtx.WorkspaceId,
+		FlowId:      workflow.GetInfo(eCtx).WorkflowExecution.ID,
+		Providers:   eCtx.Providers,
+	}
+	actionCtx.ActionParams = streamInput.ActionParams()
+
+	response, err := flow_action.TrackWithOptions(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, func(trackedCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
+		streamInput.FlowActionId = flowAction.Id
+		return persisted_ai.ExecuteChatStream(trackedCtx, streamInput, nil, true)
+	})
+	if err != nil {
+		return "", fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	title := strings.TrimSpace(response.GetMessage().GetContentString())
+	title = strings.Trim(title, "\"'`")
+	if title == "" {
+		return "", fmt.Errorf("empty title generated")
+	}
+	return title, nil
+}
+
 // generateTaskTitle is the workflow-level replacement for the GenerateTaskTitle
 // activity. It wires up a temporary ExecContext mirroring the one constructed
 // by setupDevContextAction (including any config overrides supplied by the
@@ -199,7 +251,7 @@ func generateTaskTitle(ctx workflow.Context, input GenerateTitleInput, repoDir s
 
 	response, err := flow_action.TrackWithOptions(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, func(trackedCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
-		return persisted_ai.ExecuteChatStream(trackedCtx, streamInput, nil)
+		return persisted_ai.ExecuteChatStream(trackedCtx, streamInput, nil, true)
 	})
 	if err != nil {
 		return fmt.Errorf("LLM call failed: %w", err)

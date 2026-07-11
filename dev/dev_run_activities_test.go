@@ -1269,8 +1269,12 @@ type mockSSHEnv struct {
 	sshArgs    []string
 }
 
-func (m *mockSSHEnv) GetType() env.EnvType        { return env.EnvTypeDevPod }
-func (m *mockSSHEnv) GetWorkingDirectory() string { return m.workingDir }
+func (m *mockSSHEnv) GetType() env.EnvType { return env.EnvTypeDevPod }
+func (m *mockSSHEnv) Hibernate(ctx context.Context, branchName string) (env.HibernationMetadata, error) {
+	return env.HibernationMetadata{}, nil
+}
+func (m *mockSSHEnv) WakeIfHibernated(ctx context.Context) error { return nil }
+func (m *mockSSHEnv) GetWorkingDirectory() string                { return m.workingDir }
 func (m *mockSSHEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
 	return env.EnvRunCommandOutput{}, nil
 }

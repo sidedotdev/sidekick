@@ -91,12 +91,13 @@ describe('LlmConfigEditor', () => {
     const wrapper = mount(LlmConfigEditor)
     
     const useCaseCheckboxes = wrapper.findAll('.use-case-checkbox')
-    expect(useCaseCheckboxes.length).toBe(3)
+    expect(useCaseCheckboxes.length).toBe(4)
     
     const labels = useCaseCheckboxes.map(cb => cb.find('.model-label').text())
     expect(labels).toContain('Plan')
     expect(labels).toContain('Review')
     expect(labels).toContain('Context')
+    expect(labels).toContain('Advisor')
   })
 
   it('enables use case inputs when checkbox is checked', async () => {

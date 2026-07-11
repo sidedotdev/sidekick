@@ -43,6 +43,7 @@ func (s *GitDiffWorkflowTestSuite) SetupTest() {
 
 	// setup workflow environment
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.env.SetTestTimeout(30 * time.Second)
 
 	// s.NewTestActivityEnvironment()

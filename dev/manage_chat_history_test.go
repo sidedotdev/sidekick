@@ -245,21 +245,21 @@ func manageChatHistoryWithMutation(chatHistory *[]llm.ChatMessage, maxLength int
 
 func TestManageChatHistory(t *testing.T) {
 	t.Run("retains summary from dropped message when total content length exceeds limit", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 200
+		defaultRequestedKeepLength = 200
 		// the threshold is 10000 characters, so three half-max-size messages should be trimmed to two
-		firstMessage := strings.Repeat("a", defaultMaxChatHistoryLength/3)
+		firstMessage := strings.Repeat("a", defaultRequestedKeepLength/3)
 		summary := "#START SUMMARY\nThis is a summary.\n#END SUMMARY"
-		nextMessage := strings.Repeat("x", (defaultMaxChatHistoryLength/3)-len(summary)-1) + "\n" + summary
-		lastMessage := strings.Repeat("y", (defaultMaxChatHistoryLength/3)-len(summary)-1) + "\n" + summary
+		nextMessage := strings.Repeat("x", (defaultRequestedKeepLength/3)-len(summary)-1) + "\n" + summary
+		lastMessage := strings.Repeat("y", (defaultRequestedKeepLength/3)-len(summary)-1) + "\n" + summary
 		chatHistory := &[]llm.ChatMessage{
 			{Content: firstMessage, Role: llm.ChatMessageRoleSystem},
 			{Content: nextMessage, Role: llm.ChatMessageRoleAssistant},
 			{Content: lastMessage, Role: llm.ChatMessageRoleAssistant},
 		}
 
-		manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
+		manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
 		// FIXME we should always respect the the max history length strictly
-		// assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+		// assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 		summaryHeader := "\nsummaries of previous messages:\n"
 		assert.Equal(t, 2, len(*chatHistory))
@@ -268,36 +268,36 @@ func TestManageChatHistory(t *testing.T) {
 	})
 
 	t.Run("does not modify empty chat history", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 100
+		defaultRequestedKeepLength = 100
 		chatHistory := &[]llm.ChatMessage{}
-		manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+		manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 		assert.Empty(t, *chatHistory)
 	})
 
 	t.Run("does not modify chat history if total content length is under the limit", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 100
+		defaultRequestedKeepLength = 100
 		chatHistory := &[]llm.ChatMessage{
 			{Content: "This is a test message."},
 			{Content: "Second test message."},
 		}
 		oldChatHistory := make([]llm.ChatMessage, len(*chatHistory))
 		copy(oldChatHistory, *chatHistory)
-		manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+		manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 		assert.Equal(t, oldChatHistory, *chatHistory)
 	})
 
 	t.Run("removes messages if total content length exceeds limit, keeping first and last messages", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 100
+		defaultRequestedKeepLength = 100
 		// the threshold is 10000 characters, so three half-max-size messages should be trimmed to two
-		firstMessage := strings.Repeat("a", defaultMaxChatHistoryLength/2)
-		nextMessage := strings.Repeat("x", defaultMaxChatHistoryLength/2)
-		lastMessage := strings.Repeat("x", defaultMaxChatHistoryLength/2)
+		firstMessage := strings.Repeat("a", defaultRequestedKeepLength/2)
+		nextMessage := strings.Repeat("x", defaultRequestedKeepLength/2)
+		lastMessage := strings.Repeat("x", defaultRequestedKeepLength/2)
 		chatHistory := &[]llm.ChatMessage{{Content: firstMessage}, {Content: nextMessage}, {Content: lastMessage}}
 
-		manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+		manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 		assert.Equal(t, 2, len(*chatHistory))
 		assert.Equal(t, firstMessage, (*chatHistory)[0].Content)
@@ -305,20 +305,20 @@ func TestManageChatHistory(t *testing.T) {
 	})
 
 	t.Run("removes messages if total content length exceeds limit, keeping first message only", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 100
+		defaultRequestedKeepLength = 100
 		// these two long messages should be trimmed to one
-		firstMessage := strings.Repeat("a", 100+defaultMaxChatHistoryLength/2)
-		lastMessage := strings.Repeat("x", defaultMaxChatHistoryLength/2)
+		firstMessage := strings.Repeat("a", 100+defaultRequestedKeepLength/2)
+		lastMessage := strings.Repeat("x", defaultRequestedKeepLength/2)
 		chatHistory := &[]llm.ChatMessage{{Content: firstMessage}, {Content: lastMessage}}
 
-		manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
+		manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
 
 		assert.Equal(t, 1, len(*chatHistory))
 		assert.Equal(t, firstMessage, (*chatHistory)[0].Content)
 	})
 
 	t.Run("shrinks embedded code in first message when length exceeds limit", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 1400
+		defaultRequestedKeepLength = 1400
 		fullInitialCodeContext := `
 some/file.go
 ` + "```go" + `
@@ -355,8 +355,8 @@ func main()
 
 		expectedFirstMessage := symbolizedCodeContent
 
-		manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+		manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 		assert.Equal(t, 2, len(*chatHistory))
 		assert.Equal(t, expectedFirstMessage, (*chatHistory)[0].Content)
@@ -364,7 +364,7 @@ func main()
 	})
 
 	t.Run("shrinks embedded code partially in first message when length exceeds limit", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 1430
+		defaultRequestedKeepLength = 1430
 		fullInitialCodeContext := "```" + `
 some code without a language
 ` + "```" + `
@@ -408,8 +408,8 @@ func main()
 
 		expectedFirstMessage := symbolizedCodeContent
 
-		manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+		manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+		assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 		assert.Equal(t, 2, len(*chatHistory))
 		assert.Equal(t, expectedFirstMessage, (*chatHistory)[0].Content)
@@ -418,18 +418,18 @@ func main()
 }
 
 func TestManageChatHistory_RetainsLastTestReviewMessageWhenOverLimit(t *testing.T) {
-	defaultMaxChatHistoryLength = 200
-	firstMessage := strings.Repeat("a", defaultMaxChatHistoryLength/3)
-	middleMessage := strings.Repeat("x", defaultMaxChatHistoryLength/3) + "\n" + testReviewStart + "\n" + " Middle message " + "\n" + testReviewEnd
-	lastMessage := strings.Repeat("y", defaultMaxChatHistoryLength/3) + "\n" + testReviewStart + "\n" + " Last message " + "\n" + testReviewEnd
+	defaultRequestedKeepLength = 200
+	firstMessage := strings.Repeat("a", defaultRequestedKeepLength/3)
+	middleMessage := strings.Repeat("x", defaultRequestedKeepLength/3) + "\n" + testReviewStart + "\n" + " Middle message " + "\n" + testReviewEnd
+	lastMessage := strings.Repeat("y", defaultRequestedKeepLength/3) + "\n" + testReviewStart + "\n" + " Last message " + "\n" + testReviewEnd
 	chatHistory := &[]llm.ChatMessage{
 		{Content: firstMessage, Role: llm.ChatMessageRoleAssistant},
 		{Content: middleMessage, Role: llm.ChatMessageRoleAssistant},
 		{Content: lastMessage, Role: llm.ChatMessageRoleAssistant},
 	}
 
-	manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+	manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 	// middle message should get dropped
 	assert.Equal(t, 2, len(*chatHistory))
@@ -446,12 +446,12 @@ func totalContentLength(chatCompletionMessage []llm.ChatMessage) int {
 
 /*
 func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyPutUsPastLimit_V1(t *testing.T) {
-	defaultMaxChatHistoryLength = 400
-	firstMessage := strings.Repeat("a", defaultMaxChatHistoryLength/4)
-	firstReviewMessage := strings.Repeat("x", defaultMaxChatHistoryLength/4) + "\n" + testReviewStart + "\n" + " Middle message " + "\n" + testReviewEnd
-	lastReviewMessage := strings.Repeat("y", defaultMaxChatHistoryLength/4) + "\n" + testReviewStart + "\n" + " Last message " + "\n" + testReviewEnd
-	overLimitMessage1 := strings.Repeat("z", defaultMaxChatHistoryLength/4)
-	overLimitMessage2 := strings.Repeat("0", defaultMaxChatHistoryLength/4)
+	defaultRequestedKeepLength = 400
+	firstMessage := strings.Repeat("a", defaultRequestedKeepLength/4)
+	firstReviewMessage := strings.Repeat("x", defaultRequestedKeepLength/4) + "\n" + testReviewStart + "\n" + " Middle message " + "\n" + testReviewEnd
+	lastReviewMessage := strings.Repeat("y", defaultRequestedKeepLength/4) + "\n" + testReviewStart + "\n" + " Last message " + "\n" + testReviewEnd
+	overLimitMessage1 := strings.Repeat("z", defaultRequestedKeepLength/4)
+	overLimitMessage2 := strings.Repeat("0", defaultRequestedKeepLength/4)
 	chatHistory := &[]llm.ChatMessage{
 		{Content: firstMessage, Role: llm.ChatMessageRoleUser},
 		{Content: firstReviewMessage, Role: llm.ChatMessageRoleUser},
@@ -460,8 +460,8 @@ func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyP
 		{Content: overLimitMessage2, Role: llm.ChatMessageRoleUser},
 	}
 
-	manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+	manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 	// last review message should stay, in favor of the later overLimitMessage1,
 	// even though earlier messages are usually dropped when we hit a limit
@@ -472,15 +472,15 @@ func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyP
 }
 
 func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyPutUsPastLimit_V2(t *testing.T) {
-	defaultMaxChatHistoryLength = 400
-	firstMessage := strings.Repeat("a", defaultMaxChatHistoryLength/4)
-	firstReviewMessage := strings.Repeat("x", defaultMaxChatHistoryLength/4) + "\n" + testReviewStart + "\n" + " Middle message " + "\n" + testReviewEnd
-	lastReviewMessage := strings.Repeat("y", defaultMaxChatHistoryLength/4) + "\n" + testReviewStart + "\n" + " Last message " + "\n" + testReviewEnd
-	overLimitMessage1 := strings.Repeat("1", defaultMaxChatHistoryLength/8)
-	overLimitMessage2 := strings.Repeat("2", defaultMaxChatHistoryLength/8)
-	overLimitMessage3 := strings.Repeat("3", defaultMaxChatHistoryLength/8)
-	overLimitMessage4 := strings.Repeat("4", defaultMaxChatHistoryLength/8)
-	overLimitMessage5 := strings.Repeat("5", defaultMaxChatHistoryLength/8)
+	defaultRequestedKeepLength = 400
+	firstMessage := strings.Repeat("a", defaultRequestedKeepLength/4)
+	firstReviewMessage := strings.Repeat("x", defaultRequestedKeepLength/4) + "\n" + testReviewStart + "\n" + " Middle message " + "\n" + testReviewEnd
+	lastReviewMessage := strings.Repeat("y", defaultRequestedKeepLength/4) + "\n" + testReviewStart + "\n" + " Last message " + "\n" + testReviewEnd
+	overLimitMessage1 := strings.Repeat("1", defaultRequestedKeepLength/8)
+	overLimitMessage2 := strings.Repeat("2", defaultRequestedKeepLength/8)
+	overLimitMessage3 := strings.Repeat("3", defaultRequestedKeepLength/8)
+	overLimitMessage4 := strings.Repeat("4", defaultRequestedKeepLength/8)
+	overLimitMessage5 := strings.Repeat("5", defaultRequestedKeepLength/8)
 	chatHistory := &[]llm.ChatMessage{
 		{Content: firstMessage, Role: llm.ChatMessageRoleUser},
 		{Content: firstReviewMessage, Role: llm.ChatMessageRoleUser},
@@ -492,8 +492,8 @@ func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyP
 		{Content: overLimitMessage5, Role: llm.ChatMessageRoleAssistant},
 	}
 
-	manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+	manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 	// last review message should stay, in favor of the later overLimitMessage1,
 	// even though earlier messages are usually dropped when we hit a limit
@@ -505,15 +505,15 @@ func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyP
 }
 
 func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyPutUsPastLimit_WithToolBoundaryIssue(t *testing.T) {
-	defaultMaxChatHistoryLength = 400
-	firstMessage := strings.Repeat("a", defaultMaxChatHistoryLength/4)
-	firstReviewMessage := strings.Repeat("x", defaultMaxChatHistoryLength/4) + "\n" + testReviewStart + "\n" + " Middle message " + "\n" + testReviewEnd
-	lastReviewMessage := strings.Repeat("y", defaultMaxChatHistoryLength/4) + "\n" + testReviewStart + "\n" + " Last message " + "\n" + testReviewEnd
-	overLimitMessage1 := strings.Repeat("1", defaultMaxChatHistoryLength/8)
-	overLimitMessage2 := strings.Repeat("2", defaultMaxChatHistoryLength/8)
-	overLimitMessage3 := strings.Repeat("3", defaultMaxChatHistoryLength/8)
-	overLimitMessage4 := strings.Repeat("4", defaultMaxChatHistoryLength/8)
-	overLimitMessage5 := strings.Repeat("5", defaultMaxChatHistoryLength/8)
+	defaultRequestedKeepLength = 400
+	firstMessage := strings.Repeat("a", defaultRequestedKeepLength/4)
+	firstReviewMessage := strings.Repeat("x", defaultRequestedKeepLength/4) + "\n" + testReviewStart + "\n" + " Middle message " + "\n" + testReviewEnd
+	lastReviewMessage := strings.Repeat("y", defaultRequestedKeepLength/4) + "\n" + testReviewStart + "\n" + " Last message " + "\n" + testReviewEnd
+	overLimitMessage1 := strings.Repeat("1", defaultRequestedKeepLength/8)
+	overLimitMessage2 := strings.Repeat("2", defaultRequestedKeepLength/8)
+	overLimitMessage3 := strings.Repeat("3", defaultRequestedKeepLength/8)
+	overLimitMessage4 := strings.Repeat("4", defaultRequestedKeepLength/8)
+	overLimitMessage5 := strings.Repeat("5", defaultRequestedKeepLength/8)
 	chatHistory := &[]llm.ChatMessage{
 		{Content: firstMessage, Role: llm.ChatMessageRoleUser},
 		{Content: firstReviewMessage, Role: llm.ChatMessageRoleUser},
@@ -531,8 +531,8 @@ func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyP
 		{Content: overLimitMessage5, Role: llm.ChatMessageRoleAssistant},
 	}
 
-	manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+	manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 	// last review message should stay, in favor of the later overLimitMessage1,
 	// even though earlier messages are usually dropped when we hit a limit
@@ -544,7 +544,7 @@ func TestManageChatHistory_RetainsLastTestReviewMessageWhenLaterMessagesAlreadyP
 */
 
 func TestManageChatHistory_RetainsAllUniqueMessagesWhenUnderLimit(t *testing.T) {
-	defaultMaxChatHistoryLength = 200
+	defaultRequestedKeepLength = 200
 	firstMessage := "First message"
 	middleMessage := testReviewStart + " Middle message " + testReviewEnd
 	lastMessage := testReviewStart + " Last message " + testReviewEnd
@@ -554,8 +554,8 @@ func TestManageChatHistory_RetainsAllUniqueMessagesWhenUnderLimit(t *testing.T) 
 		{Content: lastMessage, Role: llm.ChatMessageRoleAssistant},
 	}
 
-	manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
-	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+	manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
+	assert.LessOrEqual(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 	assert.Equal(t, 3, len(*chatHistory))
 	assert.Contains(t, (*chatHistory)[1].Content, "Middle message")
@@ -641,7 +641,7 @@ func TestManageChatHistory_ToolCallEdgeCase(t *testing.T) {
 
 /*
 func TestManageChatHistory_RetainsStructureWithToolCalls(t *testing.T) {
-	defaultMaxChatHistoryLength = 300
+	defaultRequestedKeepLength = 300
 	chatHistory := &[]llm.ChatMessage{
 		{Content: "Here are snippets of some existing code...", Role: llm.ChatMessageRoleUser},
 		{Content: "Edit block application results:", Role: llm.ChatMessageRoleSystem},
@@ -676,10 +676,10 @@ Please analyze what was wrong with some of the previous *edit blocks*...`, Role:
 		},
 	}
 	originalChatHistory := *chatHistory
-	manageChatHistoryWithMutation(chatHistory, defaultMaxChatHistoryLength)
+	manageChatHistoryWithMutation(chatHistory, defaultRequestedKeepLength)
 
 	// we go over the limit on purpose here, as it's required to retain all three essential messages
-	assert.Greater(t, totalContentLength(*chatHistory), defaultMaxChatHistoryLength)
+	assert.Greater(t, totalContentLength(*chatHistory), defaultRequestedKeepLength)
 
 	//fmt.Println("----------------------------------------------------------------------------")
 	//utils.PrettyPrint(originalChatHistory)
@@ -710,6 +710,7 @@ type ManageChatHistoryWorkflowTestSuite struct {
 // SetupTest is called before each test in the suite
 func (s *ManageChatHistoryWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
 		ctx = utils.NoRetryCtx(ctx)
 		ManageChatHistory(ctx, chatHistory, "test-workspace-id", maxLength, common.ModelConfig{})
@@ -806,7 +807,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV4
 
 	var ca *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(ca.ManageV4, mock.Anything, mock.MatchedBy(func(input persisted_ai.ManageInput) bool {
-		return input.WorkspaceId == "test-workspace-id" && input.MaxLength == maxLength
+		return input.WorkspaceId == "test-workspace-id" && input.RequestedKeepLength == maxLength
 	})).Return(
 		&persisted_ai.ManageOutput{ChatHistory: &managedContainer},
 		nil,
@@ -861,7 +862,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V4_HydratesA
 
 	var ca *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(ca.ManageV4, mock.Anything, mock.MatchedBy(func(input persisted_ai.ManageInput) bool {
-		return input.WorkspaceId == "test-workspace-id" && input.MaxLength == maxLength
+		return input.WorkspaceId == "test-workspace-id" && input.RequestedKeepLength == maxLength
 	})).Return(
 		&persisted_ai.ManageOutput{ChatHistory: &managedContainer},
 		nil,
@@ -918,7 +919,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V4_ReusesHyd
 
 	var ca *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(ca.ManageV4, mock.Anything, mock.MatchedBy(func(input persisted_ai.ManageInput) bool {
-		return input.WorkspaceId == "test-workspace-id" && input.MaxLength == maxLength
+		return input.WorkspaceId == "test-workspace-id" && input.RequestedKeepLength == maxLength
 	})).Return(
 		&persisted_ai.ManageOutput{ChatHistory: &managedContainer},
 		nil,
@@ -976,7 +977,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V4_VerifiesR
 
 	var ca *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(ca.ManageV4, mock.Anything, mock.MatchedBy(func(input persisted_ai.ManageInput) bool {
-		return input.WorkspaceId == "test-workspace-id" && input.MaxLength == maxLength
+		return input.WorkspaceId == "test-workspace-id" && input.RequestedKeepLength == maxLength
 	})).Return(
 		&persisted_ai.ManageOutput{ChatHistory: &managedContainer},
 		nil,
@@ -2425,4 +2426,88 @@ func TestApplyCacheControlBreakpoints_FirstAndLastAlwaysBreakpointWithoutInitial
 	assert.Equal(t, "ephemeral", chatHistory[4].CacheControl, "Last message must have breakpoint")
 
 	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+// TestManageChatHistoryV2_IntentTaskStartRetained verifies that an assistant
+// tool-call message marked with ContextTypeIntentTaskStart and its matching
+// tool result are both kept even when older filler messages are trimmed. This
+// supports the IDD background orchestrator's need to always recall which
+// intent chunks it has already dispatched to sub-tasks.
+func TestManageChatHistoryV2_IntentTaskStartRetained(t *testing.T) {
+	taskStartMsg := llm.ChatMessage{
+		Role:        llm.ChatMessageRoleAssistant,
+		ContextType: ContextTypeIntentTaskStart,
+		ToolCalls:   []llm.ToolCall{{Id: "call1", Name: "start_intent_subtask", Arguments: `{"prompt":"chunk A"}`}},
+	}
+	taskStartResult := llm.ChatMessage{
+		Role:       llm.ChatMessageRoleTool,
+		ToolCallId: "call1",
+		Name:       "start_intent_subtask",
+		Content:    "started",
+	}
+
+	chatHistory := []llm.ChatMessage{
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+		{Content: strings.Repeat("filler-", 50)},
+		taskStartMsg,
+		taskStartResult,
+		{Content: strings.Repeat("more-filler-", 50)},
+		{Content: "Latest"},
+	}
+
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 30)
+	assert.NoError(t, err)
+
+	cleared := clearCacheControl(result)
+	assert.Contains(t, cleared, chatHistory[0], "InitialInstructions must always be kept")
+	assert.Contains(t, cleared, taskStartMsg, "IntentTaskStart tool-call must be retained across trimming")
+	assert.Contains(t, cleared, taskStartResult, "IntentTaskStart tool-result must be retained alongside its tool-call")
+	assert.Equal(t, chatHistory[len(chatHistory)-1], cleared[len(cleared)-1], "last message retention preserved")
+}
+
+// TestManageChatHistoryV2_IntentTaskStartRetainsAllToolResults verifies that
+// when an assistant turn marked with ContextTypeIntentTaskStart emits multiple
+// tool calls (e.g. start_intent_subtask + add_nudge in the same turn), every
+// consecutive tool-result message is retained alongside the assistant
+// message. Dropping any of them would leave a tool_use without its matching
+// tool_result, which most providers reject.
+func TestManageChatHistoryV2_IntentTaskStartRetainsAllToolResults(t *testing.T) {
+	taskStartMsg := llm.ChatMessage{
+		Role:        llm.ChatMessageRoleAssistant,
+		ContextType: ContextTypeIntentTaskStart,
+		ToolCalls: []llm.ToolCall{
+			{Id: "call1", Name: "start_intent_subtask", Arguments: `{"prompt":"chunk A"}`},
+			{Id: "call2", Name: "add_nudge", Arguments: `{"text":"ambiguous bit"}`},
+		},
+	}
+	startResult := llm.ChatMessage{
+		Role:       llm.ChatMessageRoleTool,
+		ToolCallId: "call1",
+		Name:       "start_intent_subtask",
+		Content:    "started",
+	}
+	nudgeResult := llm.ChatMessage{
+		Role:       llm.ChatMessageRoleTool,
+		ToolCallId: "call2",
+		Name:       "add_nudge",
+		Content:    "noted",
+	}
+
+	chatHistory := []llm.ChatMessage{
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+		{Content: strings.Repeat("filler-", 50)},
+		taskStartMsg,
+		startResult,
+		nudgeResult,
+		{Content: strings.Repeat("more-filler-", 50)},
+		{Content: "Latest"},
+	}
+
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 30)
+	assert.NoError(t, err)
+
+	cleared := clearCacheControl(result)
+	assert.Contains(t, cleared, taskStartMsg, "IntentTaskStart tool-call must be retained")
+	assert.Contains(t, cleared, startResult, "start_intent_subtask tool-result must be retained")
+	assert.Contains(t, cleared, nudgeResult, "add_nudge tool-result emitted in the same turn must also be retained")
 }

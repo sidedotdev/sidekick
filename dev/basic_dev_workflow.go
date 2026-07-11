@@ -58,10 +58,11 @@ type MergeWithReviewParams struct {
 	CommitRequired bool
 	AutoMerge      bool
 
-	// PreviousReview is the most recent reviewer feedback accumulated by
-	// reviewAndResolve. It is forwarded to the conflict-resolution
-	// subflow so the resolver can avoid undoing edits made specifically
-	// to address that feedback. Empty on the initial pre-review merge.
+	// PreviousReview is the accumulated reviewer feedback across all review
+	// rounds, as kept by reviewAndResolve. It is forwarded to the conflict-
+	// resolution subflow so the resolver can avoid undoing edits made
+	// specifically to address that feedback. Empty on the initial pre-review
+	// merge.
 	PreviousReview string
 }
 
@@ -272,6 +273,16 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	SetupDevRunStateQuery(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
+	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
+	if hibernateVersion >= 1 {
+		SetupHibernateHandler(dCtx)
+	}
+	if hibernateVersion == 1 {
+		// v1 replay compatibility: explicit wake activity is in history
+		if _, err = WakeIfHibernated(dCtx); err != nil {
+			return "", fmt.Errorf("failed to wake hibernated worktree: %w", err)
+		}
+	}
 	err = EnsurePrerequisites(dCtx)
 	if err != nil {
 		return "", err
@@ -345,6 +356,11 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 	// id to the activities to avoid bloating temporal db
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
+	var advisor *Advisor
+	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+	}
+
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
@@ -416,7 +432,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		}
 
 		// Step 2: edit code
-		err = EditCode(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo)
+		err = EditCode(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
 		if err != nil {
 			return "", fmt.Errorf("failed to write edit blocks: %w", err)
 		}
@@ -726,12 +742,11 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				// Add rejection message to history for next iteration
 				reviewMessages = append(reviewMessages, mergeInfo.Message)
 
-				// Surface accumulated review feedback to the conflict-
-				// resolution subflow so it doesn't undo edits made
-				// specifically to satisfy reviewers. The latest message
-				// is the most actionable, so list it last after prior
-				// messages.
-				params.PreviousReview = strings.Join(reviewMessages, "\n\n---\n\n")
+				// Surface the accumulated review feedback from all rounds to
+				// the conflict-resolution subflow so it doesn't undo edits made
+				// specifically to satisfy reviewers. The latest message is the
+				// most actionable, so it's listed last after prior messages.
+				params.PreviousReview = reviewMessagesToText(reviewMessages)
 
 				// must commit before merge at this point, as codingSubflow
 				// doesn't do so inherently
@@ -761,6 +776,14 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 }
 
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string) (string, MergeApprovalResponse, string, error) {
+	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
+	case 2:
+		clearHibernationGlobalState(dCtx)
+	default:
+		if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
+			return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
+		}
+	}
 
 	// GlobalState is the single source of truth for the target branch, updated
 	// by set_base_branch tool and UI. Fallback covers workflow replays from
@@ -911,43 +934,89 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				return "", MergeApprovalResponse{}, "", fmt.Errorf("conflict resolution subflow failed: %w", err)
 			}
 
-			// The conflict resolution finalized a merge commit on the
-			// source worktree whose second parent is the target branch
-			// tip. That makes target an ancestor of source, so merging
-			// source into target is a fast-forward and contains the
-			// resolution commit.
-			//
-			// Squash strategy must be overridden here: a squash would
-			// re-merge target's content into a single commit on top of
-			// target, discarding the merge commit (and thus the resolved
-			// conflict edits become indistinguishable from regular work).
-			// The resolution commit is the meaningful artifact, so we
-			// always do a regular (fast-forward) merge for the final
-			// step regardless of the originally requested strategy.
-			finalActionCtx := dCtx.NewActionContext("merge")
-			finalActionCtx.ActionParams = map[string]interface{}{
-				"sourceBranch": dCtx.Worktree.Name,
-				"targetBranch": mergeInfo.TargetBranch,
+			rereviewVersion := workflow.GetVersion(dCtx, "conflict-resolution-rereview", workflow.DefaultVersion, 1)
+			if rereviewVersion >= 1 {
+				// The resolution may have introduced changes the user never
+				// reviewed. Compare the diff against the target branch before
+				// vs after resolution (ignoring whitespace) and only re-request
+				// approval when the resolution changed things substantially.
+				afterDiff, err := GetGitDiff(dCtx, mergeInfo.TargetBranch, true)
+				if err != nil {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to compute post-resolution diff: %w", err)
+				}
+
+				var assessment AssessResolutionSubstantialityResult
+				if err := workflow.ExecuteActivity(dCtx, AssessResolutionSubstantialityActivity, AssessResolutionSubstantialityInput{
+					BeforeDiff: gitDiff,
+					AfterDiff:  afterDiff,
+				}).Get(dCtx, &assessment); err != nil {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to assess conflict resolution substantiality: %w", err)
+				}
+
+				if assessment.Substantial {
+					reapproval, reDiff, reTreeHash, err := getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, lastReviewTreeHash, params.AutoMerge)
+					if err != nil {
+						return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get post-resolution merge approval: %w", err)
+					}
+					if !reapproval.Approved {
+						return reDiff, reapproval, reTreeHash, nil
+					}
+					mergeInfo = reapproval
+				}
 			}
-			finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
-				var finalResult git.MergeActivityResult
-				err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
-					SourceBranch:   trackedCtx.Worktree.Name,
-					TargetBranch:   mergeInfo.TargetBranch,
-					MergeStrategy:  git.MergeStrategyMerge,
-					CommitMessage:  commitMessage,
-					CommitterName:  committerName,
-					CommitterEmail: committerEmail,
+
+			if mergeResult.BaseStashWorktreePath != "" {
+				// The conflict was a dirty base worktree's stash restore,
+				// relocated to and resolved on the flow's own worktree. The
+				// merge itself already completed on the base worktree, so we
+				// only move the resolved (still uncommitted) changes back there.
+				if err := workflow.ExecuteActivity(dCtx, git.GitTransferWorktreeChangesActivity, *dCtx.EnvContainer, git.GitTransferWorktreeChangesParams{
+					SourceWorktreePath: resolutionWorktree,
+					TargetWorktreePath: mergeResult.BaseStashWorktreePath,
+					BaseStashSha:       mergeResult.BaseStashSha,
+				}).Get(dCtx, nil); err != nil {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to transfer resolved base changes: %w", err)
+				}
+				mergeResult = git.MergeActivityResult{}
+			} else {
+				// The conflict resolution finalized a merge commit on the
+				// source worktree whose second parent is the target branch
+				// tip. That makes target an ancestor of source, so merging
+				// source into target is a fast-forward and contains the
+				// resolution commit.
+				//
+				// Squash strategy must be overridden here: a squash would
+				// re-merge target's content into a single commit on top of
+				// target, discarding the merge commit (and thus the resolved
+				// conflict edits become indistinguishable from regular work).
+				// The resolution commit is the meaningful artifact, so we
+				// always do a regular (fast-forward) merge for the final
+				// step regardless of the originally requested strategy.
+				finalActionCtx := dCtx.NewActionContext("merge")
+				finalActionCtx.ActionParams = map[string]interface{}{
+					"sourceBranch": dCtx.Worktree.Name,
+					"targetBranch": mergeInfo.TargetBranch,
+				}
+				finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
+					var finalResult git.MergeActivityResult
+					err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
+						SourceBranch:   trackedCtx.Worktree.Name,
+						TargetBranch:   mergeInfo.TargetBranch,
+						MergeStrategy:  git.MergeStrategyMerge,
+						CommitMessage:  commitMessage,
+						CommitterName:  committerName,
+						CommitterEmail: committerEmail,
+					})
+					if err != nil {
+						return finalResult, fmt.Errorf("failed to perform final merge after conflict resolution: %w", err)
+					}
+					return finalResult, nil
 				})
 				if err != nil {
-					return finalResult, fmt.Errorf("failed to perform final merge after conflict resolution: %w", err)
+					return "", MergeApprovalResponse{}, "", err
 				}
-				return finalResult, nil
-			})
-			if err != nil {
-				return "", MergeApprovalResponse{}, "", err
+				mergeResult = finalMergeResult
 			}
-			mergeResult = finalMergeResult
 		} else {
 			var conflictMessage string
 			if mergeResult.ConflictOnTargetBranch {

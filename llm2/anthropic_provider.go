@@ -17,7 +17,7 @@ import (
 )
 
 const anthropicDefaultModel = "claude-opus-4-5"
-const anthropicDefaultMaxTokens = 16000
+const anthropicDefaultMaxTokens = 24000
 
 const (
 	anthropicAcceptHeaderValue                  = "application/json"
@@ -248,7 +248,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	// intentionally skipped (no params.Thinking set).
 
 	var streamOpts []option.RequestOption
-	if fastMode {
+	if fastMode && strings.Contains(model, "opus-4-8") {
 		// The non-beta MessageNewParams struct does not yet expose a Speed field
 		// in the SDK; inject it into the request body directly so we stay on
 		// client.Messages.NewStreaming.

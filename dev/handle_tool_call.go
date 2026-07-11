@@ -166,6 +166,13 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 		response, err := unmarshalAndInvoke(toolCall, &wrapper, func() (string, error) {
 			return GetHelpOrInput(dCtx, wrapper.Requests)
 		})
+		if errors.Is(err, ErrEmptyHelpOrInputRequests) {
+			// Self-correctable: surface the error as tool result content so the
+			// model can retry with valid arguments, without retrying the workflow.
+			toolCallResult.IsError = true
+			toolCallResult.Content = llm2.TextContentBlocks(err.Error())
+			return ToolCallOutput{ToolResultBlock: toolCallResult}, nil
+		}
 		toolCallResult.Content = llm2.TextContentBlocks(response)
 		return ToolCallOutput{ToolResultBlock: toolCallResult}, err
 	}
@@ -202,12 +209,12 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 				// field for detailed info, and also change how we pass the
 				// variables to render the prompts later based on this more
 				// detailed metadata with context of max history limits.
-				lengthThreshold := min(defaultMaxChatHistoryLength/2, maxRetrieveCodeContextLength)
+				lengthThreshold := min(defaultRequestedKeepLength/2, maxRetrieveCodeContextLength)
 				return RetrieveCodeContext(trackedDCtx, requiredCodeContext, lengthThreshold)
 			})
 		case bulkReadFileTool.Name:
 			var bulkReadFileParams BulkReadFileParams
-			response, err = unmarshalAndInvoke(toolCall, &bulkReadFileParams, func() (string, error) {
+			invokeBulkReadFile := func() (string, error) {
 				v := workflow.GetVersion(trackedDCtx, "bulk_read_file_ref", workflow.DefaultVersion, 1)
 				if v == workflow.DefaultVersion {
 					return BulkReadFile(trackedDCtx, bulkReadFileParams)
@@ -218,7 +225,16 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 				}
 				ref = &output.Ref
 				return "", nil
-			})
+			}
+			lenientArgs := workflow.GetVersion(trackedDCtx, "read_file_lines_lenient_args", workflow.DefaultVersion, 1)
+			if lenientArgs == workflow.DefaultVersion {
+				response, err = unmarshalAndInvoke(toolCall, &bulkReadFileParams, invokeBulkReadFile)
+			} else {
+				bulkReadFileParams, err = parseBulkReadFileParamsLenient(toolCall.Arguments)
+				if err == nil {
+					response, err = invokeBulkReadFile()
+				}
+			}
 		case bulkSearchRepositoryTool.Name:
 			var bulkSearchRepositoryParams BulkSearchRepositoryParams
 			response, err = unmarshalAndInvoke(toolCall, &bulkSearchRepositoryParams, func() (string, error) {

@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+
+	"sidekick/utils"
 )
 
 func TestExtractPayloadsFromEvent_Scheduled(t *testing.T) {
@@ -172,6 +174,7 @@ func (s *CodecCleanupWorkflowTestSuite) SetupTest() {
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
 
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.env.RegisterWorkflow(CodecPayloadCleanupWorkflow)
 	s.activities = &CodecCleanupActivities{}
 	s.env.RegisterActivity(s.activities.CollectCodecKeysFromHistory)

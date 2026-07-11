@@ -36,12 +36,19 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="event in filteredEvents" :key="event.eventId">
+          <template v-for="event in filteredEvents" :key="event.eventId">
+          <tr>
             <td>{{ event.eventId }}</td>
             <td>{{ event.eventType }}</td>
             <td>{{ event.name || '-' }}</td>
             <td>{{ formatTimestamp(event.timestamp) }}</td>
             <td class="reset-buttons">
+              <button
+                @click="toggleDetails(event.eventId)"
+                class="reset-button"
+              >
+                {{ expandedEventId === event.eventId ? 'Hide Details' : 'Details' }}
+              </button>
               <button
                 @click="resetToEvent(event.resetBeforeEventId!)"
                 :disabled="isResetting || event.resetBeforeEventId === null"
@@ -58,6 +65,35 @@
               </button>
             </td>
           </tr>
+          <tr v-if="expandedEventId === event.eventId" class="details-row">
+            <td colspan="5">
+              <div v-if="detailLoading[event.eventId]" class="details-loading">Loading payloads...</div>
+              <div v-else-if="detailError[event.eventId]" class="details-error">{{ detailError[event.eventId] }}</div>
+              <div v-else-if="eventDetails[event.eventId]" class="details-content">
+                <div class="details-section">
+                  <h3>Input</h3>
+                  <div v-if="eventDetails[event.eventId].input.length === 0" class="details-empty">No input payloads.</div>
+                  <JsonTree
+                    v-for="(payload, index) in eventDetails[event.eventId].input"
+                    :key="`input-${index}`"
+                    :data="payload"
+                    class="details-tree"
+                  />
+                </div>
+                <div class="details-section">
+                  <h3>Output</h3>
+                  <div v-if="eventDetails[event.eventId].output.length === 0" class="details-empty">No output payloads.</div>
+                  <JsonTree
+                    v-for="(payload, index) in eventDetails[event.eventId].output"
+                    :key="`output-${index}`"
+                    :data="payload"
+                    class="details-tree"
+                  />
+                </div>
+              </div>
+            </td>
+          </tr>
+          </template>
         </tbody>
       </table>
 
@@ -72,6 +108,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
+import JsonTree from '../components/JsonTree.vue'
+import type { JSONDataType } from 'vue-json-pretty/types/utils'
 
 interface HistoryEvent {
   eventId: number
@@ -80,6 +118,13 @@ interface HistoryEvent {
   timestamp: number
   resetBeforeEventId: number | null
   resetAfterEventId: number | null
+}
+
+interface EventDetail {
+  eventId: number
+  eventType: string
+  input: JSONDataType[]
+  output: JSONDataType[]
 }
 
 const devMode = import.meta.env.MODE === 'development'
@@ -94,6 +139,10 @@ const isResetting = ref(false)
 const error = ref<string | null>(null)
 const resetMessage = ref<string | null>(null)
 const resetSuccess = ref(false)
+const expandedEventId = ref<number | null>(null)
+const eventDetails = ref<Record<number, EventDetail>>({})
+const detailLoading = ref<Record<number, boolean>>({})
+const detailError = ref<Record<number, string | null>>({})
 
 const filteredEvents = computed(() => {
   if (!filterText.value) {
@@ -125,6 +174,39 @@ const fetchHistory = async () => {
     error.value = e instanceof Error ? e.message : 'Failed to fetch workflow history'
   } finally {
     isLoading.value = false
+  }
+}
+
+const toggleDetails = async (eventId: number) => {
+  if (expandedEventId.value === eventId) {
+    expandedEventId.value = null
+    return
+  }
+  expandedEventId.value = eventId
+
+  if (eventDetails.value[eventId]) {
+    return
+  }
+
+  detailLoading.value = { ...detailLoading.value, [eventId]: true }
+  detailError.value = { ...detailError.value, [eventId]: null }
+  try {
+    const response = await fetch(
+      `/api/v1/workspaces/${store.workspaceId}/flows/${flowId}/history/${eventId}`
+    )
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to fetch event details: ${response.statusText}`)
+    }
+    const data = await response.json()
+    eventDetails.value = { ...eventDetails.value, [eventId]: data.event }
+  } catch (e) {
+    detailError.value = {
+      ...detailError.value,
+      [eventId]: e instanceof Error ? e.message : 'Failed to fetch event details',
+    }
+  } finally {
+    detailLoading.value = { ...detailLoading.value, [eventId]: false }
   }
 }
 
@@ -265,6 +347,40 @@ onMounted(() => {
 .reset-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.details-row td {
+  background: var(--color-background-soft);
+}
+
+.details-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.details-section h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.9375rem;
+}
+
+.details-tree {
+  margin-bottom: 0.5rem;
+}
+
+.details-loading,
+.details-error,
+.details-empty {
+  padding: 0.5rem 0;
+}
+
+.details-error {
+  color: var(--color-error, #dc3545);
+}
+
+.details-empty {
+  opacity: 0.7;
 }
 
 .reset-message {

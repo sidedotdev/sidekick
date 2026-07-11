@@ -26,6 +26,7 @@ type DevRunWorkflowTestSuite struct {
 
 func (s *DevRunWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
 func (s *DevRunWorkflowTestSuite) AfterTest(suiteName, testName string) {
@@ -299,6 +300,7 @@ type MergeStrategyRoundTripTestSuite struct {
 
 func (s *MergeStrategyRoundTripTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
 func (s *MergeStrategyRoundTripTestSuite) AfterTest(suiteName, testName string) {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/common"
 	"strings"
 	"testing"
 
@@ -88,6 +89,45 @@ func TestParseSSHConfigArgs(t *testing.T) {
 	}
 }
 
+func TestSandboxAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name:   "already exists error",
+			output: "Error:   × sandbox 'side-e2e-openshell-a52d9f9cebab' already exists\n  hint: delete it first",
+			want:   true,
+		},
+		{
+			name:   "case insensitive",
+			output: "Sandbox Already Exists",
+			want:   true,
+		},
+		{
+			name:   "unrelated failure",
+			output: "Error: failed to build image: no space left on device",
+			want:   false,
+		},
+		{
+			name:   "empty",
+			output: "",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, sandboxAlreadyExists(tt.output))
+		})
+	}
+}
+
 func TestParseCreatedSandboxName(t *testing.T) {
 	t.Parallel()
 
@@ -138,12 +178,14 @@ func TestOpenShellEnvironment_MarshalUnmarshal(t *testing.T) {
 		WorkingDirectory: "/workspaces/myrepo",
 		SandboxName:      "anointed-smelt",
 		LocalRepoDir:     "/host/path/to/repo",
+		PortForwards:     []common.PortForwardConfig{{HostPort: 18855}},
 	}
 	envContainer := EnvContainer{Env: originalEnv}
 
 	jsonBytes, err := json.Marshal(envContainer)
 	assert.NoError(t, err)
 	assert.Contains(t, string(jsonBytes), `"localRepoDir":"/host/path/to/repo"`)
+	assert.Contains(t, string(jsonBytes), `"portForwards":[{"hostPort":18855}]`)
 
 	var unmarshaledEnvContainer EnvContainer
 	err = json.Unmarshal(jsonBytes, &unmarshaledEnvContainer)

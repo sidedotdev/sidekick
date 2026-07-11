@@ -1,0 +1,13 @@
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+
+linters-settings:
+  errcheck:
+    # Flag errors silently discarded via blank assignment (e.g. `_, _ = f()`),
+    # not just calls whose error return is dropped entirely.
+    check-blank: true

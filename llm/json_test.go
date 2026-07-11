@@ -67,6 +67,33 @@ func TestParseJsonValue(t *testing.T) {
 	}
 }
 
+func TestRepairJsonPassesThroughUnrepairableInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "unquoted value from broken tool-call parsing",
+			input: `{"requests": <parameter name="content">...}`,
+		},
+		{
+			name:  "completely malformed",
+			input: `{not json at all`,
+		},
+		{
+			name:  "leaked xml parameter tag from broken tool-call parsing",
+			input: `{"requests": <parameter name="content">Please review the changes and let me know if anything needs adjustment.</parameter>}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := RepairJson(test.input)
+			assert.Equal(t, test.input, got, "expected unrepairable input to pass through unchanged")
+		})
+	}
+}
+
 func TestRepairJson(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -271,6 +298,26 @@ func TestRepairJsonFull(t *testing.T) {
 			input:    `{"data": "{\"key\": \"value\"}</invoke>"}`,
 			expected: `{"data":{"key":"value"}}`,
 		},
+		{
+			name:     "leaked fields encoded as xml elements promoted to siblings",
+			input:    `{"analysis": "Some analysis about foo and bar.</analysis>\n<learnings>[\"learned foo\", \"learned bar\"]</learnings>\n<steps>[{\"step_number\": \"1\", \"title\": \"baz\"}]</steps>\n<is_planning_complete\">true</is_planning_complete>\n</invoke>\n"}`,
+			expected: `{"analysis": "Some analysis about foo and bar.", "learnings": ["learned foo", "learned bar"], "steps": [{"step_number": "1", "title": "baz"}], "is_planning_complete": true}`,
+		},
+		{
+			name:     "mismatched leaked tag names are left untouched",
+			input:    `{"analysis": "Some analysis.</analysis>\n<foo>[1, 2]</bar>"}`,
+			expected: `{"analysis": "Some analysis.</analysis>\n<foo>[1, 2]</bar>"}`,
+		},
+		{
+			name:     "xml-like element without a preceding closing tag is left untouched",
+			input:    `{"analysis": "content <foo>[1]</foo>"}`,
+			expected: `{"analysis": "content <foo>[1]</foo>"}`,
+		},
+		{
+			name:     "inline markup within real content is not promoted",
+			input:    `{"text": "Use <b>bold</b> for emphasis"}`,
+			expected: `{"text": "Use <b>bold</b> for emphasis"}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -289,4 +336,33 @@ func TestRepairJsonFull(t *testing.T) {
 				test.input, test.expected, got)
 		})
 	}
+}
+
+// TestRepairJsonFull_LeakedTagValueContainsMarkup documents a class of leaked
+// tool-call output that the regex-based repair cannot recover on its own: when a
+// leaked sibling field's value itself contains XML-like markup, the non-greedy
+// match terminates at the inner closing tag, the opening/closing names disagree,
+// and we conservatively decline to promote the field to avoid corrupting it.
+//
+// TODO: pass an expected JSON schema into the repair mechanism so it can locate
+// the true field boundaries (here the value spans until the matching </code>)
+// instead of relying on tag-name heuristics.
+func TestRepairJsonFull_LeakedTagValueContainsMarkup(t *testing.T) {
+	t.Parallel()
+	t.Skip("requires JSON-schema-aware repair to recover leaked fields whose values contain markup")
+
+	input := `{"analysis": "done</analysis>\n<code>[\"<div>hi</div>\"]</code>"}`
+	expected := `{"analysis": "done", "code": ["<div>hi</div>"]}`
+
+	got := RepairJsonFull(input)
+
+	var expectedJSON, gotJSON interface{}
+	if err := json.Unmarshal([]byte(expected), &expectedJSON); err != nil {
+		t.Fatalf("Failed to parse expected JSON %q: %v", expected, err)
+	}
+	if err := json.Unmarshal([]byte(got), &gotJSON); err != nil {
+		t.Fatalf("Failed to parse actual JSON %q: %v", got, err)
+	}
+	assert.Equal(t, expectedJSON, gotJSON, "For input %q\nexpected JSON equivalent to %q\nbut got %q",
+		input, expected, got)
 }

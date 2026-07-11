@@ -70,6 +70,7 @@ func (s *SearchRepositoryE2ETestSuite) ResetWorkflowEnvironment() {
 
 	// Create a new TestWorkflowEnvironment for each test
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.env.SetTestTimeout(30 * time.Second)
 
 	s.env.RegisterActivity(env.EnvRunCommandActivity)

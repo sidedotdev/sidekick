@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,10 +15,13 @@ import (
 	"testing"
 
 	"sidekick/common"
+	"sidekick/utils"
 	sidekick_worker "sidekick/worker"
 
+	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/history/v1"
+	"go.temporal.io/api/proxy"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
@@ -133,7 +138,18 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to initialize storage for codec: %v", err)
 	}
-	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	// Inside a remote container the host's Temporal server is not reachable;
+	// only its read-only proxy is reverse-forwarded (see port_forwards in
+	// side.yml), which suffices here since this test only lists workflows and
+	// reads histories. The default port may instead belong to a
+	// container-local Temporal instance started via `side start`.
+	temporalHostPort := common.GetTemporalServerHostPort()
+	if common.IsActiveEnvNonLocal() {
+		if forwardedPort, ok := common.LookupForwardedPort(common.GetTemporalReadOnlyServerPort()); ok {
+			temporalHostPort = fmt.Sprintf("127.0.0.1:%d", forwardedPort)
+		}
+	}
+	clientOptions, err := common.NewTemporalClientOptions(service, temporalHostPort)
 	if err != nil {
 		t.Fatalf("Failed to create Temporal client options: %v", err)
 	}
@@ -201,9 +217,9 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 	// Fetch all histories concurrently, then replay concurrently in subtests.
 	type historyResult struct {
-		id      string
-		err     error
-		skipped bool
+		id         string
+		err        error
+		skipReason string
 	}
 
 	terminalEventTypes := map[enums.EventType]bool{
@@ -241,7 +257,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				return
 			}
 			if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
-				result.skipped = true
+				result.skipReason = "completed before replay"
 				return
 			}
 			// Drop any in-flight WorkflowTask tail to avoid the
@@ -249,12 +265,32 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			// history mid workflow-task on a running workflow.
 			hist.Events = dropInFlightWFTTail(hist.Events)
 			if len(hist.Events) == 0 {
-				result.skipped = true
+				result.skipReason = "no replayable events"
 				return
 			}
-			replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
-				DataConverter: clientOptions.DataConverter,
+
+			// Resolve payloads the codec offloaded to KV storage up front:
+			// unresolvable references (e.g. histories read over the read-only
+			// proxy of a host that does not inline them) would otherwise
+			// derail replay with misleading non-determinism errors.
+			codec := common.NewPayloadCodec(service, common.DefaultCodecThreshold)
+			err = proxy.VisitPayloads(ctx, hist, proxy.VisitPayloadsOptions{
+				SkipSearchAttributes: true,
+				Visitor: func(_ *proxy.VisitPayloadsContext, payloads []*commonpb.Payload) ([]*commonpb.Payload, error) {
+					return codec.Decode(payloads)
+				},
 			})
+			if err != nil {
+				if errors.Is(err, common.ErrCodecPayloadMissing) {
+					result.skipReason = fmt.Sprintf("offloaded payloads unavailable in this environment: %v", err)
+					return
+				}
+				result.err = err
+				return
+			}
+			replayerOptions := utils.TestReplayerOptions()
+			replayerOptions.DataConverter = clientOptions.DataConverter
+			replayer, err := worker.NewWorkflowReplayerWithOptions(replayerOptions)
 			if err != nil {
 				result.err = err
 				return
@@ -272,8 +308,8 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		result := histories[id]
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
-			if result.skipped {
-				t.Skipf("Workflow %s completed before replay; skipping", result.id)
+			if result.skipReason != "" {
+				t.Skipf("Workflow %s: %s", result.id, result.skipReason)
 			}
 			if result.err != nil {
 				t.Errorf("Replay failed for workflow %s: %v", result.id, result.err)

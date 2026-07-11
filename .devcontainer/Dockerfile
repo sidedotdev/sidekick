@@ -1,8 +1,22 @@
-FROM mcr.microsoft.com/devcontainers/go:1.24
+FROM mcr.microsoft.com/devcontainers/go:1.26
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git ripgrep \
     && rm -rf /var/lib/apt/lists/*
+
+# On aarch64 hosts the Android SDK's aapt2 is only shipped as an x86-64 binary,
+# which runs under emulation (e.g. Rosetta) but needs the x86-64 dynamic loader
+# and C runtime present. Install the cross runtime and expose the loader at the
+# path baked into the aapt2 binary so `./gradlew :app:assembleDebug` works.
+RUN if [ "$(uname -m)" = "aarch64" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            libc6-amd64-cross libgcc-s1-amd64-cross \
+        && mkdir -p /lib64 \
+        && ln -sf /usr/x86_64-linux-gnu/lib/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2 \
+        && ln -sfn /usr/x86_64-linux-gnu/lib /lib/x86_64-linux-gnu \
+        && ln -sfn /usr/x86_64-linux-gnu/lib /usr/lib/x86_64-linux-gnu \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Install Node.js matching frontend/.node-version
 ARG NODE_VERSION=20.16.0
@@ -32,8 +46,8 @@ RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-clo
 ENV CGO_ENABLED=1
 ENV CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm"
 
-# gopls for LSP tests
-RUN go install golang.org/x/tools/gopls@v0.17.1
+# gopls for LSP tests (keep in sync with common.GoplsVersion)
+RUN go install golang.org/x/tools/gopls@v0.21.0
 
 # Install bun and pre-warm the dependency cache
 USER vscode

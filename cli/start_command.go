@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sidekick"
 	"sidekick/api"
 	"sidekick/common"
 	"sidekick/nats"
@@ -102,6 +103,11 @@ func NewStartCommand() *cli.Command {
 				Usage:   "Enable the NATS server component",
 			},
 			&cli.BoolFlag{
+				Name:    "remote",
+				Aliases: []string{"r"},
+				Usage:   "Enable the remote (iroh) API server component",
+			},
+			&cli.BoolFlag{
 				Name:    "disable-auto-open",
 				Aliases: []string{"x"},
 				Usage:   "Disable automatic browser opening",
@@ -116,14 +122,16 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 	worker := cmd.Bool("worker")
 	temporal := cmd.Bool("temporal")
 	natsServer := cmd.Bool("nats")
+	remote := cmd.Bool("remote")
 	disableAutoOpen := cmd.Bool("disable-auto-open")
 
 	// If no services specified, enable all by default
-	if !server && !worker && !temporal && !natsServer {
+	if !server && !worker && !temporal && !natsServer && !remote {
 		server = true
 		worker = true
 		temporal = true
 		natsServer = true
+		remote = true
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -139,9 +147,34 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 
 			temporalServer := temporalsrv.Start()
 
+			// Dev builds (no injected version) also expose a read-only
+			// Temporal endpoint, which is safe to reverse-forward into
+			// sandboxed environments so tests there can read workflow
+			// histories without gaining mutating access (see port_forwards
+			// in side.yml).
+			var readOnlyProxy *temporalsrv.ReadOnlyProxy
+			if version == "" {
+				var payloadStorage common.KeyValueStorage
+				if storage, err := sidekick.GetStorage(); err != nil {
+					log.Error().Err(err).Msg("Failed to initialize storage for read-only temporal proxy; offloaded payloads won't be inlined")
+				} else {
+					payloadStorage = storage
+				}
+				proxy, err := temporalsrv.StartReadOnlyProxy(common.GetTemporalReadOnlyServerHostPort(), common.GetTemporalServerHostPort(), payloadStorage)
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to start read-only temporal proxy")
+				} else {
+					readOnlyProxy = proxy
+					log.Info().Str("component", "Temporal Read-Only Proxy").Msg(proxy.Addr())
+				}
+			}
+
 			// Wait for cancellation
 			<-ctx.Done()
 			log.Info().Msg("Stopping temporal...")
+			if readOnlyProxy != nil {
+				readOnlyProxy.Stop()
+			}
 			temporalServer.Stop()
 		}()
 	}
@@ -225,6 +258,30 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 
 			if err := nats.Stop(); err != nil {
 				log.Error().Err(err).Msg("Error stopping NATS server")
+			}
+		}()
+	}
+
+	if remote {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info().Msg("Starting remote (iroh) API server...")
+
+			remoteServer, err := api.RunRemoteServer(ctx)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to start remote (iroh) API server")
+				return
+			}
+
+			fmt.Printf("\nRemote access enabled. Pair a device using this iroh ticket:\n\n  %s\n\n", remoteServer.Ticket())
+
+			// Wait for cancellation
+			<-ctx.Done()
+			log.Info().Msg("Stopping remote (iroh) API server...")
+
+			if err := remoteServer.Shutdown(context.Background()); err != nil {
+				log.Error().Err(err).Msg("Error stopping remote (iroh) API server")
 			}
 		}()
 	}

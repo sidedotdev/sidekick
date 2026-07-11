@@ -41,6 +41,7 @@ func (s *BranchNameTestSuite) SetupTest() {
 
 	// setup workflow environment
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 
 	s.wrapperWorkflow = func(ctx workflow.Context, req BranchNameRequest) (string, error) {
 		ctx = utils.NoRetryCtx(ctx)

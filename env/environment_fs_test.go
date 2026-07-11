@@ -50,7 +50,7 @@ func TestLocalGitWorktreeEnv_FilesystemMethods(t *testing.T) {
 	}, worktree)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cmd := exec.Command("git", "worktree", "remove", "--force", env.GetWorkingDirectory())
+		cmd := exec.Command("git", "worktree", "remove", "--force", "--force", env.GetWorkingDirectory())
 		cmd.Dir = repoDir
 		_ = cmd.Run()
 	})
@@ -418,6 +418,26 @@ func runRemoteEnvFilesystemSubtests(t *testing.T, ctx context.Context, env Env) 
 		require.Contains(t, byName, "sub")
 		assert.False(t, byName["a.txt"].IsDir())
 		assert.True(t, byName["sub"].IsDir())
+	})
+
+	t.Run("reconnects after losing the shared SFTP session", func(t *testing.T) {
+		relPath := path.Join(base, "reconnect.txt")
+		want := []byte("reconnect-" + ksuid.New().String())
+		require.NoError(t, env.WriteFile(ctx, relPath, want, 0o644))
+
+		sshEnv, ok := env.(interface{ sharedSFTP() *sftpConn })
+		require.True(t, ok, "remote env must expose a shared SFTP connection")
+
+		// Kill the session's ssh transport to simulate the container being
+		// restarted or recreated under the same name.
+		conn := sshEnv.sharedSFTP().lockLive()
+		require.NotNil(t, conn.cmd, "expected a dialed SFTP session")
+		_ = conn.cmd.Process.Kill()
+		conn.mu.Unlock()
+
+		got, err := env.ReadFile(ctx, relPath)
+		require.NoError(t, err, "filesystem ops must transparently re-dial after the session dies")
+		assert.Equal(t, want, got)
 	})
 }
 

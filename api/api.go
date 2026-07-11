@@ -31,9 +31,11 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
+	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 )
 
 type Server struct {
@@ -214,6 +216,11 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)
 	r.POST("/api/v1/open-in-ide", ctrl.OpenInIdeHandler)
 
+	remotePairingRoutes := r.Group("/api/v1/remote/pairings")
+	remotePairingRoutes.GET("/", ctrl.ListPairingsHandler)
+	remotePairingRoutes.POST("/", ctrl.CreatePairingHandler)
+	remotePairingRoutes.DELETE("/:id", ctrl.DeletePairingHandler)
+
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
 
@@ -234,6 +241,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
 	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
+	flowRoutes.GET("/:id/history/:eventId", ctrl.GetFlowEventDetailHandler)
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
 	flowRoutes.GET("/:id/subflows", ctrl.GetFlowSubflowsHandler)
 	flowRoutes.POST("/:id/query", ctrl.QueryFlowHandler)
@@ -245,6 +253,8 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.GET("/:id/intent/branches", ctrl.ListIntentBranchesHandler)
 	flowRoutes.GET("/:id/intent/finish_diff", ctrl.FinishIntentDiffHandler)
 	flowRoutes.POST("/:id/intent/finish", ctrl.FinishIntentHandler)
+	flowRoutes.POST("/:id/intent/auto_mode", ctrl.SetIddAutoModeHandler)
+	flowRoutes.POST("/:id/intent/run_orchestrator", ctrl.RunIddOrchestratorHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
@@ -954,6 +964,168 @@ func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
 	slices.Reverse(events)
 
 	c.JSON(http.StatusOK, gin.H{"events": events})
+}
+
+// EventDetail contains the decoded input and output payloads of a single
+// workflow history event, for inspection in the reset UI.
+type EventDetail struct {
+	EventId   int64         `json:"eventId"`
+	EventType string        `json:"eventType"`
+	Input     []interface{} `json:"input"`
+	Output    []interface{} `json:"output"`
+}
+
+// eventInputPayloads returns the input payloads carried by an event, if any.
+func eventInputPayloads(event *historypb.HistoryEvent) *commonpb.Payloads {
+	switch event.EventType {
+	case enums.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED:
+		if a := event.GetWorkflowExecutionStartedEventAttributes(); a != nil {
+			return a.Input
+		}
+	case enums.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
+		if a := event.GetActivityTaskScheduledEventAttributes(); a != nil {
+			return a.Input
+		}
+	case enums.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_INITIATED:
+		if a := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); a != nil {
+			return a.Input
+		}
+	case enums.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED:
+		if a := event.GetWorkflowExecutionSignaledEventAttributes(); a != nil {
+			return a.Input
+		}
+	case enums.EVENT_TYPE_SIGNAL_EXTERNAL_WORKFLOW_EXECUTION_INITIATED:
+		if a := event.GetSignalExternalWorkflowExecutionInitiatedEventAttributes(); a != nil {
+			return a.Input
+		}
+	case enums.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW:
+		if a := event.GetWorkflowExecutionContinuedAsNewEventAttributes(); a != nil {
+			return a.Input
+		}
+	}
+	return nil
+}
+
+// eventOutputPayloads returns the result payloads carried by an event, if any.
+func eventOutputPayloads(event *historypb.HistoryEvent) *commonpb.Payloads {
+	switch event.EventType {
+	case enums.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED:
+		if a := event.GetWorkflowExecutionCompletedEventAttributes(); a != nil {
+			return a.Result
+		}
+	case enums.EVENT_TYPE_ACTIVITY_TASK_COMPLETED:
+		if a := event.GetActivityTaskCompletedEventAttributes(); a != nil {
+			return a.Result
+		}
+	case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED:
+		if a := event.GetChildWorkflowExecutionCompletedEventAttributes(); a != nil {
+			return a.Result
+		}
+	}
+	return nil
+}
+
+// completionSourceEventId returns the scheduled/initiated event ID that a
+// completion event corresponds to, allowing an output payload to be linked back
+// to the event that requested the work. Returns 0 when not applicable.
+func completionSourceEventId(event *historypb.HistoryEvent) int64 {
+	switch event.EventType {
+	case enums.EVENT_TYPE_ACTIVITY_TASK_COMPLETED:
+		if a := event.GetActivityTaskCompletedEventAttributes(); a != nil {
+			return a.ScheduledEventId
+		}
+	case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED:
+		if a := event.GetChildWorkflowExecutionCompletedEventAttributes(); a != nil {
+			return a.InitiatedEventId
+		}
+	}
+	return 0
+}
+
+// decodePayloads decodes each payload into a generic JSON-serializable value.
+// Payloads that cannot be decoded are represented by an error string so the
+// remainder of the response is still usable.
+func decodePayloads(dc converter.DataConverter, payloads *commonpb.Payloads) []interface{} {
+	if payloads == nil {
+		return nil
+	}
+	result := make([]interface{}, 0, len(payloads.Payloads))
+	for _, p := range payloads.Payloads {
+		var v interface{}
+		if err := dc.FromPayload(p, &v); err != nil {
+			result = append(result, fmt.Sprintf("<undecodable payload: %v>", err))
+			continue
+		}
+		result = append(result, v)
+	}
+	return result
+}
+
+func (ctrl *Controller) GetFlowEventDetailHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+	eventIdParam := c.Param("eventId")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	eventId, err := strconv.ParseInt(eventIdParam, 10, 64)
+	if err != nil || eventId <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "eventId must be a positive integer"})
+		return
+	}
+
+	iter := ctrl.temporalClient.GetWorkflowHistory(c, flowId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+
+	var allEvents []*historypb.HistoryEvent
+	for iter.HasNext() {
+		event, err := iter.Next()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		allEvents = append(allEvents, event)
+	}
+
+	var target *historypb.HistoryEvent
+	for _, event := range allEvents {
+		if event.EventId == eventId {
+			target = event
+			break
+		}
+	}
+	if target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Event not found"})
+		return
+	}
+
+	codec := common.NewPayloadCodec(ctrl.service, common.DefaultCodecThreshold)
+	dc := converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), codec)
+
+	inputPayloads := eventInputPayloads(target)
+	outputPayloads := eventOutputPayloads(target)
+
+	// For scheduling/initiating events the output lives in the matching
+	// completion event, so link it back here for convenience.
+	if outputPayloads == nil {
+		for _, event := range allEvents {
+			if completionSourceEventId(event) == eventId {
+				outputPayloads = eventOutputPayloads(event)
+				break
+			}
+		}
+	}
+
+	detail := EventDetail{
+		EventId:   target.EventId,
+		EventType: target.EventType.String(),
+		Input:     decodePayloads(dc, inputPayloads),
+		Output:    decodePayloads(dc, outputPayloads),
+	}
+
+	c.JSON(http.StatusOK, gin.H{"event": detail})
 }
 
 // ResetFlowRequest defines the request body for resetting a workflow

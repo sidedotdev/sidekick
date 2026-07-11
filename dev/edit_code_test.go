@@ -47,6 +47,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 
 	// setup workflow environment
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 
 	// s.NewTestActivityEnvironment()
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
@@ -69,7 +70,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 				},
 			},
 		}
-		return authorEditBlocks(execContext, common.ModelConfig{}, 0, chatHistory, pic.PromptInfo, getEnvironmentContext())
+		return authorEditBlocks(execContext, common.ModelConfig{}, 0, chatHistory, pic.PromptInfo, getEnvironmentContext(), nil)
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 	s.env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
@@ -388,6 +389,7 @@ type BuildAuthorEditBlockInputTestSuite struct {
 
 func (s *BuildAuthorEditBlockInputTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
 func (s *BuildAuthorEditBlockInputTestSuite) AfterTest(suiteName, testName string) {

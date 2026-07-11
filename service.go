@@ -14,23 +14,31 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func GetService() (*srv.Delegator, error) {
+// GetStorage initializes only the storage backend selected via SIDE_STORAGE,
+// without the streamer (and thus without requiring a NATS connection).
+func GetStorage() (srv.Storage, error) {
 	storageType := os.Getenv("SIDE_STORAGE")
-	var storage srv.Storage
-	var err error
-
 	switch storageType {
 	case "redis":
-		storage = redis.NewStorage()
 		log.Info().Msg("Using Redis storage")
+		return redis.NewStorage(), nil
 	case "sqlite", "":
-		storage, err = sqlite.NewStorage()
+		storage, err := sqlite.NewStorage()
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize SQLite storage: %w", err)
 		}
 		log.Info().Msg("Using SQLite storage")
+		return storage, nil
 	default:
 		log.Fatal().Str("storage", storageType).Msg("Unknown storage type")
+		return nil, nil
+	}
+}
+
+func GetService() (*srv.Delegator, error) {
+	storage, err := GetStorage()
+	if err != nil {
+		return nil, err
 	}
 
 	streamerType := os.Getenv("SIDE_STREAMER")

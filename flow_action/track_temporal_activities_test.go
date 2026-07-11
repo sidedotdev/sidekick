@@ -15,6 +15,7 @@ import (
 	"sidekick/env"
 	"sidekick/secret_manager"
 	"sidekick/temporalmeta"
+	"sidekick/utils"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -42,6 +43,7 @@ func (s *TrackTemporalActivitiesTestSuite) SetupTest() {
 	s.SetContextPropagators([]workflow.ContextPropagator{NewFlowActionIdPropagator()})
 
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.mu.Lock()
 	s.persistedActions = nil
 	s.headerFlowActionIds = nil

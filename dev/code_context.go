@@ -24,7 +24,7 @@ import (
 
 type RequiredCodeContext struct {
 	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before outputting requests."`
-	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of given symbols. Each request groups a single file_path with the list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it; when a symbol is not defined in file_path\\, the tool automatically resolves the real definition (possibly in another repo file or a third-party library). Each symbol entry may carry its own optional reference_line to disambiguate among multiple occurrences in file_path."`
+	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of given symbols. Each request groups a single file_path with the list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it; when a symbol is not defined in file_path\\, the tool automatically resolves the real definition (possibly in another repo file or a third-party library). Symbol entries normally need only a name."`
 }
 
 func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
@@ -52,7 +52,7 @@ func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
 
 var getSymbolDefinitionsTool = &llm.Tool{
 	Name:        "get_symbol_definitions",
-	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type definition bodies. The go import block will also be included. Each request groups one file_path with a list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it: when a symbol is not defined in file_path, the tool automatically resolves the real definition via LSP go-to-definition and inlines it from wherever it lives (another repo file or a third-party library/stdlib). Each symbol entry may set an optional reference_line to disambiguate when the symbol text appears multiple times in file_path.",
+	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type definition bodies. The go import block will also be included. Each request groups one file_path with a list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it: when a symbol is not defined in file_path, the tool automatically resolves the real definition via LSP go-to-definition and inlines it from wherever it lives (another repo file or a third-party library/stdlib).",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RequiredCodeContext{}),
 }
 
@@ -108,7 +108,7 @@ func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, plan
 	}
 
 	// Step 3: Refine and rank the code context, if needed
-	if len(codeContext) > min(defaultMaxChatHistoryLength/2, refineContextLengthThreshold) {
+	if len(codeContext) > min(defaultRequestedKeepLength/2, refineContextLengthThreshold) {
 		refinePromptInfo := RefineCodeContextInfo{
 			DetermineCodeContextInfo:   initialPromptInfo,
 			OriginalCodeContext:        codeContext,
@@ -125,7 +125,7 @@ func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, plan
 }
 
 func PrepareRepoSummary(dCtx DevContext, requirements string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (string, string, error) {
-	repoSummary, err := GetRankedRepoSummary(dCtx, requirements, min(defaultMaxChatHistoryLength/2, 15000), weightedRankQueries...)
+	repoSummary, err := GetRankedRepoSummary(dCtx, requirements, min(defaultRequestedKeepLength/2, 15000), weightedRankQueries...)
 	if err != nil {
 		return "", "", err
 	}
@@ -143,7 +143,7 @@ func PrepareRepoSummary(dCtx DevContext, requirements string, weightedRankQuerie
 
 	// Append the identified needs to the requirements for second round of ranked signatures
 	rankQuery := fmt.Sprintf("%s\n\n%s", requirements, strings.Join(infoNeeds.Needs, "\n"))
-	repoSummary, err = GetRankedRepoSummary(dCtx, rankQuery, min(defaultMaxChatHistoryLength/2, 15000), weightedRankQueries...)
+	repoSummary, err = GetRankedRepoSummary(dCtx, rankQuery, min(defaultRequestedKeepLength/2, 15000), weightedRankQueries...)
 
 	return repoSummary, needs, err
 }
@@ -204,7 +204,7 @@ func GetRelevantCodeContext(dCtx DevContext, promptInfo DetermineCodeContextInfo
 	longestFirst := true
 
 	// we don't need room for other messages since we'll refine later if needed
-	threshold := defaultMaxChatHistoryLength
+	threshold := defaultRequestedKeepLength
 
 	// TODO move up to PrepareInitialCodeContext and beyond
 	return codeContextLoop(dCtx.NewActionContext("generate.code_context"), promptInfo, longestFirst, threshold)
@@ -221,7 +221,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 
 	// leave some room for other messages in other subflows after code context
 	// is finalized
-	threshold := min(defaultMaxChatHistoryLength/2, refineContextLengthThreshold)
+	threshold := min(defaultRequestedKeepLength/2, refineContextLengthThreshold)
 
 	// TODO move up to PrepareInitialCodeContext and beyond
 	requiredCodeContext, codeContext, err := codeContextLoop(dCtx.NewActionContext("generate.refine_code_context"), promptInfo, longestFirst, threshold)
@@ -231,7 +231,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 	// TODO /gen include the symbolized code context for the symbols that were
 	// removed from context after refining, and add that to the end of the
 	// codeContext string
-	fullCodeContext, err := RetrieveCodeContext(dCtx, *requiredCodeContext, 1000*defaultMaxChatHistoryLength)
+	fullCodeContext, err := RetrieveCodeContext(dCtx, *requiredCodeContext, 1000*defaultRequestedKeepLength)
 	return codeContext, fullCodeContext, err
 }
 
@@ -286,7 +286,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		if v := workflow.GetVersion(actionCtx, "chat-history-manage-v4", workflow.DefaultVersion, 1); v == 1 {
 			modelConfig = actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 		}
-		ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultMaxChatHistoryLength, modelConfig)
+		ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultRequestedKeepLength, modelConfig)
 
 		attempts++
 		iterationsSinceLastFeedback++
@@ -336,37 +336,58 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			return nil, "", fmt.Errorf("failed to determine required code context: %v", err)
 		}
 
-		// Check for unmarshal errors in any tool call and provide feedback
-		feedbacks, hasUnmarshalError, fatalErr := checkToolCallUnmarshalErrors(toolCallResults)
-		if fatalErr != nil {
-			return nil, "", fatalErr
-		}
-		if hasUnmarshalError {
-			for _, feedback := range feedbacks {
-				if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
-					return nil, "", err
-				}
+		var allSymbolDefinitions []string
+		if workflow.GetVersion(actionCtx, "code-context-process-all-tool-calls", workflow.DefaultVersion, 1) == 1 {
+			// STEP 3: process every tool call one at a time, appending exactly
+			// one result per tool call to chat history
+			merged, symbolDefinitions, anyToolCallError, processErr := processCodeContextToolCalls(actionCtx, noRetryCtx, chatHistory, toolCallResults)
+			if processErr != nil {
+				return nil, "", processErr
 			}
-			continue
-		}
-
-		// Merge all RequiredCodeContext requests in tool-call order
-		requiredCodeContext = mergeToolCallRequests(toolCallResults)
-
-		// Allow explicit empty requests for new/empty projects
-		if len(requiredCodeContext.Requests) == 0 {
-			break
-		}
-
-		// STEP 3: Read the code for each tool call separately and concatenate
-		allSymbolDefinitions, retrievalFeedbacks := retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
-		if len(retrievalFeedbacks) > 0 {
-			for _, feedback := range retrievalFeedbacks {
-				if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
-					return nil, "", err
-				}
+			if anyToolCallError {
+				continue
 			}
-			continue
+			requiredCodeContext = merged
+
+			// Allow explicit empty requests for new/empty projects
+			if len(requiredCodeContext.Requests) == 0 {
+				break
+			}
+			allSymbolDefinitions = symbolDefinitions
+		} else {
+			// Check for unmarshal errors in any tool call and provide feedback
+			feedbacks, hasUnmarshalError, fatalErr := checkToolCallUnmarshalErrors(toolCallResults)
+			if fatalErr != nil {
+				return nil, "", fatalErr
+			}
+			if hasUnmarshalError {
+				for _, feedback := range feedbacks {
+					if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
+						return nil, "", err
+					}
+				}
+				continue
+			}
+
+			// Merge all RequiredCodeContext requests in tool-call order
+			requiredCodeContext = mergeToolCallRequests(toolCallResults)
+
+			// Allow explicit empty requests for new/empty projects
+			if len(requiredCodeContext.Requests) == 0 {
+				break
+			}
+
+			// STEP 3: Read the code for each tool call separately and concatenate
+			var retryToolResults []llm2.ToolResultBlock
+			allSymbolDefinitions, retryToolResults = retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
+			if len(retryToolResults) > 0 {
+				for _, toolResult := range retryToolResults {
+					if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, toolResult); err != nil {
+						return nil, "", err
+					}
+				}
+				continue
+			}
 		}
 
 		// Concatenate all symbol definitions
@@ -565,7 +586,7 @@ type ToolCallWithCodeContext struct {
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	flowActionCtx := actionCtx.FlowActionContext()
-	toolNameMapping, err := resolveStreamToolNameMapping(flowActionCtx, modelConfig, *flowActionCtx.Secrets)
+	toolNameMapping, err := resolveStreamToolNameMapping(flowActionCtx.ExecContext, modelConfig, *flowActionCtx.Secrets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 	}
@@ -631,7 +652,7 @@ func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]llm2.Too
 	for _, tcResult := range results {
 		if tcResult.Err != nil {
 			if errors.Is(tcResult.Err, llm.ErrToolCallUnmarshal) {
-				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", tcResult.Err.Error())
+				response := codeContextUnmarshalErrorFeedback(tcResult.Err)
 				feedbacks = append(feedbacks, llm2.ToolResultBlock{
 					Content:    llm2.TextContentBlocks(response),
 					ToolCallId: tcResult.ToolCall.Id,
@@ -646,21 +667,20 @@ func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]llm2.Too
 	return feedbacks, hasUnmarshalError, nil
 }
 
-// retrieveCodeContextForToolCalls retrieves code context for each tool call and returns
-// the concatenated symbol definitions. If any retrieval fails, it returns feedback for
-// those failures instead of symbol definitions.
+// retrieveCodeContextForToolCalls retrieves code context for every tool call and
+// returns retry results for the complete batch if any retrieval fails.
 func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.EnvContainer, results []ToolCallWithCodeContext) ([]string, []llm2.ToolResultBlock) {
 	var allSymbolDefinitions []string
-	var feedbacks []llm2.ToolResultBlock
+	toolResults := make([]llm2.ToolResultBlock, len(results))
+	anyRetrievalFailed := false
 
-	v := workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
+	workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
 	for i, tcResult := range results {
-		if v == workflow.DefaultVersion && i > 0 {
-			// legacy behavior: only use the first tool call
-			break
-		}
+		toolResults[i].ToolCallId = tcResult.ToolCall.Id
+		toolResults[i].Name = tcResult.ToolCall.Name
 
 		if len(tcResult.RequiredCodeContext.Requests) == 0 {
+			toolResults[i].Content = llm2.TextContentBlocks("No code context was retrieved, since no symbol definition requests were provided.")
 			continue
 		}
 
@@ -671,19 +691,116 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 		})
 
 		if err != nil || result.Failures != "" {
-			hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array. Also note that file_path may be either the file where the symbol is defined or a file that references/uses it: when the symbol isn't defined in file_path the tool resolves the real definition via LSP (possibly in another repo file or a third-party library). Use the optional reference_line field to disambiguate when the symbol text appears multiple times in file_path.", currentGetSymbolDefinitionsTool().Name)
-			feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
-			feedbacks = append(feedbacks, llm2.ToolResultBlock{
-				Content:    llm2.TextContentBlocks(feedback),
-				ToolCallId: tcResult.ToolCall.Id,
-				Name:       tcResult.ToolCall.Name,
-			})
-		} else {
-			allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
+			toolResults[i].Content = llm2.TextContentBlocks(codeContextRetrievalFailureFeedback(err, result.Failures))
+			toolResults[i].IsError = true
+			anyRetrievalFailed = true
+			continue
+		}
+
+		allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
+		toolResults[i].Content = llm2.TextContentBlocks(result.SymbolDefinitions)
+	}
+
+	if anyRetrievalFailed {
+		return allSymbolDefinitions, toolResults
+	}
+	return allSymbolDefinitions, nil
+}
+
+func codeContextUnmarshalErrorFeedback(err error) string {
+	return fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
+}
+
+func codeContextRetrievalFailureFeedback(err error, failures string) string {
+	hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array. Also note that file_path may be either the file where the symbol is defined or a file that references/uses it: when the symbol isn't defined in file_path the tool resolves the real definition via LSP (possibly in another repo file or a third-party library). reference_line is only an optional disambiguator: omit it unless you need to choose among reference occurrences that could resolve differently, and never use a declaration line as its value.", currentGetSymbolDefinitionsTool().Name)
+	return fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, failures, hint)
+}
+
+// processCodeContextToolCalls processes every tool call one at a time and in
+// order, similarly to handleToolCalls: a failure in one tool call does not
+// prevent the others from being processed, and each tool call gets exactly one
+// result appended to chat history. It returns the merged RequiredCodeContext
+// and the symbol definitions retrieved by successful tool calls, plus whether
+// any tool call failed. When some tool calls fail, each successful tool call's
+// result contains the retrieved definitions directly, since the loop iterates
+// again and only the final iteration's retrievals produce the returned code
+// context.
+func processCodeContextToolCalls(actionCtx DevActionContext, noRetryCtx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, toolCallResults []ToolCallWithCodeContext) (RequiredCodeContext, []string, bool, error) {
+	merged := RequiredCodeContext{Requests: []coding.FileSymDefRequest{}}
+	var allSymbolDefinitions []string
+	toolResults := make([]llm2.ToolResultBlock, len(toolCallResults))
+	retrievedDefs := make([]string, len(toolCallResults))
+	didRetrieve := make([]bool, len(toolCallResults))
+	anyToolCallError := false
+
+	for i, tcResult := range toolCallResults {
+		toolResults[i].ToolCallId = tcResult.ToolCall.Id
+		toolResults[i].Name = tcResult.ToolCall.Name
+
+		if tcResult.Err != nil {
+			if !errors.Is(tcResult.Err, llm.ErrToolCallUnmarshal) {
+				return merged, nil, false, fmt.Errorf("failed to determine required code context: %v", tcResult.Err)
+			}
+			toolResults[i].IsError = true
+			toolResults[i].Content = llm2.TextContentBlocks(codeContextUnmarshalErrorFeedback(tcResult.Err))
+			anyToolCallError = true
+			continue
+		}
+
+		merged.Requests = append(merged.Requests, tcResult.RequiredCodeContext.Requests...)
+		if merged.Analysis == "" {
+			merged.Analysis = tcResult.RequiredCodeContext.Analysis
+		} else if tcResult.RequiredCodeContext.Analysis != "" {
+			merged.Analysis += "\n" + tcResult.RequiredCodeContext.Analysis
+		}
+
+		// explicit empty requests are allowed, eg for new/empty projects
+		if len(tcResult.RequiredCodeContext.Requests) == 0 {
+			toolResults[i].Content = llm2.TextContentBlocks("No code context was retrieved, since no symbol definition requests were provided.")
+			continue
+		}
+
+		result, err := extractCodeContext(noRetryCtx, coding.DirectorySymDefRequest{
+			EnvContainer:          *actionCtx.EnvContainer,
+			Requests:              tcResult.RequiredCodeContext.Requests,
+			IncludeRelatedSymbols: true,
+		})
+		if err != nil || result.Failures != "" {
+			toolResults[i].IsError = true
+			toolResults[i].Content = llm2.TextContentBlocks(codeContextRetrievalFailureFeedback(err, result.Failures))
+			anyToolCallError = true
+			continue
+		}
+
+		allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
+		retrievedDefs[i] = result.SymbolDefinitions
+		didRetrieve[i] = true
+	}
+
+	for i := range toolResults {
+		if didRetrieve[i] {
+			if anyToolCallError {
+				toolResults[i].Content = llm2.TextContentBlocks(retrievedDefs[i])
+			} else {
+				toolResults[i].Content = llm2.TextContentBlocks("Successfully retrieved the requested code context.")
+			}
+		}
+		content := toolResults[i].TextContent()
+		if toolResults[i].IsError {
+			content = renderCodeContextFeedbackPrompt(content, "")
+		}
+		if err := AppendChatHistory(actionCtx.ExecContext, chatHistory, llm.ChatMessage{
+			Role:       llm.ChatMessageRoleTool,
+			Content:    content,
+			Name:       toolResults[i].Name,
+			ToolCallId: toolResults[i].ToolCallId,
+			IsError:    toolResults[i].IsError,
+		}); err != nil {
+			return merged, nil, false, err
 		}
 	}
 
-	return allSymbolDefinitions, feedbacks
+	return merged, allSymbolDefinitions, anyToolCallError, nil
 }
 
 func addCodeContextPrompt(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {

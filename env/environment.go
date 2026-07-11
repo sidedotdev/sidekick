@@ -24,13 +24,34 @@ import (
 	"go.temporal.io/sdk/temporal"
 )
 
-// envVarsToInject are environment variables injected into all commands run via Env.
-// GIT_EDITOR=true prevents git from opening an editor for interactive commands.
-var envVarsToInject = []string{"GIT_EDITOR=true"}
+// envVarsToInject returns environment variables injected into all commands run
+// via Env. GIT_EDITOR=true prevents git from opening an editor for interactive
+// commands. common.ActiveEnvTypeEnvVar lets spawned processes (e.g. tests)
+// detect which kind of Sidekick environment they run inside, and
+// common.PortForwardsEnvVar (set only when forwards are configured) tells them
+// the container-local ports at which reverse-forwarded host ports are
+// reachable.
+func envVarsToInject(envType EnvType, portForwards []common.PortForwardConfig) []string {
+	envVars := []string{
+		"GIT_EDITOR=true",
+		common.ActiveEnvTypeEnvVar + "=" + string(envType),
+	}
+	if len(portForwards) > 0 {
+		envVars = append(envVars, common.PortForwardsEnvVar+"="+common.FormatPortForwards(portForwards))
+	}
+	return envVars
+}
 
 // ErrBranchAlreadyExists is returned when attempting to create a worktree
 // with a branch name that already exists
 var ErrBranchAlreadyExists = errors.New("branch already exists")
+
+// WorktreeLockReason explains why Sidekick locks its git worktrees. Locking
+// prevents "git worktree prune" (including via auto-gc) from deleting a
+// worktree's admin directory under .git/worktrees/ when its working tree is not
+// visible from the environment running prune (e.g. host vs devcontainer sharing
+// the same .git).
+const WorktreeLockReason = "Sidekick-managed worktree; locked to prevent git worktree prune from removing it when the working tree is not visible from this environment"
 
 // ErrTypeBranchAlreadyExists is the application error type for branch already exists errors
 const ErrTypeBranchAlreadyExists = "BranchAlreadyExists"
@@ -93,6 +114,12 @@ type Env interface {
 	// The pattern follows the same semantics as os.CreateTemp: the last
 	// "*" in pattern is replaced with a random string.
 	CreateTemp(ctx context.Context, dir, pattern string) (string, error)
+	// Hibernate saves the worktree state as patches, removes the git worktree
+	// link, and leaves only hibernation artifacts on disk.
+	Hibernate(ctx context.Context, branchName string) (HibernationMetadata, error)
+	// WakeIfHibernated restores the worktree from hibernation if it is currently
+	// hibernated, otherwise it is a no-op.
+	WakeIfHibernated(ctx context.Context) error
 }
 
 // SSHCapableEnv is implemented by environments that support direct SSH access.
@@ -102,6 +129,16 @@ type SSHCapableEnv interface {
 	// The returned args end with the destination; a remote command string
 	// can be appended directly.
 	SSHArgs(ctx context.Context) ([]string, error)
+}
+
+// MergeResultSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. After a
+// successful merge performed inside such an environment, the merged branch
+// must be propagated back to the host repository that is the source of truth.
+type MergeResultSyncer interface {
+	// SyncMergeResultToLocal transfers the given branch's merged state from the
+	// environment back to the host repository.
+	SyncMergeResultToLocal(ctx context.Context, branch string) error
 }
 
 // EnvSeparator returns the path separator string for the env.
@@ -181,20 +218,26 @@ func splitNonEmpty(s, sep string) []string {
 
 type EnvRunCommandInput struct {
 	// the directory relative to the environment's working directory. must not contain ".."
-	RelativeWorkingDir string
-	Command            string
-	Args               []string
-	EnvVars            []string
+	RelativeWorkingDir string   `json:"relativeWorkingDir"`
+	Command            string   `json:"command"`
+	Args               []string `json:"args"`
+	EnvVars            []string `json:"envVars,omitempty"`
+	// SkipWaking suppresses the automatic wake-if-hibernated check in RunCommand.
+	// Must be set to true by the wake/hibernate implementations themselves to
+	// avoid infinite recursion.
+	SkipWaking bool `json:"skipWaking,omitempty"`
 }
 
 type EnvRunCommandOutput = unix.RunCommandActivityOutput
 
 type LocalEnv struct {
 	WorkingDirectory string
+	Hibernated       bool `json:"hibernated,omitempty"`
 }
 
 type LocalGitWorktreeEnv struct {
 	WorkingDirectory string
+	Hibernated       bool `json:"hibernated,omitempty"`
 }
 
 type DevPodEnv struct {
@@ -205,7 +248,10 @@ type DevPodEnv struct {
 	// to read tracked content from local git objects instead of paying the
 	// per-file SSH/sftp cost.
 	LocalRepoDir string `json:"localRepoDir,omitempty"`
-	sftp         sftpConn
+	// PortForwards are host ports reverse-forwarded into the container over
+	// the SSH connection used to run commands.
+	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
+	Hibernated   bool                       `json:"hibernated,omitempty"`
 }
 
 type OpenShellEnv struct {
@@ -216,7 +262,10 @@ type OpenShellEnv struct {
 	// to read tracked content from local git objects instead of paying the
 	// per-file SSH/sftp cost.
 	LocalRepoDir string `json:"localRepoDir,omitempty"`
-	sftp         sftpConn
+	// PortForwards are host ports reverse-forwarded into the container over
+	// the SSH connection used to run commands.
+	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
+	Hibernated   bool                       `json:"hibernated,omitempty"`
 }
 
 type LocalEnvParams struct {
@@ -278,11 +327,13 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 	if params.StartBranch != nil && *params.StartBranch != "" {
 		worktreeBaseRef = *params.StartBranch
 	}
-	// Add the worktree, creating a new branch based on the target branch
+	// Add the worktree, creating a new branch based on the target branch. The
+	// worktree is created locked so that "git worktree prune" won't remove it
+	// from an environment that can't see its working tree.
 	addWorktreeInput := unix.RunCommandActivityInput{
 		WorkingDir: params.RepoDir,
 		Command:    "git",
-		Args:       []string{"worktree", "add", "-b", newBranchName, workingDir, worktreeBaseRef},
+		Args:       []string{"worktree", "add", "--lock", "--reason", WorktreeLockReason, "-b", newBranchName, workingDir, worktreeBaseRef},
 	}
 	addWorktreeOutput, err := unix.RunCommandActivity(ctx, addWorktreeInput)
 	if err != nil {
@@ -301,6 +352,11 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 }
 
 func (e *LocalEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	release, err := acquireLocalReadLockWithWake(ctx, e)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return walkCodeDirectory(ctx, e.WorkingDirectory, ignoreFileNames, handleEntry)
 }
 
@@ -313,16 +369,28 @@ func (e *LocalEnv) GetWorkingDirectory() string {
 }
 
 func (e *LocalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	if !input.SkipWaking {
+		release, err := acquireLocalReadLockWithWake(ctx, e)
+		if err != nil {
+			return EnvRunCommandOutput{}, err
+		}
+		defer release()
+	}
 	runCommandInput := unix.RunCommandActivityInput{
 		WorkingDir: filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir),
 		Command:    input.Command,
 		Args:       input.Args,
-		EnvVars:    append(input.EnvVars, envVarsToInject...),
+		EnvVars:    append(input.EnvVars, envVarsToInject(e.GetType(), nil)...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
 
 func (e *LocalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -330,6 +398,11 @@ func (e *LocalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 }
 
 func (e *LocalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -337,6 +410,11 @@ func (e *LocalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error)
 }
 
 func (e *LocalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -344,6 +422,11 @@ func (e *LocalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs
 }
 
 func (e *LocalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -351,6 +434,11 @@ func (e *LocalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) err
 }
 
 func (e *LocalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -358,6 +446,11 @@ func (e *LocalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 }
 
 func (e *LocalEnv) Remove(ctx context.Context, p string) error {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -365,6 +458,11 @@ func (e *LocalEnv) Remove(ctx context.Context, p string) error {
 }
 
 func (e *LocalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return "", lockErr
+	}
+	defer release()
 	if dir != "" && !filepath.IsAbs(dir) {
 		dir = filepath.Join(e.WorkingDirectory, dir)
 	}
@@ -380,6 +478,11 @@ func (e *LocalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string,
 }
 
 func (e *LocalGitWorktreeEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	release, err := acquireLocalReadLockWithWake(ctx, e)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return walkCodeDirectory(ctx, e.WorkingDirectory, ignoreFileNames, handleEntry)
 }
 
@@ -392,16 +495,28 @@ func (e *LocalGitWorktreeEnv) GetWorkingDirectory() string {
 }
 
 func (e *LocalGitWorktreeEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	if !input.SkipWaking {
+		release, err := acquireLocalReadLockWithWake(ctx, e)
+		if err != nil {
+			return EnvRunCommandOutput{}, err
+		}
+		defer release()
+	}
 	runCommandInput := unix.RunCommandActivityInput{
 		WorkingDir: filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir),
 		Command:    input.Command,
 		Args:       input.Args,
-		EnvVars:    append(input.EnvVars, envVarsToInject...),
+		EnvVars:    append(input.EnvVars, envVarsToInject(e.GetType(), nil)...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
 
 func (e *LocalGitWorktreeEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -409,6 +524,11 @@ func (e *LocalGitWorktreeEnv) ReadFile(ctx context.Context, p string) ([]byte, e
 }
 
 func (e *LocalGitWorktreeEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -416,6 +536,11 @@ func (e *LocalGitWorktreeEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEn
 }
 
 func (e *LocalGitWorktreeEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -423,6 +548,11 @@ func (e *LocalGitWorktreeEnv) WriteFile(ctx context.Context, p string, data []by
 }
 
 func (e *LocalGitWorktreeEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -430,6 +560,11 @@ func (e *LocalGitWorktreeEnv) MkdirAll(ctx context.Context, p string, perm fs.Fi
 }
 
 func (e *LocalGitWorktreeEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -437,6 +572,11 @@ func (e *LocalGitWorktreeEnv) Stat(ctx context.Context, p string) (fs.FileInfo, 
 }
 
 func (e *LocalGitWorktreeEnv) Remove(ctx context.Context, p string) error {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
@@ -444,6 +584,11 @@ func (e *LocalGitWorktreeEnv) Remove(ctx context.Context, p string) error {
 }
 
 func (e *LocalGitWorktreeEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	release, lockErr := acquireLocalReadLockWithWake(ctx, e)
+	if lockErr != nil {
+		return "", lockErr
+	}
+	defer release()
 	if dir != "" && !filepath.IsAbs(dir) {
 		dir = filepath.Join(e.WorkingDirectory, dir)
 	}
@@ -477,8 +622,8 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 // non-zero exit and a clear message on stderr, so callers get an explicit error
 // instead of empty output from a command that silently ran in the SSH session's
 // default directory.
-func buildRemoteShellCommand(workDir string, input EnvRunCommandInput) string {
-	allEnvVars := append(input.EnvVars, envVarsToInject...)
+func buildRemoteShellCommand(workDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) string {
+	allEnvVars := append(input.EnvVars, envVarsToInject(envType, portForwards)...)
 	shellParts := make([]string, 0, len(allEnvVars)+3)
 
 	// Detach stdin from the SSH channel so remote commands behave like local
@@ -501,9 +646,60 @@ func buildRemoteShellCommand(workDir string, input EnvRunCommandInput) string {
 	return strings.Join(shellParts, " && ")
 }
 
+// reverseForwardArgs returns ssh -R flags exposing the configured host ports
+// on the container's loopback interface, so services bound to 127.0.0.1 on the
+// host are reachable from inside the container. When commands multiplex onto
+// an existing ControlMaster connection, the master recognizes repeated
+// identical forward requests as already established, so these flags are safe
+// to include on every invocation and forwards self-heal if the master
+// connection is ever restarted.
+func reverseForwardArgs(forwards []common.PortForwardConfig) []string {
+	args := make([]string, 0, len(forwards)*2)
+	for _, forward := range forwards {
+		args = append(args, "-R", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", forward.ContainerPortOrDefault(), forward.HostPort))
+	}
+	return args
+}
+
+// insertBeforeSSHDestination inserts extra ssh option args before the
+// destination, which must be the last element of sshArgs.
+func insertBeforeSSHDestination(sshArgs []string, extra []string) []string {
+	if len(extra) == 0 {
+		return sshArgs
+	}
+	out := make([]string, 0, len(sshArgs)+len(extra))
+	out = append(out, sshArgs[:len(sshArgs)-1]...)
+	out = append(out, extra...)
+	out = append(out, sshArgs[len(sshArgs)-1])
+	return out
+}
+
 func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	if !input.SkipWaking {
+		if err := wakeIfHibernatedRemote(ctx, e); err != nil {
+			return EnvRunCommandOutput{}, err
+		}
+	}
+
+	output, err := e.runCommandInner(ctx, input)
+
+	// The read-lock wrapper signals a hibernated worktree via a sentinel exit
+	// code; wake and retry when that happens.
+	if !input.SkipWaking && err == nil && output.ExitStatus == hibernatedRemoteExitCode {
+		if _, wakeErr := WakeHibernatedEnv(ctx, e); wakeErr != nil {
+			return EnvRunCommandOutput{}, wakeErr
+		}
+		return e.runCommandInner(ctx, input)
+	}
+	return output, err
+}
+
+func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, input)
+	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+	if !input.SkipWaking {
+		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
+	}
 
 	controlPath := devpodSSHControlPath(e.WorkspaceName)
 	sshHost := e.WorkspaceName + ".devpod"
@@ -515,17 +711,24 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 		"-o", "ServerAliveInterval=10",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "LogLevel=ERROR",
-		sshHost,
-		"--",
-		fullCommand,
 	}
+	sshArgs = append(sshArgs, reverseForwardArgs(e.PortForwards)...)
+	sshArgs = append(sshArgs, sshHost, "--", fullCommand)
 
 	runCommandInput := unix.RunCommandActivityInput{
 		WorkingDir: os.TempDir(),
 		Command:    "ssh",
 		Args:       sshArgs,
 	}
-	output, err := unix.RunCommandActivity(ctx, runCommandInput)
+	// Commands run over SSH into the container ultimately depend on the docker
+	// engine; a hung engine makes them block forever. Guard so such a hang is
+	// detected and the engine restarted instead of stalling the activity.
+	var output EnvRunCommandOutput
+	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
+		var runErr error
+		output, runErr = unix.RunCommandActivity(ctx, runCommandInput)
+		return runErr
+	})
 	if err != nil {
 		return output, err
 	}
@@ -537,7 +740,7 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 func (e *DevPodEnv) SSHArgs(ctx context.Context) ([]string, error) {
 	controlPath := devpodSSHControlPath(e.WorkspaceName)
 	sshHost := e.WorkspaceName + ".devpod"
-	return []string{
+	sshArgs := []string{
 		"-o", "ControlMaster=auto",
 		"-S", controlPath,
 		"-o", "ControlPersist=3600",
@@ -545,9 +748,15 @@ func (e *DevPodEnv) SSHArgs(ctx context.Context) ([]string, error) {
 		"-o", "ServerAliveInterval=10",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "LogLevel=ERROR",
-		sshHost,
-		"--",
-	}, nil
+	}
+	sshArgs = append(sshArgs, reverseForwardArgs(e.PortForwards)...)
+	return append(sshArgs, sshHost, "--"), nil
+}
+
+// sharedSFTP returns the process-wide SFTP connection for this workspace, so
+// env copies deserialized across activity invocations reuse one session.
+func (e *DevPodEnv) sharedSFTP() *sftpConn {
+	return sharedSFTPConnFor("devpod:" + e.WorkspaceName)
 }
 
 // sftpConnKey returns the stable per-remote identity used to share a pooled
@@ -557,6 +766,9 @@ func (e *DevPodEnv) sftpConnKey() string {
 }
 
 func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -564,6 +776,9 @@ func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 }
 
 func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -571,6 +786,9 @@ func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error
 }
 
 func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -578,6 +796,9 @@ func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm f
 }
 
 func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -585,6 +806,9 @@ func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) er
 }
 
 func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -592,6 +816,9 @@ func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 }
 
 func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -599,6 +826,9 @@ func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
 }
 
 func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return "", wakeErr
+	}
 	if dir == "" {
 		dir = "/tmp"
 	} else if !strings.HasPrefix(dir, "/") {
@@ -620,13 +850,36 @@ func (e *OpenShellEnv) GetWorkingDirectory() string {
 }
 
 func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	if !input.SkipWaking {
+		if err := wakeIfHibernatedRemote(ctx, e); err != nil {
+			return EnvRunCommandOutput{}, err
+		}
+	}
+
+	output, err := e.runCommandInner(ctx, input)
+
+	// Read-lock prefix detected hibernation (race with concurrent hibernate)
+	if !input.SkipWaking && err == nil && output.ExitStatus == hibernatedRemoteExitCode {
+		if _, wakeErr := WakeHibernatedEnv(ctx, e); wakeErr != nil {
+			return EnvRunCommandOutput{}, wakeErr
+		}
+		return e.runCommandInner(ctx, input)
+	}
+	return output, err
+}
+
+func (e *OpenShellEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, input)
+	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+	if !input.SkipWaking {
+		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
+	}
 
 	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
 	if err != nil {
 		return EnvRunCommandOutput{}, fmt.Errorf("failed to get SSH config for sandbox %s: %w", e.SandboxName, err)
 	}
+	sshArgs = insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards))
 	sshArgs = append(sshArgs, fullCommand)
 
 	runCommandInput := unix.RunCommandActivityInput{
@@ -638,7 +891,17 @@ func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput)
 }
 
 func (e *OpenShellEnv) SSHArgs(ctx context.Context) ([]string, error) {
-	return openShellSSHArgs(ctx, e.SandboxName)
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return nil, err
+	}
+	return insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards)), nil
+}
+
+// sharedSFTP returns the process-wide SFTP connection for this sandbox, so
+// env copies deserialized across activity invocations reuse one session.
+func (e *OpenShellEnv) sharedSFTP() *sftpConn {
+	return sharedSFTPConnFor("openshell:" + e.SandboxName)
 }
 
 // sftpConnKey returns the stable per-remote identity used to share a pooled
@@ -648,6 +911,9 @@ func (e *OpenShellEnv) sftpConnKey() string {
 }
 
 func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -655,6 +921,9 @@ func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 }
 
 func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -662,6 +931,9 @@ func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, er
 }
 
 func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -669,6 +941,9 @@ func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, per
 }
 
 func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -676,6 +951,9 @@ func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode)
 }
 
 func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -683,6 +961,9 @@ func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) 
 }
 
 func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -690,6 +971,9 @@ func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
 }
 
 func (e *OpenShellEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return "", wakeErr
+	}
 	if dir == "" {
 		dir = "/tmp"
 	} else if !strings.HasPrefix(dir, "/") {
@@ -836,12 +1120,12 @@ func (ec *EnvContainer) UnmarshalJSON(data []byte) error {
 }
 
 type EnvRunCommandActivityInput struct {
-	EnvContainer EnvContainer
-	/* the following fields should always match EnvRunCommandInput */
+	EnvContainer       EnvContainer
 	RelativeWorkingDir string   `json:"relativeWorkingDir"`
 	Command            string   `json:"command"`
 	Args               []string `json:"args"`
 	EnvVars            []string `json:"envVars,omitempty"`
+	SkipWaking         bool     `json:"skipWaking,omitempty"`
 }
 
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
@@ -897,6 +1181,7 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 			Command:            input.Command,
 			Args:               input.Args,
 			EnvVars:            input.EnvVars,
+			SkipWaking:         input.SkipWaking,
 		})
 		resultCh <- result{output: out, err: err}
 	}()

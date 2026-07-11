@@ -3,7 +3,7 @@
 # for bun dependency caching. Early layers are kept byte-identical to
 # .devcontainer/Dockerfile to maximize Docker layer cache reuse.
 
-FROM mcr.microsoft.com/devcontainers/go:1.24
+FROM mcr.microsoft.com/devcontainers/go:1.26
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git ripgrep \
@@ -37,8 +37,8 @@ RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-clo
 ENV CGO_ENABLED=1
 ENV CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm"
 
-# gopls for LSP tests
-RUN go install golang.org/x/tools/gopls@v0.17.1
+# gopls for LSP tests (keep in sync with common.GoplsVersion)
+RUN go install golang.org/x/tools/gopls@v0.21.0
 
 # --- Sandbox-specific additions ---
 

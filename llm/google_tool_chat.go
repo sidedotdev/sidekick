@@ -32,7 +32,7 @@ const (
 	// tier, there might be other differences now?
 	//GoogleDefaultModel     = "gemini-2.5-pro-exp-03-25"
 	//GoogleDefaultModel = "gemini-2.5-pro-preview-03-25"
-	GoogleDefaultModel = "gemini-3-pro-preview"
+	GoogleDefaultModel = "gemini-3.1-pro-preview"
 	thinkingStartTag   = "<thinking>"
 	thinkingEndTag     = "</thinking>"
 )

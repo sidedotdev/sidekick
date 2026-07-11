@@ -11,6 +11,8 @@ import (
 	workflowApi "go.temporal.io/api/workflow/v1"
 	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/testsuite"
+
+	"sidekick/utils"
 )
 
 type PollFailuresWorkflowTestSuite struct {
@@ -27,6 +29,7 @@ func (s *PollFailuresWorkflowTestSuite) SetupTest() {
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
 
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.env.RegisterWorkflow(PollFailuresWorkflow)
 	s.env.RegisterActivity(s.pfa.ListFailedWorkflows)
 	s.env.RegisterActivity(s.pfa.UpdateTaskStatus)

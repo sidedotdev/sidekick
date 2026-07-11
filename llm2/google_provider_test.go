@@ -781,7 +781,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-pro-preview")
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3.1-pro-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, "user", contents[0].Role)

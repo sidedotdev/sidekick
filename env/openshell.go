@@ -8,13 +8,29 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"sidekick/coding/unix"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/temporal"
 )
 
+// openShellGatewayProbeTimeout bounds the fast `sandbox list` gateway
+// reachability probe so a wedged gateway cannot make the probe itself hang.
+const openShellGatewayProbeTimeout = 15 * time.Second
+
 var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// autoRecreateOpenShellGatewayEnvVar controls whether sidekick recreates the
+// OpenShell gateway when sandbox creation fails or times out because the gateway
+// is unreachable. Enabled by default; disable with a falsy value (0, false, no,
+// off).
+const autoRecreateOpenShellGatewayEnvVar = "SIDE_AUTO_RECREATE_OPENSHELL_GATEWAY"
+
+func openShellGatewayRecreateEnabled() bool {
+	return envFlagEnabled(autoRecreateOpenShellGatewayEnvVar)
+}
 
 type OpenShellCreateInput struct {
 	// Source for --from: a Dockerfile path, community sandbox name, or image reference.
@@ -40,6 +56,21 @@ func OpenShellSandboxName(repoDir string) string {
 
 // OpenShellCreateActivity creates an OpenShell sandbox.
 func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (OpenShellCreateOutput, error) {
+	if err := ensureDockerReady(ctx); err != nil {
+		return OpenShellCreateOutput{}, err
+	}
+
+	// A non-interactive `sandbox create` against an unreachable gateway hangs
+	// instead of failing fast, and legitimate creates (which build images) can
+	// run long, so we cannot simply bound create with a short timeout. Instead,
+	// probe reachability up front with the fast `sandbox list` and heal the
+	// gateway before attempting create.
+	if openShellGatewayRecreateEnabled() && openShellGatewayUnreachableViaList(ctx) {
+		if err := recreateOpenShellGateway(ctx); err != nil {
+			return OpenShellCreateOutput{}, err
+		}
+	}
+
 	args := []string{"sandbox", "create"}
 	if input.Name != "" {
 		args = append(args, "--name", input.Name)
@@ -54,15 +85,29 @@ func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (O
 		workingDir = "."
 	}
 
-	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: workingDir,
-		Command:    "openshell",
-		Args:       args,
-	})
+	output, err := runOpenShellSandboxCreate(ctx, workingDir, args)
+
+	// A stopped or crashed gateway leaves stale metadata that openshell reuses
+	// silently in non-interactive mode, so a plain "gateway start" cannot revive
+	// it. Detect that failure mode, recreate the gateway, and retry once.
+	if openShellGatewayRecreateEnabled() && shouldRecreateOpenShellGateway(ctx, output, err) {
+		if recreateErr := recreateOpenShellGateway(ctx); recreateErr != nil {
+			return OpenShellCreateOutput{}, recreateErr
+		}
+		output, err = runOpenShellSandboxCreate(ctx, workingDir, args)
+	}
+
 	if err != nil {
-		return OpenShellCreateOutput{}, fmt.Errorf("openshell sandbox create failed: %w", err)
+		return OpenShellCreateOutput{}, err
 	}
 	if output.ExitStatus != 0 {
+		// When a specific name is requested, concurrent creates for that same
+		// deterministic name race: one wins and the others see "already
+		// exists". An existing sandbox is the reuse outcome callers want, so
+		// treat it as success rather than surfacing a spurious error.
+		if input.Name != "" && sandboxAlreadyExists(output.Stderr+"\n"+output.Stdout) {
+			return OpenShellCreateOutput{SandboxName: input.Name}, nil
+		}
 		return OpenShellCreateOutput{}, fmt.Errorf("openshell sandbox create exited with status %d: %s", output.ExitStatus, output.Stderr)
 	}
 
@@ -71,6 +116,83 @@ func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (O
 		return OpenShellCreateOutput{}, fmt.Errorf("could not determine sandbox name from openshell output")
 	}
 	return OpenShellCreateOutput{SandboxName: name}, nil
+}
+
+// sandboxAlreadyExists reports whether openshell output indicates a create
+// failed because a sandbox with the requested name is already present.
+func sandboxAlreadyExists(output string) bool {
+	return strings.Contains(strings.ToLower(output), "already exists")
+}
+
+func runOpenShellSandboxCreate(ctx context.Context, workingDir string, args []string) (unix.RunCommandActivityOutput, error) {
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: workingDir,
+		Command:    "openshell",
+		Args:       args,
+	})
+	if err != nil {
+		return output, fmt.Errorf("openshell sandbox create failed: %w", err)
+	}
+	return output, nil
+}
+
+// isOpenShellGatewayUnreachable reports whether the failed sandbox-create output
+// indicates that the openshell gateway exists but is not currently reachable.
+func isOpenShellGatewayUnreachable(output unix.RunCommandActivityOutput) bool {
+	combined := output.Stderr + "\n" + output.Stdout
+	return strings.Contains(combined, "is not reachable") ||
+		strings.Contains(combined, "Connection refused") ||
+		strings.Contains(combined, "transport error")
+}
+
+// shouldRecreateOpenShellGateway decides whether the openshell gateway should be
+// recreated based on the sandbox-create result. When the create command itself
+// errors (for example because it timed out), the gateway state is probed via
+// the faster sandbox-list command, whose output reveals an unreachable gateway.
+func shouldRecreateOpenShellGateway(ctx context.Context, output unix.RunCommandActivityOutput, createErr error) bool {
+	if createErr != nil {
+		return openShellGatewayUnreachableViaList(ctx)
+	}
+	if output.ExitStatus != 0 {
+		return isOpenShellGatewayUnreachable(output)
+	}
+	return false
+}
+
+// openShellGatewayUnreachableViaList probes the gateway state using the
+// sandbox-list command, which fails fast instead of hanging like sandbox-create
+// can when the gateway is unreachable.
+func openShellGatewayUnreachableViaList(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, openShellGatewayProbeTimeout)
+	defer cancel()
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: ".",
+		Command:    "openshell",
+		Args:       []string{"sandbox", "list"},
+	})
+	if err != nil || output.ExitStatus == 0 {
+		return false
+	}
+	return isOpenShellGatewayUnreachable(output)
+}
+
+// recreateOpenShellGateway destroys and recreates the openshell gateway. This is
+// required to revive a stopped gateway, since non-interactive "gateway start"
+// reuses stale metadata without bringing the gateway back up.
+func recreateOpenShellGateway(ctx context.Context) error {
+	log.Info().Msg("OpenShell gateway not reachable; recreating it")
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: ".",
+		Command:    "openshell",
+		Args:       []string{"gateway", "start", "--recreate"},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to recreate openshell gateway: %w", err)
+	}
+	if output.ExitStatus != 0 {
+		return fmt.Errorf("openshell gateway start --recreate exited with status %d: %s", output.ExitStatus, output.Stderr)
+	}
+	return nil
 }
 
 func parseCreatedSandboxName(output string) string {
@@ -222,6 +344,105 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 	}
 
 	return OpenShellSyncRepoOutput{ContainerRepoDir: containerRepoDir}, nil
+}
+
+// SyncMergeResultToLocal transfers the given branch from the OpenShell sandbox
+// back to the local host repository. OpenShell holds an independent clone of
+// the repo (synced in via a git bundle) rather than a bind mount, so a merge
+// performed inside the sandbox does not otherwise reach the host checkout that
+// is the source of truth. This bundles the branch out of the sandbox and
+// fast-forwards the local branch, updating its worktree in place when it is
+// checked out.
+var _ MergeResultSyncer = (*OpenShellEnv)(nil)
+
+func (e *OpenShellEnv) SyncMergeResultToLocal(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync merge result to local: OpenShellEnv has no LocalRepoDir")
+	}
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return fmt.Errorf("failed to get SSH args: %w", err)
+	}
+
+	// Bundle the branch inside the sandbox. The working directory is a worktree
+	// that shares the object store, so the branch ref is reachable from here.
+	remoteBundlePath := "/tmp/repo-back-" + e.SandboxName + ".bundle"
+	bundleScript := fmt.Sprintf(
+		"cd %s && rm -f %s && git bundle create %s %s",
+		shellQuote(e.WorkingDirectory),
+		shellQuote(remoteBundlePath),
+		shellQuote(remoteBundlePath),
+		shellQuote(branch),
+	)
+	bundleArgs := append(append([]string{}, sshArgs...), bundleScript)
+	bundleOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       bundleArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create git bundle in sandbox: %w", err)
+	}
+	if bundleOutput.ExitStatus != 0 {
+		return fmt.Errorf("git bundle create in sandbox failed (exit %d): %s", bundleOutput.ExitStatus, bundleOutput.Stderr)
+	}
+
+	localBundle, err := os.CreateTemp("", fmt.Sprintf("openshell-back-%s-*.bundle", e.SandboxName))
+	if err != nil {
+		return fmt.Errorf("failed to allocate bundle temp file: %w", err)
+	}
+	localBundlePath := localBundle.Name()
+	localBundle.Close()
+	defer os.Remove(localBundlePath)
+
+	downloadArgs := append(append([]string{}, sshArgs...), fmt.Sprintf("cat %s", shellQuote(remoteBundlePath)))
+	downloadOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "sh",
+		Args:       []string{"-c", fmt.Sprintf("ssh %s > %s", strings.Join(quoteArgs(downloadArgs), " "), shellQuote(localBundlePath))},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to download bundle from sandbox: %w", err)
+	}
+	if downloadOutput.ExitStatus != 0 {
+		return fmt.Errorf("bundle download failed (exit %d): %s", downloadOutput.ExitStatus, downloadOutput.Stderr)
+	}
+
+	// Best-effort cleanup of the sandbox-side bundle.
+	cleanupArgs := append(append([]string{}, sshArgs...), fmt.Sprintf("rm -f %s", shellQuote(remoteBundlePath)))
+	_, _ = unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       cleanupArgs,
+	})
+
+	// Apply the branch to the local repo. The bundle path and branch are passed
+	// as positional arguments ($1, $2) rather than interpolated into the script
+	// so that arbitrary branch names cannot alter the shell command. Fetch into
+	// a temporary ref first, which is always permitted (even for the currently
+	// checked-out branch), then advance the local branch: when a worktree has it
+	// checked out, merge --ff-only there so both the ref and the working tree
+	// move; otherwise update the ref directly.
+	applyScript := `set -e
+bundle="$1"
+branch="$2"
+tempref="refs/sidekick-sync/$branch"
+git fetch "$bundle" "+refs/heads/$branch:$tempref"
+wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p; exit}')
+if [ -n "$wt" ]; then git -C "$wt" merge --ff-only "$tempref"; else git update-ref "refs/heads/$branch" "$tempref"; fi
+git update-ref -d "$tempref"`
+	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: e.LocalRepoDir,
+		Command:    "sh",
+		Args:       []string{"-c", applyScript, "sh", localBundlePath, branch},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to apply synced branch to local repo: %w", err)
+	}
+	if applyOutput.ExitStatus != 0 {
+		return fmt.Errorf("applying synced branch to local repo failed (exit %d): %s", applyOutput.ExitStatus, applyOutput.Stderr)
+	}
+	return nil
 }
 
 // quoteArgs shell-quotes each argument for use in a sh -c command.

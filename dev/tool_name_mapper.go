@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sidekick/common"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
 	"sidekick/utils"
+	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -52,20 +54,24 @@ func ResolveToolNameMappingActivity(_ context.Context, input ResolveToolNameMapp
 	return ResolveToolNameMappingResult{UseMapping: useOAuth}, nil
 }
 
-func resolveStreamToolNameMapping(ctx workflow.Context, modelConfig common.ModelConfig, secrets secret_manager.SecretManagerContainer) (*persisted_ai.ToolNameMappingConfig, error) {
+func resolveStreamToolNameMapping(eCtx flow_action.ExecContext, modelConfig common.ModelConfig, secrets secret_manager.SecretManagerContainer) (*persisted_ai.ToolNameMappingConfig, error) {
 	// FIXME use provider type instead (needs list of providers or the specific provider type passed in)
 	if modelConfig.NormalizedProviderName() != "ANTHROPIC" {
 		return nil, nil
 	}
 
-	v := workflow.GetVersion(ctx, "resolve-tool-name-mapping-activity", workflow.DefaultVersion, 1)
+	v := workflow.GetVersion(eCtx, "resolve-tool-name-mapping-activity", workflow.DefaultVersion, 1)
 	if v >= 1 {
 		var result ResolveToolNameMappingResult
-		err := workflow.ExecuteActivity(
-			utils.NoRetryCtx(ctx),
+		retryECtx := eCtx
+		retryECtx.Context = utils.RetryCtx(eCtx.Context, 3, 10*time.Second)
+		err := flow_action.PerformActivityWithUserRetry(
+			retryECtx,
+			"Resolve tool name mapping",
 			ResolveToolNameMappingActivity,
+			&result,
 			ResolveToolNameMappingInput{Secrets: secrets},
-		).Get(ctx, &result)
+		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve tool name mapping: %w", err)
 		}

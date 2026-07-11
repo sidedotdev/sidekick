@@ -10,6 +10,7 @@ const (
 	JudgingKey               = "judging"
 	SummarizationKey         = "summarization"
 	QueryExpansionKey        = "query_expansion"
+	AdvisingKey              = "advising"
 )
 
 type LLMConfig struct {

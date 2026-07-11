@@ -40,6 +40,26 @@ func RetryCtx(ctx workflow.Context, maxAttempts int32, maxInterval time.Duration
 	return ctx
 }
 
+// ProvisioningRetryCtx returns a context for environment-provisioning
+// activities (starting a DevPod workspace, creating an OpenShell sandbox).
+// These can hit transient docker/network failures, so they get a small,
+// bounded number of automatic retries; once exhausted the failure surfaces
+// for user-initiated retry rather than retrying indefinitely. The longer
+// timeout accommodates image builds.
+func ProvisioningRetryCtx(ctx workflow.Context) workflow.Context {
+	retrypolicy := &temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2.0,
+		MaximumInterval:    30 * time.Second,
+		MaximumAttempts:    3,
+	}
+	options := workflow.ActivityOptions{
+		StartToCloseTimeout: 15 * time.Minute,
+		RetryPolicy:         retrypolicy,
+	}
+	return workflow.WithActivityOptions(ctx, options)
+}
+
 var LlmNumRetries = 4
 
 func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
@@ -53,6 +73,27 @@ func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
 
 	options := workflow.ActivityOptions{
 		StartToCloseTimeout: 45 * time.Minute,
+		HeartbeatTimeout:    20 * time.Second,
+		RetryPolicy:         retrypolicy,
+	}
+	ctx = workflow.WithActivityOptions(ctx, options)
+	return ctx
+}
+
+// LlmBoundedHeartbeatCtx configures LLM activity options with the standard
+// heartbeat timeout but a short start-to-close timeout and a small, quick set of
+// automatic retries. It's intended for callers that have their own fallback and
+// want a failing LLM to surface quickly rather than retrying for a long time.
+func LlmBoundedHeartbeatCtx(ctx workflow.Context) workflow.Context {
+	retrypolicy := &temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2.0,
+		MaximumInterval:    3 * time.Second,
+		MaximumAttempts:    3,
+	}
+
+	options := workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
 		HeartbeatTimeout:    20 * time.Second,
 		RetryPolicy:         retrypolicy,
 	}

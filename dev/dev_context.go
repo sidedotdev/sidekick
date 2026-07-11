@@ -28,6 +28,9 @@ type DevContext struct {
 	// Idd indicates the work originates from an Intent Driven Development flow,
 	// enabling the intent/ directory guidance in coding-agent prompts.
 	Idd bool
+	// AdvisorEnabled is a per-run toggle (chosen in the task modal) for the
+	// background advisor. It defaults to true when unset in ConfigOverrides.
+	AdvisorEnabled bool
 }
 
 // WithContext returns a new DevContext with the workflow.Context updated.
@@ -226,16 +229,24 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 		devPodUpInput := env.DevPodUpInput{WorkspacePath: repoDir}
 		// Check for a custom workspace ID from repo config
+		var portForwards []common.PortForwardConfig
 		tempRepoConfigForDevPod, configErr := GetRepoConfig(tempLocalExecContext)
 		if configErr == nil {
 			configOverrides.ApplyToRepoConfig(&tempRepoConfigForDevPod)
+			portForwards = tempRepoConfigForDevPod.PortForwards
 			if tempRepoConfigForDevPod.DevPodConfig.WorkspaceId != "" {
 				devpodWorkspaceName = tempRepoConfigForDevPod.DevPodConfig.WorkspaceId
 				devPodUpInput.WorkspaceId = devpodWorkspaceName
 			}
 		}
 
-		err = workflow.ExecuteActivity(ctx, env.DevPodUpActivity, devPodUpInput).Get(ctx, nil)
+		// Provisioning can hit transient docker/network failures, and devpod up
+		// can legitimately take many minutes (image builds). ProvisioningRetryCtx
+		// gives it a generous timeout and a small bounded number of automatic
+		// retries before surfacing the failure for user-initiated retry rather
+		// than retrying indefinitely.
+		provisionCtx := utils.ProvisioningRetryCtx(ctx)
+		err = workflow.ExecuteActivity(provisionCtx, env.DevPodUpActivity, devPodUpInput).Get(provisionCtx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to start DevPod workspace: %v", err)
 		}
@@ -248,6 +259,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -276,12 +288,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: worktree.WorkingDirectory,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		}
 	case string(env.EnvTypeOpenShell):
@@ -290,6 +304,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			configOverrides.ApplyToRepoConfig(&tempRepoConfigForOpenShell)
 		}
 		osConfig := tempRepoConfigForOpenShell.OpenShellConfig
+		portForwards := tempRepoConfigForOpenShell.PortForwards
 
 		sandboxName := env.OpenShellSandboxName(repoDir)
 		// Reuse an existing sandbox for this workspace if it is still alive.
@@ -314,13 +329,16 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				}
 			}
 
-			// TODO increase timeout for sandbox creation
 			var createOutput env.OpenShellCreateOutput
-			err = workflow.ExecuteActivity(ctx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
+			// Provisioning can hit transient docker/network failures, so retry a
+			// small bounded number of times before surfacing the failure for
+			// user-initiated retry.
+			provisionCtx := utils.ProvisioningRetryCtx(ctx)
+			err = workflow.ExecuteActivity(provisionCtx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
 				Name:    sandboxName,
 				Source:  osConfig.From,
 				RepoDir: repoDir,
-			}).Get(ctx, &createOutput)
+			}).Get(provisionCtx, &createOutput)
 			if err != nil {
 				return DevContext{}, fmt.Errorf("failed to create OpenShell sandbox: %v", err)
 			}
@@ -344,6 +362,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: containerWorkDir,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -372,12 +391,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkingDirectory: worktree.WorkingDirectory,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.OpenShellEnv{
 				WorkingDirectory: containerWorkDir,
 				SandboxName:      sandboxName,
 				LocalRepoDir:     repoDir,
+				PortForwards:     portForwards,
 			}}
 		}
 	default:
@@ -497,17 +518,21 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	devCtx := DevContext{
-		ExecContext: eCtx,
-		Worktree:    worktree,
-		RepoConfig:  repoConfig,
+		ExecContext:    eCtx,
+		Worktree:       worktree,
+		RepoConfig:     repoConfig,
+		AdvisorEnabled: configOverrides.IsAdvisorEnabled(),
 	}
 
-	// Fetch and store git user config for commit authorship
+	// Fetch and store git user config for commit authorship. This must run
+	// against the local env (the developer's machine) rather than the flow's
+	// env, since containerized environments (devpod/open shell) generally lack
+	// the developer's git identity and we want commits attributed to them.
 	if v := workflow.GetVersion(ctx, "git-user-config-in-global-state", workflow.DefaultVersion, 1); v >= 1 {
 		var gitUserConfig git.GitUserConfig
-		err = workflow.ExecuteActivity(ctx, git.GetGitUserConfigActivity, envContainer).Get(ctx, &gitUserConfig)
+		err = workflow.ExecuteActivity(ctx, git.GetGitUserConfigActivity, *tempLocalExecContext.EnvContainer).Get(ctx, &gitUserConfig)
 		if err != nil {
-			// Log but don't fail - the activity will fall back to git config lookup
+			// Log but don't fail - commit authorship falls back to git config lookup
 			log.Warn().Err(err).Msg("Failed to get git user config, will fall back to git config lookup")
 		} else {
 			eCtx.GlobalState.SetValue("committerName", gitUserConfig.Name)
@@ -618,6 +643,24 @@ func handleFlowCancel(dCtx DevContext) {
 	}
 
 	if dCtx.Worktree != nil {
+		// If hibernated, wake the worktree first so CleanupWorktreeActivity can operate on it.
+		// The explicit WakeWorktreeActivity call (rather than relying on auto-wake)
+		// is necessary here because CleanupWorktreeActivity needs a functional
+		// worktree and we're in a cancellation context where auto-wake may not
+		// trigger in time.
+		val := dCtx.ExecContext.GlobalState.GetValue(globalStateKeyHibernated)
+		hibernated, _ := val.(bool)
+		if hibernated {
+			var wakeOutput git.WakeWorktreeOutput
+			err := workflow.ExecuteActivity(disconnectedCtx, git.WakeWorktreeActivity, git.WakeWorktreeInput{
+				EnvContainer: *dCtx.EnvContainer,
+			}).Get(disconnectedCtx, &wakeOutput)
+			if err != nil {
+				workflow.GetLogger(dCtx).Error("Failed to wake hibernated worktree during cancellation", "error", err)
+			}
+			dCtx.ExecContext.GlobalState.SetValue(globalStateKeyHibernated, nil)
+		}
+
 		future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
 		if err := future.Get(disconnectedCtx, nil); err != nil {
 			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree during workflow cancellation", "error", err, "worktree", dCtx.Worktree.Name)
