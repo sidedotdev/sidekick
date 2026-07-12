@@ -598,3 +598,56 @@ func TestBuildFailureSummaryShowsBuildFailed(t *testing.T) {
 	assert.Contains(t, summary, "build failed")
 	assert.NotContains(t, summary, "no tests")
 }
+
+func TestBuildOutputEventsFlushedOnBuildFail(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	buildPath := "pkg/build [pkg/build.test]"
+	s.ProcessEvent(TestEvent{Action: "build-output", ImportPath: buildPath, Output: "# pkg/build [pkg/build.test]\n"})
+	s.ProcessEvent(TestEvent{Action: "build-output", ImportPath: buildPath, Output: "pkg/build/broken.go:5:2: undefined: nope\n"})
+	s.ProcessEvent(TestEvent{Action: "build-fail", ImportPath: buildPath})
+	s.ProcessEvent(TestEvent{Action: "start", Package: "pkg/build"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/build", Output: "FAIL\tpkg/build [build failed]\n"})
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/build", FailedBuild: buildPath})
+
+	output := out.String()
+	assert.Contains(t, output, "--- pkg/build ---")
+	assert.Contains(t, output, "undefined: nope")
+	assert.NotContains(t, output, "# pkg/build")
+	assert.NotContains(t, output, "FAIL\tpkg/build [build failed]")
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "build failed")
+}
+
+func TestBuildOutputForFailedDependencyShownOnce(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	s.ProcessEvent(TestEvent{Action: "build-output", ImportPath: "pkg/dep", Output: "# pkg/dep\n"})
+	s.ProcessEvent(TestEvent{Action: "build-output", ImportPath: "pkg/dep", Output: "pkg/dep/dep.go:3:1: syntax error\n"})
+	s.ProcessEvent(TestEvent{Action: "build-fail", ImportPath: "pkg/dep"})
+	for _, pkg := range []string{"pkg/a", "pkg/b"} {
+		s.ProcessEvent(TestEvent{Action: "output", Package: pkg, Output: "FAIL\t" + pkg + " [build failed]\n"})
+		s.ProcessEvent(TestEvent{Action: "fail", Package: pkg, FailedBuild: "pkg/dep"})
+	}
+
+	output := out.String()
+	assert.Contains(t, output, "--- pkg/a ---")
+	assert.Contains(t, output, "--- pkg/b ---")
+	// Dependency headers are kept since they identify the broken package,
+	// and the messages are not repeated for every affected package.
+	assert.Equal(t, 1, strings.Count(output, "# pkg/dep"))
+	assert.Equal(t, 1, strings.Count(output, "syntax error"))
+	assert.Contains(t, output, "build failed\n")
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "pkg/a")
+	assert.Contains(t, summary, "pkg/b")
+	assert.Contains(t, summary, "build failed")
+}

@@ -18,6 +18,12 @@ type TestEvent struct {
 	Test    string    `json:"Test"`
 	Output  string    `json:"Output"`
 	Elapsed float64   `json:"Elapsed"`
+	// ImportPath is set on build-output/build-fail events (Go 1.24+ emits
+	// build diagnostics as JSON instead of plain text).
+	ImportPath string `json:"ImportPath"`
+	// FailedBuild names the ImportPath whose failed build caused this
+	// package-level fail event.
+	FailedBuild string `json:"FailedBuild"`
 }
 
 type packageStatus string
@@ -52,13 +58,16 @@ type Streamer struct {
 	packages map[string]*packageResult
 	// per-test buffered output keyed by "package/testname"
 	testOutput map[string][]string
+	// buffered build-output lines keyed by build ImportPath
+	buildOutput map[string][]string
 }
 
 func NewStreamer(out io.Writer) *Streamer {
 	return &Streamer{
-		out:        out,
-		packages:   make(map[string]*packageResult),
-		testOutput: make(map[string][]string),
+		out:         out,
+		packages:    make(map[string]*packageResult),
+		testOutput:  make(map[string][]string),
+		buildOutput: make(map[string][]string),
 	}
 }
 
@@ -80,6 +89,18 @@ func testKey(pkg, test string) string {
 
 // ProcessEvent handles a single TestEvent.
 func (s *Streamer) ProcessEvent(ev TestEvent) {
+	switch ev.Action {
+	case "build-output":
+		// Buffer compiler/vet messages until we know which test package
+		// they caused to fail.
+		s.buildOutput[ev.ImportPath] = append(s.buildOutput[ev.ImportPath], ev.Output)
+		return
+	case "build-fail":
+		// The affected package(s) also get a regular fail event carrying
+		// FailedBuild, which is where the buffered output gets flushed.
+		return
+	}
+
 	pr := s.getOrCreatePackage(ev.Package)
 
 	switch ev.Action {
@@ -126,6 +147,14 @@ func (s *Streamer) ProcessEvent(ev TestEvent) {
 			// Package failed
 			pr.status = statusFail
 			pr.elapsed = ev.Elapsed
+			if ev.FailedBuild != "" {
+				pr.failureReason = "build failed"
+				// Show the build messages once, under the first package that
+				// failed because of this build; other packages sharing the
+				// same broken dependency just report "build failed".
+				pr.packageOutput = append(s.buildOutput[ev.FailedBuild], pr.packageOutput...)
+				delete(s.buildOutput, ev.FailedBuild)
+			}
 			// Flush buffered output for tests that never got a terminal event (e.g. timeout)
 			s.flushRemainingTestOutput(pr)
 			// Flush any remaining package-level output
@@ -218,7 +247,9 @@ func shouldSkipPackageOutputLine(pr *packageResult, line string) bool {
 	}
 
 	trimmed := strings.TrimSpace(line)
-	if trimmed == "# "+pr.name {
+	// Build headers appear either bare ("# pkg") or with the build target
+	// ("# pkg [pkg.test]").
+	if trimmed == "# "+pr.name || strings.HasPrefix(trimmed, "# "+pr.name+" [") {
 		return true
 	}
 
