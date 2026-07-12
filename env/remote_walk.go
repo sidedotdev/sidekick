@@ -42,26 +42,29 @@ type RemoteWalkContentMode string
 
 const (
 	// RemoteWalkContentModeSFTP reads every file's content via the env's
-	// SFTP transport. This is the default — simpler and lower-latency for
-	// small numbers of file reads.
+	// SFTP transport. Each read costs a transport round trip, which makes
+	// full-repo walks prohibitively slow on high-latency links (e.g. cloud
+	// sandboxes).
 	RemoteWalkContentModeSFTP RemoteWalkContentMode = "sftp"
 	// RemoteWalkContentModeSnapshot reads unchanged tracked files from
 	// local git objects (via gitwalk's cat-file pool) and falls back to
-	// SFTP only for overlay-changed or untracked files.
+	// SFTP only for overlay-changed or untracked files. This is the
+	// default: walks touch every file, so avoiding a per-file remote round
+	// trip dominates, and typically only a handful of files are dirty.
 	RemoteWalkContentModeSnapshot RemoteWalkContentMode = "snapshot"
 )
 
 // remoteWalkContentModeEnv lets operators flip the default content mode
-// without recompiling. Unset / unrecognized values resolve to the SFTP
+// without recompiling. Unset / unrecognized values resolve to the snapshot
 // default.
 const remoteWalkContentModeEnv = "SIDEKICK_REMOTE_WALK_CONTENT_MODE"
 
 func remoteWalkContentMode() RemoteWalkContentMode {
 	switch RemoteWalkContentMode(os.Getenv(remoteWalkContentModeEnv)) {
-	case RemoteWalkContentModeSnapshot:
-		return RemoteWalkContentModeSnapshot
-	default:
+	case RemoteWalkContentModeSFTP:
 		return RemoteWalkContentModeSFTP
+	default:
+		return RemoteWalkContentModeSnapshot
 	}
 }
 
@@ -87,8 +90,18 @@ func WalkCodeDirectoryEntriesViaEnv(
 ) error {
 	switch env := ec.Env.(type) {
 	case *LocalEnv:
+		release, err := acquireLocalReadLockWithWake(ctx, env)
+		if err != nil {
+			return err
+		}
+		defer release()
 		return walkCodeDirectoryEntries(ctx, env.WorkingDirectory, common.SidekickIgnoreFileNames, handleEntry)
 	case *LocalGitWorktreeEnv:
+		release, err := acquireLocalReadLockWithWake(ctx, env)
+		if err != nil {
+			return err
+		}
+		defer release()
 		return walkCodeDirectoryEntries(ctx, env.WorkingDirectory, common.SidekickIgnoreFileNames, handleEntry)
 	case *DevPodEnv:
 		return walkCodeDirectorySSHEntries(ctx, env, env.LocalRepoDir, env.WorkingDirectory,

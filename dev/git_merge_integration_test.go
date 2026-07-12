@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,14 +164,17 @@ func TestOpenShellGitMergeIntegration(t *testing.T) {
 	ripgrepDockerfile := filepath.Join(devToolsRepoRoot(t), "env", "testdata", "Dockerfile.openshell-ripgrep")
 	sandboxName := openshellFixtureSandboxName(t, ripgrepDockerfile)
 
-	checkOutput, err := env.OpenShellCheckSandboxActivity(ctx, env.OpenShellCheckSandboxInput{SandboxName: sandboxName})
-	require.NoError(t, err, "OpenShellCheckSandboxActivity failed")
+	checkOutput, err := env.CheckSandboxActivity(ctx, env.CheckSandboxInput{EnvType: env.EnvTypeOpenShell, SandboxName: sandboxName})
+	require.NoError(t, err, "CheckSandboxActivity failed")
 	if !checkOutput.Alive {
-		createOutput, err := env.OpenShellCreateActivity(ctx, env.OpenShellCreateInput{
-			Source: ripgrepDockerfile,
-			Name:   sandboxName,
+		osConfig, err := json.Marshal(common.OpenShellEnvConfig{From: ripgrepDockerfile})
+		require.NoError(t, err)
+		createOutput, err := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{
+			EnvType: env.EnvTypeOpenShell,
+			Name:    sandboxName,
+			Config:  osConfig,
 		})
-		require.NoError(t, err, "OpenShellCreateActivity failed")
+		require.NoError(t, err, "CreateSandboxActivity failed")
 		require.Equal(t, sandboxName, createOutput.SandboxName)
 	}
 
@@ -184,14 +188,14 @@ func TestOpenShellGitMergeIntegration(t *testing.T) {
 	require.NoError(t, err)
 	initContainerGitRepo(t, ctx, localEnv, hostRepoDir)
 
-	syncOutput, err := env.OpenShellSyncRepoActivity(ctx, env.OpenShellSyncRepoInput{
-		SandboxName:  sandboxName,
+	syncOutput, err := env.SyncRepoToRemoteActivity(ctx, env.SyncRepoToRemoteInput{
+		EnvContainer: env.EnvContainer{Env: &env.OpenShellEnv{SandboxName: sandboxName, LocalRepoDir: hostRepoDir}},
 		LocalRepoDir: hostRepoDir,
 	})
-	require.NoError(t, err, "OpenShellSyncRepoActivity failed")
+	require.NoError(t, err, "SyncRepoToRemoteActivity failed")
 
 	repoEnv := &env.OpenShellEnv{
-		WorkingDirectory: syncOutput.ContainerRepoDir,
+		WorkingDirectory: syncOutput.RemoteRepoDir,
 		SandboxName:      sandboxName,
 		LocalRepoDir:     hostRepoDir,
 	}
@@ -202,9 +206,67 @@ func TestOpenShellGitMergeIntegration(t *testing.T) {
 		defer cancel()
 		_, _ = repoEnv.RunCommand(cleanupCtx, env.EnvRunCommandInput{
 			Command: "rm",
-			Args:    []string{"-rf", syncOutput.ContainerRepoDir},
+			Args:    []string{"-rf", syncOutput.RemoteRepoDir},
 		})
 	})
 
+	runGitMergeIntegration(t, ctx, env.EnvContainer{Env: repoEnv}, hostRepoDir)
+}
+
+func TestModalGitMergeIntegration(t *testing.T) {
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		t.Skip("skipping Modal git merge integration test; SIDE_E2E_TEST not set to true")
+	}
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping Modal git merge integration test; credentials are unavailable in non-local sidekick environments")
+	}
+
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
+		defer cancel()
+	}
+
+	baseEnv := setupModalSandbox(t, ctx, modalFixtureSandboxName)
+
+	// The host repo is the source of truth. The Modal sandbox holds an
+	// independent clone (no bind mount), so create the repo locally, sync it
+	// in, run the merge in the sandbox, and rely on GitMergeActivity syncing
+	// the result back to this host repo, which we then verify.
+	hostRepoDir := filepath.Join(t.TempDir(), "modal-merge-repo")
+	require.NoError(t, os.MkdirAll(hostRepoDir, 0o755))
+	localEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: hostRepoDir})
+	require.NoError(t, err)
+	initContainerGitRepo(t, ctx, localEnv, hostRepoDir)
+
+	syncOutput, err := env.SyncRepoToRemoteActivity(ctx, env.SyncRepoToRemoteInput{
+		EnvContainer: env.EnvContainer{Env: &env.ModalEnv{
+			SandboxName:  modalFixtureSandboxName,
+			SSHHost:      baseEnv.SSHHost,
+			SSHPort:      baseEnv.SSHPort,
+			LocalRepoDir: hostRepoDir,
+		}},
+		LocalRepoDir: hostRepoDir,
+	})
+	require.NoError(t, err, "SyncRepoToRemoteActivity failed")
+
+	repoEnv := &env.ModalEnv{
+		WorkingDirectory: syncOutput.RemoteRepoDir,
+		SandboxName:      modalFixtureSandboxName,
+		SSHHost:          baseEnv.SSHHost,
+		SSHPort:          baseEnv.SSHPort,
+		LocalRepoDir:     hostRepoDir,
+	}
+	// The sandbox is reused across runs; remove this per-run synced repo so
+	// stale worktree/branch state can't leak into the next run.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = repoEnv.RunCommand(cleanupCtx, env.EnvRunCommandInput{
+			Command: "rm",
+			Args:    []string{"-rf", syncOutput.RemoteRepoDir},
+		})
+	})
 	runGitMergeIntegration(t, ctx, env.EnvContainer{Env: repoEnv}, hostRepoDir)
 }

@@ -24,13 +24,18 @@ import (
 
 const remoteSFTPPrefix = "/tmp/side-sftp-"
 
+// remoteActivityMarker is the file whose mtime the in-sandbox idle watchdog
+// reads as "last client activity" (see env/modal_watchdog.sh).
+const remoteActivityMarker = "/tmp/.sidekick-activity"
+
 // sftpConn manages a persistent SFTP client connection over SSH.
 // It is safe for concurrent use; the underlying sftp.Client multiplexes requests.
 type sftpConn struct {
-	mu      sync.Mutex
-	client  *sftp.Client
-	cmd     *exec.Cmd
-	latency time.Duration
+	mu                sync.Mutex
+	client            *sftp.Client
+	cmd               *exec.Cmd
+	latency           time.Duration
+	lastActivityTouch time.Time
 }
 
 // getOrDial returns the cached SFTP client, dialing a new connection if needed.
@@ -38,10 +43,34 @@ func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
-	if sc.client != nil {
-		return sc.client, nil
+	if sc.client == nil {
+		if _, err := sc.dialLocked(ctx, sshEnv); err != nil {
+			return nil, err
+		}
 	}
-	return sc.dialLocked(ctx, sshEnv)
+	sc.touchActivityLocked()
+	return sc.client, nil
+}
+
+// touchActivityLocked asynchronously refreshes the in-sandbox idle-watchdog
+// activity marker: command execution touches it via a shell wrapper, but pure
+// file operations would otherwise be invisible to the watchdog between its
+// polls. Best-effort, and throttled since every touch costs a round trip.
+func (sc *sftpConn) touchActivityLocked() {
+	if time.Since(sc.lastActivityTouch) < 10*time.Second {
+		return
+	}
+	sc.lastActivityTouch = time.Now()
+	client := sc.client
+	go func() {
+		now := time.Now()
+		if err := client.Chtimes(remoteActivityMarker, now, now); err != nil {
+			if f, createErr := client.Create(remoteActivityMarker); createErr == nil {
+				f.Close()
+				_ = client.Chtimes(remoteActivityMarker, now, now)
+			}
+		}
+	}()
 }
 
 // resetAndDial closes any existing connection and establishes a new one.

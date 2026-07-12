@@ -1112,34 +1112,30 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
-	if !mergeResult.HasConflicts && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
-		devPodEnv := dCtx.EnvContainer.Env.(*env.DevPodEnv)
-		if dCtx.Worktree != nil {
-			err := workflow.ExecuteActivity(dCtx, env.DevPodDeleteActivity, devPodEnv.WorkspaceName).Get(dCtx, nil)
-			if err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to delete DevPod workspace", "error", err)
+	if !mergeResult.HasConflicts {
+		if sandboxEnv, ok := dCtx.EnvContainer.Env.(env.SandboxEnv); ok {
+			envType := sandboxEnv.GetType()
+			sandboxName := sandboxEnv.GetSandboxName()
+			if dCtx.Worktree != nil {
+				// With the worktree merged and cleaned up there is nothing to
+				// resume later, so delete rather than stop (they only differ
+				// for providers with a stop-without-delete lifecycle).
+				err := workflow.ExecuteActivity(dCtx, env.DeleteSandboxActivity, env.DeleteSandboxInput{
+					EnvType:     envType,
+					SandboxName: sandboxName,
+				}).Get(dCtx, nil)
+				if err != nil {
+					workflow.GetLogger(dCtx).Error("Failed to delete sandbox", "envType", envType, "error", err)
+				}
+			} else {
+				err := workflow.ExecuteActivity(dCtx, env.StopSandboxActivity, env.StopSandboxInput{
+					EnvType:     envType,
+					SandboxName: sandboxName,
+				}).Get(dCtx, nil)
+				if err != nil {
+					workflow.GetLogger(dCtx).Error("Failed to stop sandbox", "envType", envType, "error", err)
+				}
 			}
-		} else {
-			err := workflow.ExecuteActivity(dCtx, env.DevPodStopActivity, devPodEnv.WorkspaceName).Get(dCtx, nil)
-			if err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to stop DevPod workspace", "error", err)
-			}
-		}
-	}
-
-	if !mergeResult.HasConflicts && dCtx.EnvContainer.Env.GetType() == env.EnvTypeOpenShell {
-		openShellEnv := dCtx.EnvContainer.Env.(*env.OpenShellEnv)
-		err := workflow.ExecuteActivity(dCtx, env.OpenShellStopActivity, openShellEnv.SandboxName).Get(dCtx, nil)
-		if err != nil {
-			workflow.GetLogger(dCtx).Error("Failed to stop OpenShell sandbox", "error", err)
-		}
-	}
-
-	if !mergeResult.HasConflicts && dCtx.EnvContainer.Env.GetType() == env.EnvTypeModal {
-		modalEnv := dCtx.EnvContainer.Env.(*env.ModalEnv)
-		err := workflow.ExecuteActivity(dCtx, env.ModalStopActivity, env.ModalStopInput{SandboxName: modalEnv.SandboxName}).Get(dCtx, nil)
-		if err != nil {
-			workflow.GetLogger(dCtx).Error("Failed to stop Modal sandbox", "error", err)
 		}
 	}
 

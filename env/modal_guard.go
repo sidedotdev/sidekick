@@ -2,7 +2,6 @@ package env
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	_ "embed"
@@ -34,57 +33,42 @@ var modalWatchdogScript string
 const (
 	// modalGuardAppName is the Modal app hosting the sidekick guard: a tiny
 	// serverless (scale-to-zero) app that lets a sandbox holding a
-	// sandbox-scoped HMAC token snapshot and terminate only itself. Modal
+	// per-sandbox random token snapshot and terminate only itself. Modal
 	// account tokens therefore never enter untrusted task sandboxes, while
 	// idle sandboxes still stop billing when the sidekick host is offline.
-	modalGuardAppName    = "sidekick-guard"
-	modalGuardSecretName = "sidekick-guard-key"
+	modalGuardAppName = "sidekick-guard"
+	// modalGuardTokenTagKey is the sandbox tag holding the hash of that
+	// sandbox's guard token. Tags require workspace credentials to write,
+	// which sandboxes never hold, so the tag is a tamper-proof auth record
+	// carried by the sandbox itself. Must match GUARD_TOKEN_TAG in
+	// modal_guard_app.py.
+	modalGuardTokenTagKey = "side-guard-token"
 )
 
 var modalGuardMu sync.Mutex
 
-// ensureModalGuardKey returns the shared HMAC key used to mint
-// sandbox-scoped guard tokens, generating it on first use. It lives in the
-// sidekick data home and, as a Modal secret, in the guard deployment; only
-// derived per-sandbox tokens ever enter sandboxes.
-func ensureModalGuardKey() (string, error) {
-	dataHome, err := common.GetSidekickDataHome()
-	if err != nil {
-		return "", fmt.Errorf("failed to get sidekick data home: %w", err)
-	}
-	keyPath := filepath.Join(dataHome, "modal", "guard.key")
-	data, err := os.ReadFile(keyPath)
-	if err == nil && len(strings.TrimSpace(string(data))) > 0 {
-		return strings.TrimSpace(string(data)), nil
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("failed to read modal guard key: %w", err)
-	}
+// newModalGuardToken generates a random per-sandbox guard token together
+// with the hash of it that the host stores as a tag on the sandbox. The
+// sandbox receives only the raw token; the guard authorizes a request by
+// comparing the presented token's hash against the tag, so a compromised
+// sandbox can never act on a sibling.
+func newModalGuardToken() (token, tokenHash string, err error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		return "", err
+		return "", "", err
 	}
-	key := hex.EncodeToString(raw)
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
-		return "", fmt.Errorf("failed to create modal key dir: %w", err)
-	}
-	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
-		return "", fmt.Errorf("failed to write modal guard key: %w", err)
-	}
-	return key, nil
+	token = hex.EncodeToString(raw)
+	return token, modalGuardTokenHash(token), nil
 }
 
-// modalGuardToken derives the token a sandbox uses to authenticate
-// hibernation requests to the guard, scoped to that sandbox alone.
-func modalGuardToken(sandboxName string) (string, error) {
-	key, err := ensureModalGuardKey()
-	if err != nil {
-		return "", err
-	}
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(sandboxName))
-	return hex.EncodeToString(mac.Sum(nil)), nil
+// modalGuardTokenHash must match the guard app's hashing of presented
+// tokens. Truncated to 128 bits to stay well within tag value limits.
+func modalGuardTokenHash(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])[:32]
 }
+
+
 
 // modalHostTokens returns the Modal API credentials that `modal token set`
 // writes, from env vars or the active profile in ~/.modal.toml. They are
@@ -158,15 +142,11 @@ func ensureModalGuard(ctx context.Context, client *modal.Client) (string, error)
 		}
 	}
 
-	guardKey, err := ensureModalGuardKey()
-	if err != nil {
-		return "", err
-	}
 	tokenID, tokenSecret, err := modalHostTokens()
 	if err != nil {
 		return "", err
 	}
-	url, err := deployModalGuard(ctx, client, guardKey, tokenID, tokenSecret)
+	url, err := deployModalGuard(ctx, client, tokenID, tokenSecret)
 	if err != nil {
 		return "", err
 	}
@@ -186,9 +166,10 @@ func ensureModalGuard(ctx context.Context, client *modal.Client) (string, error)
 
 // deployModalGuard deploys the guard app by running `modal deploy` inside an
 // ephemeral, sidekick-controlled Modal sandbox: the host needs no local
-// Python tooling, and account tokens only enter that trusted sandbox (which
-// runs only this fixed script), never task sandboxes.
-func deployModalGuard(ctx context.Context, client *modal.Client, guardKey, tokenID, tokenSecret string) (string, error) {
+// Python tooling (the Go SDK cannot deploy Modal Functions), and account
+// tokens only enter that trusted sandbox (which runs only this fixed
+// script), never task sandboxes.
+func deployModalGuard(ctx context.Context, client *modal.Client, tokenID, tokenSecret string) (string, error) {
 	app, err := client.Apps.FromName(ctx, modalAppName, &modal.AppFromNameParams{CreateIfMissing: true})
 	if err != nil {
 		return "", fmt.Errorf("failed to look up modal app %s: %w", modalAppName, err)
@@ -202,7 +183,6 @@ func deployModalGuard(ctx context.Context, client *modal.Client, guardKey, token
 		Env: map[string]string{
 			"MODAL_TOKEN_ID":     tokenID,
 			"MODAL_TOKEN_SECRET": tokenSecret,
-			"SIDEKICK_GUARD_KEY": guardKey,
 		},
 	})
 	if err != nil {
@@ -219,7 +199,6 @@ func deployModalGuard(ctx context.Context, client *modal.Client, guardKey, token
 	}
 
 	deployScript := `set -e
-modal secret create --force ` + modalGuardSecretName + ` SIDEKICK_GUARD_KEY="$SIDEKICK_GUARD_KEY"
 modal deploy /root/guard_app.py
 python -c "import modal; f = modal.Function.from_name('` + modalGuardAppName + `', 'hibernate'); print(getattr(f, 'get_web_url', lambda: f.web_url)())"`
 	stdout, stderr, exitCode, err := modalExecCapture(ctx, sb, deployScript)
@@ -321,33 +300,49 @@ func modalLatestSnapshot(ctx context.Context, client *modal.Client, sandboxName 
 	return &record, nil
 }
 
+// modalIdleSeconds resolves the effective idle watchdog timeout: unset
+// defaults to 30s (restoring from a snapshot is fast, so aggressive
+// hibernation is cheap). The watchdog cannot be disabled, so negative
+// values are rejected.
+func modalIdleSeconds(config common.ModalEnvConfig) (int, error) {
+	if config.IdleSeconds < 0 {
+		return 0, fmt.Errorf("modal idle_seconds must not be negative, got %d", config.IdleSeconds)
+	}
+	if config.IdleSeconds == 0 {
+		return 30, nil
+	}
+	return config.IdleSeconds, nil
+}
+
 // modalWatchdogEnv returns the env vars that arm the in-sandbox idle
-// watchdog, or nil when it is disabled or the guard cannot be provisioned
-// (the sandbox then simply runs without auto-hibernation).
-func modalWatchdogEnv(ctx context.Context, client *modal.Client, sandboxName string, config common.ModalEnvConfig) map[string]string {
-	if config.IdleSeconds <= 0 {
-		return nil
+// watchdog, along with the guard token hash the caller must store as a tag
+// on the sandbox (the guard's auth record for the injected token).
+// Auto-hibernation is mandatory, so invalid watchdog configuration and guard
+// provisioning failures are errors: a sandbox must never run without the
+// watchdog.
+func modalWatchdogEnv(ctx context.Context, client *modal.Client, sandboxName string, config common.ModalEnvConfig) (map[string]string, string, error) {
+	idleSeconds, err := modalIdleSeconds(config)
+	if err != nil {
+		return nil, "", err
 	}
 	guardURL, err := ensureModalGuard(ctx, client)
 	if err != nil {
-		log.Warn().Err(err).Msg("sidekick guard unavailable; modal sandbox runs without idle watchdog")
-		return nil
+		return nil, "", fmt.Errorf("failed to provision sidekick guard for idle watchdog: %w", err)
 	}
-	token, err := modalGuardToken(sandboxName)
+	token, tokenHash, err := newModalGuardToken()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to derive modal guard token; sandbox runs without idle watchdog")
-		return nil
+		return nil, "", fmt.Errorf("failed to generate modal guard token: %w", err)
 	}
 	meta, err := json.Marshal(config)
 	if err != nil {
 		meta = []byte("{}")
 	}
 	return map[string]string{
-		"SIDEKICK_GUARD_URL":    guardURL,
-		"SIDEKICK_GUARD_TOKEN":  token,
-		"SIDEKICK_SANDBOX_NAME": sandboxName,
-		"SIDEKICK_SANDBOX_META": string(meta),
-		"SIDEKICK_IDLE_SECONDS": strconv.Itoa(config.IdleSeconds),
-		"SIDEKICK_WATCHDOG":     modalWatchdogScript,
-	}
+		"SIDE_GUARD_URL":    guardURL,
+		"SIDE_GUARD_TOKEN":  token,
+		"SIDE_SANDBOX_NAME": sandboxName,
+		"SIDE_SANDBOX_META": string(meta),
+		"SIDE_IDLE_SECONDS": strconv.Itoa(idleSeconds),
+		"SIDE_WATCHDOG":     modalWatchdogScript,
+	}, tokenHash, nil
 }

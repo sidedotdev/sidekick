@@ -71,8 +71,10 @@ func TestModalSandboxCreateParams(t *testing.T) {
 		assert.Equal(t, "side--repo-abc", params.Name)
 		assert.Nil(t, params.ExperimentalOptions)
 		assert.Equal(t, []int{modalSSHPort}, params.UnencryptedPorts)
-		assert.Equal(t, "ssh-ed25519 AAAA test", params.Env["SIDEKICK_SSH_PUBKEY"])
+		assert.Equal(t, "ssh-ed25519 AAAA test", params.Env["SIDE_SSH_PUBKEY"])
 		assert.Equal(t, modalSandboxTimeout, params.Timeout)
+		assert.Equal(t, float64(1), params.CPU)
+		assert.Equal(t, 1024, params.MemoryMiB)
 		require.Len(t, params.Command, 3)
 		assert.Contains(t, params.Command[2], "sshd")
 	})
@@ -93,10 +95,10 @@ func TestModalSandboxCreateParams(t *testing.T) {
 	t.Run("watchdog env merged", func(t *testing.T) {
 		t.Parallel()
 		params := modalSandboxCreateParams(common.ModalEnvConfig{}, "n", "pk", map[string]string{
-			"SIDEKICK_GUARD_URL": "https://guard.example",
+			"SIDE_GUARD_URL": "https://guard.example",
 		})
-		assert.Equal(t, "pk", params.Env["SIDEKICK_SSH_PUBKEY"])
-		assert.Equal(t, "https://guard.example", params.Env["SIDEKICK_GUARD_URL"])
+		assert.Equal(t, "pk", params.Env["SIDE_SSH_PUBKEY"])
+		assert.Equal(t, "https://guard.example", params.Env["SIDE_GUARD_URL"])
 	})
 }
 

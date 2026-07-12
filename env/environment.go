@@ -142,6 +142,17 @@ type MergeResultSyncer interface {
 	SyncMergeResultToLocal(ctx context.Context, branch string) error
 }
 
+// GitRefSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. It
+// propagates a single ref created inside the environment (e.g. an archive
+// tag) back to the host repository, so that git state survives the
+// environment's deletion.
+type GitRefSyncer interface {
+	// SyncGitRefToLocal transfers the given fully-qualified ref (e.g.
+	// "refs/tags/archive/foo") from the environment to the host repository.
+	SyncGitRefToLocal(ctx context.Context, ref string) error
+}
+
 // EnvSeparator returns the path separator string for the env.
 func EnvSeparator(e Env) string {
 	switch e.GetType() {
@@ -1055,7 +1066,7 @@ func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput
 		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
 	}
 	// Refresh the idle-watchdog activity marker with every command.
-	fullCommand = "touch /tmp/.sidekick-activity 2>/dev/null; " + fullCommand
+	fullCommand = "touch " + remoteActivityMarker + " 2>/dev/null; " + fullCommand
 
 	sshArgs, err := e.SSHArgs(ctx)
 	if err != nil {

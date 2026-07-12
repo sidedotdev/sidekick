@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,14 +76,17 @@ func TestOpenShellIntegration(t *testing.T) {
 	ripgrepDockerfile := filepath.Join(repoRoot(t), "env", "testdata", "Dockerfile.openshell-ripgrep")
 	sandboxName := openshellFixtureSandboxName(t, ripgrepDockerfile)
 
-	checkOutput, err := OpenShellCheckSandboxActivity(ctx, OpenShellCheckSandboxInput{SandboxName: sandboxName})
-	require.NoError(t, err, "OpenShellCheckSandboxActivity failed")
+	checkOutput, err := CheckSandboxActivity(ctx, CheckSandboxInput{EnvType: EnvTypeOpenShell, SandboxName: sandboxName})
+	require.NoError(t, err, "CheckSandboxActivity failed")
 	if !checkOutput.Alive {
-		createOutput, err := OpenShellCreateActivity(ctx, OpenShellCreateInput{
-			Source: ripgrepDockerfile,
-			Name:   sandboxName,
+		osConfig, err := json.Marshal(common.OpenShellEnvConfig{From: ripgrepDockerfile})
+		require.NoError(t, err)
+		createOutput, err := CreateSandboxActivity(ctx, CreateSandboxInput{
+			EnvType: EnvTypeOpenShell,
+			Name:    sandboxName,
+			Config:  osConfig,
 		})
-		require.NoError(t, err, "OpenShellCreateActivity failed")
+		require.NoError(t, err, "CreateSandboxActivity failed")
 		require.Equal(t, sandboxName, createOutput.SandboxName)
 	}
 	t.Logf("using sandbox: %s", sandboxName)
@@ -114,12 +118,12 @@ func TestOpenShellIntegration(t *testing.T) {
 	t.Run("sync and verify repo", func(t *testing.T) {
 		localRepo := setupMinimalGitRepo(t)
 
-		syncOutput, err := OpenShellSyncRepoActivity(ctx, OpenShellSyncRepoInput{
-			SandboxName:  sandboxName,
+		syncOutput, err := SyncRepoToRemoteActivity(ctx, SyncRepoToRemoteInput{
+			EnvContainer: EnvContainer{Env: &OpenShellEnv{SandboxName: sandboxName, LocalRepoDir: localRepo}},
 			LocalRepoDir: localRepo,
 		})
-		require.NoError(t, err, "OpenShellSyncRepoActivity failed")
-		assert.NotEmpty(t, syncOutput.ContainerRepoDir)
+		require.NoError(t, err, "SyncRepoToRemoteActivity failed")
+		assert.NotEmpty(t, syncOutput.RemoteRepoDir)
 
 		// Remove the synced repo from the reused sandbox to avoid unbounded
 		// growth of its writable layer across runs.
@@ -128,12 +132,12 @@ func TestOpenShellIntegration(t *testing.T) {
 			defer cancel()
 			_, _ = osEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
 				Command: "rm",
-				Args:    []string{"-rf", syncOutput.ContainerRepoDir},
+				Args:    []string{"-rf", syncOutput.RemoteRepoDir},
 			})
 		})
 
 		repoEnv := &OpenShellEnv{
-			WorkingDirectory: syncOutput.ContainerRepoDir,
+			WorkingDirectory: syncOutput.RemoteRepoDir,
 			SandboxName:      sandboxName,
 			LocalRepoDir:     localRepo,
 		}
@@ -189,13 +193,13 @@ func TestOpenShellIntegration(t *testing.T) {
 		wsId := "ws-" + ksuid.New().String()
 		branchName := "side/openshell-e2e-test-" + ksuid.New().String()
 
-		output, err := CreateOpenShellWorktreeActivity(ctx, CreateOpenShellWorktreeInput{
+		output, err := CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      containerRepoDir,
 			BranchName:   branchName,
 			WorkspaceId:  wsId,
 		})
-		require.NoError(t, err, "CreateOpenShellWorktreeActivity failed")
+		require.NoError(t, err, "CreateRemoteWorktreeActivity failed")
 		assert.NotEmpty(t, output.WorktreePath)
 		t.Logf("worktree created at: %s", output.WorktreePath)
 

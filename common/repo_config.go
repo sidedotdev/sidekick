@@ -131,15 +131,17 @@ type ModalEnvConfig struct {
 	// and run as root, since sidekick layers openssh-server and git on top.
 	// Defaults to ubuntu:24.04.
 	Image string `toml:"image,omitempty" json:"image,omitempty"`
-	// CPU is the number of CPU cores to reserve for the sandbox.
+	// CPU is the number of CPU cores to reserve for the sandbox. Unset
+	// defaults to 1.
 	CPU float64 `toml:"cpu,omitempty" json:"cpu,omitempty"`
-	// MemoryMiB is the sandbox memory reservation in MiB.
+	// MemoryMiB is the sandbox memory reservation in MiB. Unset defaults to
+	// 1024.
 	MemoryMiB int `toml:"memory_mib,omitempty" json:"memoryMiB,omitempty"`
 	// IdleSeconds arms the in-sandbox idle watchdog: after this many seconds
 	// without activity the sandbox snapshots its filesystem and terminates
 	// itself (via the sidekick guard app), stopping billing even when the
 	// sidekick host is offline. It is restored from the snapshot on next
-	// use. 0 disables the watchdog.
+	// use. Unset defaults to 30 seconds; negative values are rejected.
 	IdleSeconds int `toml:"idle_seconds,omitempty" json:"idleSeconds,omitempty"`
 }
 

@@ -2,6 +2,7 @@ package env
 
 import (
 	"path/filepath"
+	"sidekick/common"
 	"strings"
 	"testing"
 
@@ -10,22 +11,17 @@ import (
 )
 
 func TestModalGuardToken(t *testing.T) {
-	// Not parallel: redirects the sidekick data home via env vars.
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", "")
-
-	token, err := modalGuardToken("side--repo-abc")
+	t.Parallel()
+	token, tokenHash, err := newModalGuardToken()
 	require.NoError(t, err)
-	assert.Len(t, token, 64) // hex-encoded HMAC-SHA256
+	assert.Len(t, token, 64) // hex-encoded 32 random bytes
 	assert.Regexp(t, `^[0-9a-f]+$`, token)
+	assert.Equal(t, modalGuardTokenHash(token), tokenHash)
+	assert.Len(t, tokenHash, 32) // truncated sha256, fits tag value limits
+	assert.NotContains(t, token, tokenHash, "tag value must not reveal the token")
 
-	// Deterministic for the same sandbox once the key exists.
-	again, err := modalGuardToken("side--repo-abc")
-	require.NoError(t, err)
-	assert.Equal(t, token, again)
-
-	// Scoped: other sandboxes get different tokens.
-	other, err := modalGuardToken("side--repo-xyz")
+	// Tokens are per-sandbox random, never shared or derived.
+	other, _, err := newModalGuardToken()
 	require.NoError(t, err)
 	assert.NotEqual(t, token, other)
 }
@@ -79,11 +75,30 @@ func TestModalGuardEmbeds(t *testing.T) {
 	t.Parallel()
 	// The watchdog script and guard app ride into sandboxes/deployments as
 	// embedded strings; guard/watchdog contract env vars must line up.
-	assert.Contains(t, modalWatchdogScript, "$SIDEKICK_GUARD_URL")
-	assert.Contains(t, modalWatchdogScript, "$SIDEKICK_GUARD_TOKEN")
-	assert.Contains(t, modalWatchdogScript, "$SIDEKICK_SANDBOX_NAME")
+	assert.Contains(t, modalWatchdogScript, "$SIDE_GUARD_URL")
+	assert.Contains(t, modalWatchdogScript, "$SIDE_GUARD_TOKEN")
+	assert.Contains(t, modalWatchdogScript, "$SIDE_SANDBOX_NAME")
 	assert.Contains(t, modalGuardAppSource, `modal.App("sidekick-guard")`)
-	assert.Contains(t, modalGuardAppSource, "SIDEKICK_GUARD_KEY")
 	assert.True(t, strings.Contains(modalGuardAppSource, `SANDBOX_APP_NAME = "`+modalAppName+`"`),
 		"guard app must target the sidekick sandbox app")
+	assert.True(t, strings.Contains(modalGuardAppSource, `GUARD_TOKEN_TAG = "`+modalGuardTokenTagKey+`"`),
+		"guard app must verify tokens against the tag key the host sets")
+	// Two-phase shutdown contract: the watchdog sends a phase and the guard
+	// dispatches on it.
+	assert.Contains(t, modalWatchdogScript, `\"phase\":\"$1\"`)
+	assert.Contains(t, modalGuardAppSource, `req.get("phase"`)
+}
+
+func TestModalIdleSeconds(t *testing.T) {
+	t.Parallel()
+	idle, err := modalIdleSeconds(common.ModalEnvConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, 30, idle, "unset defaults to 30s")
+
+	idle, err = modalIdleSeconds(common.ModalEnvConfig{IdleSeconds: 120})
+	require.NoError(t, err)
+	assert.Equal(t, 120, idle)
+
+	_, err = modalIdleSeconds(common.ModalEnvConfig{IdleSeconds: -1})
+	assert.Error(t, err, "negative values are rejected")
 }

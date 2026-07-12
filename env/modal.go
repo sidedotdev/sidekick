@@ -40,9 +40,9 @@ const modalSSHPort = 22
 // lives until terminated or timed out. The authorized key rides in via an env
 // var so it is never baked into the image.
 const modalSSHDCommand = `mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh && ` +
-	`printf '%s\n' "$SIDEKICK_SSH_PUBKEY" > /root/.ssh/authorized_keys && ` +
+	`printf '%s\n' "$SIDE_SSH_PUBKEY" > /root/.ssh/authorized_keys && ` +
 	`chmod 600 /root/.ssh/authorized_keys && ssh-keygen -A && ` +
-	`if [ -n "$SIDEKICK_GUARD_URL" ]; then printf '%s' "$SIDEKICK_WATCHDOG" > /usr/local/bin/sidekick-watchdog && ` +
+	`if [ -n "$SIDE_GUARD_URL" ]; then printf '%s' "$SIDE_WATCHDOG" > /usr/local/bin/sidekick-watchdog && ` +
 	`chmod +x /usr/local/bin/sidekick-watchdog && (/usr/local/bin/sidekick-watchdog &); fi; ` +
 	`while :; do /usr/sbin/sshd -D -e -o PermitRootLogin=prohibit-password ` +
 	`-o PasswordAuthentication=no -o ClientAliveInterval=30; sleep 1; done`
@@ -256,6 +256,9 @@ func enableModalPerfCounters(ctx context.Context, sb *modal.Sandbox) {
 
 type ModalCreateSandboxInput struct {
 	Name string `json:"name"`
+	// RepoDir is the local repository the sandbox is created for; used to
+	// find seed snapshots from prior sandboxes of the same repo.
+	RepoDir string `json:"repoDir,omitempty"`
 	// Config carries the repo-level modal settings (image, VM runtime, sizing).
 	Config common.ModalEnvConfig `json:"config"`
 }
@@ -272,9 +275,20 @@ type ModalCreateSandboxOutput struct {
 // alpha VM runtime (real Linux kernel). extraEnv entries (e.g. the idle
 // watchdog's configuration) are merged into the sandbox environment.
 func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey string, extraEnv map[string]string) *modal.SandboxCreateParams {
-	env := map[string]string{"SIDEKICK_SSH_PUBKEY": publicKey}
+	env := map[string]string{"SIDE_SSH_PUBKEY": publicKey}
 	for k, v := range extraEnv {
 		env[k] = v
+	}
+	// Modal's platform defaults (0.125 cores, 128 MiB) are too lean for dev
+	// workloads — and outright unusable on the VM runtime, where memory is
+	// statically provisioned — so default to 1 core / 1 GiB when unset.
+	cpu := config.CPU
+	if cpu == 0 {
+		cpu = 1
+	}
+	memoryMiB := config.MemoryMiB
+	if memoryMiB == 0 {
+		memoryMiB = 1024
 	}
 	params := &modal.SandboxCreateParams{
 		Name:             name,
@@ -282,8 +296,8 @@ func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey stri
 		Env:              env,
 		Timeout:          modalSandboxTimeout,
 		UnencryptedPorts: []int{modalSSHPort}, // ssh provides its own encryption
-		CPU:              config.CPU,
-		MemoryMiB:        config.MemoryMiB,
+		CPU:              cpu,
+		MemoryMiB:        memoryMiB,
 	}
 	if config.VM {
 		// Note: VM-runtime memory is statically provisioned.
@@ -321,18 +335,18 @@ func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int,
 			log.Warn().Err(err).Str("sandbox", sandboxName).Msg("invalid snapshot config metadata; restoring with defaults")
 		}
 	}
-	output, err := ModalCreateSandboxActivity(ctx, ModalCreateSandboxInput{Name: sandboxName, Config: config})
+	output, err := modalCreateSandbox(ctx, ModalCreateSandboxInput{Name: sandboxName, Config: config})
 	if err != nil {
 		return "", 0, err
 	}
 	return output.SSHHost, output.SSHPort, nil
 }
 
-// ModalCreateSandboxActivity creates a Modal sandbox running sshd behind a
-// Modal tunnel, or reuses the live sandbox with the same name. Both the
-// default gVisor runtime and the alpha VM runtime (real kernel) are supported
-// via Config.VM.
-func ModalCreateSandboxActivity(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
+// modalCreateSandbox creates a Modal sandbox running sshd behind a Modal
+// tunnel, or reuses the live sandbox with the same name. Both the default
+// gVisor runtime and the alpha VM runtime (real kernel) are supported via
+// Config.VM.
+func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
 	_, publicKey, err := ensureModalSSHKey(ctx)
 	if err != nil {
 		return ModalCreateSandboxOutput{}, err
@@ -357,18 +371,33 @@ func ModalCreateSandboxActivity(ctx context.Context, input ModalCreateSandboxInp
 		image := modalSandboxImage(client, input.Config.Image)
 		// Restore from the idle watchdog's latest filesystem snapshot when
 		// one exists: repo, worktrees and caches come back as they were.
-		if record, snapErr := modalLatestSnapshot(ctx, client, input.Name); snapErr != nil {
-			log.Warn().Err(snapErr).Str("sandbox", input.Name).Msg("failed to check for modal snapshot; creating fresh sandbox")
-		} else if record != nil {
-			if snapImage, imgErr := client.Images.FromID(ctx, record.ImageId); imgErr != nil {
-				log.Warn().Err(imgErr).Str("sandbox", input.Name).Msg("failed to load modal snapshot image; creating fresh sandbox")
-			} else {
-				image = snapImage
+		// Otherwise bootstrap from the most recent snapshot of another
+		// sandbox for the same repo, inheriting its repo (with deepened
+		// history) and installed dependencies instead of starting from
+		// scratch.
+		for _, snapName := range append([]string{input.Name}, modalSeedCandidates(input.RepoDir)...) {
+			record, snapErr := modalLatestSnapshot(ctx, client, snapName)
+			if snapErr != nil {
+				log.Warn().Err(snapErr).Str("sandbox", snapName).Msg("failed to check for modal snapshot")
+				continue
 			}
+			if record == nil {
+				continue
+			}
+			snapImage, imgErr := client.Images.FromID(ctx, record.ImageId)
+			if imgErr != nil {
+				log.Warn().Err(imgErr).Str("sandbox", snapName).Msg("failed to load modal snapshot image")
+				continue
+			}
+			image = snapImage
+			break
 		}
 
-		params := modalSandboxCreateParams(input.Config, input.Name, publicKey,
-			modalWatchdogEnv(ctx, client, input.Name, input.Config))
+		watchdogEnv, guardTokenHash, wdErr := modalWatchdogEnv(ctx, client, input.Name, input.Config)
+		if wdErr != nil {
+			return ModalCreateSandboxOutput{}, wdErr
+		}
+		params := modalSandboxCreateParams(input.Config, input.Name, publicKey, watchdogEnv)
 		sb, err = client.Sandboxes.Create(ctx, app, image, params)
 		if err != nil {
 			// Concurrent creates for the same deterministic name race: one
@@ -387,7 +416,17 @@ func ModalCreateSandboxActivity(ctx context.Context, input ModalCreateSandboxInp
 			}
 			reused = true
 		}
+		if !reused {
+			// The tag is the guard's auth record for this sandbox's token;
+			// hibernation requests are rejected without it, so failure here
+			// must fail creation (auto-hibernation is mandatory).
+			if tagErr := sb.SetTags(ctx, map[string]string{modalGuardTokenTagKey: guardTokenHash}); tagErr != nil {
+				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to set modal guard token tag on sandbox %s: %w", input.Name, tagErr)
+			}
+		}
 	}
+
+	modalRegisterSeedSandbox(input.RepoDir, input.Name)
 
 	if err := waitForModalSSHD(ctx, sb); err != nil {
 		return ModalCreateSandboxOutput{}, err
@@ -407,26 +446,22 @@ func ModalCreateSandboxActivity(ctx context.Context, input ModalCreateSandboxInp
 	}, nil
 }
 
-type ModalCheckSandboxInput struct {
-	SandboxName string `json:"sandboxName"`
-}
-
 type ModalCheckSandboxOutput struct {
 	Alive   bool   `json:"alive"`
 	SSHHost string `json:"sshHost,omitempty"`
 	SSHPort int    `json:"sshPort,omitempty"`
 }
 
-// ModalCheckSandboxActivity reports whether a named Modal sandbox is currently
+// modalCheckSandbox reports whether a named Modal sandbox is currently
 // running, returning its SSH tunnel endpoint when it is. Failures are treated
 // as "not alive" so callers can fall through to (re)creation, which surfaces
 // any persistent error.
-func ModalCheckSandboxActivity(ctx context.Context, input ModalCheckSandboxInput) (ModalCheckSandboxOutput, error) {
+func modalCheckSandbox(ctx context.Context, sandboxName string) (ModalCheckSandboxOutput, error) {
 	client, err := getModalClient()
 	if err != nil {
 		return ModalCheckSandboxOutput{}, nil
 	}
-	sb, err := findModalSandbox(ctx, client, input.SandboxName)
+	sb, err := findModalSandbox(ctx, client, sandboxName)
 	if err != nil || sb == nil {
 		return ModalCheckSandboxOutput{}, nil
 	}
@@ -437,97 +472,69 @@ func ModalCheckSandboxActivity(ctx context.Context, input ModalCheckSandboxInput
 	return ModalCheckSandboxOutput{Alive: true, SSHHost: sshHost, SSHPort: sshPort}, nil
 }
 
-type ModalSyncRepoInput struct {
-	SandboxName string `json:"sandboxName"`
-	SSHHost     string `json:"sshHost"`
-	SSHPort     int    `json:"sshPort"`
-	// LocalRepoDir is the local repository to upload.
-	LocalRepoDir string `json:"localRepoDir"`
-	// ContainerRepoDir optionally overrides where the repo lands in the
-	// sandbox. Defaults to $HOME/<repo basename>.
-	ContainerRepoDir string `json:"containerRepoDir,omitempty"`
-}
-
-type ModalSyncRepoOutput struct {
-	ContainerRepoDir string `json:"containerRepoDir"`
-}
-
-// ModalSyncRepoActivity uploads a local git repository to a Modal sandbox
-// using a git bundle transferred over ssh.
-func ModalSyncRepoActivity(ctx context.Context, input ModalSyncRepoInput) (ModalSyncRepoOutput, error) {
-	keyPath, _, err := ensureModalSSHKey(ctx)
-	if err != nil {
-		return ModalSyncRepoOutput{}, err
-	}
-	sshArgs := modalSSHArgs(input.SandboxName, input.SSHHost, input.SSHPort, keyPath)
-	containerRepoDir, err := syncRepoOverSSH(ctx, sshArgs, input.SandboxName, input.LocalRepoDir, input.ContainerRepoDir)
-	if err != nil {
-		return ModalSyncRepoOutput{}, err
-	}
-	return ModalSyncRepoOutput{ContainerRepoDir: containerRepoDir}, nil
-}
-
-type CreateModalWorktreeInput struct {
-	EnvContainer EnvContainer `json:"envContainer"`
-	RepoDir      string       `json:"repoDir"`
-	BranchName   string       `json:"branchName"`
-	StartBranch  string       `json:"startBranch,omitempty"`
-	WorkspaceId  string       `json:"workspaceId"`
-}
-
-type CreateModalWorktreeOutput struct {
-	WorktreePath string `json:"worktreePath"`
-}
-
-// CreateModalWorktreeActivity creates a git worktree inside a running Modal
-// sandbox so that worktree .git references resolve within the sandbox
-// filesystem.
-func CreateModalWorktreeActivity(ctx context.Context, input CreateModalWorktreeInput) (CreateModalWorktreeOutput, error) {
-	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId)
-	if err != nil {
-		return CreateModalWorktreeOutput{}, err
-	}
-	return CreateModalWorktreeOutput{WorktreePath: worktreePath}, nil
-}
-
-type ModalDeleteInput struct {
-	SandboxName string `json:"sandboxName"`
-}
-
-type ModalDeleteOutput struct{}
-
-// ModalDeleteActivity terminates a Modal sandbox. Terminating a sandbox that
+// modalDeleteSandbox terminates a Modal sandbox. Terminating a sandbox that
 // no longer exists is a no-op.
-func ModalDeleteActivity(ctx context.Context, input ModalDeleteInput) (ModalDeleteOutput, error) {
+func modalDeleteSandbox(ctx context.Context, sandboxName string) error {
 	client, err := getModalClient()
 	if err != nil {
-		return ModalDeleteOutput{}, err
+		return err
 	}
-	sb, err := findModalSandbox(ctx, client, input.SandboxName)
+	sb, err := findModalSandbox(ctx, client, sandboxName)
 	if err != nil {
-		return ModalDeleteOutput{}, err
+		return err
 	}
 	if sb == nil {
-		return ModalDeleteOutput{}, nil
+		return nil
 	}
 	if _, err := sb.Terminate(ctx, nil); err != nil {
-		return ModalDeleteOutput{}, fmt.Errorf("failed to terminate modal sandbox %s: %w", input.SandboxName, err)
+		return fmt.Errorf("failed to terminate modal sandbox %s: %w", sandboxName, err)
 	}
-	return ModalDeleteOutput{}, nil
+	return nil
 }
 
-type ModalStopInput struct {
-	SandboxName string `json:"sandboxName"`
+// modalSandboxProvider adapts Modal sandbox management to the generic
+// SandboxProvider interface.
+type modalSandboxProvider struct{}
+
+func init() {
+	RegisterSandboxProvider(EnvTypeModal, modalSandboxProvider{})
 }
 
-type ModalStopOutput struct{}
+func (modalSandboxProvider) CreateSandbox(ctx context.Context, input CreateSandboxInput) (CreateSandboxOutput, error) {
+	var config common.ModalEnvConfig
+	if len(input.Config) > 0 {
+		if err := json.Unmarshal(input.Config, &config); err != nil {
+			return CreateSandboxOutput{}, fmt.Errorf("invalid modal sandbox config: %w", err)
+		}
+	}
+	output, err := modalCreateSandbox(ctx, ModalCreateSandboxInput{Name: input.Name, RepoDir: input.RepoDir, Config: config})
+	if err != nil {
+		return CreateSandboxOutput{}, err
+	}
+	return CreateSandboxOutput{
+		SandboxName: output.SandboxName,
+		SSHHost:     output.SSHHost,
+		SSHPort:     output.SSHPort,
+		Reused:      output.Reused,
+	}, nil
+}
 
-// ModalStopActivity terminates a Modal sandbox. Modal sandboxes have no
-// stop-without-delete lifecycle (filesystem snapshots may enable that later),
-// so this is equivalent to delete.
-func ModalStopActivity(ctx context.Context, input ModalStopInput) (ModalStopOutput, error) {
-	_, err := ModalDeleteActivity(ctx, ModalDeleteInput{SandboxName: input.SandboxName})
-	return ModalStopOutput{}, err
+func (modalSandboxProvider) CheckSandbox(ctx context.Context, input CheckSandboxInput) (CheckSandboxOutput, error) {
+	output, err := modalCheckSandbox(ctx, input.SandboxName)
+	if err != nil {
+		return CheckSandboxOutput{}, err
+	}
+	return CheckSandboxOutput{Alive: output.Alive, SSHHost: output.SSHHost, SSHPort: output.SSHPort}, nil
+}
+
+// StopSandbox terminates the sandbox: Modal has no stop-without-delete
+// lifecycle (filesystem snapshots may enable that later).
+func (modalSandboxProvider) StopSandbox(ctx context.Context, input StopSandboxInput) error {
+	return modalDeleteSandbox(ctx, input.SandboxName)
+}
+
+func (modalSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteSandboxInput) error {
+	return modalDeleteSandbox(ctx, input.SandboxName)
 }
 
 // SyncMergeResultToLocal transfers the given branch from the Modal sandbox
@@ -543,5 +550,18 @@ func (e *ModalEnv) SyncMergeResultToLocal(ctx context.Context, branch string) er
 	if err != nil {
 		return err
 	}
-	return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.SandboxName, e.WorkingDirectory, e.LocalRepoDir, branch)
+	return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+}
+
+var _ GitRefSyncer = (*ModalEnv)(nil)
+
+func (e *ModalEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync git ref to local: ModalEnv has no LocalRepoDir")
+	}
+	sshArgs, err := e.baseSSHArgs(ctx)
+	if err != nil {
+		return err
+	}
+	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
 }

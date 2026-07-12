@@ -93,14 +93,13 @@ const task: FullTask = {
   })
 
   it.each([
-    ['devpod', 'DevPod'],
-    ['openshell', 'OpenShell'],
-  ])('renders a Container indicator with tooltip for %s', (envType, title) => {
+    ['devpod', 'DevPod container'],
+    ['openshell', 'OpenShell container'],
+    ['modal', 'Modal cloud sandbox'],
+  ])('renders an env indicator with tooltip for %s', (envType, title) => {
     const wrapper = shallowMount(TaskCard, {
       props: { task: { ...task, flowOptions: { envType } } },
     })
-    const indicator = wrapper.get('.env-indicator')
-    expect(indicator.text()).toContain('Container')
-    expect(indicator.attributes('title')).toBe(title)
+    expect(wrapper.get('.env-indicator').attributes('title')).toBe(title)
   })
 })

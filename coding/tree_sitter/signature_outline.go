@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"io"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,7 +14,6 @@ import (
 
 	"fmt"
 
-	"sidekick/common"
 	"sidekick/env"
 	"sidekick/logger"
 	"sidekick/utils"
@@ -113,14 +113,40 @@ func GetDirectorySignatureOutlines(ctx context.Context, ec env.EnvContainer, sho
 		idx          int
 		path         string
 		relativePath string
+		fileBytes    []byte
 	}
 
-	var tasks []fileTask
+	// The entry-based walk sources content on the host for unchanged tracked
+	// files of SSH-backed envs, avoiding a per-file remote round trip.
+	// Content must be copied inline (entry readers are only valid until the
+	// callback returns), so reads happen during the walk while the CPU-bound
+	// signature parsing runs in a bounded worker pool; the channel's capacity
+	// bounds how many file contents are held in memory at once.
+	const maxConcurrency = 15
+	taskCh := make(chan fileTask, maxConcurrency)
+	resultsByIdx := make(map[int]FileOutline)
+	var resultsMu sync.Mutex
+	var wg sync.WaitGroup
+	for range maxConcurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskCh {
+				outline, ok := signatureOutlineFromBytes(t.path, t.relativePath, t.fileBytes, signaturePaths)
+				if !ok {
+					continue
+				}
+				resultsMu.Lock()
+				resultsByIdx[t.idx] = outline
+				resultsMu.Unlock()
+			}
+		}()
+	}
 
-	err = ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
-		relativePath := strings.Replace(path, baseDirectory, "", 1)
+	walkErr := env.WalkCodeDirectoryEntriesViaEnv(ctx, ec, func(entry env.WalkEntryWithContent) error {
+		relativePath := strings.Replace(entry.Path, baseDirectory, "", 1)
 
-		if isDir {
+		if entry.IsDir {
 			if showPaths == nil || (*showPaths)[relativePath] {
 				outlines = append(outlines, FileOutline{
 					Path:        relativePath,
@@ -146,102 +172,100 @@ func GetDirectorySignatureOutlines(ctx context.Context, ec env.EnvContainer, sho
 			Path:        relativePath,
 			OutlineType: OutlineTypeFileUnhandled,
 		})
-		tasks = append(tasks, fileTask{idx: idx, path: path, relativePath: relativePath})
+
+		fileBytes, readErr := readWalkEntry(ctx, entry)
+		if readErr != nil {
+			l := logger.Get()
+			l.Trace().Err(readErr).Msgf("error reading file %s", entry.Path)
+			return nil
+		}
+		taskCh <- fileTask{idx: idx, path: entry.Path, relativePath: relativePath, fileBytes: fileBytes}
 		return nil
 	})
-	if err != nil {
-		return outlines, err
-	}
-
-	// Process file signatures in parallel with bounded concurrency.
-	const maxConcurrency = 15
-	sem := make(chan struct{}, maxConcurrency)
-	var wg sync.WaitGroup
-	results := make([]FileOutline, len(tasks))
-
-	for i, task := range tasks {
-		wg.Add(1)
-		i, t := i, task
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			fileBytes, readErr := ec.Env.ReadFile(ctx, t.path)
-			if readErr != nil {
-				l := logger.Get()
-				l.Trace().Err(readErr).Msgf("error reading file %s", t.path)
-				return
-			}
-
-			checksum := checksumFromBytes(fileBytes)
-
-			var outlineContent string
-			if val, ok := checksums.Load(t.path); ok && val == checksum {
-				if val, ok := cachedOutlines.Load(t.path); ok {
-					outlineContent = val.(string)
-				}
-			}
-
-			if outlineContent == "" {
-				langName := utils.InferLanguageNameFromFilePath(t.path)
-				content, sigErr := GetFileSignaturesStringFromBytes(langName, fileBytes)
-				if sigErr != nil {
-					l := logger.Get()
-					if strings.Contains(sigErr.Error(), t.path) {
-						l.Trace().Err(sigErr).Msg("error getting signatures")
-					} else {
-						l.Trace().Err(sigErr).Msg(fmt.Sprintf("error getting signatures for file %s", t.relativePath))
-					}
-					return
-				}
-				cachedOutlines.Store(t.path, content)
-				checksums.Store(t.path, checksum)
-				outlineContent = content
-			}
-
-			// NOTE max embed size is 8192 tokens, this character limit is trying to
-			// avoid hitting that with a decent margin of error
-			maxContentLength := 30000
-			if signaturePaths != nil {
-				maxContentLength = min((*signaturePaths)[t.relativePath], maxContentLength)
-			}
-			if len(outlineContent) > maxContentLength {
-				languageName := utils.InferLanguageNameFromFilePath(t.path)
-				sourceCode := SourceCode{
-					Content:              outlineContent,
-					LanguageName:         languageName,
-					OriginalLanguageName: languageName + "-signatures",
-				}
-				_, newSourceCode := removeComments(sourceCode)
-				outlineContent = newSourceCode.Content
-			}
-			if len(outlineContent) > maxContentLength {
-				truncatedPart := outlineContent[maxContentLength:]
-				outlineContent = outlineContent[:maxContentLength]
-				// Only show truncation message if we truncated more than just whitespace
-				if strings.TrimSpace(truncatedPart) != "" {
-					outlineContent += fmt.Sprintf("\n... [truncated %d characters]", len(truncatedPart))
-				}
-			}
-
-			results[i] = FileOutline{
-				Path:        t.relativePath,
-				OutlineType: OutlineTypeFileSignature,
-				Content:     outlineContent,
-			}
-		}()
-	}
-
+	close(taskCh)
 	wg.Wait()
+	if walkErr != nil {
+		return outlines, walkErr
+	}
 
-	// Merge results back into outlines in walk order.
-	for i, t := range tasks {
-		if results[i].Path != "" {
-			outlines[t.idx] = results[i]
-		}
+	for idx, outline := range resultsByIdx {
+		outlines[idx] = outline
 	}
 	return outlines, nil
+}
+
+// readWalkEntry copies the entry's content inline; entry readers are only
+// valid until the walk callback returns.
+func readWalkEntry(ctx context.Context, entry env.WalkEntryWithContent) ([]byte, error) {
+	rc, err := entry.Open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+
+// signatureOutlineFromBytes computes the signature outline for a single
+// file's content, reusing the process-level checksum cache. ok is false when
+// signature extraction fails, in which case the caller keeps its unhandled
+// placeholder for the file.
+func signatureOutlineFromBytes(path, relativePath string, fileBytes []byte, signaturePaths *map[string]int) (_ FileOutline, ok bool) {
+	checksum := checksumFromBytes(fileBytes)
+
+	var outlineContent string
+	if val, ok := checksums.Load(path); ok && val == checksum {
+		if val, ok := cachedOutlines.Load(path); ok {
+			outlineContent = val.(string)
+		}
+	}
+
+	if outlineContent == "" {
+		langName := utils.InferLanguageNameFromFilePath(path)
+		content, sigErr := GetFileSignaturesStringFromBytes(langName, fileBytes)
+		if sigErr != nil {
+			l := logger.Get()
+			if strings.Contains(sigErr.Error(), path) {
+				l.Trace().Err(sigErr).Msg("error getting signatures")
+			} else {
+				l.Trace().Err(sigErr).Msg(fmt.Sprintf("error getting signatures for file %s", relativePath))
+			}
+			return FileOutline{}, false
+		}
+		cachedOutlines.Store(path, content)
+		checksums.Store(path, checksum)
+		outlineContent = content
+	}
+
+	// NOTE max embed size is 8192 tokens, this character limit is trying to
+	// avoid hitting that with a decent margin of error
+	maxContentLength := 30000
+	if signaturePaths != nil {
+		maxContentLength = min((*signaturePaths)[relativePath], maxContentLength)
+	}
+	if len(outlineContent) > maxContentLength {
+		languageName := utils.InferLanguageNameFromFilePath(path)
+		sourceCode := SourceCode{
+			Content:              outlineContent,
+			LanguageName:         languageName,
+			OriginalLanguageName: languageName + "-signatures",
+		}
+		_, newSourceCode := removeComments(sourceCode)
+		outlineContent = newSourceCode.Content
+	}
+	if len(outlineContent) > maxContentLength {
+		truncatedPart := outlineContent[maxContentLength:]
+		outlineContent = outlineContent[:maxContentLength]
+		// Only show truncation message if we truncated more than just whitespace
+		if strings.TrimSpace(truncatedPart) != "" {
+			outlineContent += fmt.Sprintf("\n... [truncated %d characters]", len(truncatedPart))
+		}
+	}
+
+	return FileOutline{
+		Path:        relativePath,
+		OutlineType: OutlineTypeFileSignature,
+		Content:     outlineContent,
+	}, true
 }
 
 func GetDirectorySignatureOutlinesString(ctx context.Context, ec env.EnvContainer) (string, error) {

@@ -180,6 +180,19 @@ func TestListWorktrees(t *testing.T) {
 	})
 }
 
+// gitRefSyncerEnv wraps an env.Env and records refs synced via
+// SyncGitRefToLocal, simulating an environment whose repo is an independent
+// clone (e.g. a remote sandbox).
+type gitRefSyncerEnv struct {
+	env.Env
+	syncedRefs []string
+}
+
+func (e *gitRefSyncerEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
+	e.syncedRefs = append(e.syncedRefs, ref)
+	return nil
+}
+
 func TestCleanupWorktreeActivity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -237,6 +250,30 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		// Verify the tag message
 		tagMessageOutput := runGitCommandInTestRepo(t, repoDir, "tag", "-l", "-n1", expectedTag)
 		assert.Contains(t, tagMessageOutput, "Test cleanup with archive message", "Archive tag should have the correct message")
+	})
+
+	t.Run("Archive Tag Synced To Local For GitRefSyncer Envs", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit on main")
+
+		uniqueId := ksuid.New().String()
+		branchName := fmt.Sprintf("feature-cleanup-refsync-%s", uniqueId)
+
+		worktree := domain.Worktree{
+			Name:        branchName,
+			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
+		}
+		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		syncerEnv := &gitRefSyncerEnv{Env: devEnv}
+		envContainer := env.EnvContainer{Env: syncerEnv}
+
+		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
+		require.NoError(t, err, "Cleanup should succeed")
+
+		require.Len(t, syncerEnv.syncedRefs, 1, "Archive tag should be synced to local exactly once")
+		assert.Equal(t, "refs/tags/archive/"+branchName, syncerEnv.syncedRefs[0])
 	})
 
 	t.Run("Cleanup Succeeds With Only Untracked Binary", func(t *testing.T) {

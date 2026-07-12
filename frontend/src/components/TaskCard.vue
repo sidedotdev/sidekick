@@ -12,13 +12,15 @@
     <p class="task-description" @mouseleave.self="handleDescriptionBlur">{{ task.description }}</p>
     <div class="card-footer">
       <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
-      <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
-        <ContainerIcon/>{{ envIndicator.label }}
-      </span>
       <span v-if="task.archived" class="archived-label">Archived</span>
     </div>
 
-    <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
+    <div v-if="envIndicator || llmPresetLabel" class="card-meta">
+      <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
+        <component :is="envIndicator.icon"/>
+      </span>
+      <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
+    </div>
   </div>
 
   <TaskModal v-if="isCopyModalOpen" :task="copiedTask" @close="closeCopyModal" @updated="onUpdated" />
@@ -26,7 +28,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, type Component } from 'vue'
 import type { FullTask, Task, LLMConfig } from '../lib/models'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, llmConfigsEqual } from '../lib/llmPresetStorage'
@@ -34,6 +36,7 @@ import TaskModal from './TaskModal.vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ContainerIcon from './icons/ContainerIcon.vue'
+import CloudIcon from './icons/CloudIcon.vue'
 import router from '@/router'
 
 const props = defineProps({
@@ -43,17 +46,16 @@ const props = defineProps({
   },
 })
 
-type EnvIndicator = { label: string; title: string }
+type EnvIndicator = { title: string; icon: Component }
 
-// Maps concrete env types to their execution-location category. Only env types
-// that deviate from the default (local machine) are listed, so unmapped types
-// (local, local_git_worktree, unknown) render no indicator. Adding a future
-// remote/cloud category is a matter of adding entries here, not new template
-// branches.
+// Maps concrete env types to an icon conveying where the task executes, with
+// the tooltip carrying the specifics. Only env types that deviate from the
+// default (local machine) are listed, so unmapped types (local,
+// local_git_worktree, unknown) render no indicator.
 const envIndicatorMap: Record<string, EnvIndicator> = {
-  devpod: { label: 'Container', title: 'DevPod' },
-  openshell: { label: 'Container', title: 'OpenShell' },
-  modal: { label: 'Cloud', title: 'Modal' },
+  devpod: { title: 'DevPod container', icon: ContainerIcon },
+  openshell: { title: 'OpenShell container', icon: ContainerIcon },
+  modal: { title: 'Modal cloud sandbox', icon: CloudIcon },
 }
 
 const envIndicator = computed<EnvIndicator | null>(() => {
@@ -449,29 +451,33 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   font-family: "JetBrains Mono", monospace;
 }
 
-.env-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  margin-left: 0.5rem;
-  padding: 0 0.4375rem;
-  border-radius: 0.0625rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  background-color: var(--color-background-mute);
-  color: var(--color-text);
-  font-family: "JetBrains Mono", monospace;
-}
-.env-indicator svg {
-  width: 0.85rem;
-  height: 0.85rem;
-}
-
-.llm-preset-label {
+.card-meta {
   position: absolute;
   right: calc(var(--task-pad) / 2);
   bottom: calc(var(--task-pad) / 2);
   max-width: calc(100% - var(--task-pad));
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.env-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.25rem;
+  border-radius: 0.2rem;
+  opacity: 0.75;
+  background-color: var(--color-background-mute);
+  color: var(--color-text);
+}
+.env-indicator svg {
+  display: block;
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.llm-preset-label {
+  min-width: 0;
   padding: 0.1rem 0.4rem;
   border-radius: 0.2rem;
   font-size: 0.75rem;

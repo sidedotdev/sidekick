@@ -3,21 +3,33 @@ package env
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"sidekick/coding/unix"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/temporal"
 )
 
-// syncRepoOverSSH uploads a local git repository to a remote environment
-// reachable via the given ssh args (ending with the destination), using a git
-// bundle transferred over ssh. name distinguishes remote temp files between
-// environments. When containerRepoDir is empty, the repo lands under the
+// seedCloneDepth is how much history a fresh sandbox clone starts with:
+// enough for a coding agent to inspect recent changes, while keeping the
+// first sync fast even for repos with large histories.
+const seedCloneDepth = 25
+
+// syncRepoOverSSH mirrors the local HEAD branch (plus any extraBranches) of
+// a local git repository into a remote environment reachable via the given
+// ssh args (ending with the destination). A missing remote repo is first
+// seeded as a shallow clone served straight from the host through a
+// reverse-forwarded tunnel; updates go through `git push` over the same ssh
+// transport. When containerRepoDir is empty, the repo lands under the
 // remote $HOME; the resolved directory is returned.
-func syncRepoOverSSH(ctx context.Context, sshArgs []string, name, localRepoDir, containerRepoDir string) (string, error) {
+func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir string, extraBranches []string) (string, error) {
 	if containerRepoDir == "" {
 		homeArgs := make([]string, len(sshArgs))
 		copy(homeArgs, sshArgs)
@@ -37,191 +49,319 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, name, localRepoDir, 
 		containerRepoDir = filepath.Join(home, filepath.Base(localRepoDir))
 	}
 
-	// Create a git bundle containing all refs. The bundle path must be unique
-	// per invocation: `git bundle create` creates a sibling .lock file and
-	// will refuse to run if either it or the bundle already exists, so a
-	// fixed path keyed only on the environment name collides with concurrent
-	// or previously-crashed invocations against the same environment.
-	bundleFile, err := os.CreateTemp("", fmt.Sprintf("repo-sync-%s-*.bundle", name))
+	headRef, err := localHeadRef(ctx, localRepoDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to allocate bundle temp file: %w", err)
+		return "", err
 	}
-	bundlePath := bundleFile.Name()
-	// Close immediately so git can write to it; also remove the empty
-	// placeholder so `git bundle create` does not see a pre-existing file
-	// (git refuses to overwrite an existing bundle target).
-	bundleFile.Close()
-	if err := os.Remove(bundlePath); err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("failed to clear bundle temp file: %w", err)
-	}
-	defer os.Remove(bundlePath)
+	refspecs := syncRefspecs(headRef, extraBranches)
 
-	// FIXME skip creating the bundle when it's not needed (when updating)
-	bundleOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: localRepoDir,
-		Command:    "git",
-		Args:       []string{"bundle", "create", bundlePath, "--all"},
-	})
+	exists, err := remoteRepoExists(ctx, sshArgs, containerRepoDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to create git bundle: %w", err)
+		return "", err
 	}
-	if bundleOutput.ExitStatus != 0 {
-		return "", fmt.Errorf("git bundle create failed (exit %d): %s", bundleOutput.ExitStatus, bundleOutput.Stderr)
-	}
-
-	// Upload the bundle using ssh with cat + stdin redirect
-	// (avoids needing scp binary or separate SSH config for scp)
-	remoteBundlePath := "/tmp/repo-" + name + ".bundle"
-	uploadArgs := make([]string, len(sshArgs))
-	copy(uploadArgs, sshArgs)
-	uploadArgs = append(uploadArgs, fmt.Sprintf("cat > %s", shellQuote(remoteBundlePath)))
-
-	uploadOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "sh",
-		Args:       []string{"-c", fmt.Sprintf("cat %s | ssh %s", shellQuote(bundlePath), strings.Join(quoteArgs(uploadArgs), " "))},
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to upload bundle to sandbox: %w", err)
-	}
-	if uploadOutput.ExitStatus != 0 {
-		return "", fmt.Errorf("bundle upload failed (exit %d): %s", uploadOutput.ExitStatus, uploadOutput.Stderr)
+	if !exists {
+		if err := seedRepoOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, extraBranches); err != nil {
+			// The push below seeds the repo too (with the full history of
+			// the synced branches): slower, but it needs no reverse tunnel.
+			log.Warn().Err(err).Str("remoteRepoDir", containerRepoDir).
+				Msg("shallow repo seed failed; falling back to seeding via push")
+		}
 	}
 
-	// Clone or update the repo inside the sandbox.
-	// If the repo already exists (sandbox reuse), fetch from the bundle and
-	// reset to match; otherwise clone fresh. On reuse, the bundle's prior
-	// HEAD branch may have been pruned by --prune, leaving the sandbox HEAD
-	// dangling; we re-point HEAD at the bundle's HEAD ref and reset via
-	// FETCH_HEAD to recover.
-	quotedRepo := shellQuote(containerRepoDir)
-	quotedBundle := shellQuote(remoteBundlePath)
-	cloneScript := fmt.Sprintf(
-		"if [ -d %s/.git ]; then "+
-			"cd %s && "+
-			"head_ref=$(git ls-remote --symref %s HEAD 2>/dev/null | awk '/^ref:/ {print $2; exit}') && "+
-			"git fetch --update-head-ok %s '+refs/*:refs/*' --prune && "+
-			"if [ -n \"$head_ref\" ]; then git symbolic-ref HEAD \"$head_ref\"; fi && "+
-			"git fetch %s && "+
-			"if ! git rev-parse --verify HEAD >/dev/null 2>&1; then git update-ref --no-deref HEAD \"$(git rev-parse FETCH_HEAD)\"; fi && "+
-			"git reset --hard FETCH_HEAD; "+
-			"else "+
-			"mkdir -p %s && git clone %s %s && cd %s && "+
-			"git config user.name 'Sidekick' && git config user.email 'sidekick@side.dev'; "+
-			"fi && rm -f %s",
-		quotedRepo,
-		quotedRepo,
-		quotedBundle,
-		quotedBundle,
-		quotedBundle,
-		shellQuote(filepath.Dir(containerRepoDir)), quotedBundle, quotedRepo, quotedRepo,
-		quotedBundle,
-	)
+	if err := pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs); err != nil {
+		return "", err
+	}
+	return containerRepoDir, nil
+}
 
-	cloneArgs := make([]string, len(sshArgs))
-	copy(cloneArgs, sshArgs)
-	cloneArgs = append(cloneArgs, cloneScript)
+// syncRefspecs returns forced refspecs for the HEAD branch plus any extra
+// branches, deduplicated.
+func syncRefspecs(headRef string, extraBranches []string) []string {
+	refs := []string{headRef}
+	for _, branch := range extraBranches {
+		ref := branch
+		if !strings.HasPrefix(ref, "refs/") {
+			ref = "refs/heads/" + ref
+		}
+		if !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	specs := make([]string, len(refs))
+	for i, ref := range refs {
+		specs[i] = fmt.Sprintf("+%s:%s", ref, ref)
+	}
+	return specs
+}
 
-	cloneOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+// remoteRepoExists reports whether a git repo already exists at
+// containerRepoDir in the remote environment.
+func remoteRepoExists(ctx context.Context, sshArgs []string, containerRepoDir string) (bool, error) {
+	script := fmt.Sprintf("if [ -d %s/.git ]; then echo EXISTS; else echo MISSING; fi", shellQuote(containerRepoDir))
+	checkArgs := make([]string, len(sshArgs))
+	copy(checkArgs, sshArgs)
+	checkArgs = append(checkArgs, script)
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: os.TempDir(),
 		Command:    "ssh",
-		Args:       cloneArgs,
+		Args:       checkArgs,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to clone bundle in sandbox: %w", err)
+		return false, fmt.Errorf("failed to check for remote repo: %w", err)
 	}
-	if cloneOutput.ExitStatus != 0 {
-		return "", fmt.Errorf("git clone in sandbox failed (exit %d): %s", cloneOutput.ExitStatus, cloneOutput.Stderr)
+	if output.ExitStatus != 0 {
+		return false, fmt.Errorf("checking for remote repo failed (exit %d): %s", output.ExitStatus, output.Stderr)
+	}
+	return strings.Contains(output.Stdout, "EXISTS"), nil
+}
+
+// seedRepoOverSSH creates the remote repo as a shallow clone (real shas,
+// truncated history) of the local repo, fetched straight from the host
+// through a reverse-forwarded tunnel.
+func seedRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir, headRef string, extraBranches []string) error {
+	seedStart := time.Now()
+	headBranch := strings.TrimPrefix(headRef, "refs/heads/")
+	quotedRepo := shellQuote(containerRepoDir)
+	err := tunneledRepoScriptOverSSH(ctx, sshArgs, localRepoDir, func(url string) string {
+		var script strings.Builder
+		script.WriteString("mkdir -p " + shellQuote(filepath.Dir(containerRepoDir)))
+		script.WriteString(fmt.Sprintf(" && git clone --depth %d --no-tags --single-branch --branch %s %s %s",
+			seedCloneDepth, shellQuote(headBranch), url, quotedRepo))
+		for _, spec := range syncRefspecs(headRef, extraBranches)[1:] {
+			script.WriteString(fmt.Sprintf(" && git -C %s fetch --depth %d %s %s",
+				quotedRepo, seedCloneDepth, url, shellQuote(spec)))
+		}
+		// The origin remote points at the tunnel, which is gone after this
+		// command; remove it so nothing in the sandbox tries to use it.
+		script.WriteString(fmt.Sprintf(" && git -C %s remote remove origin", quotedRepo))
+		script.WriteString(fmt.Sprintf(" && git -C %s config user.name 'Sidekick' && git -C %s config user.email 'sidekick@side.dev'",
+			quotedRepo, quotedRepo))
+		return script.String()
+	})
+	if err != nil {
+		return fmt.Errorf("seeding remote repo failed: %w", err)
+	}
+	log.Debug().
+		Str("mode", "seed").
+		Str("remoteRepoDir", containerRepoDir).
+		Dur("seedDur", time.Since(seedStart)).
+		Msg("synced repo over ssh")
+	return nil
+}
+
+// tunneledRepoScriptOverSSH runs a remote shell script produced by
+// buildScript, which receives a git URL from which the remote can fetch the
+// local repo: an in-process upload-pack server on the host loopback is
+// reverse-forwarded into the remote environment for the duration of the one
+// ssh command, so the remote only ever gets temporary read-only access to
+// this single repository. The remote-side tunnel port is chosen at random
+// and retried on collision, which surfaces via ExitOnForwardFailure.
+func tunneledRepoScriptOverSSH(ctx context.Context, sshArgs []string, localRepoDir string, buildScript func(url string) string) error {
+	localPort, stop, err := startLocalGitUploadPackServer(ctx, localRepoDir)
+	if err != nil {
+		return err
+	}
+	defer stop()
+
+	dest, opts := splitSSHDestination(sshArgs)
+	if dest == "" {
+		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
 
-	return containerRepoDir, nil
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		remotePort := 20000 + rand.Intn(40000)
+		url := fmt.Sprintf("git://127.0.0.1:%d/repo", remotePort)
+		runArgs := append(append([]string{}, opts...),
+			"-o", "ExitOnForwardFailure=yes",
+			"-R", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", remotePort, localPort),
+			dest, buildScript(url))
+		output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+			WorkingDir: os.TempDir(),
+			Command:    "ssh",
+			Args:       runArgs,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to run tunneled repo script: %w", err)
+		}
+		if output.ExitStatus == 0 {
+			return nil
+		}
+		lastErr = fmt.Errorf("tunneled repo script failed (exit %d): %s", output.ExitStatus, output.Stderr)
+	}
+	return lastErr
+}
+
+// pushRepoSyncOverSSH updates the given refspecs in the remote repo via `git
+// push` over the same ssh transport: git execs git-receive-pack through the
+// existing sshd channel, so no daemon or extra remote service is required,
+// only git itself. Native negotiation provides incrementality and backward
+// moves in one connection.
+func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir, headRef string, refspecs []string) error {
+	dest, opts := splitSSHDestination(sshArgs)
+	if dest == "" {
+		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
+	}
+	gitSSH := "ssh"
+	for _, a := range opts {
+		gitSSH += " " + shellQuote(a)
+	}
+
+	// Prepare the remote repo: init when missing, and allow pushes to (and
+	// deletions of) checked-out branches; the working tree is realigned
+	// right after the push.
+	quotedRepo := shellQuote(containerRepoDir)
+	prepScript := fmt.Sprintf(
+		"if [ ! -d %s/.git ]; then mkdir -p %s && git init -q %s && "+
+			"git -C %s config user.name 'Sidekick' && git -C %s config user.email 'sidekick@side.dev'; fi && "+
+			"git -C %s config receive.denyCurrentBranch ignore && "+
+			"git -C %s config receive.denyDeleteCurrent ignore",
+		quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo,
+	)
+	prepArgs := make([]string, len(sshArgs))
+	copy(prepArgs, sshArgs)
+	prepArgs = append(prepArgs, prepScript)
+	prepStart := time.Now()
+	prepOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       prepArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to prepare remote repo for push: %w", err)
+	}
+	if prepOutput.ExitStatus != 0 {
+		return fmt.Errorf("preparing remote repo for push failed (exit %d): %s", prepOutput.ExitStatus, prepOutput.Stderr)
+	}
+	prepDur := time.Since(prepStart)
+
+	pushStart := time.Now()
+	pushArgs := append([]string{"-C", localRepoDir, "push", "--quiet", dest + ":" + containerRepoDir}, refspecs...)
+	cmd := exec.CommandContext(ctx, "git", pushArgs...)
+	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git push to %s: %w: %s", containerRepoDir, err, string(out))
+	}
+	pushDur := time.Since(pushStart)
+
+	applyScript := "cd " + quotedRepo +
+		" && git symbolic-ref HEAD " + shellQuote(headRef) +
+		" && git reset --hard"
+	applyArgs := make([]string, len(sshArgs))
+	copy(applyArgs, sshArgs)
+	applyArgs = append(applyArgs, applyScript)
+	applyStart := time.Now()
+	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       applyArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to realign remote repo after push: %w", err)
+	}
+	if applyOutput.ExitStatus != 0 {
+		return fmt.Errorf("realigning remote repo after push failed (exit %d): %s", applyOutput.ExitStatus, applyOutput.Stderr)
+	}
+
+	log.Debug().
+		Str("mode", "push").
+		Str("remoteRepoDir", containerRepoDir).
+		Dur("prepDur", prepDur).
+		Dur("pushDur", pushDur).
+		Dur("remoteApplyDur", time.Since(applyStart)).
+		Msg("synced repo over ssh")
+
+	return nil
+}
+
+// localHeadRef returns the local HEAD's branch ref, or an error when HEAD is
+// detached: the incremental path relies on a symbolic HEAD to re-point the
+// remote, while the full sync handles detached HEAD via the bundle's HEAD
+// entry.
+func localHeadRef(ctx context.Context, localRepoDir string) (string, error) {
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: localRepoDir,
+		Command:    "git",
+		Args:       []string{"symbolic-ref", "--quiet", "HEAD"},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve local HEAD: %w", err)
+	}
+	if output.ExitStatus != 0 {
+		return "", fmt.Errorf("local HEAD is detached")
+	}
+	return strings.TrimSpace(output.Stdout), nil
 }
 
 // syncMergeResultToLocalOverSSH transfers the given branch from a remote
 // environment (reachable via sshArgs) back to the local host repository. Such
-// environments hold an independent clone of the repo (synced in via a git
-// bundle) rather than a bind mount, so a merge performed inside the
-// environment does not otherwise reach the host checkout that is the source
-// of truth. This bundles the branch out of the environment and fast-forwards
-// the local branch, updating its worktree in place when it is checked out.
-func syncMergeResultToLocalOverSSH(ctx context.Context, sshArgs []string, name, workingDirectory, localRepoDir, branch string) error {
-	// Bundle the branch inside the sandbox. The working directory is a worktree
-	// that shares the object store, so the branch ref is reachable from here.
-	remoteBundlePath := "/tmp/repo-back-" + name + ".bundle"
-	bundleScript := fmt.Sprintf(
-		"cd %s && rm -f %s && git bundle create %s %s",
-		shellQuote(workingDirectory),
-		shellQuote(remoteBundlePath),
-		shellQuote(remoteBundlePath),
-		shellQuote(branch),
-	)
-	bundleArgs := append(append([]string{}, sshArgs...), bundleScript)
-	bundleOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       bundleArgs,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create git bundle in sandbox: %w", err)
-	}
-	if bundleOutput.ExitStatus != 0 {
-		return fmt.Errorf("git bundle create in sandbox failed (exit %d): %s", bundleOutput.ExitStatus, bundleOutput.Stderr)
+// environments hold an independent clone of the repo rather than a bind
+// mount, so a merge performed inside the environment does not otherwise
+// reach the host checkout that is the source of truth. The branch is fetched
+// into a temporary ref (negotiated transfer, so only missing objects move)
+// and the local branch is then fast-forwarded, updating its worktree in
+// place when it is checked out.
+func syncMergeResultToLocalOverSSH(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, branch string) error {
+	tempRef := "refs/sidekick-sync/" + branch
+	refspec := fmt.Sprintf("+refs/heads/%s:%s", branch, tempRef)
+	if err := fetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, refspec); err != nil {
+		return err
 	}
 
-	localBundle, err := os.CreateTemp("", fmt.Sprintf("repo-back-%s-*.bundle", name))
-	if err != nil {
-		return fmt.Errorf("failed to allocate bundle temp file: %w", err)
-	}
-	localBundlePath := localBundle.Name()
-	localBundle.Close()
-	defer os.Remove(localBundlePath)
-
-	downloadArgs := append(append([]string{}, sshArgs...), fmt.Sprintf("cat %s", shellQuote(remoteBundlePath)))
-	downloadOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "sh",
-		Args:       []string{"-c", fmt.Sprintf("ssh %s > %s", strings.Join(quoteArgs(downloadArgs), " "), shellQuote(localBundlePath))},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to download bundle from sandbox: %w", err)
-	}
-	if downloadOutput.ExitStatus != 0 {
-		return fmt.Errorf("bundle download failed (exit %d): %s", downloadOutput.ExitStatus, downloadOutput.Stderr)
-	}
-
-	// Best-effort cleanup of the sandbox-side bundle.
-	cleanupArgs := append(append([]string{}, sshArgs...), fmt.Sprintf("rm -f %s", shellQuote(remoteBundlePath)))
-	_, _ = unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       cleanupArgs,
-	})
-
-	// Apply the branch to the local repo. The bundle path and branch are passed
-	// as positional arguments ($1, $2) rather than interpolated into the script
-	// so that arbitrary branch names cannot alter the shell command. Fetch into
-	// a temporary ref first, which is always permitted (even for the currently
-	// checked-out branch), then advance the local branch: when a worktree has it
-	// checked out, merge --ff-only there so both the ref and the working tree
-	// move; otherwise update the ref directly.
+	// Advance the local branch from the temporary ref (fetching into one is
+	// always permitted, even for the currently checked-out branch): when a
+	// worktree has the branch checked out, merge --ff-only there so both the
+	// ref and the working tree move; otherwise update the ref directly. The
+	// branch is passed as a positional argument ($1) rather than
+	// interpolated into the script so that arbitrary branch names cannot
+	// alter the shell command.
 	applyScript := `set -e
-bundle="$1"
-branch="$2"
+branch="$1"
 tempref="refs/sidekick-sync/$branch"
-git fetch "$bundle" "+refs/heads/$branch:$tempref"
 wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p; exit}')
 if [ -n "$wt" ]; then git -C "$wt" merge --ff-only "$tempref"; else git update-ref "refs/heads/$branch" "$tempref"; fi
 git update-ref -d "$tempref"`
 	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: localRepoDir,
 		Command:    "sh",
-		Args:       []string{"-c", applyScript, "sh", localBundlePath, branch},
+		Args:       []string{"-c", applyScript, "sh", branch},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to apply synced branch to local repo: %w", err)
 	}
 	if applyOutput.ExitStatus != 0 {
 		return fmt.Errorf("applying synced branch to local repo failed (exit %d): %s", applyOutput.ExitStatus, applyOutput.Stderr)
+	}
+	return nil
+}
+
+// syncGitRefToLocalOverSSH transfers a single fully-qualified ref (e.g. an
+// archive tag like "refs/tags/archive/foo") from a remote environment's clone
+// into the local repo. Unlike branch syncing there is no local working tree
+// to update, so a plain fetch of the ref suffices.
+func syncGitRefToLocalOverSSH(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, ref string) error {
+	return fetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, fmt.Sprintf("%s:%s", ref, ref))
+}
+
+// fetchRemoteRefToLocal fetches the given refspec from a remote
+// environment's repo into the local one via git's negotiated transfer over
+// the same ssh transport (git execs git-upload-pack through sshd; no daemon
+// is needed). workingDirectory may be a worktree: it shares the object
+// store, so any repo-level ref is reachable from there.
+func fetchRemoteRefToLocal(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, refspec string) error {
+	dest, opts := splitSSHDestination(sshArgs)
+	if dest == "" {
+		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
+	}
+	gitSSH := "ssh"
+	for _, a := range opts {
+		gitSSH += " " + shellQuote(a)
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir,
+		"fetch", "--no-tags", "--no-write-fetch-head", dest+":"+workingDirectory, refspec)
+	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch %s %s: %w: %s", workingDirectory, refspec, err, string(out))
 	}
 	return nil
 }
@@ -282,4 +422,150 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 	}
 
 	return worktreePath, nil
+}
+
+type SyncRepoToRemoteInput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+	// LocalRepoDir is the local repository to upload.
+	LocalRepoDir string `json:"localRepoDir"`
+	// RemoteRepoDir optionally overrides where the repo lands in the remote
+	// environment. Defaults to $HOME/<repo basename>.
+	RemoteRepoDir string `json:"remoteRepoDir,omitempty"`
+	// Branches lists branches to sync besides the local HEAD branch (e.g. a
+	// task's start branch). Only these and the HEAD branch are guaranteed
+	// to exist in the remote repo.
+	Branches []string `json:"branches,omitempty"`
+}
+
+type SyncRepoToRemoteOutput struct {
+	RemoteRepoDir string `json:"remoteRepoDir"`
+}
+
+// SyncRepoToRemoteActivity mirrors a local git repository's HEAD branch
+// (plus Branches) into any SSH-capable environment, seeding missing repos as
+// shallow clones and pushing updates otherwise. The environment's working
+// directory is not required to exist yet: the repo lands under the remote
+// $HOME unless RemoteRepoDir is set.
+func SyncRepoToRemoteActivity(ctx context.Context, input SyncRepoToRemoteInput) (SyncRepoToRemoteOutput, error) {
+	sshEnv, ok := input.EnvContainer.Env.(SSHCapableEnv)
+	if !ok {
+		return SyncRepoToRemoteOutput{}, fmt.Errorf("env type %s does not support SSH-based repo sync", input.EnvContainer.Env.GetType())
+	}
+	sshArgs, err := sshEnv.SSHArgs(ctx)
+	if err != nil {
+		return SyncRepoToRemoteOutput{}, fmt.Errorf("failed to get SSH args: %w", err)
+	}
+	remoteRepoDir, err := syncRepoOverSSH(ctx, sshArgs, input.LocalRepoDir, input.RemoteRepoDir, input.Branches)
+	if err != nil {
+		return SyncRepoToRemoteOutput{}, err
+	}
+	return SyncRepoToRemoteOutput{RemoteRepoDir: remoteRepoDir}, nil
+}
+
+type CreateRemoteWorktreeInput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+	RepoDir      string       `json:"repoDir"`
+	BranchName   string       `json:"branchName"`
+	StartBranch  string       `json:"startBranch,omitempty"`
+	WorkspaceId  string       `json:"workspaceId"`
+}
+
+type CreateRemoteWorktreeOutput struct {
+	WorktreePath string `json:"worktreePath"`
+}
+
+// CreateRemoteWorktreeActivity creates a git worktree inside a remote
+// environment via its RunCommand, so that the worktree's .git references
+// resolve within the remote filesystem.
+func CreateRemoteWorktreeActivity(ctx context.Context, input CreateRemoteWorktreeInput) (CreateRemoteWorktreeOutput, error) {
+	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId)
+	if err != nil {
+		return CreateRemoteWorktreeOutput{}, err
+	}
+	return CreateRemoteWorktreeOutput{WorktreePath: worktreePath}, nil
+}
+
+type DeepenRepoInput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+	// LocalRepoDir is the host repository serving the missing history.
+	LocalRepoDir string `json:"localRepoDir"`
+	// RemoteRepoDir is the environment's repo to deepen.
+	RemoteRepoDir string `json:"remoteRepoDir"`
+	// Branches lists branches whose full history to backfill besides the
+	// local HEAD branch's.
+	Branches []string `json:"branches,omitempty"`
+}
+
+type DeepenRepoOutput struct {
+	// Deepened is false when the remote repo already had complete history.
+	Deepened bool `json:"deepened"`
+}
+
+// DeepenRepoActivity backfills complete history into a shallow-seeded
+// remote repo, meant to run in the background once a task is already
+// underway. The fetch adds objects and lifts the shallow boundary but
+// updates no refs, so it is safe to run concurrently with work happening in
+// the environment. Once the deepened repo is captured by a filesystem
+// snapshot, sandboxes seeded from that snapshot never pay this cost again.
+// No-op for repos with complete history.
+func DeepenRepoActivity(ctx context.Context, input DeepenRepoInput) (DeepenRepoOutput, error) {
+	sshEnv, ok := input.EnvContainer.Env.(SSHCapableEnv)
+	if !ok {
+		return DeepenRepoOutput{}, fmt.Errorf("env type %s does not support SSH-based repo deepening", input.EnvContainer.Env.GetType())
+	}
+	sshArgs, err := sshEnv.SSHArgs(ctx)
+	if err != nil {
+		return DeepenRepoOutput{}, fmt.Errorf("failed to get SSH args: %w", err)
+	}
+
+	quotedRepo := shellQuote(input.RemoteRepoDir)
+	checkArgs := make([]string, len(sshArgs))
+	copy(checkArgs, sshArgs)
+	checkArgs = append(checkArgs, fmt.Sprintf("if [ -f %s/.git/shallow ]; then echo SHALLOW; else echo COMPLETE; fi", quotedRepo))
+	checkOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       checkArgs,
+	})
+	if err != nil {
+		return DeepenRepoOutput{}, fmt.Errorf("failed to check for shallow remote repo: %w", err)
+	}
+	if checkOutput.ExitStatus != 0 {
+		return DeepenRepoOutput{}, fmt.Errorf("checking for shallow remote repo failed (exit %d): %s", checkOutput.ExitStatus, checkOutput.Stderr)
+	}
+	if !strings.Contains(checkOutput.Stdout, "SHALLOW") {
+		return DeepenRepoOutput{}, nil
+	}
+
+	headRef, err := localHeadRef(ctx, input.LocalRepoDir)
+	if err != nil {
+		return DeepenRepoOutput{}, err
+	}
+	refs := []string{headRef}
+	for _, branch := range input.Branches {
+		ref := branch
+		if !strings.HasPrefix(ref, "refs/") {
+			ref = "refs/heads/" + ref
+		}
+		if !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+
+	deepenStart := time.Now()
+	err = tunneledRepoScriptOverSSH(ctx, sshArgs, input.LocalRepoDir, func(url string) string {
+		fetch := fmt.Sprintf("git -C %s fetch --unshallow --no-tags %s", quotedRepo, url)
+		for _, ref := range refs {
+			fetch += " " + shellQuote(ref)
+		}
+		return fetch
+	})
+	if err != nil {
+		return DeepenRepoOutput{}, fmt.Errorf("deepening remote repo failed: %w", err)
+	}
+	log.Debug().
+		Str("remoteRepoDir", input.RemoteRepoDir).
+		Dur("deepenDur", time.Since(deepenStart)).
+		Msg("deepened remote repo history")
+	return DeepenRepoOutput{Deepened: true}, nil
 }

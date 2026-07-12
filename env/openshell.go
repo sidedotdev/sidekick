@@ -3,12 +3,14 @@ package env
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"sidekick/coding/unix"
+	"sidekick/common"
 
 	"github.com/rs/zerolog/log"
 )
@@ -51,8 +53,8 @@ func OpenShellSandboxName(repoDir string) string {
 	return "side--" + DevPodWorkspaceName(repoDir)
 }
 
-// OpenShellCreateActivity creates an OpenShell sandbox.
-func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (OpenShellCreateOutput, error) {
+// openShellCreateSandbox creates an OpenShell sandbox.
+func openShellCreateSandbox(ctx context.Context, input OpenShellCreateInput) (OpenShellCreateOutput, error) {
 	if err := ensureDockerReady(ctx); err != nil {
 		return OpenShellCreateOutput{}, err
 	}
@@ -205,30 +207,6 @@ func parseCreatedSandboxName(output string) string {
 	return ""
 }
 
-type OpenShellSyncRepoInput struct {
-	SandboxName      string `json:"sandboxName"`
-	LocalRepoDir     string `json:"localRepoDir"`
-	ContainerRepoDir string `json:"containerRepoDir"`
-}
-
-type OpenShellSyncRepoOutput struct {
-	ContainerRepoDir string `json:"containerRepoDir"`
-}
-
-// OpenShellSyncRepoActivity uploads a local git repository to an OpenShell
-// sandbox using a git bundle transferred over ssh.
-func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput) (OpenShellSyncRepoOutput, error) {
-	sshArgs, err := openShellSSHArgs(ctx, input.SandboxName)
-	if err != nil {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to get SSH args: %w", err)
-	}
-	containerRepoDir, err := syncRepoOverSSH(ctx, sshArgs, input.SandboxName, input.LocalRepoDir, input.ContainerRepoDir)
-	if err != nil {
-		return OpenShellSyncRepoOutput{}, err
-	}
-	return OpenShellSyncRepoOutput{ContainerRepoDir: containerRepoDir}, nil
-}
-
 // SyncMergeResultToLocal transfers the given branch from the OpenShell sandbox
 // back to the local host repository. OpenShell holds an independent clone of
 // the repo (synced in via a git bundle) rather than a bind mount, so a merge
@@ -246,7 +224,20 @@ func (e *OpenShellEnv) SyncMergeResultToLocal(ctx context.Context, branch string
 	if err != nil {
 		return fmt.Errorf("failed to get SSH args: %w", err)
 	}
-	return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.SandboxName, e.WorkingDirectory, e.LocalRepoDir, branch)
+	return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+}
+
+var _ GitRefSyncer = (*OpenShellEnv)(nil)
+
+func (e *OpenShellEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync git ref to local: OpenShellEnv has no LocalRepoDir")
+	}
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return fmt.Errorf("failed to get SSH args: %w", err)
+	}
+	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
 }
 
 // quoteArgs shell-quotes each argument for use in a sh -c command.
@@ -258,53 +249,23 @@ func quoteArgs(args []string) []string {
 	return quoted
 }
 
-type CreateOpenShellWorktreeInput struct {
-	EnvContainer EnvContainer `json:"envContainer"`
-	RepoDir      string       `json:"repoDir"`
-	BranchName   string       `json:"branchName"`
-	StartBranch  string       `json:"startBranch,omitempty"`
-	WorkspaceId  string       `json:"workspaceId"`
-}
-
-type CreateOpenShellWorktreeOutput struct {
-	WorktreePath string `json:"worktreePath"`
-}
-
-// CreateOpenShellWorktreeActivity creates a git worktree inside a running
-// OpenShell sandbox so that worktree .git references resolve within the
-// sandbox filesystem.
-func CreateOpenShellWorktreeActivity(ctx context.Context, input CreateOpenShellWorktreeInput) (CreateOpenShellWorktreeOutput, error) {
-	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId)
-	if err != nil {
-		return CreateOpenShellWorktreeOutput{}, err
-	}
-	return CreateOpenShellWorktreeOutput{WorktreePath: worktreePath}, nil
-}
-
-type OpenShellCheckSandboxInput struct {
-	SandboxName string `json:"sandboxName"`
-}
-
-type OpenShellCheckSandboxOutput struct {
-	Alive bool `json:"alive"`
-}
-
-// OpenShellCheckSandboxActivity checks whether a named sandbox exists and is
-// reachable by fetching its metadata.
-func OpenShellCheckSandboxActivity(ctx context.Context, input OpenShellCheckSandboxInput) (OpenShellCheckSandboxOutput, error) {
+// openShellCheckSandbox checks whether a named sandbox exists and is
+// reachable by fetching its metadata. Failures are treated as "not alive" so
+// callers can fall through to (re)creation.
+func openShellCheckSandbox(ctx context.Context, sandboxName string) (bool, error) {
 	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: ".",
 		Command:    "openshell",
-		Args:       []string{"sandbox", "get", input.SandboxName},
+		Args:       []string{"sandbox", "get", sandboxName},
 	})
 	if err != nil {
-		return OpenShellCheckSandboxOutput{Alive: false}, nil
+		return false, nil
 	}
-	return OpenShellCheckSandboxOutput{Alive: output.ExitStatus == 0}, nil
+	return output.ExitStatus == 0, nil
 }
 
-// OpenShellDeleteActivity deletes an OpenShell sandbox.
-func OpenShellDeleteActivity(ctx context.Context, sandboxName string) error {
+// openShellDeleteSandbox deletes an OpenShell sandbox.
+func openShellDeleteSandbox(ctx context.Context, sandboxName string) error {
 	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: ".",
 		Command:    "openshell",
@@ -319,10 +280,45 @@ func OpenShellDeleteActivity(ctx context.Context, sandboxName string) error {
 	return nil
 }
 
-// OpenShellStopActivity deletes an OpenShell sandbox.
-// OpenShell has no stop-without-delete; this is equivalent to delete.
-func OpenShellStopActivity(ctx context.Context, sandboxName string) error {
-	return OpenShellDeleteActivity(ctx, sandboxName)
+// openShellSandboxProvider adapts OpenShell sandbox management to the
+// generic SandboxProvider interface.
+type openShellSandboxProvider struct{}
+
+func init() {
+	RegisterSandboxProvider(EnvTypeOpenShell, openShellSandboxProvider{})
+}
+
+func (openShellSandboxProvider) CreateSandbox(ctx context.Context, input CreateSandboxInput) (CreateSandboxOutput, error) {
+	var config common.OpenShellEnvConfig
+	if len(input.Config) > 0 {
+		if err := json.Unmarshal(input.Config, &config); err != nil {
+			return CreateSandboxOutput{}, fmt.Errorf("invalid openshell sandbox config: %w", err)
+		}
+	}
+	output, err := openShellCreateSandbox(ctx, OpenShellCreateInput{
+		Name:    input.Name,
+		Source:  config.From,
+		RepoDir: input.RepoDir,
+	})
+	if err != nil {
+		return CreateSandboxOutput{}, err
+	}
+	return CreateSandboxOutput{SandboxName: output.SandboxName}, nil
+}
+
+func (openShellSandboxProvider) CheckSandbox(ctx context.Context, input CheckSandboxInput) (CheckSandboxOutput, error) {
+	alive, err := openShellCheckSandbox(ctx, input.SandboxName)
+	return CheckSandboxOutput{Alive: alive}, err
+}
+
+// StopSandbox deletes the sandbox: OpenShell has no stop-without-delete
+// lifecycle.
+func (openShellSandboxProvider) StopSandbox(ctx context.Context, input StopSandboxInput) error {
+	return openShellDeleteSandbox(ctx, input.SandboxName)
+}
+
+func (openShellSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteSandboxInput) error {
+	return openShellDeleteSandbox(ctx, input.SandboxName)
 }
 
 // openShellSSHArgs runs `openshell sandbox ssh-config <name>`, parses the
