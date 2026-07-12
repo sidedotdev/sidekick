@@ -28,13 +28,12 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(ctx context.Context, w
 // optional walk cache that skips reading and parsing files unchanged since a
 // previously cached repo state.
 func (t *TreeSitterActivities) CreateDirSignatureOutlinesCached(ctx context.Context, workspaceId string, ec env.EnvContainer, maxCharacterLimit int, cache *OutlineWalkCache) ([]string, error) {
-	outlines, err := GetDirectorySignatureOutlinesCached(ctx, ec, nil, nil, cache)
-
+	entries, err := GetDirectoryRawOutlines(ctx, ec, cache)
 	if err != nil {
 		return []string{}, err
 	}
 
-	return t.PersistDirSignatureOutlines(ctx, workspaceId, outlines, maxCharacterLimit)
+	return t.PersistDirSignatureOutlines(ctx, workspaceId, OutlinesFromRawEntries(entries, nil, nil), maxCharacterLimit)
 }
 
 // PersistDirSignatureOutlines chunks the given signature outlines and

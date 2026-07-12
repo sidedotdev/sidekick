@@ -134,7 +134,6 @@ func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options 
 		WorkspaceId:          options.WorkspaceId,
 		FileSignatureSubkeys: rankedFileSignatureSubkeys,
 		DirChunkSubkeys:      rankedDirChunkSubkeys,
-		EnvContainer:         options.EnvContainer,
 		CharLimit:            options.CharLimit,
 		rawEntries:           rawEntries,
 	})
@@ -318,12 +317,10 @@ type DirSignatureOutlineOptions struct {
 	WorkspaceId          string
 	FileSignatureSubkeys []string // these are file signature subkeys
 	DirChunkSubkeys      []string
-	EnvContainer         env.EnvContainer
 	EmbeddingType        string
 	CharLimit            int
-	// rawEntries optionally provides pre-walked raw outline entries so the
-	// subset outline needs no additional walk. In-process only: it
-	// intentionally does not serialize.
+	// rawEntries provides the pre-walked raw outline entries the subset
+	// outline is derived from, so no additional walk or parse is needed.
 	rawEntries []tree_sitter.RawOutlineEntry
 }
 
@@ -337,7 +334,7 @@ func (ra *RagActivities) LimitedDirSignatureOutline(ctx context.Context, options
 	for i, subkey := range options.DirChunkSubkeys {
 		dirChunkKeys[i] = fmt.Sprintf("%s:%s", tree_sitter.ContentTypeDirChunk, subkey)
 	}
-	dirChunks, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, dirChunkKeys)
+	dirChunks, err := ra.DatabaseAccessor.MGet(ctx, options.WorkspaceId, dirChunkKeys)
 	if err != nil {
 		return "", err
 	}
@@ -378,7 +375,7 @@ chunksLoop:
 	for i, subkey := range options.FileSignatureSubkeys {
 		fileSignatureKeys[i] = fmt.Sprintf("%s:%s", tree_sitter.ContentTypeFileSignature, subkey)
 	}
-	fileSignatures, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, fileSignatureKeys)
+	fileSignatures, err := ra.DatabaseAccessor.MGet(ctx, options.WorkspaceId, fileSignatureKeys)
 	if err != nil {
 		return "", err
 	}
@@ -437,16 +434,7 @@ chunksLoop:
 		}
 	}
 
-	var outlines []tree_sitter.FileOutline
-	if options.rawEntries != nil {
-		outlines = tree_sitter.OutlinesFromRawEntries(options.rawEntries, &showPaths, &signaturePaths)
-	} else {
-		outlines, err = tree_sitter.GetDirectorySignatureOutlines(ctx, options.EnvContainer, &showPaths, &signaturePaths)
-		if err != nil {
-			return "", err
-		}
-	}
-
+	outlines := tree_sitter.OutlinesFromRawEntries(options.rawEntries, &showPaths, &signaturePaths)
 	return tree_sitter.GetFileOutlinesString(outlines)
 }
 

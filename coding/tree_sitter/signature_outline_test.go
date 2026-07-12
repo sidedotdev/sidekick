@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetDirectorySignatureOutlines_TruncationWhitespaceOnly(t *testing.T) {
+func TestOutlinesFromRawEntries_TruncationWhitespaceOnly(t *testing.T) {
 	t.Parallel()
 
 	// Markdown signature output ends with "---\n" which means trailing newline
@@ -45,8 +45,9 @@ More content.
 	signaturePaths := map[string]int{"test.md": maxLen}
 
 	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tmpDir}}
-	outlines, err := GetDirectorySignatureOutlines(context.Background(), ec, nil, &signaturePaths)
+	entries, err := GetDirectoryRawOutlines(context.Background(), ec, nil)
 	require.NoError(t, err)
+	outlines := OutlinesFromRawEntries(entries, nil, &signaturePaths)
 
 	// Find the file outline
 	var fileOutline *FileOutline
@@ -63,7 +64,7 @@ More content.
 		"should not show truncation message when only whitespace is truncated")
 }
 
-func TestGetDirectorySignatureOutlines_TruncationWithContent(t *testing.T) {
+func TestOutlinesFromRawEntries_TruncationWithContent(t *testing.T) {
 	t.Parallel()
 
 	content := `# Heading One
@@ -92,8 +93,9 @@ Even more content.
 	signaturePaths := map[string]int{"test.md": maxLen}
 
 	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tmpDir}}
-	outlines, err := GetDirectorySignatureOutlines(context.Background(), ec, nil, &signaturePaths)
+	entries, err := GetDirectoryRawOutlines(context.Background(), ec, nil)
 	require.NoError(t, err)
+	outlines := OutlinesFromRawEntries(entries, nil, &signaturePaths)
 
 	// Find the file outline
 	var fileOutline *FileOutline
@@ -110,7 +112,7 @@ Even more content.
 		"should show truncation message when actual content is truncated")
 }
 
-func TestGetDirectorySignatureOutlinesCached(t *testing.T) {
+func TestGetDirectoryRawOutlines_WalkCache(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -121,8 +123,9 @@ func TestGetDirectorySignatureOutlinesCached(t *testing.T) {
 	t.Run("records raw outlines during walk", func(t *testing.T) {
 		t.Parallel()
 		cache := &OutlineWalkCache{}
-		outlines, err := GetDirectorySignatureOutlinesCached(context.Background(), ec, nil, nil, cache)
+		entries, err := GetDirectoryRawOutlines(context.Background(), ec, cache)
 		require.NoError(t, err)
+		outlines := OutlinesFromRawEntries(entries, nil, nil)
 		require.NotEmpty(t, outlines)
 		updated := cache.UpdatedSnapshot()
 		require.Contains(t, updated, "a.go")
@@ -140,8 +143,9 @@ func TestGetDirectorySignatureOutlinesCached(t *testing.T) {
 			},
 			Affected: map[string]bool{"b.go": true},
 		}
-		outlines, err := GetDirectorySignatureOutlinesCached(context.Background(), ec, nil, nil, cache)
+		entries, err := GetDirectoryRawOutlines(context.Background(), ec, cache)
 		require.NoError(t, err)
+		outlines := OutlinesFromRawEntries(entries, nil, nil)
 		byPath := map[string]FileOutline{}
 		for _, outline := range outlines {
 			byPath[outline.Path] = outline
@@ -160,8 +164,9 @@ func TestGetDirectorySignatureOutlinesCached(t *testing.T) {
 	t.Run("cached unhandled sentinel skips files without outlines", func(t *testing.T) {
 		t.Parallel()
 		cache := &OutlineWalkCache{Raw: map[string]string{"a.go": rawOutlineUnhandled}}
-		outlines, err := GetDirectorySignatureOutlinesCached(context.Background(), ec, nil, nil, cache)
+		entries, err := GetDirectoryRawOutlines(context.Background(), ec, cache)
 		require.NoError(t, err)
+		outlines := OutlinesFromRawEntries(entries, nil, nil)
 		var aOutline *FileOutline
 		for i := range outlines {
 			if outlines[i].Path == "a.go" {

@@ -259,7 +259,7 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	t.Logf("RankedDirSignatureOutline output length: %d", len(output))
 }
 
-func BenchmarkGetDirectorySignatureOutlines_OpenShell(b *testing.B) {
+func BenchmarkGetDirectoryRawOutlines_OpenShell(b *testing.B) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		b.Skip("Skipping integration benchmark; SIDE_INTEGRATION_TEST not set to true")
 	}
@@ -315,11 +315,12 @@ func BenchmarkGetDirectorySignatureOutlines_OpenShell(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		start := time.Now()
-		outlines, err := tree_sitter.GetDirectorySignatureOutlines(ctx, ec, nil, nil)
+		entries, err := tree_sitter.GetDirectoryRawOutlines(ctx, ec, nil)
 		elapsed := time.Since(start)
 		if err != nil {
-			b.Fatalf("GetDirectorySignatureOutlines failed: %v", err)
+			b.Fatalf("GetDirectoryRawOutlines failed: %v", err)
 		}
+		outlines := tree_sitter.OutlinesFromRawEntries(entries, nil, nil)
 		b.Logf("iteration %d: %d outlines in %v (with 10ms simulated read latency)", i, len(outlines), elapsed)
 	}
 }

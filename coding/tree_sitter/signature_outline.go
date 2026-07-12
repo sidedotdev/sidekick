@@ -240,23 +240,6 @@ func checksumFromBytes(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// nil for the showPaths means: show all paths
-// nil for signaturePaths means: outline signatures for all paths
-func GetDirectorySignatureOutlines(ctx context.Context, ec env.EnvContainer, showPaths *map[string]bool, signaturePaths *map[string]int) ([]FileOutline, error) {
-	return GetDirectorySignatureOutlinesCached(ctx, ec, showPaths, signaturePaths, nil)
-}
-
-// GetDirectorySignatureOutlinesCached is GetDirectorySignatureOutlines with an
-// optional walk cache: files known unchanged since the cached repo state are
-// served from cached raw outlines without being read or re-parsed.
-func GetDirectorySignatureOutlinesCached(ctx context.Context, ec env.EnvContainer, showPaths *map[string]bool, signaturePaths *map[string]int, cache *OutlineWalkCache) ([]FileOutline, error) {
-	entries, err := GetDirectoryRawOutlines(ctx, ec, cache)
-	if err != nil {
-		return nil, err
-	}
-	return OutlinesFromRawEntries(entries, showPaths, signaturePaths), nil
-}
-
 // RawOutlineEntry is one entry from a directory walk with its raw
 // (untruncated) signature outline, sufficient to derive any filtered or
 // truncated outline view without walking again.
@@ -604,11 +587,11 @@ func finishSignatureOutline(path, relativePath, outlineContent string, signature
 }
 
 func GetDirectorySignatureOutlinesString(ctx context.Context, ec env.EnvContainer) (string, error) {
-	outlines, err := GetDirectorySignatureOutlines(ctx, ec, nil, nil)
+	entries, err := GetDirectoryRawOutlines(ctx, ec, nil)
 	if err != nil {
 		return "", err
 	}
-	return GetFileOutlinesString(outlines)
+	return GetFileOutlinesString(OutlinesFromRawEntries(entries, nil, nil))
 }
 
 func GetFileOutlinesString(outlines []FileOutline) (string, error) {
