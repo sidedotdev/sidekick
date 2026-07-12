@@ -125,6 +125,7 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 			environmentContext = output.FormatEnvironmentContext()
 		}
 	}
+	environmentContext = withBranchContext(dCtx, environmentContext)
 
 	// TODO return info that could help redefine requirements if issues are
 	// discovered while editing code. It should indicate if edits
@@ -684,6 +685,24 @@ const endInitialCodeContext = "#END INITIAL CODE CONTEXT"
 
 func getEnvironmentContext() string {
 	return fmt.Sprintf("OS: %s, Arch: %s", runtime.GOOS, runtime.GOARCH)
+}
+
+// withBranchContext appends the worktree branch and current base branch to the
+// environment context for worktree-based flows, so coding agents know which
+// branch they are on and which branch diffs and merges are targeted against.
+func withBranchContext(dCtx DevContext, environmentContext string) string {
+	if dCtx.Worktree == nil {
+		return environmentContext
+	}
+	if dCtx.Worktree.Name != "" {
+		environmentContext = fmt.Sprintf("%s, Worktree branch: %s", environmentContext, dCtx.Worktree.Name)
+	}
+	if dCtx.ExecContext.GlobalState != nil {
+		if baseBranch := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); baseBranch != "" {
+			environmentContext = fmt.Sprintf("%s, Base branch: %s", environmentContext, baseBranch)
+		}
+	}
+	return environmentContext
 }
 
 func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string, applyEditBlocksImmediately, doneRequired bool, environmentContext string, idd bool) string {

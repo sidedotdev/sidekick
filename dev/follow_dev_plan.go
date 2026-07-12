@@ -213,6 +213,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			environmentContext = output.FormatEnvironmentContext()
 		}
 	}
+	environmentContext = withBranchContext(dCtx, environmentContext)
 
 	// TODO decide how to set the dev step info based on the step type, eg
 	// perhaps different structs per step type

@@ -6,6 +6,7 @@ import (
 	"os"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
@@ -616,4 +617,67 @@ func TestRenderConflictResolutionPrompt(t *testing.T) {
 	assert.Contains(t, promptDoneRequired, search)
 	assert.NotContains(t, promptDoneRequired, "re-emit edit blocks")
 	assert.Contains(t, promptDoneRequired, doneTool.Name)
+}
+
+func TestWithBranchContext(t *testing.T) {
+	t.Parallel()
+
+	newDCtx := func(worktree *domain.Worktree, baseBranch string) DevContext {
+		globalState := &flow_action.GlobalState{}
+		if baseBranch != "" {
+			globalState.SetValue(common.KeyCurrentTargetBranch, baseBranch)
+		}
+		return DevContext{
+			ExecContext: flow_action.ExecContext{GlobalState: globalState},
+			Worktree:    worktree,
+		}
+	}
+
+	baseContext := "OS: Linux, Arch: x86_64"
+	tests := []struct {
+		name     string
+		dCtx     DevContext
+		expected string
+	}{
+		{
+			name:     "no worktree leaves context unchanged",
+			dCtx:     newDCtx(nil, "main"),
+			expected: baseContext,
+		},
+		{
+			name:     "worktree without branches leaves context unchanged",
+			dCtx:     newDCtx(&domain.Worktree{}, ""),
+			expected: baseContext,
+		},
+		{
+			name:     "worktree with base branch appends it",
+			dCtx:     newDCtx(&domain.Worktree{}, "release/1.2"),
+			expected: "OS: Linux, Arch: x86_64, Base branch: release/1.2",
+		},
+		{
+			name:     "worktree with branch name appends it",
+			dCtx:     newDCtx(&domain.Worktree{Name: "side/feature-x"}, ""),
+			expected: "OS: Linux, Arch: x86_64, Worktree branch: side/feature-x",
+		},
+		{
+			name:     "worktree with branch name and base branch appends both",
+			dCtx:     newDCtx(&domain.Worktree{Name: "side/feature-x"}, "release/1.2"),
+			expected: "OS: Linux, Arch: x86_64, Worktree branch: side/feature-x, Base branch: release/1.2",
+		},
+		{
+			name: "nil global state still appends worktree branch",
+			dCtx: DevContext{
+				ExecContext: flow_action.ExecContext{},
+				Worktree:    &domain.Worktree{Name: "side/feature-x"},
+			},
+			expected: "OS: Linux, Arch: x86_64, Worktree branch: side/feature-x",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, withBranchContext(tt.dCtx, baseContext))
+		})
+	}
 }
