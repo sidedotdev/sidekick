@@ -188,6 +188,17 @@ func TestAnthropicSupportsAdaptiveThinking(t *testing.T) {
 		// Haiku family never supports adaptive thinking
 		{"haiku-3", "claude-haiku-3", false},
 		{"haiku-5", "claude-haiku-5", false},
+		// Bedrock model IDs (per models.dev): global/region-prefixed and
+		// unprefixed, date-stamped, and with the -v1:0 suffix
+		{"bedrock global haiku-4-5 dated", "global.anthropic.claude-haiku-4-5-20251001-v1:0", false},
+		{"bedrock us sonnet-4-5 dated", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", false},
+		{"bedrock eu opus-4-5 dated", "eu.anthropic.claude-opus-4-5-20251101-v1:0", false},
+		{"bedrock opus-4-1 dated", "anthropic.claude-opus-4-1-20250805-v1:0", false},
+		{"bedrock opus-4-6", "anthropic.claude-opus-4-6-v1", true},
+		{"bedrock us opus-4-6", "us.anthropic.claude-opus-4-6-v1", true},
+		{"bedrock global sonnet-4-6", "global.anthropic.claude-sonnet-4-6", true},
+		{"bedrock global opus-4-8", "global.anthropic.claude-opus-4-8", true},
+		{"bedrock us sonnet-5", "us.anthropic.claude-sonnet-5", true},
 		// Non-claude models
 		{"gpt model", "gpt-5.1", false},
 	}
