@@ -407,6 +407,15 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 
+	// Second call exercises the per-git-tree outline cache populated by the
+	// first: unchanged files are neither read nor re-parsed, and the result
+	// must be byte-identical.
+	phaseStart = time.Now()
+	output2, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
+	t.Logf("phase: ranked outline (cached) took %s", time.Since(phaseStart))
+	require.NoError(t, err, "cached RankedDirSignatureOutline returned an error")
+	require.Equal(t, output, output2, "cached ranked outline should match the uncached result")
+
 	expectedPaths := []string{
 		"\ndomain/\n",
 		"\n\ttask.go",

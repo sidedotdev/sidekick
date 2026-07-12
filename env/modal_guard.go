@@ -68,8 +68,6 @@ func modalGuardTokenHash(token string) string {
 	return hex.EncodeToString(h[:])[:32]
 }
 
-
-
 // modalHostTokens returns the Modal API credentials that `modal token set`
 // writes, from env vars or the active profile in ~/.modal.toml. They are
 // needed to run `modal deploy` inside the trusted deployer sandbox.

@@ -3,6 +3,7 @@ package env
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -100,6 +101,39 @@ func TestModalIntegration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(len(content)), info.Size())
 		require.NoError(t, modalEnv.Remove(ctx, "modal-test.txt"))
+	})
+
+	t.Run("reverse port forward", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+		go func() {
+			for {
+				conn, acceptErr := listener.Accept()
+				if acceptErr != nil {
+					return
+				}
+				_, _ = conn.Write([]byte("hello-from-host\n"))
+				_ = conn.Close()
+			}
+		}()
+		hostPort := listener.Addr().(*net.TCPAddr).Port
+
+		fwdEnv := &ModalEnv{
+			SandboxName:      sandboxName,
+			SSHHost:          createOutput.SSHHost,
+			SSHPort:          createOutput.SSHPort,
+			WorkingDirectory: syncOutput.RemoteRepoDir,
+			PortForwards:     []common.PortForwardConfig{{HostPort: hostPort, ContainerPort: 18080}},
+		}
+		output, err := fwdEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "python3",
+			Args: []string{"-c",
+				"import socket; s = socket.create_connection(('127.0.0.1', 18080), 10); print(s.recv(100).decode())"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, output.ExitStatus, "stderr: %s", output.Stderr)
+		assert.Contains(t, output.Stdout, "hello-from-host")
 	})
 
 	t.Run("worktree", func(t *testing.T) {

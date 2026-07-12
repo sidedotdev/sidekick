@@ -21,13 +21,25 @@ const ContentTypeDirChunk = "dir:chunk"
 
 // TODO move to RagActivities
 func (t *TreeSitterActivities) CreateDirSignatureOutlines(ctx context.Context, workspaceId string, ec env.EnvContainer, maxCharacterLimit int) ([]string, error) {
-	// FIXME perf: have a way to skip getting outlines for the ones we already set in the DB, eg using checksums
-	outlines, err := GetDirectorySignatureOutlines(ctx, ec, nil, nil)
+	return t.CreateDirSignatureOutlinesCached(ctx, workspaceId, ec, maxCharacterLimit, nil)
+}
+
+// CreateDirSignatureOutlinesCached is CreateDirSignatureOutlines with an
+// optional walk cache that skips reading and parsing files unchanged since a
+// previously cached repo state.
+func (t *TreeSitterActivities) CreateDirSignatureOutlinesCached(ctx context.Context, workspaceId string, ec env.EnvContainer, maxCharacterLimit int, cache *OutlineWalkCache) ([]string, error) {
+	outlines, err := GetDirectorySignatureOutlinesCached(ctx, ec, nil, nil, cache)
 
 	if err != nil {
 		return []string{}, err
 	}
 
+	return t.PersistDirSignatureOutlines(ctx, workspaceId, outlines, maxCharacterLimit)
+}
+
+// PersistDirSignatureOutlines chunks the given signature outlines and
+// persists them under content-hash subkeys, returning those subkeys.
+func (t *TreeSitterActivities) PersistDirSignatureOutlines(ctx context.Context, workspaceId string, outlines []FileOutline, maxCharacterLimit int) ([]string, error) {
 	values := make(map[string]interface{})
 	hashes := make([]string, 0, len(outlines))
 	for _, outline := range outlines {
@@ -47,7 +59,7 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(ctx context.Context, w
 		}
 	}
 
-	err = t.DatabaseAccessor.MSet(context.Background(), workspaceId, values)
+	err := t.DatabaseAccessor.MSet(context.Background(), workspaceId, values)
 	if err != nil {
 		return []string{}, err
 	}

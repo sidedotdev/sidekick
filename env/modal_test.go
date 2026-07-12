@@ -116,3 +116,16 @@ func TestModalSSHArgs(t *testing.T) {
 	assert.Contains(t, joined, "BatchMode=yes")
 	assert.Contains(t, joined, "ControlMaster=auto")
 }
+
+func TestModalSFTPConnKey(t *testing.T) {
+	t.Parallel()
+	a := &ModalEnv{SandboxName: "side-abc", SSHHost: "t1.modal.host", SSHPort: 1111}
+	sameEndpoint := &ModalEnv{SandboxName: "side-abc", SSHHost: "t1.modal.host", SSHPort: 1111}
+	assert.Equal(t, a.sftpConnKey(), sameEndpoint.sftpConnKey(),
+		"envs targeting the same sandbox instance must share a pooled connection")
+
+	// A recreated sandbox keeps its name but gets a fresh tunnel endpoint and
+	// must not reuse the stale pooled connection.
+	recreated := &ModalEnv{SandboxName: "side-abc", SSHHost: "t2.modal.host", SSHPort: 2222}
+	assert.NotEqual(t, a.sftpConnKey(), recreated.sftpConnKey())
+}

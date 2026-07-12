@@ -299,8 +299,7 @@ type ModalEnv struct {
 	// PortForwards are host ports reverse-forwarded into the sandbox over
 	// the SSH connection used to run commands.
 	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
-	sftp         sftpConn
-	Hibernated   bool `json:"hibernated,omitempty"`
+	Hibernated   bool                       `json:"hibernated,omitempty"`
 }
 
 type LocalEnvParams struct {
@@ -1118,6 +1117,15 @@ func (e *ModalEnv) SSHArgs(ctx context.Context) ([]string, error) {
 	return insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards)), nil
 }
 
+// sftpConnKey returns the stable per-remote identity used to share a pooled
+// sftpConn across separately-constructed envs targeting the same sandbox.
+// The tunnel endpoint is part of the identity: a recreated sandbox keeps its
+// name but gets a fresh endpoint, and must not reuse the stale connection
+// (the orphaned pool entry is closed by the idle reaper).
+func (e *ModalEnv) sftpConnKey() string {
+	return fmt.Sprintf("modal:%s@%s:%d", e.SandboxName, e.SSHHost, e.SSHPort)
+}
+
 func (e *ModalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
 		return nil, wakeErr
@@ -1125,7 +1133,7 @@ func (e *ModalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadFile(ctx, &e.sftp, e, p)
+	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *ModalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -1135,7 +1143,7 @@ func (e *ModalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error)
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadDir(ctx, &e.sftp, e, p)
+	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *ModalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -1145,7 +1153,7 @@ func (e *ModalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpWriteFile(ctx, &e.sftp, e, p, data, perm)
+	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
 }
 
 func (e *ModalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -1155,7 +1163,7 @@ func (e *ModalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) err
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpMkdirAll(ctx, &e.sftp, e, p, perm)
+	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
 }
 
 func (e *ModalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -1165,7 +1173,7 @@ func (e *ModalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpStat(ctx, &e.sftp, e, p)
+	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *ModalEnv) Remove(ctx context.Context, p string) error {
@@ -1175,7 +1183,7 @@ func (e *ModalEnv) Remove(ctx context.Context, p string) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpRemove(ctx, &e.sftp, e, p)
+	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *ModalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -1187,7 +1195,7 @@ func (e *ModalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string,
 	} else if !strings.HasPrefix(dir, "/") {
 		dir = path.Join(e.WorkingDirectory, dir)
 	}
-	return sftpCreateTemp(ctx, &e.sftp, e, dir, pattern)
+	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
 }
 
 // shellQuote wraps a string in single quotes, escaping any embedded single quotes.

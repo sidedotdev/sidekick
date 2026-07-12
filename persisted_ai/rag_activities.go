@@ -13,8 +13,10 @@ import (
 	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
+	"time"
 
 	"github.com/kelindar/binary"
+	"github.com/rs/zerolog/log"
 )
 
 type RagActivities struct {
@@ -70,10 +72,40 @@ func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options 
 		return "", fmt.Errorf("failed to calculate embedding char limits: %w", err)
 	}
 
-	fileSignatureSubkeys, err := t.CreateDirSignatureOutlines(ctx, options.WorkspaceId, options.EnvContainer, maxChars)
+	stepStart := time.Now()
+	logStep := func(step string) {
+		log.Debug().Str("step", step).Dur("duration", time.Since(stepStart)).Msg("ranked dir signature outline step")
+		stepStart = time.Now()
+	}
+
+	cacheState := ra.loadOutlineWalkCache(ctx, options.WorkspaceId, options.EnvContainer)
+	logStep("load outline cache")
+
+	// A single raw entry set feeds all three consumers below (signature
+	// outlines, dir chunk paths and the final limited outline). With a cached
+	// snapshot it is reconstructed from cache + git diff without walking;
+	// only a cold cache pays for a full walk.
+	rawEntries, cached, err := tree_sitter.GetDirectoryRawOutlinesFromCache(ctx, options.EnvContainer, cacheState.cache)
+	if err != nil {
+		// Reconstruction failures (eg transient read errors) are recoverable:
+		// the full walk below re-records every path from scratch.
+		log.Debug().Err(err).Msg("outline cache reconstruction failed, falling back to full walk")
+		cached = false
+	}
+	if !cached {
+		rawEntries, err = tree_sitter.GetDirectoryRawOutlines(ctx, options.EnvContainer, cacheState.cache)
+		if err != nil {
+			return "", err
+		}
+	}
+	logStep("raw outlines")
+	ra.storeOutlineWalkCache(ctx, options.WorkspaceId, cacheState)
+
+	fileSignatureSubkeys, err := t.PersistDirSignatureOutlines(ctx, options.WorkspaceId, tree_sitter.OutlinesFromRawEntries(rawEntries, nil, nil), maxChars)
 	if err != nil {
 		return "", err
 	}
+	logStep("persist dir signature outlines")
 
 	rankedFileSignatureSubkeys, err := ra.RankedSubkeys(ctx, RankedSubkeysOptions{
 		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions,
@@ -83,19 +115,31 @@ func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options 
 	if err != nil {
 		return "", err
 	}
+	logStep("rank file signature subkeys")
 
-	rankedDirChunkSubkeys, err := ra.RankedDirChunkSubkeys(ctx, RankedDirChunkSubkeysOptions{options.RankedViaEmbeddingOptions})
+	pathInfos := make([]PathInfo, len(rawEntries))
+	for i, entry := range rawEntries {
+		pathInfos[i] = PathInfo{Path: "/" + entry.RelativePath, IsDir: entry.IsDir, present: true}
+	}
+	rankedDirChunkSubkeys, err := ra.RankedDirChunkSubkeys(ctx, RankedDirChunkSubkeysOptions{
+		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions,
+		pathInfos:                 pathInfos,
+	})
 	if err != nil {
 		return "", err
 	}
+	logStep("rank dir chunk subkeys")
 
-	return ra.LimitedDirSignatureOutline(ctx, DirSignatureOutlineOptions{
+	outline, err := ra.LimitedDirSignatureOutline(ctx, DirSignatureOutlineOptions{
 		WorkspaceId:          options.WorkspaceId,
 		FileSignatureSubkeys: rankedFileSignatureSubkeys,
 		DirChunkSubkeys:      rankedDirChunkSubkeys,
 		EnvContainer:         options.EnvContainer,
 		CharLimit:            options.CharLimit,
+		rawEntries:           rawEntries,
 	})
+	logStep("limited dir signature outline")
+	return outline, err
 }
 
 type RankedSubkeysOptions struct {
@@ -277,6 +321,10 @@ type DirSignatureOutlineOptions struct {
 	EnvContainer         env.EnvContainer
 	EmbeddingType        string
 	CharLimit            int
+	// rawEntries optionally provides pre-walked raw outline entries so the
+	// subset outline needs no additional walk. In-process only: it
+	// intentionally does not serialize.
+	rawEntries []tree_sitter.RawOutlineEntry
 }
 
 // LimitedDirSignatureOutline returns a string containing the directory structure with signature outlines expanded only for the given subkeys.
@@ -389,9 +437,14 @@ chunksLoop:
 		}
 	}
 
-	outlines, err := tree_sitter.GetDirectorySignatureOutlines(ctx, options.EnvContainer, &showPaths, &signaturePaths)
-	if err != nil {
-		return "", err
+	var outlines []tree_sitter.FileOutline
+	if options.rawEntries != nil {
+		outlines = tree_sitter.OutlinesFromRawEntries(options.rawEntries, &showPaths, &signaturePaths)
+	} else {
+		outlines, err = tree_sitter.GetDirectorySignatureOutlines(ctx, options.EnvContainer, &showPaths, &signaturePaths)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	return tree_sitter.GetFileOutlinesString(outlines)
@@ -399,12 +452,21 @@ chunksLoop:
 
 type RankedDirChunkSubkeysOptions struct {
 	RankedViaEmbeddingOptions
+	// pathInfos optionally provides pre-walked paths so chunking needs no
+	// additional walk. In-process only: it intentionally does not serialize.
+	pathInfos []PathInfo
 }
 
 func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options RankedDirChunkSubkeysOptions) ([]string, error) {
-	chunks, err := GetDirectoryChunks(ctx, options.EnvContainer)
-	if err != nil {
-		return []string{}, fmt.Errorf("get directory chunks: %w", err)
+	var chunks []DirChunk
+	if options.pathInfos != nil {
+		chunks = GetDirectoryChunksFromPaths(options.pathInfos)
+	} else {
+		var err error
+		chunks, err = GetDirectoryChunks(ctx, options.EnvContainer)
+		if err != nil {
+			return []string{}, fmt.Errorf("get directory chunks: %w", err)
+		}
 	}
 
 	values := make(map[string]interface{})
@@ -417,7 +479,7 @@ func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options Rank
 		key := fmt.Sprintf("%s:%s", tree_sitter.ContentTypeDirChunk, hash)
 		values[key] = value
 	}
-	err = ra.DatabaseAccessor.MSet(ctx, options.WorkspaceId, values)
+	err := ra.DatabaseAccessor.MSet(ctx, options.WorkspaceId, values)
 	if err != nil {
 		return []string{}, fmt.Errorf("error persisting dir chunk content: %w", err)
 	}
