@@ -202,8 +202,8 @@ func TestOpenAIProvider_UsageOnChunkWithChoices_OpenAISemantics(t *testing.T) {
 		flusher.Flush()
 
 		// prompt_tokens=700 already includes cached_tokens=200 and
-		// cache_creation_input_tokens=100 (OpenAI semantics: total >= sum of subsets).
-		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":700,\"completion_tokens\":5,\"total_tokens\":705,\"prompt_tokens_details\":{\"cached_tokens\":200},\"cache_creation_input_tokens\":100}}\n\n")
+		// cache_write_tokens=100 (OpenAI semantics: total >= sum of subsets).
+		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":700,\"completion_tokens\":5,\"total_tokens\":705,\"prompt_tokens_details\":{\"cached_tokens\":200,\"cache_write_tokens\":100}}}\n\n")
 		flusher.Flush()
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
@@ -348,7 +348,8 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words.",
+					Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words. " +
+						strings.Repeat("Keep this weather-request context available while deciding how to respond. ", 400),
 				},
 			},
 		},
@@ -358,8 +359,9 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
-			Provider: "openai",
-			Model:    "gpt-4.1-nano-2025-04-14",
+			Provider:        "openai",
+			Model:           "gpt-5.6-luna",
+			ReasoningEffort: "none",
 		},
 		Temperature: utils.Ptr(float32(0)),
 		Tools:       []*common.Tool{mockTool},
@@ -433,6 +435,7 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 	assert.NotNil(t, response.Usage, "Usage field should not be nil")
 	assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0")
 	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0")
+	assert.Greater(t, response.Usage.CacheWriteInputTokens, 0, "CacheWriteInputTokens should be greater than 0")
 
 	t.Run("MultiTurn", func(t *testing.T) {
 		messages = append(messages, response.Output)

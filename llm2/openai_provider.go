@@ -14,6 +14,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	openaiRespJSON "github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/shared"
 )
 
@@ -161,13 +162,8 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 			if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
 				usage.CacheReadInputTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
 			}
-			// litellm proxying Anthropic models returns cache_creation_input_tokens
-			// as a top-level field in the usage object.
-			if f, ok := chunk.Usage.JSON.ExtraFields["cache_creation_input_tokens"]; ok {
-				var cacheWriteTokens int
-				if json.Unmarshal([]byte(f.Raw()), &cacheWriteTokens) == nil {
-					usage.CacheWriteInputTokens = cacheWriteTokens
-				}
+			if cacheWriteTokens, ok := openAICacheWriteTokens(chunk.Usage); ok {
+				usage.CacheWriteInputTokens = cacheWriteTokens
 			}
 		}
 
@@ -658,4 +654,31 @@ func wrapOpenAIError(err error) error {
 	}
 
 	return err
+}
+func openAICacheWriteTokens(usage openai.CompletionUsage) (int, bool) {
+	fields := []map[string]openaiRespJSON.Field{
+		usage.PromptTokensDetails.JSON.ExtraFields,
+		usage.JSON.ExtraFields,
+	}
+	names := []string{
+		"cache_write_tokens",
+		"cache_creation_input_tokens",
+		"cache_creation_tokens",
+	}
+
+	for _, extraFields := range fields {
+		for _, name := range names {
+			field, ok := extraFields[name]
+			if !ok {
+				continue
+			}
+
+			var tokens int
+			if json.Unmarshal([]byte(field.Raw()), &tokens) == nil {
+				return tokens, true
+			}
+		}
+	}
+
+	return 0, false
 }
