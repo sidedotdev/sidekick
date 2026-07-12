@@ -2294,6 +2294,34 @@ func TestEvaluateScriptPermission_TempPathAdvisory(t *testing.T) {
 		assert.NotContains(t, msg, ".side/tmp")
 	})
 
+	t.Run("path under .side/tmp does not trigger advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee -a .side/tmp/ghostty-refs/out.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Empty(t, msg)
+	})
+
+	t.Run("relative parent or home tmp paths do not trigger advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee ../tmp/a.log ~/tmp/b.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Empty(t, msg)
+	})
+
+	t.Run("absolute /var/tmp path still triggers advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, "echo hi | tee /var/tmp/out.log", autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, ".side/tmp")
+	})
+
+	t.Run("quoted absolute /tmp path still triggers advisory", func(t *testing.T) {
+		t.Parallel()
+		result, msg := EvaluateScriptPermissionWithOptions(config, `echo hi | tee "/tmp/out.log"`, autoApproveOpts)
+		assert.Equal(t, PermissionAutoApprove, result)
+		assert.Contains(t, msg, ".side/tmp")
+	})
+
 	t.Run("heredoc file write to /tmp appends temp guidance to deny message", func(t *testing.T) {
 		t.Parallel()
 		result, msg := EvaluateScriptPermission(config, "cat > /tmp/scratch.txt << 'EOF'\nhi\nEOF")
@@ -2309,5 +2337,67 @@ func TestEvaluateScriptPermission_TempPathAdvisory(t *testing.T) {
 		assert.Equal(t, PermissionDeny, result)
 		assert.Contains(t, msg, "edit blocks")
 		assert.NotContains(t, msg, ".side/tmp")
+	})
+}
+
+func TestBasePermissions_ShellSyntaxCheck(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("shell -n syntax checks are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"bash -n script.sh",
+			"sh -n script.sh",
+			"zsh -n script.sh",
+			"dash -n script.sh",
+			"ksh -n script.sh",
+			"mksh -n script.sh",
+			"ash -n script.sh",
+			"fish -n script.fish",
+			"csh -n script.csh",
+			"tcsh -n script.csh",
+			"bash -n ./scripts/deploy.sh",
+			"bash -vn script.sh",
+			"bash -n -v script.sh",
+			`bash -n -c "echo hi"`,
+			"sh -n",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateScriptPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("shell execution or cancelled noexec is not auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"bash script.sh",
+			"sh script.sh",
+			// +n cancels noexec, so the script/command actually executes
+			"bash -n +n script.sh",
+			`bash -n +n -c "rm -rf /"`,
+			// interactive shells ignore -n
+			"bash -in script.sh",
+			"bash -n -i script.sh",
+			// csh/tcsh -b stops option parsing, so -n becomes the script operand
+			"csh -b -n script.csh",
+			"tcsh -b -n script.csh",
+			"csh -bn script.csh",
+			// -o takes a named option argument (e.g. zsh interactive mode)
+			"zsh -o interactive -n script.sh",
+			"zsh -no interactive script.sh",
+			// short options taking possibly-attached arguments can consume
+			// the 'n' (fish -pn is -p with profile file "n")
+			"fish -pn script.fish",
+			"ksh -Rn script.sh",
+			"bash -On script.sh",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateScriptPermission(config, cmd)
+			assert.NotEqual(t, PermissionAutoApprove, result, "expected no auto-approve for: %s", cmd)
+		}
 	})
 }

@@ -508,6 +508,86 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{"sh script.sh", "./script.sh"},
 		},
 		{
+			name:     "bash -n syntax check does not execute script",
+			script:   "bash -n script.sh",
+			expected: []string{"bash -n script.sh"},
+		},
+		{
+			name:     "sh -n syntax check",
+			script:   "sh -n script.sh",
+			expected: []string{"sh -n script.sh"},
+		},
+		{
+			name:     "zsh -n syntax check",
+			script:   "zsh -n script.sh",
+			expected: []string{"zsh -n script.sh"},
+		},
+		{
+			name:     "bash -n with -c does not extract inner commands",
+			script:   `bash -n -c "rm -rf /"`,
+			expected: []string{`bash -n -c "rm -rf /"`},
+		},
+		{
+			name:     "bash combined short flags including noexec",
+			script:   "bash -vn script.sh",
+			expected: []string{"bash -vn script.sh"},
+		},
+		{
+			name:     "bash -n cancelled by +n still extracts script",
+			script:   "bash -n +n script.sh",
+			expected: []string{"bash -n +n script.sh", "./script.sh"},
+		},
+		{
+			name:     "bash -n cancelled by +n still extracts -c inner commands",
+			script:   `bash -n +n -c "rm -rf /"`,
+			expected: []string{`bash -n +n -c "rm -rf /"`, "rm -rf /"},
+		},
+		{
+			name:     "bash -i makes -n ignored so script is extracted",
+			script:   "bash -in script.sh",
+			expected: []string{"bash -in script.sh", "./script.sh"},
+		},
+		{
+			name:     "csh -n syntax check",
+			script:   "csh -n script.csh",
+			expected: []string{"csh -n script.csh"},
+		},
+		{
+			name:     "tcsh -n syntax check",
+			script:   "tcsh -n script.csh",
+			expected: []string{"tcsh -n script.csh"},
+		},
+		{
+			name:     "csh -b stops option parsing so -n does not suppress extraction",
+			script:   "csh -b -n script.csh",
+			expected: []string{"csh -b -n script.csh", "./script.csh"},
+		},
+		{
+			name:     "tcsh -b stops option parsing so -n does not suppress extraction",
+			script:   "tcsh -b -n script.csh",
+			expected: []string{"tcsh -b -n script.csh", "./script.csh"},
+		},
+		{
+			name:     "bash -b is a regular option so noexec still suppresses extraction",
+			script:   "bash -bn script.sh",
+			expected: []string{"bash -bn script.sh"},
+		},
+		{
+			name:     "shell -o named option prevents noexec suppression",
+			script:   "zsh -no interactive script.sh",
+			expected: []string{"zsh -no interactive script.sh", "./interactive"},
+		},
+		{
+			name:     "csh script execution",
+			script:   "csh script.csh",
+			expected: []string{"csh script.csh", "./script.csh"},
+		},
+		{
+			name:     "tcsh -c command",
+			script:   `tcsh -c "pwd"`,
+			expected: []string{`tcsh -c "pwd"`, "pwd"},
+		},
+		{
 			name:     "source script",
 			script:   "source script.sh",
 			expected: []string{"source script.sh", "./script.sh"},

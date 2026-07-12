@@ -104,6 +104,13 @@ func GenerateBranchName(eCtx flow_action.ExecContext, req BranchNameRequest) (st
 }
 
 func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRequest) ([]string, error) {
+	// Branch name generation has a deterministic fallback, so LLM failures should
+	// surface as errors and let the caller fall back rather than prompting the
+	// user to retry indefinitely. Gated behind a version check so in-flight
+	// workflows started before this change keep their original user-retry
+	// behavior during replay.
+	disableUserRetry := workflow.GetVersion(eCtx, "branch-name-no-user-retry", workflow.DefaultVersion, 1) >= 1
+
 	reqMap := make(map[string]any)
 	utils.Transcode(req, &reqMap)
 	chatHistory := NewVersionedChatHistory(eCtx, eCtx.WorkspaceId)
@@ -120,11 +127,11 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	attempts := 0
 	for {
 		actionCtx := eCtx.NewActionContext("generate.branch_names")
-		toolNameMapping, err := resolveStreamToolNameMapping(actionCtx, modelConfig, *actionCtx.Secrets)
+		toolNameMapping, err := resolveStreamToolNameMapping(actionCtx.ExecContext, modelConfig, *actionCtx.Secrets)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 		}
-		msgResponse, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, modelConfig, chatHistory, toolNameMapping, &generateBranchNamesTool)
+		msgResponse, err := persisted_ai.ForceToolCallWithFallbackV2(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, disableUserRetry, modelConfig, chatHistory, toolNameMapping, &generateBranchNamesTool)
 		if err != nil {
 			return nil, fmt.Errorf("failed to force tool call: %v", err)
 		}

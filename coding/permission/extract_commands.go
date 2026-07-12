@@ -175,7 +175,7 @@ func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts)
 	cmdName := parts[0]
 
 	switch cmdName {
-	case "sh", "bash", "zsh":
+	case "sh", "bash", "zsh", "csh", "tcsh":
 		handleShellCommand(parts, commands, opts)
 	case "eval":
 		handleEvalCommand(parts, commands, opts)
@@ -319,6 +319,11 @@ func parseCommandParts(cmd string) []string {
 
 // handleShellCommand handles sh -c, bash -c, zsh -c patterns and script execution
 func handleShellCommand(parts []string, commands *[]string, opts extractOpts) {
+	// Under -n (noexec) the shell only checks syntax without executing, so
+	// there are no inner commands to extract.
+	if hasNoexecFlag(parts) {
+		return
+	}
 	// Look for -c flag followed by a string argument
 	for i := 1; i < len(parts)-1; i++ {
 		if parts[i] == "-c" {
@@ -331,6 +336,53 @@ func handleShellCommand(parts []string, commands *[]string, opts extractOpts) {
 	}
 	// No -c flag found, check for script file execution
 	handleScriptExecution(parts, commands)
+}
+
+// hasNoexecFlag reports whether the shell invocation's option list leaves -n
+// (noexec) in effect, meaning the shell only checks syntax without executing.
+// Options may be combined into short-flag clusters (e.g. -vn), a later +n
+// cancels noexec, and interactive shells (-i) ignore -n entirely. Scanning
+// stops at the first operand, since later arguments belong to the script.
+// Shell-specific semantics: csh/tcsh -b stops option processing (a following
+// -n would be the script operand), and -o/-O take a named option argument we
+// don't model (e.g. zsh's -o interactive), so those cases conservatively
+// report noexec as not in effect.
+func hasNoexecFlag(parts []string) bool {
+	cshStyle := parts[0] == "csh" || parts[0] == "tcsh"
+	noexec := false
+	interactive := false
+	for i := 1; i < len(parts); i++ {
+		part := parts[i]
+		switch {
+		case part == "-" || part == "--":
+			return noexec && !interactive
+		case strings.HasPrefix(part, "--"):
+			// Long options don't affect noexec.
+		case strings.HasPrefix(part, "-"):
+			if strings.ContainsAny(part, "oO") {
+				return false
+			}
+			if strings.ContainsRune(part, 'n') {
+				noexec = true
+			}
+			if strings.ContainsRune(part, 'i') {
+				interactive = true
+			}
+			if cshStyle && strings.ContainsRune(part, 'b') {
+				return noexec && !interactive
+			}
+		case strings.HasPrefix(part, "+"):
+			if strings.ContainsRune(part, 'n') {
+				noexec = false
+			}
+			if strings.ContainsRune(part, 'i') {
+				interactive = false
+			}
+		default:
+			return noexec && !interactive
+		}
+	}
+	return noexec && !interactive
 }
 
 // handleEvalCommand handles eval "..." patterns
@@ -530,9 +582,9 @@ func handleScriptExecution(parts []string, commands *[]string) {
 		}
 	}
 
-	// Skip any flags to find the script argument
+	// Skip any flags (including +x style option toggles) to find the script argument
 	scriptIdx := 1
-	for scriptIdx < len(parts) && strings.HasPrefix(parts[scriptIdx], "-") {
+	for scriptIdx < len(parts) && (strings.HasPrefix(parts[scriptIdx], "-") || strings.HasPrefix(parts[scriptIdx], "+")) {
 		scriptIdx++
 	}
 

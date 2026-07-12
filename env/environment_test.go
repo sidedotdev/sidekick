@@ -434,6 +434,10 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
+		// Worktrees must live beside the repo (inside the persistent workspace
+		// mount) rather than in a system temp path.
+		assert.Equal(t, filepath.Join(filepath.Dir(repoDir), "sidekick-worktrees"),
+			filepath.Dir(filepath.Dir(output.WorktreePath)))
 		assert.DirExists(t, output.WorktreePath)
 
 		// Verify the branch was created inside the worktree

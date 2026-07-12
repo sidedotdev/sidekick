@@ -25,9 +25,18 @@ func (s *Storage) PersistFlow(ctx context.Context, flow domain.Flow) error {
 		flow.Updated = flow.Updated.UTC()
 	}
 
+	// Upsert via ON CONFLICT (rather than INSERT OR REPLACE) so updates keep
+	// the original created timestamp and rowid, keeping creation-order
+	// listings stable.
 	query := `
-		INSERT OR REPLACE INTO flows (workspace_id, id, type, parent_id, status, created, updated)
+		INSERT INTO flows (workspace_id, id, type, parent_id, status, created, updated)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			workspace_id = excluded.workspace_id,
+			type = excluded.type,
+			parent_id = excluded.parent_id,
+			status = excluded.status,
+			updated = excluded.updated
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
@@ -79,6 +88,7 @@ func (s *Storage) GetFlowsForTask(ctx context.Context, workspaceId, taskId strin
 		SELECT workspace_id, id, type, parent_id, status, created, updated
 		FROM flows
 		WHERE workspace_id = ? AND parent_id = ?
+		ORDER BY created ASC, id ASC
 	`
 
 	rows, err := s.db.QueryContext(ctx, query, workspaceId, taskId)

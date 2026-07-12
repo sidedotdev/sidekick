@@ -158,7 +158,10 @@ func pendingIntentDiff(dCtx DevContext, state *IddState) (string, error) {
 // nudgeOnly restricts the turn to the add_nudge tool only — used when the
 // user has disabled auto sub-task creation but still wants the orchestrator
 // to surface clarifications about ambiguous/contradictory intent.
-func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddState, chatHistory *persisted_ai.ChatHistoryContainer, nudgeOnly bool) {
+//
+// requestOrchestratorTurn is forwarded to runIntentSubtask so a follow-up
+// turn is requested when a launched sub-task reaches a terminal status.
+func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddState, chatHistory *persisted_ai.ChatHistoryContainer, nudgeOnly bool, requestOrchestratorTurn func()) {
 	log := workflow.GetLogger(dCtx)
 
 	diff, err := pendingIntentDiff(dCtx, state)
@@ -186,6 +189,15 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 		summarizeSubtasksForOrchestrator(state),
 		summarizeNudgesForOrchestrator(state),
 	)
+	// Notices queued by runIntentSubtask survive until a turn actually runs
+	// (the empty-diff early return above leaves them queued), then are
+	// delivered exactly once.
+	if len(state.PendingSubtaskNotices) > 0 {
+		turnPrompt = "Sub-task updates since the last turn:\n- " +
+			strings.Join(state.PendingSubtaskNotices, "\n- ") +
+			"\n\n" + turnPrompt
+		state.PendingSubtaskNotices = nil
+	}
 	if nudgeOnly {
 		turnPrompt += "\n\nNOTE: Auto sub-task creation is disabled by the user this turn. Do NOT call start_intent_subtask; only call add_nudge if there is genuine ambiguity worth surfacing, otherwise stay silent."
 	}
@@ -327,7 +339,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 			// possibly many minutes. Fire-and-forget via workflow.Go
 			// mirrors the user-initiated signal path in IddWorkflow.
 			workflow.Go(dCtx, func(goCtx workflow.Context) {
-				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId)
+				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId, requestOrchestratorTurn)
 			})
 			startedAny = true
 

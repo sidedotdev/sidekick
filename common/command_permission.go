@@ -176,6 +176,19 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "wait"},
 			{Pattern: "seq"},
 			{Pattern: "printf"},
+			// Shell syntax check: -n (noexec) parses the script without
+			// executing it. Beyond -n, only whitelisted argument-less short
+			// options (v, x, c) may appear, alone or clustered: options that
+			// take arguments (e.g. zsh -o interactive, ksh -R file) could
+			// consume the 'n' or re-enable execution, -i makes interactive
+			// shells ignore -n, and csh/tcsh -b stops option processing. The
+			// first operand must not start with + or -, so a +n toggle
+			// cannot cancel noexec before option parsing ends.
+			{Pattern: `(bash|sh|zsh|dash|ksh|ksh93|mksh|ash|yash|posh|csh|tcsh)(\s+-[nvxc]+)*\s+-[nvxc]*n[nvxc]*(\s+-[nvxc]+)*(\s+[^-+\s].*)?$`},
+			// fish's other short options take possibly-attached arguments
+			// (e.g. -pn is -p with profile file "n"), so only standalone -n
+			// flags are accepted for fish.
+			{Pattern: `fish(\s+-n)+(\s+[^-+\s].*)?$`},
 			// Git read operations
 			{Pattern: "git status"},
 			{Pattern: "git log"},
@@ -1075,7 +1088,9 @@ const heredocFileWriteDenyMessage = "Writing files via shell heredoc (e.g. `cat 
 // tempPathPattern matches references to system temp paths like /tmp and
 // /var/tmp anywhere in a script (heredoc redirects, `tee`, plain redirects,
 // etc.), so guidance toward in-repo locations can be surfaced for any of them.
-var tempPathPattern = regexp.MustCompile(`/(?:var/)?tmp(?:/|\b)`)
+// Only absolute paths are matched: a preceding path-like character (as in
+// `.side/tmp` or `~/tmp`) means the reference is not the system temp dir.
+var tempPathPattern = regexp.MustCompile(`(?:^|[^\w.~-])/(?:var/)?tmp(?:/|\b)`)
 
 // tempPathAdvisory steers commands away from system temp paths toward in-repo
 // locations. It is surfaced whenever a script references such a path.

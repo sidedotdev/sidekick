@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -28,19 +29,141 @@ const remoteSFTPPrefix = "/tmp/side-sftp-"
 // reads as "last client activity" (see env/modal_watchdog.sh).
 const remoteActivityMarker = "/tmp/.sidekick-activity"
 
+// sftpIdleTimeout bounds how long an idle pooled connection (and its remote
+// side-sftp/ssh process chain) is kept alive before being reaped. It is set
+// long so the re-dial startup cost is rarely paid during active use, while
+// still guaranteeing eventual cleanup of connections that fall idle. It is a
+// var only so tests can shorten it to exercise the eviction path.
+var sftpIdleTimeout = 1 * time.Hour
+
 // sftpConn manages a persistent SFTP client connection over SSH.
 // It is safe for concurrent use; the underlying sftp.Client multiplexes requests.
 type sftpConn struct {
 	mu                sync.Mutex
+	key               string
 	client            *sftp.Client
 	cmd               *exec.Cmd
 	latency           time.Duration
+	idleTimer         *time.Timer
 	lastActivityTouch time.Time
+	// lastUsed and evicted are maintained by lockLive, the idle reaper and
+	// CloseAllSharedSFTPConns.
+	lastUsed time.Time
+	evicted  bool
+}
+
+// sftpPool holds one shared sftpConn per remote identity so that all envs
+// pointing at the same remote reuse a single running side-sftp server instead
+// of each dialing (and leaking) its own ssh+side-sftp process chain. Pooling
+// is required because envs are frequently serialized and deserialized, which
+// drops the per-struct conn and would otherwise force a fresh dial on every op.
+var sftpPool = struct {
+	mu    sync.Mutex
+	conns map[string]*sftpConn
+}{conns: map[string]*sftpConn{}}
+
+// sharedSFTPConns and sharedSFTPConnsMu alias the pool storage so the idle
+// reaper and worker-shutdown paths operate on the same entries created by
+// getPooledSFTPConn.
+var (
+	sharedSFTPConns   = sftpPool.conns
+	sharedSFTPConnsMu = &sftpPool.mu
+
+	startSFTPReaperOnce sync.Once
+)
+
+// sftpReapInterval is how often the reaper scans for idle connections.
+const sftpReapInterval = time.Minute
+
+// startSFTPReaper lazily launches the background idle reaper. It is invoked from
+// getPooledSFTPConn so that all normal env filesystem access (not only callers
+// of sharedSFTPConnFor) arms idle eviction of connections that fall idle.
+func startSFTPReaper() {
+	startSFTPReaperOnce.Do(func() {
+		go func() {
+			for range time.Tick(sftpReapInterval) {
+				reapIdleSFTPConns(time.Now().Add(-sftpIdleTimeout))
+			}
+		}()
+	})
+}
+
+// getPooledSFTPConn returns the shared sftpConn for key, creating one if none
+// exists yet. It also ensures the background idle reaper is running so pooled
+// connections (and their remote side-sftp/ssh process chains) are eventually
+// reaped even if a per-conn idle timer is never armed.
+func getPooledSFTPConn(key string) *sftpConn {
+	startSFTPReaper()
+	sftpPool.mu.Lock()
+	defer sftpPool.mu.Unlock()
+	if sc, ok := sftpPool.conns[key]; ok {
+		return sc
+	}
+	sc := &sftpConn{key: key, lastUsed: time.Now()}
+	sftpPool.conns[key] = sc
+	return sc
+}
+
+// sharedSFTPConnFor returns the process-wide SFTP connection for the given
+// environment identity key. It is a thin alias over getPooledSFTPConn (which
+// starts the idle reaper); both route to the same shared pool so neither
+// implementation is bypassed.
+func sharedSFTPConnFor(key string) *sftpConn {
+	return getPooledSFTPConn(key)
+}
+
+// reapIdleSFTPConns closes and evicts cache entries unused since cutoff.
+// Entries busy with an in-flight operation are skipped; they are not idle.
+func reapIdleSFTPConns(cutoff time.Time) {
+	sftpPool.mu.Lock()
+	defer sftpPool.mu.Unlock()
+	for key, conn := range sftpPool.conns {
+		if !conn.mu.TryLock() {
+			continue
+		}
+		if conn.lastUsed.Before(cutoff) {
+			conn.closeLocked()
+			conn.evicted = true
+			delete(sftpPool.conns, key)
+		}
+		conn.mu.Unlock()
+	}
+}
+
+// CloseAllSharedSFTPConns closes every cached SFTP connection along with its
+// ssh child process. Intended for worker shutdown.
+func CloseAllSharedSFTPConns() {
+	sftpPool.mu.Lock()
+	defer sftpPool.mu.Unlock()
+	for key, conn := range sftpPool.conns {
+		conn.mu.Lock()
+		conn.closeLocked()
+		conn.evicted = true
+		conn.mu.Unlock()
+		delete(sftpPool.conns, key)
+	}
+}
+
+// lockLive locks and returns the current live cache entry for this connection,
+// following the replacement entry when it was evicted between lookup and use
+// (which prevents dialing orphan sessions that no reaper would ever close). It
+// also refreshes the idle timestamp. The caller must unlock the returned conn.
+func (sc *sftpConn) lockLive() *sftpConn {
+	for {
+		sc.mu.Lock()
+		if !sc.evicted {
+			sc.lastUsed = time.Now()
+			return sc
+		}
+		key := sc.key
+		sc.mu.Unlock()
+		sc = getPooledSFTPConn(key)
+	}
 }
 
 // getOrDial returns the cached SFTP client, dialing a new connection if needed.
 func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.Client, error) {
-	sc.mu.Lock()
+	sc = sc.lockLive()
 	defer sc.mu.Unlock()
 
 	if sc.client == nil {
@@ -48,6 +171,7 @@ func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.
 			return nil, err
 		}
 	}
+	sc.resetIdleTimerLocked()
 	sc.touchActivityLocked()
 	return sc.client, nil
 }
@@ -73,20 +197,50 @@ func (sc *sftpConn) touchActivityLocked() {
 	}()
 }
 
+// Close tears down the connection and its remote process chain, reaping the
+// ssh child and the side-sftp server it runs, then de-registers it from the
+// pool so the next op re-dials a fresh connection.
+func (sc *sftpConn) Close() {
+	sc.mu.Lock()
+	sc.closeLocked()
+	sc.evicted = true
+	sc.mu.Unlock()
+
+	sftpPool.mu.Lock()
+	if sftpPool.conns[sc.key] == sc {
+		delete(sftpPool.conns, sc.key)
+	}
+	sftpPool.mu.Unlock()
+}
+
+// resetIdleTimerLocked (re)arms the idle-eviction timer. sc.mu must be held.
+func (sc *sftpConn) resetIdleTimerLocked() {
+	if sc.idleTimer != nil {
+		sc.idleTimer.Reset(sftpIdleTimeout)
+		return
+	}
+	sc.idleTimer = time.AfterFunc(sftpIdleTimeout, sc.Close)
+}
+
 // resetAndDial closes any existing connection and establishes a new one.
 func (sc *sftpConn) resetAndDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.Client, error) {
-	sc.mu.Lock()
+	sc = sc.lockLive()
 	defer sc.mu.Unlock()
 	sc.closeLocked()
 	return sc.dialLocked(ctx, sshEnv)
 }
 
 func (sc *sftpConn) closeLocked() {
+	if sc.idleTimer != nil {
+		sc.idleTimer.Stop()
+		sc.idleTimer = nil
+	}
 	if sc.client != nil {
 		sc.client.Close()
 		sc.client = nil
 	}
 	if sc.cmd != nil && sc.cmd.Process != nil {
+		runtime.SetFinalizer(sc, nil)
 		_ = sc.cmd.Process.Kill()
 		_ = sc.cmd.Wait()
 		sc.cmd = nil
@@ -152,6 +306,14 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 
 	sc.client = client
 	sc.cmd = cmd
+	sc.resetIdleTimerLocked()
+	// GC safety net: if this conn is dropped without Close (eg pool eviction
+	// races), still reap the ssh child that runs the remote side-sftp server.
+	runtime.SetFinalizer(sc, func(sc *sftpConn) {
+		if sc.cmd != nil && sc.cmd.Process != nil {
+			_ = sc.cmd.Process.Kill()
+		}
+	})
 	return client, nil
 }
 

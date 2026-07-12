@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sidekick"
 	"sidekick/api"
 	"sidekick/common"
 	"sidekick/nats"
@@ -153,7 +154,13 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 			// in side.yml).
 			var readOnlyProxy *temporalsrv.ReadOnlyProxy
 			if version == "" {
-				proxy, err := temporalsrv.StartReadOnlyProxy(common.GetTemporalReadOnlyServerHostPort(), common.GetTemporalServerHostPort())
+				var payloadStorage common.KeyValueStorage
+				if storage, err := sidekick.GetStorage(); err != nil {
+					log.Error().Err(err).Msg("Failed to initialize storage for read-only temporal proxy; offloaded payloads won't be inlined")
+				} else {
+					payloadStorage = storage
+				}
+				proxy, err := temporalsrv.StartReadOnlyProxy(common.GetTemporalReadOnlyServerHostPort(), common.GetTemporalServerHostPort(), payloadStorage)
 				if err != nil {
 					log.Error().Err(err).Msg("Failed to start read-only temporal proxy")
 				} else {

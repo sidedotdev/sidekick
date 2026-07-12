@@ -4,6 +4,9 @@ import TaskCard from '../TaskCard.vue'
 import TaskModal from '../TaskModal.vue'
 import type { FullTask } from '../../lib/models'
 
+const { routerPushMock } = vi.hoisted(() => ({ routerPushMock: vi.fn() }))
+vi.mock('@/router', () => ({ default: { push: routerPushMock } }))
+
 describe('TaskCard', () => {
 const task: FullTask = {
   id: 'task_1',
@@ -54,6 +57,23 @@ const task: FullTask = {
     })
     await wrapper.find('.action.edit').trigger('click')
     expect(wrapper.findComponent(TaskModal).exists()).toBe(true)
+  })
+
+  it('routes an idd task to the intent canvas using the idd flow, not a sub-task flow', async () => {
+    routerPushMock.mockClear()
+    const iddTask: FullTask = {
+      ...task,
+      flowType: 'idd',
+      flows: [
+        { workspaceId: 'ws_1', id: 'flow_subtask', type: 'basic_dev', parentId: 'task_1', status: 'in_progress' },
+        { workspaceId: 'ws_1', id: 'flow_idd', type: 'idd', parentId: 'task_1', status: 'in_progress' },
+      ],
+    }
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: iddTask },
+    })
+    await wrapper.find('.task-card').trigger('click')
+    expect(routerPushMock).toHaveBeenCalledWith({ name: 'intent-canvas', params: { id: 'flow_idd' } })
   })
 
   it('calls the correct endpoint when delete button is clicked', async () => {

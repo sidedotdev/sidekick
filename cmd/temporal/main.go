@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"os/signal"
+	"sidekick"
 	"sidekick/common"
 	"sidekick/temporal"
 	"syscall"
@@ -31,7 +32,13 @@ func main() {
 	// here is what makes it reachable for reverse-forwarding into sandboxed
 	// environments (see port_forwards in side.yml). It only allows listing
 	// workflows and reading histories, so it is safe to expose.
-	readOnlyProxy, err := temporal.StartReadOnlyProxy(common.GetTemporalReadOnlyServerHostPort(), common.GetTemporalServerHostPort())
+	var payloadStorage common.KeyValueStorage
+	if storage, err := sidekick.GetStorage(); err != nil {
+		log.Error().Err(err).Msg("Failed to initialize storage for read-only temporal proxy; offloaded payloads won't be inlined")
+	} else {
+		payloadStorage = storage
+	}
+	readOnlyProxy, err := temporal.StartReadOnlyProxy(common.GetTemporalReadOnlyServerHostPort(), common.GetTemporalServerHostPort(), payloadStorage)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to start read-only temporal proxy")
 	} else {

@@ -80,6 +80,27 @@ func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
 	return ctx
 }
 
+// LlmBoundedHeartbeatCtx configures LLM activity options with the standard
+// heartbeat timeout but a short start-to-close timeout and a small, quick set of
+// automatic retries. It's intended for callers that have their own fallback and
+// want a failing LLM to surface quickly rather than retrying for a long time.
+func LlmBoundedHeartbeatCtx(ctx workflow.Context) workflow.Context {
+	retrypolicy := &temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2.0,
+		MaximumInterval:    3 * time.Second,
+		MaximumAttempts:    3,
+	}
+
+	options := workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		HeartbeatTimeout:    20 * time.Second,
+		RetryPolicy:         retrypolicy,
+	}
+	ctx = workflow.WithActivityOptions(ctx, options)
+	return ctx
+}
+
 func NoRetryCtx(ctx workflow.Context) workflow.Context {
 	noRetryPolicy := &temporal.RetryPolicy{
 		InitialInterval:        time.Second,

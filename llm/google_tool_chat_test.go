@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/invopop/jsonschema"
+	orderedmap "github.com/pb33f/ordered-map/v2"
 	"github.com/stretchr/testify/assert"
-	orderedmap "github.com/wk8/go-ordered-map/v2"
 	"google.golang.org/genai"
 )
 

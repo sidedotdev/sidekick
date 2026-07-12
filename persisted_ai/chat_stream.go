@@ -18,13 +18,26 @@ import (
 // For Llm2ChatHistory: delegates to the Stream activity which hydrates from KV.
 // For LegacyChatHistory: calls the legacy LlmActivities.ChatStream path.
 // Callers are responsible for appending the response message to chat history.
+// When disableUserRetry is true, this single LLM invocation is bounded to a few
+// quick automatic retries and failures surface as errors instead of prompting
+// the user to retry. It's meant for callers (like branch name generation) that
+// have their own fallback and should not block indefinitely on user input.
 func ExecuteChatStream(
 	actionCtx flow_action.ActionContext,
 	streamInput StreamInput,
 	toolNameMapping *ToolNameMappingConfig,
+	disableUserRetry bool,
 ) (common.MessageResponse, error) {
 	heartbeatActionCtx := actionCtx
-	heartbeatActionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
+	// Keep the standard LLM heartbeat, but when the caller disabled user retry
+	// (because it has its own fallback), bound the automatic retries and
+	// start-to-close timeout so a failing LLM surfaces quickly instead of
+	// delaying the fallback.
+	if disableUserRetry {
+		heartbeatActionCtx.Context = utils.LlmBoundedHeartbeatCtx(actionCtx.Context)
+	} else {
+		heartbeatActionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
+	}
 
 	if streamInput.ChatHistory == nil {
 		return nil, fmt.Errorf("ChatHistory is required in StreamInput")
@@ -32,7 +45,7 @@ func ExecuteChatStream(
 
 	v := workflow.GetVersion(actionCtx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
-		return executeChatStreamV1(heartbeatActionCtx, streamInput, toolNameMapping)
+		return executeChatStreamV1(heartbeatActionCtx, streamInput, toolNameMapping, disableUserRetry)
 	}
 
 	chatHistory := streamInput.ChatHistory
@@ -51,7 +64,7 @@ func ExecuteChatStream(
 		FlowId:       streamInput.FlowId,
 		FlowActionId: streamInput.FlowActionId,
 	}
-	return executeChatStreamLegacy(heartbeatActionCtx, legacyOptions, chatHistory)
+	return executeChatStreamLegacy(heartbeatActionCtx, legacyOptions, chatHistory, disableUserRetry)
 }
 
 // executeChatStreamV1 handles the Llm2ChatHistory path.
@@ -61,6 +74,7 @@ func executeChatStreamV1(
 	actionCtx flow_action.ActionContext,
 	streamInput StreamInput,
 	toolNameMapping *ToolNameMappingConfig,
+	disableUserRetry bool,
 ) (common.MessageResponse, error) {
 	chatHistory := streamInput.ChatHistory
 	if _, ok := chatHistory.History.(*Llm2ChatHistory); !ok {
@@ -73,7 +87,12 @@ func executeChatStreamV1(
 
 	var la *Llm2Activities
 	var response llm2.MessageResponse
-	err := flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
+	var err error
+	if disableUserRetry {
+		err = flow_action.PerformActivity(actionCtx.ExecContext, la.Stream, &response, streamInput)
+	} else {
+		err = flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +118,7 @@ func executeChatStreamLegacy(
 	actionCtx flow_action.ActionContext,
 	options ChatStreamOptions,
 	chatHistory *ChatHistoryContainer,
+	disableUserRetry bool,
 ) (common.MessageResponse, error) {
 	legacyHistory, ok := chatHistory.History.(*LegacyChatHistory)
 	if !ok {
@@ -136,7 +156,12 @@ func executeChatStreamLegacy(
 
 	var la *LlmActivities
 	var chatResponse llm.ChatMessageResponse
-	err := flow_action.PerformWithUserRetry(actionCtx, la.ChatStream, &chatResponse, legacyOptions)
+	var err error
+	if disableUserRetry {
+		err = flow_action.PerformActivity(actionCtx.ExecContext, la.ChatStream, &chatResponse, legacyOptions)
+	} else {
+		err = flow_action.PerformWithUserRetry(actionCtx, la.ChatStream, &chatResponse, legacyOptions)
+	}
 	if err != nil {
 		return nil, err
 	}

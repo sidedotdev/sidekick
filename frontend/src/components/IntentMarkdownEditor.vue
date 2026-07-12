@@ -205,10 +205,28 @@ const formatDocument = () => {
 // opening DashLine positionally instead of by node name. We fold from the end
 // of the opening `---` line through the end of the whole frontmatter section
 // so the entire block collapses onto the first line of the document.
+
+// frontmatterParseTarget finds the position just past the frontmatter's
+// closing `---` delimiter. Returns null when the document has no frontmatter
+// delimiters at all.
+const frontmatterParseTarget = (state: EditorState): number | null => {
+  if (state.doc.line(1).text !== '---') return null
+  for (let i = 2; i <= state.doc.lines; i++) {
+    const line = state.doc.line(i)
+    if (line.text === '---') return line.to
+  }
+  return null
+}
+
 const foldFrontmatter = () => {
   if (!editorView) return
   const state = editorView.state
-  const tree = ensureSyntaxTree(state, state.doc.length, 50)
+  // Only parse up to the end of the frontmatter: ensureSyntaxTree's time
+  // budget can be exceeded when parsing a whole large document on a slow or
+  // heavily loaded machine, which would silently skip the fold.
+  const parseTarget = frontmatterParseTarget(state)
+  if (parseTarget === null) return
+  const tree = ensureSyntaxTree(state, parseTarget, 50)
   if (!tree) return
   const frontmatter = tree.topNode.getChild('Frontmatter')
   if (!frontmatter) return

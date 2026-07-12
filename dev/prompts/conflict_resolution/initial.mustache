@@ -13,6 +13,8 @@ Critical rules:
 - Do NOT run `git commit`, `git merge --continue`, or `git merge --abort`.
   The orchestrator finalizes the merge commit after verification.
 
+{{> ../author_edit_block/edit_block}}
+
 Important workaround for the edit-block format: the raw git conflict
 markers (`<<<<<<<`, `=======`, `>>>>>>>`) collide with the edit block
 delimiters and will corrupt any edit block that tries to quote them

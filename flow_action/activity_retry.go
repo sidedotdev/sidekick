@@ -14,6 +14,14 @@ func PerformWithUserRetry(actionCtx ActionContext, activity interface{}, valuePt
 	return performWithUserRetry(actionCtx.ExecContext, actionCtx.ActionType, activity, valuePtr, args...)
 }
 
+// PerformActivity executes an activity once (subject to any automatic retries
+// configured via the context's activity options) without prompting the user to
+// retry on failure. Callers that have their own fallback should use this so a
+// failing activity surfaces as an error instead of blocking on user input.
+func PerformActivity(eCtx ExecContext, activity interface{}, valuePtr interface{}, args ...interface{}) error {
+	return workflow.ExecuteActivity(eCtx, activity, args...).Get(eCtx, valuePtr)
+}
+
 // PerformActivityWithUserRetry is like PerformWithUserRetry but takes an
 // ExecContext and explicit action name instead of a full ActionContext.
 func PerformActivityWithUserRetry(eCtx ExecContext, actionName string, activity interface{}, valuePtr interface{}, args ...interface{}) error {

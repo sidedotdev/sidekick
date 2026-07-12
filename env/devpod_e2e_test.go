@@ -186,7 +186,23 @@ func TestDevPodIntegration(t *testing.T) {
 		})
 		require.NoError(t, err, "CreateDevPodWorktreeActivity failed")
 		assert.NotEmpty(t, output.WorktreePath)
+		// The worktree must be created beside the repo dir so that in
+		// production (repo under /workspaces) it lands in the persistent
+		// workspace mount rather than the ephemeral container layer.
+		assert.Equal(t, filepath.Join(filepath.Dir(containerRepoDir), "sidekick-worktrees", wsId),
+			filepath.Dir(output.WorktreePath))
 		t.Logf("worktree created at: %s", output.WorktreePath)
+
+		// The workspace volume is reused across runs, so remove this run's
+		// unique worktree dir to avoid unbounded accumulation.
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = devEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
+				Command: "rm",
+				Args:    []string{"-rf", filepath.Dir(output.WorktreePath)},
+			})
+		})
 
 		verifyOut, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
 			Command: "test",

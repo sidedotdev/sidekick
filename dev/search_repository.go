@@ -294,19 +294,26 @@ type EnsureCoreIgnoreFileActivityOutput struct {
 // sanctioned scratch location that never pollutes search results.
 const coreIgnoreFileContent = ".git\n.side/tmp\n"
 
-// EnsureCoreIgnoreFileActivity creates a core ignore file inside the code
-// execution environment and returns its env-side path, suitable for passing to
-// commands like rg that run via env.RunCommand. A fresh temp file is created
-// per invocation so the path is always valid for the env.
+// coreIgnoreRelPath is where EnsureCoreIgnoreFileActivity places the core
+// ignore file, relative to the env's working directory. Living in the
+// workspace's sanctioned scratch dir rather than a system temp dir means it
+// persists with the workspace (e.g. across devpod container restarts), and it
+// is itself excluded from search results by coreIgnoreFileContent.
+const coreIgnoreRelPath = ".side/tmp/core_ignore"
+
+// EnsureCoreIgnoreFileActivity ensures the core ignore file exists inside the
+// code execution environment and returns its env-side path, suitable for
+// passing to commands like rg that run via env.RunCommand.
 func EnsureCoreIgnoreFileActivity(ctx context.Context, input EnsureCoreIgnoreFileActivityInput) (EnsureCoreIgnoreFileActivityOutput, error) {
-	path, err := input.EnvContainer.Env.CreateTemp(ctx, "", "sidekick-core-ignore-*")
-	if err != nil {
-		return EnsureCoreIgnoreFileActivityOutput{}, fmt.Errorf("failed to create core ignore temp file: %w", err)
+	if err := input.EnvContainer.Env.MkdirAll(ctx, filepath.Dir(coreIgnoreRelPath), 0755); err != nil {
+		return EnsureCoreIgnoreFileActivityOutput{}, fmt.Errorf("failed to create core ignore dir: %w", err)
 	}
-	if err := input.EnvContainer.Env.WriteFile(ctx, path, []byte(coreIgnoreFileContent), 0644); err != nil {
+	if err := input.EnvContainer.Env.WriteFile(ctx, coreIgnoreRelPath, []byte(coreIgnoreFileContent), 0644); err != nil {
 		return EnsureCoreIgnoreFileActivityOutput{}, fmt.Errorf("failed to write core ignore file: %w", err)
 	}
-	return EnsureCoreIgnoreFileActivityOutput{Path: path}, nil
+	return EnsureCoreIgnoreFileActivityOutput{
+		Path: filepath.Join(input.EnvContainer.Env.GetWorkingDirectory(), coreIgnoreRelPath),
+	}, nil
 }
 
 func getOrCreateCoreIgnoreFile() (string, error) {

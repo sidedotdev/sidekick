@@ -38,9 +38,11 @@ type Worker struct {
 	shutdownTracer func(context.Context) error
 }
 
-// Stop stops the worker and shuts down the tracer
+// Stop stops the worker, closes shared remote-env connections and shuts down
+// the tracer
 func (w *Worker) Stop() {
 	w.Worker.Stop()
+	env.CloseAllSharedSFTPConns()
 	if w.shutdownTracer != nil {
 		if err := w.shutdownTracer(context.Background()); err != nil {
 			log.Error().Err(err).Msg("Failed to shutdown telemetry tracer")

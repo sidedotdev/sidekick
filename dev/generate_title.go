@@ -181,7 +181,7 @@ func generateIntentSubtaskTitle(dCtx DevContext, commit, diff string) (string, e
 
 	response, err := flow_action.TrackWithOptions(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, func(trackedCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
-		return persisted_ai.ExecuteChatStream(trackedCtx, streamInput, nil)
+		return persisted_ai.ExecuteChatStream(trackedCtx, streamInput, nil, true)
 	})
 	if err != nil {
 		return "", fmt.Errorf("LLM call failed: %w", err)
@@ -251,7 +251,7 @@ func generateTaskTitle(ctx workflow.Context, input GenerateTitleInput, repoDir s
 
 	response, err := flow_action.TrackWithOptions(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, func(trackedCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
-		return persisted_ai.ExecuteChatStream(trackedCtx, streamInput, nil)
+		return persisted_ai.ExecuteChatStream(trackedCtx, streamInput, nil, true)
 	})
 	if err != nil {
 		return fmt.Errorf("LLM call failed: %w", err)
