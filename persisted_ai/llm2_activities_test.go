@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/llm2"
 	"sidekick/secret_manager"
 )
@@ -463,5 +464,83 @@ func TestGetLlm2Provider_AuthType(t *testing.T) {
 
 			tt.assert(t, provider)
 		})
+	}
+}
+func TestConvertLlm2EventToFlowEvent_TextFollowedByToolCall(t *testing.T) {
+	t.Parallel()
+
+	blocks := make(map[int]llm2.ContentBlock)
+	flowActionId := "action-1"
+
+	textStart := convertLlm2EventToFlowEvent(llm2.Event{
+		Type:  llm2.EventBlockStarted,
+		Index: 0,
+		ContentBlock: &llm2.ContentBlock{
+			Type: llm2.ContentBlockTypeText,
+		},
+	}, flowActionId, blocks)
+	if textStart != nil {
+		t.Fatalf("empty text block start produced event %#v", textStart)
+	}
+
+	textEvent := convertLlm2EventToFlowEvent(llm2.Event{
+		Type:  llm2.EventTextDelta,
+		Index: 0,
+		Delta: "I will check that.",
+	}, flowActionId, blocks)
+	textDelta, ok := textEvent.(domain.ChatMessageDeltaEvent)
+	if !ok {
+		t.Fatalf("text delta event type = %T, want domain.ChatMessageDeltaEvent", textEvent)
+	}
+	if textDelta.ChatMessageDelta.Content != "I will check that." {
+		t.Fatalf("text content = %q, want %q", textDelta.ChatMessageDelta.Content, "I will check that.")
+	}
+	if len(textDelta.ChatMessageDelta.ToolCalls) != 0 {
+		t.Fatalf("text delta unexpectedly contained tool calls: %#v", textDelta.ChatMessageDelta.ToolCalls)
+	}
+
+	toolStart := convertLlm2EventToFlowEvent(llm2.Event{
+		Type:  llm2.EventBlockStarted,
+		Index: 1,
+		ContentBlock: &llm2.ContentBlock{
+			Type: llm2.ContentBlockTypeToolUse,
+			ToolUse: &llm2.ToolUseBlock{
+				Id:   "tool-1",
+				Name: "read_file",
+			},
+		},
+	}, flowActionId, blocks)
+	toolStartDelta, ok := toolStart.(domain.ChatMessageDeltaEvent)
+	if !ok {
+		t.Fatalf("tool start event type = %T, want domain.ChatMessageDeltaEvent", toolStart)
+	}
+	if toolStartDelta.ChatMessageDelta.Content != "" {
+		t.Fatalf("tool start was emitted as text %q", toolStartDelta.ChatMessageDelta.Content)
+	}
+	if len(toolStartDelta.ChatMessageDelta.ToolCalls) != 1 {
+		t.Fatalf("tool start calls = %#v, want one call", toolStartDelta.ChatMessageDelta.ToolCalls)
+	}
+	if toolStartDelta.ChatMessageDelta.ToolCalls[0].Id != "tool-1" ||
+		toolStartDelta.ChatMessageDelta.ToolCalls[0].Name != "read_file" {
+		t.Fatalf("tool start call = %#v", toolStartDelta.ChatMessageDelta.ToolCalls[0])
+	}
+
+	argumentsEvent := convertLlm2EventToFlowEvent(llm2.Event{
+		Type:  llm2.EventTextDelta,
+		Index: 1,
+		Delta: `{"path":"README.md"}`,
+	}, flowActionId, blocks)
+	argumentsDelta, ok := argumentsEvent.(domain.ChatMessageDeltaEvent)
+	if !ok {
+		t.Fatalf("tool arguments event type = %T, want domain.ChatMessageDeltaEvent", argumentsEvent)
+	}
+	if argumentsDelta.ChatMessageDelta.Content != "" {
+		t.Fatalf("tool arguments were emitted as text %q", argumentsDelta.ChatMessageDelta.Content)
+	}
+	if len(argumentsDelta.ChatMessageDelta.ToolCalls) != 1 {
+		t.Fatalf("tool argument calls = %#v, want one call", argumentsDelta.ChatMessageDelta.ToolCalls)
+	}
+	if argumentsDelta.ChatMessageDelta.ToolCalls[0].Arguments != `{"path":"README.md"}` {
+		t.Fatalf("tool arguments = %q", argumentsDelta.ChatMessageDelta.ToolCalls[0].Arguments)
 	}
 }
