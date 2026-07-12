@@ -248,7 +248,6 @@ func (da *DevActivities) tryBatchApply(
 		preEditFileHadErrors = !preEditValid && preEditErr == nil
 	}
 
-	var appliedReports []indexedReport
 	allApplied := true
 
 	// Build a mutable slice so updateVisibleFileRanges can shift ranges for
@@ -258,11 +257,11 @@ func (da *DevActivities) tryBatchApply(
 		editBlockSlice[i] = ib.block
 	}
 
-	for i, ib := range blocks {
+	for i := range blocks {
 		block := editBlockSlice[i]
 
-		// Capture file content before the edit so we can compute a diff that
-		// includes autofix changes for accurate visible-range updates.
+		// Capture file content before the edit so we can compute a diff for
+		// accurate visible-range updates.
 		var preEditContent []byte
 		if block.EditType != "create" {
 			preEditContent, _ = input.EnvContainer.Env.ReadFile(ctx, block.FilePath)
@@ -274,13 +273,10 @@ func (da *DevActivities) tryBatchApply(
 		switch block.EditType {
 		case "create":
 			report, err = ApplyCreateEditBlock(ctx, input.EnvContainer, block, baseDir)
-			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "update":
 			report, err = ApplyUpdateEditBlock(ctx, input.EnvContainer, block, baseDir)
-			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "append":
 			report, err = ApplyAppendEditBlock(ctx, input.EnvContainer, block, baseDir)
-			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "delete":
 			report, err = ApplyDeleteEditBlock(ctx, input.EnvContainer, block, baseDir)
 		default:
@@ -297,19 +293,13 @@ func (da *DevActivities) tryBatchApply(
 		}
 
 		if report.DidApply {
-			// Use a diff that includes autofix changes (not just the raw edit)
-			// so that visible file ranges are shifted accurately for subsequent
-			// blocks in the same file.
+			// Compute a diff of the raw edit so that visible file ranges are
+			// shifted accurately for subsequent blocks in the same file.
 			postEditContent, _ := input.EnvContainer.Env.ReadFile(ctx, block.FilePath)
 			fullBlockDiff := string(diffp.Diff(block.FilePath, preEditContent, block.FilePath, postEditContent))
 			lineEdits := getLineEditsFromDiff(fullBlockDiff)
 			updateVisibleFileRanges(editBlockSlice[i:], block.FilePath, lineEdits)
 		}
-
-		appliedReports = append(appliedReports, indexedReport{
-			originalIndex: ib.originalIndex,
-			report:        report,
-		})
 	}
 
 	if !allApplied {
@@ -336,27 +326,9 @@ func (da *DevActivities) tryBatchApply(
 		allEditBlocks[i] = ib.block
 	}
 
-	// Merge autofix results/errors from individual per-block reports.
-	var mergedAutofixResult lsp.AutofixActivityOutput
-	var mergedAutofixError string
-	for _, ar := range appliedReports {
-		r := ar.report
-		mergedAutofixResult.AppliedEdits = append(mergedAutofixResult.AppliedEdits, r.AutofixResult.AppliedEdits...)
-		mergedAutofixResult.FailedEdits = append(mergedAutofixResult.FailedEdits, r.AutofixResult.FailedEdits...)
-		mergedAutofixResult.SkippedCodeActions = append(mergedAutofixResult.SkippedCodeActions, r.AutofixResult.SkippedCodeActions...)
-		if r.AutofixError != "" {
-			if mergedAutofixError != "" {
-				mergedAutofixError += "\n"
-			}
-			mergedAutofixError += r.AutofixError
-		}
-	}
-
 	batchReport := ApplyEditBlockReport{
 		OriginalEditBlocks: allEditBlocks,
 		DidApply:           true,
-		AutofixResult:      mergedAutofixResult,
-		AutofixError:       mergedAutofixError,
 	}
 
 	if hasDeleteOnly {
@@ -379,6 +351,13 @@ func (da *DevActivities) tryBatchApply(
 		}
 		gitMu.Unlock()
 		return []indexedReport{{originalIndex: blocks[0].originalIndex, report: batchReport}}
+	}
+
+	// Run autofix once for the whole batch, before computing the diff and
+	// running checks, so both reflect autofix changes. Skip if the file no
+	// longer exists (e.g. the batch ended with a delete).
+	if _, readErr := input.EnvContainer.Env.ReadFile(ctx, filePath); readErr == nil {
+		AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &batchReport)
 	}
 
 	// Calculate the diff of unstaged changes for the whole file (all edits +
