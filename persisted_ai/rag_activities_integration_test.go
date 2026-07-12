@@ -174,6 +174,7 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	sandboxName := env.OpenShellSandboxName(repoRoot)
 
 	// Ensure sandbox exists (reuse if available, create otherwise).
+	phaseStart := time.Now()
 	checkOut, err := env.CheckSandboxActivity(ctx, env.CheckSandboxInput{EnvType: env.EnvTypeOpenShell, SandboxName: sandboxName})
 	require.NoError(t, err)
 
@@ -189,12 +190,15 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 		require.NoError(t, err, "CreateSandboxActivity failed")
 		sandboxName = createOut.SandboxName
 	}
+	t.Logf("phase: create sandbox took %v (reused=%v)", time.Since(phaseStart), checkOut.Alive)
 
+	phaseStart = time.Now()
 	syncOut, err := env.SyncRepoToRemoteActivity(ctx, env.SyncRepoToRemoteInput{
 		EnvContainer: env.EnvContainer{Env: &env.OpenShellEnv{SandboxName: sandboxName, LocalRepoDir: repoRoot}},
 		LocalRepoDir: repoRoot,
 	})
 	require.NoError(t, err, "SyncRepoToRemoteActivity failed")
+	t.Logf("phase: repo sync took %v", time.Since(phaseStart))
 
 	osEnv := &env.OpenShellEnv{
 		WorkingDirectory: syncOut.RemoteRepoDir,
@@ -227,7 +231,9 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	runCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
+	phaseStart = time.Now()
 	output, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
+	t.Logf("phase: ranked outline took %v", time.Since(phaseStart))
 	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 
