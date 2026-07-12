@@ -759,6 +759,12 @@ func (e *DevPodEnv) sharedSFTP() *sftpConn {
 	return sharedSFTPConnFor("devpod:" + e.WorkspaceName)
 }
 
+// sftpConnKey returns the stable per-remote identity used to share a pooled
+// sftpConn across separately-constructed envs targeting the same DevPod.
+func (e *DevPodEnv) sftpConnKey() string {
+	return "devpod:" + e.WorkspaceName
+}
+
 func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
 		return nil, wakeErr
@@ -766,7 +772,7 @@ func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadFile(ctx, e.sharedSFTP(), e, p)
+	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -776,7 +782,7 @@ func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadDir(ctx, e.sharedSFTP(), e, p)
+	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -786,7 +792,7 @@ func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm f
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpWriteFile(ctx, e.sharedSFTP(), e, p, data, perm)
+	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
 }
 
 func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -796,7 +802,7 @@ func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) er
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpMkdirAll(ctx, e.sharedSFTP(), e, p, perm)
+	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
 }
 
 func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -806,7 +812,7 @@ func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpStat(ctx, e.sharedSFTP(), e, p)
+	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
@@ -816,7 +822,7 @@ func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpRemove(ctx, e.sharedSFTP(), e, p)
+	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -828,7 +834,7 @@ func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string
 	} else if !strings.HasPrefix(dir, "/") {
 		dir = path.Join(e.WorkingDirectory, dir)
 	}
-	return sftpCreateTemp(ctx, e.sharedSFTP(), e, dir, pattern)
+	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
 }
 
 func (e *OpenShellEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
@@ -898,6 +904,12 @@ func (e *OpenShellEnv) sharedSFTP() *sftpConn {
 	return sharedSFTPConnFor("openshell:" + e.SandboxName)
 }
 
+// sftpConnKey returns the stable per-remote identity used to share a pooled
+// sftpConn across separately-constructed envs targeting the same sandbox.
+func (e *OpenShellEnv) sftpConnKey() string {
+	return "openshell:" + e.SandboxName
+}
+
 func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
 		return nil, wakeErr
@@ -905,7 +917,7 @@ func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadFile(ctx, e.sharedSFTP(), e, p)
+	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -915,7 +927,7 @@ func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, er
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadDir(ctx, e.sharedSFTP(), e, p)
+	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -925,7 +937,7 @@ func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, per
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpWriteFile(ctx, e.sharedSFTP(), e, p, data, perm)
+	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
 }
 
 func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -935,7 +947,7 @@ func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode)
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpMkdirAll(ctx, e.sharedSFTP(), e, p, perm)
+	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
 }
 
 func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -945,7 +957,7 @@ func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) 
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpStat(ctx, e.sharedSFTP(), e, p)
+	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
@@ -955,7 +967,7 @@ func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpRemove(ctx, e.sharedSFTP(), e, p)
+	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *OpenShellEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -967,12 +979,13 @@ func (e *OpenShellEnv) CreateTemp(ctx context.Context, dir, pattern string) (str
 	} else if !strings.HasPrefix(dir, "/") {
 		dir = path.Join(e.WorkingDirectory, dir)
 	}
-	return sftpCreateTemp(ctx, e.sharedSFTP(), e, dir, pattern)
+	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
 }
 
 // SetLatency injects artificial latency into each SFTP read for benchmarking.
 func (e *OpenShellEnv) SetLatency(d time.Duration) {
-	sc := e.sharedSFTP().lockLive()
+	sc := getPooledSFTPConn(e.sftpConnKey())
+	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.latency = d
 	// Force reconnect so the latency wrapper takes effect.
