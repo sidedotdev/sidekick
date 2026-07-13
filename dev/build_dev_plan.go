@@ -223,6 +223,20 @@ func ValidateAndCleanPlan(plan DevPlan) (DevPlan, error) {
 	return plan, nil
 }
 
+func validateCompletedPlanHasSteps(plan DevPlan) error {
+	if plan.Complete && len(plan.Steps) == 0 {
+		return fmt.Errorf("the plan must contain at least one step with a valid type")
+	}
+	return nil
+}
+
+func validateFinalDevPlan(plan *DevPlan) error {
+	if plan == nil || len(plan.Steps) == 0 {
+		return fmt.Errorf("planning finished without recording any executable steps")
+	}
+	return nil
+}
+
 // TODO also add EstimatedDevStep struct, or do it in one go within DevStep with an StepSize field
 type DevStep struct {
 	StepNumber         string `json:"step_number" jsonschema:"description=Step number in the plan\\, eg \"1\" for the first step and \"2\" for the second step"`
@@ -329,6 +343,9 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 	if err != nil {
 		return nil, fmt.Errorf("failed to run LlmLoop: %w", err)
 	}
+	if err := validateFinalDevPlan(result); err != nil {
+		return nil, err
+	}
 
 	return result, nil
 }
@@ -404,10 +421,12 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 					return result, nil
 				}
 
-				if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 && len(validatedPlan.Steps) == 0 {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Plan failed validation after update: the plan must contain at least one step with a valid type. The previously-recorded plan was not overwritten.")
-					return result, nil
+				if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 {
+					if err := validateCompletedPlanHasSteps(validatedPlan); err != nil {
+						result.IsError = true
+						result.Content = llm2.TextContentBlocks("Plan failed validation after update: " + err.Error() + ". The previously-recorded plan was not overwritten.")
+						return result, nil
+					}
 				}
 
 				state.devPlan = validatedPlan
@@ -467,10 +486,12 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 					return result, nil
 				}
 
-				if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 && len(validatedDevPlan.Steps) == 0 {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan was NOT recorded because it contains no steps with a valid type. The previously-recorded plan, if any, was not overwritten.")
-					return result, nil
+				if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 {
+					if err := validateCompletedPlanHasSteps(validatedDevPlan); err != nil {
+						result.IsError = true
+						result.Content = llm2.TextContentBlocks("Please output a new plan: Plan was NOT recorded because " + err.Error() + ". The previously-recorded plan, if any, was not overwritten.")
+						return result, nil
+					}
 				}
 
 				state.devPlan = validatedDevPlan
