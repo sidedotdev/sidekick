@@ -72,7 +72,7 @@ type Advisor struct {
 // newAdvisor constructs an Advisor, resolving the advising model (falling back
 // to the default Anthropic opus model when the "advising" use case is
 // unconfigured) and the advising cadence from repo config.
-func newAdvisor(dCtx DevContext, enabled bool) *Advisor {
+func newAdvisor(dCtx DevContext, enabled bool, executorUseCase string) *Advisor {
 	_, isDefault := dCtx.LLMConfig.GetModelConfig(common.AdvisingKey, 0)
 	var modelConfig common.ModelConfig
 	if isDefault {
@@ -82,6 +82,11 @@ func newAdvisor(dCtx DevContext, enabled bool) *Advisor {
 		}
 	} else {
 		modelConfig = dCtx.GetModelConfig(common.AdvisingKey, 0, "default")
+	}
+
+	if v := workflow.GetVersion(dCtx, "advisor-skip-same-model", workflow.DefaultVersion, 1); v == 1 {
+		executorModelConfig := dCtx.GetModelConfig(executorUseCase, 0, "default")
+		enabled = enabled && !sameAdvisorModelAndReasoning(modelConfig, executorModelConfig)
 	}
 
 	everyN := defaultAdvisorEveryNTurns
@@ -95,6 +100,12 @@ func newAdvisor(dCtx DevContext, enabled bool) *Advisor {
 		ModelConfig: modelConfig,
 		ChatHistory: NewVersionedChatHistory(dCtx, dCtx.WorkspaceId),
 	}
+}
+
+func sameAdvisorModelAndReasoning(advisor, executor common.ModelConfig) bool {
+	return advisor.Model != "" &&
+		advisor.Model == executor.Model &&
+		advisor.ReasoningEffort == executor.ReasoningEffort
 }
 
 // shouldAdvise increments the turn counter and reports whether the advisor

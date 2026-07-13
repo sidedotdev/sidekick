@@ -316,7 +316,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		reproduceIssue:              reproduceIssue,
 	}
 	if v := workflow.GetVersion(dCtx, "dev-plan-advisor", workflow.DefaultVersion, 1); v == 1 {
-		initialState.advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		initialState.advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.PlanningKey)
 	}
 
 	feedbackIterations := 5

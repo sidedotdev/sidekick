@@ -90,7 +90,7 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 
 	var advisor *Advisor
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
-		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
 
 	conflictDiff, err := computeConflictResolutionDiff(dCtx, params.WorktreePath, snapshot)

@@ -175,7 +175,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 	var advisor *Advisor
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
-		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
 
 	modelConfigs, _ := dCtx.LLMConfig.GetModelsOrDefault(common.CodingKey)
