@@ -309,7 +309,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	hasExistingRequirements := len(state.devRequirements.AcceptanceCriteria) > 0 || state.devRequirements.Overview != ""
 
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-requirements-advisor", workflow.DefaultVersion, 1); v == 1 {
-		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devRequirementsTools(iteration.ExecCtx, hasExistingRequirements)); err != nil {
+		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devRequirementsTools(iteration.ExecCtx, hasExistingRequirements), nil); err != nil {
 			return nil, fmt.Errorf("error running advisor: %w", err)
 		}
 	}

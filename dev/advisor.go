@@ -117,7 +117,12 @@ func (a *Advisor) shouldAdvise() bool {
 // guide appends feedback to the executor history, and an executor tool call is
 // injected into the executor history while the advisor history records a
 // synthetic success.
-func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, executorTools []*llm.Tool) error {
+func (a *Advisor) MaybeAdvise(
+	dCtx DevContext,
+	executorHistory *persisted_ai.ChatHistoryContainer,
+	executorTools []*llm.Tool,
+	customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error),
+) error {
 	if !a.shouldAdvise() {
 		return nil
 	}
@@ -192,7 +197,7 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 	// tool_use blocks. They must be resolved with matching tool results before
 	// the executor's LLM runs again, otherwise the provider rejects the request.
 	if len(injectedToolCalls) > 0 {
-		if _, err := handleToolCalls(dCtx, injectedToolCalls, executorHistory, nil); err != nil {
+		if _, err := handleToolCalls(dCtx, injectedToolCalls, executorHistory, customHandlers); err != nil {
 			return fmt.Errorf("advisor: failed to handle injected executor tool calls: %w", err)
 		}
 	}

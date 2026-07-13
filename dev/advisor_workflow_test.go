@@ -9,6 +9,7 @@ import (
 	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/flow_action"
+	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
@@ -39,6 +40,8 @@ type AdvisorWorkflowTestSuite struct {
 	// manageV4Calls counts how many times the advisor triggered history
 	// management (ManageV4) during a workflow run.
 	manageV4Calls int
+
+	customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error)
 
 	// adviseWorkflow wraps MaybeAdvise so the executor history round-trips
 	// through the data converter and arrives refs-only, mirroring production.
@@ -79,7 +82,7 @@ func (s *AdvisorWorkflowTestSuite) SetupTest() {
 			ModelConfig: common.ModelConfig{Provider: "openai"},
 			ChatHistory: NewVersionedChatHistory(ctx, dCtx.WorkspaceId),
 		}
-		if err := advisor.MaybeAdvise(dCtx, executorHistory, nil); err != nil {
+		if err := advisor.MaybeAdvise(dCtx, executorHistory, nil, s.customHandlers); err != nil {
 			return nil, err
 		}
 		return executorHistory, nil
@@ -250,6 +253,15 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_Guide() {
 func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextBlock() {
 	const flowId = "exec_flow_tool_call"
 	executorHistory, originalRefs := s.persistExecutorHistory(flowId)
+	s.customHandlers = map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
+		recordDevPlanTool.Name: func(_ DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
+			return llm2.ToolResultBlock{
+				Name:       toolCall.Name,
+				ToolCallId: toolCall.Id,
+				Content:    llm2.TextContentBlocks("Plan recorded by custom handler."),
+			}, nil
+		},
+	}
 
 	var la *persisted_ai.Llm2Activities
 	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
@@ -316,6 +328,7 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextB
 	for _, block := range last.Content {
 		if block.Type == llm2.ContentBlockTypeToolResult {
 			toolResultBlocks++
+			s.Equal("Plan recorded by custom handler.", block.ToolResult.Content[0].Text)
 		}
 	}
 	s.Equal(1, toolResultBlocks, "expected the injected tool call to be resolved with a tool_result")
