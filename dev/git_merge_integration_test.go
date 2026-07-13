@@ -30,11 +30,13 @@ import (
 func runGitMergeIntegration(t *testing.T, ctx context.Context, mergeEnvContainer env.EnvContainer, localRepoDir string) {
 	t.Helper()
 	repoDir := mergeEnvContainer.Env.GetWorkingDirectory()
-	worktreeDir := repoDir + "-merge-feature"
+	featureID := ksuid.New().String()
+	featureBranch := "merge-feature-" + featureID
+	worktreeDir := repoDir + "-" + featureBranch
 
 	setupScript := strings.Join([]string{
 		"cd " + repoDir,
-		"git worktree add -b merge-feature " + worktreeDir,
+		"git worktree add -b " + featureBranch + " " + worktreeDir,
 		"cd " + worktreeDir,
 		"echo hello > feature.txt",
 		"git add feature.txt",
@@ -57,7 +59,7 @@ func runGitMergeIntegration(t *testing.T, ctx context.Context, mergeEnvContainer
 	})
 
 	result, err := git.GitMergeActivity(ctx, mergeEnvContainer, git.GitMergeParams{
-		SourceBranch:   "merge-feature",
+		SourceBranch:   featureBranch,
 		TargetBranch:   "main",
 		CommitterName:  "Test",
 		CommitterEmail: "test@test.com",

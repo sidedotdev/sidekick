@@ -2,7 +2,6 @@ package llm2
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sidekick/common"
@@ -648,21 +647,7 @@ func openaiResponsesFromTools(tools []*common.Tool) ([]responses.ToolUnionParam,
 }
 
 func jsonSchemaToMap(schema interface{}) (map[string]any, error) {
-	if schema == nil {
-		return map[string]any{}, nil
-	}
-
-	jsonBytes, err := json.Marshal(schema)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(jsonBytes, &result); err != nil {
-		return nil, err
-	}
-
-	return result, nil
+	return common.JSONSchemaWithRequiredNullableOptionals(schema)
 }
 
 func openaiResponsesFromToolChoice(toolChoice common.ToolChoice, tools []*common.Tool) *responses.ResponseNewParamsToolChoiceUnion {
