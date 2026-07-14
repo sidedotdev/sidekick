@@ -3,7 +3,10 @@ import {
   useModelConfigPresets,
   validateLlmConfig,
 } from './useModelConfigPresets'
-import { invalidatePresetsCache } from '../lib/llmPresetStorage'
+import {
+  invalidatePresetsCache,
+  savePresets,
+} from '../lib/llmPresetStorage'
 
 describe('model configuration presets', () => {
   beforeEach(() => {
@@ -26,6 +29,44 @@ describe('model configuration presets', () => {
         planning: [{ provider: '', model: 'gpt' }],
       },
     })).toBe(false)
+  })
+
+  it('restores the last selected preset and orders presets alphabetically', () => {
+    savePresets([
+      {
+        id: 'zebra',
+        name: 'Zebra models',
+        config: {
+          defaults: [{ provider: 'anthropic', model: 'claude' }],
+          useCaseConfigs: {},
+        },
+      },
+      {
+        id: 'alpha',
+        name: 'Alpha models',
+        config: {
+          defaults: [{ provider: 'openai', model: 'gpt' }],
+          useCaseConfigs: {},
+        },
+      },
+    ])
+
+    const firstEditor = useModelConfigPresets(undefined)
+    firstEditor.handlePresetChange('zebra')
+
+    const restoredEditor = useModelConfigPresets(undefined)
+
+    expect(restoredEditor.selectedPresetValue.value).toBe('zebra')
+    expect(restoredEditor.llmConfig.value.defaults[0]).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude',
+    })
+    expect(restoredEditor.presetOptions.value.map((option) => option.label)).toEqual([
+      'Default',
+      'Alpha models',
+      'Zebra models',
+      'Custom',
+    ])
   })
 
   it('creates and updates a preset without duplicating it', () => {

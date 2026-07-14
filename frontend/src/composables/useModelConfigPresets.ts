@@ -3,7 +3,9 @@ import type { LLMConfig } from '../lib/models'
 import { getModelSummary } from '../lib/llmPresets'
 import {
   llmConfigsEqual,
+  loadLastPresetSelection,
   loadPresets,
+  saveLastPresetSelection,
   savePresets,
   type ModelPreset,
 } from '../lib/llmPresetStorage'
@@ -55,16 +57,25 @@ export const useModelConfigPresets = (
   options: { useDefaultWhenMissing?: boolean; initiallyCustom?: boolean } = {},
 ): ModelConfigPresetEditorState => {
   const presets = ref<ModelPreset[]>(loadPresets())
-  const llmConfig = ref<LLMConfig>(cloneConfig(initialConfig || emptyLlmConfig()))
 
   const findInitialSelection = (): string => {
     if (options.initiallyCustom) return 'add_preset'
-    if (!initialConfig && options.useDefaultWhenMissing !== false) return 'default'
+
     const match = initialConfig && presets.value.find((preset) => llmConfigsEqual(preset.config, initialConfig))
-    return match?.id || 'add_preset'
+    if (match) return match.id
+    if (initialConfig) return 'add_preset'
+
+    const lastSelection = loadLastPresetSelection()
+    if (lastSelection === 'add_preset') return lastSelection
+    if (lastSelection === 'default' && options.useDefaultWhenMissing !== false) return lastSelection
+    if (lastSelection && presets.value.some((preset) => preset.id === lastSelection)) return lastSelection
+
+    return options.useDefaultWhenMissing !== false ? 'default' : 'add_preset'
   }
 
   const selectedPresetValue = ref(findInitialSelection())
+  const selectedPreset = presets.value.find((preset) => preset.id === selectedPresetValue.value)
+  const llmConfig = ref<LLMConfig>(cloneConfig(selectedPreset?.config || initialConfig || emptyLlmConfig()))
   const currentPresetId = ref<string | null>(null)
   const newPresetName = ref('')
 
@@ -74,7 +85,13 @@ export const useModelConfigPresets = (
       result.push({ value: 'default', label: 'Default' })
     }
 
-    for (const preset of presets.value) {
+    const sortedPresets = [...presets.value].sort((a, b) => {
+      const labelA = a.name || getModelSummary(a.config)
+      const labelB = b.name || getModelSummary(b.config)
+      return labelA.localeCompare(labelB)
+    })
+
+    for (const preset of sortedPresets) {
       result.push({
         value: preset.id,
         label: preset.name || getModelSummary(preset.config),
@@ -91,6 +108,7 @@ export const useModelConfigPresets = (
 
   const setSelectedPresetValue = (value: string) => {
     selectedPresetValue.value = value
+    saveLastPresetSelection(value)
   }
 
   const setNewPresetName = (value: string) => {
@@ -102,7 +120,7 @@ export const useModelConfigPresets = (
   }
 
   const handlePresetChange = (value: string) => {
-    selectedPresetValue.value = value
+    setSelectedPresetValue(value)
     currentPresetId.value = null
 
     if (value !== 'default' && value !== 'add_preset') {
@@ -120,7 +138,7 @@ export const useModelConfigPresets = (
     const preset = presets.value.find((candidate) => candidate.id === presetId)
     if (!preset) return
 
-    selectedPresetValue.value = 'add_preset'
+    setSelectedPresetValue('add_preset')
     currentPresetId.value = presetId
     newPresetName.value = preset.name
     llmConfig.value = cloneConfig(preset.config)
@@ -140,7 +158,7 @@ export const useModelConfigPresets = (
     savePresets(presets.value)
 
     if (selectedPresetValue.value === presetId) {
-      selectedPresetValue.value = options.useDefaultWhenMissing === false ? 'add_preset' : 'default'
+      setSelectedPresetValue(options.useDefaultWhenMissing === false ? 'add_preset' : 'default')
     }
   }
 
@@ -173,7 +191,7 @@ export const useModelConfigPresets = (
         config: cloneConfig(llmConfig.value),
       })
       if (finalSave) {
-        selectedPresetValue.value = newId
+        setSelectedPresetValue(newId)
       }
     }
 
