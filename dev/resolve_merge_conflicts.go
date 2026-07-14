@@ -84,7 +84,9 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 		return finalizeMergeCommit(dCtx, params)
 	}
 
-	codingModelConfig := dCtx.GetModelConfig(common.CodingKey, 0, "default")
+	resolveModelConfig := func() common.ModelConfig {
+		return dCtx.GetModelConfig(common.CodingKey, 0, "default")
+	}
 
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
@@ -106,7 +108,7 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 	}
 
 	for attempt := 0; attempt < maxConflictResolutionAttempts; attempt++ {
-		if err := EditCode(dCtx, codingModelConfig, 0, chatHistory, promptInfo, advisor); err != nil {
+		if err := EditCodeWithModelConfigResolver(dCtx, resolveModelConfig, 0, chatHistory, promptInfo, advisor); err != nil {
 			if errors.Is(err, flow_action.PendingActionError) {
 				return err
 			}

@@ -76,6 +76,7 @@ func forceToolCallV2(
 	actionCtx flow_action.ActionContext,
 	trackOptions flow_action.TrackOptions,
 	modelConfig common.ModelConfig,
+	resolveModelConfig ModelConfigResolver,
 	chatHistory *ChatHistoryContainer,
 	toolNameMapping *ToolNameMappingConfig,
 	parallelToolCalls *bool,
@@ -111,7 +112,13 @@ func forceToolCallV2(
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping, disableUserRetry)
+		msgResponse, err := ExecuteChatStreamWithModelConfigResolver(
+			trackedActionCtx,
+			streamInput,
+			toolNameMapping,
+			disableUserRetry,
+			resolveModelConfig,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +155,13 @@ func forceToolCallV2(
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			streamInput.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping, disableUserRetry)
+			msgResponse, err := ExecuteChatStreamWithModelConfigResolver(
+				trackedActionCtx,
+				streamInput,
+				toolNameMapping,
+				disableUserRetry,
+				resolveModelConfig,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -181,7 +194,21 @@ func ForceToolCallWithTrackOptionsV2(
 	toolNameMapping *ToolNameMappingConfig,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
-	return forceToolCallV2(actionCtx, trackOptions, modelConfig, chatHistory, toolNameMapping, nil, false, tools...)
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, nil, chatHistory, toolNameMapping, nil, false, tools...)
+}
+
+// ForceToolCallWithTrackOptionsV2AndModelConfigResolver resolves the selected
+// model before every stream attempt.
+func ForceToolCallWithTrackOptionsV2AndModelConfigResolver(
+	actionCtx flow_action.ActionContext,
+	trackOptions flow_action.TrackOptions,
+	resolveModelConfig ModelConfigResolver,
+	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
+	tools ...*llm.Tool,
+) (common.MessageResponse, error) {
+	modelConfig := resolveModelConfig()
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, resolveModelConfig, chatHistory, toolNameMapping, nil, false, tools...)
 }
 
 // ForceToolCallWithFallbackV2 is like ForceToolCallWithTrackOptionsV2 but, when
@@ -199,18 +226,48 @@ func ForceToolCallWithFallbackV2(
 	toolNameMapping *ToolNameMappingConfig,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
-	return forceToolCallV2(actionCtx, trackOptions, modelConfig, chatHistory, toolNameMapping, nil, disableUserRetry, tools...)
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, nil, chatHistory, toolNameMapping, nil, disableUserRetry, tools...)
+}
+
+// ForceToolCallWithFallbackV2AndModelConfigResolver resolves the selected model
+// before every bounded stream attempt.
+func ForceToolCallWithFallbackV2AndModelConfigResolver(
+	actionCtx flow_action.ActionContext,
+	trackOptions flow_action.TrackOptions,
+	disableUserRetry bool,
+	resolveModelConfig ModelConfigResolver,
+	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
+	tools ...*llm.Tool,
+) (common.MessageResponse, error) {
+	modelConfig := resolveModelConfig()
+	return forceToolCallV2(actionCtx, trackOptions, modelConfig, resolveModelConfig, chatHistory, toolNameMapping, nil, disableUserRetry, tools...)
 }
 
 func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
-	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, nil, false, tools...)
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, nil, chatHistory, nil, nil, false, tools...)
+}
+
+// ForceToolCallWithModelConfigResolver resolves the selected model before every
+// stream attempt.
+func ForceToolCallWithModelConfigResolver(actionCtx flow_action.ActionContext, resolveModelConfig ModelConfigResolver, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
+	modelConfig := resolveModelConfig()
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, resolveModelConfig, chatHistory, nil, nil, false, tools...)
 }
 
 // ForceParallelToolCall forces at least one tool call while explicitly enabling
 // parallel tool calls for providers that support the toggle.
 func ForceParallelToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
 	parallel := true
-	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, &parallel, false, tools...)
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, nil, chatHistory, nil, &parallel, false, tools...)
+}
+
+// ForceParallelToolCallWithModelConfigResolver resolves the selected model
+// before every stream attempt while retaining parallel tool calls.
+func ForceParallelToolCallWithModelConfigResolver(actionCtx flow_action.ActionContext, resolveModelConfig ModelConfigResolver, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
+	parallel := true
+	modelConfig := resolveModelConfig()
+	return forceToolCallV2(actionCtx, flow_action.TrackOptions{}, modelConfig, resolveModelConfig, chatHistory, nil, &parallel, false, tools...)
 }
 
 // AppendChatHistory appends a message to chat history, using an activity to

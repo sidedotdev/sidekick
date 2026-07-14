@@ -76,6 +76,12 @@ func (pic *PromptInfoContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		pic.PromptInfo = fi
+	case "conflict_resolution":
+		var cri ConflictResolutionInfo
+		if err := json.Unmarshal(v.Info, &cri); err != nil {
+			return err
+		}
+		pic.PromptInfo = cri
 	case "tool_call_response":
 		// Legacy: tool call responses are now added to chat history directly
 		// via addToolCallResponse, so we just skip when deserializing old data.

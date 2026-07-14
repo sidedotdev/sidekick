@@ -482,9 +482,14 @@ func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHist
 
 // TrackedToolChat delegates to persisted_ai.ExecuteChatStream for LLM calls,
 // taking chat history as a separate parameter from options.
-func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, chatHistory *persisted_ai.ChatHistoryContainer) (common.MessageResponse, error) {
+func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, chatHistory *persisted_ai.ChatHistoryContainer, optionsResolvers ...persisted_ai.OptionsResolver) (common.MessageResponse, error) {
 	if chatHistory == nil {
 		return nil, fmt.Errorf("chatHistory is required for TrackedToolChat")
+	}
+
+	var resolveOptions persisted_ai.OptionsResolver
+	if len(optionsResolvers) > 0 {
+		resolveOptions = optionsResolvers[0]
 	}
 
 	streamInput := persisted_ai.StreamInput{
@@ -511,11 +516,24 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 		streamInput.FlowId = workflow.GetInfo(trackedCtx).WorkflowExecution.ID
 		streamInput.FlowActionId = flowAction.Id
 
-		response, err := persisted_ai.ExecuteChatStream(
+		var resolveAttempt persisted_ai.StreamAttemptResolver
+		if resolveOptions != nil {
+			resolveAttempt = func() (llm2.Options, *persisted_ai.ToolNameMappingConfig, error) {
+				attemptOptions := resolveOptions()
+				attemptToolNameMapping, err := resolveStreamToolNameMapping(trackedCtx.ExecContext, attemptOptions.ModelConfig, *trackedCtx.Secrets)
+				if err != nil {
+					return llm2.Options{}, nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+				}
+				return attemptOptions, attemptToolNameMapping, nil
+			}
+		}
+
+		response, err := persisted_ai.ExecuteChatStreamWithAttemptResolver(
 			trackedCtx.FlowActionContext(),
 			streamInput,
 			toolNameMapping,
 			false,
+			resolveAttempt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)

@@ -81,6 +81,9 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	SetupUserActionHandler(dCtx)
 	SetupDevRunConfigQuery(dCtx)
 	SetupDevRunStateQuery(dCtx)
+	if err = SetupModelConfigHandlers(dCtx); err != nil {
+		return DevPlanExecution{}, err
+	}
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)

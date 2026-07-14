@@ -1,7 +1,26 @@
 <template>
   <div v-if="flow">
-    <FlowEditorLinks v-if="!embedded" :flow-id="flow.id" :worktrees="flow.worktrees" />
-    <FlowEditorLinks v-else :flow-id="flow.id" :worktrees="flow.worktrees" subtask />
+    <FlowEditorLinks
+      v-if="!embedded"
+      :flow-id="flow.id"
+      :worktrees="flow.worktrees"
+      :show-model-configuration="showModelConfiguration"
+      @model-configuration="modelConfigModalOpen = true"
+    />
+    <FlowEditorLinks
+      v-else
+      :flow-id="flow.id"
+      :worktrees="flow.worktrees"
+      :show-model-configuration="showModelConfiguration"
+      subtask
+      @model-configuration="modelConfigModalOpen = true"
+    />
+    <FlowModelConfigModal
+      v-if="modelConfigModalOpen"
+      :workspace-id="flow.workspaceId"
+      :flow-id="flow.id"
+      @close="modelConfigModalOpen = false"
+    />
     <!-- TODO: In the future, we should allow going to next step even if currently paused -->
     <div 
       v-if="flow && !['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" 
@@ -47,12 +66,14 @@ import { useEventBus } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
 import IdeSelectorDialog from '@/components/IdeSelectorDialog.vue'
 import FlowEditorLinks from '@/components/FlowEditorLinks.vue'
-import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow, Workspace } from '../lib/models'
+import FlowModelConfigModal from '@/components/FlowModelConfigModal.vue'
+import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Subflow, Workspace } from '../lib/models'
 import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
 import { viewCache } from '../lib/viewCache'
+import { isFlowModelConfigVisible } from '../lib/flowModelConfig'
 import { useIdeOpener, IDE_OPENER_KEY } from '@/composables/useIdeOpener'
 
 const props = defineProps<{
@@ -76,7 +97,8 @@ const handleOpenInIde = (relativePath: string, lineNumber?: number | null) => {
 }
 
 provide(IDE_OPENER_KEY, handleOpenInIde)
-const devMode = import.meta.env.MODE === 'development'
+const devMode = computed(() => import.meta.env.MODE === 'development')
+const modelConfigModalOpen = ref(false)
 const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
@@ -119,6 +141,9 @@ const updateSubflowTrees = () => {
 }
 
 let flow = ref<Flow | null>(null)
+const showModelConfiguration = computed(
+  () => !!flow.value && isFlowModelConfigVisible(flow.value.status, devMode.value),
+)
 const flowActionsContainerRef = ref<HTMLDivElement | null>(null)
 const scrollContainerRef = ref<HTMLDivElement | null>(null)
 let actionChangesSocket: WebSocket | null = null

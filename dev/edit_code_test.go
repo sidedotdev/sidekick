@@ -16,6 +16,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/stretchr/testify/assert"
@@ -64,14 +65,27 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 				FlowScope: &flow_action.FlowScope{
 					SubflowName: "AuthorEditBlocksTestSuite",
 				},
-				LLMConfig: common.LLMConfig{
-					Defaults: []common.ModelConfig{
-						{Provider: "openai"},
-					},
-				},
 			},
 		}
-		return authorEditBlocks(execContext, common.ModelConfig{}, 0, chatHistory, pic.PromptInfo, getEnvironmentContext(), nil)
+		execContext.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{
+				{Provider: "test", Model: "initial-default"},
+			},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.CodingKey: {
+					{Provider: "test", Model: "initial-coding"},
+					{Provider: "test", Model: "initial-fallback"},
+				},
+			},
+		})
+		if err := SetupModelConfigHandlers(execContext); err != nil {
+			return nil, err
+		}
+		resolveModelConfig := func() common.ModelConfig {
+			modelConfig, _ := execContext.GetLLMConfig().GetModelConfig(common.CodingKey, 0)
+			return modelConfig
+		}
+		return authorEditBlocksWithModelConfigResolver(execContext, resolveModelConfig, 0, chatHistory, pic.PromptInfo, getEnvironmentContext(), nil)
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 	s.env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
@@ -176,6 +190,94 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 	var result []EditBlock
 	s.NoError(s.env.GetWorkflowResult(&result))
 	s.Equal([]EditBlock(nil), result)
+}
+
+func streamInputHasTool(input persisted_ai.StreamInput, toolName string) bool {
+	for _, tool := range input.Options.Tools {
+		if tool.Name == toolName {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *AuthorEditBlocksTestSuite) testModelUpdateRebuildsAuthoringTools(promptInfo PromptInfo, updatedConfig common.LLMConfig) {
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
+	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+	s.env.OnGetVersion("resolve-tool-name-mapping-activity", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
+	s.env.OnActivity(ResolveToolNameMappingActivity, mock.Anything, mock.Anything).
+		Return(ResolveToolNameMappingResult{UseMapping: true}, nil).
+		Maybe()
+
+	var activities *persisted_ai.Llm2Activities
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Model == "initial-coding" &&
+			len(input.Options.Tools) > 0 &&
+			!streamInputHasTool(input, readImageTool.Name)
+	})).Return(&llm2.MessageResponse{
+		StopReason: "stop",
+		Output: llm2.Message{
+			Role: llm2.RoleAssistant,
+		},
+	}, nil).After(time.Second).Once()
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Model == "updated" &&
+			streamInputHasTool(input, readImageTool.Name) &&
+			input.ToolNameMapping != nil &&
+			input.ToolNameMapping.Prefix == anthropicMCPToolNamePrefix
+	})).Return(&llm2.MessageResponse{
+		StopReason: "stop",
+		Output: llm2.Message{
+			Role: llm2.RoleAssistant,
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeText,
+				Text: "No further edits are required.",
+			}},
+		},
+	}, nil).Once()
+
+	callbacks := &modelConfigUpdateCallbacks{}
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateNameModelConfig, "authoring-model-update", callbacks, updatedConfig)
+	}, 100*time.Millisecond)
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{PromptInfo: promptInfo})
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.True(callbacks.accepted)
+	s.NoError(callbacks.rejection)
+	s.True(callbacks.completed)
+	s.NoError(callbacks.err)
+
+	var result []EditBlock
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.Empty(result)
+}
+
+func (s *AuthorEditBlocksTestSuite) TestCodingModelUpdateRebuildsToolsAndCompletesCurrentTurn() {
+	s.testModelUpdateRebuildsAuthoringTools(
+		InitialCodeInfo{},
+		common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "test", Model: "updated-default"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.CodingKey: {{Provider: "anthropic", Model: "updated"}},
+			},
+		},
+	)
+}
+
+func (s *AuthorEditBlocksTestSuite) TestConflictResolutionDefaultModelUpdateRebuildsToolsAndCompletesCurrentTurn() {
+	s.testModelUpdateRebuildsAuthoringTools(
+		ConflictResolutionInfo{
+			Requirements:    "Resolve the merge conflicts without changing behavior.",
+			ConflictedPaths: []string{"conflicted.go"},
+			ConflictDiff:    "conflict markers",
+		},
+		common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "updated"}},
+		},
+	)
 }
 
 func (s *AuthorEditBlocksTestSuite) TestDoneRequiredProtocol_EmptyResponseThenDone() {

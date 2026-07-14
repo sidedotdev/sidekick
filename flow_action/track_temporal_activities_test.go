@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/secret_manager"
@@ -133,7 +132,6 @@ func (s *TrackTemporalActivitiesTestSuite) newTestExecContext(ctx workflow.Conte
 			SecretManager: secret_manager.MockSecretManager{},
 		},
 		EnvContainer: &env.EnvContainer{},
-		LLMConfig:    common.LLMConfig{},
 		GlobalState:  &GlobalState{},
 	}
 }
