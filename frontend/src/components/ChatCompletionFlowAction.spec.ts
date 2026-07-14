@@ -282,6 +282,48 @@ describe('ChatCompletionFlowAction', () => {
       expect(wrapper.find('.model-provider').text()).toContain('anthropic')
     })
 
+    it('shows the effective subscription auth type for a completed response', async () => {
+      const actionResult = JSON.stringify({
+        model: 'gpt-5',
+        provider: 'openai',
+        authType: 'subscription',
+        output: {
+          role: 'assistant',
+          content: [{ id: 'b1', type: 'text', text: 'Hello' }]
+        },
+        stopReason: 'stop',
+        usage: { inputTokens: 100, outputTokens: 50 }
+      })
+      const wrapper = mount(ChatCompletionFlowAction, {
+        props: { flowAction: { ...flowAction, actionResult }, expand: true }
+      })
+
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.find('.auth-type').text()).toBe('Auth type: subscription')
+    })
+
+    it('shows the effective API auth type for an API-key response', async () => {
+      const actionResult = JSON.stringify({
+        model: 'gpt-5',
+        provider: 'openai',
+        authType: 'api',
+        output: {
+          role: 'assistant',
+          content: [{ id: 'b1', type: 'text', text: 'Hello' }]
+        },
+        stopReason: 'stop',
+        usage: { inputTokens: 100, outputTokens: 50 }
+      })
+      const wrapper = mount(ChatCompletionFlowAction, {
+        props: { flowAction: { ...flowAction, actionResult }, expand: true }
+      })
+
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.find('.auth-type').text()).toBe('Auth type: api')
+    })
+
     it('renders llm2 response with tool_use content blocks', async () => {
       const actionResult = JSON.stringify({
         id: 'resp-2',

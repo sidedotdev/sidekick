@@ -301,6 +301,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		Output:          outputMessage,
 		StopReason:      stopReason,
 		Usage:           usage,
+		AuthType:        credentials.authType,
 		ReasoningEffort: actualReasoningEffort, // FIXME if we didn't set reasoning effort, we should report the default value here
 	}, nil
 }

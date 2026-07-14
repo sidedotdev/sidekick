@@ -14,6 +14,7 @@ type openAIRequestCredentials struct {
 	token     string
 	accountID string
 	useOAuth  bool
+	authType  common.ProviderAuthType
 }
 
 func openAICredentialsForRequest(
@@ -30,7 +31,10 @@ func openAICredentialsForRequest(
 		if err != nil {
 			return openAIRequestCredentials{}, err
 		}
-		return openAIRequestCredentials{token: token}, nil
+		return openAIRequestCredentials{
+			token:    token,
+			authType: common.ProviderAuthTypeAPI,
+		}, nil
 	case common.ProviderAuthTypeSubscription:
 		credentials, err := getOpenAIOAuthCredentials(secretManager, oauthSecretName)
 		if err != nil {
@@ -53,7 +57,10 @@ func openAICredentialsForRequest(
 		if err != nil {
 			return openAIRequestCredentials{}, err
 		}
-		return openAIRequestCredentials{token: token}, nil
+		return openAIRequestCredentials{
+			token:    token,
+			authType: common.ProviderAuthTypeAPI,
+		}, nil
 	default:
 		return openAIRequestCredentials{}, fmt.Errorf("unsupported OpenAI auth type: %s", authType)
 	}
@@ -80,5 +87,6 @@ func getOpenAIOAuthCredentials(
 		token:     credentials.AccessToken,
 		accountID: credentials.AccountID,
 		useOAuth:  true,
+		authType:  common.ProviderAuthTypeSubscription,
 	}, nil
 }
