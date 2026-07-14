@@ -271,6 +271,9 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	SetupUserActionHandler(dCtx)
 	SetupDevRunConfigQuery(dCtx)
 	SetupDevRunStateQuery(dCtx)
+	if err = SetupModelConfigHandlers(dCtx); err != nil {
+		return "", err
+	}
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
@@ -358,7 +361,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 
 	var advisor *Advisor
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
-		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
 
 	maxAttempts := 17
@@ -401,9 +404,18 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 			autoIterations = cfg.AutoIterations
 		}
 
-		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
-		// in completeDevStep to switch models when ErrMaxIterationsReached
-		modelConfig := dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
+		// Preserve the original command ordering until a model configuration
+		// update requires subsequent attempts to resolve dynamically.
+		var codingModelConfig common.ModelConfig
+		if ModelConfigRevision(dCtx) == 0 {
+			codingModelConfig = dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
+		}
+		resolveModelConfig := func() common.ModelConfig {
+			if ModelConfigRevision(dCtx) == 0 {
+				return codingModelConfig
+			}
+			return dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
+		}
 
 		// TODO don't force getting help if it just got help recently already
 		if attemptCount > 0 && attemptCount%autoIterations == 0 {
@@ -432,7 +444,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		}
 
 		// Step 2: edit code
-		err = EditCode(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		err = EditCodeWithModelConfigResolver(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
 		if err != nil {
 			return "", fmt.Errorf("failed to write edit blocks: %w", err)
 		}

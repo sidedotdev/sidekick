@@ -175,10 +175,9 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 	var advisor *Advisor
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
-		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
 
-	modelConfigs, _ := dCtx.LLMConfig.GetModelsOrDefault(common.CodingKey)
 	modelAttemptCount := 0
 	modelIndex := 0
 
@@ -213,6 +212,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			environmentContext = output.FormatEnvironmentContext()
 		}
 	}
+	environmentContext = withBranchContext(dCtx, environmentContext)
 
 	// TODO decide how to set the dev step info based on the step type, eg
 	// perhaps different structs per step type
@@ -232,6 +232,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		// reset everything to let the next model start fresh
 		modelAttemptCount = 0
 		modelIndex++
+		modelConfigs, _ := dCtx.GetLLMConfig().GetModelsOrDefault(common.CodingKey)
 		// only reset working dir and chat history if we haven't looped back to the first model
 		if modelIndex < len(modelConfigs) {
 			// TODO /gen capture the git checkout head all in a "Revert Edits" flow action
@@ -252,7 +253,10 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 				return result, err
 			}
 		}
-		modelConfig := modelConfigs[modelIndex%len(modelConfigs)]
+		resolveModelConfig := func() common.ModelConfig {
+			modelConfigs, _ := dCtx.GetLLMConfig().GetModelsOrDefault(common.CodingKey)
+			return modelConfigs[modelIndex%len(modelConfigs)]
+		}
 
 		// TODO /gen don't get user feedback if it just got help via the
 		// get_help_or_input tool recently already, i.e. keep track of count
@@ -302,7 +306,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 
 		// Step 2: execute step
-		err = performStep(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExecution, advisor)
+		err = performStep(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExecution, advisor)
 		promptInfo = SkipInfo{} // never reuse the prompt info from the previous attempt
 		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			log.Warn().Err(err).Msg("Error executing step")
@@ -456,23 +460,23 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 	return result, nil
 }
 
-func performStep(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution, advisor *Advisor) error {
+func performStep(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution, advisor *Advisor) error {
 	v := workflow.GetVersion(dCtx, "performStep", workflow.DefaultVersion, 1)
 	if v == workflow.DefaultVersion {
 		return RunSubflowWithoutResult(dCtx, "perform_step", "Perform Step", func(_ domain.Subflow) error {
-			return performStepSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExec, advisor)
+			return performStepSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExec, advisor)
 		})
 	} else {
 		// remove the perform step subflow going forward, since we'll have
 		// subflows when needed for individual step types (eg edit_code)
-		return performStepSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExec, advisor)
+		return performStepSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExec, advisor)
 	}
 }
 
-func performStepSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution, advisor *Advisor) error {
+func performStepSubflow(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution, advisor *Advisor) error {
 	switch step.Type {
 	case "edit":
-		return EditCode(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		return EditCodeWithModelConfigResolver(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
 	case "other":
 		request := HelpOrInputRequest{
 			Content: step.Definition,

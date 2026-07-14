@@ -139,6 +139,25 @@ func main() {
 					fmt.Printf("    Cause: %s\n", attrs.Failure.Cause.Message)
 				}
 			}
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetWorkflowExecutionSignaledEventAttributes()
+			if attrs == nil {
+				continue
+			}
+
+			fmt.Printf("%d WorkflowExecutionSignaled %s\n", eid, attrs.SignalName)
+			if attrs.Input != nil {
+				for i, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
+					if *verbose {
+						fmt.Printf("    Input[%d]: %s\n", i, input)
+					} else {
+						fmt.Printf("    Input[%d]: %s\n", i, summarizePayload(ctx, service, input))
+					}
+				}
+			}
 		case enums.EVENT_TYPE_MARKER_RECORDED:
 			if eid < int64(startEvent) || eid > int64(endEvent) {
 				continue

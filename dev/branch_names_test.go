@@ -55,13 +55,13 @@ func (s *BranchNameTestSuite) SetupTest() {
 			FlowScope: &flow_action.FlowScope{
 				SubflowName: "BranchNameTestSuite",
 			},
-			LLMConfig: common.LLMConfig{
-				Defaults: []common.ModelConfig{
-					{Provider: "openai"},
-				},
-			},
 			GlobalState: &flow_action.GlobalState{},
 		}
+		execContext.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{
+				{Provider: "openai"},
+			},
+		})
 		return GenerateBranchName(execContext, req)
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)

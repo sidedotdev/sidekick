@@ -38,8 +38,14 @@ var ErrExtractEditBlocks = fmt.Errorf("failed to extract edit blocks")
 
 // edits code in the envContainer based on code context + requirements
 func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
+	return EditCodeWithModelConfigResolver(dCtx, func() common.ModelConfig {
+		return codingModelConfig
+	}, contextSizeExtension, chatHistory, promptInfo, advisor)
+}
+
+func EditCodeWithModelConfigResolver(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
-		return editCodeSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		return editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
 	})
 }
 
@@ -101,7 +107,7 @@ func applyEditBlocksAndReport(dCtx DevContext, editBlocks []EditBlock) (applyEdi
 	}, nil
 }
 
-func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
+func editCodeSubflow(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
 	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 	case 2:
 		clearHibernationGlobalState(dCtx)
@@ -125,6 +131,7 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 			environmentContext = output.FormatEnvironmentContext()
 		}
 	}
+	environmentContext = withBranchContext(dCtx, environmentContext)
 
 	// TODO return info that could help redefine requirements if issues are
 	// discovered while editing code. It should indicate if edits
@@ -139,6 +146,8 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 
 editLoop:
 	for {
+		codingModelConfig := resolveModelConfig()
+
 		// Handle user request to go to the next step, if versioned feature is active.
 		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
 		if goNextVersion == 1 {
@@ -176,7 +185,7 @@ editLoop:
 		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig)
 
 		// Step 1: Get a list of *edit blocks* from the LLM
-		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, environmentContext, advisor)
+		editBlocks, err = authorEditBlocksWithModelConfigResolver(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, environmentContext, advisor)
 		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			v := workflow.GetVersion(dCtx, "edit-code-max-attempts-bugfix", workflow.DefaultVersion, 1)
 			isMaxAttempts := errors.Is(err, ErrMaxAttemptsReached)
@@ -243,6 +252,12 @@ editLoop:
 }
 
 func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, environmentContext string, advisor *Advisor) ([]EditBlock, error) {
+	return authorEditBlocksWithModelConfigResolver(dCtx, func() common.ModelConfig {
+		return codingModelConfig
+	}, contextSizeExtension, chatHistory, promptInfo, environmentContext, advisor)
+}
+
+func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, environmentContext string, advisor *Advisor) ([]EditBlock, error) {
 	var extractedEditBlocks []EditBlock
 
 	attemptCount := 0
@@ -278,6 +293,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
+		codingModelConfig := resolveModelConfig()
 		doneToolCalled := false
 		// Check for UserActionGoNext and version to potentially skip this step
 		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
@@ -383,7 +399,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 && advisor != nil {
-			if err := advisor.MaybeAdvise(dCtx, chatHistory, authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan)); err != nil {
+			if err := advisor.MaybeAdvise(dCtx, chatHistory, authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan), nil); err != nil {
 				return nil, fmt.Errorf("error running advisor: %w", err)
 			}
 		}
@@ -392,9 +408,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		attemptCount++
 		attemptsSinceLastEditBlockOrFeedback++
 
+		resolveOptions := func() llm2.Options {
+			attemptOptions := authorEditBlockInput
+			attemptOptions.ModelConfig = resolveModelConfig()
+			attemptOptions.Tools = authorEditBlockTools(dCtx, attemptOptions.ModelConfig, doneRequired, hasPlan)
+			return attemptOptions
+		}
+
 		// call Open AI to get back messages that contain edit blocks
 		chatCtx := dCtx.WithCancelOnPause()
-		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput, chatHistory)
+		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput, chatHistory, resolveOptions)
 		if dCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}
@@ -684,6 +707,24 @@ const endInitialCodeContext = "#END INITIAL CODE CONTEXT"
 
 func getEnvironmentContext() string {
 	return fmt.Sprintf("OS: %s, Arch: %s", runtime.GOOS, runtime.GOARCH)
+}
+
+// withBranchContext appends the worktree branch and current base branch to the
+// environment context for worktree-based flows, so coding agents know which
+// branch they are on and which branch diffs and merges are targeted against.
+func withBranchContext(dCtx DevContext, environmentContext string) string {
+	if dCtx.Worktree == nil {
+		return environmentContext
+	}
+	if dCtx.Worktree.Name != "" {
+		environmentContext = fmt.Sprintf("%s, Worktree branch: %s", environmentContext, dCtx.Worktree.Name)
+	}
+	if dCtx.ExecContext.GlobalState != nil {
+		if baseBranch := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); baseBranch != "" {
+			environmentContext = fmt.Sprintf("%s, Base branch: %s", environmentContext, baseBranch)
+		}
+	}
+	return environmentContext
 }
 
 func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string, applyEditBlocksImmediately, doneRequired bool, environmentContext string, idd bool) string {

@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sidekick/common"
+	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/mocks"
@@ -90,7 +92,7 @@ func NewMockController(t *testing.T) Controller {
 	mockTemporalClient.On("GetWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(MockWorkflow{}, nil).Maybe()
 	mockTemporalClient.On("SignalWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockTemporalClient.On("CancelWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(MockWorkflowUpdateHandle{}, nil).Maybe()
+	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(MockWorkflowUpdateHandle{}, nil).Maybe()
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
@@ -3121,4 +3123,195 @@ func TestUpdateTaskHandler_StartError(t *testing.T) {
 	updatedTask, _ := service.GetTask(context.Background(), workspaceId, task.Id)
 	assert.Equal(t, domain.TaskStatusDrafting, updatedTask.Status)
 	assert.Equal(t, domain.AgentTypeHuman, updatedTask.AgentType)
+}
+func TestUpdateFlowModelConfigHandler_AcceptsTargetedUpdate(t *testing.T) {
+	t.Parallel()
+
+	ctrl := NewMockController(t)
+	mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
+	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Unset()
+
+	workspaceId := "ws-model-config-" + ksuid.New().String()
+	flowId := "flow-model-config-" + ksuid.New().String()
+	require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
+	require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+	llmConfig := common.LLMConfig{
+		Defaults: []common.ModelConfig{
+			{Provider: "openai", Model: "default-model"},
+		},
+		UseCaseConfigs: map[string][]common.ModelConfig{
+			common.CodingKey: {
+				{Provider: "anthropic", Model: "coding-model", ReasoningEffort: "high"},
+			},
+		},
+	}
+	mockTemporalClient.On(
+		"UpdateWorkflow",
+		mock.Anything,
+		mock.MatchedBy(func(options client.UpdateWorkflowOptions) bool {
+			return options.WorkflowID == flowId &&
+				options.RunID == "" &&
+				options.UpdateName == dev.UpdateNameModelConfig &&
+				options.WaitForStage == client.WorkflowUpdateStageAccepted &&
+				len(options.Args) == 1 &&
+				assert.ObjectsAreEqual(llmConfig, options.Args[0])
+		}),
+	).Return(MockWorkflowUpdateHandle{}, nil).Once()
+
+	payload, err := json.Marshal(ModelConfigUpdateRequest{Config: llmConfig})
+	require.NoError(t, err)
+	req := httptest.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/model_config", workspaceId, flowId),
+		bytes.NewReader(payload),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusAccepted, rr.Code)
+	assert.JSONEq(t, `{"message":"Model configuration update accepted"}`, rr.Body.String())
+	mockTemporalClient.AssertExpectations(t)
+}
+func TestUpdateFlowModelConfigHandler_ValidatesRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		payload string
+		error   string
+	}{
+		{
+			name:    "malformed JSON",
+			payload: `{`,
+			error:   "Invalid request payload:",
+		},
+		{
+			name:    "missing config",
+			payload: `{}`,
+			error:   "at least one default model configuration is required",
+		},
+		{
+			name:    "missing defaults",
+			payload: `{"config":{"defaults":[],"useCaseConfigs":{}}}`,
+			error:   "at least one default model configuration is required",
+		},
+		{
+			name:    "default missing provider",
+			payload: `{"config":{"defaults":[{"model":"default-model"}],"useCaseConfigs":{}}}`,
+			error:   "default model configuration 0 is missing a provider",
+		},
+		{
+			name:    "use case missing provider",
+			payload: `{"config":{"defaults":[{"provider":"openai","model":"default-model"}],"useCaseConfigs":{"coding":[{"model":"coding-model"}]}}}`,
+			error:   `model configuration 0 for use case "coding" is missing a provider`,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl := NewMockController(t)
+			workspaceId := "ws-model-validation-" + ksuid.New().String()
+			flowId := "flow-model-validation-" + ksuid.New().String()
+			require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
+			require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+			req := httptest.NewRequest(
+				http.MethodPut,
+				fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/model_config", workspaceId, flowId),
+				strings.NewReader(test.payload),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusBadRequest, rr.Code)
+			var response map[string]string
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+			assert.Contains(t, response["error"], test.error)
+			ctrl.temporalClient.(*mocks.Client).AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
+		})
+	}
+}
+func TestUpdateFlowModelConfigHandler_FlowNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctrl := NewMockController(t)
+	workspaceId := "ws-model-not-found-" + ksuid.New().String()
+	flowId := "flow-model-not-found-" + ksuid.New().String()
+	payload := `{"config":{"defaults":[{"provider":"openai","model":"default-model"}],"useCaseConfigs":{}}}`
+	req := httptest.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/model_config", workspaceId, flowId),
+		strings.NewReader(payload),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	assert.JSONEq(t, `{"error":"Flow not found"}`, rr.Body.String())
+	ctrl.temporalClient.(*mocks.Client).AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
+}
+func TestUpdateFlowModelConfigHandler_TemporalErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		updateErr    error
+		expectedCode int
+		expectedBody string
+	}{
+		{
+			name:         "workflow not found",
+			updateErr:    serviceerror.NewNotFound("workflow not found"),
+			expectedCode: http.StatusNotFound,
+			expectedBody: "Flow with ID",
+		},
+		{
+			name:         "update failure",
+			updateErr:    serviceerror.NewDeadlineExceeded("deadline exceeded"),
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: "Failed to update workflow model configuration",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl := NewMockController(t)
+			mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
+			mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Unset()
+			mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(nil, test.updateErr).Once()
+
+			workspaceId := "ws-model-temporal-" + ksuid.New().String()
+			flowId := "flow-model-temporal-" + ksuid.New().String()
+			require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
+			require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+			payload := `{"config":{"defaults":[{"provider":"openai","model":"default-model"}],"useCaseConfigs":{}}}`
+			req := httptest.NewRequest(
+				http.MethodPut,
+				fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/model_config", workspaceId, flowId),
+				strings.NewReader(payload),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+			require.Equal(t, test.expectedCode, rr.Code)
+			assert.Contains(t, rr.Body.String(), test.expectedBody)
+			mockTemporalClient.AssertExpectations(t)
+		})
+	}
 }

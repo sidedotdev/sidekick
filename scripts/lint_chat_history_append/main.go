@@ -262,6 +262,8 @@ func findViolations(ctx context.Context, client lsp.LSPClient, cwd string, targe
 
 var activityInvocationHelpers = []string{
 	"PerformWithUserRetry(",
+	"PerformWithUserRetryOrCancel(",
+	"PerformActivity(",
 	"PerformActivityWithUserRetry(",
 	"workflow.ExecuteActivity(",
 	"workflow.ExecuteLocalActivity(",

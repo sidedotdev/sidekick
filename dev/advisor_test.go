@@ -126,3 +126,46 @@ func TestApplyAdvisorToolCalls(t *testing.T) {
 		})
 	}
 }
+func TestSameAdvisorModelAndReasoning(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		advisor  common.ModelConfig
+		executor common.ModelConfig
+		want     bool
+	}{
+		{
+			name:     "same model and reasoning",
+			advisor:  common.ModelConfig{Provider: "anthropic", Model: "claude-opus-4-8", ReasoningEffort: "high"},
+			executor: common.ModelConfig{Provider: "openai", Model: "claude-opus-4-8", ReasoningEffort: "high"},
+			want:     true,
+		},
+		{
+			name:     "different model",
+			advisor:  common.ModelConfig{Model: "claude-opus-4-8", ReasoningEffort: "high"},
+			executor: common.ModelConfig{Model: "claude-sonnet-4-6", ReasoningEffort: "high"},
+			want:     false,
+		},
+		{
+			name:     "empty model IDs",
+			advisor:  common.ModelConfig{Provider: "anthropic", ReasoningEffort: "high"},
+			executor: common.ModelConfig{Provider: "openai", ReasoningEffort: "high"},
+			want:     false,
+		},
+		{
+			name:     "different reasoning",
+			advisor:  common.ModelConfig{Model: "claude-opus-4-8", ReasoningEffort: "high"},
+			executor: common.ModelConfig{Model: "claude-opus-4-8", ReasoningEffort: "low"},
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, sameAdvisorModelAndReasoning(tt.advisor, tt.executor))
+		})
+	}
+}

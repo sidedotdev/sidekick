@@ -107,7 +107,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		if err != nil {
 			return DevContext{}, err
 		}
-		llmConfig = tempLocalExecContext.LLMConfig
+		llmConfig = tempLocalExecContext.GetLLMConfig()
 		embeddingConfig = tempLocalExecContext.EmbeddingConfig
 	} else {
 		tempProviders := localConfig.Providers
@@ -553,10 +553,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			}),
 		},
 		Providers:       finalProviders, // TODO merge with workspace providers
-		LLMConfig:       llmConfig,
 		EmbeddingConfig: embeddingConfig,
 		GlobalState:     &flow_action.GlobalState{},
 	}
+	eCtx.SetLLMConfig(llmConfig)
 
 	// NOTE: it's important to do this *after* the eCtx has been created, since
 	// that ensures we get the correct repo config for the given start branch
@@ -989,7 +989,7 @@ func newTempLocalExecContext(
 	if err != nil {
 		return flow_action.ExecContext{}, fmt.Errorf("failed to create temp local env: %v", err)
 	}
-	return flow_action.ExecContext{
+	eCtx := flow_action.ExecContext{
 		FlowScope:    &flow_action.FlowScope{},
 		Context:      ctx,
 		WorkspaceId:  workspaceId,
@@ -1002,10 +1002,11 @@ func newTempLocalExecContext(
 			}),
 		},
 		Providers:       providers,
-		LLMConfig:       llmConfig,
 		EmbeddingConfig: embeddingConfig,
 		GlobalState:     &flow_action.GlobalState{},
-	}, nil
+	}
+	eCtx.SetLLMConfig(llmConfig)
+	return eCtx, nil
 }
 
 // NewTempLocalExecContext is a workflow-facing wrapper around newTempLocalExecContext

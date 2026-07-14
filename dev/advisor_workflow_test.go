@@ -9,6 +9,7 @@ import (
 	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/flow_action"
+	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
@@ -40,9 +41,12 @@ type AdvisorWorkflowTestSuite struct {
 	// management (ManageV4) during a workflow run.
 	manageV4Calls int
 
+	customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error)
+
 	// adviseWorkflow wraps MaybeAdvise so the executor history round-trips
 	// through the data converter and arrives refs-only, mirroring production.
-	adviseWorkflow func(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer) (*persisted_ai.ChatHistoryContainer, error)
+	adviseWorkflow       func(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer) (*persisted_ai.ChatHistoryContainer, error)
+	modelUpdatesWorkflow func(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer, initial common.LLMConfig, updates []common.LLMConfig) (*persisted_ai.ChatHistoryContainer, error)
 }
 
 const advisorTestWorkspaceId = "ws_advisor_test"
@@ -68,23 +72,60 @@ func (s *AdvisorWorkflowTestSuite) SetupTest() {
 				Secrets: &secret_manager.SecretManagerContainer{
 					SecretManager: secret_manager.MockSecretManager{},
 				},
-				LLMConfig: common.LLMConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai"}},
-				},
 			},
+		}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "default-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.AdvisingKey: {{Provider: "openai", Model: "initial-advisor"}},
+			},
+		})
+		if err := SetupModelConfigHandlers(dCtx); err != nil {
+			return nil, err
 		}
 		advisor := &Advisor{
 			Enabled:     true,
 			EveryNTurns: 1,
-			ModelConfig: common.ModelConfig{Provider: "openai"},
 			ChatHistory: NewVersionedChatHistory(ctx, dCtx.WorkspaceId),
 		}
-		if err := advisor.MaybeAdvise(dCtx, executorHistory, nil); err != nil {
+		if err := advisor.MaybeAdvise(dCtx, executorHistory, nil, s.customHandlers); err != nil {
 			return nil, err
 		}
 		return executorHistory, nil
 	}
 	s.env.RegisterWorkflow(s.adviseWorkflow)
+
+	s.modelUpdatesWorkflow = func(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer, initial common.LLMConfig, updates []common.LLMConfig) (*persisted_ai.ChatHistoryContainer, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		globalState := &flow_action.GlobalState{}
+		globalState.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     ctx,
+				WorkspaceId: advisorTestWorkspaceId,
+				GlobalState: globalState,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "advisor"},
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+			},
+		}
+		dCtx.SetLLMConfig(initial)
+		advisor := newAdvisor(dCtx, true, common.CodingKey)
+		advisor.EveryNTurns = 1
+
+		if err := advisor.MaybeAdvise(dCtx, executorHistory, nil, s.customHandlers); err != nil {
+			return nil, err
+		}
+		for _, update := range updates {
+			applyModelConfigUpdate(dCtx, update)
+			if err := advisor.MaybeAdvise(dCtx, executorHistory, nil, s.customHandlers); err != nil {
+				return nil, err
+			}
+		}
+		return executorHistory, nil
+	}
+	s.env.RegisterWorkflowWithOptions(s.modelUpdatesWorkflow, workflow.RegisterOptions{Name: "advisorModelUpdatesWorkflow"})
 
 	// Real activities: the advisor summarization must hydrate the executor
 	// history from storage, so it needs the real storage-backed activity.
@@ -94,9 +135,14 @@ func (s *AdvisorWorkflowTestSuite) SetupTest() {
 
 	// Use the Llm2ChatHistory path.
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
+	s.env.OnGetVersion("model-config-stream-interruption", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
+	s.env.OnGetVersion("advisor-dynamic-skip-same-model", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
 
 	var fa *flow_action.FlowActivities
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.env.OnActivity(fa.GetModelMetadata, mock.Anything, mock.Anything, mock.Anything).
+		Return(common.ModelMetadata{}, nil).
+		Maybe()
 
 	// Persist advisor and executor appends for real so injected messages can be
 	// hydrated and their serialized content blocks inspected (e.g. to confirm no
@@ -250,6 +296,15 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_Guide() {
 func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextBlock() {
 	const flowId = "exec_flow_tool_call"
 	executorHistory, originalRefs := s.persistExecutorHistory(flowId)
+	s.customHandlers = map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
+		recordDevPlanTool.Name: func(_ DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
+			return llm2.ToolResultBlock{
+				Name:       toolCall.Name,
+				ToolCallId: toolCall.Id,
+				Content:    llm2.TextContentBlocks("Plan recorded by custom handler."),
+			}, nil
+		},
+	}
 
 	var la *persisted_ai.Llm2Activities
 	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
@@ -316,6 +371,7 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ExecutorToolCall_NoEmptyTextB
 	for _, block := range last.Content {
 		if block.Type == llm2.ContentBlockTypeToolResult {
 			toolResultBlocks++
+			s.Equal("Plan recorded by custom handler.", block.ToolResult.Content[0].Text)
 		}
 	}
 	s.Equal(1, toolResultBlocks, "expected the injected tool call to be resolved with a tool_result")
@@ -347,4 +403,134 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ManagesHistoryEachTurn() {
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 	s.GreaterOrEqual(s.manageV4Calls, 1, "advisor must manage its own history during a turn")
+}
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_UsesLatestModelConfigAcrossRepeatedUpdates() {
+	executorHistory, originalRefs := s.persistExecutorHistory("exec_flow_model_updates")
+	initial := common.LLMConfig{
+		Defaults: []common.ModelConfig{{Provider: "openai", Model: "default-model"}},
+		UseCaseConfigs: map[string][]common.ModelConfig{
+			common.AdvisingKey: {{Provider: "openai", Model: "initial-advisor"}},
+		},
+	}
+	updates := []common.LLMConfig{
+		{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "updated-default"}},
+		},
+		{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "latest-default"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.AdvisingKey: {{Provider: "google", Model: "updated-advisor"}},
+			},
+		},
+	}
+
+	proceedResponse := func(id string) *llm2.MessageResponse {
+		return &llm2.MessageResponse{
+			StopReason: "tool_use",
+			Output: llm2.Message{
+				Role: "assistant",
+				Content: []llm2.ContentBlock{{
+					Type: llm2.ContentBlockTypeToolUse,
+					ToolUse: &llm2.ToolUseBlock{
+						Id:        id,
+						Name:      advisorProceedToolName,
+						Arguments: "{}",
+					},
+				}},
+			},
+		}
+	}
+
+	var activities *persisted_ai.Llm2Activities
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Provider == "openai" &&
+			input.Options.ModelConfig.Model == "initial-advisor"
+	})).Return(proceedResponse("call_initial"), nil).Once()
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Provider == string(common.AnthropicChatProvider) &&
+			input.Options.ModelConfig.Model == advisorDefaultModel
+	})).Return(proceedResponse("call_fallback"), nil).Once()
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Provider == "google" &&
+			input.Options.ModelConfig.Model == "updated-advisor"
+	})).Return(proceedResponse("call_updated"), nil).Once()
+
+	s.env.ExecuteWorkflow("advisorModelUpdatesWorkflow", executorHistory, initial, updates)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Len(s.executorRefsFromResult(), originalRefs, "proceed must not modify the executor history")
+	s.env.AssertExpectations(s.T())
+}
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_SkipsAndResumesAsModelsChange() {
+	executorHistory, originalRefs := s.persistExecutorHistory("exec_flow_skip_same_model")
+	initial := common.LLMConfig{
+		Defaults: []common.ModelConfig{{Provider: "openai", Model: "default-model"}},
+		UseCaseConfigs: map[string][]common.ModelConfig{
+			common.AdvisingKey: {{Provider: "openai", Model: "shared-model"}},
+			common.CodingKey:   {{Provider: "openai", Model: "shared-model"}},
+		},
+	}
+	updates := []common.LLMConfig{
+		{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "default-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.AdvisingKey: {{Provider: "openai", Model: "configured-advisor"}},
+				common.CodingKey:   {{Provider: "openai", Model: "shared-model"}},
+			},
+		},
+		{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "default-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.AdvisingKey: {{Provider: "openai", Model: "shared-model"}},
+				common.CodingKey:   {{Provider: "openai", Model: "shared-model"}},
+			},
+		},
+		{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "default-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.CodingKey: {{Provider: "anthropic", Model: advisorDefaultModel}},
+			},
+		},
+		{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "default-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.CodingKey: {{Provider: "openai", Model: "different-executor"}},
+			},
+		},
+	}
+
+	proceedResponse := func(id string) *llm2.MessageResponse {
+		return &llm2.MessageResponse{
+			StopReason: "tool_use",
+			Output: llm2.Message{
+				Role: "assistant",
+				Content: []llm2.ContentBlock{{
+					Type: llm2.ContentBlockTypeToolUse,
+					ToolUse: &llm2.ToolUseBlock{
+						Id:        id,
+						Name:      advisorProceedToolName,
+						Arguments: "{}",
+					},
+				}},
+			},
+		}
+	}
+
+	var activities *persisted_ai.Llm2Activities
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Provider == "openai" &&
+			input.Options.ModelConfig.Model == "configured-advisor"
+	})).Return(proceedResponse("call_configured"), nil).Once()
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Provider == string(common.AnthropicChatProvider) &&
+			input.Options.ModelConfig.Model == advisorDefaultModel
+	})).Return(proceedResponse("call_fallback"), nil).Once()
+
+	s.env.ExecuteWorkflow("advisorModelUpdatesWorkflow", executorHistory, initial, updates)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Len(s.executorRefsFromResult(), originalRefs, "proceed must not modify the executor history")
+	s.env.AssertExpectations(s.T())
 }

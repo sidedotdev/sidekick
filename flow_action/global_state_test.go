@@ -1,6 +1,8 @@
 package flow_action
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -155,6 +157,125 @@ func TestGlobalState_Values(t *testing.T) {
 		slice, ok := gs.GetValue("slice").([]string)
 		if !ok || len(slice) != 2 {
 			t.Errorf("Expected []string{'a', 'b'} for slice key")
+		}
+	})
+}
+
+func TestGlobalState_NamedCancellationIsolation(t *testing.T) {
+	gs := &GlobalState{}
+	var broadCanceled, streamCanceled, otherCanceled int
+
+	gs.AddCancelFunc(func() {
+		broadCanceled++
+	})
+	gs.AddNamedCancelFunc("llm_stream", func() {
+		streamCanceled++
+	})
+	gs.AddNamedCancelFunc("other", func() {
+		otherCanceled++
+	})
+
+	gs.CancelNamed("llm_stream")
+
+	if broadCanceled != 0 {
+		t.Fatalf("Expected broad cancellation queue to remain untouched, got %d calls", broadCanceled)
+	}
+	if streamCanceled != 1 {
+		t.Fatalf("Expected stream cancellation once, got %d calls", streamCanceled)
+	}
+	if otherCanceled != 0 {
+		t.Fatalf("Expected unrelated named queue to remain untouched, got %d calls", otherCanceled)
+	}
+
+	gs.CancelNamed("llm_stream")
+	if streamCanceled != 1 {
+		t.Fatalf("Expected canceled named queue to be cleared, got %d calls", streamCanceled)
+	}
+
+	gs.Cancel()
+	if broadCanceled != 1 {
+		t.Errorf("Expected broad cancellation once, got %d calls", broadCanceled)
+	}
+	if otherCanceled != 1 {
+		t.Errorf("Expected broad cancellation to include remaining named queues, got %d calls", otherCanceled)
+	}
+
+	gs.Cancel()
+	if broadCanceled != 1 || otherCanceled != 1 {
+		t.Errorf("Expected broad cancellation queues to be cleared, got broad=%d other=%d", broadCanceled, otherCanceled)
+	}
+}
+func TestGlobalState_NamedCancellationGenerationAndCleanup(t *testing.T) {
+	t.Parallel()
+
+	gs := &GlobalState{}
+	canceled := 0
+	unregister := gs.RegisterNamedCancelFunc("llm_stream", func() {
+		canceled++
+	})
+	unregister()
+
+	gs.CancelNamed("llm_stream")
+	if canceled != 0 {
+		t.Fatalf("Expected completed registration not to be canceled, got %d calls", canceled)
+	}
+	if generation := gs.NamedCancellationGeneration("llm_stream"); generation != 1 {
+		t.Fatalf("Expected named cancellation generation 1, got %d", generation)
+	}
+
+	gs.RegisterNamedCancelFunc("llm_stream", func() {
+		canceled++
+	})
+	gs.Cancel()
+	if canceled != 1 {
+		t.Fatalf("Expected broad cancellation to include active named registration, got %d calls", canceled)
+	}
+	if generation := gs.NamedCancellationGeneration("llm_stream"); generation != 1 {
+		t.Fatalf("Expected broad cancellation not to advance named generation, got %d", generation)
+	}
+
+	gs.CancelNamed("llm_stream")
+	if generation := gs.NamedCancellationGeneration("llm_stream"); generation != 2 {
+		t.Fatalf("Expected repeated named cancellation generation 2, got %d", generation)
+	}
+}
+func TestGlobalState_CancellationOrderIsDeterministic(t *testing.T) {
+	t.Parallel()
+
+	t.Run("named queue", func(t *testing.T) {
+		gs := &GlobalState{}
+		var canceled []int
+		for i := 1; i <= 4; i++ {
+			i := i
+			gs.RegisterNamedCancelFunc("llm_stream", func() {
+				canceled = append(canceled, i)
+			})
+		}
+
+		gs.CancelNamed("llm_stream")
+
+		expected := []int{1, 2, 3, 4}
+		if !reflect.DeepEqual(canceled, expected) {
+			t.Fatalf("Expected registration order %v, got %v", expected, canceled)
+		}
+	})
+
+	t.Run("broad cancellation sorts names then registrations", func(t *testing.T) {
+		gs := &GlobalState{}
+		var canceled []string
+		for _, registration := range []string{"beta-1", "alpha-1", "beta-2", "alpha-2"} {
+			registration := registration
+			name := strings.SplitN(registration, "-", 2)[0]
+			gs.RegisterNamedCancelFunc(name, func() {
+				canceled = append(canceled, registration)
+			})
+		}
+
+		gs.Cancel()
+
+		expected := []string{"alpha-1", "alpha-2", "beta-1", "beta-2"}
+		if !reflect.DeepEqual(canceled, expected) {
+			t.Fatalf("Expected deterministic order %v, got %v", expected, canceled)
 		}
 	})
 }

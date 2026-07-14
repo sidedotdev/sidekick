@@ -22,7 +22,7 @@ function makeTask(id: string): FullTask {
 
 function makeFlowViewCache(flowId: string): FlowViewCacheEntry {
   return {
-    flow: { id: flowId, workspaceId: 'ws1', status: 'started' } as Flow,
+    flow: { id: flowId, workspaceId: 'ws1', status: 'in_progress' } as Flow,
     flowActions: [{ id: `action_${flowId}`, flowId } as any],
     subflowsById: {
       [`sf_${flowId}`]: { id: `sf_${flowId}`, type: 'step.dev', status: SubflowStatus.Started } as Subflow,

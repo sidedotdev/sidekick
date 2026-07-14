@@ -18,6 +18,7 @@
         class="model-input-wrapper"
         inputClass="model-input-inner"
         :suggestions="filteredModels"
+        :base-z-index="overlayBaseZIndex"
         @complete="(e) => searchModels(e, defaultConfig.provider)"
         @item-select="emitUpdate"
         @change="emitUpdate"
@@ -66,6 +67,7 @@
           inputClass="model-input-inner"
           :disabled="!useCaseStates[useCase].enabled"
           :suggestions="filteredModels"
+          :base-z-index="overlayBaseZIndex"
           @complete="(e) => searchModels(e, useCaseStates[useCase].config.provider)"
           @item-select="emitUpdate"
           @change="emitUpdate"
@@ -100,9 +102,12 @@ import AutoComplete from 'primevue/autocomplete'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue?: LLMConfig | null
-}>()
+  overlayBaseZIndex?: number
+}>(), {
+  overlayBaseZIndex: 0,
+})
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: LLMConfig): void

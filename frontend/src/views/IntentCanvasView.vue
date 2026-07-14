@@ -907,7 +907,7 @@ const confirmFinish = async () => {
         return
       }
       await fetchFlow()
-      if (flow.value?.status === 'complete') {
+      if (flow.value?.status === 'completed') {
         router.push({ name: 'kanban' })
         return
       }
