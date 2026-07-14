@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sidekick/secret_manager"
 	"testing"
 	"time"
 
@@ -39,9 +40,12 @@ func TestParseCredentials(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "valid credentials",
-			input:   `{"access_token":"at","refresh_token":"rt","expires_at":9999999999,"account_id":"acct-1"}`,
-			wantErr: "",
+			name:  "valid camelCase credentials",
+			input: `{"accessToken":"at","refreshToken":"rt","expiresAt":9999999999,"accountId":"acct-1"}`,
+		},
+		{
+			name:  "valid legacy snake_case credentials",
+			input: `{"access_token":"at","refresh_token":"rt","expires_at":9999999999,"account_id":"acct-1"}`,
 		},
 		{
 			name:    "invalid JSON",
@@ -49,24 +53,24 @@ func TestParseCredentials(t *testing.T) {
 			wantErr: "failed to parse OpenAI OAuth credentials",
 		},
 		{
-			name:    "missing access_token",
-			input:   `{"refresh_token":"rt","expires_at":123,"account_id":"a"}`,
-			wantErr: "missing access_token",
+			name:    "missing accessToken",
+			input:   `{"refreshToken":"rt","expiresAt":123,"accountId":"a"}`,
+			wantErr: "missing accessToken",
 		},
 		{
-			name:    "missing refresh_token",
-			input:   `{"access_token":"at","expires_at":123,"account_id":"a"}`,
-			wantErr: "missing refresh_token",
+			name:    "missing refreshToken",
+			input:   `{"accessToken":"at","expiresAt":123,"accountId":"a"}`,
+			wantErr: "missing refreshToken",
 		},
 		{
-			name:    "missing expires_at",
-			input:   `{"access_token":"at","refresh_token":"rt","account_id":"a"}`,
-			wantErr: "missing expires_at",
+			name:    "missing expiresAt",
+			input:   `{"accessToken":"at","refreshToken":"rt","accountId":"a"}`,
+			wantErr: "missing expiresAt",
 		},
 		{
-			name:    "missing account_id",
-			input:   `{"access_token":"at","refresh_token":"rt","expires_at":123}`,
-			wantErr: "missing account_id",
+			name:    "missing accountId",
+			input:   `{"accessToken":"at","refreshToken":"rt","expiresAt":123}`,
+			wantErr: "missing accountId",
 		},
 	}
 
@@ -287,7 +291,7 @@ func (m *mockSecretManager) GetSecret(name string) (string, error) {
 	}
 	v, ok := m.secrets[name]
 	if !ok {
-		return "", fmt.Errorf("secret not found: %s", name)
+		return "", fmt.Errorf("%w: %s", secret_manager.ErrSecretNotFound, name)
 	}
 	return v, nil
 }
@@ -452,4 +456,16 @@ func TestGetAndMaybeRefresh(t *testing.T) {
 		assert.False(t, ok)
 		assert.Nil(t, creds)
 	})
+}
+func TestCredentialsMarshalCamelCase(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(Credentials{
+		AccessToken:  "at",
+		RefreshToken: "rt",
+		ExpiresAt:    123,
+		AccountID:    "acct",
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"accessToken":"at","refreshToken":"rt","expiresAt":123,"accountId":"acct"}`, string(raw))
 }

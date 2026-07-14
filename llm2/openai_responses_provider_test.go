@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
@@ -91,12 +93,12 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_OAUTH", "OPENAI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "openai",
-			Model:    "gpt-5-mini",
+			Model:    "gpt-5.6-luna",
 		},
 		Tools:      []*common.Tool{mockTool},
 		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
@@ -258,7 +260,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	})
 }
 
-func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
+func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
@@ -282,12 +284,12 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_OAUTH")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider:        "openai",
-			Model:           "gpt-5-mini",
+			Model:           "gpt-5.6-luna",
 			ReasoningEffort: "low",
 			MaxTokens:       1024,
 		},
@@ -337,23 +339,16 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	t.Logf("Response output content blocks: %d", len(response.Output.Content))
 	debugPrintAllContentBlocks(response.Output.Content)
 
-	var foundReasoning bool
-	var encryptedContent string
+	var reasoningSummary string
 	for _, block := range response.Output.Content {
 		if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
-			foundReasoning = true
-			encryptedContent = block.Reasoning.EncryptedContent
-			t.Logf("Found reasoning block with EncryptedContent length: %d", len(encryptedContent))
+			reasoningSummary = block.Reasoning.Summary
 			break
 		}
 	}
 
-	if !foundReasoning {
-		t.Fatal("Expected response.Output.Content to include a reasoning block")
-	}
-
-	if encryptedContent == "" {
-		t.Fatal("Expected reasoning block to have non-empty EncryptedContent")
+	if reasoningSummary == "" {
+		t.Fatal("Expected response.Output.Content to include a reasoning summary")
 	}
 
 	assert.NotNil(t, response.Usage, "Usage field should not be nil")
@@ -364,7 +359,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
 	t.Logf("StopReason: %s", response.StopReason)
 
-	t.Run("MultiTurnEncryptedReasoning", func(t *testing.T) {
+	t.Run("MultiTurnReasoning", func(t *testing.T) {
 		followUpMessages := append([]Message{}, messages...)
 		followUpMessages = append(followUpMessages, response.Output)
 		followUpMessages = append(followUpMessages, Message{
@@ -419,7 +414,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		}
 
 		if !hasTextContent {
-			t.Error("Response content is empty after providing encrypted reasoning continuation")
+			t.Error("Response content is empty after providing reasoning continuation")
 		}
 
 		assert.NotNil(t, response.Usage, "Usage field should not be nil on multi-turn")
@@ -630,12 +625,12 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_OAUTH", "OPENAI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "openai",
-			Model:    defaultModel,
+			Model:    "gpt-5.6-luna",
 		},
 		Tools: []*common.Tool{
 			{
@@ -704,4 +699,94 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	t.Logf("Model reported text: %q", reportedText)
 	assert.True(t, VisionTestFuzzyMatch(expectedText, reportedText),
 		"Expected model to read %q from the image, got %q", expectedText, reportedText)
+}
+
+func TestOpenAIResponsesProvider_SubscriptionRequest(t *testing.T) {
+	var requestPath string
+	var authorization string
+	var accountID string
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		accountID = r.Header.Get("ChatGPT-Account-Id")
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&requestBody))
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH": `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`,
+		},
+	}
+	provider := OpenAIResponsesProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeSubscription,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{
+			ModelConfig: common.ModelConfig{
+				Provider: "openai-alias",
+				Model:    "gpt-5-codex",
+			},
+			MaxTokens: 1024,
+		},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.Error(t, err)
+	assert.Equal(t, "/responses", requestPath)
+	assert.Equal(t, "Bearer oauth-token", authorization)
+	assert.Equal(t, "account-id", accountID)
+	assert.NotContains(t, requestBody, "max_output_tokens")
+	assert.Equal(t, []string{"OPENAI_OAUTH"}, manager.calls)
+}
+
+func TestOpenAIResponsesProvider_AnyFallsBackToAPIKey(t *testing.T) {
+	var requestPath string
+	var authorization string
+	var accountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		accountID = r.Header.Get("ChatGPT-Account-Id")
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_API_KEY": "api-key",
+		},
+	}
+	provider := OpenAIResponsesProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeAny,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-5-codex",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.Error(t, err)
+	assert.Equal(t, "/responses", requestPath)
+	assert.Equal(t, "Bearer api-key", authorization)
+	assert.Empty(t, accountID)
+	assert.Equal(t, []string{"OPENAI_OAUTH", "OPENAI_API_KEY"}, manager.calls)
 }

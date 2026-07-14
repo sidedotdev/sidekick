@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sidekick/secret_manager"
 	"strings"
 	"time"
 
@@ -20,16 +22,16 @@ const (
 	ClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
 	AuthorizeURL = "https://auth.openai.com/oauth/authorize"
 	TokenURL     = "https://auth.openai.com/oauth/token"
-	Scope        = "openid profile email offline_access"
+	Scope        = "openid profile email offline_access api.connectors.read api.connectors.invoke"
 
 	keyringService = "sidekick"
 )
 
 type Credentials struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresAt    int64  `json:"expires_at"`
-	AccountID    string `json:"account_id"`
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	ExpiresAt    int64  `json:"expiresAt"`
+	AccountID    string `json:"accountId"`
 }
 
 // StoreFn persists refreshed credentials. Override in tests to avoid OS keyring.
@@ -52,17 +54,40 @@ func ParseCredentials(raw string) (*Credentials, error) {
 	if err := json.Unmarshal([]byte(raw), &creds); err != nil {
 		return nil, fmt.Errorf("failed to parse OpenAI OAuth credentials: %w", err)
 	}
+
+	var legacy struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresAt    int64  `json:"expires_at"`
+		AccountID    string `json:"account_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		return nil, fmt.Errorf("failed to parse OpenAI OAuth credentials: %w", err)
+	}
 	if creds.AccessToken == "" {
-		return nil, fmt.Errorf("OpenAI OAuth credentials missing access_token")
+		creds.AccessToken = legacy.AccessToken
 	}
 	if creds.RefreshToken == "" {
-		return nil, fmt.Errorf("OpenAI OAuth credentials missing refresh_token")
+		creds.RefreshToken = legacy.RefreshToken
 	}
 	if creds.ExpiresAt == 0 {
-		return nil, fmt.Errorf("OpenAI OAuth credentials missing expires_at")
+		creds.ExpiresAt = legacy.ExpiresAt
 	}
 	if creds.AccountID == "" {
-		return nil, fmt.Errorf("OpenAI OAuth credentials missing account_id")
+		creds.AccountID = legacy.AccountID
+	}
+
+	if creds.AccessToken == "" {
+		return nil, fmt.Errorf("OpenAI OAuth credentials missing accessToken")
+	}
+	if creds.RefreshToken == "" {
+		return nil, fmt.Errorf("OpenAI OAuth credentials missing refreshToken")
+	}
+	if creds.ExpiresAt == 0 {
+		return nil, fmt.Errorf("OpenAI OAuth credentials missing expiresAt")
+	}
+	if creds.AccountID == "" {
+		return nil, fmt.Errorf("OpenAI OAuth credentials missing accountId")
 	}
 	return &creds, nil
 }
@@ -191,17 +216,17 @@ func ExchangeRefreshToken(ctx context.Context, refreshToken string) (*Credential
 
 // GetAndMaybeRefresh loads OPENAI_OAUTH credentials and refreshes them if
 // expired or expiring within 5 minutes. Returns (nil, false, nil) only when
-// no OAuth credentials are configured (secret not found).
+// no OAuth credentials are configured.
 func GetAndMaybeRefresh(ctx context.Context, secretManager interface{ GetSecret(string) (string, error) }) (*Credentials, bool, error) {
 	raw, err := secretManager.GetSecret(SecretName)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not exist") {
+		if errors.Is(err, secret_manager.ErrSecretNotFound) {
 			return nil, false, nil
 		}
 		return nil, false, fmt.Errorf("failed to get OpenAI OAuth secret: %w", err)
 	}
 	if raw == "" {
-		return nil, false, nil
+		return nil, false, fmt.Errorf("OpenAI OAuth secret is empty")
 	}
 
 	creds, err := ParseCredentials(raw)
@@ -209,7 +234,6 @@ func GetAndMaybeRefresh(ctx context.Context, secretManager interface{ GetSecret(
 		return nil, false, err
 	}
 
-	// Refresh proactively if token expires within 5 minutes
 	if time.Now().Unix() > creds.ExpiresAt-300 {
 		log.Info().Msg("OpenAI OAuth token expiring soon, refreshing proactively")
 		newCreds, refreshErr := ExchangeRefreshToken(ctx, creds.RefreshToken)

@@ -158,7 +158,8 @@ func TestBuildOpenAIAuthorizeURL(t *testing.T) {
 
 	verifier := "test_verifier_value"
 	state := "test_state_value"
-	rawURL := buildOpenAIAuthorizeURL(verifier, state)
+	redirectURI := "http://localhost:43210/auth/callback"
+	rawURL := buildOpenAIAuthorizeURL(verifier, state, redirectURI)
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -173,12 +174,13 @@ func TestBuildOpenAIAuthorizeURL(t *testing.T) {
 	expectations := map[string]string{
 		"response_type":              "code",
 		"client_id":                  "app_EMoamEEZ73f0CkXaXp7hrann",
-		"scope":                      "openid profile email offline_access",
+		"redirect_uri":               redirectURI,
+		"scope":                      "openid profile email offline_access api.connectors.read api.connectors.invoke",
 		"code_challenge_method":      "S256",
 		"state":                      state,
 		"id_token_add_organizations": "true",
 		"codex_cli_simplified_flow":  "true",
-		"originator":                 "pi",
+		"originator":                 "codex_cli_rs",
 	}
 
 	for key, want := range expectations {
@@ -189,8 +191,5 @@ func TestBuildOpenAIAuthorizeURL(t *testing.T) {
 
 	if q.Get("code_challenge") == "" {
 		t.Error("code_challenge should not be empty")
-	}
-	if q.Get("redirect_uri") == "" {
-		t.Error("redirect_uri should not be empty")
 	}
 }

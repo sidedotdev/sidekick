@@ -212,8 +212,6 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	// Store allowedOrigins in controller for websocket handlers
 	ctrl.allowedOrigins = allowedOrigins
 
-	r.GET("/auth/openai/callback", ctrl.OpenAIOAuthCallbackHandler)
-
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
 	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)

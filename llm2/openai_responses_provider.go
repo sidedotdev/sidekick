@@ -17,7 +17,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-const defaultModel = "gpt-5-codex"
+const defaultModel = "gpt-5.3-codex"
 
 type OpenAIResponsesProvider struct {
 	BaseURL       string
@@ -31,18 +31,23 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	options := request.Options
 
 	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
-	token, err := request.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
+	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, p.AuthType)
 	if err != nil {
 		return nil, err
 	}
 
 	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	clientOptions := []option.RequestOption{
-		option.WithAPIKey(token),
+		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	} else if credentials.useOAuth {
+		clientOptions = append(clientOptions, option.WithBaseURL(openAIChatGPTResponsesBaseURL))
+	}
+	if credentials.useOAuth {
+		clientOptions = append(clientOptions, option.WithHeader("ChatGPT-Account-Id", credentials.accountID))
 	}
 	for k, v := range p.CustomHeaders {
 		clientOptions = append(clientOptions, option.WithHeader(k, v))
@@ -83,7 +88,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 			effectiveMaxTokens = modelInfo.Limit.Output
 		}
 	}
-	if effectiveMaxTokens > 0 {
+	if effectiveMaxTokens > 0 && !credentials.useOAuth {
 		params.MaxOutputTokens = param.NewOpt(int64(effectiveMaxTokens))
 	}
 

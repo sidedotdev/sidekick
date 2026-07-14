@@ -2842,61 +2842,6 @@ func TestGetProvidersHandler(t *testing.T) {
 	}
 }
 
-func TestOpenAIOAuthCallbackHandler(t *testing.T) {
-	t.Parallel()
-	gin.SetMode(gin.TestMode)
-
-	tests := []struct {
-		name           string
-		query          string
-		expectedInBody []string
-	}{
-		{
-			name:  "displays code and state",
-			query: "?code=test_auth_code&state=test_state_value",
-			expectedInBody: []string{
-				"test_auth_code#test_state_value",
-				"side auth",
-			},
-		},
-		{
-			name:  "displays code only when no state",
-			query: "?code=test_auth_code",
-			expectedInBody: []string{
-				"test_auth_code",
-				"side auth",
-			},
-		},
-		{
-			name:  "displays empty when no params",
-			query: "",
-			expectedInBody: []string{
-				"side auth",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			apiCtrl := NewMockController(t)
-			router := DefineRoutes(apiCtrl, TestAllowedOrigins())
-
-			req, _ := http.NewRequest("GET", "/auth/openai/callback"+tt.query, nil)
-			rr := httptest.NewRecorder()
-			router.ServeHTTP(rr, req)
-
-			require.Equal(t, http.StatusOK, rr.Code)
-			assert.Contains(t, rr.Header().Get("Content-Type"), "text/html")
-
-			body := rr.Body.String()
-			for _, expected := range tt.expectedInBody {
-				assert.Contains(t, body, expected)
-			}
-		})
-	}
-}
-
 func TestGetModelsHandler(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)

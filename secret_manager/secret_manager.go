@@ -8,6 +8,7 @@ import (
 	"sidekick/common"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/zalando/go-keyring"
 )
 
@@ -78,16 +79,32 @@ func NewCompositeSecretManager(managers []SecretManager) *CompositeSecretManager
 }
 
 func (c CompositeSecretManager) GetSecret(secretName string) (string, error) {
-	var lastErr error
+	var retrievalErr error
+	var lastNotFoundErr error
 	for _, manager := range c.managers {
 		secret, err := manager.GetSecret(secretName)
 		if err == nil {
 			return secret, nil
 		}
-		lastErr = err
+		if errors.Is(err, ErrSecretNotFound) {
+			lastNotFoundErr = err
+			continue
+		}
+
+		log.Error().
+			Err(err).
+			Str("secretName", secretName).
+			Str("secretManagerType", string(manager.GetType())).
+			Msg("secret manager lookup failed; trying remaining managers")
+		if retrievalErr == nil {
+			retrievalErr = err
+		}
 	}
-	if lastErr != nil {
-		return "", fmt.Errorf("secret %s not found in any secret manager: %v", secretName, lastErr)
+	if retrievalErr != nil {
+		return "", retrievalErr
+	}
+	if lastNotFoundErr != nil {
+		return "", fmt.Errorf("%w: %s not found in any secret manager", ErrSecretNotFound, secretName)
 	}
 	return "", fmt.Errorf("no secret managers configured")
 }
