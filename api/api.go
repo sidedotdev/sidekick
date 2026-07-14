@@ -20,6 +20,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/frontend"
 	"sidekick/llm"
+	"sidekick/openai_oauth"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/telemetry"
@@ -350,7 +351,7 @@ func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 		var secretNames []string
 		switch builtinProvider {
 		case "openai":
-			secretNames = []string{llm.OpenaiApiKeySecretName}
+			secretNames = []string{llm.OpenaiApiKeySecretName, openai_oauth.SecretName}
 		case "anthropic":
 			secretNames = []string{llm.AnthropicApiKeySecretName, "ANTHROPIC_OAUTH"}
 		case "google":

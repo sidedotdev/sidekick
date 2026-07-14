@@ -137,10 +137,12 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		messages = mapMessagesToolNames(messages, input.ToolNameMapping)
 	}
 
+	secretManager := newOpenAIOAuthSecretWrapper(ctx, input.Secrets.SecretManager)
+
 	request := llm2.StreamRequest{
 		Messages:      messages,
 		Options:       options,
-		SecretManager: input.Secrets.SecretManager,
+		SecretManager: secretManager,
 	}
 
 	response, err := provider.Stream(ctx, request, eventChan)

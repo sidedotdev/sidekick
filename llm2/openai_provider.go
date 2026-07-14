@@ -55,8 +55,16 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	messages := request.Messages
 	options := request.Options
 
+	authType := common.NormalizeProviderAuthType(string(p.AuthType))
+	if authType == common.ProviderAuthTypeSubscription {
+		return nil, fmt.Errorf("OpenAI subscription auth is not supported by the chat-completions provider; use the OpenAI Responses provider")
+	}
+	if authType == common.ProviderAuthTypeAny {
+		authType = common.ProviderAuthTypeAPI
+	}
+
 	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
-	token, err := request.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
+	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
 	if err != nil {
 		return nil, err
 	}
@@ -65,11 +73,14 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		Timeout: 45 * time.Minute,
 	}
 	clientOptions := []option.RequestOption{
-		option.WithAPIKey(token),
+		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	if credentials.useOAuth {
+		clientOptions = append(clientOptions, option.WithHeader("ChatGPT-Account-Id", credentials.accountID))
 	}
 	for k, v := range p.CustomHeaders {
 		clientOptions = append(clientOptions, option.WithHeader(k, v))

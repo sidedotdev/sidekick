@@ -2733,7 +2733,7 @@ func TestGetProvidersHandler(t *testing.T) {
 		expectedNotToContain []string
 	}{
 		{
-			name:                 "does not include openai without OPENAI_API_KEY",
+			name:                 "does not include openai without any credentials",
 			secrets:              map[string]string{},
 			expectedToContain:    []string{},
 			expectedNotToContain: []string{"openai", "anthropic", "google"},
@@ -2742,6 +2742,23 @@ func TestGetProvidersHandler(t *testing.T) {
 			name: "includes openai when OPENAI_API_KEY is present",
 			secrets: map[string]string{
 				"OPENAI_API_KEY": "sk-test-key",
+			},
+			expectedToContain:    []string{"openai"},
+			expectedNotToContain: []string{"anthropic", "google"},
+		},
+		{
+			name: "includes openai when OPENAI_OAUTH is present",
+			secrets: map[string]string{
+				"OPENAI_OAUTH": `{"access_token":"tok","refresh_token":"ref","expires_at":9999999999,"account_id":"acct"}`,
+			},
+			expectedToContain:    []string{"openai"},
+			expectedNotToContain: []string{"anthropic", "google"},
+		},
+		{
+			name: "openai appears once even with both API key and OAuth",
+			secrets: map[string]string{
+				"OPENAI_API_KEY": "sk-test-key",
+				"OPENAI_OAUTH":   `{"access_token":"tok","refresh_token":"ref","expires_at":9999999999,"account_id":"acct"}`,
 			},
 			expectedToContain:    []string{"openai"},
 			expectedNotToContain: []string{"anthropic", "google"},

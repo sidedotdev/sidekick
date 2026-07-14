@@ -697,3 +697,83 @@ func TestOpenAIProvider_ToolResultImageIntegration(t *testing.T) {
 	assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
 		"Expected model to read %q from the image, got %q", expectedText, responseText)
 }
+
+func TestOpenAIProvider_AnyUsesAPIKeyAtChatCompletionsEndpoint(t *testing.T) {
+	var requestPath string
+	var authorization string
+	var accountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		accountID = r.Header.Get("ChatGPT-Account-Id")
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	oauthJSON := `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH":   oauthJSON,
+			"OPENAI_API_KEY": "api-key",
+		},
+	}
+	provider := OpenAIProvider{
+		BaseURL:  server.URL + "/v1",
+		AuthType: common.ProviderAuthTypeAny,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.Error(t, err)
+	assert.Equal(t, "/v1/chat/completions", requestPath)
+	assert.Equal(t, "Bearer api-key", authorization)
+	assert.Empty(t, accountID)
+	assert.Equal(t, []string{"OPENAI_API_KEY"}, manager.calls)
+}
+
+func TestOpenAIProvider_SubscriptionRejectedBeforeRequest(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH": `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`,
+		},
+	}
+	provider := OpenAIProvider{
+		BaseURL:  server.URL + "/v1",
+		AuthType: common.ProviderAuthTypeSubscription,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.ErrorContains(t, err, "subscription auth is not supported by the chat-completions provider")
+	assert.False(t, requested)
+	assert.Empty(t, manager.calls)
+}
