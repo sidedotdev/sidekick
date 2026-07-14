@@ -404,9 +404,16 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 			autoIterations = cfg.AutoIterations
 		}
 
-		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
-		// in completeDevStep to switch models when ErrMaxIterationsReached
+		// Preserve the original command ordering until a model configuration
+		// update requires subsequent attempts to resolve dynamically.
+		var codingModelConfig common.ModelConfig
+		if ModelConfigRevision(dCtx) == 0 {
+			codingModelConfig = dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
+		}
 		resolveModelConfig := func() common.ModelConfig {
+			if ModelConfigRevision(dCtx) == 0 {
+				return codingModelConfig
+			}
 			return dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
 		}
 
