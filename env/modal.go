@@ -26,8 +26,8 @@ const modalAppName = "sidekick"
 
 // modalDefaultImage is the base image used when the repo config does not
 // specify one. It must be Debian-based and run as root, since sidekick layers
-// openssh-server and git on top.
-const modalDefaultImage = "ubuntu:24.04"
+// its test and remote-access dependencies on top.
+const modalDefaultImage = "mcr.microsoft.com/devcontainers/go:1.26"
 
 // modalSandboxTimeout bounds a sandbox's lifetime as a backstop against
 // leaked sandboxes; sidekick terminates them explicitly on merge/cancel.
@@ -151,18 +151,30 @@ func waitForModalSSHD(ctx context.Context, sb *modal.Sandbox) error {
 	return nil
 }
 
-// modalSandboxImage layers sshd + git onto the (Debian-based, root) base
-// image. Modal caches image builds, so the install cost is only paid once per
-// unique base image.
+// modalSandboxImage layers Sidekick's test and remote-access dependencies onto
+// the (Debian-based, root) base image. Modal caches image builds, so the install
+// cost is only paid once per unique base image.
 func modalSandboxImage(client *modal.Client, imageRef string) *modal.Image {
 	if imageRef == "" {
 		imageRef = modalDefaultImage
 	}
-	return client.Images.FromRegistry(imageRef, nil).DockerfileCommands([]string{
+	return client.Images.FromRegistry(imageRef, nil).DockerfileCommands(modalSandboxDockerfileCommands(), nil)
+}
+
+func modalSandboxDockerfileCommands() []string {
+	return []string{
 		"ENV DEBIAN_FRONTEND=noninteractive",
-		"RUN apt-get update -q && apt-get install -qy openssh-server git curl ca-certificates",
+		"RUN apt-get update -q && apt-get install -qy --no-install-recommends build-essential cmake git ripgrep openssh-server curl ca-certificates xz-utils && rm -rf /var/lib/apt/lists/*",
 		"RUN mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh",
-	}, nil)
+		`RUN ARCH=$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') && curl -fsSL "https://nodejs.org/dist/v20.16.0/node-v20.16.0-linux-${ARCH}.tar.xz" | tar -xJ --strip-components=1 -C /usr/local`,
+		"RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git /tmp/usearch && cd /tmp/usearch && cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=0 -D USEARCH_BUILD_TEST_CPP=0 -D USEARCH_BUILD_BENCH_CPP=0 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=0 -D USEARCH_BUILD_SQLITE=0 -B build_release && cmake --build build_release --config Release && cp build_release/libusearch_static_c.a /usr/local/lib/libusearch_c.a && cp c/usearch.h /usr/local/include/usearch.h && rm -rf /tmp/usearch",
+		"ENV CGO_ENABLED=1",
+		`ENV CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm"`,
+		"RUN go install golang.org/x/tools/gopls@v0.21.0",
+		"ENV BUN_INSTALL=/usr/local",
+		"RUN curl -fsSL https://bun.sh/install | bash",
+		"RUN git config --global init.defaultBranch main",
+	}
 }
 
 // ensureModalSSHKey returns the dedicated SSH keypair used to reach Modal

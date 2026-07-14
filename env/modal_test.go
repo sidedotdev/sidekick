@@ -83,13 +83,13 @@ func TestModalSandboxCreateParams(t *testing.T) {
 		t.Parallel()
 		params := modalSandboxCreateParams(common.ModalEnvConfig{
 			VM:        true,
-			CPU:       4,
-			MemoryMiB: 8192,
+			CPU:       6,
+			MemoryMiB: 12288,
 		}, "side--repo-abc", "pubkey", nil)
 
 		assert.Equal(t, map[string]any{"vm_runtime": true}, params.ExperimentalOptions)
-		assert.Equal(t, float64(4), params.CPU)
-		assert.Equal(t, 8192, params.MemoryMiB)
+		assert.Equal(t, float64(6), params.CPU)
+		assert.Equal(t, 12288, params.MemoryMiB)
 	})
 
 	t.Run("watchdog env merged", func(t *testing.T) {
@@ -128,4 +128,26 @@ func TestModalSFTPConnKey(t *testing.T) {
 	// must not reuse the stale pooled connection.
 	recreated := &ModalEnv{SandboxName: "side-abc", SSHHost: "t2.modal.host", SSHPort: 2222}
 	assert.NotEqual(t, a.sftpConnKey(), recreated.sftpConnKey())
+}
+func TestModalSandboxDockerfileCommands(t *testing.T) {
+	t.Parallel()
+
+	commands := strings.Join(modalSandboxDockerfileCommands(), "\n")
+
+	for _, dependency := range []string{
+		"build-essential",
+		"cmake",
+		"git",
+		"ripgrep",
+		"openssh-server",
+		"node-v20.16.0",
+		"libusearch_c.a",
+		"gopls@v0.21.0",
+		"BUN_INSTALL=/usr/local",
+		"bun.sh/install",
+	} {
+		assert.Contains(t, commands, dependency)
+	}
+	assert.Contains(t, commands, "CGO_ENABLED=1")
+	assert.Contains(t, commands, "CGO_LDFLAGS=")
 }

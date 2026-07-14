@@ -63,6 +63,10 @@ command_permissions:
 openshell:
   from: "Dockerfile.openshell"
 
+modal:
+  cpu: 4
+  memory_mib: 8192
+
 # Reverse-forward the host's read-only Temporal proxy (exposed by dev builds
 # of `side start`) into devpod/openshell containers so integration tests that
 # read workflow histories (e.g. workflow replay) can connect. The proxy only
