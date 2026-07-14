@@ -1,6 +1,7 @@
-const MODEL_CONFIG_FLOW_STATUSES = new Set(['in_progress', 'paused'])
+import type { FlowStatus } from './models'
 
-export const isFlowModelConfigVisible = (status: string, devMode: boolean): boolean => {
-  console.log({status})
+const MODEL_CONFIG_FLOW_STATUSES = new Set<FlowStatus>(['in_progress', 'paused'])
+
+export const isFlowModelConfigVisible = (status: FlowStatus, devMode: boolean): boolean => {
   return devMode && MODEL_CONFIG_FLOW_STATUSES.has(status)
 }

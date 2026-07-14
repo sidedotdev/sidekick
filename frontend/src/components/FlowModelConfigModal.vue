@@ -28,7 +28,11 @@
       </div>
 
       <template v-else-if="editor">
-        <ModelConfigPresetEditor :editor="editor" always-show-editor />
+        <ModelConfigPresetEditor
+          :editor="editor"
+          :overlay-base-z-index="1102"
+          always-show-editor
+        />
 
         <div v-if="applyError" class="error-state" role="alert">
           {{ applyError }}

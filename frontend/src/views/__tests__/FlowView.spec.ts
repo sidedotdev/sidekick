@@ -2,6 +2,7 @@ import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import FlowView from '../FlowView.vue'
+import type { FlowStatus } from '../../lib/models'
 import { store } from '../../lib/store'
 
 class MockWebSocket {
@@ -56,7 +57,7 @@ const mountFlow = async ({
   embedded = false,
   mode = 'development',
 }: {
-  status: string
+  status: FlowStatus
   embedded?: boolean
   mode?: string
 }) => {
@@ -137,7 +138,7 @@ describe('FlowView model configuration integration', () => {
   })
 
   it('targets the displayed running flow from the normal development toolbar', async () => {
-    const { wrapper, flowId, workspaceId } = await mountFlow({ status: 'started' })
+    const { wrapper, flowId, workspaceId } = await mountFlow({ status: 'in_progress' })
     const links = wrapper.getComponent(FlowEditorLinksStub)
 
     expect(links.props()).toMatchObject({
@@ -171,7 +172,7 @@ describe('FlowView model configuration integration', () => {
     wrapper.unmount()
   })
 
-  it.each(['completed', 'failed', 'canceled'])(
+  it.each<FlowStatus>(['completed', 'failed', 'canceled'])(
     'hides the action for terminal %s flows',
     async (status) => {
       const { wrapper } = await mountFlow({ status })
@@ -183,7 +184,7 @@ describe('FlowView model configuration integration', () => {
 
   it('omits the action outside development mode', async () => {
     const { wrapper } = await mountFlow({
-      status: 'started',
+      status: 'in_progress',
       mode: 'production',
     })
 

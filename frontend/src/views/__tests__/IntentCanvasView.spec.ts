@@ -473,7 +473,7 @@ describe('IntentCanvasView', () => {
         return Promise.resolve(jsonResponse({}))
       }
       if (u === flowBase) {
-        return Promise.resolve(jsonResponse({ flow: { status: 'complete' } }))
+        return Promise.resolve(jsonResponse({ flow: { status: 'completed' } }))
       }
       return Promise.resolve(jsonResponse({}))
     })

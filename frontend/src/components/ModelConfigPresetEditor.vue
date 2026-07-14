@@ -9,6 +9,7 @@
         optionLabel="label"
         optionValue="value"
         class="preset-dropdown"
+        :base-z-index="overlayBaseZIndex"
         @change="(event: any) => handlePresetChange(event.value)"
       >
         <template #option="{ option }">
@@ -52,7 +53,7 @@
         :placeholder="editor.isEditingPreset.value ? 'Preset name' : 'Preset name (optional)'"
         class="preset-name-input"
       />
-      <LlmConfigEditor v-model="llmConfig" />
+      <LlmConfigEditor v-model="llmConfig" :overlay-base-z-index="overlayBaseZIndex" />
     </div>
   </div>
 </template>
@@ -67,8 +68,10 @@ import type { ModelConfigPresetEditorState } from '../composables/useModelConfig
 const props = withDefaults(defineProps<{
   editor: ModelConfigPresetEditorState
   alwaysShowEditor?: boolean
+  overlayBaseZIndex?: number
 }>(), {
   alwaysShowEditor: false,
+  overlayBaseZIndex: 0,
 })
 
 const presetDropdownRef = ref<InstanceType<typeof Dropdown> | null>(null)
@@ -106,7 +109,6 @@ const editPreset = (presetId: string) => {
 .preset-section {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
 }
 
 .preset-section label {
