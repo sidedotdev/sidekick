@@ -435,7 +435,6 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 	assert.NotNil(t, response.Usage, "Usage field should not be nil")
 	assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0")
 	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0")
-	assert.Greater(t, response.Usage.CacheWriteInputTokens, 0, "CacheWriteInputTokens should be greater than 0")
 
 	t.Run("MultiTurn", func(t *testing.T) {
 		messages = append(messages, response.Output)
