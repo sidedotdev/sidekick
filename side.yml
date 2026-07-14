@@ -14,7 +14,11 @@ mission: |
      design intent, constraints and preferences
 
 worktree_setup: |
-  cd frontend && bun ci && touch dist/empty.txt
+  cd frontend && if ! command -v bun >/dev/null 2>&1; then
+    echo "error: bun is not installed; skipping frontend setup" >&2
+  else
+    bun ci
+  fi && touch dist/empty.txt
 
 test_commands:
   - command: "go run ./scripts/affected_tests/ -test.timeout 120s ./..."
