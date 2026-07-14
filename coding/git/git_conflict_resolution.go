@@ -28,11 +28,27 @@ type GitMergeAbortParams struct {
 	WorktreePath string
 }
 
-// GitMergeAbortActivity aborts an in-progress merge in the given
-// directory. It is a no-op (and not an error) when no merge is in
-// progress: `git merge --abort` exits non-zero when there is nothing to
-// abort, which we deliberately ignore so this activity can be used as a
-// pre-cleanup step without callers having to introspect state first.
+// mergeAbortCommand builds a shell command that aborts any in-progress merge
+// in the given directory, covering both regular merges and squash merges. A
+// squash merge never sets MERGE_HEAD (even when it conflicts), so `git merge
+// --abort` refuses to run; in that case SQUASH_MSG is present and `git reset
+// --merge` restores the pre-merge state, including removing the leftover
+// SQUASH_MSG/MERGE_MSG state files. When neither is present, the command is a
+// no-op so callers can use it as a pre-cleanup step without introspecting
+// state first.
+func mergeAbortCommand(dir string) string {
+	return fmt.Sprintf(
+		"cd %s && if git rev-parse --verify -q MERGE_HEAD >/dev/null; then git merge --abort; "+
+			"elif [ -f \"$(git rev-parse --git-path SQUASH_MSG)\" ]; then git reset --merge; "+
+			"else true; fi",
+		shellQuote(dir),
+	)
+}
+
+// GitMergeAbortActivity aborts an in-progress merge (regular or squash) in
+// the given directory. It is a no-op (and not an error) when no merge is in
+// progress, so it can be used as a pre-cleanup step without callers having
+// to introspect state first.
 func GitMergeAbortActivity(ctx context.Context, envContainer env.EnvContainer, params GitMergeAbortParams) error {
 	dir := params.WorktreePath
 	if dir == "" {
@@ -41,10 +57,7 @@ func GitMergeAbortActivity(ctx context.Context, envContainer env.EnvContainer, p
 	if dir == "" {
 		return fmt.Errorf("worktree path is required to abort a merge")
 	}
-	cmd := fmt.Sprintf(
-		"cd %s && if git rev-parse --verify -q MERGE_HEAD >/dev/null; then git merge --abort; else true; fi",
-		shellQuote(dir),
-	)
+	cmd := mergeAbortCommand(dir)
 	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",

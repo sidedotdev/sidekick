@@ -24,7 +24,7 @@ import (
 
 type RequiredCodeContext struct {
 	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before outputting requests."`
-	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of given symbols. Each request groups a single file_path with the list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it; when a symbol is not defined in file_path\\, the tool automatically resolves the real definition (possibly in another repo file or a third-party library). Each symbol entry may carry its own optional reference_line to disambiguate among multiple occurrences in file_path."`
+	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of given symbols. Each request groups a single file_path with the list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it; when a symbol is not defined in file_path\\, the tool automatically resolves the real definition (possibly in another repo file or a third-party library). Symbol entries normally need only a name."`
 }
 
 func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
@@ -52,7 +52,7 @@ func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
 
 var getSymbolDefinitionsTool = &llm.Tool{
 	Name:        "get_symbol_definitions",
-	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type definition bodies. The go import block will also be included. Each request groups one file_path with a list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it: when a symbol is not defined in file_path, the tool automatically resolves the real definition via LSP go-to-definition and inlines it from wherever it lives (another repo file or a third-party library/stdlib). Each symbol entry may set an optional reference_line to disambiguate when the symbol text appears multiple times in file_path.",
+	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type definition bodies. The go import block will also be included. Each request groups one file_path with a list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it: when a symbol is not defined in file_path, the tool automatically resolves the real definition via LSP go-to-definition and inlines it from wherever it lives (another repo file or a third-party library/stdlib).",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RequiredCodeContext{}),
 }
 
@@ -378,11 +378,11 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			}
 
 			// STEP 3: Read the code for each tool call separately and concatenate
-			var retrievalFeedbacks []llm2.ToolResultBlock
-			allSymbolDefinitions, retrievalFeedbacks = retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
-			if len(retrievalFeedbacks) > 0 {
-				for _, feedback := range retrievalFeedbacks {
-					if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
+			var retryToolResults []llm2.ToolResultBlock
+			allSymbolDefinitions, retryToolResults = retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
+			if len(retryToolResults) > 0 {
+				for _, toolResult := range retryToolResults {
+					if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, toolResult); err != nil {
 						return nil, "", err
 					}
 				}
@@ -586,7 +586,7 @@ type ToolCallWithCodeContext struct {
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	flowActionCtx := actionCtx.FlowActionContext()
-	toolNameMapping, err := resolveStreamToolNameMapping(flowActionCtx, modelConfig, *flowActionCtx.Secrets)
+	toolNameMapping, err := resolveStreamToolNameMapping(flowActionCtx.ExecContext, modelConfig, *flowActionCtx.Secrets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 	}
@@ -667,21 +667,20 @@ func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]llm2.Too
 	return feedbacks, hasUnmarshalError, nil
 }
 
-// retrieveCodeContextForToolCalls retrieves code context for each tool call and returns
-// the concatenated symbol definitions. If any retrieval fails, it returns feedback for
-// those failures instead of symbol definitions.
+// retrieveCodeContextForToolCalls retrieves code context for every tool call and
+// returns retry results for the complete batch if any retrieval fails.
 func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.EnvContainer, results []ToolCallWithCodeContext) ([]string, []llm2.ToolResultBlock) {
 	var allSymbolDefinitions []string
-	var feedbacks []llm2.ToolResultBlock
+	toolResults := make([]llm2.ToolResultBlock, len(results))
+	anyRetrievalFailed := false
 
-	v := workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
+	workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
 	for i, tcResult := range results {
-		if v == workflow.DefaultVersion && i > 0 {
-			// legacy behavior: only use the first tool call
-			break
-		}
+		toolResults[i].ToolCallId = tcResult.ToolCall.Id
+		toolResults[i].Name = tcResult.ToolCall.Name
 
 		if len(tcResult.RequiredCodeContext.Requests) == 0 {
+			toolResults[i].Content = llm2.TextContentBlocks("No code context was retrieved, since no symbol definition requests were provided.")
 			continue
 		}
 
@@ -692,18 +691,20 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 		})
 
 		if err != nil || result.Failures != "" {
-			feedback := codeContextRetrievalFailureFeedback(err, result.Failures)
-			feedbacks = append(feedbacks, llm2.ToolResultBlock{
-				Content:    llm2.TextContentBlocks(feedback),
-				ToolCallId: tcResult.ToolCall.Id,
-				Name:       tcResult.ToolCall.Name,
-			})
-		} else {
-			allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
+			toolResults[i].Content = llm2.TextContentBlocks(codeContextRetrievalFailureFeedback(err, result.Failures))
+			toolResults[i].IsError = true
+			anyRetrievalFailed = true
+			continue
 		}
+
+		allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
+		toolResults[i].Content = llm2.TextContentBlocks(result.SymbolDefinitions)
 	}
 
-	return allSymbolDefinitions, feedbacks
+	if anyRetrievalFailed {
+		return allSymbolDefinitions, toolResults
+	}
+	return allSymbolDefinitions, nil
 }
 
 func codeContextUnmarshalErrorFeedback(err error) string {
@@ -711,7 +712,7 @@ func codeContextUnmarshalErrorFeedback(err error) string {
 }
 
 func codeContextRetrievalFailureFeedback(err error, failures string) string {
-	hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array. Also note that file_path may be either the file where the symbol is defined or a file that references/uses it: when the symbol isn't defined in file_path the tool resolves the real definition via LSP (possibly in another repo file or a third-party library). Use the optional reference_line field to disambiguate when the symbol text appears multiple times in file_path.", currentGetSymbolDefinitionsTool().Name)
+	hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array. Also note that file_path may be either the file where the symbol is defined or a file that references/uses it: when the symbol isn't defined in file_path the tool resolves the real definition via LSP (possibly in another repo file or a third-party library). reference_line is only an optional disambiguator: omit it unless you need to choose among reference occurrences that could resolve differently, and never use a declaration line as its value.", currentGetSymbolDefinitionsTool().Name)
 	return fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, failures, hint)
 }
 

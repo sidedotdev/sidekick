@@ -487,6 +487,33 @@ func TestManageLlm2ChatHistory_ParallelToolCalls_MissingOneResult(t *testing.T) 
 	assert.Equal(t, "Last", result[1].Content[0].Text)
 }
 
+func TestManageLlm2ChatHistory_ParallelToolCalls_MissingOneResult_BelowTrigger(t *testing.T) {
+	t.Parallel()
+
+	ca := &ChatHistoryActivities{}
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "II", ContextTypeInitialInstructions),
+		{
+			Role: llm2.RoleAssistant,
+			Content: []llm2.ContentBlock{
+				{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "call1", Name: "tool1", Arguments: "{}"}},
+				{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "call2", Name: "tool2", Arguments: "{}"}},
+				{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "call3", Name: "tool3", Arguments: "{}"}},
+			},
+		},
+		toolResultMsg("call1", "tool1", "result1"),
+		toolResultMsg("call2", "tool2", "result2"),
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 100000, common.ModelConfig{
+		Provider: "openai",
+		Model:    "gpt-5.4-mini",
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, "II", result[0].Content[0].Text)
+}
+
 func TestManageLlm2ChatHistory_EditBlockReport_RetainsProposals(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 

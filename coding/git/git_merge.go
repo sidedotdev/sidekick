@@ -441,15 +441,15 @@ func dropStashBySha(ctx context.Context, envContainer env.EnvContainer, worktree
 	return nil
 }
 
-// abortWorktreeMerge aborts an in-progress merge in the given worktree on a
-// best-effort basis; it is used to clear a conflicted merge before restoring a
-// stash. Errors are ignored because there may be no merge in progress.
+// abortWorktreeMerge aborts an in-progress merge (regular or squash) in the
+// given worktree on a best-effort basis; it is used to clear a conflicted
+// merge before restoring a stash. Errors are ignored because there may be no
+// merge in progress.
 func abortWorktreeMerge(ctx context.Context, envContainer env.EnvContainer, worktreePath string) {
-	abortCmd := fmt.Sprintf("cd %s && git merge --abort", shellQuote(worktreePath))
 	_, _ = env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
-		Args:         []string{"-c", abortCmd},
+		Args:         []string{"-c", mergeAbortCommand(worktreePath)},
 	})
 }
 

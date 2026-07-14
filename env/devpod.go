@@ -114,8 +114,8 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 	return CreateDevPodWorktreeOutput{WorktreePath: worktreePath}, nil
 }
 
-// DevPodDeleteActivity force-deletes a DevPod workspace.
-func DevPodDeleteActivity(ctx context.Context, workspaceName string) error {
+// devPodDeleteWorkspace force-deletes a DevPod workspace.
+func devPodDeleteWorkspace(ctx context.Context, workspaceName string) error {
 	CloseDevPodSSHMaster(workspaceName)
 	var output unix.RunCommandActivityOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
@@ -136,8 +136,8 @@ func DevPodDeleteActivity(ctx context.Context, workspaceName string) error {
 	return nil
 }
 
-// DevPodStopActivity stops a DevPod workspace without deleting it.
-func DevPodStopActivity(ctx context.Context, workspaceName string) error {
+// devPodStopWorkspace stops a DevPod workspace without deleting it.
+func devPodStopWorkspace(ctx context.Context, workspaceName string) error {
 	CloseDevPodSSHMaster(workspaceName)
 	var output unix.RunCommandActivityOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
@@ -156,4 +156,30 @@ func DevPodStopActivity(ctx context.Context, workspaceName string) error {
 		return fmt.Errorf("devpod stop exited with status %d: %s", output.ExitStatus, output.Stderr)
 	}
 	return nil
+}
+
+// devPodSandboxProvider adapts DevPod workspace lifecycle to the generic
+// SandboxProvider interface. Workspace creation still goes through
+// DevPodUpActivity, whose local-mount semantics don't fit the generic create
+// contract.
+type devPodSandboxProvider struct{}
+
+func init() {
+	RegisterSandboxProvider(EnvTypeDevPod, devPodSandboxProvider{})
+}
+
+func (devPodSandboxProvider) CreateSandbox(ctx context.Context, input CreateSandboxInput) (CreateSandboxOutput, error) {
+	return CreateSandboxOutput{}, fmt.Errorf("devpod workspaces are created via DevPodUpActivity, not CreateSandboxActivity")
+}
+
+func (devPodSandboxProvider) CheckSandbox(ctx context.Context, input CheckSandboxInput) (CheckSandboxOutput, error) {
+	return CheckSandboxOutput{}, fmt.Errorf("checking devpod workspace liveness is not supported")
+}
+
+func (devPodSandboxProvider) StopSandbox(ctx context.Context, input StopSandboxInput) error {
+	return devPodStopWorkspace(ctx, input.SandboxName)
+}
+
+func (devPodSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteSandboxInput) error {
+	return devPodDeleteWorkspace(ctx, input.SandboxName)
 }

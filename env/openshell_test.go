@@ -3,9 +3,6 @@ package env
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sidekick/common"
 	"strings"
 	"testing"
@@ -197,91 +194,14 @@ func TestOpenShellEnvironment_MarshalUnmarshal(t *testing.T) {
 	assert.Equal(t, "/host/path/to/repo", unmarshaledEnvContainer.Env.(*OpenShellEnv).LocalRepoDir)
 }
 
-func TestCreateOpenShellWorktreeActivity(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	repoDir := setupTestGitRepo(t)
-
-	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
-	require.NoError(t, err)
-	envContainer := EnvContainer{Env: localEnv}
-
-	t.Run("creates worktree successfully", func(t *testing.T) {
-		t.Parallel()
-		output, err := CreateOpenShellWorktreeActivity(ctx, CreateOpenShellWorktreeInput{
-			EnvContainer: envContainer,
-			RepoDir:      repoDir,
-			BranchName:   "side/os-test-feature",
-			WorkspaceId:  "ws-" + ksuid.New().String(),
-		})
-		require.NoError(t, err)
-		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
-		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
-		assert.DirExists(t, output.WorktreePath)
-
-		cmd := exec.Command("git", "branch", "--show-current")
-		cmd.Dir = output.WorktreePath
-		branchOutput, err := cmd.CombinedOutput()
-		require.NoError(t, err)
-		assert.Equal(t, "side/os-test-feature", strings.TrimSpace(string(branchOutput)))
-	})
-
-	t.Run("creates worktree with start branch", func(t *testing.T) {
-		t.Parallel()
-		output, err := CreateOpenShellWorktreeActivity(ctx, CreateOpenShellWorktreeInput{
-			EnvContainer: envContainer,
-			RepoDir:      repoDir,
-			BranchName:   "side/os-from-main",
-			StartBranch:  "main",
-			WorkspaceId:  "ws-" + ksuid.New().String(),
-		})
-		require.NoError(t, err)
-		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
-		assert.DirExists(t, output.WorktreePath)
-	})
-
-	t.Run("returns error for duplicate branch", func(t *testing.T) {
-		t.Parallel()
-		wsId := "ws-" + ksuid.New().String()
-		input := CreateOpenShellWorktreeInput{
-			EnvContainer: envContainer,
-			RepoDir:      repoDir,
-			BranchName:   "side/os-dup-branch",
-			WorkspaceId:  wsId,
-		}
-
-		firstOutput, err := CreateOpenShellWorktreeActivity(ctx, input)
-		require.NoError(t, err)
-		t.Cleanup(func() { os.RemoveAll(filepath.Dir(firstOutput.WorktreePath)) })
-
-		input.WorkspaceId = "ws-" + ksuid.New().String()
-		_, err = CreateOpenShellWorktreeActivity(ctx, input)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "already exists")
-	})
-
-	t.Run("strips side/ prefix for directory name", func(t *testing.T) {
-		t.Parallel()
-		output, err := CreateOpenShellWorktreeActivity(ctx, CreateOpenShellWorktreeInput{
-			EnvContainer: envContainer,
-			RepoDir:      repoDir,
-			BranchName:   "side/os-dir-test",
-			WorkspaceId:  "ws-" + ksuid.New().String(),
-		})
-		require.NoError(t, err)
-		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
-		assert.Contains(t, output.WorktreePath, "os-dir-test")
-		assert.NotContains(t, output.WorktreePath, "side/")
-	})
-}
-
-func TestOpenShellCheckSandboxActivity(t *testing.T) {
+func TestCheckSandboxActivity_OpenShell(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("returns not alive when sandbox does not exist", func(t *testing.T) {
 		t.Parallel()
-		output, err := OpenShellCheckSandboxActivity(ctx, OpenShellCheckSandboxInput{
+		output, err := CheckSandboxActivity(ctx, CheckSandboxInput{
+			EnvType:     EnvTypeOpenShell,
 			SandboxName: "nonexistent-sandbox-" + ksuid.New().String(),
 		})
 		require.NoError(t, err)

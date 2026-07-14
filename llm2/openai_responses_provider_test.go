@@ -790,3 +790,157 @@ func TestOpenAIResponsesProvider_AnyFallsBackToAPIKey(t *testing.T) {
 	assert.Empty(t, accountID)
 	assert.Equal(t, []string{"OPENAI_OAUTH", "OPENAI_API_KEY"}, manager.calls)
 }
+
+func TestMessageToResponsesInput_SanitizesItemIDs(t *testing.T) {
+	t.Parallel()
+
+	items, err := messageToResponsesInput([]Message{
+		{
+			Role: RoleAssistant,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "missing ID",
+				},
+				{
+					Id:   "foreign:message/id",
+					Type: ContentBlockTypeText,
+					Text: "invalid ID",
+				},
+				{
+					Id:   "reasoning:1",
+					Type: ContentBlockTypeReasoning,
+					Reasoning: &ReasoningBlock{
+						Summary: "summary",
+					},
+				},
+				{
+					Type: ContentBlockTypeToolUse,
+					ToolUse: &ToolUseBlock{
+						Id:        "call:1",
+						Name:      "tool",
+						Arguments: "{}",
+					},
+				},
+			},
+		},
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeToolResult,
+					ToolResult: &ToolResultBlock{
+						ToolCallId: "call:1",
+						Content:    TextContentBlocks("result"),
+					},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, items, 4)
+
+	assert.Equal(t, "msg_0_0", items[0].OfOutputMessage.ID)
+	assert.Regexp(t, `^msg_[A-Za-z0-9_-]+$`, items[1].OfOutputMessage.ID)
+	assert.Regexp(t, `^call_[A-Za-z0-9_-]+$`, items[2].OfFunctionCall.CallID)
+	assert.Equal(t, items[2].OfFunctionCall.CallID, items[3].OfFunctionCallOutput.CallID)
+}
+
+func TestOpenAIResponsesID_PreservesCompatibleIDs(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "msg_abc-123", openAIResponsesID("msg_abc-123", "msg_"))
+	assert.Empty(t, openAIResponsesID("", "msg_"))
+	assert.Regexp(t, `^rs_[A-Za-z0-9_-]+$`, openAIResponsesID("foreign:reasoning/id", "rs_"))
+}
+func TestMessageToResponsesInput_RejectsMissingToolCallIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		messages []Message
+		err      string
+	}{
+		{
+			name: "tool use ID",
+			messages: []Message{
+				{
+					Role: RoleAssistant,
+					Content: []ContentBlock{
+						{
+							Type: ContentBlockTypeToolUse,
+							ToolUse: &ToolUseBlock{
+								Name:      "tool",
+								Arguments: "{}",
+							},
+						},
+					},
+				},
+			},
+			err: "tool_use block missing Id",
+		},
+		{
+			name: "tool result call ID",
+			messages: []Message{
+				{
+					Role: RoleUser,
+					Content: []ContentBlock{
+						{
+							Type: ContentBlockTypeToolResult,
+							ToolResult: &ToolResultBlock{
+								Content: TextContentBlocks("result"),
+							},
+						},
+					},
+				},
+			},
+			err: "tool_result block missing ToolCallId",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := messageToResponsesInput(tt.messages)
+
+			assert.EqualError(t, err, tt.err)
+		})
+	}
+}
+func TestMessageToResponsesInput_OnlyIncludesOpenAIEncryptedReasoning(t *testing.T) {
+	t.Parallel()
+
+	items, err := messageToResponsesInput([]Message{
+		{
+			Role: RoleAssistant,
+			Content: []ContentBlock{
+				{
+					Id:   "foreign:reasoning/id",
+					Type: ContentBlockTypeReasoning,
+					Reasoning: &ReasoningBlock{
+						Text:             "plaintext reasoning from another provider",
+						Summary:          "foreign summary",
+						EncryptedContent: "foreign encrypted content",
+					},
+				},
+				{
+					Id:   "rs_native-123",
+					Type: ContentBlockTypeReasoning,
+					Reasoning: &ReasoningBlock{
+						Text:             "plaintext OpenAI reasoning",
+						Summary:          "OpenAI summary",
+						EncryptedContent: "OpenAI encrypted continuation",
+					},
+				},
+			},
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "rs_native-123", items[0].OfReasoning.ID)
+	assert.Empty(t, items[0].OfReasoning.Content)
+	assert.Equal(t, "OpenAI summary", items[0].OfReasoning.Summary[0].Text)
+	assert.Equal(t, "OpenAI encrypted continuation", items[0].OfReasoning.EncryptedContent.Value)
+}

@@ -14,6 +14,19 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// ModelConfigResolver resolves the model immediately before a stream attempt.
+type ModelConfigResolver func() common.ModelConfig
+
+// OptionsResolver rebuilds model-dependent options immediately before a stream attempt.
+type OptionsResolver func() llm2.Options
+
+// StreamAttemptResolver rebuilds options and provider-specific tool mapping for a stream attempt.
+type StreamAttemptResolver func() (llm2.Options, *ToolNameMappingConfig, error)
+
+func shouldRetryStreamAfterGenerationChange(initialGeneration, currentGeneration uint64, err error) bool {
+	return currentGeneration != initialGeneration && (err == nil || temporal.IsCanceledError(err))
+}
+
 // ExecuteChatStream executes an LLM chat stream.
 // For Llm2ChatHistory: delegates to the Stream activity which hydrates from KV.
 // For LegacyChatHistory: calls the legacy LlmActivities.ChatStream path.
@@ -28,43 +41,144 @@ func ExecuteChatStream(
 	toolNameMapping *ToolNameMappingConfig,
 	disableUserRetry bool,
 ) (common.MessageResponse, error) {
-	heartbeatActionCtx := actionCtx
-	// Keep the standard LLM heartbeat, but when the caller disabled user retry
-	// (because it has its own fallback), bound the automatic retries and
-	// start-to-close timeout so a failing LLM surfaces quickly instead of
-	// delaying the fallback.
-	if disableUserRetry {
-		heartbeatActionCtx.Context = utils.LlmBoundedHeartbeatCtx(actionCtx.Context)
-	} else {
-		heartbeatActionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
-	}
+	return ExecuteChatStreamWithModelConfigResolver(
+		actionCtx,
+		streamInput,
+		toolNameMapping,
+		disableUserRetry,
+		nil,
+	)
+}
 
+// ExecuteChatStreamWithModelConfigResolver executes an LLM stream and resolves
+// its model again whenever a model configuration update interrupts the stream.
+func ExecuteChatStreamWithModelConfigResolver(
+	actionCtx flow_action.ActionContext,
+	streamInput StreamInput,
+	toolNameMapping *ToolNameMappingConfig,
+	disableUserRetry bool,
+	resolveModelConfig ModelConfigResolver,
+) (common.MessageResponse, error) {
+	var resolveAttempt StreamAttemptResolver
+	if resolveModelConfig != nil {
+		resolveAttempt = func() (llm2.Options, *ToolNameMappingConfig, error) {
+			options := streamInput.Options
+			options.ModelConfig = resolveModelConfig()
+			return options, toolNameMapping, nil
+		}
+	}
+	return ExecuteChatStreamWithAttemptResolver(
+		actionCtx,
+		streamInput,
+		toolNameMapping,
+		disableUserRetry,
+		resolveAttempt,
+	)
+}
+
+// ExecuteChatStreamWithAttemptResolver executes an LLM stream with freshly
+// resolved model-dependent state whenever an update interrupts an attempt.
+func ExecuteChatStreamWithAttemptResolver(
+	actionCtx flow_action.ActionContext,
+	streamInput StreamInput,
+	toolNameMapping *ToolNameMappingConfig,
+	disableUserRetry bool,
+	resolveAttempt StreamAttemptResolver,
+) (common.MessageResponse, error) {
 	if streamInput.ChatHistory == nil {
 		return nil, fmt.Errorf("ChatHistory is required in StreamInput")
 	}
 
 	v := workflow.GetVersion(actionCtx, "chat-history-llm2", workflow.DefaultVersion, 1)
-	if v == 1 {
-		return executeChatStreamV1(heartbeatActionCtx, streamInput, toolNameMapping, disableUserRetry)
+	streamInterruptionVersion := workflow.GetVersion(actionCtx, "model-config-stream-interruption", workflow.DefaultVersion, 1)
+	if streamInterruptionVersion == workflow.DefaultVersion {
+		heartbeatActionCtx := actionCtx
+		if disableUserRetry {
+			heartbeatActionCtx.Context = utils.LlmBoundedHeartbeatCtx(actionCtx.Context)
+		} else {
+			heartbeatActionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
+		}
+
+		if v == 1 {
+			return executeChatStreamV1(heartbeatActionCtx, streamInput, toolNameMapping, disableUserRetry, false)
+		}
+
+		legacyOptions := ChatStreamOptions{
+			ToolChatOptions: llm.ToolChatOptions{
+				Secrets: streamInput.Secrets,
+				Params: llm.ToolChatParams{
+					Tools:             streamInput.Options.Tools,
+					ToolChoice:        streamInput.Options.ToolChoice,
+					Temperature:       streamInput.Options.Temperature,
+					ModelConfig:       streamInput.Options.ModelConfig,
+					ParallelToolCalls: streamInput.Options.ParallelToolCalls,
+				},
+			},
+			WorkspaceId:  streamInput.WorkspaceId,
+			FlowId:       streamInput.FlowId,
+			FlowActionId: streamInput.FlowActionId,
+		}
+		return executeChatStreamLegacy(heartbeatActionCtx, legacyOptions, streamInput.ChatHistory, disableUserRetry, false)
 	}
 
-	chatHistory := streamInput.ChatHistory
-	legacyOptions := ChatStreamOptions{
-		ToolChatOptions: llm.ToolChatOptions{
-			Secrets: streamInput.Secrets,
-			Params: llm.ToolChatParams{
-				Tools:             streamInput.Options.Tools,
-				ToolChoice:        streamInput.Options.ToolChoice,
-				Temperature:       streamInput.Options.Temperature,
-				ModelConfig:       streamInput.Options.ModelConfig,
-				ParallelToolCalls: streamInput.Options.ParallelToolCalls,
-			},
-		},
-		WorkspaceId:  streamInput.WorkspaceId,
-		FlowId:       streamInput.FlowId,
-		FlowActionId: streamInput.FlowActionId,
+	for {
+		generation := actionCtx.GlobalState.NamedCancellationGeneration(flow_action.LLMStreamCancellationName)
+		if resolveAttempt != nil {
+			var err error
+			streamInput.Options, toolNameMapping, err = resolveAttempt()
+			if err != nil {
+				return nil, err
+			}
+			if actionCtx.GlobalState.NamedCancellationGeneration(flow_action.LLMStreamCancellationName) != generation {
+				continue
+			}
+		}
+
+		attemptCtx, cancel := workflow.WithCancel(actionCtx.Context)
+		unregister := actionCtx.GlobalState.RegisterNamedCancelFunc(flow_action.LLMStreamCancellationName, cancel)
+
+		attemptActionCtx := actionCtx
+		if disableUserRetry {
+			attemptActionCtx.Context = utils.LlmBoundedHeartbeatCtx(attemptCtx)
+		} else {
+			attemptActionCtx.Context = utils.LlmHeartbeatCtx(attemptCtx)
+		}
+
+		var response common.MessageResponse
+		var err error
+		if v == 1 {
+			response, err = executeChatStreamV1(attemptActionCtx, streamInput, toolNameMapping, disableUserRetry, true)
+		} else {
+			legacyOptions := ChatStreamOptions{
+				ToolChatOptions: llm.ToolChatOptions{
+					Secrets: streamInput.Secrets,
+					Params: llm.ToolChatParams{
+						Tools:             streamInput.Options.Tools,
+						ToolChoice:        streamInput.Options.ToolChoice,
+						Temperature:       streamInput.Options.Temperature,
+						ModelConfig:       streamInput.Options.ModelConfig,
+						ParallelToolCalls: streamInput.Options.ParallelToolCalls,
+					},
+				},
+				WorkspaceId:  streamInput.WorkspaceId,
+				FlowId:       streamInput.FlowId,
+				FlowActionId: streamInput.FlowActionId,
+			}
+			response, err = executeChatStreamLegacy(attemptActionCtx, legacyOptions, streamInput.ChatHistory, disableUserRetry, true)
+		}
+
+		unregister()
+		cancel()
+
+		currentGeneration := actionCtx.GlobalState.NamedCancellationGeneration(flow_action.LLMStreamCancellationName)
+		if shouldRetryStreamAfterGenerationChange(generation, currentGeneration, err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return response, nil
 	}
-	return executeChatStreamLegacy(heartbeatActionCtx, legacyOptions, chatHistory, disableUserRetry)
 }
 
 // executeChatStreamV1 handles the Llm2ChatHistory path.
@@ -75,6 +189,7 @@ func executeChatStreamV1(
 	streamInput StreamInput,
 	toolNameMapping *ToolNameMappingConfig,
 	disableUserRetry bool,
+	propagateCancellation bool,
 ) (common.MessageResponse, error) {
 	chatHistory := streamInput.ChatHistory
 	if _, ok := chatHistory.History.(*Llm2ChatHistory); !ok {
@@ -90,6 +205,8 @@ func executeChatStreamV1(
 	var err error
 	if disableUserRetry {
 		err = flow_action.PerformActivity(actionCtx.ExecContext, la.Stream, &response, streamInput)
+	} else if propagateCancellation {
+		err = flow_action.PerformWithUserRetryOrCancel(actionCtx, la.Stream, &response, streamInput)
 	} else {
 		err = flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
 	}
@@ -119,6 +236,7 @@ func executeChatStreamLegacy(
 	options ChatStreamOptions,
 	chatHistory *ChatHistoryContainer,
 	disableUserRetry bool,
+	propagateCancellation bool,
 ) (common.MessageResponse, error) {
 	legacyHistory, ok := chatHistory.History.(*LegacyChatHistory)
 	if !ok {
@@ -159,6 +277,8 @@ func executeChatStreamLegacy(
 	var err error
 	if disableUserRetry {
 		err = flow_action.PerformActivity(actionCtx.ExecContext, la.ChatStream, &chatResponse, legacyOptions)
+	} else if propagateCancellation {
+		err = flow_action.PerformWithUserRetryOrCancel(actionCtx, la.ChatStream, &chatResponse, legacyOptions)
 	} else {
 		err = flow_action.PerformWithUserRetry(actionCtx, la.ChatStream, &chatResponse, legacyOptions)
 	}

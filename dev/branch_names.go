@@ -127,7 +127,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	attempts := 0
 	for {
 		actionCtx := eCtx.NewActionContext("generate.branch_names")
-		toolNameMapping, err := resolveStreamToolNameMapping(actionCtx, modelConfig, *actionCtx.Secrets)
+		toolNameMapping, err := resolveStreamToolNameMapping(actionCtx.ExecContext, modelConfig, *actionCtx.Secrets)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 		}

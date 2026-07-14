@@ -115,9 +115,6 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
 				GlobalState: gs,
 				Secrets:     &secret_manager.SecretManagerContainer{SecretManager: &secret_manager.EnvSecretManager{}},
-				LLMConfig: common.LLMConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai"}},
-				},
 				EnvContainer: &env.EnvContainer{
 					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
 				},
@@ -125,6 +122,9 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 			Worktree:   &domain.Worktree{Name: iddBranch},
 			RepoConfig: common.RepoConfig{},
 		}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai"}},
+		})
 		state := &IddState{}
 		flowId := reservePendingSubtask(dCtx, state, "")
 		runIntentSubtask(dCtx, IddWorkflowInput{
@@ -217,9 +217,6 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskTriggersOrchestratorOnTermina
 				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
 				GlobalState: gs,
 				Secrets:     &secret_manager.SecretManagerContainer{SecretManager: &secret_manager.EnvSecretManager{}},
-				LLMConfig: common.LLMConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai"}},
-				},
 				EnvContainer: &env.EnvContainer{
 					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
 				},
@@ -227,6 +224,9 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskTriggersOrchestratorOnTermina
 			Worktree:   &domain.Worktree{Name: iddBranch},
 			RepoConfig: common.RepoConfig{},
 		}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai"}},
+		})
 		state := &IddState{}
 		flowId := reservePendingSubtask(dCtx, state, "")
 		var result triggerResult

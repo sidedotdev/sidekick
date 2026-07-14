@@ -10,51 +10,7 @@
       </button>
     </div>
     <form @submit.prevent="startTask">
-      <div class="preset-section">
-        <label>Model Config</label>
-        <Dropdown
-          ref="presetDropdownRef"
-          v-model="selectedPresetValue"
-          :options="presetOptions"
-          optionLabel="label"
-          optionValue="value"
-          @change="(e: any) => handlePresetChange(e.value)"
-          class="preset-dropdown"
-        >
-          <template #option="{ option }">
-            <div class="preset-option">
-              <div class="preset-option-content">
-                <div class="preset-option-text">
-                  <div class="preset-name">{{ option.label }}</div>
-                  <div v-if="option.preset && option.label != getModelSummary(option.preset.config)" class="preset-summary">{{ getModelSummary(option.preset.config) }}</div>
-                </div>
-                <span v-if="option.preset" class="preset-action-icons">
-                  <span
-                    class="preset-edit-icon"
-                    @click.stop="editPreset(option.preset.id)"
-                  >✎</span>
-                  <span
-                    class="preset-delete-icon"
-                    @click.stop="deletePreset(option.preset.id)"
-                  >x</span>
-                </span>
-              </div>
-            </div>
-          </template>
-        </Dropdown>
-      </div>
-
-      <div v-if="isAddPresetMode" class="add-preset-section">
-        <div v-if="isEditingPreset" class="preset-editing-label">Editing preset</div>
-        <input
-          type="text"
-          v-model="newPresetName"
-          :placeholder="isEditingPreset ? 'Preset name' : 'Preset name (optional)'"
-          class="preset-name-input"
-        />
-        <LlmConfigEditor v-model="llmConfig" />
-      </div>
-
+      <ModelConfigPresetEditor :editor="modelConfigPresetEditor" />
 
       <div>
         <label>Flow</label>
@@ -139,72 +95,14 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import Button from 'primevue/button'
-import Dropdown from 'primevue/dropdown'
 import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
-import LlmConfigEditor from './LlmConfigEditor.vue'
+import ModelConfigPresetEditor from './ModelConfigPresetEditor.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ShortcutHint from './ShortcutHint.vue'
 import { store, type TaskConfigData } from '../lib/store'
-import { getModelSummary } from '../lib/llmPresets'
-import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
+import { useModelConfigPresets } from '../composables/useModelConfigPresets'
 import type { Flow, Task, TaskStatus, LLMConfig } from '../lib/models'
-
-type PresetOption = 
-  | { value: 'default'; label: string }
-  | { value: 'add_preset'; label: string }
-  | { value: string; label: string; preset: ModelPreset }
-
-const validateLlmConfig = (config: LLMConfig): boolean => {
-  const defaultConfig = config.defaults?.[0]
-  if (!defaultConfig?.provider) return false
-  
-  for (const [, configs] of Object.entries(config.useCaseConfigs || {})) {
-    const ucConfig = configs?.[0]
-    if (ucConfig && !ucConfig.provider) return false
-  }
-  
-  return true
-}
-
-const saveOrUpdatePreset = (options: { finalSave?: boolean } = {}): boolean => {
-  const { finalSave = false } = options
-  
-  if (!isAddPresetMode.value && !currentPresetId.value) return true
-  
-  const isValid = validateLlmConfig(llmConfig.value)
-  if (!isValid) {
-    if (finalSave) {
-      alert('Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.')
-    }
-    return false
-  }
-  
-  const existingPresetIndex = presets.value.findIndex(p => p.id === currentPresetId.value)
-  
-  if (existingPresetIndex >= 0) {
-    presets.value[existingPresetIndex] = {
-      id: currentPresetId.value!,
-      name: newPresetName.value.trim(),
-      config: JSON.parse(JSON.stringify(llmConfig.value))
-    }
-  } else {
-    const newId = crypto.randomUUID()
-    currentPresetId.value = newId
-    const newPreset: ModelPreset = {
-      id: newId,
-      name: newPresetName.value.trim(),
-      config: JSON.parse(JSON.stringify(llmConfig.value))
-    }
-    presets.value.push(newPreset)
-    if (finalSave) {
-      selectedPresetValue.value = newId
-    }
-  }
-  
-  savePresets(presets.value)
-  return true
-}
 
 const devMode = import.meta.env.MODE === 'development'
 const props = withDefaults(defineProps<{
@@ -414,92 +312,23 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 }
 
-// Model configuration presets
-const presets = ref<ModelPreset[]>(loadPresets())
 const existingLlmConfig = props.task?.flowOptions?.configOverrides?.llm as LLMConfig | undefined
+const modelConfigPresetEditor = useModelConfigPresets(existingLlmConfig)
+const {
+  presets,
+  selectedPresetValue,
+  currentPresetId,
+  newPresetName,
+  llmConfig,
+  handlePresetChange,
+  saveOrUpdatePreset,
+} = modelConfigPresetEditor
 
-const findMatchingPreset = (): string => {
-  if (!existingLlmConfig) return 'default'
-  const match = presets.value.find(p => llmConfigsEqual(p.config, existingLlmConfig))
-  return match ? match.id : 'add_preset'
-}
-
-const selectedPresetValue = ref<string>(findMatchingPreset())
-const currentPresetId = ref<string | null>(null)
-const newPresetName = ref('')
-const presetDropdownRef = ref<InstanceType<typeof Dropdown> | null>(null)
-const llmConfig = ref<LLMConfig>(existingLlmConfig || {
-  defaults: [{ provider: '', model: '', reasoningEffort: '' }],
-  useCaseConfigs: {},
+defineExpose({
+  presets,
+  currentPresetId,
+  handlePresetChange,
 })
-
-const presetOptions = computed((): PresetOption[] => {
-  const options: PresetOption[] = [
-    { value: 'default', label: 'Default' }
-  ]
-  
-  presets.value.forEach((preset) => {
-    options.push({
-      value: preset.id,
-      label: preset.name || getModelSummary(preset.config),
-      preset
-    })
-  })
-  
-  options.push({ value: 'add_preset', label: 'Custom' })
-  return options
-})
-
-const isAddPresetMode = computed(() => selectedPresetValue.value === 'add_preset')
-const isEditingPreset = computed(() => isAddPresetMode.value && currentPresetId.value !== null)
-
-const handlePresetChange = (value: string) => {
-  selectedPresetValue.value = value
-  currentPresetId.value = null
-  if (value !== 'default' && value !== 'add_preset') {
-    const preset = presets.value.find(p => p.id === value)
-    if (preset) {
-      llmConfig.value = JSON.parse(JSON.stringify(preset.config))
-    }
-  } else if (value === 'add_preset') {
-    llmConfig.value = {
-      defaults: [{ provider: '', model: '', reasoningEffort: '' }],
-      useCaseConfigs: {},
-    }
-    newPresetName.value = ''
-  }
-}
-
-const editPreset = (presetId: string) => {
-  const preset = presets.value.find(p => p.id === presetId)
-  if (!preset) return
-
-  selectedPresetValue.value = 'add_preset'
-  currentPresetId.value = presetId
-  newPresetName.value = preset.name
-  llmConfig.value = JSON.parse(JSON.stringify(preset.config))
-  presetDropdownRef.value?.hide()
-}
-
-const deletePreset = (presetId: string, event?: Event) => {
-  if (event) {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-  
-  const preset = presets.value.find(p => p.id === presetId)
-  if (!preset) return
-  
-  const name = preset.name || getModelSummary(preset.config)
-  if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return
-  
-  presets.value = presets.value.filter(p => p.id !== presetId)
-  savePresets(presets.value)
-  
-  if (selectedPresetValue.value === presetId) {
-    selectedPresetValue.value = 'default'
-  }
-}
 
 const flowTypeOptions = [
   { label: 'Just Code', value: 'basic_dev' },
@@ -511,6 +340,7 @@ const envTypeOptions = [
   { label: 'Local', value: 'local' },
   { label: 'DevPod', value: 'devpod' },
   { label: 'OpenShell', value: 'openshell' },
+  { label: 'Modal', value: 'modal' },
 ]
 
 const repoModeOptions = [
@@ -993,85 +823,6 @@ label {
 
 :deep(.p-select) {
   background-color: field;
-}
-
-.preset-dropdown {
-  flex: 1;
-  max-width: 20rem;
-}
-
-.preset-option {
-  width: 100%;
-}
-
-.preset-option-content {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.preset-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  flex: 1;
-}
-
-.preset-name {
-  font-weight: 500;
-}
-
-.preset-summary {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-}
-
-.preset-action-icons {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  visibility: hidden;
-}
-
-.preset-option:hover .preset-action-icons {
-  visibility: visible;
-}
-
-.preset-edit-icon,
-.preset-delete-icon {
-  opacity: 0.4;
-  cursor: pointer;
-  padding: 0.25rem;
-  transition: opacity 0.2s ease;
-  font-size: 0.875rem;
-}
-
-.preset-edit-icon:hover,
-.preset-delete-icon:hover {
-  opacity: 1;
-}
-
-.preset-editing-label {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-  font-style: italic;
-}
-
-.add-preset-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-}
-
-.preset-name-input {
-  padding: 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-  background-color: var(--color-background);
-  color: var(--color-text);
-  max-width: 20rem;
 }
 
 .title-input {

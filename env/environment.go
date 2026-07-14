@@ -63,10 +63,11 @@ const (
 	EnvTypeLocalGitWorktree EnvType = "local_git_worktree"
 	EnvTypeDevPod           EnvType = "devpod"
 	EnvTypeOpenShell        EnvType = "openshell"
+	EnvTypeModal            EnvType = "modal"
 )
 
 func (e EnvType) IsValid() bool {
-	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree || e == EnvTypeDevPod || e == EnvTypeOpenShell
+	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree || e == EnvTypeDevPod || e == EnvTypeOpenShell || e == EnvTypeModal
 }
 
 type RepoMode string
@@ -139,6 +140,17 @@ type MergeResultSyncer interface {
 	// SyncMergeResultToLocal transfers the given branch's merged state from the
 	// environment back to the host repository.
 	SyncMergeResultToLocal(ctx context.Context, branch string) error
+}
+
+// GitRefSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. It
+// propagates a single ref created inside the environment (e.g. an archive
+// tag) back to the host repository, so that git state survives the
+// environment's deletion.
+type GitRefSyncer interface {
+	// SyncGitRefToLocal transfers the given fully-qualified ref (e.g.
+	// "refs/tags/archive/foo") from the environment to the host repository.
+	SyncGitRefToLocal(ctx context.Context, ref string) error
 }
 
 // EnvSeparator returns the path separator string for the env.
@@ -263,6 +275,28 @@ type OpenShellEnv struct {
 	// per-file SSH/sftp cost.
 	LocalRepoDir string `json:"localRepoDir,omitempty"`
 	// PortForwards are host ports reverse-forwarded into the container over
+	// the SSH connection used to run commands.
+	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
+	Hibernated   bool                       `json:"hibernated,omitempty"`
+}
+
+// ModalEnv is a Modal (https://modal.com) sandbox reachable over SSH through
+// a Modal tunnel. Both the default gVisor runtime and the alpha VM runtime
+// (real Linux kernel) are supported; which one a sandbox uses is decided at
+// creation time via common.ModalEnvConfig.
+type ModalEnv struct {
+	WorkingDirectory string `json:"workingDirectory"`
+	SandboxName      string `json:"sandboxName"`
+	// SSHHost and SSHPort are the Modal tunnel endpoint exposing the
+	// sandbox's sshd. They are fixed for the sandbox's lifetime.
+	SSHHost string `json:"sshHost"`
+	SSHPort int    `json:"sshPort"`
+	// LocalRepoDir is the path to the local checkout of the repo whose
+	// remote copy lives in this Modal sandbox. It is used by file-walking
+	// to read tracked content from local git objects instead of paying the
+	// per-file SSH/sftp cost.
+	LocalRepoDir string `json:"localRepoDir,omitempty"`
+	// PortForwards are host ports reverse-forwarded into the sandbox over
 	// the SSH connection used to run commands.
 	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
 	Hibernated   bool                       `json:"hibernated,omitempty"`
@@ -759,6 +793,12 @@ func (e *DevPodEnv) sharedSFTP() *sftpConn {
 	return sharedSFTPConnFor("devpod:" + e.WorkspaceName)
 }
 
+// sftpConnKey returns the stable per-remote identity used to share a pooled
+// sftpConn across separately-constructed envs targeting the same DevPod.
+func (e *DevPodEnv) sftpConnKey() string {
+	return "devpod:" + e.WorkspaceName
+}
+
 func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
 		return nil, wakeErr
@@ -766,7 +806,7 @@ func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadFile(ctx, e.sharedSFTP(), e, p)
+	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -776,7 +816,7 @@ func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadDir(ctx, e.sharedSFTP(), e, p)
+	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -786,7 +826,7 @@ func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm f
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpWriteFile(ctx, e.sharedSFTP(), e, p, data, perm)
+	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
 }
 
 func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -796,7 +836,7 @@ func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) er
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpMkdirAll(ctx, e.sharedSFTP(), e, p, perm)
+	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
 }
 
 func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -806,7 +846,7 @@ func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpStat(ctx, e.sharedSFTP(), e, p)
+	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
@@ -816,7 +856,7 @@ func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpRemove(ctx, e.sharedSFTP(), e, p)
+	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -828,7 +868,7 @@ func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string
 	} else if !strings.HasPrefix(dir, "/") {
 		dir = path.Join(e.WorkingDirectory, dir)
 	}
-	return sftpCreateTemp(ctx, e.sharedSFTP(), e, dir, pattern)
+	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
 }
 
 func (e *OpenShellEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
@@ -898,6 +938,12 @@ func (e *OpenShellEnv) sharedSFTP() *sftpConn {
 	return sharedSFTPConnFor("openshell:" + e.SandboxName)
 }
 
+// sftpConnKey returns the stable per-remote identity used to share a pooled
+// sftpConn across separately-constructed envs targeting the same sandbox.
+func (e *OpenShellEnv) sftpConnKey() string {
+	return "openshell:" + e.SandboxName
+}
+
 func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
 		return nil, wakeErr
@@ -905,7 +951,7 @@ func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadFile(ctx, e.sharedSFTP(), e, p)
+	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -915,7 +961,7 @@ func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, er
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadDir(ctx, e.sharedSFTP(), e, p)
+	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -925,7 +971,7 @@ func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, per
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpWriteFile(ctx, e.sharedSFTP(), e, p, data, perm)
+	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
 }
 
 func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -935,7 +981,7 @@ func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode)
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpMkdirAll(ctx, e.sharedSFTP(), e, p, perm)
+	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
 }
 
 func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -945,7 +991,7 @@ func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) 
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpStat(ctx, e.sharedSFTP(), e, p)
+	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
@@ -955,7 +1001,7 @@ func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpRemove(ctx, e.sharedSFTP(), e, p)
+	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
 }
 
 func (e *OpenShellEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -967,16 +1013,189 @@ func (e *OpenShellEnv) CreateTemp(ctx context.Context, dir, pattern string) (str
 	} else if !strings.HasPrefix(dir, "/") {
 		dir = path.Join(e.WorkingDirectory, dir)
 	}
-	return sftpCreateTemp(ctx, e.sharedSFTP(), e, dir, pattern)
+	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
 }
 
 // SetLatency injects artificial latency into each SFTP read for benchmarking.
 func (e *OpenShellEnv) SetLatency(d time.Duration) {
-	sc := e.sharedSFTP().lockLive()
+	sc := getPooledSFTPConn(e.sftpConnKey())
+	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.latency = d
 	// Force reconnect so the latency wrapper takes effect.
 	sc.closeLocked()
+}
+
+func (e *ModalEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	return walkCodeDirectorySSH(ctx, e, e.LocalRepoDir, e.WorkingDirectory, ignoreFileNames, handleEntry)
+}
+
+func (e *ModalEnv) GetType() EnvType {
+	return EnvTypeModal
+}
+
+func (e *ModalEnv) GetWorkingDirectory() string {
+	return e.WorkingDirectory
+}
+
+func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	if !input.SkipWaking {
+		if err := wakeIfHibernatedRemote(ctx, e); err != nil {
+			return EnvRunCommandOutput{}, err
+		}
+	}
+
+	output, err := e.runCommandInner(ctx, input)
+
+	// ssh exit 255 signals a connection-level failure: the stored tunnel
+	// endpoint may be stale because the idle watchdog snapshotted and
+	// terminated the sandbox. Re-resolve (restoring from the snapshot when
+	// needed) and retry against the fresh endpoint. Retrying only on an
+	// endpoint change avoids double-running commands that themselves exit
+	// with 255.
+	if err == nil && output.ExitStatus == 255 {
+		host, port, refreshErr := refreshModalEndpoint(ctx, e.SandboxName)
+		if refreshErr != nil {
+			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
+		} else if host != e.SSHHost || port != e.SSHPort {
+			e.SSHHost, e.SSHPort = host, port
+			output, err = e.runCommandInner(ctx, input)
+		}
+	}
+
+	// Read-lock prefix detected hibernation (race with concurrent hibernate)
+	if !input.SkipWaking && err == nil && output.ExitStatus == hibernatedRemoteExitCode {
+		if _, wakeErr := WakeHibernatedEnv(ctx, e); wakeErr != nil {
+			return EnvRunCommandOutput{}, wakeErr
+		}
+		return e.runCommandInner(ctx, input)
+	}
+	return output, err
+}
+
+func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
+	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+	if !input.SkipWaking {
+		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
+	}
+	// Refresh the idle-watchdog activity marker with every command.
+	fullCommand = "touch " + remoteActivityMarker + " 2>/dev/null; " + fullCommand
+
+	sshArgs, err := e.SSHArgs(ctx)
+	if err != nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("failed to get SSH args for modal sandbox %s: %w", e.SandboxName, err)
+	}
+	sshArgs = append(sshArgs, fullCommand)
+
+	runCommandInput := unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       sshArgs,
+	}
+	return unix.RunCommandActivity(ctx, runCommandInput)
+}
+
+// baseSSHArgs returns ssh args (ending with the destination) for reaching the
+// sandbox's sshd through its Modal tunnel endpoint, without reverse forwards.
+func (e *ModalEnv) baseSSHArgs(ctx context.Context) ([]string, error) {
+	if e.SSHHost == "" || e.SSHPort == 0 {
+		return nil, fmt.Errorf("modal env for sandbox %s has no SSH endpoint", e.SandboxName)
+	}
+	keyPath, _, err := ensureModalSSHKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return modalSSHArgs(e.SandboxName, e.SSHHost, e.SSHPort, keyPath), nil
+}
+
+func (e *ModalEnv) SSHArgs(ctx context.Context) ([]string, error) {
+	sshArgs, err := e.baseSSHArgs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards)), nil
+}
+
+// sftpConnKey returns the stable per-remote identity used to share a pooled
+// sftpConn across separately-constructed envs targeting the same sandbox.
+// The tunnel endpoint is part of the identity: a recreated sandbox keeps its
+// name but gets a fresh endpoint, and must not reuse the stale connection
+// (the orphaned pool entry is closed by the idle reaper).
+func (e *ModalEnv) sftpConnKey() string {
+	return fmt.Sprintf("modal:%s@%s:%d", e.SandboxName, e.SSHHost, e.SSHPort)
+}
+
+func (e *ModalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+}
+
+func (e *ModalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+}
+
+func (e *ModalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
+}
+
+func (e *ModalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
+}
+
+func (e *ModalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return nil, wakeErr
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+}
+
+func (e *ModalEnv) Remove(ctx context.Context, p string) error {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return wakeErr
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+}
+
+func (e *ModalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
+		return "", wakeErr
+	}
+	if dir == "" {
+		dir = "/tmp"
+	} else if !strings.HasPrefix(dir, "/") {
+		dir = path.Join(e.WorkingDirectory, dir)
+	}
+	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
 }
 
 // shellQuote wraps a string in single quotes, escaping any embedded single quotes.
@@ -1097,6 +1316,12 @@ func (ec *EnvContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		ec.Env = ose
+	case string(EnvTypeModal):
+		var me *ModalEnv
+		if err := json.Unmarshal(v.Env, &me); err != nil {
+			return err
+		}
+		ec.Env = me
 	case "":
 		ec.Env = nil
 	default:

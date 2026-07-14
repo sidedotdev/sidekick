@@ -46,16 +46,15 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 		},
 	})
 
-	eCtx := &ExecContext{
-		LLMConfig: common.LLMConfig{
-			Defaults: []common.ModelConfig{
-				{
-					Provider: "openai",
-					Model:    "",
-				},
+	eCtx := &ExecContext{GlobalState: &GlobalState{}}
+	eCtx.SetLLMConfig(common.LLMConfig{
+		Defaults: []common.ModelConfig{
+			{
+				Provider: "openai",
+				Model:    "",
 			},
 		},
-	}
+	})
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
@@ -85,16 +84,15 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 		},
 	})
 
-	eCtx := &ExecContext{
-		LLMConfig: common.LLMConfig{
-			Defaults: []common.ModelConfig{
-				{
-					Provider: "openai",
-					Model:    "",
-				},
+	eCtx := &ExecContext{GlobalState: &GlobalState{}}
+	eCtx.SetLLMConfig(common.LLMConfig{
+		Defaults: []common.ModelConfig{
+			{
+				Provider: "openai",
+				Model:    "",
 			},
 		},
-	}
+	})
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
@@ -124,14 +122,7 @@ func TestGetModelConfig_SmallFallback_ClaudeModel(t *testing.T) {
 	})
 
 	eCtx := &ExecContext{
-		LLMConfig: common.LLMConfig{
-			Defaults: []common.ModelConfig{
-				{
-					Provider: "custom-provider",
-					Model:    "",
-				},
-			},
-		},
+		GlobalState: &GlobalState{},
 		Providers: []common.ModelProviderPublicConfig{
 			{
 				Name:     "custom-provider",
@@ -139,6 +130,14 @@ func TestGetModelConfig_SmallFallback_ClaudeModel(t *testing.T) {
 			},
 		},
 	}
+	eCtx.SetLLMConfig(common.LLMConfig{
+		Defaults: []common.ModelConfig{
+			{
+				Provider: "custom-provider",
+				Model:    "",
+			},
+		},
+	})
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
@@ -167,17 +166,16 @@ func TestGetModelConfig_NoReasoningForNonReasoningModel(t *testing.T) {
 		},
 	})
 
-	eCtx := &ExecContext{
-		LLMConfig: common.LLMConfig{
-			Defaults: []common.ModelConfig{
-				{
-					Provider:        "anthropic",
-					Model:           "claude-3-5-sonnet-20241022",
-					ReasoningEffort: "medium",
-				},
+	eCtx := &ExecContext{GlobalState: &GlobalState{}}
+	eCtx.SetLLMConfig(common.LLMConfig{
+		Defaults: []common.ModelConfig{
+			{
+				Provider:        "anthropic",
+				Model:           "claude-3-5-sonnet-20241022",
+				ReasoningEffort: "medium",
 			},
 		},
-	}
+	})
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
@@ -192,4 +190,48 @@ func TestGetModelConfig_NoReasoningForNonReasoningModel(t *testing.T) {
 	assert.Equal(t, "anthropic", modelConfig.Provider)
 	assert.Equal(t, "claude-3-5-sonnet-20241022", modelConfig.Model)
 	assert.Equal(t, "", modelConfig.ReasoningEffort)
+}
+
+func TestGetModelConfigUsesLatestGlobalState(t *testing.T) {
+	setupModelsCache(t, map[string]interface{}{
+		"openai": map[string]interface{}{
+			"models": map[string]interface{}{
+				"initial-model": map[string]interface{}{"reasoning": false},
+				"updated-model": map[string]interface{}{"reasoning": false},
+			},
+		},
+	})
+
+	eCtx := &ExecContext{GlobalState: &GlobalState{}}
+	eCtx.SetLLMConfig(common.LLMConfig{
+		Defaults: []common.ModelConfig{{Provider: "openai", Model: "initial-model"}},
+	})
+
+	testWorkflow := func(ctx workflow.Context) ([]common.ModelConfig, error) {
+		eCtx.Context = ctx
+		initial := eCtx.GetModelConfig("", 0, "default")
+		copiedContext := *eCtx
+		copiedContext.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "updated-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				"coding": {{Provider: "openai", Model: "updated-model"}},
+			},
+		})
+		updated := eCtx.GetModelConfig("coding", 0, "default")
+		return []common.ModelConfig{initial, updated}, nil
+	}
+
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
+	env.RegisterActivity(&FlowActivities{})
+	env.ExecuteWorkflow(testWorkflow)
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var modelConfigs []common.ModelConfig
+	require.NoError(t, env.GetWorkflowResult(&modelConfigs))
+	require.Len(t, modelConfigs, 2)
+	assert.Equal(t, "initial-model", modelConfigs[0].Model)
+	assert.Equal(t, "updated-model", modelConfigs[1].Model)
 }

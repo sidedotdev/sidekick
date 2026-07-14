@@ -126,6 +126,56 @@ func executeChatStreamV1(actionCtx flow_action.ActionContext) {
 		}
 	})
 
+	t.Run("perform with user retry or cancel", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+
+		caller := writeGoFileAndMakeItem(t, tmpDir, "chat_stream.go",
+			`package persisted_ai
+
+func executeChatStreamV1(actionCtx flow_action.ActionContext) {
+	var la *Llm2Activities
+	flow_action.PerformWithUserRetryOrCancel(actionCtx, la.Stream, &response, streamInput)
+}
+`, "executeChatStreamV1", 2)
+
+		call := lsp.CallHierarchyIncomingCall{
+			From: caller,
+			FromRanges: []lsp.Range{
+				{Start: lsp.Position{Line: 4, Character: 1}},
+			},
+		}
+
+		if !isActivityInvocationEdge(call, "Stream") {
+			t.Fatal("expected PerformWithUserRetryOrCancel(..., la.Stream, ...) to be treated as an activity invocation edge")
+		}
+	})
+
+	t.Run("perform activity", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+
+		caller := writeGoFileAndMakeItem(t, tmpDir, "chat_stream.go",
+			`package persisted_ai
+
+func executeChatStreamV1(actionCtx flow_action.ActionContext) {
+	var la *Llm2Activities
+	flow_action.PerformActivity(actionCtx.ExecContext, la.Stream, &response, streamInput)
+}
+`, "executeChatStreamV1", 2)
+
+		call := lsp.CallHierarchyIncomingCall{
+			From: caller,
+			FromRanges: []lsp.Range{
+				{Start: lsp.Position{Line: 4, Character: 1}},
+			},
+		}
+
+		if !isActivityInvocationEdge(call, "Stream") {
+			t.Fatal("expected PerformActivity(..., la.Stream, ...) to be treated as an activity invocation edge")
+		}
+	})
+
 	t.Run("workflow execute activity", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()

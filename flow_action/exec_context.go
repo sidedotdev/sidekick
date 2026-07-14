@@ -48,11 +48,12 @@ type ExecContext struct {
 	Secrets               *secret_manager.SecretManagerContainer
 	FlowScope             *FlowScope
 	Providers             []common.ModelProviderPublicConfig
-	LLMConfig             common.LLMConfig
 	EmbeddingConfig       common.EmbeddingConfig
 	GlobalState           *GlobalState
 	DisableHumanInTheLoop bool
 }
+
+const LLMStreamCancellationName = "llm_stream"
 
 type ActionContext struct {
 	ExecContext
@@ -83,7 +84,8 @@ func (fs *FlowScope) GetSubflowId() string {
 }
 
 func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback string) common.ModelConfig {
-	modelConfig, isDefault := eCtx.LLMConfig.GetModelConfig(key, iteration)
+	llmConfig := eCtx.GetLLMConfig()
+	modelConfig, isDefault := llmConfig.GetModelConfig(key, iteration)
 	if isDefault && fallback != "default" {
 		if fallback == "small" {
 			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
@@ -101,7 +103,7 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 				}
 			}
 		} else {
-			modelConfig, _ = eCtx.LLMConfig.GetModelConfig(fallback, iteration)
+			modelConfig, _ = llmConfig.GetModelConfig(fallback, iteration)
 		}
 	}
 
@@ -137,4 +139,21 @@ func (eCtx *ExecContext) FetchModelMetadata(provider, model string) common.Model
 func (eCtx *ExecContext) GetEmbeddingModelConfig(key string) common.ModelConfig {
 	modelConfig := eCtx.EmbeddingConfig.GetModelConfig(key)
 	return modelConfig
+}
+
+const GlobalStateKeyLLMConfig = "llmConfig"
+
+func (eCtx *ExecContext) SetLLMConfig(llmConfig common.LLMConfig) {
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	eCtx.GlobalState.SetValue(GlobalStateKeyLLMConfig, llmConfig)
+}
+
+func (eCtx *ExecContext) GetLLMConfig() common.LLMConfig {
+	if eCtx.GlobalState == nil {
+		return common.LLMConfig{}
+	}
+	llmConfig, _ := eCtx.GlobalState.GetValue(GlobalStateKeyLLMConfig).(common.LLMConfig)
+	return llmConfig
 }

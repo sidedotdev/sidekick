@@ -119,6 +119,8 @@ func TestResolveAnthropicReasoningEffort(t *testing.T) {
 		{"highest sonnet-4-6", "highest", "claude-sonnet-4-6", "max"},
 		{"highest opus-5", "highest", "claude-opus-5", "max"},
 		{"highest sonnet-5", "highest", "claude-sonnet-5", "max"},
+		{"highest fable-5", "highest", "claude-fable-5", "max"},
+		{"highest unknown family legendary-5", "highest", "claude-legendary-5", "max"},
 		{"highest opus-4-5", "highest", "claude-opus-4-5", "high"},
 		{"highest sonnet-4", "highest", "claude-sonnet-4", "high"},
 		{"highest haiku", "highest", "claude-haiku-3", "high"},
@@ -172,9 +174,33 @@ func TestAnthropicSupportsAdaptiveThinking(t *testing.T) {
 		{"opus-4", "claude-opus-4", false},
 		{"sonnet-4", "claude-sonnet-4", false},
 		{"sonnet-4-0", "claude-sonnet-4-0", false},
-		// Non-opus/sonnet families
+		// Other and unknown families parse generically
+		{"fable-5", "claude-fable-5", true},
+		{"mythos-5", "claude-mythos-5", true},
+		{"unknown family legendary-5", "claude-legendary-5", true},
+		{"unknown family legendary-4-5", "claude-legendary-4-5", false},
+		// Unversioned family names cannot be parsed
+		{"mythos preview", "claude-mythos-preview", false},
+		// Date stamps are not version numbers
+		{"sonnet-4 dated", "claude-sonnet-4-20250514", false},
+		// Old version-first naming
+		{"sonnet-3-5 dated", "claude-3-5-sonnet-20241022", false},
+		// Haiku family never supports adaptive thinking
 		{"haiku-3", "claude-haiku-3", false},
 		{"haiku-5", "claude-haiku-5", false},
+		// Bedrock model IDs (per models.dev): global/region-prefixed and
+		// unprefixed, date-stamped, and with the -v1:0 suffix
+		{"bedrock global haiku-4-5 dated", "global.anthropic.claude-haiku-4-5-20251001-v1:0", false},
+		{"bedrock us sonnet-4-5 dated", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", false},
+		{"bedrock eu opus-4-5 dated", "eu.anthropic.claude-opus-4-5-20251101-v1:0", false},
+		{"bedrock opus-4-1 dated", "anthropic.claude-opus-4-1-20250805-v1:0", false},
+		{"bedrock opus-4-6", "anthropic.claude-opus-4-6-v1", true},
+		{"bedrock us opus-4-6", "us.anthropic.claude-opus-4-6-v1", true},
+		{"bedrock global sonnet-4-6", "global.anthropic.claude-sonnet-4-6", true},
+		{"bedrock global opus-4-8", "global.anthropic.claude-opus-4-8", true},
+		{"bedrock us sonnet-5", "us.anthropic.claude-sonnet-5", true},
+		// Non-claude models
+		{"gpt model", "gpt-5.1", false},
 	}
 
 	for _, tt := range tests {

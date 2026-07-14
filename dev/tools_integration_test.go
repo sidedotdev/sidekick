@@ -365,14 +365,17 @@ func TestOpenShellToolsIntegration(t *testing.T) {
 	ripgrepDockerfile := filepath.Join(devToolsRepoRoot(t), "env", "testdata", "Dockerfile.openshell-ripgrep")
 	sandboxName := openshellFixtureSandboxName(t, ripgrepDockerfile)
 
-	checkOutput, err := env.OpenShellCheckSandboxActivity(ctx, env.OpenShellCheckSandboxInput{SandboxName: sandboxName})
-	require.NoError(t, err, "OpenShellCheckSandboxActivity failed")
+	checkOutput, err := env.CheckSandboxActivity(ctx, env.CheckSandboxInput{EnvType: env.EnvTypeOpenShell, SandboxName: sandboxName})
+	require.NoError(t, err, "CheckSandboxActivity failed")
 	if !checkOutput.Alive {
-		createOutput, err := env.OpenShellCreateActivity(ctx, env.OpenShellCreateInput{
-			Source: ripgrepDockerfile,
-			Name:   sandboxName,
+		osConfig, err := json.Marshal(common.OpenShellEnvConfig{From: ripgrepDockerfile})
+		require.NoError(t, err)
+		createOutput, err := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{
+			EnvType: env.EnvTypeOpenShell,
+			Name:    sandboxName,
+			Config:  osConfig,
 		})
-		require.NoError(t, err, "OpenShellCreateActivity failed")
+		require.NoError(t, err, "CreateSandboxActivity failed")
 		require.Equal(t, sandboxName, createOutput.SandboxName)
 	}
 
@@ -385,6 +388,63 @@ func TestOpenShellToolsIntegration(t *testing.T) {
 	repoEnv := &env.OpenShellEnv{
 		WorkingDirectory: containerRepoDir,
 		SandboxName:      sandboxName,
+	}
+	runHandleToolCallToolSubtests(t, ctx, env.EnvContainer{Env: repoEnv})
+}
+
+// modalFixtureSandboxName is the sandbox shared by the dev-package Modal e2e
+// tests, within and across runs.
+const modalFixtureSandboxName = "side-e2e-modal-dev"
+
+// setupModalSandbox creates or reuses a Modal sandbox for e2e tests, skipping
+// the test when Modal credentials are unavailable. The sandbox is
+// intentionally not deleted on cleanup: the in-sandbox idle watchdog
+// snapshots and terminates it shortly after the test (so it stops billing),
+// and the next run restores it from that snapshot — with layered packages
+// like ripgrep intact — instead of paying the full creation cost again.
+func setupModalSandbox(t *testing.T, ctx context.Context, sandboxName string) *env.ModalEnv {
+	t.Helper()
+
+	// Missing Modal credentials only surface on the first RPC, so probe with a
+	// real lookup before creating anything.
+	if _, err := env.CheckSandboxActivity(ctx, env.CheckSandboxInput{EnvType: env.EnvTypeModal, SandboxName: sandboxName}); err != nil {
+		t.Skipf("modal credentials not configured or Modal unreachable: %v", err)
+	}
+
+	createOutput, err := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{EnvType: env.EnvTypeModal, Name: sandboxName})
+	require.NoError(t, err, "CreateSandboxActivity failed")
+
+	return &env.ModalEnv{
+		WorkingDirectory: "/root",
+		SandboxName:      sandboxName,
+		SSHHost:          createOutput.SSHHost,
+		SSHPort:          createOutput.SSHPort,
+	}
+}
+
+func TestModalToolsIntegration(t *testing.T) {
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		t.Skip("skipping Modal tools integration test; SIDE_E2E_TEST not set to true")
+	}
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping Modal tools integration test; credentials are unavailable in non-local sidekick environments")
+	}
+
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
+		defer cancel()
+	}
+
+	baseEnv := setupModalSandbox(t, ctx, modalFixtureSandboxName)
+	containerRepoDir := initContainerGitRepo(t, ctx, baseEnv, "/tmp/modal-tools-repo-"+ksuid.New().String())
+
+	repoEnv := &env.ModalEnv{
+		WorkingDirectory: containerRepoDir,
+		SandboxName:      modalFixtureSandboxName,
+		SSHHost:          baseEnv.SSHHost,
+		SSHPort:          baseEnv.SSHPort,
 	}
 	runHandleToolCallToolSubtests(t, ctx, env.EnvContainer{Env: repoEnv})
 }

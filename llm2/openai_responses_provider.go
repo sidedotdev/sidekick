@@ -2,7 +2,7 @@ package llm2
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"sidekick/common"
@@ -408,12 +408,38 @@ func toolResultToResponsesOutputParts(tr *ToolResultBlock) responses.ResponseFun
 	return parts
 }
 
+func openAIResponsesID(id, prefix string) string {
+	if id == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(id, prefix) {
+		for _, r := range id {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+				sum := sha256.Sum256([]byte(id))
+				return fmt.Sprintf("%s%x", prefix, sum[:16])
+			}
+		}
+		return id
+	}
+
+	sum := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("%s%x", prefix, sum[:16])
+}
+
+func openAIResponsesItemID(id, prefix string, messageIndex, blockIndex int) string {
+	if sanitizedID := openAIResponsesID(id, prefix); sanitizedID != "" {
+		return sanitizedID
+	}
+	return fmt.Sprintf("%s%d_%d", prefix, messageIndex, blockIndex)
+}
+
 func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemUnionParam, error) {
 	var items []responses.ResponseInputItemUnionParam
 
-	for _, msg := range messages {
+	for messageIndex, msg := range messages {
 	contentBlocksLoop:
-		for _, block := range msg.Content {
+		for blockIndex, block := range msg.Content {
 			switch block.Type {
 			case ContentBlockTypeText:
 				var role responses.EasyInputMessageRole
@@ -433,7 +459,7 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 					}
 					items = append(items, responses.ResponseInputItemParamOfOutputMessage(
 						content,
-						block.Id,
+						openAIResponsesItemID(block.Id, "msg_", messageIndex, blockIndex),
 						responses.ResponseOutputMessageStatusCompleted,
 					))
 					continue contentBlocksLoop
@@ -463,7 +489,7 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				}
 				items = append(items, responses.ResponseInputItemParamOfFunctionCall(
 					block.ToolUse.Arguments,
-					block.ToolUse.Id,
+					openAIResponsesID(block.ToolUse.Id, "call_"),
 					block.ToolUse.Name,
 				))
 
@@ -476,7 +502,7 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				}
 				outputParts := toolResultToResponsesOutputParts(block.ToolResult)
 				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
-					block.ToolResult.ToolCallId,
+					openAIResponsesID(block.ToolResult.ToolCallId, "call_"),
 					outputParts,
 				))
 
@@ -484,30 +510,26 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				if msg.Role != RoleAssistant {
 					return nil, fmt.Errorf("reasoning blocks must be in assistant messages, got role %s", msg.Role)
 				}
-				if block.Reasoning != nil {
-					reasoning := responses.ResponseReasoningItemParam{ID: block.Id}
-					if block.Reasoning.Text != "" {
-						reasoning.Content = append(reasoning.Content, responses.ResponseReasoningItemContentParam{
-							Text: block.Reasoning.Text,
-						})
-					}
-
-					reasoning.Summary = []responses.ResponseReasoningItemSummaryParam{}
-					if block.Reasoning.Summary != "" {
-						reasoning.Summary = append(reasoning.Summary, responses.ResponseReasoningItemSummaryParam{
-							Text: block.Reasoning.Summary,
-						})
-					}
-
-					if block.Reasoning.EncryptedContent != "" {
-						reasoning.EncryptedContent = param.NewOpt(block.Reasoning.EncryptedContent)
-					}
-
-					reasoningItem := responses.ResponseInputItemUnionParam{OfReasoning: &reasoning}
-					items = append(items, reasoningItem)
-				} else {
+				if block.Reasoning == nil {
 					return nil, fmt.Errorf("reasoning block missing seasoning data: %s", utils.PanicJSON(block))
 				}
+				if !strings.HasPrefix(block.Id, "rs_") || block.Reasoning.EncryptedContent == "" {
+					continue contentBlocksLoop
+				}
+
+				reasoning := responses.ResponseReasoningItemParam{
+					ID:               block.Id,
+					EncryptedContent: param.NewOpt(block.Reasoning.EncryptedContent),
+					Summary:          []responses.ResponseReasoningItemSummaryParam{},
+				}
+				if block.Reasoning.Summary != "" {
+					reasoning.Summary = append(reasoning.Summary, responses.ResponseReasoningItemSummaryParam{
+						Text: block.Reasoning.Summary,
+					})
+				}
+
+				reasoningItem := responses.ResponseInputItemUnionParam{OfReasoning: &reasoning}
+				items = append(items, reasoningItem)
 
 			case ContentBlockTypeRefusal:
 				// NOTE: refusals aren't represented in openai's input params,
@@ -653,21 +675,7 @@ func openaiResponsesFromTools(tools []*common.Tool) ([]responses.ToolUnionParam,
 }
 
 func jsonSchemaToMap(schema interface{}) (map[string]any, error) {
-	if schema == nil {
-		return map[string]any{}, nil
-	}
-
-	jsonBytes, err := json.Marshal(schema)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(jsonBytes, &result); err != nil {
-		return nil, err
-	}
-
-	return result, nil
+	return common.JSONSchemaWithRequiredNullableOptionals(schema)
 }
 
 func openaiResponsesFromToolChoice(toolChoice common.ToolChoice, tools []*common.Tool) *responses.ResponseNewParamsToolChoiceUnion {

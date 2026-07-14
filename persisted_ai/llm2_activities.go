@@ -92,6 +92,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 			}
 		}()
 
+		streamedBlocks := make(map[int]llm2.ContentBlock)
 		for event := range eventChan {
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, event)
@@ -100,8 +101,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 				continue
 			}
 
-			// Convert llm2.Event to domain flow event
-			flowEvent := convertLlm2EventToFlowEvent(event, input.FlowActionId)
+			flowEvent := convertLlm2EventToFlowEvent(event, input.FlowActionId, streamedBlocks)
 			if flowEvent == nil {
 				continue
 			}
@@ -160,16 +160,63 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 }
 
 // convertLlm2EventToFlowEvent converts an llm2.Event to a domain.FlowEvent for streaming.
-func convertLlm2EventToFlowEvent(event llm2.Event, flowActionId string) domain.FlowEvent {
-	switch event.Type {
-	case llm2.EventTextDelta:
+func convertLlm2EventToFlowEvent(event llm2.Event, flowActionId string, blocks map[int]llm2.ContentBlock) domain.FlowEvent {
+	chatDelta := func(delta common.ChatMessageDelta) domain.FlowEvent {
 		return domain.ChatMessageDeltaEvent{
-			EventType:    domain.ChatMessageDeltaEventType,
-			FlowActionId: flowActionId,
-			ChatMessageDelta: common.ChatMessageDelta{
-				Content: event.Delta,
-			},
+			EventType:        domain.ChatMessageDeltaEventType,
+			FlowActionId:     flowActionId,
+			ChatMessageDelta: delta,
 		}
+	}
+
+	switch event.Type {
+	case llm2.EventBlockStarted:
+		if event.ContentBlock == nil {
+			return nil
+		}
+		blocks[event.Index] = *event.ContentBlock
+		switch event.ContentBlock.Type {
+		case llm2.ContentBlockTypeText:
+			if event.ContentBlock.Text != "" {
+				return chatDelta(common.ChatMessageDelta{Content: event.ContentBlock.Text})
+			}
+		case llm2.ContentBlockTypeToolUse:
+			if event.ContentBlock.ToolUse != nil {
+				toolUse := event.ContentBlock.ToolUse
+				return chatDelta(common.ChatMessageDelta{
+					ToolCalls: []common.ToolCall{{
+						Id:        toolUse.Id,
+						Name:      toolUse.Name,
+						Arguments: toolUse.Arguments,
+						Signature: toolUse.Signature,
+					}},
+				})
+			}
+		}
+		return nil
+	case llm2.EventTextDelta:
+		block, ok := blocks[event.Index]
+		if !ok {
+			return chatDelta(common.ChatMessageDelta{Content: event.Delta})
+		}
+		switch block.Type {
+		case llm2.ContentBlockTypeText:
+			return chatDelta(common.ChatMessageDelta{Content: event.Delta})
+		case llm2.ContentBlockTypeToolUse:
+			if block.ToolUse != nil {
+				return chatDelta(common.ChatMessageDelta{
+					ToolCalls: []common.ToolCall{{
+						Id:        block.ToolUse.Id,
+						Name:      block.ToolUse.Name,
+						Arguments: event.Delta,
+					}},
+				})
+			}
+		}
+		return nil
+	case llm2.EventBlockDone:
+		delete(blocks, event.Index)
+		return nil
 	case llm2.EventSummaryTextDelta:
 		return domain.ProgressTextEvent{
 			EventType: domain.ProgressTextEventType,

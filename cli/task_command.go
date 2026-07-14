@@ -31,7 +31,7 @@ func NewTaskCommand() *cli.Command {
 			&cli.BoolFlag{Name: "worktree", Aliases: []string{"w"}, Usage: "Use a git worktree. Sets --start-branch to the current branch if not specified."},
 			&cli.StringFlag{Name: "repo-mode", Usage: "Set the repo mode (worktree, in_place)"},
 			&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}, Usage: "The worktree start branch. Implies --worktree"},
-			&cli.StringFlag{Name: "env-type", Usage: "Set the environment type (local, devpod, openshell)"},
+			&cli.StringFlag{Name: "env-type", Usage: "Set the environment type (local, devpod, openshell, modal)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			c := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))

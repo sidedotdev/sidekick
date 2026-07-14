@@ -110,6 +110,10 @@ type Controller struct {
 	allowedOrigins    *AllowedOrigins
 }
 
+type ModelConfigUpdateRequest struct {
+	Config common.LLMConfig `json:"config"`
+}
+
 // UserActionRequest defines the expected request body for user actions.
 type UserActionRequest struct {
 	ActionType string `json:"actionType"`
@@ -241,6 +245,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
+	flowRoutes.PUT("/:id/model_config", ctrl.UpdateFlowModelConfigHandler)
 	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
 	flowRoutes.GET("/:id/history/:eventId", ctrl.GetFlowEventDetailHandler)
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
@@ -596,6 +601,69 @@ func (ctrl *Controller) UserActionHandler(c *gin.Context) {
 
 	log.Info().Str("workspaceId", workspaceId).Str("flowId", flowId).Str("action", req.ActionType).Msg("User action signaled to workflow")
 	c.JSON(http.StatusOK, gin.H{"message": "User action '" + req.ActionType + "' signaled successfully"})
+}
+
+func validateModelConfig(llmConfig common.LLMConfig) error {
+	if len(llmConfig.Defaults) == 0 {
+		return errors.New("at least one default model configuration is required")
+	}
+	for i, modelConfig := range llmConfig.Defaults {
+		if strings.TrimSpace(modelConfig.Provider) == "" {
+			return fmt.Errorf("default model configuration %d is missing a provider", i)
+		}
+	}
+	for useCase, modelConfigs := range llmConfig.UseCaseConfigs {
+		for i, modelConfig := range modelConfigs {
+			if strings.TrimSpace(modelConfig.Provider) == "" {
+				return fmt.Errorf("model configuration %d for use case %q is missing a provider", i, useCase)
+			}
+		}
+	}
+	return nil
+}
+
+func (ctrl *Controller) UpdateFlowModelConfigHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	_, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var req ModelConfigUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
+		return
+	}
+	if err := validateModelConfig(req.Config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid model configuration: " + err.Error()})
+		return
+	}
+
+	_, err = ctrl.temporalClient.UpdateWorkflow(c.Request.Context(), client.UpdateWorkflowOptions{
+		WorkflowID:   flowId,
+		UpdateName:   dev.UpdateNameModelConfig,
+		Args:         []interface{}{req.Config},
+		WaitForStage: client.WorkflowUpdateStageAccepted,
+	})
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to update workflow model configuration")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update workflow model configuration: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{"message": "Model configuration update accepted"})
 }
 
 // QueryFlowHandler handles requests to query a workflow.

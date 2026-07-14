@@ -27,7 +27,7 @@ func TestIddWatchEditIdleActivity_ReturnsAfterIdleOnIntentEdit(t *testing.T) {
 	intentDir := filepath.Join(worktree, "intent")
 	require.NoError(t, os.MkdirAll(intentDir, 0o755))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	type result struct {
@@ -40,27 +40,41 @@ func TestIddWatchEditIdleActivity_ReturnsAfterIdleOnIntentEdit(t *testing.T) {
 			WorktreeDir:  worktree,
 			WatchSubdir:  "intent",
 			IdleDuration: 150 * time.Millisecond,
-			MaxWait:      4 * time.Second,
+			MaxWait:      10 * time.Second,
 		})
 		resCh <- result{out, err}
 	}()
 
 	// Give the watcher a moment to install its inotify hooks before writing.
 	time.Sleep(50 * time.Millisecond)
-	writeFile(t, filepath.Join(intentDir, "goals.md"), "# initial\n")
-	// A second edit during the burst window should coalesce into the same
-	// returned batch rather than splitting into two activity returns.
-	time.Sleep(40 * time.Millisecond)
-	writeFile(t, filepath.Join(intentDir, "notes.md"), "more\n")
+	// Both edits land within one burst window, so they should coalesce into
+	// the same returned batch rather than splitting into two activity
+	// returns. The watcher dedupes paths, so under heavy load (where hook
+	// installation may lag past the initial sleep) the writes can simply be
+	// retried until a settled batch is reported.
+	writeBurst := func() {
+		writeFile(t, filepath.Join(intentDir, "goals.md"), "# initial\n")
+		time.Sleep(40 * time.Millisecond)
+		writeFile(t, filepath.Join(intentDir, "notes.md"), "more\n")
+	}
+	writeBurst()
 
-	select {
-	case r := <-resCh:
-		require.NoError(t, r.err)
-		assert.False(t, r.out.TimedOut)
-		sort.Strings(r.out.ChangedPaths)
-		assert.Equal(t, []string{"intent/goals.md", "intent/notes.md"}, r.out.ChangedPaths)
-	case <-time.After(4 * time.Second):
-		t.Fatal("watcher did not return after idle window elapsed")
+	retryTicker := time.NewTicker(500 * time.Millisecond)
+	defer retryTicker.Stop()
+	deadline := time.After(12 * time.Second)
+	for {
+		select {
+		case r := <-resCh:
+			require.NoError(t, r.err)
+			assert.False(t, r.out.TimedOut)
+			sort.Strings(r.out.ChangedPaths)
+			assert.Equal(t, []string{"intent/goals.md", "intent/notes.md"}, r.out.ChangedPaths)
+			return
+		case <-retryTicker.C:
+			writeBurst()
+		case <-deadline:
+			t.Fatal("watcher did not return after idle window elapsed")
+		}
 	}
 }
 

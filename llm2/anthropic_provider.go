@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sidekick/common"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 )
 
 const anthropicDefaultModel = "claude-opus-4-5"
-const anthropicDefaultMaxTokens = 16000
+const anthropicDefaultMaxTokens = 24000
 
 const (
 	anthropicAcceptHeaderValue                  = "application/json"
@@ -208,14 +209,21 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	} else if anthropicSupportsAdaptiveThinking(model) && resolvedEffort != "" {
 		// Adaptive-capable models: thinking and effort are orthogonal.
 		// Enable adaptive thinking and set effort via OutputConfig.
-		adaptive := anthropic.ThinkingConfigAdaptiveParam{}
+		// Display must be set explicitly: some models (e.g. fable) default to
+		// "omitted", which redacts thinking and narration text to
+		// signature-only blocks.
+		adaptive := anthropic.ThinkingConfigAdaptiveParam{
+			Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
+		}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 		params.OutputConfig = anthropic.OutputConfigParam{
 			Effort: anthropic.OutputConfigEffort(resolvedEffort),
 		}
 	} else if anthropicSupportsAdaptiveThinking(model) && resolvedEffort == "" && options.ReasoningEffort == "" {
 		// Adaptive-capable model with no explicit effort: enable adaptive thinking at defaults.
-		adaptive := anthropic.ThinkingConfigAdaptiveParam{}
+		adaptive := anthropic.ThinkingConfigAdaptiveParam{
+			Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
+		}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 	} else if resolvedEffort != "" {
 		// Non-adaptive models (or adaptive with future effort levels):
@@ -233,7 +241,9 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			useAdaptive = true
 		}
 		if useAdaptive {
-			adaptive := anthropic.ThinkingConfigAdaptiveParam{}
+			adaptive := anthropic.ThinkingConfigAdaptiveParam{
+				Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
+			}
 			params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 		} else {
 			// max_tokens must be greater than thinking.budget_tokens
@@ -241,7 +251,11 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 				effectiveMaxTokens = int(budgetTokens) + 1000
 				params.MaxTokens = int64(effectiveMaxTokens)
 			}
-			params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budgetTokens)
+			enabled := anthropic.ThinkingConfigEnabledParam{
+				BudgetTokens: budgetTokens,
+				Display:      anthropic.ThinkingConfigEnabledDisplaySummarized,
+			}
+			params.Thinking = anthropic.ThinkingConfigParamUnion{OfEnabled: &enabled}
 		}
 	}
 	// When resolvedEffort is "" and ReasoningEffort was "lowest", thinking is
@@ -449,8 +463,12 @@ func resolveAnthropicReasoningEffort(effort, model string) string {
 }
 
 // anthropicSupportsAdaptiveThinking returns true for models where adaptive
-// thinking should be enabled by default (Opus and Sonnet 4.6+).
+// thinking should be enabled by default (version 4.6+, excluding haiku).
 func anthropicSupportsAdaptiveThinking(model string) bool {
+	// Haiku models don't support adaptive thinking regardless of version.
+	if strings.Contains(strings.ToLower(model), "haiku") {
+		return false
+	}
 	major, minor, ok := parseAnthropicVersion(model)
 	if !ok {
 		return false
@@ -460,52 +478,46 @@ func anthropicSupportsAdaptiveThinking(model string) bool {
 }
 
 // parseAnthropicVersion extracts the major and minor version from an Anthropic
-// model name for the opus or sonnet family. Returns false if the model is not
-// a recognized opus/sonnet model or the version cannot be parsed.
+// model name, e.g. "claude-opus-4-6" or "claude-legendary-5.1-latest". The
+// version is taken from the first numeric segments in the name, so unknown
+// future model families are supported. Segments longer than two digits (e.g.
+// date stamps like "20250514") are not treated as version numbers. Returns
+// false if the model is not a claude model or no version can be found.
 func parseAnthropicVersion(model string) (major, minor int, ok bool) {
 	m := strings.ToLower(model)
 
-	// Find the family prefix to locate where the version starts.
-	var versionPart string
-	for _, family := range []string{"opus-", "sonnet-"} {
-		idx := strings.Index(m, family)
-		if idx >= 0 {
-			versionPart = m[idx+len(family):]
-			break
-		}
-	}
-	if versionPart == "" {
+	idx := strings.Index(m, "claude-")
+	if idx < 0 {
 		return 0, 0, false
 	}
+	rest := m[idx+len("claude-"):]
 
-	// Parse major version (digits at the start).
-	i := 0
-	for i < len(versionPart) && versionPart[i] >= '0' && versionPart[i] <= '9' {
-		i++
-	}
-	if i == 0 {
-		return 0, 0, false
-	}
-	major = 0
-	for _, c := range versionPart[:i] {
-		major = major*10 + int(c-'0')
-	}
-
-	// Parse optional minor version after '.' or '-'.
-	if i < len(versionPart) && (versionPart[i] == '.' || versionPart[i] == '-') {
-		rest := versionPart[i+1:]
-		j := 0
-		for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
-			j++
+	isVersionSegment := func(s string) bool {
+		if len(s) == 0 || len(s) > 2 {
+			return false
 		}
-		if j > 0 {
-			for _, c := range rest[:j] {
-				minor = minor*10 + int(c-'0')
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return false
 			}
 		}
+		return true
 	}
 
-	return major, minor, true
+	segments := strings.FieldsFunc(rest, func(r rune) bool {
+		return r == '-' || r == '.'
+	})
+	for i, seg := range segments {
+		if !isVersionSegment(seg) {
+			continue
+		}
+		major, _ = strconv.Atoi(seg)
+		if i+1 < len(segments) && isVersionSegment(segments[i+1]) {
+			minor, _ = strconv.Atoi(segments[i+1])
+		}
+		return major, minor, true
+	}
+	return 0, 0, false
 }
 
 func accumulateAnthropicEventsToMessage(events []Event) Message {

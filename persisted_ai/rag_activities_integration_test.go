@@ -2,6 +2,7 @@ package persisted_ai
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -173,27 +174,34 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	sandboxName := env.OpenShellSandboxName(repoRoot)
 
 	// Ensure sandbox exists (reuse if available, create otherwise).
-	checkOut, err := env.OpenShellCheckSandboxActivity(ctx, env.OpenShellCheckSandboxInput{SandboxName: sandboxName})
+	phaseStart := time.Now()
+	checkOut, err := env.CheckSandboxActivity(ctx, env.CheckSandboxInput{EnvType: env.EnvTypeOpenShell, SandboxName: sandboxName})
 	require.NoError(t, err)
 
 	if !checkOut.Alive {
-		createOut, err := env.OpenShellCreateActivity(ctx, env.OpenShellCreateInput{
+		osConfig, err := json.Marshal(common.OpenShellEnvConfig{From: "base"})
+		require.NoError(t, err)
+		createOut, err := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{
+			EnvType: env.EnvTypeOpenShell,
 			Name:    sandboxName,
 			RepoDir: repoRoot,
-			Source:  "base",
+			Config:  osConfig,
 		})
-		require.NoError(t, err, "OpenShellCreateActivity failed")
+		require.NoError(t, err, "CreateSandboxActivity failed")
 		sandboxName = createOut.SandboxName
 	}
+	t.Logf("phase: create sandbox took %v (reused=%v)", time.Since(phaseStart), checkOut.Alive)
 
-	syncOut, err := env.OpenShellSyncRepoActivity(ctx, env.OpenShellSyncRepoInput{
-		SandboxName:  sandboxName,
+	phaseStart = time.Now()
+	syncOut, err := env.SyncRepoToRemoteActivity(ctx, env.SyncRepoToRemoteInput{
+		EnvContainer: env.EnvContainer{Env: &env.OpenShellEnv{SandboxName: sandboxName, LocalRepoDir: repoRoot}},
 		LocalRepoDir: repoRoot,
 	})
-	require.NoError(t, err, "OpenShellSyncRepoActivity failed")
+	require.NoError(t, err, "SyncRepoToRemoteActivity failed")
+	t.Logf("phase: repo sync took %v", time.Since(phaseStart))
 
 	osEnv := &env.OpenShellEnv{
-		WorkingDirectory: syncOut.ContainerRepoDir,
+		WorkingDirectory: syncOut.RemoteRepoDir,
 		SandboxName:      sandboxName,
 		LocalRepoDir:     repoRoot,
 	}
@@ -223,7 +231,9 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	runCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
+	phaseStart = time.Now()
 	output, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
+	t.Logf("phase: ranked outline took %v", time.Since(phaseStart))
 	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 
@@ -249,7 +259,7 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	t.Logf("RankedDirSignatureOutline output length: %d", len(output))
 }
 
-func BenchmarkGetDirectorySignatureOutlines_OpenShell(b *testing.B) {
+func BenchmarkGetDirectoryRawOutlines_OpenShell(b *testing.B) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		b.Skip("Skipping integration benchmark; SIDE_INTEGRATION_TEST not set to true")
 	}
@@ -268,29 +278,34 @@ func BenchmarkGetDirectorySignatureOutlines_OpenShell(b *testing.B) {
 
 	sandboxName := env.OpenShellSandboxName(repoRoot)
 
-	checkOut, err := env.OpenShellCheckSandboxActivity(ctx, env.OpenShellCheckSandboxInput{SandboxName: sandboxName})
+	checkOut, err := env.CheckSandboxActivity(ctx, env.CheckSandboxInput{EnvType: env.EnvTypeOpenShell, SandboxName: sandboxName})
 	if err != nil || !checkOut.Alive {
-		createOut, createErr := env.OpenShellCreateActivity(ctx, env.OpenShellCreateInput{
+		osConfig, marshalErr := json.Marshal(common.OpenShellEnvConfig{From: "base"})
+		if marshalErr != nil {
+			b.Fatalf("failed to marshal openshell config: %v", marshalErr)
+		}
+		createOut, createErr := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{
+			EnvType: env.EnvTypeOpenShell,
 			Name:    sandboxName,
 			RepoDir: repoRoot,
-			Source:  "base",
+			Config:  osConfig,
 		})
 		if createErr != nil {
-			b.Fatalf("OpenShellCreateActivity failed: %v", createErr)
+			b.Fatalf("CreateSandboxActivity failed: %v", createErr)
 		}
 		sandboxName = createOut.SandboxName
 	}
 
-	syncOut, err := env.OpenShellSyncRepoActivity(ctx, env.OpenShellSyncRepoInput{
-		SandboxName:  sandboxName,
+	syncOut, err := env.SyncRepoToRemoteActivity(ctx, env.SyncRepoToRemoteInput{
+		EnvContainer: env.EnvContainer{Env: &env.OpenShellEnv{SandboxName: sandboxName, LocalRepoDir: repoRoot}},
 		LocalRepoDir: repoRoot,
 	})
 	if err != nil {
-		b.Fatalf("OpenShellSyncRepoActivity failed: %v", err)
+		b.Fatalf("SyncRepoToRemoteActivity failed: %v", err)
 	}
 
 	osEnv := &env.OpenShellEnv{
-		WorkingDirectory: syncOut.ContainerRepoDir,
+		WorkingDirectory: syncOut.RemoteRepoDir,
 		SandboxName:      sandboxName,
 		LocalRepoDir:     repoRoot,
 	}
@@ -300,11 +315,126 @@ func BenchmarkGetDirectorySignatureOutlines_OpenShell(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		start := time.Now()
-		outlines, err := tree_sitter.GetDirectorySignatureOutlines(ctx, ec, nil, nil)
+		entries, err := tree_sitter.GetDirectoryRawOutlines(ctx, ec, nil)
 		elapsed := time.Since(start)
 		if err != nil {
-			b.Fatalf("GetDirectorySignatureOutlines failed: %v", err)
+			b.Fatalf("GetDirectoryRawOutlines failed: %v", err)
 		}
+		outlines := tree_sitter.OutlinesFromRawEntries(entries, nil, nil)
 		b.Logf("iteration %d: %d outlines in %v (with 10ms simulated read latency)", i, len(outlines), elapsed)
 	}
+}
+
+func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		t.Skip("skipping Modal ranked context integration test; SIDE_E2E_TEST not set to true")
+	}
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping Modal ranked context integration test; credentials are unavailable in non-local sidekick environments")
+	}
+
+	ctx := context.Background()
+	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
+	ragActivities := setupRagService(t, ctx, repoRoot)
+
+	// The sandbox is intentionally reused across runs (never deleted): the
+	// idle watchdog snapshots and terminates it after the test so it stops
+	// billing, and the next run restores it — with the synced repo intact,
+	// making the sync incremental — instead of recreating from scratch.
+	const sandboxName = "side-e2e-modal-rag"
+
+	// Missing Modal credentials only surface on the first RPC, so probe with a
+	// real lookup before creating anything.
+	phaseStart := time.Now()
+	if _, err := env.CheckSandboxActivity(ctx, env.CheckSandboxInput{EnvType: env.EnvTypeModal, SandboxName: sandboxName}); err != nil {
+		t.Skipf("modal credentials not configured or Modal unreachable: %v", err)
+	}
+	t.Logf("phase: credential probe took %s", time.Since(phaseStart))
+
+	phaseStart = time.Now()
+	createOut, err := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{EnvType: env.EnvTypeModal, Name: sandboxName})
+	require.NoError(t, err, "CreateSandboxActivity failed")
+	t.Logf("phase: create sandbox took %s (reused=%v)", time.Since(phaseStart), createOut.Reused)
+
+	phaseStart = time.Now()
+	syncOut, err := env.SyncRepoToRemoteActivity(ctx, env.SyncRepoToRemoteInput{
+		EnvContainer: env.EnvContainer{Env: &env.ModalEnv{
+			SandboxName:  sandboxName,
+			SSHHost:      createOut.SSHHost,
+			SSHPort:      createOut.SSHPort,
+			LocalRepoDir: repoRoot,
+		}},
+		LocalRepoDir: repoRoot,
+	})
+	require.NoError(t, err, "SyncRepoToRemoteActivity failed")
+	t.Logf("phase: repo sync took %s", time.Since(phaseStart))
+
+	modalEnv := &env.ModalEnv{
+		WorkingDirectory: syncOut.RemoteRepoDir,
+		SandboxName:      sandboxName,
+		SSHHost:          createOut.SSHHost,
+		SSHPort:          createOut.SSHPort,
+		LocalRepoDir:     repoRoot,
+	}
+	ec := env.EnvContainer{Env: modalEnv}
+
+	secretsManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		secret_manager.EnvSecretManager{},
+		secret_manager.KeyringSecretManager{},
+		secret_manager.LocalConfigSecretManager{},
+	})
+
+	options := RankedDirSignatureOutlineOptions{
+		RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
+			WorkspaceId:  workspaceId,
+			EnvContainer: ec,
+			RankQuery:    "peristence interface for task domain",
+			Secrets: secret_manager.SecretManagerContainer{
+				SecretManager: secretsManager,
+			},
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+			},
+		},
+		CharLimit: 32000,
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	phaseStart = time.Now()
+	output, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
+	t.Logf("phase: ranked outline took %s", time.Since(phaseStart))
+	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
+	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
+
+	// Second call exercises the per-git-tree outline cache populated by the
+	// first: unchanged files are neither read nor re-parsed, and the result
+	// must be byte-identical.
+	phaseStart = time.Now()
+	output2, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
+	t.Logf("phase: ranked outline (cached) took %s", time.Since(phaseStart))
+	require.NoError(t, err, "cached RankedDirSignatureOutline returned an error")
+	require.Equal(t, output, output2, "cached ranked outline should match the uncached result")
+
+	expectedPaths := []string{
+		"\ndomain/\n",
+		"\n\ttask.go",
+		"\nsrv/\n",
+		"\n\t\ttask.go",
+	}
+	for _, path := range expectedPaths {
+		require.Contains(t, output, path, "Output should contain directory path: %s", path)
+	}
+
+	expectedSignatures := []string{
+		"type TaskStorage interface {",
+		"PersistTask(ctx context.Context, task Task) error",
+		"GetTask(ctx context.Context, workspaceId, taskId string) (Task, error)",
+	}
+	for _, sig := range expectedSignatures {
+		require.Contains(t, output, sig, "Output should contain signature: %s", sig)
+	}
+
+	t.Logf("RankedDirSignatureOutline output length: %d", len(output))
 }
