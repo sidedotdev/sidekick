@@ -293,14 +293,14 @@ func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey stri
 	}
 	// Modal's platform defaults (0.125 cores, 128 MiB) are too lean for dev
 	// workloads — and outright unusable on the VM runtime, where memory is
-	// statically provisioned — so default to 1 core / 1 GiB when unset.
+	// statically provisioned — so default to 2 cores / 2 GiB when unset.
 	cpu := config.CPU
 	if cpu == 0 {
-		cpu = 1
+		cpu = 2
 	}
 	memoryMiB := config.MemoryMiB
 	if memoryMiB == 0 {
-		memoryMiB = 1024
+		memoryMiB = 2048
 	}
 	params := &modal.SandboxCreateParams{
 		Name:             name,
