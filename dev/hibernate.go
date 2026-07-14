@@ -21,7 +21,7 @@ type HibernateSignal struct{}
 // clearing the workflow-level flag.
 func SetupHibernateHandler(dCtx DevContext) {
 	signalChan := workflow.GetSignalChannel(dCtx, SignalNameHibernate)
-	workflow.Go(dCtx, func(ctx workflow.Context) {
+	workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 		for {
 			selector := workflow.NewSelector(ctx)
 			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {

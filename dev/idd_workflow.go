@@ -273,7 +273,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		// state, both deciding to dispatch, and double-creating sub-tasks
 		// for the same intent diff.
 		orchestratorTriggerCh = workflow.NewBufferedChannel(dCtx, 1)
-		workflow.Go(dCtx, func(goCtx workflow.Context) {
+		workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
 			for {
 				var sig RunIddOrchestratorSignal
 				if !orchestratorTriggerCh.Receive(goCtx, &sig) {
@@ -303,7 +303,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		if worktreeDir == "" {
 			return
 		}
-		workflow.Go(dCtx, func(goCtx workflow.Context) {
+		workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
 			watchCtx := workflow.WithActivityOptions(goCtx, workflow.ActivityOptions{
 				StartToCloseTimeout: 30 * time.Minute,
 				HeartbeatTimeout:    2 * time.Minute,
@@ -384,7 +384,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			}
 			// Spawn a coroutine so committing and running the sub-task to
 			// completion doesn't block the selector from handling more signals.
-			workflow.Go(dCtx, func(goCtx workflow.Context) {
+			workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
 				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId, requestOrchestratorTurn)
 			})
 		})
