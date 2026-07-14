@@ -93,7 +93,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_OAUTH", "OPENAI_API_KEY")
+	secretManager := requireOpenAIIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -284,7 +284,7 @@ func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_OAUTH")
+	secretManager := requireOpenAIIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -625,7 +625,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_OAUTH", "OPENAI_API_KEY")
+	secretManager := requireOpenAIIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
