@@ -512,10 +512,6 @@ const setupFlow = async (newFlowId: string | undefined) => {
   // Restore from cache or initialize empty state
   const cached = viewCache.getFlowView(newFlowId);
   if (cached) {
-    if (cached.flow?.type === 'idd' && !props.embedded) {
-      router.replace({ name: 'intent-canvas', params: { id: newFlowId } });
-      return;
-    }
     flow.value = cached.flow;
     flowActions.value = [...cached.flowActions];
     subflowsById.value = { ...cached.subflowsById };
@@ -550,10 +546,6 @@ const setupFlow = async (newFlowId: string | undefined) => {
     const response = await flowPromise;
     if (response.ok) {
       const flowData = await response.json();
-      if (flowData.flow?.type === 'idd' && !props.embedded) {
-        router.replace({ name: 'intent-canvas', params: { id: newFlowId } });
-        return;
-      }
       flow.value = flowData.flow;
       isLoadingFlow.value = false;
       isStartingFlow.value = !hasReceivedFirstAction;
