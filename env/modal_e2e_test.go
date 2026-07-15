@@ -89,6 +89,14 @@ func TestModalIntegration(t *testing.T) {
 		// The seed clone is shallow, so only recent commits are present.
 		assert.Contains(t, output.Stdout, "filler")
 		assert.NotContains(t, output.Stdout, "init")
+
+		output, err = modalEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "rg",
+			Args:    []string{"--version"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 0, output.ExitStatus, "stderr: %s", output.Stderr)
+		assert.Contains(t, output.Stdout, "ripgrep")
 	})
 
 	t.Run("file operations", func(t *testing.T) {

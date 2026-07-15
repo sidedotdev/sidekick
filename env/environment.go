@@ -300,6 +300,9 @@ type ModalEnv struct {
 	// the SSH connection used to run commands.
 	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
 	Hibernated   bool                       `json:"hibernated,omitempty"`
+
+	runModalCommand      func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error)
+	refreshModalEndpoint func(context.Context, string) (string, int, error)
 }
 
 type LocalEnvParams struct {
@@ -1045,21 +1048,38 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		}
 	}
 
-	output, err := e.runCommandInner(ctx, input)
+	runCommand := e.runCommandInner
+	if e.runModalCommand != nil {
+		runCommand = e.runModalCommand
+	}
+	refreshEndpoint := refreshModalEndpoint
+	if e.refreshModalEndpoint != nil {
+		refreshEndpoint = e.refreshModalEndpoint
+	}
 
-	// ssh exit 255 signals a connection-level failure: the stored tunnel
-	// endpoint may be stale because the idle watchdog snapshotted and
-	// terminated the sandbox. Re-resolve (restoring from the snapshot when
-	// needed) and retry against the fresh endpoint. Retrying only on an
-	// endpoint change avoids double-running commands that themselves exit
-	// with 255.
-	if err == nil && output.ExitStatus == 255 {
-		host, port, refreshErr := refreshModalEndpoint(ctx, e.SandboxName)
+	output, diagnostics, err := runCommand(ctx, input)
+	appendDiagnostics := func() {
+		if diagnostics == "" {
+			return
+		}
+		if output.Stderr != "" && !strings.HasSuffix(output.Stderr, "\n") {
+			output.Stderr += "\n"
+		}
+		output.Stderr += diagnostics
+	}
+	appendDiagnostics()
+
+	// The stored tunnel endpoint may be stale because the idle watchdog
+	// snapshotted and terminated the sandbox. Only SSH client diagnostics
+	// kept separate from remote output can prove the command never started.
+	if err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics) {
+		host, port, refreshErr := refreshEndpoint(ctx, e.SandboxName)
 		if refreshErr != nil {
 			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
-		} else if host != e.SSHHost || port != e.SSHPort {
+		} else {
 			e.SSHHost, e.SSHPort = host, port
-			output, err = e.runCommandInner(ctx, input)
+			output, diagnostics, err = runCommand(ctx, input)
+			appendDiagnostics()
 		}
 	}
 
@@ -1068,12 +1088,27 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		if _, wakeErr := WakeHibernatedEnv(ctx, e); wakeErr != nil {
 			return EnvRunCommandOutput{}, wakeErr
 		}
-		return e.runCommandInner(ctx, input)
+		output, diagnostics, err = runCommand(ctx, input)
+		appendDiagnostics()
 	}
 	return output, err
 }
 
-func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+func isModalSSHTransportFailure(diagnostics string) bool {
+	diagnostics = strings.ToLower(diagnostics)
+	for _, fragment := range []string{
+		"connect to address",
+		"could not resolve hostname",
+		"no route to host",
+	} {
+		if strings.Contains(diagnostics, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
 	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
 	if !input.SkipWaking {
@@ -1084,8 +1119,20 @@ func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput
 
 	sshArgs, err := e.SSHArgs(ctx)
 	if err != nil {
-		return EnvRunCommandOutput{}, fmt.Errorf("failed to get SSH args for modal sandbox %s: %w", e.SandboxName, err)
+		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to get SSH args for modal sandbox %s: %w", e.SandboxName, err)
 	}
+	diagnosticsFile, err := os.CreateTemp("", "sidekick-modal-ssh-*.log")
+	if err != nil {
+		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to create modal SSH diagnostics file: %w", err)
+	}
+	diagnosticsPath := diagnosticsFile.Name()
+	if err := diagnosticsFile.Close(); err != nil {
+		os.Remove(diagnosticsPath)
+		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to close modal SSH diagnostics file: %w", err)
+	}
+	defer os.Remove(diagnosticsPath)
+
+	sshArgs = insertBeforeSSHDestination(sshArgs, []string{"-v", "-E", diagnosticsPath})
 	sshArgs = append(sshArgs, fullCommand)
 
 	runCommandInput := unix.RunCommandActivityInput{
@@ -1093,7 +1140,16 @@ func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput
 		Command:    "ssh",
 		Args:       sshArgs,
 	}
-	return unix.RunCommandActivity(ctx, runCommandInput)
+	output, err := unix.RunCommandActivity(ctx, runCommandInput)
+	if err != nil || output.ExitStatus != 255 {
+		return output, "", err
+	}
+	diagnostics, readErr := os.ReadFile(diagnosticsPath)
+	if readErr != nil {
+		log.Warn().Err(readErr).Str("sandbox", e.SandboxName).Msg("failed to read modal SSH diagnostics")
+		return output, "", nil
+	}
+	return output, string(diagnostics), nil
 }
 
 // baseSSHArgs returns ssh args (ending with the destination) for reaching the

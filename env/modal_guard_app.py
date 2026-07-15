@@ -94,6 +94,7 @@ def hibernate(req: dict):
             pass
     state[name] = {
         "imageId": snapshot.object_id,
+        "imageVersion": req.get("imageVersion"),
         "meta": req.get("meta"),
         "history": history[-2:],
     }

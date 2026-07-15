@@ -79,6 +79,7 @@ func TestModalSandboxCreateParams(t *testing.T) {
 		assert.Equal(t, 2048, params.MemoryMiB)
 		require.Len(t, params.Command, 3)
 		assert.Contains(t, params.Command[2], "sshd")
+		assert.NotContains(t, params.Command[2], "apt-get")
 	})
 
 	t.Run("VM runtime with sizing", func(t *testing.T) {
@@ -192,4 +193,29 @@ func TestModalDockerfileDefinition(t *testing.T) {
 			assert.Equal(t, tt.expected, commands)
 		})
 	}
+}
+func TestModalSandboxSetupCommands(t *testing.T) {
+	t.Parallel()
+
+	commands := strings.Join(modalSandboxSetupCommands(), "\n")
+	assert.Contains(t, commands, "apt-get install")
+	assert.Contains(t, commands, "ripgrep")
+}
+func TestModalSnapshotImageVersion(t *testing.T) {
+	t.Parallel()
+
+	record := modalSnapshotRecord{ImageId: "im-current", ImageVersion: modalSnapshotImageVersion}
+	encoded, err := json.Marshal(record)
+	require.NoError(t, err)
+
+	var decoded modalSnapshotRecord
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	assert.Equal(t, modalSnapshotImageVersion, decoded.ImageVersion)
+	assert.True(t, modalSnapshotCompatible(&decoded))
+
+	decoded = modalSnapshotRecord{}
+	require.NoError(t, json.Unmarshal([]byte(`{"imageId":"im-stale"}`), &decoded))
+	assert.Zero(t, decoded.ImageVersion)
+	assert.False(t, modalSnapshotCompatible(&decoded))
+	assert.False(t, modalSnapshotCompatible(nil))
 }

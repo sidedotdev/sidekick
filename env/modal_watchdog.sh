@@ -58,7 +58,7 @@ is_busy() {
 guard_post() {
     curl -fsS -m 60 -X POST "$SIDE_GUARD_URL" \
         -H 'Content-Type: application/json' \
-        -d "{\"name\":\"$SIDE_SANDBOX_NAME\",\"token\":\"$SIDE_GUARD_TOKEN\",\"phase\":\"$1\",\"meta\":$SIDE_SANDBOX_META}" \
+        -d "{\"name\":\"$SIDE_SANDBOX_NAME\",\"token\":\"$SIDE_GUARD_TOKEN\",\"phase\":\"$1\",\"imageVersion\":${SIDE_IMAGE_VERSION:-0},\"meta\":$SIDE_SANDBOX_META}" \
         >/dev/null
 }
 

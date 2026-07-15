@@ -25,6 +25,11 @@ import (
 // are created.
 const modalAppName = "sidekick"
 
+// modalSnapshotImageVersion marks snapshots safe to use as the base image for
+// newly created sandboxes. Bump it when image changes cannot be safely layered
+// onto snapshots produced by an older version.
+const modalSnapshotImageVersion = 1
+
 // modalDefaultImage is the base image used when the repo config does not
 // specify one. It must be Debian-based and run as root, since sidekick layers
 // its test and remote-access dependencies on top.
@@ -152,6 +157,18 @@ func waitForModalSSHD(ctx context.Context, sb *modal.Sandbox) error {
 	return nil
 }
 
+func modalSandboxSetupCommands() []string {
+	return []string{
+		"ENV DEBIAN_FRONTEND=noninteractive",
+		"RUN apt-get update -q && apt-get install -qy --no-install-recommends openssh-server git curl ca-certificates ripgrep && rm -rf /var/lib/apt/lists/*",
+		"RUN mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh",
+	}
+}
+
+func modalSnapshotCompatible(record *modalSnapshotRecord) bool {
+	return record != nil && record.ImageVersion == modalSnapshotImageVersion
+}
+
 // modalSandboxImage layers Sidekick's remote-access dependencies onto the
 // configured (Debian-based, root) image. Modal caches each image build layer.
 func modalSandboxImage(client *modal.Client, config common.ModalEnvConfig, repoDir string) (*modal.Image, error) {
@@ -170,11 +187,7 @@ func modalSandboxImage(client *modal.Client, config common.ModalEnvConfig, repoD
 	if imageRef == "" {
 		imageRef = modalDefaultImage
 	}
-	commands = append(commands,
-		"ENV DEBIAN_FRONTEND=noninteractive",
-		"RUN apt-get update -q && apt-get install -qy --no-install-recommends openssh-server git curl ca-certificates && rm -rf /var/lib/apt/lists/*",
-		"RUN mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh",
-	)
+	commands = append(commands, modalSandboxSetupCommands()...)
 	return client.Images.FromRegistry(imageRef, nil).DockerfileCommands(commands, nil), nil
 }
 
@@ -399,6 +412,9 @@ func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int,
 		return "", 0, err
 	}
 	if sb != nil {
+		if err := waitForModalSSHD(ctx, sb); err != nil {
+			return "", 0, err
+		}
 		return modalTunnelEndpoint(ctx, sb)
 	}
 	record, err := modalLatestSnapshot(ctx, client, sandboxName)
@@ -447,12 +463,10 @@ func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (Mod
 			return ModalCreateSandboxOutput{}, fmt.Errorf("failed to look up modal app %s: %w", modalAppName, err)
 		}
 
-		// Restore from the idle watchdog's latest filesystem snapshot when
-		// one exists: repo, worktrees and caches come back as they were.
-		// Otherwise bootstrap from the most recent snapshot of another
-		// sandbox for the same repo, inheriting its repo (with deepened
-		// history) and installed dependencies instead of starting from
-		// scratch.
+		// Restore from the idle watchdog's latest compatible filesystem
+		// snapshot when one exists: repo, worktrees and caches come back as
+		// they were. Otherwise bootstrap from a compatible snapshot of another
+		// sandbox for the same repo, or fall back to a clean current image.
 		var image *modal.Image
 		for _, snapName := range append([]string{input.Name}, modalSeedCandidates(input.RepoDir)...) {
 			record, snapErr := modalLatestSnapshot(ctx, client, snapName)
@@ -461,6 +475,14 @@ func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (Mod
 				continue
 			}
 			if record == nil {
+				continue
+			}
+			if !modalSnapshotCompatible(record) {
+				log.Info().
+					Str("sandbox", snapName).
+					Int("snapshotImageVersion", record.ImageVersion).
+					Int("requiredImageVersion", modalSnapshotImageVersion).
+					Msg("skipping incompatible modal snapshot")
 				continue
 			}
 			snapImage, imgErr := client.Images.FromID(ctx, record.ImageId)

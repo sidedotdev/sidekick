@@ -265,8 +265,9 @@ func modalExecCapture(ctx context.Context, sb *modal.Sandbox, script string) (st
 // snapshot. Meta round-trips the sandbox's ModalEnvConfig so restores use the
 // same runtime/sizing as the original.
 type modalSnapshotRecord struct {
-	ImageId string          `json:"imageId"`
-	Meta    json.RawMessage `json:"meta,omitempty"`
+	ImageId      string          `json:"imageId"`
+	ImageVersion int             `json:"imageVersion,omitempty"`
+	Meta         json.RawMessage `json:"meta,omitempty"`
 }
 
 // modalLatestSnapshot returns the most recent watchdog snapshot record for a
@@ -336,11 +337,12 @@ func modalWatchdogEnv(ctx context.Context, client *modal.Client, sandboxName str
 		meta = []byte("{}")
 	}
 	return map[string]string{
-		"SIDE_GUARD_URL":    guardURL,
-		"SIDE_GUARD_TOKEN":  token,
-		"SIDE_SANDBOX_NAME": sandboxName,
-		"SIDE_SANDBOX_META": string(meta),
-		"SIDE_IDLE_SECONDS": strconv.Itoa(idleSeconds),
-		"SIDE_WATCHDOG":     modalWatchdogScript,
+		"SIDE_GUARD_URL":     guardURL,
+		"SIDE_GUARD_TOKEN":   token,
+		"SIDE_SANDBOX_NAME":  sandboxName,
+		"SIDE_SANDBOX_META":  string(meta),
+		"SIDE_IMAGE_VERSION": strconv.Itoa(modalSnapshotImageVersion),
+		"SIDE_IDLE_SECONDS":  strconv.Itoa(idleSeconds),
+		"SIDE_WATCHDOG":      modalWatchdogScript,
 	}, tokenHash, nil
 }

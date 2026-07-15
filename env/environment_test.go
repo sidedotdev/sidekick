@@ -588,3 +588,95 @@ func TestPosixRel(t *testing.T) {
 		})
 	}
 }
+func TestModalRunCommandRetriesTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	refreshes := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "old.modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			if attempts == 1 {
+				return EnvRunCommandOutput{
+					ExitStatus: 255,
+				}, "ssh: connect to address old.modal.host port 1234: Connection refused", nil
+			}
+			return EnvRunCommandOutput{ExitStatus: 0, Stdout: "completed"}, "", nil
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			return "old.modal.host", 1234, nil
+		},
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+	require.NoError(t, err)
+	assert.Equal(t, 0, output.ExitStatus)
+	assert.Equal(t, "completed", output.Stdout)
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, 1, refreshes)
+}
+
+func TestModalRunCommandDoesNotRetryRemoteExit255(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	refreshes := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "old.modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{
+				ExitStatus: 255,
+				Stdout:     "connection closed",
+				Stderr:     "ssh: connect to host nested.example port 22: Connection refused",
+			}, "debug1: channel 0: free", nil
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			return "new.modal.host", 5678, nil
+		},
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+	require.NoError(t, err)
+	assert.Equal(t, 255, output.ExitStatus)
+	assert.Contains(t, output.Stderr, "debug1: channel 0: free")
+	assert.Equal(t, 1, attempts)
+	assert.Zero(t, refreshes)
+}
+func TestModalRunCommandPreservesDiagnosticsWhenRefreshFails(t *testing.T) {
+	t.Parallel()
+
+	const diagnostics = "debug1: connect to address 127.0.0.1 port 22: Connection refused"
+	attempts := 0
+	refreshes := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "old.modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{
+				ExitStatus: 255,
+				Stderr:     "remote stderr",
+			}, diagnostics, nil
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			return "", 0, context.DeadlineExceeded
+		},
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+	require.NoError(t, err)
+	assert.Equal(t, 255, output.ExitStatus)
+	assert.Equal(t, "remote stderr\n"+diagnostics, output.Stderr)
+	assert.Equal(t, 1, attempts)
+	assert.Equal(t, 1, refreshes)
+}
