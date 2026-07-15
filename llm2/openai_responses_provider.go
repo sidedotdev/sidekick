@@ -31,7 +31,17 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	options := request.Options
 
 	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
-	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, p.AuthType)
+	authType := common.NormalizeProviderAuthType(string(p.AuthType))
+	if providerNameNormalized != "OPENAI" {
+		if authType == common.ProviderAuthTypeSubscription {
+			return nil, fmt.Errorf("OpenAI subscription auth is only supported by the built-in openai provider")
+		}
+		if authType == common.ProviderAuthTypeAny {
+			authType = common.ProviderAuthTypeAPI
+		}
+	}
+
+	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
 	if err != nil {
 		return nil, err
 	}

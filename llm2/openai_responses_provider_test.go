@@ -734,7 +734,7 @@ func TestOpenAIResponsesProvider_SubscriptionRequest(t *testing.T) {
 		}},
 		Options: Options{
 			ModelConfig: common.ModelConfig{
-				Provider: "openai-alias",
+				Provider: "openai",
 				Model:    "gpt-5-codex",
 			},
 			MaxTokens: 1024,
@@ -946,4 +946,82 @@ func TestMessageToResponsesInput_OnlyIncludesOpenAIEncryptedReasoning(t *testing
 	assert.Empty(t, items[0].OfReasoning.Content)
 	assert.Equal(t, "OpenAI summary", items[0].OfReasoning.Summary[0].Text)
 	assert.Equal(t, "OpenAI encrypted continuation", items[0].OfReasoning.EncryptedContent.Value)
+}
+func TestOpenAIResponsesProvider_CompatibleAnyUsesProviderAPIKey(t *testing.T) {
+	var requestPath string
+	var authorization string
+	var accountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		accountID = r.Header.Get("ChatGPT-Account-Id")
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH":        `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`,
+			"LLM_GATEWAY_API_KEY": "sk-gateway-key",
+		},
+	}
+	provider := OpenAIResponsesProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeAny,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "llm-gateway",
+			Model:    "custom-model",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.Error(t, err)
+	assert.Equal(t, "/responses", requestPath)
+	assert.Equal(t, "Bearer sk-gateway-key", authorization)
+	assert.Empty(t, accountID)
+	assert.Equal(t, []string{"LLM_GATEWAY_API_KEY"}, manager.calls)
+}
+func TestOpenAIResponsesProvider_CompatibleSubscriptionRejectedBeforeRequest(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH":        `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`,
+			"LLM_GATEWAY_API_KEY": "sk-gateway-key",
+		},
+	}
+	provider := OpenAIResponsesProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeSubscription,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "llm-gateway",
+			Model:    "custom-model",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.ErrorContains(t, err, "OpenAI subscription auth is only supported by the built-in openai provider")
+	assert.False(t, requested)
+	assert.Empty(t, manager.calls)
 }
