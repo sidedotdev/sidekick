@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/invopop/jsonschema"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -966,4 +967,28 @@ func TestAnthropicResponsesProvider_FastModeSpeedup(t *testing.T) {
 	if fastAvg >= normalAvg {
 		t.Fatalf("expected fast-mode avg latency (%s) to be lower than normal-mode avg (%s)", fastAvg, normalAvg)
 	}
+}
+func TestAccumulateAnthropicMessageMetadataIgnoresMalformedToolInput(t *testing.T) {
+	t.Parallel()
+
+	rawEvents := []string{
+		`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-opus-4-8","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_test","name":"get_help_or_input","input":{}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"requests\": <parameter name=\"content\">broken"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":9}}`,
+	}
+
+	var message anthropic.Message
+	for _, rawEvent := range rawEvents {
+		var event anthropic.MessageStreamEventUnion
+		assert.NoError(t, json.Unmarshal([]byte(rawEvent), &event))
+		assert.NoError(t, accumulateAnthropicMessageMetadata(&message, event))
+	}
+
+	assert.Equal(t, "msg_test", message.ID)
+	assert.Equal(t, int64(12), message.Usage.InputTokens)
+	assert.Equal(t, int64(9), message.Usage.OutputTokens)
+	assert.Equal(t, anthropic.StopReasonToolUse, message.StopReason)
+	assert.Empty(t, message.Content)
 }

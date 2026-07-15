@@ -91,6 +91,16 @@ func anthropicRequestHeaders(model string, useOAuth bool, accessToken string, to
 	return headers
 }
 
+func accumulateAnthropicMessageMetadata(message *anthropic.Message, event anthropic.MessageStreamEventUnion) error {
+	switch event.AsAny().(type) {
+	case anthropic.MessageStartEvent, anthropic.MessageDeltaEvent:
+		if err := message.Accumulate(event); err != nil {
+			return fmt.Errorf("failed to accumulate message metadata: %w", err)
+		}
+	}
+	return nil
+}
+
 func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options
@@ -280,9 +290,8 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	for stream.Next() {
 		event := stream.Current()
 
-		err := finalMessage.Accumulate(event)
-		if err != nil {
-			return nil, fmt.Errorf("failed to accumulate message: %w", err)
+		if err := accumulateAnthropicMessageMetadata(&finalMessage, event); err != nil {
+			return nil, err
 		}
 
 		switch evt := event.AsAny().(type) {
