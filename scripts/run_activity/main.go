@@ -213,6 +213,7 @@ func buildActivityRegistry() map[string]interface{} {
 		dev.SummarizeDiffActivity,
 		dev.AssessResolutionSubstantialityActivity,
 		dev.CheckCommandPermissionActivity,
+		dev.EnsureCoreIgnoreFileActivity,
 		common.GetLocalConfig,
 		common.BaseCommandPermissionsActivity,
 		persisted_ai.RepairToolCallArgumentsActivity,
