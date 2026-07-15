@@ -2,17 +2,20 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
 
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/srv/sqlite"
 	"sidekick/utils"
 
@@ -49,7 +52,117 @@ type AdvisorWorkflowTestSuite struct {
 	modelUpdatesWorkflow func(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer, initial common.LLMConfig, updates []common.LLMConfig) (*persisted_ai.ChatHistoryContainer, error)
 }
 
-const advisorTestWorkspaceId = "ws_advisor_test"
+const (
+	advisorTestWorkspaceId  = "ws_advisor_test"
+	advisorPauseReadySignal = "advisor_pause_ready"
+)
+
+type advisorPauseWorkflowResult struct {
+	Iterations int
+	Completed  bool
+}
+
+func advisorPauseChildWorkflow(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer) (advisorPauseWorkflowResult, error) {
+	ctx = utils.NoRetryCtx(ctx)
+	globalState := &flow_action.GlobalState{}
+	globalState.InitValues()
+	dCtx := DevContext{
+		ExecContext: flow_action.ExecContext{
+			Context:     ctx,
+			WorkspaceId: advisorTestWorkspaceId,
+			GlobalState: globalState,
+			FlowScope:   &flow_action.FlowScope{SubflowName: "advisor"},
+			Secrets: &secret_manager.SecretManagerContainer{
+				SecretManager: secret_manager.MockSecretManager{},
+			},
+		},
+	}
+	dCtx.SetLLMConfig(common.LLMConfig{
+		Defaults: []common.ModelConfig{{Provider: "openai", Model: "default-model"}},
+		UseCaseConfigs: map[string][]common.ModelConfig{
+			common.AdvisingKey: {{Provider: "openai", Model: "advisor-model"}},
+		},
+	})
+	if err := SetupModelConfigHandlers(dCtx); err != nil {
+		return advisorPauseWorkflowResult{}, err
+	}
+	SetupPauseHandler(dCtx, "", nil)
+
+	advisor := &Advisor{
+		Enabled:          true,
+		EveryNTurns:      3,
+		ChatHistory:      NewVersionedChatHistory(ctx, dCtx.WorkspaceId),
+		turnsSinceAdvice: 2,
+	}
+
+	parent := workflow.GetInfo(ctx).ParentWorkflowExecution
+	if parent == nil {
+		return advisorPauseWorkflowResult{}, fmt.Errorf("advisor pause test requires a parent workflow")
+	}
+	if err := workflow.SignalExternalWorkflow(ctx, parent.ID, "", advisorPauseReadySignal, true).Get(ctx, nil); err != nil {
+		return advisorPauseWorkflowResult{}, fmt.Errorf("failed to signal advisor readiness: %w", err)
+	}
+
+	iterations := 0
+	completed, err := LlmLoop(dCtx, executorHistory, func(iteration *LlmIteration) (*bool, error) {
+		iterations++
+		if err := advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, nil, nil); err != nil {
+			if advisor.handlePauseInterruption(iteration.ExecCtx) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("error running advisor: %w", err)
+		}
+		done := true
+		return &done, nil
+	})
+	if err != nil {
+		return advisorPauseWorkflowResult{}, err
+	}
+	return advisorPauseWorkflowResult{
+		Iterations: iterations,
+		Completed:  completed != nil && *completed,
+	}, nil
+}
+
+func advisorPauseParentWorkflow(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer) (advisorPauseWorkflowResult, error) {
+	const childWorkflowID = "advisor-pause-child"
+
+	requests := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+	workflow.Go(ctx, func(ctx workflow.Context) {
+		var req flow_action.RequestForUser
+		requests.Receive(ctx, &req)
+		_ = workflow.SignalExternalWorkflow(
+			ctx,
+			req.OriginWorkflowId,
+			"",
+			flow_action.UserResponseSignalName(req.FlowActionId),
+			flow_action.UserResponse{
+				FlowActionId: req.FlowActionId,
+				Content:      "continue",
+			},
+		).Get(ctx, nil)
+	})
+
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID: childWorkflowID,
+	})
+	child := workflow.ExecuteChildWorkflow(childCtx, advisorPauseChildWorkflow, executorHistory)
+
+	var ready bool
+	workflow.GetSignalChannel(ctx, advisorPauseReadySignal).Receive(ctx, &ready)
+	if !ready {
+		return advisorPauseWorkflowResult{}, fmt.Errorf("advisor child did not report readiness")
+	}
+	if err := workflow.SignalExternalWorkflow(ctx, childWorkflowID, "", SignalNamePause, Pause{}).Get(ctx, nil); err != nil {
+		return advisorPauseWorkflowResult{}, err
+	}
+
+	var result advisorPauseWorkflowResult
+	if err := child.Get(ctx, &result); err != nil {
+		return advisorPauseWorkflowResult{}, err
+	}
+	return result, nil
+}
 
 func (s *AdvisorWorkflowTestSuite) SetupTest() {
 	s.T().Helper()
@@ -127,6 +240,8 @@ func (s *AdvisorWorkflowTestSuite) SetupTest() {
 		return executorHistory, nil
 	}
 	s.env.RegisterWorkflowWithOptions(s.modelUpdatesWorkflow, workflow.RegisterOptions{Name: "advisorModelUpdatesWorkflow"})
+	s.env.RegisterWorkflow(advisorPauseChildWorkflow)
+	s.env.RegisterWorkflow(advisorPauseParentWorkflow)
 
 	// Real activities: the advisor summarization must hydrate the executor
 	// history from storage, so it needs the real storage-backed activity.
@@ -144,6 +259,10 @@ func (s *AdvisorWorkflowTestSuite) SetupTest() {
 	s.env.OnActivity(fa.GetModelMetadata, mock.Anything, mock.Anything, mock.Anything).
 		Return(common.ModelMetadata{}, nil).
 		Maybe()
+
+	var srvActivities srv.Activities
+	s.env.OnActivity(srvActivities.GetFlow, mock.Anything, mock.Anything, mock.Anything).Return(domain.Flow{}, nil).Maybe()
+	s.env.OnActivity(srvActivities.PersistFlow, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Persist advisor and executor appends for real so injected messages can be
 	// hydrated and their serialized content blocks inspected (e.g. to confirm no
@@ -534,4 +653,38 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_SkipsAndResumesAsModelsChange
 	s.NoError(s.env.GetWorkflowError())
 	s.Len(s.executorRefsFromResult(), originalRefs, "proceed must not modify the executor history")
 	s.env.AssertExpectations(s.T())
+}
+
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_PauseInterruptionResumesAndRetriesDueTurn() {
+	executorHistory, _ := s.persistExecutorHistory("exec_flow_pause_retry")
+
+	proceedResponse := &llm2.MessageResponse{
+		StopReason: "tool_use",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeToolUse,
+				ToolUse: &llm2.ToolUseBlock{
+					Id:        "call_proceed_after_resume",
+					Name:      advisorProceedToolName,
+					Arguments: "{}",
+				},
+			}},
+		},
+	}
+
+	var activities *persisted_ai.Llm2Activities
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.Anything).
+		Return(proceedResponse, nil).
+		Once()
+
+	s.env.ExecuteWorkflow(advisorPauseParentWorkflow, executorHistory)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var result advisorPauseWorkflowResult
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+	s.True(result.Completed, "workflow must continue after the pause checkpoint")
+	s.Equal(2, result.Iterations, "the interrupted advisor cadence slot must be retried on the next normal iteration")
 }

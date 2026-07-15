@@ -131,6 +131,15 @@ func (a *Advisor) shouldAdvise() bool {
 	return true
 }
 
+func (a *Advisor) handlePauseInterruption(dCtx DevContext) bool {
+	if dCtx.GlobalState == nil || !dCtx.GlobalState.Paused {
+		return false
+	}
+
+	a.turnsSinceAdvice = max(0, a.EveryNTurns-1)
+	return true
+}
+
 // MaybeAdvise runs one advisor turn when the cadence is due. It reviews the
 // executor's recent history, forces a single tool call over the advisor tools
 // plus the executor's own tools, and applies the result: proceed is a no-op,

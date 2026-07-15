@@ -369,6 +369,9 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-advisor", workflow.DefaultVersion, 1); v == 1 {
 		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devPlanTools(iteration.ExecCtx, hasExistingPlan), customHandlers); err != nil {
+			if state.advisor.handlePauseInterruption(iteration.ExecCtx) {
+				return nil, nil
+			}
 			return nil, fmt.Errorf("error running advisor: %w", err)
 		}
 		if recordedPlan != nil {

@@ -400,6 +400,9 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 
 		if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 && advisor != nil {
 			if err := advisor.MaybeAdvise(dCtx, chatHistory, authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan), nil); err != nil {
+				if advisor.handlePauseInterruption(dCtx) {
+					continue
+				}
 				return nil, fmt.Errorf("error running advisor: %w", err)
 			}
 		}

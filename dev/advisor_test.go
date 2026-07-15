@@ -169,3 +169,66 @@ func TestSameAdvisorModelAndReasoning(t *testing.T) {
 		})
 	}
 }
+func TestAdvisor_handlePauseInterruption(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		globalState        *flow_action.GlobalState
+		everyNTurns        int
+		turnsSinceAdvice   int
+		wantHandled        bool
+		wantTurnsSinceNext int
+		wantDueNextTurn    bool
+	}{
+		{
+			name:               "active pause restores due cadence slot",
+			globalState:        &flow_action.GlobalState{Paused: true},
+			everyNTurns:        3,
+			turnsSinceAdvice:   0,
+			wantHandled:        true,
+			wantTurnsSinceNext: 2,
+			wantDueNextTurn:    true,
+		},
+		{
+			name:               "inactive pause leaves cadence unchanged",
+			globalState:        &flow_action.GlobalState{},
+			everyNTurns:        3,
+			turnsSinceAdvice:   0,
+			wantHandled:        false,
+			wantTurnsSinceNext: 0,
+			wantDueNextTurn:    false,
+		},
+		{
+			name:               "missing global state leaves cadence unchanged",
+			globalState:        nil,
+			everyNTurns:        3,
+			turnsSinceAdvice:   0,
+			wantHandled:        false,
+			wantTurnsSinceNext: 0,
+			wantDueNextTurn:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			advisor := &Advisor{
+				Enabled:          true,
+				EveryNTurns:      tt.everyNTurns,
+				turnsSinceAdvice: tt.turnsSinceAdvice,
+			}
+			dCtx := DevContext{
+				ExecContext: flow_action.ExecContext{
+					GlobalState: tt.globalState,
+				},
+			}
+
+			assert.Equal(t, tt.wantHandled, advisor.handlePauseInterruption(dCtx))
+			assert.Equal(t, tt.wantTurnsSinceNext, advisor.turnsSinceAdvice)
+			assert.Equal(t, tt.wantDueNextTurn, advisor.shouldAdvise())
+		})
+	}
+}

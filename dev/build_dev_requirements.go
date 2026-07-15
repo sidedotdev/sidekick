@@ -310,6 +310,9 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-requirements-advisor", workflow.DefaultVersion, 1); v == 1 {
 		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devRequirementsTools(iteration.ExecCtx, hasExistingRequirements), nil); err != nil {
+			if state.advisor.handlePauseInterruption(iteration.ExecCtx) {
+				return nil, nil
+			}
 			return nil, fmt.Errorf("error running advisor: %w", err)
 		}
 	}
