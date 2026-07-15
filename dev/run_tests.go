@@ -18,6 +18,12 @@ import (
 )
 
 var maxTestOutputSize = min(4000, defaultRequestedKeepLength/4)
+var summarizeTestOutput = SummarizeTestOutput
+
+func gracefullyHandlePausedTestError(dCtx DevContext) bool {
+	version := workflow.GetVersion(dCtx, "graceful-paused-test-error", workflow.DefaultVersion, 1)
+	return version >= 1 && dCtx.GlobalState != nil && dCtx.GlobalState.Paused
+}
 
 // TestResult holds a detailed information about test run
 type TestResult struct {
@@ -63,9 +69,9 @@ func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult
 
 	for i, result := range testResults {
 		if len(result.Output) > maxTestOutputSize {
-			summarizedOutput, err := SummarizeTestOutput(dCtx, result.Output)
+			summarizedOutput, err := summarizeTestOutput(dCtx, result.Output)
 			if err != nil {
-				return TestResult{}, fmt.Errorf("failed to summarize test output: %v", err)
+				return TestResult{}, fmt.Errorf("failed to summarize test output: %w", err)
 			}
 			testResults[i].Output = summarizedOutput
 		}

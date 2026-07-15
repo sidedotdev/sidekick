@@ -11,6 +11,8 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ResolveMergeConflictsParams describes a single conflict-resolution
@@ -135,6 +137,15 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 		// 2. Re-run tests on the resolved state.
 		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
+			if errors.Is(err, flow_action.PendingActionError) {
+				promptInfo = SkipInfo{}
+				continue
+			}
+			if gracefullyHandlePausedTestError(dCtx) {
+				log.Debug().Err(err).Msg("Ignoring conflict resolution test error while paused")
+				promptInfo = SkipInfo{}
+				continue
+			}
 			return fmt.Errorf("failed to run tests during conflict resolution: %w", err)
 		}
 		if !testResult.TestsPassed && !testResult.TestsSkipped {

@@ -17,6 +17,8 @@ import (
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Weights used when fusing repo-summary RAG rankings derived from review
@@ -452,6 +454,10 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		// Step 3: run tests
 		testResult, err = RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
+			if handleCodingTestError(dCtx, err, false) {
+				promptInfo = SkipInfo{}
+				continue
+			}
 			return "", fmt.Errorf("failed to run tests: %w", err)
 		}
 
@@ -469,6 +475,10 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
 			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
 			if err != nil {
+				if handleCodingTestError(dCtx, err, true) {
+					promptInfo = SkipInfo{}
+					continue
+				}
 				return "", fmt.Errorf("failed to run integration tests: %w", err)
 			}
 			if !integrationTestResult.TestsPassed && !integrationTestResult.TestsSkipped {
@@ -1152,4 +1162,18 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 	}
 
 	return gitDiff, mergeInfo, currentTreeHash, err
+}
+func handleCodingTestError(dCtx DevContext, err error, integration bool) bool {
+	if errors.Is(err, flow_action.PendingActionError) {
+		return true
+	}
+	if !gracefullyHandlePausedTestError(dCtx) {
+		return false
+	}
+
+	log.Debug().
+		Err(err).
+		Bool("integration", integration).
+		Msg("Ignoring test error while paused")
+	return true
 }

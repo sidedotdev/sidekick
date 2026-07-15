@@ -536,7 +536,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 			resolveAttempt,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
+			return nil, fmt.Errorf("error during tracked tool chat action '%s': %w", actionType, err)
 		}
 
 		return response, nil

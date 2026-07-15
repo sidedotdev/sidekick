@@ -7,8 +7,10 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/utils"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -177,8 +179,11 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 		attempts++
 
 		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
-		if err != nil {
-			return fmt.Errorf("failed to run tests: %v", err)
+		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
+			if !gracefullyHandlePausedTestError(dCtx) {
+				return fmt.Errorf("failed to run tests: %w", err)
+			}
+			log.Debug().Err(err).Msg("Ignoring test error while paused")
 		}
 
 		if testResult.TestsSkipped {
@@ -186,22 +191,27 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 		}
 
 		integrationTestsFailed := false
-		if testResult.TestsPassed {
+		if err == nil && testResult.TestsPassed {
 			if len(dCtx.RepoConfig.IntegrationTestCommands) == 0 {
 				break
 			}
 
 			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
-			if err != nil {
-				return fmt.Errorf("failed to run integration tests: %v", err)
+			if err != nil && !errors.Is(err, flow_action.PendingActionError) {
+				if !gracefullyHandlePausedTestError(dCtx) {
+					return fmt.Errorf("failed to run integration tests: %w", err)
+				}
+				log.Debug().Err(err).Msg("Ignoring integration test error while paused")
 			}
-			if integrationTestResult.TestsPassed || integrationTestResult.TestsSkipped {
-				break
-			}
+			if err == nil {
+				if integrationTestResult.TestsPassed || integrationTestResult.TestsSkipped {
+					break
+				}
 
-			// use the integration test results as part of the prompt
-			testResult = integrationTestResult
-			integrationTestsFailed = true
+				// use the integration test results as part of the prompt
+				testResult = integrationTestResult
+				integrationTestsFailed = true
+			}
 		}
 
 		_, err = completeDevStep(dCtx, input.Requirements, planExec, DevStep{

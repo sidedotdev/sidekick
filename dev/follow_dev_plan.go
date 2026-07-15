@@ -275,7 +275,16 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			// Run tests (TODO: replace this with using the latest DevStepResult)
 			testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 			if err != nil {
-				return result, fmt.Errorf("failed to run tests: %v", err)
+				if errors.Is(err, flow_action.PendingActionError) {
+					promptInfo = SkipInfo{}
+					continue
+				}
+				if gracefullyHandlePausedTestError(dCtx) {
+					log.Debug().Err(err).Msg("Ignoring test error while paused")
+					promptInfo = SkipInfo{}
+					continue
+				}
+				return result, fmt.Errorf("failed to run tests: %w", err)
 			}
 
 			// Get user feedback with git diff and test results
@@ -343,6 +352,11 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 						break
 					}
 				}
+				if gracefullyHandlePausedTestError(dCtx) {
+					log.Debug().Err(err).Msg("Ignoring step completion error while paused")
+					promptInfo = SkipInfo{}
+					continue
+				}
 				return result, fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
 			}
 		} else {
@@ -405,7 +419,7 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 		// Pass a git diff of the repo + test results to the llm and ask if it looks good
 		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
-			return result, fmt.Errorf("failed to run tests: %v", err)
+			return result, fmt.Errorf("failed to run tests: %w", err)
 		}
 		autoChecks := ""
 		if !testResult.TestsSkipped {
@@ -416,7 +430,7 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 			if step.RunIntegrationTests && testResult.TestsPassed && len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
 				integrationTestResult, intErr := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
 				if intErr != nil {
-					return result, fmt.Errorf("failed to run integration tests: %v", intErr)
+					return result, fmt.Errorf("failed to run integration tests: %w", intErr)
 				}
 				if !integrationTestResult.TestsPassed && !integrationTestResult.TestsSkipped {
 					result.Successful = false

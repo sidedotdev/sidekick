@@ -3,6 +3,7 @@ package dev
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"sidekick/common"
@@ -12,6 +13,7 @@ import (
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/utils"
+	"strings"
 	"sync"
 	"testing"
 
@@ -541,4 +543,146 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 
 func TestRunTestsTestSuite(t *testing.T) {
 	suite.Run(t, new(RunTestsTestSuite))
+}
+
+func (s *RunTestsTestSuite) TestPausedSummarizationReachesUserResponsePath() {
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{WorkingDir: ".", Command: "failing command"},
+		},
+	}
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
+		Stdout:     strings.Repeat("failure output", maxTestOutputSize),
+		ExitStatus: 1,
+	}, nil).Once()
+
+	originalSummarizeTestOutput := summarizeTestOutput
+	s.T().Cleanup(func() {
+		summarizeTestOutput = originalSummarizeTestOutput
+	})
+	summarizationCount := 0
+	summarizeTestOutput = func(dCtx DevContext, _ string) (string, error) {
+		summarizationCount++
+		dCtx.GlobalState.Paused = true
+		return "", fmt.Errorf("tracked summarization failed: %w", temporal.NewCanceledError())
+	}
+
+	childWorkflow := func(ctx workflow.Context) error {
+		ctx = utils.NoRetryCtx(ctx)
+		dCtx := *s.devContext
+		dCtx.ExecContext.Context = ctx
+
+		_, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
+		if err == nil {
+			return errors.New("expected summarization error")
+		}
+		if !temporal.IsCanceledError(err) {
+			return fmt.Errorf("expected cancellation error, got %w", err)
+		}
+		if errors.Is(err, flow_action.PendingActionError) {
+			return fmt.Errorf("expected cancellation error instead of pending action error: %w", err)
+		}
+		if !handleCodingTestError(dCtx, err, false) {
+			return fmt.Errorf("expected coding loop to handle paused test error: %w", err)
+		}
+
+		response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil)
+		if err != nil {
+			return fmt.Errorf("failed to request user response while paused: %w", err)
+		}
+		if response == nil || response.Content != "continue" {
+			return fmt.Errorf("expected resume response, got %#v", response)
+		}
+		if dCtx.GlobalState.Paused {
+			return errors.New("expected pause state to be cleared after user response")
+		}
+		return nil
+	}
+	s.env.RegisterWorkflow(childWorkflow)
+
+	userPromptCount := 0
+	parentWorkflow := func(ctx workflow.Context) error {
+		signalCh := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			var req flow_action.RequestForUser
+			signalCh.Receive(ctx, &req)
+			userPromptCount++
+			workflow.SignalExternalWorkflow(
+				ctx,
+				req.OriginWorkflowId,
+				"",
+				flow_action.UserResponseSignalName(req.FlowActionId),
+				flow_action.UserResponse{
+					FlowActionId: req.FlowActionId,
+					Content:      "continue",
+				},
+			).Get(ctx, nil)
+		})
+
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "paused-summarization-child",
+		})
+		return workflow.ExecuteChildWorkflow(childCtx, childWorkflow).Get(ctx, nil)
+	}
+	s.env.RegisterWorkflow(parentWorkflow)
+	s.env.ExecuteWorkflow(parentWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal(1, summarizationCount)
+	s.Equal(1, userPromptCount)
+}
+func (s *RunTestsTestSuite) TestGracefullyHandlePausedTestErrorVersioning() {
+	testCases := []struct {
+		name            string
+		version         workflow.Version
+		paused          bool
+		expectedHandled bool
+	}{
+		{
+			name:            "old history retains failure behavior",
+			version:         workflow.DefaultVersion,
+			paused:          true,
+			expectedHandled: false,
+		},
+		{
+			name:            "new history handles paused error",
+			version:         1,
+			paused:          true,
+			expectedHandled: true,
+		},
+		{
+			name:            "new history does not handle unpaused error",
+			version:         1,
+			paused:          false,
+			expectedHandled: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		s.Run(testCase.name, func() {
+			testEnv := s.NewTestWorkflowEnvironment()
+			testEnv.SetWorkerOptions(utils.TestWorkerOptions())
+			testEnv.OnGetVersion(
+				"graceful-paused-test-error",
+				workflow.DefaultVersion,
+				1,
+			).Return(testCase.version).Once()
+
+			workflowFn := func(ctx workflow.Context) error {
+				dCtx := *s.devContext
+				dCtx.ExecContext.Context = ctx
+				dCtx.GlobalState.Paused = testCase.paused
+				if handled := gracefullyHandlePausedTestError(dCtx); handled != testCase.expectedHandled {
+					return fmt.Errorf("expected handled=%t, got %t", testCase.expectedHandled, handled)
+				}
+				return nil
+			}
+			testEnv.RegisterWorkflow(workflowFn)
+			testEnv.ExecuteWorkflow(workflowFn)
+
+			s.True(testEnv.IsWorkflowCompleted())
+			s.NoError(testEnv.GetWorkflowError())
+		})
+	}
 }
