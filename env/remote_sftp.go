@@ -236,10 +236,15 @@ func (sc *sftpConn) resetIdleTimerLocked() {
 	sc.idleTimer = time.AfterFunc(sftpIdleTimeout, sc.Close)
 }
 
-// resetAndDial closes any existing connection and establishes a new one.
-func (sc *sftpConn) resetAndDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.Client, error) {
+// reconnectAfterFailure replaces failedClient unless another request has
+// already established a replacement connection.
+func (sc *sftpConn) reconnectAfterFailure(ctx context.Context, sshEnv SSHCapableEnv, failedClient *sftp.Client) (*sftp.Client, error) {
 	sc = sc.lockLive()
 	defer sc.mu.Unlock()
+	if sc.client != failedClient && sc.client != nil {
+		sc.resetIdleTimerLocked()
+		return sc.client, nil
+	}
 	sc.closeLocked()
 	return sc.dialLocked(ctx, sshEnv)
 }
@@ -288,8 +293,6 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 	remoteCmd := shellQuote(remotePath)
 	runArgs := append(independentSSHArgs(sshArgs), remoteCmd)
 
-	log.Debug().Str("remotePath", remotePath).Msg("starting remote SFTP server")
-
 	cmd := exec.Command("ssh", runArgs...)
 	var sshDiagnostics bytes.Buffer
 	cmd.Stderr = &sshDiagnostics
@@ -324,6 +327,7 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 		return nil, fmt.Errorf("create sftp client: %w", err)
 	}
 
+	log.Debug().Str("remotePath", remotePath).Msg("started remote SFTP server")
 	sc.client = client
 	sc.cmd = cmd
 	sc.resetIdleTimerLocked()
@@ -350,7 +354,7 @@ func sftpReadFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, pat
 			return nil, err
 		}
 		// Connection may have dropped; retry once with a fresh connection.
-		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return nil, fmt.Errorf("read %s: %w (reconnect: %v)", path, err, retryErr)
 		}
@@ -371,7 +375,7 @@ func sftpReadDir(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, path
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			return nil, err
 		}
-		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return nil, fmt.Errorf("readdir %s: %w (reconnect: %v)", path, err, retryErr)
 		}
@@ -413,7 +417,7 @@ func sftpWriteFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p 
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			return err
 		}
-		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return fmt.Errorf("write %s: %w (reconnect: %v)", p, err, retryErr)
 		}
@@ -434,7 +438,7 @@ func sftpMkdirAll(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p s
 		if errors.Is(err, os.ErrPermission) {
 			return err
 		}
-		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return fmt.Errorf("mkdirall %s: %w (reconnect: %v)", p, err, retryErr)
 		}
@@ -455,7 +459,7 @@ func sftpStat(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p strin
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			return nil, err
 		}
-		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return nil, fmt.Errorf("stat %s: %w (reconnect: %v)", p, err, retryErr)
 		}
@@ -476,7 +480,7 @@ func sftpRemove(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p str
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			return err
 		}
-		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return fmt.Errorf("remove %s: %w (reconnect: %v)", p, err, retryErr)
 		}
@@ -505,7 +509,7 @@ func sftpCreateTemp(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, d
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			return "", err
 		}
-		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return "", fmt.Errorf("createtemp %s/%s: %w (reconnect: %v)", dir, pattern, err, retryErr)
 		}

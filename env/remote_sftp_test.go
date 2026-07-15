@@ -1,6 +1,7 @@
 package env
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -228,4 +230,29 @@ func TestCloseAllSharedSFTPConns(t *testing.T) {
 	evicted := conn.evicted
 	conn.mu.Unlock()
 	assert.True(t, evicted, "holders of a closed entry must be redirected to a fresh one")
+}
+func TestSftpConn_ReconnectAfterStaleFailureReusesReplacement(t *testing.T) {
+	t.Parallel()
+
+	failedClient := &sftp.Client{}
+	replacementClient := &sftp.Client{}
+	sc := &sftpConn{
+		key:      "test-stale-reconnect",
+		client:   replacementClient,
+		lastUsed: time.Now(),
+	}
+	t.Cleanup(func() {
+		sc.mu.Lock()
+		if sc.idleTimer != nil {
+			sc.idleTimer.Stop()
+		}
+		sc.mu.Unlock()
+	})
+
+	client, err := sc.reconnectAfterFailure(context.Background(), nil, failedClient)
+
+	require.NoError(t, err)
+	assert.Same(t, replacementClient, client,
+		"a failure from an obsolete client must not replace the current connection")
+	assert.Same(t, replacementClient, sc.client)
 }

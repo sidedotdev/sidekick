@@ -1194,13 +1194,12 @@ func (e *ModalEnv) SSHArgs(ctx context.Context) ([]string, error) {
 	return insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards)), nil
 }
 
-// sftpConnKey returns the stable per-remote identity used to share a pooled
-// sftpConn across separately-constructed envs targeting the same sandbox.
-// The tunnel endpoint is part of the identity: a recreated sandbox keeps its
-// name but gets a fresh endpoint, and must not reuse the stale connection
-// (the orphaned pool entry is closed by the idle reaper).
+// sftpConnKey returns the stable per-sandbox identity used to share a pooled
+// sftpConn across separately-constructed envs. Modal tunnel endpoints can
+// change while the sandbox remains alive; transport recovery reconnects the
+// pooled entry when its endpoint becomes stale.
 func (e *ModalEnv) sftpConnKey() string {
-	return fmt.Sprintf("modal:%s@%s:%d", e.SandboxName, e.SSHHost, e.SSHPort)
+	return "modal:" + e.SandboxName
 }
 
 func (e *ModalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
