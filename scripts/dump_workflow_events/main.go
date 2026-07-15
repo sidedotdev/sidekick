@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
@@ -68,7 +69,17 @@ func main() {
 	}
 	defer c.Close()
 
-	activityTypes := make(map[int64]string)
+	type scheduledActivity struct {
+		activityType string
+		scheduledAt  string
+		startedAt    string
+		identity     string
+	}
+	activities := make(map[int64]*scheduledActivity)
+	eventPrefix := func(eventID int64, eventTime interface{ AsTime() time.Time }) string {
+		return fmt.Sprintf("%d %s", eventID, eventTime.AsTime().Format(time.RFC3339Nano))
+	}
+
 	iter := c.GetWorkflowHistory(ctx, workflowID, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 	for iter.HasNext() {
 		event, err := iter.Next()
@@ -86,12 +97,20 @@ func main() {
 			}
 
 			activityType := attrs.ActivityType.GetName()
-			activityTypes[eid] = activityType
+			activities[eid] = &scheduledActivity{
+				activityType: activityType,
+				scheduledAt:  event.EventTime.AsTime().Format(time.RFC3339Nano),
+			}
 			if eid < int64(startEvent) || eid > int64(endEvent) {
 				continue
 			}
 
-			fmt.Printf("%d ActivityTaskScheduled %s id=%s\n", eid, activityType, attrs.ActivityId)
+			fmt.Printf("%s ActivityTaskScheduled %s id=%s scheduleToStart=%s startToClose=%s\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ActivityId,
+				attrs.ScheduleToStartTimeout.AsDuration(),
+				attrs.StartToCloseTimeout.AsDuration())
 			if attrs.Input != nil {
 				for i, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
 					if *verbose {
@@ -101,6 +120,29 @@ func main() {
 					}
 				}
 			}
+		case enums.EVENT_TYPE_ACTIVITY_TASK_STARTED:
+			attrs := event.GetActivityTaskStartedEventAttributes()
+			if attrs == nil {
+				continue
+			}
+			activity := activities[attrs.ScheduledEventId]
+			if activity != nil {
+				activity.startedAt = event.EventTime.AsTime().Format(time.RFC3339Nano)
+				activity.identity = attrs.Identity
+			}
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			activityType := ""
+			if activity != nil {
+				activityType = activity.activityType
+			}
+			fmt.Printf("%s ActivityTaskStarted %s scheduled=%d identity=%q attempt=%d\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ScheduledEventId,
+				attrs.Identity,
+				attrs.Attempt)
 		case enums.EVENT_TYPE_ACTIVITY_TASK_COMPLETED:
 			if eid < int64(startEvent) || eid > int64(endEvent) {
 				continue
@@ -110,8 +152,16 @@ func main() {
 				continue
 			}
 
-			activityType := activityTypes[attrs.ScheduledEventId]
-			fmt.Printf("%d ActivityTaskCompleted %s scheduled=%d\n", eid, activityType, attrs.ScheduledEventId)
+			activity := activities[attrs.ScheduledEventId]
+			activityType := ""
+			if activity != nil {
+				activityType = activity.activityType
+			}
+			fmt.Printf("%s ActivityTaskCompleted %s scheduled=%d identity=%q\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ScheduledEventId,
+				activity.identity)
 			if attrs.Result != nil {
 				for i, result := range clientOptions.DataConverter.ToStrings(attrs.Result) {
 					if *verbose {
@@ -130,14 +180,55 @@ func main() {
 				continue
 			}
 
-			activityType := activityTypes[attrs.ScheduledEventId]
-			fmt.Printf("%d ActivityTaskFailed %s scheduled=%d started=%d\n",
-				eid, activityType, attrs.ScheduledEventId, attrs.StartedEventId)
+			activity := activities[attrs.ScheduledEventId]
+			activityType := ""
+			identity := ""
+			if activity != nil {
+				activityType = activity.activityType
+				identity = activity.identity
+			}
+			fmt.Printf("%s ActivityTaskFailed %s scheduled=%d started=%d identity=%q\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ScheduledEventId,
+				attrs.StartedEventId,
+				identity)
 			if attrs.Failure != nil {
 				fmt.Printf("    Failure: %s\n", attrs.Failure.Message)
 				if attrs.Failure.Cause != nil {
 					fmt.Printf("    Cause: %s\n", attrs.Failure.Cause.Message)
 				}
+			}
+		case enums.EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetActivityTaskTimedOutEventAttributes()
+			if attrs == nil {
+				continue
+			}
+			activity := activities[attrs.ScheduledEventId]
+			activityType := ""
+			identity := ""
+			scheduledAt := ""
+			startedAt := ""
+			if activity != nil {
+				activityType = activity.activityType
+				identity = activity.identity
+				scheduledAt = activity.scheduledAt
+				startedAt = activity.startedAt
+			}
+			fmt.Printf("%s ActivityTaskTimedOut %s scheduled=%d started=%d identity=%q retryState=%s scheduledAt=%s startedAt=%s\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ScheduledEventId,
+				attrs.StartedEventId,
+				identity,
+				attrs.RetryState,
+				scheduledAt,
+				startedAt)
+			if attrs.Failure != nil {
+				fmt.Printf("    Failure: %s\n", attrs.Failure.Message)
 			}
 		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED:
 			if eid < int64(startEvent) || eid > int64(endEvent) {

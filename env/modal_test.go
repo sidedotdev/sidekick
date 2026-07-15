@@ -118,6 +118,8 @@ func TestModalSSHArgs(t *testing.T) {
 	assert.Contains(t, joined, "StrictHostKeyChecking=no")
 	assert.Contains(t, joined, "BatchMode=yes")
 	assert.Contains(t, joined, "ControlMaster=auto")
+	assert.Contains(t, joined, "ConnectTimeout=10")
+	assert.Contains(t, joined, "ConnectionAttempts=1")
 }
 
 func TestModalSFTPConnKey(t *testing.T) {

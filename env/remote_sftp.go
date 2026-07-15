@@ -1,6 +1,7 @@
 package env
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -277,6 +278,8 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 	log.Debug().Str("remotePath", remotePath).Msg("starting remote SFTP server")
 
 	cmd := exec.Command("ssh", runArgs...)
+	var sshDiagnostics bytes.Buffer
+	cmd.Stderr = &sshDiagnostics
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("create stdin pipe: %w", err)
@@ -301,6 +304,10 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		diagnostics := strings.TrimSpace(sshDiagnostics.String())
+		if diagnostics != "" {
+			return nil, fmt.Errorf("create sftp client: %w: ssh diagnostics: %s", err, diagnostics)
+		}
 		return nil, fmt.Errorf("create sftp client: %w", err)
 	}
 

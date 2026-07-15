@@ -10,7 +10,9 @@ import (
 	"sidekick/env"
 	"sidekick/utils"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -1451,5 +1453,68 @@ func TestShouldRetrieveFullFile(t *testing.T) {
 			result := shouldRetrieveFullFile(tc.symbols, tc.absolutePath)
 			assert.Equal(t, tc.expected, result)
 		})
+	}
+}
+
+type cancellationRecordingEnv struct {
+	env.Env
+	started     chan struct{}
+	startedOnce sync.Once
+}
+
+func (e *cancellationRecordingEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	e.startedOnce.Do(func() {
+		close(e.started)
+	})
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (e *cancellationRecordingEnv) GetType() env.EnvType {
+	return env.EnvTypeModal
+}
+
+func (e *cancellationRecordingEnv) GetWorkingDirectory() string {
+	return "/workspace"
+}
+
+func (e *cancellationRecordingEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestBulkGetSymbolDefinitionsCancellationUnblocksFileRead(t *testing.T) {
+	t.Parallel()
+
+	recordingEnv := &cancellationRecordingEnv{started: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	completed := make(chan error, 1)
+
+	go func() {
+		_, err := (&CodingActivities{}).BulkGetSymbolDefinitions(ctx, DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{Env: recordingEnv},
+			Requests: []FileSymDefRequest{
+				{
+					FilePath: "example.go",
+					Symbols:  []RequestedSymbol{{Name: "Target"}},
+				},
+			},
+		})
+		completed <- err
+	}()
+
+	select {
+	case <-recordingEnv.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the file read to start")
+	}
+
+	cancel()
+
+	select {
+	case err := <-completed:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("BulkGetSymbolDefinitions did not return after cancellation")
 	}
 }

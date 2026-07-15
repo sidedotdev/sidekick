@@ -320,6 +320,8 @@ func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string)
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ConnectTimeout=10",
+		"-o", "ConnectionAttempts=1",
 		"-o", "ServerAliveInterval=10",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "LogLevel=ERROR",

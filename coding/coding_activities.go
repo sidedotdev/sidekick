@@ -233,7 +233,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 		request := req
 		go func(req FileSymDefRequest) {
 			defer wg.Done()
-			symbolResults := ca.retrieveSymbolDefinitions(dirSymDefRequest.EnvContainer, req, numContextLines, dirSymDefRequest.IncludeRelatedSymbols)
+			symbolResults := ca.retrieveSymbolDefinitions(ctx, dirSymDefRequest.EnvContainer, req, numContextLines, dirSymDefRequest.IncludeRelatedSymbols)
 
 			// The file's headers (e.g. package/imports) are only useful when at
 			// least one symbol was actually found in the requested file. When
@@ -811,14 +811,14 @@ func shouldRetrieveFullFile(symbols []string, absolutePath string) bool {
 	return isWildcard
 }
 
-func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContainer, symDefRequest FileSymDefRequest, numContextLines int, includeRelatedSymbols bool) []SymbolRetrievalResult {
+func (ca *CodingActivities) retrieveSymbolDefinitions(ctx context.Context, envContainer env.EnvContainer, symDefRequest FileSymDefRequest, numContextLines int, includeRelatedSymbols bool) []SymbolRetrievalResult {
 	results := make([]SymbolRetrievalResult, len(symDefRequest.Symbols))
 	var extras []SymbolRetrievalResult
 	var extrasMu sync.Mutex
 	var wg sync.WaitGroup
 
 	// Read the file once for all symbol lookups.
-	fileBytes, readErr := envContainer.Env.ReadFile(context.Background(), symDefRequest.FilePath)
+	fileBytes, readErr := envContainer.Env.ReadFile(ctx, symDefRequest.FilePath)
 	langName := utils.InferLanguageNameFromFilePath(symDefRequest.FilePath)
 
 	for i, sym := range symDefRequest.Symbols {
@@ -864,7 +864,7 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 
 			if err == nil && includeRelatedSymbols && len(sourceBlocks) > 0 && sourceBlocks[0].NameRange != nil {
 				symbolNameRange := sitterToLspRange(*sourceBlocks[0].NameRange)
-				related, relatedErr := ca.RelatedSymbolsActivity(context.Background(), RelatedSymbolsActivityInput{
+				related, relatedErr := ca.RelatedSymbolsActivity(ctx, RelatedSymbolsActivityInput{
 					RelativeFilePath: symDefRequest.FilePath,
 					SymbolText:       symbol,
 					EnvContainer:     envContainer,
@@ -887,7 +887,7 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 				return
 			}
 
-			resolved := ca.resolveSymbolDefinitionViaLSP(context.Background(), envContainer, symDefRequest.FilePath, symbol, referenceLine, numContextLines)
+			resolved := ca.resolveSymbolDefinitionViaLSP(ctx, envContainer, symDefRequest.FilePath, symbol, referenceLine, numContextLines)
 			if len(resolved) == 0 {
 				return
 			}
