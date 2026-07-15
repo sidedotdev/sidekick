@@ -286,7 +286,11 @@ func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 		},
 	}
 
+<<<<<<< HEAD
 	secretManager := requireOpenAIIntegrationCredentials(t)
+=======
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_OAUTH", "OPENAI_API_KEY")
+>>>>>>> devpod
 
 	options := Options{
 		ModelConfig: common.ModelConfig{

@@ -20,7 +20,7 @@ underlying intent be retained as-is.
 
 ## Default Models
 
-The default summarization and small model is gpt-5.4-nano.
+The default summarization and small model is gpt-5.4-mini.
 
 ## Verification
 
