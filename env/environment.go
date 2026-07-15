@@ -132,6 +132,10 @@ type SSHCapableEnv interface {
 	SSHArgs(ctx context.Context) ([]string, error)
 }
 
+type sshTransportRecoverer interface {
+	recoverSSHTransport(ctx context.Context, cause error) (bool, error)
+}
+
 // MergeResultSyncer is implemented by environments whose repository is an
 // independent clone rather than a bind mount of the host checkout. After a
 // successful merge performed inside such an environment, the merged branch
@@ -1094,10 +1098,27 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	return output, err
 }
 
+func (e *ModalEnv) recoverSSHTransport(ctx context.Context, cause error) (bool, error) {
+	if cause == nil || !isModalSSHTransportFailure(cause.Error()) {
+		return false, nil
+	}
+	refreshEndpoint := refreshModalEndpoint
+	if e.refreshModalEndpoint != nil {
+		refreshEndpoint = e.refreshModalEndpoint
+	}
+	host, port, err := refreshEndpoint(ctx, e.SandboxName)
+	if err != nil {
+		return true, err
+	}
+	e.SSHHost, e.SSHPort = host, port
+	return true, nil
+}
+
 func isModalSSHTransportFailure(diagnostics string) bool {
 	diagnostics = strings.ToLower(diagnostics)
 	for _, fragment := range []string{
 		"connect to address",
+		"connect to host",
 		"could not resolve hostname",
 		"no route to host",
 	} {

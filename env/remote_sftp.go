@@ -169,7 +169,20 @@ func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.
 
 	if sc.client == nil {
 		if _, err := sc.dialLocked(ctx, sshEnv); err != nil {
-			return nil, err
+			recoverer, ok := sshEnv.(sshTransportRecoverer)
+			if !ok {
+				return nil, err
+			}
+			recovered, recoverErr := recoverer.recoverSSHTransport(ctx, err)
+			if recoverErr != nil {
+				return nil, fmt.Errorf("%w (recover SSH transport: %v)", err, recoverErr)
+			}
+			if !recovered {
+				return nil, err
+			}
+			if _, retryErr := sc.dialLocked(ctx, sshEnv); retryErr != nil {
+				return nil, fmt.Errorf("%w (retry after recovering SSH transport: %v)", err, retryErr)
+			}
 		}
 	}
 	sc.resetIdleTimerLocked()

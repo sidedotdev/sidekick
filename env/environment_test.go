@@ -3,6 +3,7 @@ package env
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"sidekick/common"
@@ -679,4 +680,73 @@ func TestModalRunCommandPreservesDiagnosticsWhenRefreshFails(t *testing.T) {
 	assert.Equal(t, "remote stderr\n"+diagnostics, output.Stderr)
 	assert.Equal(t, 1, attempts)
 	assert.Equal(t, 1, refreshes)
+}
+func TestModalRecoverSSHTransport(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		cause         error
+		refreshErr    error
+		wantRecovered bool
+		wantRefreshes int
+		wantErr       bool
+	}{
+		{
+			name:          "connection refused",
+			cause:         errors.New("create sftp client: unexpected EOF: ssh diagnostics: ssh: connect to host old.modal.host port 1234: Connection refused"),
+			wantRecovered: true,
+			wantRefreshes: 1,
+		},
+		{
+			name:          "unrelated SFTP failure",
+			cause:         errors.New("create sftp client: malformed version packet"),
+			wantRecovered: false,
+			wantRefreshes: 0,
+		},
+		{
+			name:          "endpoint refresh failure",
+			cause:         errors.New("ssh: connect to address old.modal.host port 1234: Connection refused"),
+			refreshErr:    context.DeadlineExceeded,
+			wantRecovered: true,
+			wantRefreshes: 1,
+			wantErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			refreshes := 0
+			modalEnv := &ModalEnv{
+				SandboxName: "sandbox",
+				SSHHost:     "old.modal.host",
+				SSHPort:     1234,
+				refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+					refreshes++
+					if tt.refreshErr != nil {
+						return "", 0, tt.refreshErr
+					}
+					return "new.modal.host", 5678, nil
+				},
+			}
+
+			recovered, err := modalEnv.recoverSSHTransport(context.Background(), tt.cause)
+
+			assert.Equal(t, tt.wantRecovered, recovered)
+			assert.Equal(t, tt.wantRefreshes, refreshes)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, "old.modal.host", modalEnv.SSHHost)
+				assert.Equal(t, 1234, modalEnv.SSHPort)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantRecovered {
+				assert.Equal(t, "new.modal.host", modalEnv.SSHHost)
+				assert.Equal(t, 5678, modalEnv.SSHPort)
+			}
+		})
+	}
 }
