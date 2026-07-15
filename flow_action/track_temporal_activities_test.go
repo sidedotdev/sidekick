@@ -172,12 +172,12 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackDecoratesWithMultipleActivit
 
 			// Two parallel activities via workflow.Go
 			errCh := workflow.NewChannel(trackedActionCtx)
-			workflow.Go(trackedActionCtx, func(gCtx workflow.Context) {
+			workflow.Go(trackedActionCtx.Context, func(gCtx workflow.Context) {
 				var resB int
 				err := workflow.ExecuteActivity(gCtx, stubActivityB, 7).Get(gCtx, &resB)
 				errCh.Send(gCtx, err)
 			})
-			workflow.Go(trackedActionCtx, func(gCtx workflow.Context) {
+			workflow.Go(trackedActionCtx.Context, func(gCtx workflow.Context) {
 				var resA2 string
 				err := workflow.ExecuteActivity(gCtx, stubActivityA, "par").Get(gCtx, &resA2)
 				errCh.Send(gCtx, err)

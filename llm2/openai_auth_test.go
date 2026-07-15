@@ -63,6 +63,7 @@ func TestOpenAICredentialsForRequest(t *testing.T) {
 				token:     "oauth-token",
 				accountID: "account-id",
 				useOAuth:  true,
+				authType:  common.ProviderAuthTypeSubscription,
 			},
 			wantCalls: []string{"OPENAI_OAUTH"},
 		},
@@ -72,7 +73,10 @@ func TestOpenAICredentialsForRequest(t *testing.T) {
 			secrets: map[string]string{
 				"OPENAI_API_KEY": "api-key",
 			},
-			want:      openAIRequestCredentials{token: "api-key"},
+			want: openAIRequestCredentials{
+				token:    "api-key",
+				authType: common.ProviderAuthTypeAPI,
+			},
 			wantCalls: []string{"OPENAI_OAUTH", "OPENAI_API_KEY"},
 		},
 		{
@@ -82,7 +86,10 @@ func TestOpenAICredentialsForRequest(t *testing.T) {
 				"OPENAI_OAUTH":   string(oauthJSON),
 				"OPENAI_API_KEY": "api-key",
 			},
-			want:      openAIRequestCredentials{token: "api-key"},
+			want: openAIRequestCredentials{
+				token:    "api-key",
+				authType: common.ProviderAuthTypeAPI,
+			},
 			wantCalls: []string{"OPENAI_API_KEY"},
 		},
 		{
@@ -164,6 +171,7 @@ func TestOpenAICredentialsForRequest_UsesLiteralOAuthSecretName(t *testing.T) {
 		token:     "oauth-token",
 		accountID: "account-id",
 		useOAuth:  true,
+		authType:  common.ProviderAuthTypeSubscription,
 	}, credentials)
 	assert.Equal(t, []string{openai_oauth.SecretName}, manager.calls)
 }

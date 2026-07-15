@@ -63,7 +63,7 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 		// capture loop variables
 		tc := tc
 		index := i
-		workflow.Go(dCtx, func(ctx workflow.Context) {
+		workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 			localDCtx := dCtx
 			localDCtx.Context = ctx
 

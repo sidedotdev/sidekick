@@ -360,6 +360,7 @@ loop:
 		StopReason:      stopReason,
 		StopSequence:    "",
 		Usage:           usage,
+		AuthType:        credentials.authType,
 		ReasoningEffort: actualReasoningEffort,
 	}, nil
 }

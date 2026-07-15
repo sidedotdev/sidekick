@@ -338,7 +338,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 			// (and all subsequent turns) until the sub-task finishes,
 			// possibly many minutes. Fire-and-forget via workflow.Go
 			// mirrors the user-initiated signal path in IddWorkflow.
-			workflow.Go(dCtx, func(goCtx workflow.Context) {
+			workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
 				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId, requestOrchestratorTurn)
 			})
 			startedAny = true

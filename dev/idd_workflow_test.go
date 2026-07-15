@@ -559,3 +559,32 @@ func TestSubtaskTerminalNotice(t *testing.T) {
 		})
 	}
 }
+func (s *IddWorkflowTestSuite) TestWorkflowGoContextSupportsCancellation() {
+	testWorkflow := func(ctx workflow.Context) error {
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     ctx,
+				GlobalState: gs,
+			},
+		}
+
+		done := workflow.NewChannel(ctx)
+		workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
+			cancelCtx, cancel := workflow.WithCancel(goCtx)
+			cancel()
+			done.Send(goCtx, cancelCtx.Err())
+		})
+
+		var err error
+		done.Receive(ctx, &err)
+		return err
+	}
+	s.env.RegisterWorkflow(testWorkflow)
+
+	s.env.ExecuteWorkflow(testWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.ErrorIs(s.env.GetWorkflowError(), workflow.ErrCanceled)
+}

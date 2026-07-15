@@ -418,6 +418,11 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		reportedEffort = "none"
 	}
 
+	authType := common.ProviderAuthTypeAPI
+	if useOAuth {
+		authType = common.ProviderAuthTypeSubscription
+	}
+
 	response := &MessageResponse{
 		Id:              finalMessage.ID,
 		Model:           responseModel,
@@ -426,6 +431,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		StopReason:      string(finalMessage.StopReason),
 		StopSequence:    finalMessage.StopSequence,
 		Usage:           usage,
+		AuthType:        authType,
 		ReasoningEffort: reportedEffort,
 	}
 

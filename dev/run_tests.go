@@ -98,7 +98,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		// execute pending test commands in parallel
 		for _, ic := range pendingCommands {
 			ic := ic
-			workflow.Go(dCtx, func(ctx workflow.Context) {
+			workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 				localActionCtx := actionCtx.WithContext(ctx)
 				runSingleTest(localActionCtx, ic.index, ic.cmd.WorkingDir, ic.cmd.Command, *dCtx.EnvContainer, resultsCh)
 			})

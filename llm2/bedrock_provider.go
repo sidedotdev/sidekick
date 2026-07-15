@@ -163,6 +163,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		Output:          output,
 		StopReason:      stopReason,
 		Usage:           usage,
+		AuthType:        common.ProviderAuthTypeAPI,
 		ReasoningEffort: reportedEffort,
 	}, nil
 }

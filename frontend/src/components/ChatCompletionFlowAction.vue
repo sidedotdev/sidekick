@@ -9,6 +9,7 @@
           ({{ effectiveReasoningEffort }} reasoning)
         </span>
       </p>
+      <p class="auth-type" v-if="authType">Auth type: {{ authType }}</p>
       <p class="model-usage" v-if="parsedActionResult && !completionParseFailure && flowAction.actionStatus !== 'pending' && flowAction.actionStatus !== 'started' && usage && (usage.inputTokens || usage.outputTokens)">
         <span v-if="usage.inputTokens">{{ formatTokens(usage.inputTokens) }} in</span><span v-if="usage.inputTokens && (usage.cacheReadInputTokens || usage.cacheWriteInputTokens)"> (<span v-if="usage.cacheReadInputTokens">{{ formatTokens(usage.cacheReadInputTokens) }} cached</span><span v-if="usage.cacheReadInputTokens && usage.cacheWriteInputTokens">, </span><span v-if="usage.cacheWriteInputTokens">{{ formatTokens(usage.cacheWriteInputTokens) }} written</span>)</span><span v-if="usage.inputTokens && usage.outputTokens"> · </span><span v-if="usage.outputTokens">{{ formatTokens(usage.outputTokens) }} out</span>
       </p>
@@ -342,6 +343,7 @@ const llm2ResponseBlocks = computed(() => {
 const effectiveModel = computed(() => props.flowAction.actionParams.model || parsedActionResult.value?.model || completion.value?.model || '')
 const effectiveProvider = computed(() => props.flowAction.actionParams.provider || parsedActionResult.value?.provider || completion.value?.provider || '')
 const effectiveReasoningEffort = computed(() => parsedActionResult.value?.reasoningEffort || props.flowAction.actionParams.reasoningEffort || '')
+const authType = computed(() => parsedActionResult.value?.authType || '')
 
 const usage = computed<Usage | null>(() => parsedActionResult.value?.usage || completion.value?.usage || null)
 
