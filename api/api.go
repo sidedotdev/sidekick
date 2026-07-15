@@ -1116,7 +1116,7 @@ func completionSourceEventId(event *historypb.HistoryEvent) int64 {
 // remainder of the response is still usable.
 func decodePayloads(dc converter.DataConverter, payloads *commonpb.Payloads) []interface{} {
 	if payloads == nil {
-		return nil
+		return []interface{}{}
 	}
 	result := make([]interface{}, 0, len(payloads.Payloads))
 	for _, p := range payloads.Payloads {
