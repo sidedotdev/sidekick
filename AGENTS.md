@@ -43,3 +43,7 @@ avoid repeating what is plainly visible in the code directly.
 When debugging complex issues, particularly with temporal, make sure to use
 custom diagnostic tooling and to improve on these as needed, retaining general
 improvements for future debugging sessions to leverage.
+
+You may freely `go run ./scripts/*` to run any scripts in the `scripts`
+directory to aid in debugging or verifying changes. You must always verify
+changes when possible.
