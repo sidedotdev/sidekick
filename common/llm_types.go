@@ -169,7 +169,7 @@ const (
 )
 
 var SmallModels = map[ToolChatProviderType]string{
-	OpenaiToolChatProviderType: "gpt-5-mini",
+	OpenaiToolChatProviderType: "gpt-5.4-mini",
 
 	AnthropicToolChatProviderType: "claude-haiku-4-5",
 

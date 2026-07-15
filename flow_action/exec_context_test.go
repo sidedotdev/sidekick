@@ -39,7 +39,7 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 	setupModelsCache(t, map[string]interface{}{
 		"openai": map[string]interface{}{
 			"models": map[string]interface{}{
-				"gpt-5.4-nano": map[string]interface{}{
+				"gpt-5.4-mini": map[string]interface{}{
 					"reasoning": true,
 				},
 			},
@@ -68,7 +68,7 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 	var modelConfig common.ModelConfig
 	require.NoError(t, env.GetWorkflowResult(&modelConfig))
 	assert.Equal(t, "openai", modelConfig.Provider)
-	assert.Equal(t, "gpt-5.4-nano", modelConfig.Model)
+	assert.Equal(t, "gpt-5.4-mini", modelConfig.Model)
 	// Non-Claude reasoning models get low reasoning effort for small fallback
 	assert.Equal(t, "low", modelConfig.ReasoningEffort)
 }
@@ -77,7 +77,7 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 	setupModelsCache(t, map[string]interface{}{
 		"openai": map[string]interface{}{
 			"models": map[string]interface{}{
-				"gpt-5.4-nano": map[string]interface{}{
+				"gpt-5.4-mini": map[string]interface{}{
 					"reasoning": false,
 				},
 			},
@@ -106,7 +106,7 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 	var modelConfig common.ModelConfig
 	require.NoError(t, env.GetWorkflowResult(&modelConfig))
 	assert.Equal(t, "openai", modelConfig.Provider)
-	assert.Equal(t, "gpt-5.4-nano", modelConfig.Model)
+	assert.Equal(t, "gpt-5.4-mini", modelConfig.Model)
 	assert.Equal(t, "", modelConfig.ReasoningEffort)
 }
 
