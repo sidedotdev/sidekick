@@ -127,15 +127,18 @@ type ModalEnvConfig struct {
 	// instead of gVisor — enabling tools that need kernel features (e.g.
 	// perf). Memory is statically provisioned on the VM runtime.
 	VM bool `toml:"vm,omitempty" json:"vm,omitempty"`
-	// Image is the Debian-based, root base image onto which sidekick layers its
-	// test and remote-access dependencies. Defaults to the Sidekick Go
-	// development image.
+	// Image is the base container image reference. It must be Debian-based and
+	// run as root, since sidekick layers its remote-access dependencies on top.
 	Image string `toml:"image,omitempty" json:"image,omitempty"`
+	// DockerfilePath selects a single-stage, context-free Dockerfile relative
+	// to the repository root. Its FROM supplies the base image, so Image must
+	// be unset. COPY, ADD, and BuildKit context mounts are unsupported.
+	DockerfilePath string `toml:"dockerfile_path,omitempty" json:"dockerfilePath,omitempty"`
 	// CPU is the number of CPU cores to reserve for the sandbox. Unset
-	// defaults to 1.
+	// defaults to 2.
 	CPU float64 `toml:"cpu,omitempty" json:"cpu,omitempty"`
 	// MemoryMiB is the sandbox memory reservation in MiB. Unset defaults to
-	// 1024.
+	// 2048.
 	MemoryMiB int `toml:"memory_mib,omitempty" json:"memoryMiB,omitempty"`
 	// IdleSeconds arms the in-sandbox idle watchdog: after this many seconds
 	// without activity the sandbox snapshots its filesystem and terminates
