@@ -57,6 +57,7 @@ func (s *AdvisorWorkflowTestSuite) SetupTest() {
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
 
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.storage = sqlite.NewTestSqliteStorage(s.T(), "advisor_workflow")
 
 	s.adviseWorkflow = func(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer) (*persisted_ai.ChatHistoryContainer, error) {
