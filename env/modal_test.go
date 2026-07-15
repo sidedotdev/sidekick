@@ -2,6 +2,8 @@ package env
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -129,25 +131,65 @@ func TestModalSFTPConnKey(t *testing.T) {
 	recreated := &ModalEnv{SandboxName: "side-abc", SSHHost: "t2.modal.host", SSHPort: 2222}
 	assert.NotEqual(t, a.sftpConnKey(), recreated.sftpConnKey())
 }
-func TestModalSandboxDockerfileCommands(t *testing.T) {
+func TestModalDockerfileDefinition(t *testing.T) {
 	t.Parallel()
 
-	commands := strings.Join(modalSandboxDockerfileCommands(), "\n")
-
-	for _, dependency := range []string{
-		"build-essential",
-		"cmake",
-		"git",
-		"ripgrep",
-		"openssh-server",
-		"node-v20.16.0",
-		"libusearch_c.a",
-		"gopls@v0.21.0",
-		"BUN_INSTALL=/usr/local",
-		"bun.sh/install",
-	} {
-		assert.Contains(t, commands, dependency)
+	tests := []struct {
+		name          string
+		dockerfile    string
+		expectedImage string
+		expected      []string
+		expectedErr   string
+	}{
+		{
+			name:          "context-free single stage",
+			dockerfile:    "FROM ubuntu:24.04\nENV FOO=bar\nRUN echo ok\n",
+			expectedImage: "ubuntu:24.04",
+			expected:      []string{"ENV FOO=bar", "RUN echo ok"},
+		},
+		{
+			name:        "copy",
+			dockerfile:  "FROM ubuntu:24.04\nCOPY go.mod .\n",
+			expectedErr: "Dockerfile.modal:2: COPY requires a build context",
+		},
+		{
+			name:        "add",
+			dockerfile:  "FROM ubuntu:24.04\nADD https://example.com/file .\n",
+			expectedErr: "Dockerfile.modal:2: ADD requires a build context",
+		},
+		{
+			name:        "multiple stages",
+			dockerfile:  "FROM ubuntu:24.04 AS build\nFROM ubuntu:24.04\n",
+			expectedErr: "Dockerfile.modal:1: FROM must contain one literal image reference",
+		},
+		{
+			name:        "dynamic base",
+			dockerfile:  "ARG BASE=ubuntu:24.04\nFROM ${BASE}\n",
+			expectedErr: "Dockerfile.modal:2: FROM must contain one literal image reference",
+		},
+		{
+			name:        "buildkit mount",
+			dockerfile:  "FROM ubuntu:24.04\nRUN --mount=type=secret,id=token echo ok\n",
+			expectedErr: "Dockerfile.modal:2: RUN --mount requires BuildKit context support",
+		},
 	}
-	assert.Contains(t, commands, "CGO_ENABLED=1")
-	assert.Contains(t, commands, "CGO_LDFLAGS=")
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoDir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(repoDir, "Dockerfile.modal"), []byte(tt.dockerfile), 0o644))
+
+			image, commands, err := modalDockerfileDefinition(repoDir, "Dockerfile.modal")
+			if tt.expectedErr != "" {
+				require.ErrorContains(t, err, tt.expectedErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedImage, image)
+			assert.Equal(t, tt.expected, commands)
+		})
+	}
 }

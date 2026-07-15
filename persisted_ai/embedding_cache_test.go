@@ -32,6 +32,10 @@ func TestEmbeddingCacheSetWritesReadableCacheEntry(t *testing.T) {
 func TestEmbeddingCacheSetFailureLeavesExistingEntryReadable(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root can bypass directory write permissions")
+	}
+
 	cacheDir := t.TempDir()
 	cache := &embeddingCache{
 		cacheDir: cacheDir,

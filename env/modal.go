@@ -16,6 +16,7 @@ import (
 	"sidekick/coding/unix"
 	"sidekick/common"
 
+	"github.com/moby/buildkit/frontend/dockerfile/parser"
 	modal "github.com/modal-labs/libmodal/modal-go"
 	"github.com/rs/zerolog/log"
 )
@@ -151,30 +152,96 @@ func waitForModalSSHD(ctx context.Context, sb *modal.Sandbox) error {
 	return nil
 }
 
-// modalSandboxImage layers Sidekick's test and remote-access dependencies onto
-// the (Debian-based, root) base image. Modal caches image builds, so the install
-// cost is only paid once per unique base image.
-func modalSandboxImage(client *modal.Client, imageRef string) *modal.Image {
+// modalSandboxImage layers Sidekick's remote-access dependencies onto the
+// configured (Debian-based, root) image. Modal caches each image build layer.
+func modalSandboxImage(client *modal.Client, config common.ModalEnvConfig, repoDir string) (*modal.Image, error) {
+	imageRef := config.Image
+	var commands []string
+	if config.DockerfilePath != "" {
+		if config.Image != "" {
+			return nil, errors.New("modal image and dockerfile_path cannot both be set")
+		}
+		var err error
+		imageRef, commands, err = modalDockerfileDefinition(repoDir, config.DockerfilePath)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if imageRef == "" {
 		imageRef = modalDefaultImage
 	}
-	return client.Images.FromRegistry(imageRef, nil).DockerfileCommands(modalSandboxDockerfileCommands(), nil)
+	commands = append(commands,
+		"ENV DEBIAN_FRONTEND=noninteractive",
+		"RUN apt-get update -q && apt-get install -qy --no-install-recommends openssh-server git curl ca-certificates && rm -rf /var/lib/apt/lists/*",
+		"RUN mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh",
+	)
+	return client.Images.FromRegistry(imageRef, nil).DockerfileCommands(commands, nil), nil
 }
 
-func modalSandboxDockerfileCommands() []string {
-	return []string{
-		"ENV DEBIAN_FRONTEND=noninteractive",
-		"RUN apt-get update -q && apt-get install -qy --no-install-recommends build-essential cmake git ripgrep openssh-server curl ca-certificates xz-utils && rm -rf /var/lib/apt/lists/*",
-		"RUN mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh",
-		`RUN ARCH=$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') && curl -fsSL "https://nodejs.org/dist/v20.16.0/node-v20.16.0-linux-${ARCH}.tar.xz" | tar -xJ --strip-components=1 -C /usr/local`,
-		"RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git /tmp/usearch && cd /tmp/usearch && cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=0 -D USEARCH_BUILD_TEST_CPP=0 -D USEARCH_BUILD_BENCH_CPP=0 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=0 -D USEARCH_BUILD_SQLITE=0 -B build_release && cmake --build build_release --config Release && cp build_release/libusearch_static_c.a /usr/local/lib/libusearch_c.a && cp c/usearch.h /usr/local/include/usearch.h && rm -rf /tmp/usearch",
-		"ENV CGO_ENABLED=1",
-		`ENV CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm"`,
-		"RUN go install golang.org/x/tools/gopls@v0.21.0",
-		"ENV BUN_INSTALL=/usr/local",
-		"RUN curl -fsSL https://bun.sh/install | bash",
-		"RUN git config --global init.defaultBranch main",
+func modalDockerfileDefinition(repoDir, dockerfilePath string) (string, []string, error) {
+	if repoDir == "" {
+		return "", nil, errors.New("modal dockerfile_path requires a repository directory")
 	}
+	if filepath.IsAbs(dockerfilePath) {
+		return "", nil, errors.New("modal dockerfile_path must be relative to the repository root")
+	}
+
+	repoDir, err := filepath.Abs(repoDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve repository directory: %w", err)
+	}
+	path := filepath.Join(repoDir, filepath.Clean(dockerfilePath))
+	relativePath, err := filepath.Rel(repoDir, path)
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return "", nil, fmt.Errorf("modal dockerfile_path %q escapes the repository root", dockerfilePath)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("open modal Dockerfile %s: %w", dockerfilePath, err)
+	}
+	defer file.Close()
+
+	result, err := parser.Parse(file)
+	if err != nil {
+		return "", nil, fmt.Errorf("parse modal Dockerfile %s: %w", dockerfilePath, err)
+	}
+
+	var imageRef string
+	var commands []string
+	for _, node := range result.AST.Children {
+		instruction := strings.ToLower(node.Value)
+		switch instruction {
+		case "from":
+			fields := strings.Fields(node.Original)
+			if imageRef != "" {
+				return "", nil, modalDockerfileUnsupported(dockerfilePath, node.StartLine, "multiple FROM instructions are not supported")
+			}
+			if len(fields) != 2 || strings.Contains(fields[1], "$") {
+				return "", nil, modalDockerfileUnsupported(dockerfilePath, node.StartLine, "FROM must contain one literal image reference")
+			}
+			imageRef = fields[1]
+		case "copy", "add":
+			return "", nil, modalDockerfileUnsupported(dockerfilePath, node.StartLine, strings.ToUpper(instruction)+" requires a build context, which the Modal Go SDK does not support")
+		case "run":
+			for _, flag := range node.Flags {
+				if strings.HasPrefix(flag, "--mount") {
+					return "", nil, modalDockerfileUnsupported(dockerfilePath, node.StartLine, "RUN --mount requires BuildKit context support")
+				}
+			}
+			commands = append(commands, node.Original)
+		default:
+			commands = append(commands, node.Original)
+		}
+	}
+	if imageRef == "" {
+		return "", nil, fmt.Errorf("modal Dockerfile %s must contain a FROM instruction", dockerfilePath)
+	}
+	return imageRef, commands, nil
+}
+
+func modalDockerfileUnsupported(path string, line int, reason string) error {
+	return fmt.Errorf("%s:%d: %s", path, line, reason)
 }
 
 // ensureModalSSHKey returns the dedicated SSH keypair used to reach Modal
@@ -380,13 +447,13 @@ func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (Mod
 			return ModalCreateSandboxOutput{}, fmt.Errorf("failed to look up modal app %s: %w", modalAppName, err)
 		}
 
-		image := modalSandboxImage(client, input.Config.Image)
 		// Restore from the idle watchdog's latest filesystem snapshot when
 		// one exists: repo, worktrees and caches come back as they were.
 		// Otherwise bootstrap from the most recent snapshot of another
 		// sandbox for the same repo, inheriting its repo (with deepened
 		// history) and installed dependencies instead of starting from
 		// scratch.
+		var image *modal.Image
 		for _, snapName := range append([]string{input.Name}, modalSeedCandidates(input.RepoDir)...) {
 			record, snapErr := modalLatestSnapshot(ctx, client, snapName)
 			if snapErr != nil {
@@ -403,6 +470,12 @@ func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (Mod
 			}
 			image = snapImage
 			break
+		}
+		if image == nil {
+			image, err = modalSandboxImage(client, input.Config, input.RepoDir)
+			if err != nil {
+				return ModalCreateSandboxOutput{}, err
+			}
 		}
 
 		watchdogEnv, guardTokenHash, wdErr := modalWatchdogEnv(ctx, client, input.Name, input.Config)

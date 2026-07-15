@@ -1711,8 +1711,11 @@ func TestRestartProcessShowsStoppingForRunningProcess(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Start restart in background
-	go sup.RestartProcess(ctx, p, outputChan)
+	restartComplete := make(chan struct{})
+	go func() {
+		sup.RestartProcess(ctx, p, outputChan)
+		close(restartComplete)
+	}()
 
 	select {
 	case <-notificationReceived:
@@ -1732,8 +1735,11 @@ func TestRestartProcessShowsStoppingForRunningProcess(t *testing.T) {
 		t.Fatal("timeout waiting for notification")
 	}
 
-	// Wait for restart to complete
-	time.Sleep(1 * time.Second)
+	select {
+	case <-restartComplete:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for restart to complete")
+	}
 
 	// Verify final state
 	if !p.isRunning() {

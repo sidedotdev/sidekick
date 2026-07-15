@@ -65,6 +65,7 @@ openshell:
   from: "Dockerfile.openshell"
 
 modal:
+  dockerfile_path: "Dockerfile.modal"
   cpu: 4
   memory_mib: 8192
 
