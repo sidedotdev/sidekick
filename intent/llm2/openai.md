@@ -1,5 +1,10 @@
 ---
 intent_links:
+  - intent: "#default-models"
+    code:
+      - common/llm_types.go:SmallModels
+      - flow_action/exec_context_test.go:TestGetModelConfig_SmallFallback_ReasoningSupported
+      - flow_action/exec_context_test.go:TestGetModelConfig_SmallFallback_ReasoningNotSupported
   - intent: "#verification"
     code:
       - llm2/integration_test_helpers_test.go:requireOpenAIIntegrationCredentials
