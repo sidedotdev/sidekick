@@ -1450,3 +1450,155 @@ describe('TaskModal determineRequirements behavior', () => {
     })
   })
 })
+describe('TaskModal context gathering option', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    vi.stubEnv('MODE', 'development')
+    vi.stubGlobal('fetch', createMockFetch())
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  const mountContextGatherModal = (task?: Task) =>
+    mountModal({
+      props: task ? { task } : {},
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+
+  const submittedTaskBody = (fetchMock: ReturnType<typeof vi.fn>) => {
+    const taskCall = fetchMock.mock.calls.find((call) =>
+      call[0].toString().includes('/tasks') &&
+      (call[1]?.method === 'POST' || call[1]?.method === 'PUT')
+    )
+    expect(taskCall).toBeTruthy()
+    return JSON.parse(taskCall![1]!.body as string)
+  }
+
+  it.each([
+    { flowType: 'basic_dev', title: undefined, description: 'Basic task' },
+    { flowType: 'planned_dev', title: undefined, description: 'Planned task' },
+    { flowType: 'idd', title: 'IDD task', description: undefined },
+  ])('serializes explore context for $flowType tasks when checked', async ({
+    flowType,
+    title,
+    description,
+  }) => {
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContextGatherModal()
+
+    ;(wrapper.vm as any).flowType = flowType
+    ;(wrapper.vm as any).title = title ?? ''
+    ;(wrapper.vm as any).description = description ?? ''
+    await wrapper.vm.$nextTick()
+
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+    await checkbox.setValue(true)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(submittedTaskBody(fetchMock).flowOptions.contextGatherType).toBe('explore')
+    wrapper.unmount()
+  })
+
+  it.each([
+    { flowType: 'basic_dev', title: undefined, description: 'Basic task' },
+    { flowType: 'planned_dev', title: undefined, description: 'Planned task' },
+    { flowType: 'idd', title: 'IDD task', description: undefined },
+  ])('omits contextGatherType for $flowType tasks when unchecked', async ({
+    flowType,
+    title,
+    description,
+  }) => {
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContextGatherModal()
+
+    ;(wrapper.vm as any).flowType = flowType
+    ;(wrapper.vm as any).title = title ?? ''
+    ;(wrapper.vm as any).description = description ?? ''
+    await wrapper.vm.$nextTick()
+
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(submittedTaskBody(fetchMock).flowOptions).not.toHaveProperty('contextGatherType')
+    wrapper.unmount()
+  })
+
+  it('initializes the checkbox from an editable explore task', () => {
+    const wrapper = mountContextGatherModal(createTestTask({
+      flowOptions: {
+        determineRequirements: true,
+        contextGatherType: 'explore',
+      },
+    }))
+
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+    wrapper.unmount()
+  })
+
+  it.each([
+    undefined,
+    'legacy',
+    'unsupported',
+  ])('initializes the checkbox as unchecked for contextGatherType %s', (contextGatherType) => {
+    const wrapper = mountContextGatherModal(createTestTask({
+      flowOptions: {
+        determineRequirements: true,
+        ...(contextGatherType === undefined ? {} : { contextGatherType }),
+      },
+    }))
+
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('restores the checkbox through undo and redo and serializes the redone value', async () => {
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContextGatherModal()
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+
+    await checkbox.setValue(true)
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+
+    await wrapper.find('.modal').trigger('keydown', { key: 'z', ctrlKey: true })
+    await wrapper.vm.$nextTick()
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+
+    await wrapper.find('.modal').trigger('keydown', { key: 'y', ctrlKey: true })
+    await wrapper.vm.$nextTick()
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+
+    ;(wrapper.vm as any).description = 'Task with gathered context'
+    await wrapper.vm.$nextTick()
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(submittedTaskBody(fetchMock).flowOptions.contextGatherType).toBe('explore')
+    wrapper.unmount()
+  })
+
+  it('does not render the checkbox outside development mode', () => {
+    vi.stubEnv('MODE', 'production')
+    const wrapper = mountContextGatherModal()
+
+    expect(wrapper.find('[data-testid="context-gather-explore"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

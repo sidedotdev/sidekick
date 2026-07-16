@@ -30,6 +30,7 @@ type PlannedDevOptions struct {
 	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
 	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
+	ContextGatherType     ContextGatherType      `json:"contextGatherType,omitempty"`
 	// AutoMerge skips the human merge approval and merges automatically into the
 	// start branch. Used by IDD sub-tasks so their worktree merges back into the
 	// parent idd worktree.
@@ -68,6 +69,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 		signalWorkflowFailureOrCancel(ctx)
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
 	}
+	dCtx.ContextGatherType = input.PlannedDevOptions.ContextGatherType
 	dCtx.Idd = input.PlannedDevOptions.Idd
 	defer handleFlowCancel(dCtx)
 	defer stopActiveDevRun(dCtx)

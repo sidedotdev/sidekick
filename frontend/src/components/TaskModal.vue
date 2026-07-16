@@ -60,6 +60,15 @@
         Enable Advisor
       </label>
 
+      <label v-if="devMode">
+        <input
+          data-testid="context-gather-explore"
+          type="checkbox"
+          v-model="exploreContext"
+        />
+        Explore Repository Context
+      </label>
+
       <div v-if="!isIdd">
         <AutogrowTextarea ref="descriptionRef" id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
@@ -104,7 +113,7 @@ import { store, type TaskConfigData } from '../lib/store'
 import { useModelConfigPresets } from '../composables/useModelConfigPresets'
 import type { Flow, Task, TaskStatus, LLMConfig } from '../lib/models'
 
-const devMode = import.meta.env.MODE === 'development'
+const devMode = computed(() => import.meta.env.MODE === 'development')
 const props = withDefaults(defineProps<{
   task?: Task
   teleport?: boolean
@@ -192,6 +201,7 @@ const getInitialDetermineRequirements = (): boolean => {
 }
 
 const determineRequirements = ref<boolean>(getInitialDetermineRequirements())
+const exploreContext = ref(props.task?.flowOptions?.contextGatherType === 'explore')
 const userModifiedDetermineRequirements = ref(false)
 const isApplyingTaskConfig = ref(false)
 const taskConfig = ref<TaskConfigData | null>(store.getTaskConfigCache(workspaceId.value)?.data ?? null)
@@ -224,6 +234,7 @@ interface FormState {
   repoMode: string
   selectedBranch: string | null
   determineRequirements: boolean
+  exploreContext: boolean
   planningPrompt: string
   advisorEnabled: boolean
   selectedPresetValue: string
@@ -243,6 +254,7 @@ const captureFormState = (): FormState => ({
   repoMode: repoMode.value,
   selectedBranch: selectedBranch.value,
   determineRequirements: determineRequirements.value,
+  exploreContext: exploreContext.value,
   planningPrompt: planningPrompt.value,
   advisorEnabled: advisorEnabled.value,
   selectedPresetValue: selectedPresetValue.value,
@@ -259,6 +271,7 @@ const restoreFormState = (state: FormState) => {
   repoMode.value = state.repoMode
   selectedBranch.value = state.selectedBranch
   determineRequirements.value = state.determineRequirements
+  exploreContext.value = state.exploreContext
   planningPrompt.value = state.planningPrompt
   advisorEnabled.value = state.advisorEnabled
   selectedPresetValue.value = state.selectedPresetValue
@@ -354,6 +367,10 @@ const buildFlowOptions = (): Record<string, any> => {
     determineRequirements: determineRequirements.value,
     envType: envType.value,
     repoMode: repoMode.value,
+  }
+
+  if (exploreContext.value) {
+    flowOptions.contextGatherType = 'explore'
   }
 
   if (repoMode.value === 'worktree') {
@@ -458,7 +475,7 @@ const scheduleAutoSave = () => {
 }
 
 // Watch all form fields for auto-save
-watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, advisorEnabled, selectedPresetValue, llmConfig, newPresetName], () => {
+watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, exploreContext, planningPrompt, advisorEnabled, selectedPresetValue, llmConfig, newPresetName], () => {
   if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()

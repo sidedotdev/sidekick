@@ -23,10 +23,22 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+type ContextGatherType string
+
+const (
+	ContextGatherTypeLegacy  ContextGatherType = "legacy"
+	ContextGatherTypeExplore ContextGatherType = "explore"
+)
+
+func shouldGatherContext(contextGatherType ContextGatherType, editable bool) bool {
+	return contextGatherType == ContextGatherTypeExplore && editable
+}
+
 type DevContext struct {
 	flow_action.ExecContext
-	Worktree   *domain.Worktree
-	RepoConfig common.RepoConfig
+	Worktree          *domain.Worktree
+	RepoConfig        common.RepoConfig
+	ContextGatherType ContextGatherType
 	// Idd indicates the work originates from an Intent Driven Development flow,
 	// enabling the intent/ directory guidance in coding-agent prompts.
 	Idd bool

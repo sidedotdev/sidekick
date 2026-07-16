@@ -143,6 +143,34 @@ func completeDevStep(dCtx DevContext, requirements string, planExecution DevPlan
 	})
 }
 
+type plannedContextPreparer func(DevContext, string, *DevPlanExecution, *DevStep, ...persisted_ai.WeightedRankQuery) (string, string, error)
+
+func preparePlannedCodingContext(
+	dCtx DevContext,
+	requirements string,
+	planExecution DevPlanExecution,
+	step DevStep,
+	chatHistory *persisted_ai.ChatHistoryContainer,
+	prepareLegacy plannedContextPreparer,
+) (string, int, error) {
+	if shouldGatherContext(dCtx.ContextGatherType, step.Type == "edit") {
+		if err := GatherContextForCoding(dCtx, chatHistory, InitialDevStepInfo{
+			Requirements:  requirements,
+			PlanExecution: planExecution,
+			Step:          step,
+		}); err != nil {
+			return "", 0, fmt.Errorf("failed to gather context for coding: %w", err)
+		}
+		return "", 0, nil
+	}
+
+	codeContext, fullCodeContext, err := prepareLegacy(dCtx, requirements, &planExecution, &step)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to prepare code context: %v", err)
+	}
+	return codeContext, len(fullCodeContext) - len(codeContext), nil
+}
+
 func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution DevPlanExecution, step DevStep) (result DevStepResult, err error) {
 	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 	case 2:
@@ -153,12 +181,29 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 	}
 
+	var chatHistory *persisted_ai.ChatHistoryContainer
+	if shouldGatherContext(dCtx.ContextGatherType, step.Type == "edit") {
+		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	}
+
 	// Step 1: prepare code context
 	//prompt := fmt.Sprintf("#START Background Info\n%s\n#END Background Info\n#START Plan#\n%s\n", requirements, planExecution.String(), step.Title)
-	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, &planExecution, &step)
-	contextSizeExtension := len(fullCodeContext) - len(codeContext)
+	codeContext, contextSizeExtension, err := preparePlannedCodingContext(
+		dCtx,
+		requirements,
+		planExecution,
+		step,
+		chatHistory,
+		PrepareInitialCodeContext,
+	)
 	if err != nil {
-		return result, fmt.Errorf("failed to prepare code context: %v", err)
+		return result, err
+	}
+
+	// TODO store chat history in a way that can be referred to by id, and pass
+	// id to the activities to avoid bloating temporal db
+	if chatHistory == nil {
+		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	}
 
 	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2); v >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
@@ -168,10 +213,6 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 		codeContext = repoSummary + "\n\n" + codeContext
 	}
-
-	// TODO store chat history in a way that can be referred to by id, and pass
-	// id to the activities to avoid bloating temporal db
-	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
 	var advisor *Advisor
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {

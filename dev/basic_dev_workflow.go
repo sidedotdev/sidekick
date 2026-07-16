@@ -45,6 +45,7 @@ type BasicDevOptions struct {
 	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
 	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
+	ContextGatherType     ContextGatherType      `json:"contextGatherType,omitempty"`
 	// AutoMerge skips the human merge approval and merges automatically into the
 	// start branch. Used by IDD sub-tasks so their worktree merges back into the
 	// parent idd worktree.
@@ -258,6 +259,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		signalWorkflowFailureOrCancel(ctx)
 		return "", err
 	}
+	dCtx.ContextGatherType = input.BasicDevOptions.ContextGatherType
 	dCtx.Idd = input.BasicDevOptions.Idd
 	defer handleFlowCancel(dCtx)
 	defer stopActiveDevRun(dCtx)
@@ -349,17 +351,52 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	return result, nil
 }
 
-func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
-	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil, weightedRankQueries...)
-	contextSizeExtension := len(fullCodeContext) - len(codeContext)
-	if err != nil {
-		return "", fmt.Errorf("failed to prepare code context: %w", err)
+type basicContextPreparer func(DevContext, string, *DevPlanExecution, *DevStep, ...persisted_ai.WeightedRankQuery) (string, string, error)
+
+func prepareBasicCodingContext(
+	dCtx DevContext,
+	requirements string,
+	chatHistory *persisted_ai.ChatHistoryContainer,
+	prepareLegacy basicContextPreparer,
+	weightedRankQueries ...persisted_ai.WeightedRankQuery,
+) (string, int, error) {
+	if shouldGatherContext(dCtx.ContextGatherType, true) {
+		if err := GatherContextForCoding(dCtx, chatHistory, InitialCodeInfo{Requirements: requirements}); err != nil {
+			return "", 0, fmt.Errorf("failed to gather context for coding: %w", err)
+		}
+		return "", 0, nil
 	}
-	testResult := TestResult{Output: ""}
+
+	codeContext, fullCodeContext, err := prepareLegacy(dCtx, requirements, nil, nil, weightedRankQueries...)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to prepare code context: %w", err)
+	}
+	return codeContext, len(fullCodeContext) - len(codeContext), nil
+}
+
+func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
+	var chatHistory *persisted_ai.ChatHistoryContainer
+	if shouldGatherContext(dCtx.ContextGatherType, true) {
+		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	}
+
+	codeContext, contextSizeExtension, err := prepareBasicCodingContext(
+		dCtx,
+		requirements,
+		chatHistory,
+		PrepareInitialCodeContext,
+		weightedRankQueries...,
+	)
+	if err != nil {
+		return "", err
+	}
 
 	// TODO store chat history in a way that can be referred to by id, and pass
 	// id to the activities to avoid bloating temporal db
-	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	if chatHistory == nil {
+		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	}
+	testResult := TestResult{Output: ""}
 
 	var advisor *Advisor
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {

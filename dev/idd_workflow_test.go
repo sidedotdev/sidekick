@@ -132,8 +132,9 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 			RepoDir:     "/tmp/repo",
 			Title:       "My Intent",
 			IddOptions: IddOptions{
-				EnvType:  env.EnvTypeLocal,
-				RepoMode: env.RepoModeWorktree,
+				EnvType:           env.EnvTypeLocal,
+				RepoMode:          env.RepoModeWorktree,
+				ContextGatherType: ContextGatherTypeExplore,
 			},
 		}, StartIntentSubtaskSignal{Update: false}, state, flowId, nil)
 		if len(state.Subtasks) != 1 {
@@ -157,6 +158,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	s.False(capturedInput.DetermineRequirements)
 	s.True(capturedInput.AutoMerge)
 	s.True(capturedInput.Idd)
+	s.Equal(ContextGatherTypeExplore, capturedInput.ContextGatherType)
 	s.Equal("test-workspace", capturedInput.WorkspaceId)
 	s.Equal("/tmp/repo", capturedInput.RepoDir)
 	s.Require().NotNil(capturedInput.StartBranch)
@@ -587,4 +589,93 @@ func (s *IddWorkflowTestSuite) TestWorkflowGoContextSupportsCancellation() {
 
 	s.True(s.env.IsWorkflowCompleted())
 	s.ErrorIs(s.env.GetWorkflowError(), workflow.ErrCanceled)
+}
+func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesContextGatherTypeToPlannedChild() {
+	const iddBranch = "side/idd-worktree"
+
+	var capturedInput PlannedDevInput
+	s.env.RegisterWorkflowWithOptions(
+		func(ctx workflow.Context, input PlannedDevInput) (DevPlanExecution, error) {
+			capturedInput = input
+			return DevPlanExecution{}, nil
+		},
+		workflow.RegisterOptions{Name: "PlannedDevWorkflow"},
+	)
+
+	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.MatchedBy(func(input git.GitAddActivityInput) bool {
+		return input.Path == "."
+	})).Return(nil).Once()
+
+	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
+		return params.CommitAll && params.IgnoreNothingToCommit
+	})).Return("commit-sha", nil).Once()
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "abc123\n", ExitStatus: 0}, nil).Once()
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 0 && in.Args[0] == "show"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
+
+	s.env.OnActivity(
+		s.ima.PutWorkflow,
+		mock.Anything,
+		mock.AnythingOfType("domain.Flow"),
+	).Return(nil)
+
+	s.setupTitleGenerationMocks()
+
+	wrapper := func(ctx workflow.Context) (IddState, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
+				GlobalState: gs,
+				Secrets:     &secret_manager.SecretManagerContainer{SecretManager: &secret_manager.EnvSecretManager{}},
+				EnvContainer: &env.EnvContainer{
+					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
+				},
+			},
+			Worktree:   &domain.Worktree{Name: iddBranch},
+			RepoConfig: common.RepoConfig{},
+		}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai"}},
+		})
+		state := &IddState{}
+		flowId := reservePendingSubtask(dCtx, state, "")
+		runIntentSubtask(dCtx, IddWorkflowInput{
+			WorkspaceId: "test-workspace",
+			RepoDir:     "/tmp/repo",
+			Title:       "My Intent",
+			IddOptions: IddOptions{
+				EnvType:           env.EnvTypeLocal,
+				RepoMode:          env.RepoModeWorktree,
+				ContextGatherType: ContextGatherTypeExplore,
+			},
+		}, StartIntentSubtaskSignal{Planned: true}, state, flowId, nil)
+		if len(state.Subtasks) != 1 {
+			return IddState{}, fmt.Errorf("expected 1 subtask, got %d", len(state.Subtasks))
+		}
+		return *state, nil
+	}
+	s.env.RegisterWorkflow(wrapper)
+
+	s.env.ExecuteWorkflow(wrapper)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	s.False(capturedInput.DetermineRequirements)
+	s.True(capturedInput.AutoMerge)
+	s.True(capturedInput.Idd)
+	s.Equal(ContextGatherTypeExplore, capturedInput.ContextGatherType)
+	s.Equal("test-workspace", capturedInput.WorkspaceId)
+	s.Equal("/tmp/repo", capturedInput.RepoDir)
+	s.Require().NotNil(capturedInput.StartBranch)
+	s.Equal(iddBranch, *capturedInput.StartBranch)
 }

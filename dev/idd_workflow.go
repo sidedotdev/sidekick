@@ -44,10 +44,11 @@ const SignalNameRunIddOrchestrator = "runIddOrchestrator"
 const QueryNameIddState = "idd_state"
 
 type IddOptions struct {
-	EnvType         env.EnvType            `json:"envType,omitempty" default:"local"`
-	RepoMode        env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
-	StartBranch     *string                `json:"startBranch,omitempty"`
-	ConfigOverrides common.ConfigOverrides `json:"configOverrides"`
+	EnvType           env.EnvType            `json:"envType,omitempty" default:"local"`
+	RepoMode          env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
+	StartBranch       *string                `json:"startBranch,omitempty"`
+	ConfigOverrides   common.ConfigOverrides `json:"configOverrides"`
+	ContextGatherType ContextGatherType      `json:"contextGatherType,omitempty"`
 }
 
 type IddWorkflowInput struct {
@@ -206,6 +207,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		signalWorkflowFailureOrCancel(ctx)
 		return err
 	}
+	dCtx.ContextGatherType = input.ContextGatherType
 	dCtx.Idd = true
 	defer handleFlowCancel(dCtx)
 	defer stopActiveDevRun(dCtx)
@@ -575,6 +577,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 				RepoMode:              input.RepoMode,
 				StartBranch:           &branch,
 				ConfigOverrides:       input.ConfigOverrides,
+				ContextGatherType:     input.ContextGatherType,
 				AutoMerge:             true,
 				Idd:                   true,
 			},
@@ -590,6 +593,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 				RepoMode:              input.RepoMode,
 				StartBranch:           &branch,
 				ConfigOverrides:       input.ConfigOverrides,
+				ContextGatherType:     input.ContextGatherType,
 				AutoMerge:             true,
 				Idd:                   true,
 			},
