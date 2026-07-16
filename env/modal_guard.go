@@ -30,6 +30,9 @@ var modalGuardAppSource string
 //go:embed modal_watchdog.sh
 var modalWatchdogScript string
 
+//go:embed modal_snapshot.sh
+var modalSnapshotScript string
+
 const (
 	// modalGuardAppName is the Modal app hosting the sidekick guard: a tiny
 	// serverless (scale-to-zero) app that lets a sandbox holding a
@@ -343,6 +346,7 @@ func modalWatchdogEnv(ctx context.Context, client *modal.Client, sandboxName str
 		"SIDE_SANDBOX_META":  string(meta),
 		"SIDE_IMAGE_VERSION": strconv.Itoa(modalSnapshotImageVersion),
 		"SIDE_IDLE_SECONDS":  strconv.Itoa(idleSeconds),
+		"SIDE_SNAPSHOT":      modalSnapshotScript,
 		"SIDE_WATCHDOG":      modalWatchdogScript,
 	}, tokenHash, nil
 }

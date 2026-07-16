@@ -77,7 +77,7 @@ def hibernate(req: dict):
         record["lastShutdown"] = time.time()
         state[name] = record
         sb.terminate()
-        return {"status": "terminated"}
+        return JSONResponse({"status": "terminated"}, status_code=202)
 
     snapshot = sb.snapshot_filesystem()
     previous = state.get(name) or {}
@@ -100,10 +100,17 @@ def hibernate(req: dict):
     }
     if not phase:
         sb.terminate()
-    return {
-        "status": "hibernated" if not phase else "snapshotted",
-        "snapshotImageId": snapshot.object_id,
-    }
+        return {
+            "status": "hibernated",
+            "snapshotImageId": snapshot.object_id,
+        }
+    return JSONResponse(
+        {
+            "status": "snapshotted",
+            "snapshotImageId": snapshot.object_id,
+        },
+        status_code=201,
+    )
 
 
 @app.function(image=image)

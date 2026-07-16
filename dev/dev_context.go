@@ -61,9 +61,43 @@ func scheduleRepoDeepening(ctx workflow.Context, envContainer env.EnvContainer, 
 		RemoteRepoDir: remoteRepoDir,
 		Branches:      branches,
 	})
+	snapshotAfterDeepening := workflow.GetVersion(ctx, "snapshot-after-repo-deepening", workflow.DefaultVersion, 1) >= 1
+	_, supportsSnapshot := envContainer.Env.(env.SnapshottingEnv)
 	workflow.Go(ctx, func(gCtx workflow.Context) {
-		if err := future.Get(gCtx, nil); err != nil {
+		var deepenOutput env.DeepenRepoOutput
+		if err := future.Get(gCtx, &deepenOutput); err != nil {
 			workflow.GetLogger(gCtx).Warn("Background repo deepening failed", "error", err)
+			return
+		}
+		if !snapshotAfterDeepening || !deepenOutput.Deepened || !supportsSnapshot {
+			return
+		}
+
+		snapshotCtx := workflow.WithActivityOptions(gCtx, workflow.ActivityOptions{
+			StartToCloseTimeout: 30 * time.Minute,
+			HeartbeatTimeout:    2 * time.Minute,
+			WaitForCancellation: true,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+		})
+		var snapshotOutput env.SnapshotEnvironmentOutput
+		err := workflow.ExecuteActivity(snapshotCtx, env.SnapshotEnvironmentActivity, env.SnapshotEnvironmentInput{
+			EnvContainer:  envContainer,
+			RemoteRepoDir: remoteRepoDir,
+		}).Get(snapshotCtx, &snapshotOutput)
+		if err != nil {
+			workflow.GetLogger(gCtx).Warn(
+				"Post-deepening environment snapshot failed",
+				"envType", envContainer.Env.GetType(),
+				"error", err,
+			)
+			return
+		}
+		if !snapshotOutput.Snapshotted {
+			workflow.GetLogger(gCtx).Warn(
+				"Post-deepening environment snapshot retries exhausted",
+				"envType", envContainer.Env.GetType(),
+				"attempts", snapshotOutput.Attempts,
+			)
 		}
 	})
 }

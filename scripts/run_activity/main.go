@@ -176,6 +176,7 @@ func buildActivityRegistry() map[string]interface{} {
 		env.DeleteSandboxActivity,
 		env.SyncRepoToRemoteActivity,
 		env.DeepenRepoActivity,
+		env.SnapshotEnvironmentActivity,
 		env.CreateRemoteWorktreeActivity,
 		sidekick.GithubCloneRepoActivity,
 		env.EnvRunCommandActivity,

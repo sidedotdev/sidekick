@@ -14,6 +14,7 @@ import (
 	"sidekick/coding/unix"
 
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -505,9 +506,9 @@ type DeepenRepoOutput struct {
 // remote repo, meant to run in the background once a task is already
 // underway. The fetch adds objects and lifts the shallow boundary but
 // updates no refs, so it is safe to run concurrently with work happening in
-// the environment. Once the deepened repo is captured by a filesystem
-// snapshot, sandboxes seeded from that snapshot never pay this cost again.
-// No-op for repos with complete history.
+// the environment. Modal sandboxes snapshot immediately after deepening so
+// future sandboxes can use the completed history without waiting for idle
+// hibernation. No-op for repos with complete history.
 func DeepenRepoActivity(ctx context.Context, input DeepenRepoInput) (DeepenRepoOutput, error) {
 	sshEnv, ok := input.EnvContainer.Env.(SSHCapableEnv)
 	if !ok {
@@ -567,5 +568,70 @@ func DeepenRepoActivity(ctx context.Context, input DeepenRepoInput) (DeepenRepoO
 		Str("remoteRepoDir", input.RemoteRepoDir).
 		Dur("deepenDur", time.Since(deepenStart)).
 		Msg("deepened remote repo history")
+
 	return DeepenRepoOutput{Deepened: true}, nil
+}
+
+type SnapshotEnvironmentInput struct {
+	EnvContainer  EnvContainer `json:"envContainer"`
+	RemoteRepoDir string       `json:"remoteRepoDir"`
+}
+
+type SnapshotEnvironmentOutput struct {
+	Snapshotted bool `json:"snapshotted"`
+	Attempts    int  `json:"attempts"`
+}
+
+// SnapshotEnvironmentActivity checkpoints an environment after repository
+// deepening. It remains separate from deepening so a snapshot outage never
+// causes completed repository work to run again.
+func SnapshotEnvironmentActivity(ctx context.Context, input SnapshotEnvironmentInput) (SnapshotEnvironmentOutput, error) {
+	snapshotter, ok := input.EnvContainer.Env.(SnapshottingEnv)
+	if !ok {
+		return SnapshotEnvironmentOutput{}, nil
+	}
+	return snapshotEnvironmentAfterDeepening(ctx, snapshotter, input.RemoteRepoDir, 20, 15*time.Second), nil
+}
+
+func snapshotEnvironmentAfterDeepening(ctx context.Context, snapshotter SnapshottingEnv, remoteRepoDir string, attempts int, retryDelay time.Duration) SnapshotEnvironmentOutput {
+	snapshotStart := time.Now()
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if activity.IsActivity(ctx) {
+			activity.RecordHeartbeat(ctx, attempt)
+		}
+		snapshotOutput, snapshotErr := snapshotter.Snapshot(ctx)
+		event := log.Info().
+			Str("envType", string(snapshotter.GetType())).
+			Str("remoteRepoDir", remoteRepoDir).
+			Dur("snapshotDur", time.Since(snapshotStart)).
+			Int("attempt", attempt).
+			Int("maxAttempts", attempts).
+			Int("exitStatus", snapshotOutput.ExitStatus).
+			Str("stdout", strings.TrimSpace(snapshotOutput.Stdout)).
+			Str("stderr", strings.TrimSpace(snapshotOutput.Stderr))
+		if snapshotErr == nil && snapshotOutput.ExitStatus == 0 {
+			event.Msg("captured post-deepening environment snapshot")
+			return SnapshotEnvironmentOutput{Snapshotted: true, Attempts: attempt}
+		}
+		event.Err(snapshotErr).Msg("post-deepening environment snapshot attempt failed")
+		if attempt < attempts {
+			select {
+			case <-ctx.Done():
+				log.Warn().
+					Err(ctx.Err()).
+					Str("envType", string(snapshotter.GetType())).
+					Str("remoteRepoDir", remoteRepoDir).
+					Msg("post-deepening environment snapshot retries interrupted")
+				return SnapshotEnvironmentOutput{Attempts: attempt}
+			case <-time.After(retryDelay):
+			}
+		}
+	}
+
+	log.Warn().
+		Str("envType", string(snapshotter.GetType())).
+		Str("remoteRepoDir", remoteRepoDir).
+		Int("attempts", attempts).
+		Msg("post-deepening environment snapshot retries exhausted")
+	return SnapshotEnvironmentOutput{Attempts: attempts}
 }

@@ -594,6 +594,7 @@ func TestModalRunCommandRetriesTransportFailure(t *testing.T) {
 
 	attempts := 0
 	refreshes := 0
+	var refreshedSandbox string
 	modalEnv := &ModalEnv{
 		SandboxName: "sandbox",
 		SSHHost:     "old.modal.host",
@@ -607,9 +608,10 @@ func TestModalRunCommandRetriesTransportFailure(t *testing.T) {
 			}
 			return EnvRunCommandOutput{ExitStatus: 0, Stdout: "completed"}, "", nil
 		},
-		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+		refreshModalEndpoint: func(_ context.Context, sandboxName string) (string, int, error) {
 			refreshes++
-			return "old.modal.host", 1234, nil
+			refreshedSandbox = sandboxName
+			return "new.modal.host", 5678, nil
 		},
 	}
 
@@ -619,6 +621,9 @@ func TestModalRunCommandRetriesTransportFailure(t *testing.T) {
 	assert.Equal(t, "completed", output.Stdout)
 	assert.Equal(t, 2, attempts)
 	assert.Equal(t, 1, refreshes)
+	assert.Equal(t, "sandbox", refreshedSandbox)
+	assert.Equal(t, "new.modal.host", modalEnv.SSHHost)
+	assert.Equal(t, 5678, modalEnv.SSHPort)
 }
 
 func TestModalRunCommandDoesNotRetryRemoteExit255(t *testing.T) {
@@ -719,12 +724,14 @@ func TestModalRecoverSSHTransport(t *testing.T) {
 			t.Parallel()
 
 			refreshes := 0
+			var refreshedSandbox string
 			modalEnv := &ModalEnv{
 				SandboxName: "sandbox",
 				SSHHost:     "old.modal.host",
 				SSHPort:     1234,
-				refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+				refreshModalEndpoint: func(_ context.Context, sandboxName string) (string, int, error) {
 					refreshes++
+					refreshedSandbox = sandboxName
 					if tt.refreshErr != nil {
 						return "", 0, tt.refreshErr
 					}
@@ -736,6 +743,9 @@ func TestModalRecoverSSHTransport(t *testing.T) {
 
 			assert.Equal(t, tt.wantRecovered, recovered)
 			assert.Equal(t, tt.wantRefreshes, refreshes)
+			if tt.wantRefreshes > 0 {
+				assert.Equal(t, "sandbox", refreshedSandbox)
+			}
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Equal(t, "old.modal.host", modalEnv.SSHHost)

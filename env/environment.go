@@ -123,6 +123,13 @@ type Env interface {
 	WakeIfHibernated(ctx context.Context) error
 }
 
+// SnapshottingEnv is implemented by environments that can persist their
+// current filesystem state for use by future environments.
+type SnapshottingEnv interface {
+	Env
+	Snapshot(ctx context.Context) (EnvRunCommandOutput, error)
+}
+
 // SSHCapableEnv is implemented by environments that support direct SSH access.
 type SSHCapableEnv interface {
 	Env
@@ -1096,6 +1103,12 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		appendDiagnostics()
 	}
 	return output, err
+}
+
+func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
+	return e.RunCommand(ctx, EnvRunCommandInput{
+		Command: "/usr/local/bin/sidekick-snapshot",
+	})
 }
 
 func (e *ModalEnv) recoverSSHTransport(ctx context.Context, cause error) (bool, error) {

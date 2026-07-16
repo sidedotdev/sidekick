@@ -183,6 +183,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(env.DeleteSandboxActivity)
 	w.RegisterActivity(env.SyncRepoToRemoteActivity)
 	w.RegisterActivity(env.DeepenRepoActivity)
+	w.RegisterActivity(env.SnapshotEnvironmentActivity)
 	w.RegisterActivity(env.CreateRemoteWorktreeActivity)
 	w.RegisterActivity(&srv.Activities{Service: service})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)

@@ -48,8 +48,10 @@ const modalSSHPort = 22
 const modalSSHDCommand = `mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh && ` +
 	`printf '%s\n' "$SIDE_SSH_PUBKEY" > /root/.ssh/authorized_keys && ` +
 	`chmod 600 /root/.ssh/authorized_keys && ssh-keygen -A && ` +
-	`if [ -n "$SIDE_GUARD_URL" ]; then printf '%s' "$SIDE_WATCHDOG" > /usr/local/bin/sidekick-watchdog && ` +
-	`chmod +x /usr/local/bin/sidekick-watchdog && (/usr/local/bin/sidekick-watchdog &); fi; ` +
+	`if [ -n "$SIDE_GUARD_URL" ]; then printf '%s' "$SIDE_SNAPSHOT" > /usr/local/bin/sidekick-snapshot && ` +
+	`printf '%s' "$SIDE_WATCHDOG" > /usr/local/bin/sidekick-watchdog && ` +
+	`chmod +x /usr/local/bin/sidekick-snapshot /usr/local/bin/sidekick-watchdog && ` +
+	`(/usr/local/bin/sidekick-watchdog &); fi; ` +
 	`while :; do /usr/sbin/sshd -D -e -o PermitRootLogin=prohibit-password ` +
 	`-o PasswordAuthentication=no -o ClientAliveInterval=30; sleep 1; done`
 
