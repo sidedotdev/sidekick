@@ -11,6 +11,11 @@ const rrf_k = 60
 // RankQuery in RAG rank fusion; other weights are interpreted relative to it.
 const BaselineRankWeight = 1.0
 
+// bm25RankWeight scales lexical BM25 rankings relative to embedding-based
+// rankings when fused. Each weighted query's BM25 ranking contributes with
+// its query weight multiplied by this factor.
+const bm25RankWeight = 1.0
+
 // WeightedRanking is a ranked list of items (ordered most-relevant-first)
 // contributing to a fused result with the given weight.
 type WeightedRanking struct {

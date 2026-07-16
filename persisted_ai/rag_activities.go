@@ -240,6 +240,7 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	for i, set := range resultSets {
 		rankings[i] = WeightedRanking{Items: set, Weight: chunkWeights[i]}
 	}
+	rankings = append(rankings, ra.bm25WeightedRankings(ctx, options.WorkspaceId, options.ContentType, options.Subkeys, weightedQueries)...)
 
 	reranker, err := GetReranker(options.Secrets.SecretManager)
 	if err != nil {
@@ -255,6 +256,72 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 		fusedSubkeys,
 		reranker,
 	)
+}
+
+// bm25WeightedRankings hydrates the documents behind the given subkeys and
+// produces one lexical BM25 ranking per non-empty weighted query, so lexical
+// results can be fused with embedding-based rankings. It is best-effort: on
+// storage or unmarshal errors it logs at debug level and returns nil so the
+// embedding-only path still works.
+func (ra *RagActivities) bm25WeightedRankings(
+	ctx context.Context,
+	workspaceId string,
+	contentType string,
+	subkeys []string,
+	weightedQueries []WeightedRankQuery,
+) []WeightedRanking {
+	if len(subkeys) == 0 {
+		return nil
+	}
+
+	contentKeys := make([]string, len(subkeys))
+	for i, subkey := range subkeys {
+		contentKeys[i] = fmt.Sprintf("%s:%s", contentType, subkey)
+	}
+	values, err := ra.DatabaseAccessor.MGet(ctx, workspaceId, contentKeys)
+	if err != nil {
+		log.Debug().Err(err).Msg("bm25: failed to hydrate documents, skipping lexical ranking")
+		return nil
+	}
+	if len(values) != len(contentKeys) {
+		log.Debug().Int("got", len(values)).Int("expected", len(contentKeys)).Msg("bm25: unexpected hydration result count, skipping lexical ranking")
+		return nil
+	}
+
+	documents := make([]string, 0, len(values))
+	documentSubkeys := make([]string, 0, len(values))
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		var document string
+		if err := binary.Unmarshal(value, &document); err != nil {
+			log.Debug().Err(err).Str("key", contentKeys[i]).Msg("bm25: failed to unmarshal document, skipping lexical ranking")
+			return nil
+		}
+		documents = append(documents, document)
+		documentSubkeys = append(documentSubkeys, subkeys[i])
+	}
+	if len(documents) == 0 {
+		return nil
+	}
+
+	var rankings []WeightedRanking
+	for _, wq := range weightedQueries {
+		if strings.TrimSpace(wq.Query) == "" {
+			continue
+		}
+		rankedIndices := RankBM25(wq.Query, documents)
+		if len(rankedIndices) == 0 {
+			continue
+		}
+		items := make([]string, len(rankedIndices))
+		for i, docIdx := range rankedIndices {
+			items[i] = documentSubkeys[docIdx]
+		}
+		rankings = append(rankings, WeightedRanking{Items: items, Weight: wq.Weight * bm25RankWeight})
+	}
+	return rankings
 }
 
 // splitQueryIntoChunks splits a query into chunks based on sentence boundaries and size limits.
