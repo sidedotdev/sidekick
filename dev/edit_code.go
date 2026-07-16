@@ -447,8 +447,10 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		if _, isLlm2 := visibleChatHistory.History.(*persisted_ai.Llm2ChatHistory); isLlm2 {
 			var cha *persisted_ai.ChatHistoryActivities
 			var visibleCodeBlocks []tree_sitter.CodeBlock
+			extractCtx := dCtx.ExecContext
+			extractCtx.Context = utils.WithStorageActivityOptions(dCtx)
 			err = flow_action.PerformActivityWithUserRetry(
-				dCtx.ExecContext,
+				extractCtx,
 				"Extract visible code blocks",
 				cha.ExtractVisibleCodeBlocks,
 				&visibleCodeBlocks,

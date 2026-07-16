@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"sidekick/coding/tree_sitter"
@@ -31,9 +32,11 @@ type AuthorEditBlocksTestSuite struct {
 	suite.Suite
 	testsuite.WorkflowTestSuite
 
-	env          *testsuite.TestWorkflowEnvironment
-	dir          string
-	envContainer env.EnvContainer
+	env                              *testsuite.TestWorkflowEnvironment
+	dir                              string
+	envContainer                     env.EnvContainer
+	extractVisibleCodeBlocksCalls    int
+	extractVisibleCodeBlocksFailures int
 
 	// a wrapper is required to set the ctx1 value, so that we can a method that
 	// isn't a real workflow. otherwise we get errors about not having
@@ -113,7 +116,14 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 		&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "user"}, nil,
 	).Maybe()
 	s.env.OnActivity(cha.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).Return(
-		[]tree_sitter.CodeBlock{}, nil,
+		func(context.Context, *persisted_ai.ChatHistoryContainer) ([]tree_sitter.CodeBlock, error) {
+			s.extractVisibleCodeBlocksCalls++
+			if s.extractVisibleCodeBlocksFailures > 0 {
+				s.extractVisibleCodeBlocksFailures--
+				return nil, errors.New("transient extraction failure")
+			}
+			return []tree_sitter.CodeBlock{}, nil
+		},
 	).Maybe()
 
 	// Create temporary directory using t.TempDir()
@@ -186,6 +196,40 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 	})
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
+
+	var result []EditBlock
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.Equal([]EditBlock(nil), result)
+}
+
+func (s *AuthorEditBlocksTestSuite) TestExtractVisibleCodeBlocksAutomaticallyRetries() {
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
+	initialCallCount := s.extractVisibleCodeBlocksCalls
+	s.extractVisibleCodeBlocksFailures = 1
+
+	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+	s.env.OnGetVersion("storage-activity-options", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+
+	var la *persisted_ai.Llm2Activities
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
+		StopReason: "stop",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{
+				{
+					Type: llm2.ContentBlockTypeText,
+					Text: "No edit blocks",
+				},
+			},
+		},
+	}, nil).Once()
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
+		InitialCodeInfo{},
+	})
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal(2, s.extractVisibleCodeBlocksCalls-initialCallCount)
 
 	var result []EditBlock
 	s.NoError(s.env.GetWorkflowResult(&result))
