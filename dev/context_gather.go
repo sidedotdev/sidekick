@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/invopop/jsonschema"
+	"go.temporal.io/sdk/workflow"
 )
 
 type contextGatherReadyArguments struct{}
@@ -34,25 +35,88 @@ var contextGatherRememberTool = llm.Tool{
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&contextGatherReferenceArgs{}),
 }
 
-// GatherContextForCoding explores the repository in a visible, read-only
-// localization subflow and leaves only retained context exchanges in history.
-func GatherContextForCoding(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
-	if chatHistory == nil {
-		return fmt.Errorf("context gathering chat history is required")
+// ContextGatherOptions carries optional inputs for context gathering.
+type ContextGatherOptions struct {
+	// InitialMessage, when set, becomes the first message of the filtered
+	// handoff history, replacing the temporary gather instructions with the
+	// real initial prompt of the consuming flow.
+	InitialMessage *llm.ChatMessage
+	// EnvironmentContext enriches the gather prompt with the same environment
+	// details the consuming flow sees.
+	EnvironmentContext string
+}
+
+// contextGatherHandoffEnabled reports whether this workflow builds the
+// gathered history handoff with the real initial instructions and ranked repo
+// summary; older executions replay the previous explore behavior.
+func contextGatherHandoffEnabled(dCtx DevContext) bool {
+	return workflow.GetVersion(dCtx, "context-gather-handoff", workflow.DefaultVersion, 1) >= 1
+}
+
+// gatherPlanningContext runs the explore context gather for planning-phase
+// subflows (dev requirements and dev plan building) when enabled. With the
+// handoff enabled, the ranked repo summary feeds both the gather prompt and
+// the initial planning instructions built via buildInitialMessage, and the
+// returned chat history starts with those instructions (seeded=true) followed
+// by the retained context exchanges. It returns a nil history when the legacy
+// initial code context preparation should run instead. The returned int is a
+// chat history keep-length extension derived from the gathered context size.
+func gatherPlanningContext(dCtx DevContext, requirements string, buildInitialMessage func(codeContext string) llm.ChatMessage) (*persisted_ai.ChatHistoryContainer, bool, int, error) {
+	if !shouldGatherContext(dCtx.ContextGatherType, true) ||
+		workflow.GetVersion(dCtx, "planning-context-gather", workflow.DefaultVersion, 1) != 1 {
+		return nil, false, 0, nil
 	}
 
-	return RunSubflowWithoutResult(dCtx, "gather_context", "Gather Context", func(_ domain.Subflow) error {
-		return gatherContextForCodingSubflow(dCtx, chatHistory, promptInfo)
+	promptInfo := InitialCodeInfo{Requirements: requirements}
+	opts := ContextGatherOptions{}
+	seeded := contextGatherHandoffEnabled(dCtx)
+	if seeded {
+		repoSummary, _, err := PrepareRepoSummary(dCtx, requirements)
+		if err != nil {
+			return nil, false, 0, fmt.Errorf("failed to prepare repo summary: %w", err)
+		}
+		promptInfo.CodeContext = repoSummary
+		initialMessage := buildInitialMessage(repoSummary)
+		opts.InitialMessage = &initialMessage
+	}
+
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	contextSizeExtension, err := GatherContextForCoding(dCtx, chatHistory, promptInfo, opts)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	return chatHistory, seeded, contextSizeExtension, nil
+}
+
+// gatheredContextExtensionRatio determines how much of the gathered context
+// size extends the managed chat history keep length. The full gathered
+// history is handed off, but older gathered context gradually becomes
+// redundant as newer coding context duplicates or supersedes it, so only a
+// fraction of its size is protected from history management.
+const gatheredContextExtensionRatio = 0.5
+
+// GatherContextForCoding explores the repository in a visible, read-only
+// localization subflow and leaves only retained context exchanges in history,
+// preceded by opts.InitialMessage when provided. It returns a chat history
+// keep-length extension: a fraction of the gathered context size, per
+// gatheredContextExtensionRatio.
+func GatherContextForCoding(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, opts ContextGatherOptions) (int, error) {
+	if chatHistory == nil {
+		return 0, fmt.Errorf("context gathering chat history is required")
+	}
+
+	return RunSubflow(dCtx, "gather_context", "Gather Context", func(_ domain.Subflow) (int, error) {
+		return gatherContextForCodingSubflow(dCtx, chatHistory, promptInfo, opts)
 	})
 }
 
-func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
+func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, opts ContextGatherOptions) (int, error) {
 	forgettingEnabled := fflag.IsEnabled(dCtx, fflag.ContextGatheringForget)
 	tracker := newContextGatherHistory(chatHistory, forgettingEnabled)
 
-	prompt, err := renderContextGatherPrompt(promptInfo, forgettingEnabled)
+	prompt, err := renderContextGatherPrompt(dCtx, promptInfo, forgettingEnabled, opts.EnvironmentContext)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 		Role:         llm.ChatMessageRoleUser,
@@ -60,7 +124,7 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 		CacheControl: "ephemeral",
 		ContextType:  ContextTypeInitialInstructions,
 	}); err != nil {
-		return fmt.Errorf("failed to append context gathering instructions: %w", err)
+		return 0, fmt.Errorf("failed to append context gathering instructions: %w", err)
 	}
 
 	modelConfig := dCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
@@ -75,7 +139,7 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 	for {
 		response, err := TrackedToolChat(dCtx.WithCancelOnPause(), "context_gather", options, chatHistory)
 		if err != nil {
-			return fmt.Errorf("failed to gather repository context: %w", err)
+			return 0, fmt.Errorf("failed to gather repository context: %w", err)
 		}
 		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
 			continue
@@ -83,7 +147,7 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 
 		message := response.GetMessage()
 		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, message); err != nil {
-			return fmt.Errorf("failed to append context gathering response: %w", err)
+			return 0, fmt.Errorf("failed to append context gathering response: %w", err)
 		}
 		if llm2Message, ok := message.(llm2.Message); ok {
 			tracker.llm2Transcript = append(tracker.llm2Transcript, llm2Message)
@@ -95,17 +159,17 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 		for _, toolCall := range message.GetToolCalls() {
 			result, contextResult, toolTerminal, err := handleContextGatherToolCall(dCtx, tracker, toolCall)
 			if err != nil {
-				return err
+				return 0, err
 			}
 			terminal = terminal || toolTerminal
 
 			if contextResult {
 				if _, err := tracker.registerContextToolResult(&result); err != nil {
-					return fmt.Errorf("failed to register context result: %w", err)
+					return 0, fmt.Errorf("failed to register context result: %w", err)
 				}
 			}
 			if err := appendToolCallResult(dCtx.ExecContext, chatHistory, result, nil); err != nil {
-				return fmt.Errorf("failed to append context gathering tool result: %w", err)
+				return 0, fmt.Errorf("failed to append context gathering tool result: %w", err)
 			}
 			tracker.llm2Transcript = append(tracker.llm2Transcript, llm2.Message{
 				Role: llm2.RoleUser,
@@ -118,9 +182,13 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 
 		if terminal {
 			if err := tracker.filterForCoding(); err != nil {
-				return err
+				return 0, err
 			}
-			return persistFilteredContextGatherHistory(dCtx, chatHistory, tracker.llm2Transcript)
+			contextSizeExtension := int(float64(tracker.gatheredContextSize()) * gatheredContextExtensionRatio)
+			if err := persistFilteredContextGatherHistory(dCtx, chatHistory, opts.InitialMessage, tracker.llm2Transcript); err != nil {
+				return 0, err
+			}
+			return contextSizeExtension, nil
 		}
 	}
 }
@@ -128,6 +196,7 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 func persistFilteredContextGatherHistory(
 	dCtx DevContext,
 	chatHistory *persisted_ai.ChatHistoryContainer,
+	initialMessage *llm.ChatMessage,
 	messages []llm2.Message,
 ) error {
 	history, ok := chatHistory.History.(*persisted_ai.Llm2ChatHistory)
@@ -136,6 +205,11 @@ func persistFilteredContextGatherHistory(
 	}
 
 	chatHistory.History = persisted_ai.NewLlm2ChatHistory(history.FlowId(), history.WorkspaceId())
+	if initialMessage != nil {
+		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, *initialMessage); err != nil {
+			return fmt.Errorf("failed to persist handoff initial instructions: %w", err)
+		}
+	}
 	for i := range messages {
 		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, &messages[i]); err != nil {
 			return fmt.Errorf("failed to persist filtered context gathering history: %w", err)
@@ -225,14 +299,17 @@ func contextGatherControlResult(toolCall llm.ToolCall, state contextGatherRefere
 	}
 }
 
-func renderContextGatherPrompt(promptInfo PromptInfo, forgettingEnabled bool) (string, error) {
+func renderContextGatherPrompt(dCtx DevContext, promptInfo PromptInfo, forgettingEnabled bool, environmentContext string) (string, error) {
 	var taskContext string
+	codeContext := ""
 	switch info := promptInfo.(type) {
 	case InitialCodeInfo:
+		codeContext = info.CodeContext
 		taskContext = fmt.Sprintf(`# Task Requirements
 
 %s`, info.Requirements)
 	case InitialDevStepInfo:
+		codeContext = info.CodeContext
 		taskContext = fmt.Sprintf(`# Complete Task Requirements
 
 %s
@@ -260,6 +337,16 @@ Completion analysis: %s`,
 		)
 	default:
 		return "", fmt.Errorf("unsupported context gathering prompt type %q", promptInfo.GetType())
+	}
+
+	if hints := dCtx.RepoConfig.EditCode.Hints; hints != "" {
+		taskContext += fmt.Sprintf("\n\n# Repository Guidance\n\n%s", hints)
+	}
+	if environmentContext != "" {
+		taskContext += fmt.Sprintf("\n\nEnvironment: %s", environmentContext)
+	}
+	if codeContext != "" {
+		taskContext += fmt.Sprintf("\n\n%s\n%s\n%s", startInitialCodeContext, codeContext, endInitialCodeContext)
 	}
 
 	forgettingInstructions := ""

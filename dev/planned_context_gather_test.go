@@ -43,12 +43,21 @@ func TestPlannedContextGatherCallSiteSelection(t *testing.T) {
 				}
 				plan := DevPlanExecution{Plan: &DevPlan{}}
 				step := DevStep{Type: tt.stepType, Title: "Workflow call-site step"}
-				codeContext, extension, err := preparePlannedCodingContext(
+				var gatherPromptInfo *InitialDevStepInfo
+				if tt.explore {
+					gatherPromptInfo = &InitialDevStepInfo{
+						Requirements:  "complete planned requirements",
+						PlanExecution: plan,
+						Step:          step,
+					}
+				}
+				_, extension, err := preparePlannedCodingContext(
 					dCtx,
 					"complete planned requirements",
 					plan,
 					step,
 					history,
+					gatherPromptInfo,
 					legacy,
 				)
 				if err != nil {
@@ -63,12 +72,7 @@ func TestPlannedContextGatherCallSiteSelection(t *testing.T) {
 						resolve,
 						extension,
 						history,
-						InitialDevStepInfo{
-							CodeContext:   codeContext,
-							Requirements:  "complete planned requirements",
-							PlanExecution: plan,
-							Step:          step,
-						},
+						SkipInfo{},
 						nil,
 					)
 				}
@@ -86,15 +90,15 @@ func TestPlannedContextGatherCallSiteSelection(t *testing.T) {
 				assert.Zero(t, result.LegacyCalls)
 				assert.Equal(t, []string{"localization-model", "localization-model", "coding-model"}, result.Models)
 				require.Len(t, result.HandoffRefs, 3)
-				assert.Equal(t, []string{"assistant", "user", "user"}, []string{
+				assert.Equal(t, []string{"user", "assistant", "user"}, []string{
 					result.HandoffRefs[0].Role,
 					result.HandoffRefs[1].Role,
 					result.HandoffRefs[2].Role,
 				})
 				assert.Equal(t, []string{
+					"coding-instructions",
 					"filtered-context-call",
 					"filtered-context-result",
-					"coding-instructions",
 				}, []string{
 					result.HandoffRefs[0].BlockKeys[0],
 					result.HandoffRefs[1].BlockKeys[0],

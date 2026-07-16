@@ -157,6 +157,20 @@ func (h *contextGatherHistory) filterForCoding() error {
 	return nil
 }
 
+// gatheredContextSize measures the text content of the gathered exchanges
+// handed off for coding, after forget filtering. Only call after
+// filterForCoding.
+func (h *contextGatherHistory) gatheredContextSize() int {
+	if h.history == nil || h.history.History == nil {
+		return 0
+	}
+	size := 0
+	for _, message := range h.history.History.Messages() {
+		size += len(message.GetContentString())
+	}
+	return size
+}
+
 func (h *contextGatherHistory) retainedToolCallIds() map[string]bool {
 	retained := make(map[string]bool, len(h.exchanges))
 	for reference, exchange := range h.exchanges {

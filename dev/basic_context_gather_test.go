@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	"sidekick/domain"
+	sidekick_env "sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm2"
@@ -22,11 +24,14 @@ import (
 )
 
 type basicContextCallSiteResult struct {
-	LegacyCalls    int
-	Models         []string
-	HandoffRefs    []persisted_ai.MessageRef
-	AppendedInputs []persisted_ai.AppendMessageInput
-	StopAtCoding   bool
+	LegacyCalls          int
+	RankedSummaryCalls   int
+	ContextSizeExtension int
+	Models               []string
+	HandoffRefs          []persisted_ai.MessageRef
+	AppendedInputs       []persisted_ai.AppendMessageInput
+	SubflowNames         []string
+	StopAtCoding         bool
 }
 
 func TestBasicContextGatherCallSiteSelection(t *testing.T) {
@@ -56,10 +61,15 @@ func TestBasicContextGatherCallSiteSelection(t *testing.T) {
 					result.LegacyCalls++
 					return "legacy context", "legacy context extended", nil
 				}
-				codeContext, extension, err := prepareBasicCodingContext(dCtx, "complete basic requirements", history, legacy)
+				var gatherPromptInfo *InitialCodeInfo
+				if tt.explore {
+					gatherPromptInfo = &InitialCodeInfo{Requirements: "complete basic requirements"}
+				}
+				_, extension, err := prepareBasicCodingContext(dCtx, "complete basic requirements", history, gatherPromptInfo, legacy)
 				if err != nil {
 					return result, err
 				}
+				result.ContextSizeExtension = extension
 				if tt.explore {
 					resolve := func() common.ModelConfig {
 						return common.ModelConfig{Provider: "test", Model: "coding-model"}
@@ -69,7 +79,7 @@ func TestBasicContextGatherCallSiteSelection(t *testing.T) {
 						resolve,
 						extension,
 						history,
-						InitialCodeInfo{CodeContext: codeContext, Requirements: "complete basic requirements"},
+						SkipInfo{},
 						nil,
 					)
 				}
@@ -85,17 +95,20 @@ func TestBasicContextGatherCallSiteSelection(t *testing.T) {
 
 			if tt.explore {
 				assert.Zero(t, result.LegacyCalls)
+				// a fraction of the gathered context size becomes the
+				// keep-length extension
+				assert.Positive(t, result.ContextSizeExtension)
 				assert.Equal(t, []string{"localization-model", "localization-model", "coding-model"}, result.Models)
 				require.Len(t, result.HandoffRefs, 3)
-				assert.Equal(t, []string{"assistant", "user", "user"}, []string{
+				assert.Equal(t, []string{"user", "assistant", "user"}, []string{
 					result.HandoffRefs[0].Role,
 					result.HandoffRefs[1].Role,
 					result.HandoffRefs[2].Role,
 				})
 				assert.Equal(t, []string{
+					"coding-instructions",
 					"filtered-context-call",
 					"filtered-context-result",
-					"coding-instructions",
 				}, []string{
 					result.HandoffRefs[0].BlockKeys[0],
 					result.HandoffRefs[1].BlockKeys[0],
@@ -103,6 +116,7 @@ func TestBasicContextGatherCallSiteSelection(t *testing.T) {
 				})
 			} else {
 				assert.Equal(t, 1, result.LegacyCalls)
+				assert.Equal(t, len("legacy context extended")-len("legacy context"), result.ContextSizeExtension)
 				assert.Empty(t, result.Models)
 			}
 		})
@@ -149,6 +163,79 @@ func TestBasicContextGatherRunsForEachCodingInvocation(t *testing.T) {
 	assert.GreaterOrEqual(t, countModelCalls(result.Models, "coding-model"), 2)
 }
 
+// TestExploreHandoffHistoryConstruction verifies the explore handoff end to
+// end: the ranked repo summary feeds the gather prompt, the rebuilt coding
+// history starts with the exact legacy initial coding prompt followed by the
+// retained exploration exchanges, and EditCode does not append another initial
+// prompt.
+func TestExploreHandoffHistoryConstruction(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
+
+	result := basicContextCallSiteResult{StopAtCoding: true}
+	var expectedInitialPrompt string
+	wrapper := func(ctx workflow.Context) (basicContextCallSiteResult, error) {
+		dCtx := contextGatherCallSiteDevContext(ctx, ContextGatherTypeExplore)
+		expectedMessage, err := buildInitialCodingMessage(dCtx, InitialCodeInfo{
+			CodeContext:  "ranked repo summary marker",
+			Requirements: "complete basic requirements",
+		}, resolveEnvironmentContext(dCtx))
+		if err != nil {
+			return result, err
+		}
+		expectedInitialPrompt = expectedMessage.Content
+		if _, err := codingSubflow(dCtx, "complete basic requirements", nil, ""); err == nil {
+			return result, errors.New("expected coding invocation to stop at the coding model")
+		}
+		return result, nil
+	}
+	env.RegisterWorkflow(wrapper)
+	registerContextGatherCallSiteActivities(t, env, &result)
+
+	env.ExecuteWorkflow(wrapper)
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	gatherPromptSeen := false
+	initialPromptMatches := 0
+	handoffIndex := -1
+	for i, input := range result.AppendedInputs {
+		if len(input.Message.Content) != 1 || input.Message.Content[0].Type != llm2.ContentBlockTypeText {
+			continue
+		}
+		text := input.Message.Content[0].Text
+		if strings.Contains(text, contextGatherReadyTool.Name) {
+			gatherPromptSeen = true
+			assert.Contains(t, text, "ranked repo summary marker",
+				"gather prompt must include the ranked repo summary")
+		}
+		if text == expectedInitialPrompt {
+			initialPromptMatches++
+			handoffIndex = i
+		}
+	}
+	assert.True(t, gatherPromptSeen, "expected gather instructions to be appended")
+	// ranked RAG runs even though all feature flags (including
+	// InitialRepoSummary) are mocked false
+	assert.GreaterOrEqual(t, result.RankedSummaryCalls, 1)
+	assert.Contains(t, expectedInitialPrompt, "ranked repo summary marker")
+	assert.Equal(t, 1, initialPromptMatches,
+		"expected exactly one exact initial coding prompt: EditCode must not append another")
+	require.Equal(t, len(result.AppendedInputs)-3, handoffIndex,
+		"initial coding prompt must head the rebuilt handoff history")
+	require.Len(t, result.HandoffRefs, 3)
+	assert.Equal(t, []string{
+		"coding-instructions",
+		"filtered-context-call",
+		"filtered-context-result",
+	}, []string{
+		result.HandoffRefs[0].BlockKeys[0],
+		result.HandoffRefs[1].BlockKeys[0],
+		result.HandoffRefs[2].BlockKeys[0],
+	})
+}
+
 func countModelCalls(models []string, model string) int {
 	count := 0
 	for _, calledModel := range models {
@@ -169,6 +256,12 @@ func contextGatherCallSiteDevContext(ctx workflow.Context, gatherType ContextGat
 			Secrets: &secret_manager.SecretManagerContainer{
 				SecretManager: secret_manager.MockSecretManager{},
 			},
+			EmbeddingConfig: common.EmbeddingConfig{
+				Defaults: []common.ModelConfig{{Provider: "test", Model: "embedding-model"}},
+			},
+			EnvContainer: &sidekick_env.EnvContainer{
+				Env: &sidekick_env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
+			},
 		},
 		ContextGatherType: gatherType,
 	}
@@ -177,6 +270,7 @@ func contextGatherCallSiteDevContext(ctx workflow.Context, gatherType ContextGat
 		UseCaseConfigs: map[string][]common.ModelConfig{
 			common.CodeLocalizationKey: {{Provider: "test", Model: "localization-model"}},
 			common.CodingKey:           {{Provider: "test", Model: "coding-model"}},
+			common.PlanningKey:         {{Provider: "test", Model: "planning-model"}},
 		},
 	})
 	return dCtx
@@ -194,16 +288,27 @@ func registerContextGatherCallSiteActivities(
 		Maybe()
 
 	var flags *fflag.FFlagActivities
-	env.OnActivity(
-		flags.EvalBoolFlag,
-		mock.Anything,
-		mock.MatchedBy(func(params fflag.EvaluateFeatureFlagParams) bool {
-			return params.FlagName == fflag.ContextGatheringForget
-		}),
-	).Return(false, nil).Maybe()
+	env.OnActivity(flags.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+
+	env.OnActivity(sidekick_env.GetEnvironmentInfoActivity, mock.Anything, mock.Anything).
+		Return(sidekick_env.GetEnvironmentInfoOutput{}, nil).
+		Maybe()
+
+	var ragActivities *persisted_ai.RagActivities
+	env.OnActivity(ragActivities.RankedDirSignatureOutline, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ persisted_ai.RankedDirSignatureOutlineOptions) (string, error) {
+			result.RankedSummaryCalls++
+			return "ranked repo summary marker", nil
+		}).
+		Maybe()
 
 	var flowActivities *flow_action.FlowActivities
-	env.OnActivity(flowActivities.PersistSubflow, mock.Anything, mock.Anything).Return(nil).Maybe()
+	env.OnActivity(flowActivities.PersistSubflow, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, subflow domain.Subflow) error {
+			result.SubflowNames = append(result.SubflowNames, subflow.Name)
+			return nil
+		}).
+		Maybe()
 	env.OnActivity(flowActivities.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
 	env.OnActivity(flowActivities.GetModelMetadata, mock.Anything, mock.Anything, mock.Anything).
 		Return(common.ModelMetadata{}, nil).
@@ -253,7 +358,7 @@ func registerContextGatherCallSiteActivities(
 	env.OnActivity(llmActivities.Stream, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
 			result.Models = append(result.Models, input.Options.ModelConfig.Model)
-			if input.Options.ModelConfig.Model == "coding-model" {
+			if input.Options.ModelConfig.Model == "coding-model" || input.Options.ModelConfig.Model == "planning-model" {
 				history, ok := input.ChatHistory.History.(*persisted_ai.Llm2ChatHistory)
 				require.True(t, ok)
 				result.HandoffRefs = history.Refs()

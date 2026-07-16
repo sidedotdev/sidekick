@@ -26,15 +26,37 @@ func TestRenderContextGatherPrompt(t *testing.T) {
 	t.Run("basic includes complete requirements", func(t *testing.T) {
 		t.Parallel()
 
-		prompt, err := renderContextGatherPrompt(InitialCodeInfo{
+		prompt, err := renderContextGatherPrompt(DevContext{}, InitialCodeInfo{
 			Requirements: "Complete basic requirements marker",
-		}, false)
+		}, false, "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "Complete basic requirements marker")
 		assert.Contains(t, prompt, "all repository context needed")
 		assert.Contains(t, prompt, contextGatherReadyTool.Name)
 		assert.Contains(t, prompt, getHelpOrInputTool.Name)
 		assert.NotContains(t, prompt, contextGatherForgetTool.Name)
+		assert.NotContains(t, prompt, startInitialCodeContext)
+		assert.NotContains(t, prompt, "Environment:")
+	})
+
+	t.Run("includes repo summary, hints and environment context", func(t *testing.T) {
+		t.Parallel()
+
+		dCtx := DevContext{
+			RepoConfig: common.RepoConfig{
+				EditCode: common.EditCodeConfig{Hints: "Repo hints marker"},
+			},
+		}
+		prompt, err := renderContextGatherPrompt(dCtx, InitialCodeInfo{
+			CodeContext:  "Ranked summary marker",
+			Requirements: "Complete basic requirements marker",
+		}, false, "OS: testos, Arch: testarch")
+		require.NoError(t, err)
+		assert.Contains(t, prompt, "Repo hints marker")
+		assert.Contains(t, prompt, "Environment: OS: testos, Arch: testarch")
+		assert.Contains(t, prompt, startInitialCodeContext)
+		assert.Contains(t, prompt, "Ranked summary marker")
+		assert.Contains(t, prompt, endInitialCodeContext)
 	})
 
 	t.Run("planned preserves plan and step context", func(t *testing.T) {
@@ -50,11 +72,11 @@ func TestRenderContextGatherPrompt(t *testing.T) {
 			Definition:         "Current step definition marker",
 			CompletionAnalysis: "Current completion marker",
 		}
-		prompt, err := renderContextGatherPrompt(InitialDevStepInfo{
+		prompt, err := renderContextGatherPrompt(DevContext{}, InitialDevStepInfo{
 			Requirements:  "Complete planned requirements marker",
 			PlanExecution: DevPlanExecution{Plan: plan},
 			Step:          step,
-		}, true)
+		}, true, "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "Complete planned requirements marker")
 		assert.Contains(t, prompt, "Plan learning marker")
@@ -137,9 +159,9 @@ func TestContextGatherWorkflowUsesVisibleLocalizationSubflowAndRequiresTerminalT
 			return contextGatherWorkflowResult{}, err
 		}
 
-		err := GatherContextForCoding(dCtx, history, InitialCodeInfo{
+		_, err := GatherContextForCoding(dCtx, history, InitialCodeInfo{
 			Requirements: "Workflow requirements marker",
-		})
+		}, ContextGatherOptions{})
 		return contextGatherWorkflowResult{
 			HistoryLength: history.Len(),
 			StreamCalls:   streamCalls,
@@ -251,7 +273,7 @@ func TestContextGatherHelpTerminatesWithoutUserRequest(t *testing.T) {
 		if err := SetupModelConfigHandlers(dCtx); err != nil {
 			return 0, err
 		}
-		err := GatherContextForCoding(dCtx, history, InitialCodeInfo{Requirements: "Help terminal test"})
+		_, err := GatherContextForCoding(dCtx, history, InitialCodeInfo{Requirements: "Help terminal test"}, ContextGatherOptions{})
 		return history.Len(), err
 	}
 	env.RegisterWorkflow(wrapper)

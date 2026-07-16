@@ -145,23 +145,54 @@ func completeDevStep(dCtx DevContext, requirements string, planExecution DevPlan
 
 type plannedContextPreparer func(DevContext, string, *DevPlanExecution, *DevStep, ...persisted_ai.WeightedRankQuery) (string, string, error)
 
+// resolveStepEnvironmentContext builds the environment context string included
+// in dev step prompts, preferring live environment info when available and
+// appending branch context.
+func resolveStepEnvironmentContext(dCtx DevContext) string {
+	environmentContext := getEnvironmentContext()
+	v := workflow.GetVersion(dCtx, "env-context-from-activity-step", workflow.DefaultVersion, 1)
+	if v >= 1 && dCtx.EnvContainer != nil {
+		var output env.GetEnvironmentInfoOutput
+		actErr := workflow.ExecuteActivity(dCtx, env.GetEnvironmentInfoActivity, env.GetEnvironmentInfoInput{
+			EnvContainer: *dCtx.EnvContainer,
+		}).Get(dCtx, &output)
+		if actErr == nil && output.OS != "" {
+			environmentContext = output.FormatEnvironmentContext()
+		}
+	}
+	return withBranchContext(dCtx, environmentContext)
+}
+
 func preparePlannedCodingContext(
 	dCtx DevContext,
 	requirements string,
 	planExecution DevPlanExecution,
 	step DevStep,
 	chatHistory *persisted_ai.ChatHistoryContainer,
+	gatherPromptInfo *InitialDevStepInfo,
 	prepareLegacy plannedContextPreparer,
 ) (string, int, error) {
 	if shouldGatherContext(dCtx.ContextGatherType, step.Type == "edit") {
-		if err := GatherContextForCoding(dCtx, chatHistory, InitialDevStepInfo{
+		promptInfo := InitialDevStepInfo{
 			Requirements:  requirements,
 			PlanExecution: planExecution,
 			Step:          step,
-		}); err != nil {
+		}
+		opts := ContextGatherOptions{}
+		if gatherPromptInfo != nil {
+			promptInfo = *gatherPromptInfo
+			opts.EnvironmentContext = promptInfo.EnvironmentContext
+			initialMessage, err := buildInitialCodingMessage(dCtx, promptInfo, opts.EnvironmentContext)
+			if err != nil {
+				return "", 0, err
+			}
+			opts.InitialMessage = &initialMessage
+		}
+		contextSizeExtension, err := GatherContextForCoding(dCtx, chatHistory, promptInfo, opts)
+		if err != nil {
 			return "", 0, fmt.Errorf("failed to gather context for coding: %w", err)
 		}
-		return "", 0, nil
+		return "", contextSizeExtension, nil
 	}
 
 	codeContext, fullCodeContext, err := prepareLegacy(dCtx, requirements, &planExecution, &step)
@@ -182,8 +213,28 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 	}
 
 	var chatHistory *persisted_ai.ChatHistoryContainer
+	gatherHandoff := false
 	if shouldGatherContext(dCtx.ContextGatherType, step.Type == "edit") {
 		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		gatherHandoff = contextGatherHandoffEnabled(dCtx)
+	}
+
+	var gatherPromptInfo *InitialDevStepInfo
+	if gatherHandoff {
+		// the legacy-equivalent ranked repo summary feeds both the gather
+		// prompt and the initial coding instructions that head the gathered
+		// handoff history
+		repoSummary, _, err := PrepareRepoSummary(dCtx, requirements)
+		if err != nil {
+			return result, fmt.Errorf("failed to prepare repo summary: %v", err)
+		}
+		gatherPromptInfo = &InitialDevStepInfo{
+			CodeContext:        repoSummary,
+			Requirements:       requirements,
+			PlanExecution:      planExecution,
+			Step:               step,
+			EnvironmentContext: resolveStepEnvironmentContext(dCtx),
+		}
 	}
 
 	// Step 1: prepare code context
@@ -194,6 +245,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		planExecution,
 		step,
 		chatHistory,
+		gatherPromptInfo,
 		PrepareInitialCodeContext,
 	)
 	if err != nil {
@@ -206,7 +258,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	}
 
-	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2); v >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2); v >= 1 && !gatherHandoff && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 		if err != nil {
 			return result, fmt.Errorf("failed to retrieve repo summary: %v", err)
@@ -242,18 +294,12 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 	}
 
-	environmentContext := getEnvironmentContext()
-	v := workflow.GetVersion(dCtx, "env-context-from-activity-step", workflow.DefaultVersion, 1)
-	if v >= 1 && dCtx.EnvContainer != nil {
-		var output env.GetEnvironmentInfoOutput
-		actErr := workflow.ExecuteActivity(dCtx, env.GetEnvironmentInfoActivity, env.GetEnvironmentInfoInput{
-			EnvContainer: *dCtx.EnvContainer,
-		}).Get(dCtx, &output)
-		if actErr == nil && output.OS != "" {
-			environmentContext = output.FormatEnvironmentContext()
-		}
+	var environmentContext string
+	if gatherHandoff {
+		environmentContext = gatherPromptInfo.EnvironmentContext
+	} else {
+		environmentContext = resolveStepEnvironmentContext(dCtx)
 	}
-	environmentContext = withBranchContext(dCtx, environmentContext)
 
 	// TODO decide how to set the dev step info based on the step type, eg
 	// perhaps different structs per step type
@@ -264,10 +310,20 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		Step:               step,
 		EnvironmentContext: environmentContext,
 	}
+	if gatherHandoff {
+		// keep the ranked summary available for model resets that rebuild history
+		initialPromptInfo = *gatherPromptInfo
+	}
 
 	attemptCount := 0
 	var promptInfo PromptInfo
-	promptInfo = initialPromptInfo
+	if gatherHandoff {
+		// the gathered handoff history already starts with the real initial
+		// coding instructions, so nothing more is appended for the first turn
+		promptInfo = SkipInfo{}
+	} else {
+		promptInfo = initialPromptInfo
+	}
 
 	goToNextModel := func() error {
 		// reset everything to let the next model start fresh

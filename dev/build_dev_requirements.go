@@ -244,32 +244,54 @@ func BuildDevRequirements(dCtx DevContext, initialInfo InitialDevRequirementsInf
 func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirementsInfo) (*DevRequirements, error) {
 	// Step 1: prepare code context + retrieve mission
 	contextSizeExtension := 0
-	if initialInfo.Context == "" {
-		codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, initialInfo.Requirements, nil, nil)
-		initialInfo.Context = codeContext
-		contextSizeExtension = len(fullCodeContext) - len(codeContext)
-		if err != nil {
-			return nil, fmt.Errorf("failed to prepare code context: %v", err)
-		}
-	}
 	if initialInfo.Mission == "" {
 		initialInfo.Mission = dCtx.RepoConfig.Mission
 	}
 
-	// prepend a concise repository summary to the other code context in the initial prompt
-	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-	if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
-		repoSummary, err := GetRepoSummaryForPrompt(dCtx, initialInfo.Requirements, 5000)
+	var chatHistory *persisted_ai.ChatHistoryContainer
+	seededInitialPrompt := false
+	if initialInfo.Context == "" {
+		var err error
+		chatHistory, seededInitialPrompt, contextSizeExtension, err = gatherPlanningContext(dCtx, initialInfo.Requirements, func(codeContext string) llm.ChatMessage {
+			return llm.ChatMessage{
+				Role:         llm.ChatMessageRoleUser,
+				Content:      getInitialDevRequirementsPrompt(initialInfo.Mission, codeContext, initialInfo.Requirements),
+				CacheControl: "ephemeral",
+				ContextType:  ContextTypeInitialInstructions,
+			}
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to get repo summary: %w", err)
+			return nil, fmt.Errorf("failed to gather context for dev requirements: %w", err)
 		}
-		initialInfo.Context = repoSummary + "\n\n" + initialInfo.Context
+		if chatHistory == nil {
+			codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, initialInfo.Requirements, nil, nil)
+			initialInfo.Context = codeContext
+			contextSizeExtension = len(fullCodeContext) - len(codeContext)
+			if err != nil {
+				return nil, fmt.Errorf("failed to prepare code context: %v", err)
+			}
+		}
 	}
 
-	// Step 2: run the dev requirements loop
-	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
-	if err := addDevRequirementsPrompt(dCtx.ExecContext, chatHistory, initialInfo); err != nil {
-		return nil, err
+	// Step 2: run the dev requirements loop, seeding the initial prompt unless
+	// the gathered handoff history already starts with it
+	if !seededInitialPrompt {
+		// prepend a concise repository summary to the other code context in the initial prompt
+		version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
+		if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+			repoSummary, err := GetRepoSummaryForPrompt(dCtx, initialInfo.Requirements, 5000)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get repo summary: %w", err)
+			}
+			initialInfo.Context = repoSummary + "\n\n" + initialInfo.Context
+		}
+
+		if chatHistory == nil {
+			chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		}
+		if err := addDevRequirementsPrompt(dCtx.ExecContext, chatHistory, initialInfo); err != nil {
+			return nil, err
+		}
 	}
 	initialState := &buildDevRequirementsState{
 		contextSizeExtension: contextSizeExtension,

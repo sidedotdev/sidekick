@@ -357,14 +357,27 @@ func prepareBasicCodingContext(
 	dCtx DevContext,
 	requirements string,
 	chatHistory *persisted_ai.ChatHistoryContainer,
+	gatherPromptInfo *InitialCodeInfo,
 	prepareLegacy basicContextPreparer,
 	weightedRankQueries ...persisted_ai.WeightedRankQuery,
 ) (string, int, error) {
 	if shouldGatherContext(dCtx.ContextGatherType, true) {
-		if err := GatherContextForCoding(dCtx, chatHistory, InitialCodeInfo{Requirements: requirements}); err != nil {
+		promptInfo := InitialCodeInfo{Requirements: requirements}
+		opts := ContextGatherOptions{}
+		if gatherPromptInfo != nil {
+			promptInfo = *gatherPromptInfo
+			opts.EnvironmentContext = resolveEnvironmentContext(dCtx)
+			initialMessage, err := buildInitialCodingMessage(dCtx, promptInfo, opts.EnvironmentContext)
+			if err != nil {
+				return "", 0, err
+			}
+			opts.InitialMessage = &initialMessage
+		}
+		contextSizeExtension, err := GatherContextForCoding(dCtx, chatHistory, promptInfo, opts)
+		if err != nil {
 			return "", 0, fmt.Errorf("failed to gather context for coding: %w", err)
 		}
-		return "", 0, nil
+		return "", contextSizeExtension, nil
 	}
 
 	codeContext, fullCodeContext, err := prepareLegacy(dCtx, requirements, nil, nil, weightedRankQueries...)
@@ -376,14 +389,29 @@ func prepareBasicCodingContext(
 
 func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
 	var chatHistory *persisted_ai.ChatHistoryContainer
+	gatherHandoff := false
 	if shouldGatherContext(dCtx.ContextGatherType, true) {
 		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		gatherHandoff = contextGatherHandoffEnabled(dCtx)
+	}
+
+	var gatherPromptInfo *InitialCodeInfo
+	if gatherHandoff {
+		// the legacy-equivalent ranked repo summary feeds both the gather
+		// prompt and the initial coding instructions that head the gathered
+		// handoff history
+		repoSummary, _, err := PrepareRepoSummary(dCtx, requirements, weightedRankQueries...)
+		if err != nil {
+			return "", fmt.Errorf("failed to prepare repo summary: %w", err)
+		}
+		gatherPromptInfo = &InitialCodeInfo{CodeContext: repoSummary, Requirements: requirements}
 	}
 
 	codeContext, contextSizeExtension, err := prepareBasicCodingContext(
 		dCtx,
 		requirements,
 		chatHistory,
+		gatherPromptInfo,
 		PrepareInitialCodeContext,
 		weightedRankQueries...,
 	)
@@ -414,7 +442,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 
 	// prepend a concise repository summary to the other code context in the initial prompt
 	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-	if version >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+	if version >= 1 && !gatherHandoff && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000, weightedRankQueries...)
 		if err != nil {
 			return "", fmt.Errorf("failed to get repo summary: %w", err)
@@ -422,8 +450,13 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		codeContext = repoSummary + "\n\n" + codeContext
 	}
 
-	initialCodeInfo := InitialCodeInfo{CodeContext: codeContext, Requirements: requirements}
-	promptInfo = initialCodeInfo
+	if gatherHandoff {
+		// the gathered handoff history already starts with the real initial
+		// coding instructions, so nothing more is appended for the first turn
+		promptInfo = SkipInfo{}
+	} else {
+		promptInfo = InitialCodeInfo{CodeContext: codeContext, Requirements: requirements}
+	}
 	var fulfillment CriteriaFulfillment
 	for {
 		overallName := "Basic Dev"

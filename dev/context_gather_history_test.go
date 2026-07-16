@@ -196,6 +196,10 @@ func TestContextGatherHistoryFiltersLegacyHistory(t *testing.T) {
 	result := history.Get(1).(common.ChatMessage)
 	assert.Equal(t, "tool-id-2", result.ToolCallId)
 	assert.Equal(t, "symbol output\n\nContext reference: call_2", result.Content)
+
+	// only the retained tool-result text counts; the forgotten "search output"
+	// exchange is excluded
+	assert.Equal(t, len(result.Content), tracker.gatheredContextSize())
 }
 
 func TestContextGatherHistoryFiltersLlm2History(t *testing.T) {
@@ -276,6 +280,10 @@ func TestContextGatherHistoryFiltersLlm2History(t *testing.T) {
 	require.Len(t, messages[1].Content, 1)
 	require.NotNil(t, messages[1].Content[0].ToolResult)
 	assert.Equal(t, "tool-id-2", messages[1].Content[0].ToolResult.ToolCallId)
+
+	// only the retained tool-result text counts; the forgotten "search output"
+	// exchange is excluded
+	assert.Equal(t, len("symbol output"), tracker.gatheredContextSize())
 }
 
 func TestContextGatherHistoryOmitsIncompletePairs(t *testing.T) {

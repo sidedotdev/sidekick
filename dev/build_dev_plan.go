@@ -277,30 +277,48 @@ func BuildDevPlan(dCtx DevContext, requirements, planningPrompt string, reproduc
 }
 
 func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, reproduceIssue bool) (*DevPlan, error) {
-	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to prepare code context: %w", err)
-	}
-	contextSizeExtension := len(fullCodeContext) - len(codeContext)
-
-	// prepend a concise repository summary to the other code context in the initial prompt
-	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-	if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
-		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get repo summary: %w", err)
+	chatHistory, seededInitialPrompt, contextSizeExtension, err := gatherPlanningContext(dCtx, requirements, func(codeContext string) llm.ChatMessage {
+		return llm.ChatMessage{
+			Role:         llm.ChatMessageRoleUser,
+			Content:      renderInitialRecordPlanPrompt(dCtx, codeContext, requirements, planningPrompt, reproduceIssue),
+			CacheControl: "ephemeral",
+			ContextType:  ContextTypeInitialInstructions,
 		}
-		codeContext = repoSummary + "\n\n" + codeContext
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to gather context for planning: %w", err)
 	}
+	codeContext := ""
+	if chatHistory == nil {
+		var fullCodeContext string
+		codeContext, fullCodeContext, err = PrepareInitialCodeContext(dCtx, requirements, nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare code context: %w", err)
+		}
+		contextSizeExtension = len(fullCodeContext) - len(codeContext)
+	}
+	if !seededInitialPrompt {
+		// prepend a concise repository summary to the other code context in the initial prompt
+		version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
+		if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+			repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get repo summary: %w", err)
+			}
+			codeContext = repoSummary + "\n\n" + codeContext
+		}
 
-	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
-	if err := addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
-		CodeContext:    codeContext,
-		Requirements:   requirements,
-		PlanningPrompt: planningPrompt,
-		ReproduceIssue: reproduceIssue,
-	}); err != nil {
-		return nil, err
+		if chatHistory == nil {
+			chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		}
+		if err := addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
+			CodeContext:    codeContext,
+			Requirements:   requirements,
+			PlanningPrompt: planningPrompt,
+			ReproduceIssue: reproduceIssue,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	maxIterations := 17

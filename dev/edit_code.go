@@ -120,18 +120,13 @@ func editCodeSubflow(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfi
 	var err error
 	var editBlocks []EditBlock
 
-	environmentContext := getEnvironmentContext()
-	v := workflow.GetVersion(dCtx, "env-context-from-activity", workflow.DefaultVersion, 1)
-	if v >= 1 && dCtx.EnvContainer != nil {
-		var output env.GetEnvironmentInfoOutput
-		actErr := workflow.ExecuteActivity(dCtx, env.GetEnvironmentInfoActivity, env.GetEnvironmentInfoInput{
-			EnvContainer: *dCtx.EnvContainer,
-		}).Get(dCtx, &output)
-		if actErr == nil && output.OS != "" {
-			environmentContext = output.FormatEnvironmentContext()
-		}
+	// environment context only feeds initial instruction prompts; when this
+	// subflow starts from SkipInfo (eg the context gathering handoff already
+	// seeded the initial instructions), resolving it would be wasted work
+	environmentContext := ""
+	if _, isSkip := promptInfo.(SkipInfo); !isSkip || workflow.GetVersion(dCtx, "skip-info-env-context", workflow.DefaultVersion, 1) < 1 {
+		environmentContext = resolveEnvironmentContext(dCtx)
 	}
-	environmentContext = withBranchContext(dCtx, environmentContext)
 
 	// TODO return info that could help redefine requirements if issues are
 	// discovered while editing code. It should indicate if edits
@@ -176,7 +171,7 @@ editLoop:
 			}
 		}
 
-		v = workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
+		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
 		if attemptCount >= maxAttempts && (v < 1 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return ErrMaxAttemptsReached
 		}
@@ -645,16 +640,12 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	contextType := ""
 
 	switch info := promptInfo.(type) {
-	case InitialCodeInfo:
-		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
-		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content = renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements, applyImmediately, doneRequired, environmentContext, dCtx.Idd)
-		cacheControl = "ephemeral"
-		contextType = ContextTypeInitialInstructions
-	case InitialDevStepInfo:
-		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
-		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content = renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired, environmentContext, dCtx.Idd)
+	case InitialCodeInfo, InitialDevStepInfo:
+		initialContent, err := renderInitialCodingContent(dCtx, promptInfo, doneRequired, environmentContext)
+		if err != nil {
+			return llm2.Options{}, err
+		}
+		content = initialContent
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case SkipInfo:
@@ -718,6 +709,58 @@ const endInitialCodeContext = "#END INITIAL CODE CONTEXT"
 
 func getEnvironmentContext() string {
 	return fmt.Sprintf("OS: %s, Arch: %s", runtime.GOOS, runtime.GOARCH)
+}
+
+// resolveEnvironmentContext builds the environment context string included in
+// coding prompts, preferring live environment info when available and
+// appending branch context.
+func resolveEnvironmentContext(dCtx DevContext) string {
+	environmentContext := getEnvironmentContext()
+	v := workflow.GetVersion(dCtx, "env-context-from-activity", workflow.DefaultVersion, 1)
+	if v >= 1 && dCtx.EnvContainer != nil {
+		var output env.GetEnvironmentInfoOutput
+		actErr := workflow.ExecuteActivity(dCtx, env.GetEnvironmentInfoActivity, env.GetEnvironmentInfoInput{
+			EnvContainer: *dCtx.EnvContainer,
+		}).Get(dCtx, &output)
+		if actErr == nil && output.OS != "" {
+			environmentContext = output.FormatEnvironmentContext()
+		}
+	}
+	return withBranchContext(dCtx, environmentContext)
+}
+
+// renderInitialCodingContent renders the initial coding instructions for
+// InitialCodeInfo or InitialDevStepInfo prompts. It is shared between edit
+// code and the context gathering handoff so both produce identical prompts.
+func renderInitialCodingContent(dCtx DevContext, promptInfo PromptInfo, doneRequired bool, environmentContext string) (string, error) {
+	v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
+	applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
+	switch info := promptInfo.(type) {
+	case InitialCodeInfo:
+		return renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements, applyImmediately, doneRequired, environmentContext, dCtx.Idd), nil
+	case InitialDevStepInfo:
+		return renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired, environmentContext, dCtx.Idd), nil
+	default:
+		return "", fmt.Errorf("unsupported prompt type for initial coding instructions: %s", promptInfo.GetType())
+	}
+}
+
+// buildInitialCodingMessage renders the same initial coding instructions
+// message that the edit-code subflow appends for InitialCodeInfo or
+// InitialDevStepInfo prompts, so a history constructed outside edit code (eg
+// the context gathering handoff) starts with the exact legacy prompt.
+func buildInitialCodingMessage(dCtx DevContext, promptInfo PromptInfo, environmentContext string) (llm.ChatMessage, error) {
+	content, err := renderInitialCodingContent(dCtx, promptInfo, IsDoneRequiredProtocol(dCtx), environmentContext)
+	if err != nil {
+		return llm.ChatMessage{}, err
+	}
+
+	return llm.ChatMessage{
+		Role:         llm.ChatMessageRoleUser,
+		Content:      content,
+		CacheControl: "ephemeral",
+		ContextType:  ContextTypeInitialInstructions,
+	}, nil
 }
 
 // withBranchContext appends the worktree branch and current base branch to the

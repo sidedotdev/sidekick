@@ -25,8 +25,9 @@ import (
 
 func main() {
 	verbose := flag.Bool("verbose", false, "print complete activity payloads and all workflow events")
+	subflowsOnly := flag.Bool("subflows", false, "print only the subflow hierarchy decoded from PersistSubflow activity inputs")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [-verbose] <workflow-id> [start-event-id] [end-event-id]\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [-verbose] [-subflows] <workflow-id> [start-event-id] [end-event-id]\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -45,6 +46,10 @@ func main() {
 	}
 	if len(args) >= 3 {
 		endEvent, _ = strconv.Atoi(args[2])
+	}
+	if *subflowsOnly {
+		// suppress per-event output; only the hierarchy is printed at the end
+		startEvent, endEvent = 0, -1
 	}
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -76,6 +81,15 @@ func main() {
 		identity     string
 	}
 	activities := make(map[int64]*scheduledActivity)
+	type subflowInfo struct {
+		Id              string `json:"id"`
+		Name            string `json:"name"`
+		Type            string `json:"type"`
+		Status          string `json:"status"`
+		ParentSubflowId string `json:"parentSubflowId"`
+	}
+	subflows := make(map[string]*subflowInfo)
+	var subflowOrder []string
 	eventPrefix := func(eventID int64, eventTime interface{ AsTime() time.Time }) string {
 		return fmt.Sprintf("%d %s", eventID, eventTime.AsTime().Format(time.RFC3339Nano))
 	}
@@ -100,6 +114,18 @@ func main() {
 			activities[eid] = &scheduledActivity{
 				activityType: activityType,
 				scheduledAt:  event.EventTime.AsTime().Format(time.RFC3339Nano),
+			}
+			if activityType == "PersistSubflow" && attrs.Input != nil {
+				for _, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
+					var info subflowInfo
+					if err := json.Unmarshal([]byte(input), &info); err != nil || info.Id == "" {
+						continue
+					}
+					if _, seen := subflows[info.Id]; !seen {
+						subflowOrder = append(subflowOrder, info.Id)
+					}
+					subflows[info.Id] = &info
+				}
 			}
 			if eid < int64(startEvent) || eid > int64(endEvent) {
 				continue
@@ -230,6 +256,25 @@ func main() {
 			if attrs.Failure != nil {
 				fmt.Printf("    Failure: %s\n", attrs.Failure.Message)
 			}
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetWorkflowExecutionStartedEventAttributes()
+			if attrs == nil {
+				continue
+			}
+
+			fmt.Printf("%d WorkflowExecutionStarted %s\n", eid, attrs.WorkflowType.GetName())
+			if attrs.Input != nil {
+				for i, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
+					if *verbose {
+						fmt.Printf("    Input[%d]: %s\n", i, input)
+					} else {
+						fmt.Printf("    Input[%d]: %s\n", i, summarizePayload(ctx, service, input))
+					}
+				}
+			}
 		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED:
 			if eid < int64(startEvent) || eid > int64(endEvent) {
 				continue
@@ -270,6 +315,31 @@ func main() {
 			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
 				fmt.Printf("%d %s\n", eid, event.EventType.String())
 			}
+		}
+	}
+
+	if *subflowsOnly {
+		children := make(map[string][]string)
+		var roots []string
+		for _, id := range subflowOrder {
+			parentId := subflows[id].ParentSubflowId
+			if parentId == "" || subflows[parentId] == nil {
+				roots = append(roots, id)
+			} else {
+				children[parentId] = append(children[parentId], id)
+			}
+		}
+		var printTree func(id string, depth int)
+		printTree = func(id string, depth int) {
+			info := subflows[id]
+			fmt.Printf("%s%s name=%q type=%s status=%s\n",
+				strings.Repeat("  ", depth), info.Id, info.Name, info.Type, info.Status)
+			for _, childId := range children[id] {
+				printTree(childId, depth+1)
+			}
+		}
+		for _, id := range roots {
+			printTree(id, 0)
 		}
 	}
 }
