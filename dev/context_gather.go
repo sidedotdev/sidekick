@@ -352,8 +352,8 @@ Completion analysis: %s`,
 	forgettingInstructions := ""
 	if forgettingEnabled {
 		forgettingInstructions = fmt.Sprintf(`
-Each completed repository-context tool result includes a short reference such as %s1. Preferentially use the %s tool to schedule exploration that is not needed for coding for omission from the handoff. Use %s if an omitted exchange becomes relevant again.
-`, contextGatherReferencePrefix, contextGatherForgetTool.Name, contextGatherRememberTool.Name)
+Each completed repository-context tool result includes a short reference such as %s1. Aggressively use the %s tool: as soon as you determine an exchange is not directly relevant to the coding work (a dead-end search, a file that turned out to be unrelated, or context that was superseded by a better result), schedule it for omission from the handoff immediately rather than waiting. It is safe to forget liberally, since %s can restore any omitted exchange that becomes relevant again. Before calling %s, always review every retained exchange and forget any that the coding agent will not need.
+`, contextGatherReferencePrefix, contextGatherForgetTool.Name, contextGatherRememberTool.Name, contextGatherReadyTool.Name)
 	}
 
 	return strings.TrimSpace(fmt.Sprintf(`You are the repository-context gathering phase for a software development task.
