@@ -271,3 +271,13 @@ func TestBuildRemoteShellCommand(t *testing.T) {
 		assert.NotContains(t, cmd, "SIDE_PORT_FORWARDS")
 	})
 }
+func TestModalLoginShellCommand(t *testing.T) {
+	t.Parallel()
+
+	command := `printf '%s\n' "a value with spaces and 'quotes'"`
+	wrapped := modalLoginShellCommand(command)
+
+	out, err := exec.Command("sh", "-c", wrapped).Output()
+	require.NoError(t, err)
+	assert.Equal(t, "a value with spaces and 'quotes'\n", string(out))
+}

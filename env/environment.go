@@ -1135,6 +1135,7 @@ func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput
 	if !input.SkipWaking {
 		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
 	}
+	fullCommand = modalLoginShellCommand(fullCommand)
 	// Refresh the idle-watchdog activity marker with every command.
 	fullCommand = "touch " + remoteActivityMarker + " 2>/dev/null; " + fullCommand
 
@@ -1171,6 +1172,10 @@ func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput
 		return output, "", nil
 	}
 	return output, string(diagnostics), nil
+}
+
+func modalLoginShellCommand(command string) string {
+	return "bash -lc " + shellQuote(command)
 }
 
 // baseSSHArgs returns ssh args (ending with the destination) for reaching the
