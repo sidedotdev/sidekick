@@ -240,6 +240,19 @@ func (e *OpenShellEnv) SyncGitRefToLocal(ctx context.Context, ref string) error 
 	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
 }
 
+var _ TargetBranchSyncer = (*OpenShellEnv)(nil)
+
+func (e *OpenShellEnv) SyncBranchToRemote(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync branch to remote: OpenShellEnv has no LocalRepoDir")
+	}
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return fmt.Errorf("failed to get SSH args: %w", err)
+	}
+	return syncBranchToRemoteOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+}
+
 // quoteArgs shell-quotes each argument for use in a sh -c command.
 func quoteArgs(args []string) []string {
 	quoted := make([]string, len(args))

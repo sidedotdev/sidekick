@@ -676,3 +676,16 @@ func (e *ModalEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
 	}
 	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
 }
+
+var _ TargetBranchSyncer = (*ModalEnv)(nil)
+
+func (e *ModalEnv) SyncBranchToRemote(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync branch to remote: ModalEnv has no LocalRepoDir")
+	}
+	sshArgs, err := e.baseSSHArgs(ctx)
+	if err != nil {
+		return err
+	}
+	return syncBranchToRemoteOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+}

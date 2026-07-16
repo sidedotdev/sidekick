@@ -164,6 +164,20 @@ type GitRefSyncer interface {
 	SyncGitRefToLocal(ctx context.Context, ref string) error
 }
 
+// TargetBranchSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. Before
+// merging into a branch inside such an environment, the branch must be
+// refreshed from the host repository (the source of truth), otherwise the
+// merge result may diverge from the host branch and fail to fast-forward it
+// when synced back.
+type TargetBranchSyncer interface {
+	// SyncBranchToRemote force-updates the given branch in the environment
+	// from the host repository, realigning any environment worktree that has
+	// the branch checked out. Branches missing from the host repository are
+	// skipped.
+	SyncBranchToRemote(ctx context.Context, branch string) error
+}
+
 // EnvSeparator returns the path separator string for the env.
 func EnvSeparator(e Env) string {
 	switch e.GetType() {

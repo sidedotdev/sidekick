@@ -367,6 +367,89 @@ func fetchRemoteRefToLocal(ctx context.Context, sshArgs []string, workingDirecto
 	return nil
 }
 
+// syncBranchToRemoteOverSSH force-updates a single branch in a remote
+// environment's clone from the local repository, which is the source of truth
+// for it. When the branch is checked out in a remote worktree, that worktree
+// is realigned with a hard reset, so callers must ensure any uncommitted
+// changes there have been preserved first. A branch missing locally is
+// skipped, leaving the remote branch untouched.
+func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, branch string) error {
+	verifyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: localRepoDir,
+		Command:    "git",
+		Args:       []string{"rev-parse", "--verify", "--quiet", "refs/heads/" + branch},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to check for local branch %s: %w", branch, err)
+	}
+	if verifyOutput.ExitStatus != 0 {
+		// The branch only exists in the remote environment, so there is
+		// nothing local to refresh it from.
+		return nil
+	}
+
+	dest, opts := splitSSHDestination(sshArgs)
+	if dest == "" {
+		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
+	}
+	gitSSH := "ssh"
+	for _, a := range opts {
+		gitSSH += " " + shellQuote(a)
+	}
+
+	// Allow updating the branch even while it is checked out remotely; the
+	// affected worktree is realigned right after the push.
+	prepScript := fmt.Sprintf("git -C %s config receive.denyCurrentBranch ignore", shellQuote(workingDirectory))
+	prepArgs := append(slices.Clone(sshArgs), prepScript)
+	prepOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       prepArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to prepare remote repo for branch sync: %w", err)
+	}
+	if prepOutput.ExitStatus != 0 {
+		return fmt.Errorf("preparing remote repo for branch sync failed (exit %d): %s", prepOutput.ExitStatus, prepOutput.Stderr)
+	}
+
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
+	pushStart := time.Now()
+	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir, "push", "--quiet", dest+":"+workingDirectory, refspec)
+	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git push branch %s to %s: %w: %s", branch, workingDirectory, err, string(out))
+	}
+
+	// The push only moved the ref, so realign any remote worktree that has the
+	// branch checked out.
+	applyScript := fmt.Sprintf(
+		`cd %s && wt=$(git worktree list --porcelain | awk -v b=refs/heads/%s '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p; exit}') && `+
+			`if [ -n "$wt" ]; then git -C "$wt" reset --hard refs/heads/%s; fi`,
+		shellQuote(workingDirectory), shellQuote(branch), shellQuote(branch),
+	)
+	applyArgs := append(slices.Clone(sshArgs), applyScript)
+	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       applyArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to realign remote worktree after branch sync: %w", err)
+	}
+	if applyOutput.ExitStatus != 0 {
+		return fmt.Errorf("realigning remote worktree after branch sync failed (exit %d): %s", applyOutput.ExitStatus, applyOutput.Stderr)
+	}
+
+	log.Debug().
+		Str("mode", "branch-push").
+		Str("branch", branch).
+		Dur("pushDur", time.Since(pushStart)).
+		Msg("synced branch to remote over ssh")
+
+	return nil
+}
+
 // createRemoteWorktree creates a git worktree under $HOME/sidekick-worktrees
 // inside a remote environment via its RunCommand, so that the worktree's .git
 // references resolve within the remote filesystem.

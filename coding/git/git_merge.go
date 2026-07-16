@@ -47,6 +47,22 @@ type MergeActivityResult struct {
 	BaseStashSha string `json:"baseStashSha"`
 }
 
+// syncTargetBranchFromLocal refreshes the target branch in environments that
+// hold an independent clone of the repo, so the merge is performed against
+// the host repository's current branch state and its result can later
+// fast-forward the host branch. Environments sharing the host checkout need
+// no refresh and are skipped.
+func syncTargetBranchFromLocal(ctx context.Context, envContainer env.EnvContainer, branch string) error {
+	syncer, ok := envContainer.Env.(env.TargetBranchSyncer)
+	if !ok {
+		return nil
+	}
+	if err := syncer.SyncBranchToRemote(ctx, branch); err != nil {
+		return fmt.Errorf("failed to sync target branch %s from local repo: %w", branch, err)
+	}
+	return nil
+}
+
 // GitMergeActivity performs a git merge operation from a source branch into a target branch.
 // If a worktree exists for the target branch, the merge will be performed there.
 // Otherwise, a temporary checkout of the target branch will be used.
@@ -137,6 +153,14 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 				resultErr = fmt.Errorf("failed to stash dirty target worktree: %s", stashOutput.Stderr)
 				return
 			}
+		}
+
+		if refreshErr := syncTargetBranchFromLocal(ctx, envContainer, params.TargetBranch); refreshErr != nil {
+			if baseDirty {
+				_, _ = restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars)
+			}
+			resultErr = refreshErr
+			return
 		}
 
 		// Use worktree path for merge
@@ -247,6 +271,11 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	}
 
 	// No worktree found, use temporary checkout approach
+
+	if refreshErr := syncTargetBranchFromLocal(ctx, envContainer, params.TargetBranch); refreshErr != nil {
+		resultErr = refreshErr
+		return
+	}
 
 	// Checkout the target branch before merging
 	checkoutOutput, checkoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
