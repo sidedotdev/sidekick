@@ -2,6 +2,7 @@ package persisted_ai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/srv/sqlite"
 	"sidekick/utils"
 
@@ -232,4 +234,145 @@ func TestSplitQueryIntoChunks(t *testing.T) {
 			}
 		})
 	}
+}
+
+type stubSubkeyReranker struct {
+	query     string
+	documents []string
+	result    []string
+	err       error
+}
+
+func (r *stubSubkeyReranker) Rerank(_ context.Context, query string, documents []string) ([]string, error) {
+	r.query = query
+	r.documents = append([]string(nil), documents...)
+	return r.result, r.err
+}
+func TestRerankSubkeysHydratesCandidateWindow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	storage := sqlite.NewTestSqliteStorage(t, "rerank-subkeys-enabled")
+	ra := RagActivities{DatabaseAccessor: storage}
+
+	const (
+		workspaceId = "workspace"
+		contentType = "code"
+	)
+	fusedSubkeys := make([]string, rerankCandidateLimit+2)
+	values := make(map[string]interface{}, len(fusedSubkeys))
+	for i := range fusedSubkeys {
+		subkey := fmt.Sprintf("subkey-%02d", i)
+		fusedSubkeys[i] = subkey
+		values[fmt.Sprintf("%s:%s", contentType, subkey)] = fmt.Sprintf("document-%02d", i)
+	}
+	require.NoError(t, storage.MSet(ctx, workspaceId, values))
+
+	rerankedDocuments := make([]string, rerankCandidateLimit)
+	for i := range rerankedDocuments {
+		rerankedDocuments[i] = fmt.Sprintf("document-%02d", rerankCandidateLimit-1-i)
+	}
+	reranker := &stubSubkeyReranker{result: rerankedDocuments}
+
+	result, err := ra.rerankSubkeys(
+		ctx,
+		workspaceId,
+		contentType,
+		"baseline query\n\nweighted query",
+		fusedSubkeys,
+		reranker,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "baseline query\n\nweighted query", reranker.query)
+	require.Len(t, reranker.documents, rerankCandidateLimit)
+	require.Equal(t, "document-00", reranker.documents[0])
+	require.Equal(t, "document-49", reranker.documents[rerankCandidateLimit-1])
+
+	expected := make([]string, 0, len(fusedSubkeys))
+	for i := rerankCandidateLimit - 1; i >= 0; i-- {
+		expected = append(expected, fmt.Sprintf("subkey-%02d", i))
+	}
+	expected = append(expected, fusedSubkeys[rerankCandidateLimit:]...)
+	require.Equal(t, expected, result)
+}
+func TestRerankSubkeysDisabled(t *testing.T) {
+	t.Parallel()
+
+	storage := sqlite.NewTestSqliteStorage(t, "rerank-subkeys-disabled")
+	ra := RagActivities{DatabaseAccessor: storage}
+	fusedSubkeys := []string{"first", "second"}
+
+	result, err := ra.rerankSubkeys(
+		context.Background(),
+		"workspace",
+		"code",
+		"query",
+		fusedSubkeys,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, fusedSubkeys, result)
+}
+func TestRerankSubkeysReturnsRerankerError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	storage := sqlite.NewTestSqliteStorage(t, "rerank-subkeys-error")
+	ra := RagActivities{DatabaseAccessor: storage}
+
+	require.NoError(t, storage.MSet(ctx, "workspace", map[string]interface{}{
+		"code:first": "first document",
+	}))
+	rerankErr := errors.New("rerank unavailable")
+	reranker := &stubSubkeyReranker{err: rerankErr}
+
+	result, err := ra.rerankSubkeys(
+		ctx,
+		"workspace",
+		"code",
+		"query",
+		[]string{"first"},
+		reranker,
+	)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, rerankErr)
+}
+
+type failingMGetStorage struct {
+	srv.Storage
+	err error
+}
+
+func (s failingMGetStorage) MGet(context.Context, string, []string) ([][]byte, error) {
+	return nil, s.err
+}
+func TestRerankSubkeysReturnsHydrationStorageError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	sqliteStorage := sqlite.NewTestSqliteStorage(t, "rerank-subkeys-storage-error")
+	require.NoError(t, sqliteStorage.MSet(ctx, "workspace", map[string]interface{}{
+		"code:first": "first document",
+	}))
+
+	hydrationErr := errors.New("storage unavailable")
+	ra := RagActivities{
+		DatabaseAccessor: failingMGetStorage{
+			Storage: sqliteStorage,
+			err:     hydrationErr,
+		},
+	}
+	reranker := &stubSubkeyReranker{result: []string{"first document"}}
+
+	result, err := ra.rerankSubkeys(
+		ctx,
+		"workspace",
+		"code",
+		"query",
+		[]string{"first"},
+		reranker,
+	)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, hydrationErr)
+	require.ErrorContains(t, err, "failed to hydrate rerank candidates")
 }

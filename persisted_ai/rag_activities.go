@@ -183,10 +183,13 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 
 	var queryChunks []string
 	var chunkWeights []float64
+	var rerankQueryParts []string
 	for _, wq := range weightedQueries {
-		if strings.TrimSpace(wq.Query) == "" {
+		query := strings.TrimSpace(wq.Query)
+		if query == "" {
 			continue
 		}
+		rerankQueryParts = append(rerankQueryParts, query)
 		var chunks []string
 		if len(wq.Query) > maxQueryChars {
 			chunks = splitQueryIntoChunks(wq.Query, goodQueryChars, maxQueryChars)
@@ -233,7 +236,21 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	for i, set := range resultSets {
 		rankings[i] = WeightedRanking{Items: set, Weight: chunkWeights[i]}
 	}
-	return FuseResults(rankings), nil
+
+	reranker, err := GetReranker(options.Secrets.SecretManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reranker: %w", err)
+	}
+
+	fusedSubkeys := FuseResults(rankings)
+	return ra.rerankSubkeys(
+		ctx,
+		options.WorkspaceId,
+		options.ContentType,
+		strings.Join(rerankQueryParts, "\n\n"),
+		fusedSubkeys,
+		reranker,
+	)
 }
 
 // splitQueryIntoChunks splits a query into chunks based on sentence boundaries and size limits.
@@ -481,5 +498,69 @@ func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options Rank
 }
 
 /*
-
  */
+func (ra *RagActivities) rerankSubkeys(
+	ctx context.Context,
+	workspaceId string,
+	contentType string,
+	query string,
+	fusedSubkeys []string,
+	reranker Reranker,
+) ([]string, error) {
+	if reranker == nil || len(fusedSubkeys) == 0 {
+		return fusedSubkeys, nil
+	}
+
+	candidateCount := min(len(fusedSubkeys), rerankCandidateLimit)
+	contentKeys := make([]string, candidateCount)
+	for i, subkey := range fusedSubkeys[:candidateCount] {
+		contentKeys[i] = fmt.Sprintf("%s:%s", contentType, subkey)
+	}
+
+	values, err := ra.DatabaseAccessor.MGet(ctx, workspaceId, contentKeys)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate rerank candidates: %w", err)
+	}
+	if len(values) != candidateCount {
+		return nil, fmt.Errorf("hydrated %d rerank candidates, expected %d", len(values), candidateCount)
+	}
+
+	documents := make([]string, candidateCount)
+	for i, value := range values {
+		if value == nil {
+			return nil, fmt.Errorf("missing value for rerank candidate key: %s", contentKeys[i])
+		}
+		if err := binary.Unmarshal(value, &documents[i]); err != nil {
+			return nil, fmt.Errorf("value %v for rerank candidate key %s failed to unmarshal: %w", value, contentKeys[i], err)
+		}
+	}
+
+	rerankedSubkeys, err := reranker.Rerank(ctx, query, documents)
+	if err != nil {
+		return nil, fmt.Errorf("failed to rerank subkeys: %w", err)
+	}
+
+	subkeysByDocument := make(map[string][]string, candidateCount)
+	for i, document := range documents {
+		subkeysByDocument[document] = append(subkeysByDocument[document], fusedSubkeys[i])
+	}
+
+	result := make([]string, 0, len(fusedSubkeys))
+	for _, document := range rerankedSubkeys {
+		subkeys := subkeysByDocument[document]
+		if len(subkeys) == 0 {
+			return nil, fmt.Errorf("reranker returned an unknown or duplicate document")
+		}
+		result = append(result, subkeys[0])
+		if len(subkeys) == 1 {
+			delete(subkeysByDocument, document)
+		} else {
+			subkeysByDocument[document] = subkeys[1:]
+		}
+	}
+	if len(result) != candidateCount {
+		return nil, fmt.Errorf("reranker returned %d candidates, expected %d", len(result), candidateCount)
+	}
+
+	return append(result, fusedSubkeys[candidateCount:]...), nil
+}

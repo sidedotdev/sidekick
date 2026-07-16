@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,6 +139,14 @@ func TestSummarizeDiffActivity_BudgetCalculation(t *testing.T) {
 func TestSummarizeDiffActivity_MaxCharsOverride(t *testing.T) {
 	t.Parallel()
 
+	const interceptorName = "summarize_diff_max_chars_no_cohere"
+	secret_manager.RegisterSecretInterceptor(interceptorName, func(secretName string) (string, error, bool) {
+		if secretName == "COHERE_API_KEY" {
+			return "", fmt.Errorf("%w: %s", secret_manager.ErrSecretNotFound, secretName), true
+		}
+		return "", nil, false
+	})
+
 	tempDir := t.TempDir()
 
 	err := os.WriteFile(filepath.Join(tempDir, "file.go"), []byte("package main\n"), 0644)
@@ -172,7 +181,12 @@ func TestSummarizeDiffActivity_MaxCharsOverride(t *testing.T) {
 			Model:    "mock-model",
 		},
 		SecretManagerContainer: secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.MockSecretManager{},
+			SecretManager: secret_manager.InterceptingSecretManager{
+				Underlying: secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+				InterceptorName: interceptorName,
+			},
 		},
 		MaxChars: customBudget,
 	}

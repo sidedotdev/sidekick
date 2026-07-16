@@ -10,6 +10,7 @@ require (
 	al.essio.dev/pkg/shellescape v1.6.0
 	github.com/BurntSushi/toml v1.3.2
 	github.com/adrg/strutil v0.3.0
+	github.com/cohere-ai/cohere-go/v2 v2.18.0
 	github.com/adrg/xdg v0.5.3
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.27.27
