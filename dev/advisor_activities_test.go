@@ -80,6 +80,37 @@ func TestSummarizeExecutorHistoryActivity_NilHistory(t *testing.T) {
 	require.Len(t, ref.BlockKeys, 1)
 }
 
+func TestRenderExecutorTranscript_IncludesThinkingSummaries(t *testing.T) {
+	t.Parallel()
+
+	transcript := renderExecutorTranscript([]common.Message{
+		llm2.Message{
+			Role: llm2.RoleAssistant,
+			Content: []llm2.ContentBlock{
+				{
+					Type: llm2.ContentBlockTypeReasoning,
+					Reasoning: &llm2.ReasoningBlock{
+						Text:    "raw private reasoning",
+						Summary: "Reviewed the implementation plan.",
+					},
+				},
+				{
+					Type: llm2.ContentBlockTypeReasoning,
+					Reasoning: &llm2.ReasoningBlock{
+						Summary: "Identified the affected files.",
+					},
+				},
+				{Type: llm2.ContentBlockTypeText, Text: "I will make the changes."},
+			},
+		},
+	}, advisorMaxRecentMessages)
+
+	assert.Contains(t, transcript, "[assistant] thinking_summary Reviewed the implementation plan.")
+	assert.Contains(t, transcript, "[assistant] thinking_summary Identified the affected files.")
+	assert.Contains(t, transcript, "[assistant] I will make the changes.")
+	assert.NotContains(t, transcript, "raw private reasoning")
+}
+
 // TestSeedAdvisorRequirementsActivity_ExtractsInitialInstructions verifies the
 // activity hydrates a refs-only executor history, extracts only the message
 // marked ContextTypeInitialInstructions, persists it (preserving the marker),
