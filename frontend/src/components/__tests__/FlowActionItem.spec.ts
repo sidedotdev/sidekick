@@ -42,6 +42,24 @@ describe('FlowActionItem', () => {
     expect(wrapper.text()).toContain('...')
   })
 
+  it('displays created and updated timestamps when the heading is hovered', async () => {
+    flowAction.created = new Date('2025-01-02T03:04:05Z')
+    flowAction.updated = new Date('2025-01-02T04:05:06Z')
+
+    const wrapper = mount(FlowActionItem, {
+      props: { flowAction },
+    })
+
+    expect(wrapper.find('.tooltip-popup').exists()).toBe(false)
+
+    await wrapper.find('.tooltip-wrapper').trigger('mouseenter')
+
+    const tooltip = wrapper.find('.tooltip-popup')
+    expect(tooltip.exists()).toBe(true)
+    expect(tooltip.text()).toContain(`Created: ${flowAction.created.toLocaleString()}`)
+    expect(tooltip.text()).toContain(`Updated: ${flowAction.updated.toLocaleString()}`)
+  })
+
   /*
   it('displays the request content and a textarea for user input when the action is a pending user request', () => {
     const wrapper = mount(FlowActionItem, {
