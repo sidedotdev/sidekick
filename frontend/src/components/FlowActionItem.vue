@@ -2,22 +2,14 @@
   <div class="flow-action" :class="{ 'expanded-action': expand }" ref="container">
     <div class="flow-action-header" :class="{ 'expanded-header': expand }">
       <a @click="toggle()" :class="{'disable-toggle': disableToggle}">
-        <Tooltip position="bottom">
-          <h3>
-            {{ actionHeading }}
-            <span v-if="flowAction?.actionStatus == 'started'">...</span>
-            <span v-if="flowAction?.actionStatus == 'failed'">Failed</span>
-            <span v-else-if="summary != null" class="action-summary">
-              {{ summary.emoji }} {{ summary.text }}
-            </span>
-          </h3>
-          <template #content>
-            <div>
-              <div>Created: {{ formatActionTimestamp(flowAction.created) }}</div>
-              <div>Updated: {{ formatActionTimestamp(flowAction.updated) }}</div>
-            </div>
-          </template>
-        </Tooltip>
+        <h3 :title="`Updated: ${formatActionTimestamp(flowAction.updated)}`">
+          {{ actionHeading }}
+          <span v-if="flowAction?.actionStatus == 'started'">...</span>
+          <span v-if="flowAction?.actionStatus == 'failed'">Failed</span>
+          <span v-else-if="summary != null" class="action-summary">
+            {{ summary.emoji }} {{ summary.text }}
+          </span>
+        </h3>
       </a>
       <hr>
     </div>
@@ -41,7 +33,6 @@ import UserRequest from './UserRequest.vue'
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue'
 import RunTestsFlowAction from './RunTestsFlowAction.vue'
 import JsonTree from './JsonTree.vue'
-import Tooltip from './Tooltip.vue'
 import CheckCriteriaFulfillmentFlowAction from './CheckCriteriaFulfillmentFlowAction.vue'
 import type { CriteriaFulfillment } from '@/lib/models';
 import { extractToolCallArguments } from '@/lib/models';
