@@ -447,7 +447,13 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		if _, isLlm2 := visibleChatHistory.History.(*persisted_ai.Llm2ChatHistory); isLlm2 {
 			var cha *persisted_ai.ChatHistoryActivities
 			var visibleCodeBlocks []tree_sitter.CodeBlock
-			err = workflow.ExecuteActivity(dCtx, cha.ExtractVisibleCodeBlocks, &visibleChatHistory).Get(dCtx, &visibleCodeBlocks)
+			err = flow_action.PerformActivityWithUserRetry(
+				dCtx.ExecContext,
+				"Extract visible code blocks",
+				cha.ExtractVisibleCodeBlocks,
+				&visibleCodeBlocks,
+				&visibleChatHistory,
+			)
 			if err != nil {
 				return []EditBlock{}, fmt.Errorf("failed to extract visible code blocks: %w", err)
 			}
