@@ -244,7 +244,7 @@ func (da *DevActivities) tryBatchApply(
 	preEditFileHadErrors := false
 	firstEditType := blocks[0].block.EditType
 	if firstEditType == "update" || firstEditType == "append" {
-		preEditValid, _, preEditErr := check.CheckFileValidity(input.EnvContainer, filePath)
+		preEditValid, _, preEditErr := check.CheckFileValidity(ctx, input.EnvContainer, filePath)
 		preEditFileHadErrors = !preEditValid && preEditErr == nil
 	}
 
@@ -371,7 +371,7 @@ func (da *DevActivities) tryBatchApply(
 
 	if checksEnabled {
 		checkResult, checkErr := checkAndStageOrRestoreFile(
-			input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors,
+			ctx, input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors,
 		)
 
 		if !checkResult.Success {
@@ -471,7 +471,7 @@ func (da *DevActivities) applyBlocksSequentially(
 
 		preEditFileHadErrors := false
 		if block.EditType == "update" || block.EditType == "append" {
-			preEditValid, _, preEditErr := check.CheckFileValidity(input.EnvContainer, block.FilePath)
+			preEditValid, _, preEditErr := check.CheckFileValidity(ctx, input.EnvContainer, block.FilePath)
 			preEditFileHadErrors = !preEditValid && preEditErr == nil
 		}
 
@@ -544,7 +544,7 @@ func (da *DevActivities) applyBlocksSequentially(
 					report.CheckResult.Message = "Skipped"
 				}
 			} else {
-				checkResult, checkErr := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors)
+				checkResult, checkErr := checkAndStageOrRestoreFile(ctx, input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors)
 				report.CheckResult = checkResult
 				if preEditFileHadErrors {
 					report.CheckWarning = "file had pre-existing syntax errors; base file validity check was skipped"
@@ -816,8 +816,7 @@ func countUnbalanced(lines []string, openingDelimiter, closingDelimiter string) 
 // restored, otherwise it is staged, so that future restores don't affect this
 // change. When preEditFileHadErrors is true, the built-in syntax check is
 // skipped since the file was already invalid before the edit.
-func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool) (CheckResult, error) {
-	ctx := context.Background()
+func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool) (CheckResult, error) {
 	ctx, span := applyEditBlocksTracer.Start(ctx, "checkAndStageOrRestoreFile")
 	defer span.End()
 	span.SetAttributes(
@@ -827,7 +826,7 @@ func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []c
 	)
 
 	_, checkSpan := applyEditBlocksTracer.Start(ctx, "CheckFileActivity")
-	checkOutput, checkErr := check.CheckFileActivity(check.CheckFileActivityInput{
+	checkOutput, checkErr := check.CheckFileActivity(ctx, check.CheckFileActivityInput{
 		EnvContainer:              envContainer,
 		FilePath:                  filePath,
 		CheckCommands:             checkCommands,

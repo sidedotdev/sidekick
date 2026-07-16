@@ -84,6 +84,13 @@ func (ra *RagActivities) loadOutlineWalkCache(ctx context.Context, workspaceId s
 		log.Debug().Err(err).Msg("outline cache entry failed to unmarshal")
 		return state
 	}
+	if len(raw) == 0 {
+		// Defense against poisoned entries: an empty snapshot would
+		// reconstruct an empty tree on every exact-tree hit. Treat it as a
+		// miss so a full walk re-stores a real snapshot under the same key.
+		log.Warn().Str("key", keys[hitIdx]).Msg("ignoring empty outline cache snapshot")
+		return state
+	}
 
 	affected := make(map[string]bool, len(dirtyPaths))
 	for _, p := range dirtyPaths {

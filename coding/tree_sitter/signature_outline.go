@@ -405,7 +405,10 @@ func withoutEmptyDirs(entries []RawOutlineEntry) []RawOutlineEntry {
 // with paths that no longer exist dropped. ok is false when the cache holds
 // no snapshot, in which case the caller must fall back to a full walk.
 func GetDirectoryRawOutlinesFromCache(ctx context.Context, ec env.EnvContainer, cache *OutlineWalkCache) (entries []RawOutlineEntry, ok bool, err error) {
-	if cache == nil || cache.Raw == nil {
+	// An empty snapshot is treated as no snapshot: a real repo state never
+	// usefully caches to zero entries, and a poisoned empty entry would
+	// otherwise reconstruct an empty tree on every exact-tree hit.
+	if cache == nil || len(cache.Raw) == 0 {
 		return nil, false, nil
 	}
 	pathSet := make(map[string]bool, len(cache.Raw)+len(cache.Affected))

@@ -292,3 +292,43 @@ func TestOutlineWalkCache_AncestorEviction(t *testing.T) {
 	assert.Nil(t, values[0], "superseded ancestor snapshot must be evicted")
 	assert.NotNil(t, values[1], "new HEAD snapshot must be stored")
 }
+
+// TestOutlineWalkCache_EmptySnapshotIsMiss guards against poisoned (empty)
+// cache entries: an exact-tree hit on an empty snapshot must be treated as a
+// miss (falling back to a full walk) while still allowing a fresh snapshot to
+// be stored under the same key so the entry self-heals.
+func TestOutlineWalkCache_EmptySnapshotIsMiss(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir, _ := setupOutlineCacheGitRepo(t)
+	storage := sqlite.NewTestSqliteStorage(t, "outline-cache-test")
+	ra := &RagActivities{DatabaseAccessor: storage}
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: repoDir}}
+	workspaceId := "ws-outline-empty-snapshot"
+
+	state := ra.loadOutlineWalkCache(ctx, workspaceId, ec)
+	require.NotEmpty(t, state.storeKey)
+	emptyData, err := binary.Marshal(map[string]string{})
+	require.NoError(t, err)
+	require.NoError(t, storage.MSetRaw(ctx, workspaceId, map[string][]byte{state.storeKey: emptyData}))
+
+	reloaded := ra.loadOutlineWalkCache(ctx, workspaceId, ec)
+	require.NotNil(t, reloaded.cache)
+	assert.Empty(t, reloaded.cache.Raw, "empty snapshot must be a cache miss")
+	assert.Equal(t, state.storeKey, reloaded.storeKey,
+		"a miss at HEAD must still allow re-storing a fresh snapshot under the same key")
+
+	// Reconstruction from the missed state must also demand a full walk.
+	_, ok, err := tree_sitter.GetDirectoryRawOutlinesFromCache(ctx, ec, reloaded.cache)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	// The full walk then self-heals the poisoned entry.
+	tsa := tree_sitter.TreeSitterActivities{DatabaseAccessor: storage}
+	_, err = tsa.CreateDirSignatureOutlinesCached(ctx, workspaceId, ec, 100000, reloaded.cache)
+	require.NoError(t, err)
+	ra.storeOutlineWalkCache(ctx, workspaceId, reloaded)
+
+	healed := ra.loadOutlineWalkCache(ctx, workspaceId, ec)
+	assert.Contains(t, healed.cache.Raw, "main.go")
+}

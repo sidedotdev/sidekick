@@ -3,6 +3,7 @@ package env
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -255,4 +256,133 @@ func TestSftpConn_ReconnectAfterStaleFailureReusesReplacement(t *testing.T) {
 	assert.Same(t, replacementClient, client,
 		"a failure from an obsolete client must not replace the current connection")
 	assert.Same(t, replacementClient, sc.client)
+}
+
+// pipeRWC combines the two half-duplex pipes backing an in-memory SFTP
+// server into the io.ReadWriteCloser sftp.NewServer requires.
+type pipeRWC struct {
+	io.Reader
+	io.WriteCloser
+}
+
+// newInMemorySFTPClient returns a real sftp.Client wired to an in-process
+// server over pipes, so connection teardown paths (Close) work in tests
+// without any ssh process chain.
+func newInMemorySFTPClient(t *testing.T) *sftp.Client {
+	return newPipeSFTPClient(t, true)
+}
+
+// newWedgedSFTPClient returns a client whose Close blocks until test cleanup
+// (the server never closes its write side), emulating a wedged remote
+// transport.
+func newWedgedSFTPClient(t *testing.T) *sftp.Client {
+	return newPipeSFTPClient(t, false)
+}
+
+func newPipeSFTPClient(t *testing.T, propagateServerEOF bool) *sftp.Client {
+	t.Helper()
+	clientReads, serverWrites := io.Pipe()
+	serverReads, clientWrites := io.Pipe()
+	server, err := sftp.NewServer(pipeRWC{serverReads, serverWrites})
+	require.NoError(t, err)
+	go func() {
+		_ = server.Serve()
+		if propagateServerEOF {
+			// Propagate EOF to the client's receive loop, which Client.Close
+			// waits on.
+			_ = serverWrites.Close()
+		}
+	}()
+	t.Cleanup(func() { _ = server.Close() })
+	client, err := sftp.NewClientPipe(clientReads, clientWrites)
+	require.NoError(t, err)
+	return client
+}
+
+func TestBoundedSFTPOp(t *testing.T) {
+	// Deliberately not parallel: shortens the global sftpOpTimeout.
+	origTimeout := sftpOpTimeout
+	sftpOpTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { sftpOpTimeout = origTimeout })
+
+	t.Run("completed op returns its result and keeps the connection", func(t *testing.T) {
+		client := newInMemorySFTPClient(t)
+		sc := &sftpConn{key: "test-bounded-success", client: client, lastUsed: time.Now()}
+		got, err := boundedSFTPOp(context.Background(), sc, client, "read", "/tmp/x", func() (string, error) {
+			return "ok", nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "ok", got)
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		assert.Same(t, client, sc.client, "a healthy connection must be kept")
+	})
+
+	t.Run("wedged op times out and invalidates the connection", func(t *testing.T) {
+		client := newInMemorySFTPClient(t)
+		sc := &sftpConn{key: "test-bounded-timeout", client: client, lastUsed: time.Now()}
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		_, err := boundedSFTPOp(context.Background(), sc, client, "read", "/tmp/x", func() (string, error) {
+			<-unblock
+			return "", nil
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "timed out")
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		assert.Nil(t, sc.client, "a wedged connection must be torn down so the next op re-dials")
+	})
+
+	t.Run("caller cancellation invalidates the connection", func(t *testing.T) {
+		client := newInMemorySFTPClient(t)
+		sc := &sftpConn{key: "test-bounded-cancel", client: client, lastUsed: time.Now()}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		_, err := boundedSFTPOp(ctx, sc, client, "read", "/tmp/x", func() (string, error) {
+			<-unblock
+			return "", nil
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		assert.Nil(t, sc.client, "an abandoned connection must be torn down to unblock the stuck op")
+	})
+
+	t.Run("timeout returns promptly even when client teardown blocks", func(t *testing.T) {
+		client := newWedgedSFTPClient(t)
+		sc := &sftpConn{key: "test-bounded-blocking-close", client: client, lastUsed: time.Now()}
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		start := time.Now()
+		_, err := boundedSFTPOp(context.Background(), sc, client, "read", "/tmp/x", func() (string, error) {
+			<-unblock
+			return "", nil
+		})
+		require.Error(t, err)
+		assert.Less(t, time.Since(start), 5*time.Second,
+			"bounded op must not be delayed by connection teardown")
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		assert.Nil(t, sc.client)
+	})
+
+	t.Run("timeout on a stale client does not tear down a replacement", func(t *testing.T) {
+		staleClient := newInMemorySFTPClient(t)
+		replacement := newInMemorySFTPClient(t)
+		sc := &sftpConn{key: "test-bounded-replaced", client: replacement, lastUsed: time.Now()}
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		_, err := boundedSFTPOp(context.Background(), sc, staleClient, "read", "/tmp/x", func() (string, error) {
+			<-unblock
+			return "", nil
+		})
+		require.Error(t, err)
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		assert.Same(t, replacement, sc.client,
+			"a timeout from an obsolete client must not tear down the current connection")
+	})
 }

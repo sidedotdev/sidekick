@@ -141,7 +141,7 @@ func main() {}`,
 					WorkingDirectory: dir,
 				},
 			}
-			passed, errorString, err := CheckFileValidity(envContainer, filename)
+			passed, errorString, err := CheckFileValidity(t.Context(), envContainer, filename)
 			assert.NoError(t, err)
 			// fmt.Println(errorString) // debug
 			if passed != tc.wantPass {
@@ -202,7 +202,7 @@ func TestCheckFileValidity_Vue(t *testing.T) {
 					WorkingDirectory: dir,
 				},
 			}
-			passed, errorString, err := CheckFileValidity(envContainer, filename)
+			passed, errorString, err := CheckFileValidity(t.Context(), envContainer, filename)
 			assert.NoError(t, err)
 			if passed != tc.wantPass {
 				t.Errorf("Want check pass = %v, got: %v", tc.wantPass, passed)
@@ -325,7 +325,7 @@ class MyClass:
 					WorkingDirectory: dir,
 				},
 			}
-			passed, errorString, err := CheckFileValidity(envContainer, filename)
+			passed, errorString, err := CheckFileValidity(t.Context(), envContainer, filename)
 			assert.NoError(t, err)
 			if passed != tc.wantPass {
 				t.Errorf("Want check pass = %v, got: %v", tc.wantPass, passed)
@@ -378,7 +378,7 @@ func TestCheckFileValidity_Golang_NoTrailingNewline(t *testing.T) {
 					WorkingDirectory: dir,
 				},
 			}
-			passed, errorString, err := CheckFileValidity(envContainer, filename)
+			passed, errorString, err := CheckFileValidity(t.Context(), envContainer, filename)
 			assert.NoError(t, err)
 			if passed != tc.wantPass {
 				t.Errorf("Want check pass = %v, got: %v", tc.wantPass, passed)
@@ -481,7 +481,7 @@ func TestCheckFileValidity_Markdown_HasErrorButNoErrorNodes(t *testing.T) {
 		},
 	}
 
-	passed, output, checkErr := CheckFileValidity(envContainer, filename)
+	passed, output, checkErr := CheckFileValidity(t.Context(), envContainer, filename)
 	assert.NoError(t, checkErr)
 	assert.True(t, passed, "Expected CheckFileValidity to pass when HasError is true but no error/missing nodes")
 	assert.Contains(t, output, "Warning")
@@ -504,12 +504,12 @@ func TestCheckFileActivity_SkipBaseFileValidityCheck(t *testing.T) {
 	}
 
 	// Confirm the file genuinely fails the syntax check.
-	passed, _, checkErr := CheckFileValidity(envContainer, filename)
+	passed, _, checkErr := CheckFileValidity(t.Context(), envContainer, filename)
 	assert.NoError(t, checkErr)
 	assert.False(t, passed)
 
 	// With SkipBaseFileValidityCheck, the activity should pass.
-	output, activityErr := CheckFileActivity(CheckFileActivityInput{
+	output, activityErr := CheckFileActivity(t.Context(), CheckFileActivityInput{
 		EnvContainer:              envContainer,
 		FilePath:                  filename,
 		SkipBaseFileValidityCheck: true,

@@ -37,6 +37,14 @@ const remoteActivityMarker = "/tmp/.sidekick-activity"
 // var only so tests can shorten it to exercise the eviction path.
 var sftpIdleTimeout = 1 * time.Hour
 
+// sftpOpTimeout bounds each SFTP operation (and the initial protocol
+// handshake). pkg/sftp calls cannot be cancelled and block forever when the
+// SSH transport wedges without a TCP reset (eg a Modal tunnel dying), so each
+// operation races against this timeout and the caller's context, and losing
+// the race tears down the connection so the next attempt re-dials. It is a
+// var only so tests can shorten it.
+var sftpOpTimeout = 60 * time.Second
+
 // sftpConn manages a persistent SFTP client connection over SSH.
 // It is safe for concurrent use; the underlying sftp.Client multiplexes requests.
 type sftpConn struct {
@@ -249,20 +257,53 @@ func (sc *sftpConn) reconnectAfterFailure(ctx context.Context, sshEnv SSHCapable
 	return sc.dialLocked(ctx, sshEnv)
 }
 
+// invalidate detaches the connection backing failedClient unless a
+// replacement is already in place, so the next operation re-dials instead of
+// reusing a wedged transport. Teardown happens asynchronously since it can
+// itself block until the process chain dies, and invalidate is called from
+// bounded operations that must return promptly.
+func (sc *sftpConn) invalidate(failedClient *sftp.Client) {
+	sc = sc.lockLive()
+	if sc.client != failedClient {
+		sc.mu.Unlock()
+		return
+	}
+	client, cmd := sc.detachLocked()
+	sc.mu.Unlock()
+	go teardownSFTPTransport(client, cmd)
+}
+
 func (sc *sftpConn) closeLocked() {
+	client, cmd := sc.detachLocked()
+	teardownSFTPTransport(client, cmd)
+}
+
+// detachLocked clears the connection's client, process chain and idle timer,
+// returning the detached resources for teardown. sc.mu must be held.
+func (sc *sftpConn) detachLocked() (*sftp.Client, *exec.Cmd) {
 	if sc.idleTimer != nil {
 		sc.idleTimer.Stop()
 		sc.idleTimer = nil
 	}
-	if sc.client != nil {
-		sc.client.Close()
-		sc.client = nil
-	}
-	if sc.cmd != nil && sc.cmd.Process != nil {
+	client, cmd := sc.client, sc.cmd
+	sc.client, sc.cmd = nil, nil
+	if cmd != nil && cmd.Process != nil {
 		runtime.SetFinalizer(sc, nil)
-		_ = sc.cmd.Process.Kill()
-		_ = sc.cmd.Wait()
-		sc.cmd = nil
+	}
+	return client, cmd
+}
+
+// teardownSFTPTransport reaps the process chain before closing the client:
+// sftp.Client.Close waits for its receive loop to exit, which on a wedged
+// transport only happens once the underlying ssh process dies and its pipes
+// close.
+func teardownSFTPTransport(client *sftp.Client, cmd *exec.Cmd) {
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+	if client != nil {
+		client.Close()
 	}
 }
 
@@ -316,10 +357,43 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 		reader = &latencyReaderWriter{r: stdout, delay: sc.latency}
 		writer = &latencyReaderWriter{w: stdin, delay: sc.latency}
 	}
-	client, err := sftp.NewClientPipe(reader, writer)
+	// NewClientPipe's handshake blocks forever when the transport is wedged,
+	// so bound it like any other SFTP operation; killing the process chain
+	// unblocks the abandoned attempt.
+	type dialResult struct {
+		client *sftp.Client
+		err    error
+	}
+	dialCh := make(chan dialResult, 1)
+	go func() {
+		client, err := sftp.NewClientPipe(reader, writer)
+		dialCh <- dialResult{client, err}
+	}()
+	var client *sftp.Client
+	handshakeDone := false
+	timer := time.NewTimer(sftpOpTimeout)
+	defer timer.Stop()
+	select {
+	case result := <-dialCh:
+		handshakeDone = true
+		client, err = result.client, result.err
+	case <-ctx.Done():
+		err = fmt.Errorf("sftp handshake: %w", ctx.Err())
+	case <-timer.C:
+		err = fmt.Errorf("sftp handshake timed out after %s", sftpOpTimeout)
+	}
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		if !handshakeDone {
+			// Reap the abandoned handshake's client if it still produces one
+			// after the kill unblocks it.
+			go func() {
+				if result := <-dialCh; result.client != nil {
+					result.client.Close()
+				}
+			}()
+		}
 		diagnostics := strings.TrimSpace(sshDiagnostics.String())
 		if diagnostics != "" {
 			return nil, fmt.Errorf("create sftp client: %w: ssh diagnostics: %s", err, diagnostics)
@@ -341,6 +415,45 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 	return client, nil
 }
 
+// boundedSFTPOp runs op, bounding it by ctx and sftpOpTimeout. pkg/sftp calls
+// cannot be cancelled directly and block forever on a wedged transport, so
+// when the bound is hit the connection backing client is invalidated: that
+// both unblocks the abandoned operation and makes later operations (including
+// concurrent ones, via their retry-once path) re-dial a fresh connection.
+func boundedSFTPOp[T any](ctx context.Context, conn *sftpConn, client *sftp.Client, opName, path string, op func() (T, error)) (T, error) {
+	type opResult struct {
+		value T
+		err   error
+	}
+	resultCh := make(chan opResult, 1)
+	go func() {
+		value, err := op()
+		resultCh <- opResult{value, err}
+	}()
+
+	timer := time.NewTimer(sftpOpTimeout)
+	defer timer.Stop()
+	var zero T
+	select {
+	case result := <-resultCh:
+		return result.value, result.err
+	case <-ctx.Done():
+		conn.invalidate(client)
+		return zero, fmt.Errorf("sftp %s %s: %w", opName, path, ctx.Err())
+	case <-timer.C:
+		conn.invalidate(client)
+		return zero, fmt.Errorf("sftp %s %s timed out after %s", opName, path, sftpOpTimeout)
+	}
+}
+
+// boundedSFTPErrOp is boundedSFTPOp for operations that only return an error.
+func boundedSFTPErrOp(ctx context.Context, conn *sftpConn, client *sftp.Client, opName, path string, op func() error) error {
+	_, err := boundedSFTPOp(ctx, conn, client, opName, path, func() (struct{}, error) {
+		return struct{}{}, op()
+	})
+	return err
+}
+
 // sftpReadFile reads a file via the SFTP connection, reconnecting once on failure.
 func sftpReadFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, path string) ([]byte, error) {
 	client, err := conn.getOrDial(ctx, sshEnv)
@@ -348,9 +461,11 @@ func sftpReadFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, pat
 		return nil, err
 	}
 
-	data, err := doSFTPRead(client, path)
+	data, err := boundedSFTPOp(ctx, conn, client, "read", path, func() ([]byte, error) {
+		return doSFTPRead(client, path)
+	})
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
 			return nil, err
 		}
 		// Connection may have dropped; retry once with a fresh connection.
@@ -358,7 +473,9 @@ func sftpReadFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, pat
 		if retryErr != nil {
 			return nil, fmt.Errorf("read %s: %w (reconnect: %v)", path, err, retryErr)
 		}
-		return doSFTPRead(client, path)
+		return boundedSFTPOp(ctx, conn, client, "read", path, func() ([]byte, error) {
+			return doSFTPRead(client, path)
+		})
 	}
 	return data, nil
 }
@@ -370,16 +487,20 @@ func sftpReadDir(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, path
 		return nil, err
 	}
 
-	entries, err := doSFTPReadDir(client, path)
+	entries, err := boundedSFTPOp(ctx, conn, client, "readdir", path, func() ([]fs.DirEntry, error) {
+		return doSFTPReadDir(client, path)
+	})
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
 			return nil, err
 		}
 		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return nil, fmt.Errorf("readdir %s: %w (reconnect: %v)", path, err, retryErr)
 		}
-		return doSFTPReadDir(client, path)
+		return boundedSFTPOp(ctx, conn, client, "readdir", path, func() ([]fs.DirEntry, error) {
+			return doSFTPReadDir(client, path)
+		})
 	}
 	return entries, nil
 }
@@ -412,16 +533,20 @@ func sftpWriteFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p 
 		return err
 	}
 
-	err = doSFTPWrite(client, p, data, perm)
+	err = boundedSFTPErrOp(ctx, conn, client, "write", p, func() error {
+		return doSFTPWrite(client, p, data, perm)
+	})
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
 			return err
 		}
 		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return fmt.Errorf("write %s: %w (reconnect: %v)", p, err, retryErr)
 		}
-		return doSFTPWrite(client, p, data, perm)
+		return boundedSFTPErrOp(ctx, conn, client, "write", p, func() error {
+			return doSFTPWrite(client, p, data, perm)
+		})
 	}
 	return nil
 }
@@ -433,16 +558,20 @@ func sftpMkdirAll(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p s
 		return err
 	}
 
-	err = doSFTPMkdirAll(client, p, perm)
+	err = boundedSFTPErrOp(ctx, conn, client, "mkdirall", p, func() error {
+		return doSFTPMkdirAll(client, p, perm)
+	})
 	if err != nil {
-		if errors.Is(err, os.ErrPermission) {
+		if errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
 			return err
 		}
 		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return fmt.Errorf("mkdirall %s: %w (reconnect: %v)", p, err, retryErr)
 		}
-		return doSFTPMkdirAll(client, p, perm)
+		return boundedSFTPErrOp(ctx, conn, client, "mkdirall", p, func() error {
+			return doSFTPMkdirAll(client, p, perm)
+		})
 	}
 	return nil
 }
@@ -454,16 +583,20 @@ func sftpStat(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p strin
 		return nil, err
 	}
 
-	info, err := client.Stat(p)
+	info, err := boundedSFTPOp(ctx, conn, client, "stat", p, func() (fs.FileInfo, error) {
+		return client.Stat(p)
+	})
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
 			return nil, err
 		}
 		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return nil, fmt.Errorf("stat %s: %w (reconnect: %v)", p, err, retryErr)
 		}
-		return client.Stat(p)
+		return boundedSFTPOp(ctx, conn, client, "stat", p, func() (fs.FileInfo, error) {
+			return client.Stat(p)
+		})
 	}
 	return info, nil
 }
@@ -475,16 +608,20 @@ func sftpRemove(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p str
 		return err
 	}
 
-	err = client.Remove(p)
+	err = boundedSFTPErrOp(ctx, conn, client, "remove", p, func() error {
+		return client.Remove(p)
+	})
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
 			return err
 		}
 		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return fmt.Errorf("remove %s: %w (reconnect: %v)", p, err, retryErr)
 		}
-		return client.Remove(p)
+		return boundedSFTPErrOp(ctx, conn, client, "remove", p, func() error {
+			return client.Remove(p)
+		})
 	}
 	return nil
 }
@@ -504,16 +641,20 @@ func sftpCreateTemp(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, d
 		return "", err
 	}
 
-	name, err := doSFTPCreateTemp(client, dir, prefix, suffix)
+	name, err := boundedSFTPOp(ctx, conn, client, "createtemp", dir, func() (string, error) {
+		return doSFTPCreateTemp(client, dir, prefix, suffix)
+	})
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
 			return "", err
 		}
 		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
 		if retryErr != nil {
 			return "", fmt.Errorf("createtemp %s/%s: %w (reconnect: %v)", dir, pattern, err, retryErr)
 		}
-		return doSFTPCreateTemp(client, dir, prefix, suffix)
+		return boundedSFTPOp(ctx, conn, client, "createtemp", dir, func() (string, error) {
+			return doSFTPCreateTemp(client, dir, prefix, suffix)
+		})
 	}
 	return name, nil
 }

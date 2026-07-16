@@ -196,10 +196,24 @@ func TestGetDirectoryRawOutlinesFromCache(t *testing.T) {
 		assert.Nil(t, entries)
 	})
 
+	t.Run("empty snapshot is a miss", func(t *testing.T) {
+		t.Parallel()
+		cache := &OutlineWalkCache{
+			Raw:      map[string]string{},
+			Affected: map[string]bool{"new.go": true},
+		}
+		entries, ok, err := GetDirectoryRawOutlinesFromCache(context.Background(), ec, cache)
+		require.NoError(t, err)
+		assert.False(t, ok)
+		assert.Nil(t, entries)
+	})
+
 	t.Run("non-not-found read failure propagates", func(t *testing.T) {
 		t.Parallel()
 		cache := &OutlineWalkCache{
-			Raw: map[string]string{},
+			Raw: map[string]string{
+				"pkg/a.go": rawOutlineSignaturePrefix + "func CachedA()",
+			},
 			// reading a path whose parent is a regular file fails with
 			// ENOTDIR, a non-not-found error
 			Affected: map[string]bool{"new.go/child.go": true},

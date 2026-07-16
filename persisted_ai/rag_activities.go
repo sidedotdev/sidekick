@@ -99,6 +99,10 @@ func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options 
 		}
 	}
 	logStep("raw outlines")
+	log.Debug().Bool("cachedOutlines", cached).Int("rawEntryCount", len(rawEntries)).Msg("directory raw outlines")
+	if len(rawEntries) == 0 {
+		log.Warn().Bool("cachedOutlines", cached).Msg("no raw outline entries found; ranked outline will be empty")
+	}
 	ra.storeOutlineWalkCache(ctx, options.WorkspaceId, cacheState)
 
 	fileSignatureSubkeys, err := t.PersistDirSignatureOutlines(ctx, options.WorkspaceId, tree_sitter.OutlinesFromRawEntries(rawEntries, nil, nil), maxChars)
