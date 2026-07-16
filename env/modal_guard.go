@@ -316,6 +316,20 @@ func modalIdleSeconds(config common.ModalEnvConfig) (int, error) {
 	return config.IdleSeconds, nil
 }
 
+// modalActiveSnapshotSeconds resolves the interval between the watchdog's
+// best-effort snapshots of a busy sandbox: unset defaults to 180s, negative
+// disables active snapshots (returned as 0, which the watchdog treats as
+// off while keeping idle behavior intact).
+func modalActiveSnapshotSeconds(config common.ModalEnvConfig) int {
+	if config.ActiveSnapshotSeconds < 0 {
+		return 0
+	}
+	if config.ActiveSnapshotSeconds == 0 {
+		return 180
+	}
+	return config.ActiveSnapshotSeconds
+}
+
 // modalWatchdogEnv returns the env vars that arm the in-sandbox idle
 // watchdog, along with the guard token hash the caller must store as a tag
 // on the sandbox (the guard's auth record for the injected token).
@@ -340,13 +354,14 @@ func modalWatchdogEnv(ctx context.Context, client *modal.Client, sandboxName str
 		meta = []byte("{}")
 	}
 	return map[string]string{
-		"SIDE_GUARD_URL":     guardURL,
-		"SIDE_GUARD_TOKEN":   token,
-		"SIDE_SANDBOX_NAME":  sandboxName,
-		"SIDE_SANDBOX_META":  string(meta),
-		"SIDE_IMAGE_VERSION": strconv.Itoa(modalSnapshotImageVersion),
-		"SIDE_IDLE_SECONDS":  strconv.Itoa(idleSeconds),
-		"SIDE_SNAPSHOT":      modalSnapshotScript,
-		"SIDE_WATCHDOG":      modalWatchdogScript,
+		"SIDE_GUARD_URL":               guardURL,
+		"SIDE_GUARD_TOKEN":             token,
+		"SIDE_SANDBOX_NAME":            sandboxName,
+		"SIDE_SANDBOX_META":            string(meta),
+		"SIDE_IMAGE_VERSION":           strconv.Itoa(modalSnapshotImageVersion),
+		"SIDE_IDLE_SECONDS":            strconv.Itoa(idleSeconds),
+		"SIDE_ACTIVE_SNAPSHOT_SECONDS": strconv.Itoa(modalActiveSnapshotSeconds(config)),
+		"SIDE_SNAPSHOT":                modalSnapshotScript,
+		"SIDE_WATCHDOG":                modalWatchdogScript,
 	}, tokenHash, nil
 }

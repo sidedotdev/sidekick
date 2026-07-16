@@ -202,3 +202,86 @@ func TestModalIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, checkOutput.Alive)
 }
+
+// TestModalActiveSnapshotIntegration proves the watchdog's periodic
+// active-snapshot behavior end to end: a busy sandbox with a short
+// active-snapshot interval produces a guard snapshot while remaining alive.
+// It requires Modal credentials and consumes Modal compute, so it is gated
+// behind SIDE_E2E_TEST.
+func TestModalActiveSnapshotIntegration(t *testing.T) {
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		t.Skip("skipping Modal e2e test; SIDE_E2E_TEST not set to true")
+	}
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping Modal e2e test; credentials are unavailable in non-local sidekick environments")
+	}
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
+		defer cancel()
+	}
+
+	client, err := getModalClient()
+	if err != nil {
+		t.Skip("modal client unavailable: " + err.Error())
+	}
+	if _, err := findModalSandbox(ctx, client, "side-e2e-credential-probe"); err != nil {
+		t.Skipf("modal credentials not configured or Modal unreachable: %v", err)
+	}
+
+	sandboxName := "side-e2e-snap-" + strings.ToLower(ksuid.New().String()[:10])
+	// Minimal image and sizing keep this billed sandbox cheap; the sandbox
+	// itself only runs sshd plus one sleep. IdleSeconds is high so the idle
+	// shutdown cannot interfere and any snapshot must come from the active
+	// path.
+	createOutput, err := modalCreateSandbox(ctx, ModalCreateSandboxInput{
+		Name: sandboxName,
+		Config: common.ModalEnvConfig{
+			Image:                 "debian:bookworm-slim",
+			CPU:                   0.25,
+			MemoryMiB:             512,
+			IdleSeconds:           3600,
+			ActiveSnapshotSeconds: 5,
+		},
+	})
+	require.NoError(t, err, "modalCreateSandbox failed")
+	t.Cleanup(func() {
+		_, _ = DeleteSandboxActivity(context.Background(), DeleteSandboxInput{EnvType: EnvTypeModal, SandboxName: sandboxName})
+	})
+
+	modalEnv := &ModalEnv{
+		SandboxName:      sandboxName,
+		SSHHost:          createOutput.SSHHost,
+		SSHPort:          createOutput.SSHPort,
+		WorkingDirectory: "/root",
+	}
+	// A long-running command holds an ssh session open, keeping is_busy true
+	// across watchdog polls while the guard record is polled below.
+	go func() {
+		_, _ = modalEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "sleep",
+			Args:    []string{"120"},
+		})
+	}()
+
+	// The watchdog polls every 15s and snapshots on the first busy poll once
+	// the 5s interval has elapsed, so the bound is one poll cycle plus a few
+	// seconds of guard latency.
+	pollDeadline := time.Now().Add(25 * time.Second)
+	var record *modalSnapshotRecord
+	for time.Now().Before(pollDeadline) {
+		record, err = modalLatestSnapshot(ctx, client, sandboxName)
+		require.NoError(t, err)
+		if record != nil {
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	require.NotNil(t, record, "expected an active snapshot to appear while the sandbox was busy")
+	assert.NotEmpty(t, record.ImageId)
+
+	sb, err := findModalSandbox(ctx, client, sandboxName)
+	require.NoError(t, err)
+	assert.NotNil(t, sb, "sandbox must remain alive after an active snapshot")
+}

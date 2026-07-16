@@ -10,8 +10,18 @@
 # recovered by auto-resume from that snapshot. Idle sandboxes thus stop
 # billing even when the sidekick host is offline. The token only authorizes
 # acting on this sandbox.
+#
+# While busy, the watchdog also takes a best-effort snapshot whenever the
+# last successful snapshot is older than SIDE_ACTIVE_SNAPSHOT_SECONDS
+# (non-positive disables), so a forceful kill that bypasses the idle
+# shutdown loses at most that window of work.
 IDLE="${SIDE_IDLE_SECONDS:-30}"
+ACTIVE_SNAPSHOT="${SIDE_ACTIVE_SNAPSHOT_SECONDS:-0}"
 idle_since=$(date +%s)
+# a fresh sandbox matches its base/restore image, so the first active
+# snapshot is deferred a full interval from start
+last_snapshot=$idle_since
+last_attempt=0
 snapshot_failures=0
 terminate_failures=0
 was_quiet=""
@@ -81,6 +91,7 @@ guard_post() {
         snapshot) attempt=$((snapshot_failures + 1)) ;;
         terminate) attempt=$((terminate_failures + 1)) ;;
     esac
+    last_attempt=$(date +%s)
     log "guard $phase request starting (attempt $attempt of 20)"
     if /usr/local/bin/sidekick-snapshot "$phase"; then
         log "guard $phase request succeeded (attempt $attempt of 20)"
@@ -90,7 +101,24 @@ guard_post() {
     return 1
 }
 
-log "watchdog up: idle=${IDLE}s poll=15s heartbeat=30s"
+# best-effort checkpoint during sustained activity: snapshots without
+# terminating, bounding the work lost if the sandbox is forcefully killed.
+# Failures are retried on a later poll (subject to the >=30s gap between
+# guard attempts) and never count toward the idle path's kill-1 escalation.
+active_snapshot() {
+    [ "$ACTIVE_SNAPSHOT" -gt 0 ] 2>/dev/null || return 0
+    now=$(date +%s)
+    [ $((now - last_snapshot)) -ge "$ACTIVE_SNAPSHOT" ] || return 0
+    [ $((now - last_attempt)) -ge 30 ] || return 0
+    log "busy for $((now - last_snapshot))s since last snapshot (interval ${ACTIVE_SNAPSHOT}s) -> active snapshot"
+    if guard_post snapshot; then
+        last_snapshot=$(date +%s)
+    else
+        log "active snapshot failed; retrying on a later poll"
+    fi
+}
+
+log "watchdog up: idle=${IDLE}s active-snapshot=${ACTIVE_SNAPSHOT}s poll=15s heartbeat=30s"
 while :; do
     sleep 15
     polls=$((polls + 1))
@@ -102,6 +130,7 @@ while :; do
         snapshot_failures=0
         terminate_failures=0
         [ $((polls % 2)) -eq 0 ] && log "heartbeat: busy reason=$busy_reason idle-for=0s threshold=${IDLE}s snapshot-failures=$snapshot_failures terminate-failures=$terminate_failures"
+        active_snapshot
         continue
     fi
     was_quiet=1
@@ -113,6 +142,7 @@ while :; do
     failed_phase="snapshot"
     if guard_post snapshot; then
         snapshot_failures=0
+        last_snapshot=$(date +%s)
         # test hook: widen the window between snapshot and the abort re-check
         [ "${SIDE_SNAPSHOT_GRACE:-0}" -gt 0 ] 2>/dev/null && sleep "$SIDE_SNAPSHOT_GRACE"
         # re-check: anything that arrived while the snapshot was being taken

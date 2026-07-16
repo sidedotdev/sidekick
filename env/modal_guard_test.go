@@ -1,6 +1,7 @@
 package env
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -108,6 +109,17 @@ func TestModalGuardEmbeds(t *testing.T) {
 	assert.Contains(t, modalWatchdogScript, `guard $phase request starting (attempt $attempt of 20)`)
 	assert.Contains(t, modalWatchdogScript, `guard $phase request succeeded (attempt $attempt of 20)`)
 	assert.Contains(t, modalWatchdogScript, `guard $phase request failed (attempt $attempt of 20)`)
+	// Active snapshots: periodic busy-time checkpoints go through the guard's
+	// snapshot phase only (never terminate), gated on the shared
+	// last-snapshot timestamp and the minimum gap between guard attempts, and
+	// their failures never feed the idle path's kill-1 escalation counters.
+	assert.Contains(t, modalWatchdogScript, `ACTIVE_SNAPSHOT="${SIDE_ACTIVE_SNAPSHOT_SECONDS:-0}"`)
+	assert.Contains(t, modalWatchdogScript, `[ "$ACTIVE_SNAPSHOT" -gt 0 ] 2>/dev/null || return 0`)
+	assert.Contains(t, modalWatchdogScript, `[ $((now - last_snapshot)) -ge "$ACTIVE_SNAPSHOT" ] || return 0`)
+	assert.Contains(t, modalWatchdogScript, `[ $((now - last_attempt)) -ge 30 ] || return 0`)
+	assert.Contains(t, modalWatchdogScript, `-> active snapshot`)
+	assert.Contains(t, modalWatchdogScript, "if guard_post snapshot; then\n        last_snapshot=$(date +%s)\n    else")
+	assert.Contains(t, modalWatchdogScript, `active snapshot failed; retrying on a later poll`)
 }
 
 func TestModalIdleSeconds(t *testing.T) {
@@ -122,6 +134,51 @@ func TestModalIdleSeconds(t *testing.T) {
 
 	_, err = modalIdleSeconds(common.ModalEnvConfig{IdleSeconds: -1})
 	assert.Error(t, err, "negative values are rejected")
+}
+
+func TestModalActiveSnapshotSeconds(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 180, modalActiveSnapshotSeconds(common.ModalEnvConfig{}), "unset defaults to 180s")
+	assert.Equal(t, 45, modalActiveSnapshotSeconds(common.ModalEnvConfig{ActiveSnapshotSeconds: 45}))
+	assert.Equal(t, 0, modalActiveSnapshotSeconds(common.ModalEnvConfig{ActiveSnapshotSeconds: -1}),
+		"negative disables active snapshots")
+}
+
+func TestModalWatchdogEnv_ActiveSnapshotSeconds(t *testing.T) {
+	// A pre-seeded guard state file matching the embedded script hash lets
+	// ensureModalGuard return its cached URL, so modalWatchdogEnv completes
+	// without a Modal client or network access.
+	dataHome := t.TempDir()
+	t.Setenv("SIDE_DATA_HOME", dataHome)
+	state, err := json.Marshal(modalGuardState{
+		ScriptHash:   modalGuardScriptHash(),
+		HibernateURL: "https://guard.example/hibernate",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(dataHome, "modal"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dataHome, "modal", "guard_state.json"), state, 0o600))
+
+	tests := []struct {
+		name   string
+		config common.ModalEnvConfig
+		want   string
+	}{
+		{"default", common.ModalEnvConfig{}, "180"},
+		{"override", common.ModalEnvConfig{ActiveSnapshotSeconds: 45}, "45"},
+		{"disabled", common.ModalEnvConfig{ActiveSnapshotSeconds: -1}, "0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandboxName := "side--watchdog-env-" + tt.name
+			watchdogEnv, tokenHash, err := modalWatchdogEnv(context.Background(), nil, sandboxName, tt.config)
+			require.NoError(t, err)
+			assert.NotEmpty(t, tokenHash)
+			assert.Equal(t, tt.want, watchdogEnv["SIDE_ACTIVE_SNAPSHOT_SECONDS"])
+			assert.Equal(t, "https://guard.example/hibernate", watchdogEnv["SIDE_GUARD_URL"])
+			assert.Equal(t, sandboxName, watchdogEnv["SIDE_SANDBOX_NAME"])
+			assert.Equal(t, "30", watchdogEnv["SIDE_IDLE_SECONDS"])
+		})
+	}
 }
 func TestModalSnapshotScript(t *testing.T) {
 	t.Parallel()

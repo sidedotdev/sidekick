@@ -146,6 +146,12 @@ type ModalEnvConfig struct {
 	// sidekick host is offline. It is restored from the snapshot on next
 	// use. Unset defaults to 30 seconds; negative values are rejected.
 	IdleSeconds int `toml:"idle_seconds,omitempty" json:"idleSeconds,omitempty"`
+	// ActiveSnapshotSeconds sets how often the in-sandbox watchdog takes a
+	// best-effort filesystem snapshot while the sandbox is busy, bounding
+	// the work lost if the sandbox is forcefully killed before the idle
+	// shutdown can run. Unset defaults to 180 seconds; negative values
+	// disable active snapshots (idle snapshots are unaffected).
+	ActiveSnapshotSeconds int `toml:"active_snapshot_seconds,omitempty" json:"activeSnapshotSeconds,omitempty"`
 }
 
 // GlobalState keys for workflow-specific state

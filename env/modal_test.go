@@ -98,10 +98,12 @@ func TestModalSandboxCreateParams(t *testing.T) {
 	t.Run("watchdog env merged", func(t *testing.T) {
 		t.Parallel()
 		params := modalSandboxCreateParams(common.ModalEnvConfig{}, "n", "pk", map[string]string{
-			"SIDE_GUARD_URL": "https://guard.example",
+			"SIDE_GUARD_URL":               "https://guard.example",
+			"SIDE_ACTIVE_SNAPSHOT_SECONDS": "180",
 		})
 		assert.Equal(t, "pk", params.Env["SIDE_SSH_PUBKEY"])
 		assert.Equal(t, "https://guard.example", params.Env["SIDE_GUARD_URL"])
+		assert.Equal(t, "180", params.Env["SIDE_ACTIVE_SNAPSHOT_SECONDS"])
 	})
 }
 
