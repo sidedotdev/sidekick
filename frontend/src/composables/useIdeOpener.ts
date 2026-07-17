@@ -1,6 +1,6 @@
 import { ref, type InjectionKey, type Ref } from 'vue'
 
-export type IdeType = 'vscode' | 'intellij' | 'zed'
+export type IdeType = 'vscode' | 'intellij' | 'zed' | 'vimr'
 
 const SESSION_STORAGE_KEY = 'sidekick-preferred-ide'
 
@@ -41,7 +41,7 @@ async function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?
 
 function getStoredIdePreference(): IdeType | null {
   const stored = sessionStorage.getItem(SESSION_STORAGE_KEY)
-  if (stored === 'vscode' || stored === 'intellij' || stored === 'zed') {
+  if (stored === 'vscode' || stored === 'intellij' || stored === 'zed' || stored === 'vimr') {
     return stored
   }
   return null
