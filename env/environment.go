@@ -1066,12 +1066,11 @@ func (e *ModalEnv) GetWorkingDirectory() string {
 	return e.WorkingDirectory
 }
 
+// RunCommand runs a command in the sandbox. Worktree hibernation is not used
+// on Modal (the idle watchdog snapshots and terminates the whole sandbox when
+// idle instead), so commands run without hibernation preflights or read-lock
+// wrapping.
 func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	if !input.SkipWaking {
-		if err := wakeIfHibernatedRemote(ctx, e); err != nil {
-			return EnvRunCommandOutput{}, err
-		}
-	}
 
 	runCommand := e.runCommandInner
 	if e.runModalCommand != nil {
@@ -1108,14 +1107,6 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		}
 	}
 
-	// Read-lock prefix detected hibernation (race with concurrent hibernate)
-	if !input.SkipWaking && err == nil && output.ExitStatus == hibernatedRemoteExitCode {
-		if _, wakeErr := WakeHibernatedEnv(ctx, e); wakeErr != nil {
-			return EnvRunCommandOutput{}, wakeErr
-		}
-		output, diagnostics, err = runCommand(ctx, input)
-		appendDiagnostics()
-	}
 	return output, err
 }
 
@@ -1159,9 +1150,6 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
 	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
-	if !input.SkipWaking {
-		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
-	}
 	fullCommand = modalLoginShellCommand(fullCommand)
 	// Refresh the idle-watchdog activity marker with every command.
 	fullCommand = "touch " + remoteActivityMarker + " 2>/dev/null; " + fullCommand
@@ -1235,9 +1223,6 @@ func (e *ModalEnv) sftpConnKey() string {
 }
 
 func (e *ModalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
-	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
-		return nil, wakeErr
-	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -1245,9 +1230,6 @@ func (e *ModalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 }
 
 func (e *ModalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
-	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
-		return nil, wakeErr
-	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -1255,9 +1237,6 @@ func (e *ModalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error)
 }
 
 func (e *ModalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
-	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
-		return wakeErr
-	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -1265,9 +1244,6 @@ func (e *ModalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs
 }
 
 func (e *ModalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
-	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
-		return wakeErr
-	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -1275,9 +1251,6 @@ func (e *ModalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) err
 }
 
 func (e *ModalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
-	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
-		return nil, wakeErr
-	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -1285,9 +1258,6 @@ func (e *ModalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 }
 
 func (e *ModalEnv) Remove(ctx context.Context, p string) error {
-	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
-		return wakeErr
-	}
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
@@ -1295,9 +1265,6 @@ func (e *ModalEnv) Remove(ctx context.Context, p string) error {
 }
 
 func (e *ModalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
-	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
-		return "", wakeErr
-	}
 	if dir == "" {
 		dir = "/tmp"
 	} else if !strings.HasPrefix(dir, "/") {

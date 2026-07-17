@@ -1,0 +1,364 @@
+// Command modal_perf_repro measures the steady-state per-operation cost of the
+// Modal environment, simulating what a basic_dev workflow does against a warm
+// sandbox: shell commands (git status, ripgrep searches like
+// bulk_search_repository), symbol retrieval (tree-sitter GetSymbolsActivity and
+// gopls-backed definition lookups, like get_symbol_definitions), and SFTP
+// filesystem operations (reads, stats, dir listings, edit cycles).
+//
+// Run it before and after a change and tee the output to compare:
+//
+//	go run ./scripts/modal_perf_repro | tee scripts/modal_perf_repro/BEFORE.txt
+//
+// The sandbox is reused across runs (same -sandbox name) so both runs measure
+// a warm sandbox rather than sandbox creation.
+package main
+
+import (
+	"bufio"
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
+	"sidekick/coding/lsp"
+	"sidekick/dev"
+	"sidekick/env"
+)
+
+func must(err error, what string) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", what, err)
+		os.Exit(1)
+	}
+}
+
+type phaseResult struct {
+	name  string
+	ops   int
+	total time.Duration
+}
+
+func main() {
+	sandbox := flag.String("sandbox", "side-perf-repro", "Modal sandbox name (reused across runs when still alive)")
+	ops := flag.Int("ops", 5, "operations per phase")
+	flag.Parse()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	fmt.Printf("creating (or reusing) modal sandbox %q...\n", *sandbox)
+	start := time.Now()
+	created, err := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{
+		EnvType: env.EnvTypeModal,
+		Name:    *sandbox,
+	})
+	must(err, "create sandbox")
+	fmt.Printf("sandbox ready in %s (reused=%v)\n", time.Since(start).Round(time.Millisecond), created.Reused)
+
+	const repoDir = "/root/side-perf-repro"
+	rootEnv := &env.ModalEnv{
+		WorkingDirectory: "/root",
+		SandboxName:      created.SandboxName,
+		SSHHost:          created.SSHHost,
+		SSHPort:          created.SSHPort,
+	}
+
+	// One-time repo setup, mimicking the git worktree with a go module that a
+	// basic_dev flow works in.
+	setupScript := fmt.Sprintf(`
+set -e
+mkdir -p %[1]s
+cd %[1]s
+if [ ! -d .git ]; then
+  git init -q -b main
+  git config user.email perf@example.com
+  git config user.name perf
+  printf 'module example.com/perf\n\ngo 1.21\n' > go.mod
+  mkdir -p pkg/alpha pkg/beta
+  for i in $(seq 1 20); do
+    printf 'package alpha\n\nfunc AlphaFunc%%d() int { return %%d }\n' "$i" "$i" > pkg/alpha/file$i.go
+    printf 'package beta\n\nfunc BetaFunc%%d() int { return %%d }\n' "$i" "$i" > pkg/beta/file$i.go
+  done
+  git add -A
+  git commit -qm initial
+fi
+printf 'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("hi")\n}\n' > main.go
+git add -A
+git diff --cached --quiet || git commit -qm main
+`, repoDir)
+	setupStart := time.Now()
+	setupOut, err := rootEnv.RunCommand(ctx, env.EnvRunCommandInput{Command: "sh", Args: []string{"-c", setupScript}})
+	must(err, "repo setup")
+	if setupOut.ExitStatus != 0 {
+		must(fmt.Errorf("exit %d: %s%s", setupOut.ExitStatus, setupOut.Stdout, setupOut.Stderr), "repo setup")
+	}
+	fmt.Printf("repo setup done in %s\n", time.Since(setupStart).Round(time.Millisecond))
+
+	e := &env.ModalEnv{
+		WorkingDirectory: repoDir,
+		SandboxName:      created.SandboxName,
+		SSHHost:          created.SSHHost,
+		SSHPort:          created.SSHPort,
+	}
+	envContainer := env.EnvContainer{Env: e}
+
+	// Warm up the SSH control master and the pooled SFTP connection so phases
+	// measure steady-state per-operation cost, like a long-lived worker
+	// mid-flow.
+	warmupStart := time.Now()
+	_, err = e.RunCommand(ctx, env.EnvRunCommandInput{Command: "true"})
+	must(err, "warmup command")
+	_, err = e.ReadFile(ctx, "main.go")
+	must(err, "warmup sftp")
+	fmt.Printf("ssh/sftp warmup done in %s\n", time.Since(warmupStart).Round(time.Millisecond))
+
+	goAvailable := false
+	if out, err := e.RunCommand(ctx, env.EnvRunCommandInput{Command: "sh", Args: []string{"-c", "command -v go"}}); err == nil && out.ExitStatus == 0 {
+		goAvailable = true
+	}
+
+	lspActivities := lsp.NewLSPActivities(func(lang string) lsp.LSPClient {
+		return &lsp.Jsonrpc2LSPClient{LanguageName: lang}
+	})
+	if goAvailable {
+		// First lookup may install gopls and warm its daemon; time it
+		// separately so phases measure steady-state cost.
+		goplsWarmupStart := time.Now()
+		// A freshly started daemon may transiently answer "no views" while it
+		// builds the workspace view; retry until lookups reach steady state.
+		var warmupErr error
+		for deadline := time.Now().Add(90 * time.Second); ; {
+			defs, err := lspActivities.GetSingleFileDefinitions(ctx, lsp.LSPDefinitionLocationsRequest{
+				FilePath:     "main.go",
+				EnvContainer: &envContainer,
+				Symbols:      []string{"Println"},
+			})
+			if err == nil && len(defs) == 1 && defs[0].Error == "" {
+				warmupErr = nil
+				break
+			}
+			if err != nil {
+				warmupErr = err
+			} else {
+				warmupErr = fmt.Errorf("lookup did not fully resolve: %+v", defs)
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+		must(warmupErr, "gopls warmup")
+		fmt.Printf("gopls warmup done in %s\n", time.Since(goplsWarmupStart).Round(time.Millisecond))
+	} else {
+		fmt.Println("go toolchain not available in sandbox; skipping gopls phase")
+	}
+
+	runPhase := func(name string, fn func(i int) error) phaseResult {
+		phaseStart := time.Now()
+		for i := 0; i < *ops; i++ {
+			if err := fn(i); err != nil {
+				fmt.Printf("%-55s FAILED on op %d after %s: %v\n",
+					name, i+1, time.Since(phaseStart).Round(time.Millisecond), err)
+				os.Exit(1)
+			}
+		}
+		total := time.Since(phaseStart)
+		fmt.Printf("%-55s %3d ops  total %9s  avg %9s\n",
+			name, *ops, total.Round(time.Millisecond), (total / time.Duration(*ops)).Round(time.Millisecond))
+		return phaseResult{name: name, ops: *ops, total: total}
+	}
+
+	checkRun := func(command string, args ...string) error {
+		out, err := e.RunCommand(ctx, env.EnvRunCommandInput{Command: command, Args: args})
+		if err != nil {
+			return err
+		}
+		if out.ExitStatus != 0 {
+			return fmt.Errorf("%s exited %d: %s%s", command, out.ExitStatus, out.Stdout, out.Stderr)
+		}
+		return nil
+	}
+
+	// Diagnostics (excluded from TOTAL so it stays comparable across runs).
+	// ControlMaster already keeps the authenticated SSH transport open, so a
+	// raw ssh exec measures per-command *session* cost: channel open, exec
+	// request, and data/exit/close each take a network round trip even on the
+	// reused transport, which is why pooling more SSH connections would not
+	// help. RunCommand("true") layers sidekick's command wrapping on the same
+	// transport — the difference between the two is sidekick's per-command
+	// overhead. The persistent shell channel prototypes a long-lived remote
+	// runner that avoids per-command session setup entirely (~1 round trip
+	// per command), demonstrating the raw-exec cost is not a hard floor. The
+	// Stat phase below measures the floor of a single SFTP round trip.
+	sshArgs, err := e.SSHArgs(ctx)
+	must(err, "ssh args")
+	fmt.Println("\ndiagnostic phases (excluded from TOTAL):")
+	runPhase("raw ssh exec: true (per-exec session setup)", func(int) error {
+		if out, err := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), "true")...).CombinedOutput(); err != nil {
+			return fmt.Errorf("raw ssh: %w: %s", err, out)
+		}
+		return nil
+	})
+	runPhase("RunCommand: true (adds sidekick wrapping)", func(int) error {
+		return checkRun("true")
+	})
+	shell, err := startPersistentShell(ctx, sshArgs)
+	must(err, "start persistent shell channel")
+	_, err = shell.run("true")
+	must(err, "warm persistent shell channel")
+	runPhase("persistent shell channel: true (1-RTT prototype)", func(int) error {
+		code, err := shell.run("true")
+		if err != nil {
+			return err
+		}
+		if code != 0 {
+			return fmt.Errorf("exit %d", code)
+		}
+		return nil
+	})
+	shell.close()
+
+	fmt.Printf("\nbenchmark phases (%d ops each):\n", *ops)
+	var results []phaseResult
+	results = append(results, runPhase("RunCommand: git status --porcelain", func(int) error {
+		return checkRun("git", "status", "--porcelain")
+	}))
+	results = append(results, runPhase("RunCommand: rg search (bulk_search_repository)", func(i int) error {
+		return checkRun("rg", "-n", fmt.Sprintf("AlphaFunc%d", i+1), ".")
+	}))
+	results = append(results, runPhase("GetSymbolsActivity (tree-sitter)", func(i int) error {
+		_, err := dev.GetSymbolsActivity(envContainer, fmt.Sprintf("pkg/alpha/file%d.go", i+1))
+		return err
+	}))
+	if goAvailable {
+		results = append(results, runPhase("gopls GetSingleFileDefinitions", func(i int) error {
+			defs, err := lspActivities.GetSingleFileDefinitions(ctx, lsp.LSPDefinitionLocationsRequest{
+				FilePath:     "main.go",
+				EnvContainer: &envContainer,
+				Symbols:      []string{"Println"},
+			})
+			if err != nil {
+				return err
+			}
+			if len(defs) != 1 || defs[0].Error != "" {
+				return fmt.Errorf("unexpected definitions result: %+v", defs)
+			}
+			return nil
+		}))
+	}
+	results = append(results, runPhase("ReadFile", func(i int) error {
+		_, err := e.ReadFile(ctx, fmt.Sprintf("pkg/alpha/file%d.go", i+1))
+		return err
+	}))
+	results = append(results, runPhase("Stat", func(i int) error {
+		_, err := e.Stat(ctx, fmt.Sprintf("pkg/beta/file%d.go", i+1))
+		return err
+	}))
+	results = append(results, runPhase("ReadDir", func(int) error {
+		_, err := e.ReadDir(ctx, "pkg/alpha")
+		return err
+	}))
+	results = append(results, runPhase("Edit cycle (ReadFile+WriteFile+git diff)", func(i int) error {
+		p := fmt.Sprintf("pkg/beta/file%d.go", i+1)
+		data, err := e.ReadFile(ctx, p)
+		if err != nil {
+			return err
+		}
+		if err := e.WriteFile(ctx, p, append(data, []byte("// edited\n")...), 0644); err != nil {
+			return err
+		}
+		return checkRun("git", "diff", "--stat")
+	}))
+
+	var grand time.Duration
+	var totalOps int
+	for _, r := range results {
+		grand += r.total
+		totalOps += r.ops
+	}
+	fmt.Printf("\nTOTAL: %d ops in %s (avg %s/op)\n",
+		totalOps, grand.Round(time.Millisecond), (grand / time.Duration(totalOps)).Round(time.Millisecond))
+
+	// Attribute file-op cost to SFTP protocol round trips, using Stat (a
+	// single request/response) as the measured round-trip floor. Reads pay
+	// separate open/data/EOF/close round trips, dir listings similarly.
+	var statAvg time.Duration
+	for _, r := range results {
+		if r.name == "Stat" {
+			statAvg = r.total / time.Duration(r.ops)
+		}
+	}
+	if statAvg > 0 {
+		fmt.Println("\nSFTP round-trip attribution (Stat = 1 round trip):")
+		for _, r := range results {
+			switch r.name {
+			case "ReadFile", "Stat", "ReadDir":
+				avg := r.total / time.Duration(r.ops)
+				fmt.Printf("%-55s ~%.1f round trips\n", r.name, float64(avg)/float64(statAvg))
+			}
+		}
+	}
+
+	// Reset the worktree so repeated runs start from the same state.
+	must(checkRun("git", "checkout", "--", "."), "reset worktree")
+}
+
+// persistentShell prototypes a long-lived remote command runner: one SSH
+// session hosting `sh -s`, with commands streamed over stdin and completion
+// detected via a sentinel line carrying the exit status. Unlike per-command
+// ssh execs — which pay ~3 protocol round trips (channel open, exec request,
+// data/exit/close) even when the transport is reused via ControlMaster — each
+// command here costs a single network round trip.
+type persistentShell struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Reader
+	seq    int
+}
+
+func startPersistentShell(ctx context.Context, sshArgs []string) (*persistentShell, error) {
+	cmd := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), "sh -s")...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &persistentShell{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout)}, nil
+}
+
+// run executes command in the remote shell and returns its exit status. The
+// command's own stdout is not separated from the sentinel stream, which is
+// sufficient for benchmarking quiet commands.
+func (p *persistentShell) run(command string) (int, error) {
+	p.seq++
+	sentinel := fmt.Sprintf("__side_done_%d__", p.seq)
+	if _, err := fmt.Fprintf(p.stdin, "%s\nprintf '%s %%s\\n' \"$?\"\n", command, sentinel); err != nil {
+		return 0, err
+	}
+	for {
+		line, err := p.stdout.ReadString('\n')
+		if err != nil {
+			return 0, err
+		}
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), sentinel+" "); ok {
+			return strconv.Atoi(rest)
+		}
+	}
+}
+
+func (p *persistentShell) close() {
+	p.stdin.Close()
+	p.cmd.Wait()
+}

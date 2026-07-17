@@ -480,6 +480,14 @@ func HibernateEnv(ctx context.Context, e Env, branchName string) (HibernationMet
 		return HibernationMetadata{}, fmt.Errorf("branch name is required for hibernation")
 	}
 
+	// Worktree hibernation is a disk-space-saving mechanism for environments
+	// backed by local storage. Modal sandboxes already snapshot their entire
+	// filesystem and terminate when idle, so hibernating their worktrees buys
+	// nothing and only adds overhead.
+	if _, isModal := e.(*ModalEnv); isModal {
+		return HibernationMetadata{}, nil
+	}
+
 	release, err := acquireHibernationWriteLock(ctx, e)
 	if err != nil {
 		return HibernationMetadata{}, err
@@ -671,6 +679,8 @@ func (e *ModalEnv) Hibernate(ctx context.Context, branchName string) (Hibernatio
 	return HibernateEnv(ctx, e, branchName)
 }
 
+// WakeIfHibernated is a no-op: worktree hibernation is not used on Modal, so
+// no Modal worktree is ever hibernated.
 func (e *ModalEnv) WakeIfHibernated(ctx context.Context) error {
-	return wakeIfHibernatedRemote(ctx, e)
+	return nil
 }

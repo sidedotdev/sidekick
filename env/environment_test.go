@@ -760,3 +760,47 @@ func TestModalRecoverSSHTransport(t *testing.T) {
 		})
 	}
 }
+
+func TestModalRunCommandPassesThroughHibernatedExitCode(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	modalEnv := &ModalEnv{
+		WorkingDirectory: "/root/hibernated-exit-code",
+		SandboxName:      "sandbox-hibernated-exit-code",
+		SSHHost:          "modal.host",
+		SSHPort:          1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{ExitStatus: hibernatedRemoteExitCode}, "", nil
+		},
+	}
+
+	// Modal commands are not wrapped in the hibernation read lock, so the
+	// sentinel exit code has no special meaning and must not trigger a
+	// wake/retry.
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{Command: "echo"})
+	require.NoError(t, err)
+	assert.Equal(t, hibernatedRemoteExitCode, output.ExitStatus)
+	assert.Equal(t, 1, attempts)
+}
+
+func TestHibernateEnvIsNoOpForModal(t *testing.T) {
+	t.Parallel()
+
+	commands := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			commands++
+			return EnvRunCommandOutput{ExitStatus: 0}, "", nil
+		},
+	}
+
+	metadata, err := HibernateEnv(context.Background(), modalEnv, "some-branch")
+	require.NoError(t, err)
+	assert.Equal(t, HibernationMetadata{}, metadata)
+	assert.Zero(t, commands, "modal hibernation must not touch the sandbox")
+}
