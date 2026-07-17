@@ -9,6 +9,8 @@
           <IntellijIcon/>
         </a>&nbsp;<a :href="`zed://file/${worktree.workingDirectory}`">
           <ZedIcon/>
+        </a>&nbsp;<a :href="`vimr://open?url=${encodeURIComponent(`file://${worktree.workingDirectory}`)}`">
+          <VimRIcon/>
         </a>
       </p>
       <button
@@ -34,6 +36,7 @@ import { computed } from 'vue'
 import VSCodeIcon from '@/components/icons/VSCodeIcon.vue'
 import IntellijIcon from '@/components/icons/IntellijIcon.vue'
 import ZedIcon from '@/components/icons/ZedIcon.vue'
+import VimRIcon from '@/components/icons/VimRIcon.vue'
 import SlidersIcon from '@/components/icons/SlidersIcon.vue'
 import type { Worktree } from '@/lib/models'
 
