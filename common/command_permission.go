@@ -312,6 +312,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bun tsc"},
 			{Pattern: "bun run tsc"},
 			{Pattern: "bunx tsc"},
+			{Pattern: "bunx vitest"},
 			{Pattern: "npx tsc"},
 			// Python commands
 			{Pattern: "python --version"},

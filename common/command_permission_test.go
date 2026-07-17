@@ -1950,6 +1950,32 @@ func TestBasePermissions_BunxTsc(t *testing.T) {
 	})
 }
 
+func TestBasePermissions_BunxVitest(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("bunx vitest commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"bunx vitest",
+			"bunx vitest run",
+			"bunx vitest run src/components/Foo.spec.ts",
+			"bunx vitest --coverage",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("similar-prefix commands are not auto-approved", func(t *testing.T) {
+		t.Parallel()
+		result, _ := EvaluateCommandPermission(config, "bunx vitestfake")
+		assert.Equal(t, PermissionRequireApproval, result)
+	})
+}
+
 func TestBasePermissions_GolangciLint(t *testing.T) {
 	t.Parallel()
 	config := BaseCommandPermissions()
