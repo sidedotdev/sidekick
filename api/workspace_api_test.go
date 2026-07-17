@@ -933,21 +933,8 @@ func TestGetTaskConfigHandler(t *testing.T) {
 		expectedRememberLastSelection bool
 	}{
 		{
-			name:        "returns rememberLastSelection true when model contains opus-4.5",
+			name:        "returns rememberLastSelection true when config exists",
 			workspaceId: "ws_test1",
-			workspaceConfig: &domain.WorkspaceConfig{
-				LLM: common.LLMConfig{
-					Defaults: []common.ModelConfig{
-						{Model: "claude-opus-4.5-20250101"},
-					},
-				},
-			},
-			expectedStatus:                http.StatusOK,
-			expectedRememberLastSelection: true,
-		},
-		{
-			name:        "returns rememberLastSelection false when model does not contain opus-4.5",
-			workspaceId: "ws_test2",
 			workspaceConfig: &domain.WorkspaceConfig{
 				LLM: common.LLMConfig{
 					Defaults: []common.ModelConfig{
@@ -956,23 +943,12 @@ func TestGetTaskConfigHandler(t *testing.T) {
 				},
 			},
 			expectedStatus:                http.StatusOK,
-			expectedRememberLastSelection: false,
+			expectedRememberLastSelection: true,
 		},
 		{
 			name:                          "returns rememberLastSelection true when no config exists",
 			workspaceId:                   "ws_test3",
 			workspaceConfig:               nil,
-			expectedStatus:                http.StatusOK,
-			expectedRememberLastSelection: true,
-		},
-		{
-			name:        "returns rememberLastSelection true when defaults is empty",
-			workspaceId: "ws_test4",
-			workspaceConfig: &domain.WorkspaceConfig{
-				LLM: common.LLMConfig{
-					Defaults: []common.ModelConfig{},
-				},
-			},
 			expectedStatus:                http.StatusOK,
 			expectedRememberLastSelection: true,
 		},

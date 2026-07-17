@@ -367,19 +367,10 @@ func (ctrl *Controller) GetTaskConfigHandler(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
-	config, err := ctrl.service.GetWorkspaceConfig(ctx, workspaceId)
-
-	rememberLastSelection := true
-	if err == nil && len(config.LLM.Defaults) > 0 {
-		defaultModel := config.LLM.Defaults[0].Model
-		rememberLastSelection = strings.Contains(defaultModel, "opus-4.5")
-	}
-
 	taskConfig := TaskConfig{
 		DetermineRequirements: DetermineRequirementsConfig{
 			DefaultValue:          true,
-			RememberLastSelection: rememberLastSelection,
+			RememberLastSelection: true,
 		},
 	}
 
