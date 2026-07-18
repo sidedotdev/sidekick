@@ -3,13 +3,33 @@
     <div class="toolbar">
       <p v-for="worktree in worktrees" :key="worktree.id">
         Open Worktree
-        <a :href="`vscode://file/${worktree.workingDirectory}?windowId=_blank`">
+        <a
+          href="#"
+          aria-label="Open worktree in VSCode"
+          title="Open worktree in VSCode"
+          @click.prevent="openFileInIde(worktree.workingDirectory, 'vscode')"
+        >
           <VSCodeIcon/>
-        </a>&nbsp;<a :href="`idea://open?file=${encodeURIComponent(worktree.workingDirectory)}`">
+        </a>&nbsp;<a
+          href="#"
+          aria-label="Open worktree in IntelliJ"
+          title="Open worktree in IntelliJ"
+          @click.prevent="openFileInIde(worktree.workingDirectory, 'intellij')"
+        >
           <IntellijIcon/>
-        </a>&nbsp;<a :href="`zed://file/${worktree.workingDirectory}`">
+        </a>&nbsp;<a
+          href="#"
+          aria-label="Open worktree in Zed"
+          title="Open worktree in Zed"
+          @click.prevent="openFileInIde(worktree.workingDirectory, 'zed')"
+        >
           <ZedIcon/>
-        </a>&nbsp;<a :href="`vimr://open?url=${encodeURIComponent(`file://${worktree.workingDirectory}`)}`">
+        </a>&nbsp;<a
+          href="#"
+          aria-label="Open worktree in VimR"
+          title="Open worktree in VimR"
+          @click.prevent="openFileInIde(worktree.workingDirectory, 'vimr')"
+        >
           <VimRIcon/>
         </a>
       </p>
@@ -38,6 +58,7 @@ import IntellijIcon from '@/components/icons/IntellijIcon.vue'
 import ZedIcon from '@/components/icons/ZedIcon.vue'
 import VimRIcon from '@/components/icons/VimRIcon.vue'
 import SlidersIcon from '@/components/icons/SlidersIcon.vue'
+import { openFileInIde } from '@/composables/useIdeOpener'
 import type { Worktree } from '@/lib/models'
 
 const props = defineProps<{

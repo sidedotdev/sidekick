@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import FlowEditorLinks from '../FlowEditorLinks.vue'
 
@@ -32,6 +32,38 @@ describe('FlowEditorLinks', () => {
 
     await button.trigger('click')
     expect(wrapper.emitted('model-configuration')).toHaveLength(1)
+  })
+
+  it.each([
+    { ide: 'vscode', label: 'Open worktree in VSCode' },
+    { ide: 'intellij', label: 'Open worktree in IntelliJ' },
+    { ide: 'zed', label: 'Open worktree in Zed' },
+    { ide: 'vimr', label: 'Open worktree in VimR' },
+  ])('opens the worktree in $ide through the API server', async ({ ide, label }) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    )
+
+    const wrapper = mountLinks({
+      worktrees: [{
+        id: 'worktree-1',
+        workingDirectory: '/repo/worktree',
+        created: new Date(),
+        workspaceId: 'workspace-1',
+      }],
+    })
+
+    await wrapper.get(`[aria-label="${label}"]`).trigger('click')
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toBe('/api/v1/open-in-ide')
+    expect(JSON.parse(options?.body as string)).toEqual({
+      ide,
+      filePath: '/repo/worktree',
+    })
+
+    vi.restoreAllMocks()
   })
 
   it('omits the action when the flow view does not enable it', () => {

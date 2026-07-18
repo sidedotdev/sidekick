@@ -14,7 +14,7 @@ export interface IdeOpener {
 
 export const IDE_OPENER_KEY: InjectionKey<(relativePath: string, lineNumber?: number | null, baseDir?: string) => void> = Symbol('ideOpener')
 
-async function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?: number | null, baseDir?: string): Promise<void> {
+export async function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?: number | null, baseDir?: string): Promise<void> {
   const payload: { ide: IdeType; filePath: string; line?: number; baseDir?: string } = {
     ide,
     filePath: absoluteFilePath,
