@@ -66,8 +66,14 @@ openshell:
 
 modal:
   dockerfile_path: "Dockerfile.modal"
-  cpu: 4
-  memory_mib: 8192
+  # Requests are billing floors; usage bursts freely up to the limits (CPU is
+  # left unlimited at Modal's minimum 0.125-core request). Memory measured via
+  # scripts/modal_mem_measure: sampled peak ~2.9 GiB running test_commands
+  # concurrently and ~4.2 GiB for integration_test_commands, so an 8 GiB limit
+  # leaves ~2x headroom against OOM while the 1 GiB floor minimizes cost.
+  cpu: 0.125
+  memory: 1024
+  memory_limit: 8192
 
 # Reverse-forward the host's read-only Temporal proxy (exposed by dev builds
 # of `side start`) into devpod/openshell containers so integration tests that

@@ -75,24 +75,30 @@ func TestModalSandboxCreateParams(t *testing.T) {
 		assert.Equal(t, []int{modalSSHPort}, params.UnencryptedPorts)
 		assert.Equal(t, "ssh-ed25519 AAAA test", params.Env["SIDE_SSH_PUBKEY"])
 		assert.Equal(t, modalSandboxTimeout, params.Timeout)
-		assert.Equal(t, float64(2), params.CPU)
-		assert.Equal(t, 2048, params.MemoryMiB)
+		assert.Equal(t, 0.125, params.CPU)
+		assert.Zero(t, params.CPULimit)
+		assert.Equal(t, 1024, params.MemoryMiB)
+		assert.Zero(t, params.MemoryLimitMiB)
 		require.Len(t, params.Command, 3)
 		assert.Contains(t, params.Command[2], "sshd")
 		assert.NotContains(t, params.Command[2], "apt-get")
 	})
 
-	t.Run("VM runtime with sizing", func(t *testing.T) {
+	t.Run("VM runtime with explicit requests and limits", func(t *testing.T) {
 		t.Parallel()
 		params := modalSandboxCreateParams(common.ModalEnvConfig{
-			VM:        true,
-			CPU:       6,
-			MemoryMiB: 12288,
+			VM:          true,
+			CPU:         0.5,
+			CPULimit:    6,
+			Memory:      4096,
+			MemoryLimit: 12288,
 		}, "side--repo-abc", "pubkey", nil)
 
 		assert.Equal(t, map[string]any{"vm_runtime": true}, params.ExperimentalOptions)
-		assert.Equal(t, float64(6), params.CPU)
-		assert.Equal(t, 12288, params.MemoryMiB)
+		assert.Equal(t, 0.5, params.CPU)
+		assert.Equal(t, float64(6), params.CPULimit)
+		assert.Equal(t, 4096, params.MemoryMiB)
+		assert.Equal(t, 12288, params.MemoryLimitMiB)
 	})
 
 	t.Run("watchdog env merged", func(t *testing.T) {

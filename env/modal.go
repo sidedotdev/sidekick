@@ -375,16 +375,18 @@ func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey stri
 	for k, v := range extraEnv {
 		env[k] = v
 	}
-	// Modal's platform defaults (0.125 cores, 128 MiB) are too lean for dev
-	// workloads — and outright unusable on the VM runtime, where memory is
-	// statically provisioned — so default to 2 cores / 2 GiB when unset.
-	cpu := config.CPU
-	if cpu == 0 {
-		cpu = 2
+	// Requests are billing floors, not caps: with no limits set, usage bursts
+	// freely and Modal bills max(request, usage). Defaults keep the floor as
+	// cheap as possible: Modal's minimum 0.125-core CPU request and a 1 GiB
+	// memory request (Modal's 128 MiB platform default is too lean for dev
+	// workloads, and on the VM runtime memory is statically provisioned).
+	cpuRequest := config.CPU
+	if cpuRequest == 0 {
+		cpuRequest = 0.125
 	}
-	memoryMiB := config.MemoryMiB
-	if memoryMiB == 0 {
-		memoryMiB = 2048
+	memoryRequestMiB := config.Memory
+	if memoryRequestMiB == 0 {
+		memoryRequestMiB = 1024
 	}
 	params := &modal.SandboxCreateParams{
 		Name:             name,
@@ -392,8 +394,10 @@ func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey stri
 		Env:              env,
 		Timeout:          modalSandboxTimeout,
 		UnencryptedPorts: []int{modalSSHPort}, // ssh provides its own encryption
-		CPU:              cpu,
-		MemoryMiB:        memoryMiB,
+		CPU:              cpuRequest,
+		CPULimit:         config.CPULimit,
+		MemoryMiB:        memoryRequestMiB,
+		MemoryLimitMiB:   config.MemoryLimit,
 	}
 	if config.VM {
 		// Note: VM-runtime memory is statically provisioned.

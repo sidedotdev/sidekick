@@ -240,7 +240,7 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 		Config: common.ModalEnvConfig{
 			Image:                 "debian:bookworm-slim",
 			CPU:                   0.25,
-			MemoryMiB:             512,
+			Memory:                512,
 			IdleSeconds:           3600,
 			ActiveSnapshotSeconds: 5,
 		},

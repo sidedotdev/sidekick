@@ -134,12 +134,18 @@ type ModalEnvConfig struct {
 	// to the repository root. Its FROM supplies the base image, so Image must
 	// be unset. COPY, ADD, and BuildKit context mounts are unsupported.
 	DockerfilePath string `toml:"dockerfile_path,omitempty" json:"dockerfilePath,omitempty"`
-	// CPU is the number of CPU cores to reserve for the sandbox. Unset
-	// defaults to 2.
+	// CPU is the number of fractional physical CPU cores reserved for the
+	// sandbox. Unset defaults to 0.125, Modal's minimum; usage above the
+	// request bursts freely unless CPULimit is set.
 	CPU float64 `toml:"cpu,omitempty" json:"cpu,omitempty"`
-	// MemoryMiB is the sandbox memory reservation in MiB. Unset defaults to
-	// 2048.
-	MemoryMiB int `toml:"memory_mib,omitempty" json:"memoryMiB,omitempty"`
+	// CPULimit is a hard cap in fractional physical CPU cores. Zero means no
+	// limit.
+	CPULimit float64 `toml:"cpu_limit,omitempty" json:"cpuLimit,omitempty"`
+	// Memory is the sandbox memory reservation in MiB. Unset defaults to
+	// 1024; usage above the request bursts freely unless MemoryLimit is set.
+	Memory int `toml:"memory,omitempty" json:"memory,omitempty"`
+	// MemoryLimit is a hard memory cap in MiB. Zero means no limit.
+	MemoryLimit int `toml:"memory_limit,omitempty" json:"memoryLimit,omitempty"`
 	// IdleSeconds arms the in-sandbox idle watchdog: after this many seconds
 	// without activity the sandbox snapshots its filesystem and terminates
 	// itself (via the sidekick guard app), stopping billing even when the

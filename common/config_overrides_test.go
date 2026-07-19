@@ -197,10 +197,12 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 		t.Parallel()
 		config := RepoConfig{}
 		mCfg := ModalEnvConfig{
-			VM:        true,
-			Image:     "ubuntu:24.04",
-			CPU:       4,
-			MemoryMiB: 8192,
+			VM:          true,
+			Image:       "ubuntu:24.04",
+			CPU:         0.25,
+			CPULimit:    4,
+			Memory:      2048,
+			MemoryLimit: 8192,
 		}
 		overrides := ConfigOverrides{ModalConfig: &mCfg}
 
@@ -208,8 +210,10 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 
 		assert.True(t, config.ModalConfig.VM)
 		assert.Equal(t, "ubuntu:24.04", config.ModalConfig.Image)
-		assert.Equal(t, float64(4), config.ModalConfig.CPU)
-		assert.Equal(t, 8192, config.ModalConfig.MemoryMiB)
+		assert.Equal(t, 0.25, config.ModalConfig.CPU)
+		assert.Equal(t, float64(4), config.ModalConfig.CPULimit)
+		assert.Equal(t, 2048, config.ModalConfig.Memory)
+		assert.Equal(t, 8192, config.ModalConfig.MemoryLimit)
 	})
 
 	t.Run("multiple overrides applied together", func(t *testing.T) {
