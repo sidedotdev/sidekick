@@ -47,3 +47,6 @@ improvements for future debugging sessions to leverage.
 You may freely `go run ./scripts/*` to run any scripts in the `scripts`
 directory to aid in debugging or verifying changes. You must always verify
 changes when possible.
+
+Do NOT use the `temporal` command, instead favor our custom scripts or writing
+new ones as needed.
