@@ -1340,8 +1340,9 @@ func (ctrl *Controller) resetParentTaskWorkflow(ctx context.Context, workspaceId
 	// The child signals its parent by workflow ID (no run ID), so the new
 	// execution will receive signals from the reset child.
 	_, err = ctrl.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:        taskWfId,
-		TaskQueue: ctrl.temporalTaskQueue,
+		ID:                  taskWfId,
+		TaskQueue:           ctrl.temporalTaskQueue,
+		WorkflowTaskTimeout: dev.FlowWorkflowTaskTimeout,
 	}, dev.TaskWorkflow, dev.TaskWorkflowInput{
 		WorkspaceId:    workspaceId,
 		TaskId:         flow.ParentId,

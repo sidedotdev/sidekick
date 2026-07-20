@@ -7,10 +7,20 @@ import (
 	"sidekick/flow_action"
 	"sidekick/utils"
 	"strings"
+	"time"
 
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/workflow"
 )
+
+// FlowWorkflowTaskTimeout extends the default 10s workflow task timeout for
+// task and flow workflows. On a sticky cache miss, a single workflow task must
+// replay the entire history within this window; long-lived flows accumulate
+// tens of thousands of events, and once replay exceeds the timeout the
+// workflow falls into a perpetual workflow-task retry loop that starves the
+// worker. The server caps this value at 120s
+// (common.MaxWorkflowTaskStartToCloseTimeout).
+const FlowWorkflowTaskTimeout = time.Minute
 
 type TaskWorkflowInput struct {
 	WorkspaceId string
@@ -63,6 +73,9 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 			childOptions.Memo = map[string]interface{}{
 				"sidekickVersion": sidekickVersionSideEffect(ctx),
 			}
+		}
+		if workflow.GetVersion(ctx, "flow-workflow-task-timeout", workflow.DefaultVersion, 1) == 1 {
+			childOptions.WorkflowTaskTimeout = FlowWorkflowTaskTimeout
 		}
 		childCtx := workflow.WithChildOptions(ctx, childOptions)
 

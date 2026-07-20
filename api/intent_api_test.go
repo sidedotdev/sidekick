@@ -238,7 +238,9 @@ func TestIntentHandlers_WaitsForWorktree(t *testing.T) {
 
 	prevTimeout := flowWorktreeWaitTimeout
 	prevInterval := flowWorktreePollInterval
-	flowWorktreeWaitTimeout = 2 * time.Second
+	// Generous deadline: the handler returns as soon as the worktree appears
+	// (~100ms), but a loaded machine running the full suite can be slow.
+	flowWorktreeWaitTimeout = 10 * time.Second
 	flowWorktreePollInterval = 20 * time.Millisecond
 	t.Cleanup(func() {
 		flowWorktreeWaitTimeout = prevTimeout

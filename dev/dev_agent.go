@@ -51,8 +51,9 @@ func TaskWorkflowId(taskId string) string {
 
 func (ia DevAgent) HandleNewTask(ctx context.Context, task *domain.Task) error {
 	options := client.StartWorkflowOptions{
-		ID:        TaskWorkflowId(task.Id),
-		TaskQueue: ia.TemporalTaskQueue,
+		ID:                  TaskWorkflowId(task.Id),
+		TaskQueue:           ia.TemporalTaskQueue,
+		WorkflowTaskTimeout: FlowWorkflowTaskTimeout,
 		Memo: map[string]interface{}{
 			"sidekickVersion": common.GetBuildCommitSha(),
 		},

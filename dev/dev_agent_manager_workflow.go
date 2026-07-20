@@ -333,6 +333,9 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 			"sidekickVersion": sidekickVersionSideEffect(ctx),
 		}
 	}
+	if workflow.GetVersion(ctx, "flow-workflow-task-timeout", workflow.DefaultVersion, 1) == 1 {
+		childOptions.WorkflowTaskTimeout = FlowWorkflowTaskTimeout
+	}
 	childCtx := workflow.WithChildOptions(ctx, childOptions)
 
 	// TODO consider creating the requested workflow in an activity and making

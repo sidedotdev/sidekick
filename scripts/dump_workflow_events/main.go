@@ -311,6 +311,58 @@ func main() {
 					}
 				}
 			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_SCHEDULED:
+			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskScheduledEventAttributes()
+				fmt.Printf("%s WorkflowTaskScheduled queue=%q kind=%s attempt=%d\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetTaskQueue().GetName(),
+					attrs.GetTaskQueue().GetKind(),
+					attrs.GetAttempt())
+			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_STARTED:
+			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskStartedEventAttributes()
+				fmt.Printf("%s WorkflowTaskStarted identity=%q historySizeBytes=%d suggestContinueAsNew=%t\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetIdentity(),
+					attrs.GetHistorySizeBytes(),
+					attrs.GetSuggestContinueAsNew())
+			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED:
+			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskCompletedEventAttributes()
+				fmt.Printf("%s WorkflowTaskCompleted scheduled=%d started=%d identity=%q\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetScheduledEventId(),
+					attrs.GetStartedEventId(),
+					attrs.GetIdentity())
+			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_TIMED_OUT:
+			if eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskTimedOutEventAttributes()
+				fmt.Printf("%s WorkflowTaskTimedOut scheduled=%d started=%d timeoutType=%s\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetScheduledEventId(),
+					attrs.GetStartedEventId(),
+					attrs.GetTimeoutType())
+			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_FAILED:
+			if eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskFailedEventAttributes()
+				fmt.Printf("%s WorkflowTaskFailed scheduled=%d started=%d cause=%s identity=%q\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetScheduledEventId(),
+					attrs.GetStartedEventId(),
+					attrs.GetCause(),
+					attrs.GetIdentity())
+				if attrs.GetFailure() != nil {
+					fmt.Printf("    Failure: %s\n", attrs.GetFailure().GetMessage())
+					if attrs.GetFailure().GetCause() != nil {
+						fmt.Printf("    Cause: %s\n", attrs.GetFailure().GetCause().GetMessage())
+					}
+				}
+			}
 		default:
 			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
 				fmt.Printf("%d %s\n", eid, event.EventType.String())

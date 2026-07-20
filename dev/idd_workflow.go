@@ -563,6 +563,9 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			"sidekickVersion": sidekickVersionSideEffect(dCtx),
 		}
 	}
+	if workflow.GetVersion(dCtx, "flow-workflow-task-timeout", workflow.DefaultVersion, 1) == 1 {
+		childOptions.WorkflowTaskTimeout = FlowWorkflowTaskTimeout
+	}
 	childCtx := workflow.WithChildOptions(dCtx, childOptions)
 	requirements := renderIntentRequirements(reqInfo)
 	var childFuture workflow.ChildWorkflowFuture
