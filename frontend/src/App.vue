@@ -10,6 +10,7 @@ import BoardIcon from './components/icons/BoardIcon.vue'
 import ArchiveIcon from './components/icons/ArchiveIcon.vue'
 import ProjectsIcon from './components/icons/ProjectsIcon.vue'
 import PlusIcon from './components/icons/PlusIcon.vue'
+import SmartphoneIcon from './components/icons/SmartphoneIcon.vue'
 import ShortcutTooltip from './components/ShortcutTooltip.vue'
 import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
 
@@ -186,6 +187,9 @@ onUnmounted(() => {
         </ShortcutTooltip>
         <ShortcutTooltip label="New Space">
           <RouterLink to="/workspaces/new" class="nav-icon-link" aria-label="New Space"><PlusIcon /></RouterLink>
+        </ShortcutTooltip>
+        <ShortcutTooltip label="Remote Control">
+          <RouterLink to="/remote-control" class="nav-icon-link" aria-label="Remote Control"><SmartphoneIcon /></RouterLink>
         </ShortcutTooltip>
       </nav>
     </div>

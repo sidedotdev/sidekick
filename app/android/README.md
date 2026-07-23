@@ -5,23 +5,68 @@ It pairs with a server by scanning a QR code, connects over iroh, discovers
 workspaces, and displays their tasks. The app uses state hoisting,
 unidirectional data flow, injected dispatchers, and package-by-feature.
 
-## Toolchain / SDK setup (headless)
+## Toolchain / SDK setup
 
-Everything builds and tests from the CLI — no Android Studio, no `@Preview`/Live
-Edit at runtime, no emulator required for the fast loop.
+Everything builds and tests from the CLI — no Android Studio required, no
+`@Preview`/Live Edit at runtime, no emulator required for the fast loop.
 
 - **JDK**: run the Gradle daemon on JDK 21. `java -version` should report 21.
-- **Android SDK** (headless): download the latest `commandline-tools`, unzip to
-  `$ANDROID_HOME/cmdline-tools/latest`, then:
+- **Android SDK**: either reuse Android Studio's SDK or install one headlessly
+  (see below). In both cases, point `ANDROID_HOME` at the SDK root and persist
+  it (plus the `PATH` additions) in your shell profile:
 
   ```sh
-  yes | sdkmanager --licenses
-  sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+  export ANDROID_HOME="$HOME/Android/Sdk"  # see below for the actual path
+  export ANDROID_SDK_ROOT="$ANDROID_HOME"
+  export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
   ```
 
-  Use the current stable platform/build-tools if 36 is no longer latest. Export
-  `ANDROID_HOME` and `ANDROID_SDK_ROOT`, add them to `PATH`, persist to the shell
-  profile, and write `local.properties` with `sdk.dir=$ANDROID_HOME`.
+  Gradle finds the SDK via `ANDROID_HOME`, or via `local.properties` in
+  `app/android` (which takes precedence — check it if the build picks up the
+  wrong SDK):
+
+  ```sh
+  echo "sdk.dir=$ANDROID_HOME" > local.properties
+  ```
+
+### Option A: reuse Android Studio's SDK
+
+If Android Studio is installed, it has already downloaded an SDK. Set
+`ANDROID_HOME` to its location — `$HOME/Library/Android/sdk` on macOS,
+`$HOME/Android/Sdk` on Linux (double-check under **Settings → Languages &
+Frameworks → Android SDK**). From that same SDK Manager screen, under the
+**SDK Tools** tab, install "Android SDK Command-line Tools (latest)" if
+`sdkmanager` is missing and "Android SDK Platform-Tools" if `adb` is missing,
+then use `sdkmanager` as below to add any missing platform/build-tools
+versions.
+
+### Option B: headless install (no Android Studio)
+
+1. Pick an SDK location and export the variables above with that path, e.g.
+   `export ANDROID_HOME="$HOME/Android/Sdk"`. Do not point it inside the repo.
+2. Download the latest "command line tools only" package from
+   [developer.android.com](https://developer.android.com/studio#command-line-tools-only)
+   and unzip it so that `sdkmanager` ends up at
+   `$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager` (the zip extracts a
+   `cmdline-tools` directory — rename/move it to `latest` inside
+   `$ANDROID_HOME/cmdline-tools/`).
+3. Accept licenses and install the SDK components:
+
+   ```sh
+   yes | sdkmanager --licenses
+   sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+   ```
+
+   Use the current stable platform/build-tools if 36 is no longer latest.
+
+If `sdkmanager: command not found`, verify that
+`$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager` exists and that directory
+is on your `PATH` (open a new shell after editing your profile).
+
+If `adb: command not found`, verify that `$ANDROID_HOME/platform-tools/adb`
+exists and that directory is on your `PATH`. If the file is missing, install
+platform-tools with `sdkmanager "platform-tools"` (or via Android Studio's
+SDK Manager under **SDK Tools → Android SDK Platform-Tools**).
 
 ## Remote access stack
 
@@ -59,6 +104,39 @@ device:
   ```
 
 Build cache + configuration cache keep both snappy.
+
+## Install on a device
+
+To try the app out as a developer, install a debug build on an Android device
+(Android 7.0 / API 24+):
+
+1. Complete the [toolchain setup](#toolchain--sdk-setup) above. This includes
+   `adb`, which comes from the SDK's platform-tools package — see the
+   troubleshooting note in that section if `adb` is not found.
+2. Enable **Developer options** and **USB debugging** on the device, connect it
+   over USB (or use `adb pair` + `adb connect` for wireless debugging), and
+   confirm it shows up in `adb devices`.
+3. Build and install the debug APK from `app/android`:
+
+   ```sh
+   ./gradlew :app:installDebug
+   ```
+
+   Alternatively, `./gradlew :app:assembleDebug` produces
+   `app/build/outputs/apk/debug/app-debug.apk`, which can be sideloaded with
+   `adb install -r`.
+
+The app installs as **Sidekick**. To pair it with a server:
+
+1. Start the sidekick server (`side start`, or the development backend from
+   [CONTRIBUTING.md](../../CONTRIBUTING.md)) and open the web UI.
+2. Click the **Remote Control** icon (a basic smartphone) in the left sidebar,
+   enter a device name, and generate a pairing code. The QR code is displayed
+   right in the web app. It embeds a one-time token, so generate a fresh code
+   if it is lost before scanning.
+3. Open the app, tap **Scan pairing code**, grant camera access, and scan the
+   QR code from the screen. The connection runs over iroh, so the device does
+   not need to be on the same network as the server.
 
 ## On-device / e2e tests
 

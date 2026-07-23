@@ -11,6 +11,7 @@ import EvalDataValidatorView from '@/views/EvalDataValidatorView.vue'
 import IntentCanvasView from '@/views/IntentCanvasView.vue'
 import ProjectsView from '@/views/ProjectsView.vue'
 import ProjectFormView from '@/views/ProjectFormView.vue'
+import RemoteControlView from '@/views/RemoteControlView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -74,6 +75,11 @@ const router = createRouter({
       path: '/archived-tasks',
       name: 'archived-tasks',
       component: ArchivedTasksView,
+    },
+    {
+      path: '/remote-control',
+      name: 'remote-control',
+      component: RemoteControlView,
     },
     {
       path: '/blocked',
