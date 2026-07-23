@@ -8,6 +8,7 @@ import Select from 'primevue/select'
 import GearIcon from './components/icons/GearIcon.vue'
 import BoardIcon from './components/icons/BoardIcon.vue'
 import ArchiveIcon from './components/icons/ArchiveIcon.vue'
+import ProjectsIcon from './components/icons/ProjectsIcon.vue'
 import PlusIcon from './components/icons/PlusIcon.vue'
 import ShortcutTooltip from './components/ShortcutTooltip.vue'
 import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
@@ -176,6 +177,9 @@ onUnmounted(() => {
       <nav class="container">
         <ShortcutTooltip label="Board" :shortcut="isMac ? '⌘B' : 'Ctrl+B'">
           <RouterLink to="/kanban" class="nav-icon-link" aria-label="Board"><BoardIcon /></RouterLink>
+        </ShortcutTooltip>
+        <ShortcutTooltip label="Projects">
+          <RouterLink to="/projects" class="nav-icon-link" aria-label="Projects"><ProjectsIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="Archived Tasks">
           <RouterLink to="/archived-tasks" class="nav-icon-link" aria-label="Archived Tasks"><ArchiveIcon /></RouterLink>

@@ -311,3 +311,19 @@ export function extractToolCallArguments(parsedResult: any): string | null {
   }
   return parsedResult.toolCalls?.[0]?.arguments ?? null;
 }
+
+export type ProjectPriority = 'none' | 'low' | 'medium' | 'high' | 'urgent'
+
+// Ordered from most to least urgent, matching backend sort buckets.
+export const allProjectPriorities: ProjectPriority[] = ['urgent', 'high', 'medium', 'low', 'none']
+
+export interface Project {
+  workspaceId: string
+  id: string
+  title: string
+  description?: string
+  priority: ProjectPriority
+  rank?: string
+  created: string
+  updated: string
+}

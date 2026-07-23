@@ -14,6 +14,26 @@ intent_links:
       - api/project_api.go
       - api/project_api_test.go
       - api/api.go:DefineRoutes
+  - intent: "#ordering"
+    code:
+      - frontend/src/lib/rank.ts
+      - frontend/src/lib/__tests__/rank.spec.ts
+      - frontend/src/lib/projects.ts
+      - frontend/src/lib/__tests__/projects.spec.ts
+  - intent: "#frontend"
+    code:
+      - frontend/src/lib/models.ts
+      - frontend/src/router/index.ts:router
+  - intent: "#createedit-project-page"
+    code:
+      - frontend/src/views/ProjectFormView.vue
+      - frontend/src/views/__tests__/ProjectFormView.spec.ts
+  - intent: "#projects-list-page"
+    code:
+      - frontend/src/views/ProjectsView.vue
+      - frontend/src/views/__tests__/ProjectsView.spec.ts
+      - frontend/src/App.vue
+      - frontend/src/components/icons/ProjectsIcon.vue
 ---
 # Projects
 
