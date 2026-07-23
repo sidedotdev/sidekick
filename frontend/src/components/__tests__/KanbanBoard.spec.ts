@@ -116,6 +116,31 @@ describe('KanbanBoard', () => {
       expect(tasksIn(2).sort()).toEqual(['3', '4'])
     })
 
+    it('refetches projects when the workspace changes', async () => {
+      const wrapper = await mountBoard({}, projects)
+      expect(wrapper.findAll('.project-group').length).toBe(3)
+
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+      fetchMock.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            projects: [
+              { id: 'project_9', workspaceId: 'other-workspace-id', title: 'Gamma', priority: 'none' },
+            ],
+          }),
+        } as Response)
+      )
+
+      store.workspaceId = 'other-workspace-id'
+      await flushPromises()
+
+      expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/workspaces/other-workspace-id/projects')
+      const groups = wrapper.findAll('.project-group')
+      expect(groups.length).toBe(2)
+      expect(groups.at(0)!.find('.project-group-header').text()).toBe('Gamma')
+    })
+
     it('renders projects with zero tasks as empty groups', async () => {
       const wrapper = await mountBoard({}, projects)
       const groups = wrapper.findAll('.project-group')
@@ -134,31 +159,27 @@ describe('KanbanBoard', () => {
       expect(wrapper.find('.kanban-column-group').exists()).toBe(true)
     })
 
-    it('opens the task modal with the project preselected when adding from a project group', async () => {
+    it('opens the task modal without a project when adding from the top column headings', async () => {
       const wrapper = await mountBoard({}, projects)
 
-      const groups = wrapper.findAll('.project-group')
-      await groups.at(0)!.findAll('.new-task')
-        .find(button => button.text().includes('Draft Task'))!
-        .trigger('click')
-
-      const modal = wrapper.findComponent(TaskModal)
-      expect(modal.exists()).toBe(true)
-      expect(modal.props('task')!.projectId).toBe('project_1')
-      expect(modal.props('task')!.agentType).toBe('human')
-    })
-
-    it('opens the task modal without a project when adding from the everything else group', async () => {
-      const wrapper = await mountBoard({}, projects)
-
-      const groups = wrapper.findAll('.project-group')
-      await groups.at(2)!.findAll('.new-task')
-        .find(button => button.text().includes('Draft Task'))!
-        .trigger('click')
+      const addButtons = wrapper.findAll('.board-column-headings .mini-button')
+      expect(addButtons.length).toBe(2)
+      await addButtons.at(0)!.trigger('click')
 
       const modal = wrapper.findComponent(TaskModal)
       expect(modal.exists()).toBe(true)
       expect(modal.props('task')!.projectId).toBeUndefined()
+      expect(modal.props('task')!.agentType).toBe('human')
+    })
+
+    it('opens the task modal for the AI queue when adding from the top column headings', async () => {
+      const wrapper = await mountBoard({}, projects)
+
+      await wrapper.findAll('.board-column-headings .mini-button').at(1)!.trigger('click')
+
+      const modal = wrapper.findComponent(TaskModal)
+      expect(modal.exists()).toBe(true)
+      expect(modal.props('task')!.agentType).toBe('llm')
     })
 
     it('shows the column headings once at the top instead of repeating them per group', async () => {
@@ -192,22 +213,19 @@ describe('KanbanBoard', () => {
       expect(columnHeadingTexts[2]).toContain('Finished')
     })
 
-    it('renders empty project groups compactly, with no column headings', async () => {
-      const wrapper = await mountBoard({}, projects)
-
-      const group = wrapper.findAll('.project-group').at(0)!
-      expect(group.find('.kanban-column-group').classes()).toContain('compact')
-      expect(group.find('.kanban-column h2').exists()).toBe(false)
-    })
-
-    it('does not render groups with tasks compactly', async () => {
+    it('renders grouped sections without column headings or add controls', async () => {
       const tasks = [
         { id: '1', agentType: 'human', status: 'to_do', projectId: 'project_1' },
       ] as FullTask[]
       const wrapper = await mountBoard({ tasks }, projects)
 
-      const group = wrapper.findAll('.project-group').at(0)!
-      expect(group.find('.kanban-column-group').classes()).not.toContain('compact')
+      const groups = wrapper.findAll('.project-group')
+      expect(groups.length).toBe(3)
+      groups.forEach(group => {
+        expect(group.find('.kanban-column-group').classes()).toContain('headingless')
+        expect(group.find('.kanban-column h2').exists()).toBe(false)
+        expect(group.find('.kanban-column .new-task').exists()).toBe(false)
+      })
     })
 
     it('shows the project icon in project group headers', async () => {
@@ -323,8 +341,7 @@ describe('KanbanBoard', () => {
 
     const findArchiveButton = (wrapper: VueWrapper, groupIndex: number) =>
       wrapper.findAll('.project-group').at(groupIndex)!
-        .findAll('.new-task.mini-button')
-        .find(button => button.text() === '📦')!
+        .find('.project-group-archive')
 
     const archiveCalls = () =>
       (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls

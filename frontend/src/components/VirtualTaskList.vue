@@ -122,7 +122,18 @@ onUnmounted(() => {
   position: relative;
   z-index: 1;
 }
+/* Sibling lists are equal stacking contexts painted in DOM order, so the list
+   owning the hovered card must be raised for its expansion to reach across
+   lists in later groups. */
+.virtual-task-list:has(.virtual-task-card-container:hover) {
+  z-index: 10;
+}
+.virtual-task-card-container {
+  z-index: 0;
+}
+/* Each transformed row is its own stacking context, so the hovered row must
+   be raised for its expanded card to paint over later sibling rows. */
 .virtual-task-card-container:hover {
-  z-index: 1; /* hovering allow rendering over next ones */
+  z-index: 10;
 }
 </style>

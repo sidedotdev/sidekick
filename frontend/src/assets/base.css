@@ -1,6 +1,8 @@
 /* non-color variables */
 :root {
   --kanban-gap: 0.5rem;
+  /* shared rounding for kanban surfaces: columns, group headers, task cards */
+  --kanban-radius: 0.375rem;
   --task-pad: 1.2rem;
   --section-gap: 160px;
   --font-size: 15px;

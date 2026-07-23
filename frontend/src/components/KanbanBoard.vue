@@ -6,6 +6,11 @@
     </div>
   </div>
   <div class="kanban-board">
+    <div class="column-backdrops" aria-hidden="true">
+      <div></div>
+      <div></div>
+      <div></div>
+    </div>
     <div v-if="isSearchVisible" class="search-container">
       <input
         ref="searchInputRef"
@@ -17,8 +22,14 @@
       <button class="search-clear" @click="clearSearch" title="Clear search">×</button>
     </div>
     <div v-if="projects.length > 0" class="board-column-headings">
-      <h2>You</h2>
-      <h2>AI Sidekick</h2>
+      <h2>
+        You
+        <button type="button" class="mini-button" title="Draft task" @click="addTask('human')">+</button>
+      </h2>
+      <h2>
+        AI Sidekick
+        <button type="button" class="mini-button" title="Queue task" @click="addTask('llm')">+</button>
+      </h2>
       <h2>Finished</h2>
     </div>
     <section
@@ -43,6 +54,16 @@
           <ProjectsIcon class="project-group-icon" />
           <span>{{ project.title }}</span>
         </button>
+        <div class="project-group-finished-segment">
+          <button
+            v-if="hasFinishedTasks(tasksByProjectId[project.id] ?? [])"
+            type="button"
+            class="project-group-archive"
+            title="Archive all finished tasks in this project"
+            aria-label="Archive all finished tasks in this project"
+            @click="confirmArchiveFinished(project)"
+          ><ArchiveIcon /></button>
+        </div>
       </h3>
       <KanbanColumnGroup
         v-show="isGroupExpanded(project.id)"
@@ -74,6 +95,16 @@
         >
           <span>Everything else</span>
         </button>
+        <div class="project-group-finished-segment">
+          <button
+            v-if="hasFinishedTasks(unassignedTasks)"
+            type="button"
+            class="project-group-archive"
+            title="Archive all finished tasks not in a project"
+            aria-label="Archive all finished tasks not in a project"
+            @click="confirmArchiveFinished()"
+          ><ArchiveIcon /></button>
+        </div>
       </h3>
       <KanbanColumnGroup
         v-show="isGroupExpanded(EVERYTHING_ELSE_KEY)"
@@ -102,6 +133,7 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Project, Task, TaskStatus } from '../lib/models'
 import KanbanColumnGroup from './KanbanColumnGroup.vue'
+import ArchiveIcon from './icons/ArchiveIcon.vue'
 import ProjectsIcon from './icons/ProjectsIcon.vue'
 import TaskModal from './TaskModal.vue'
 import { store } from '../lib/store'
@@ -146,15 +178,28 @@ const filteredTasks = computed(() => {
 const projects = ref<Project[]>([])
 
 const fetchProjects = async () => {
+  const workspaceId = store.workspaceId
+  if (!workspaceId) {
+    projects.value = []
+    return
+  }
   try {
-    const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/projects`)
+    const response = await fetch(`/api/v1/workspaces/${workspaceId}/projects`)
     if (!response.ok) return
     const data = await response.json()
-    projects.value = data.projects ?? []
+    // Ignore out-of-order responses after switching workspaces
+    if (store.workspaceId === workspaceId) {
+      projects.value = data.projects ?? []
+    }
   } catch {
     // Without projects, all tasks simply show in the "everything else" group
   }
 }
+
+watch(() => store.workspaceId, () => {
+  projects.value = []
+  fetchProjects()
+}, { immediate: true })
 
 const tasksByProjectId = computed(() => {
   const grouped: Record<string, FullTask[]> = {}
@@ -174,6 +219,10 @@ const unassignedTasks = computed(() => {
   const projectIds = new Set(projects.value.map(project => project.id))
   return filteredTasks.value.filter(task => !task.projectId || !projectIds.has(task.projectId))
 })
+
+// Finished-column tasks determine whether a group's archive action is offered
+const hasFinishedTasks = (tasks: FullTask[]): boolean =>
+  tasks.some(task => task.agentType === 'none')
 
 // Collapse state for the "everything else" group is tracked under this
 // reserved key, which can never collide with a real project id
@@ -356,7 +405,6 @@ const clearSearch = () => {
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('keydown', handleEscape)
-  fetchProjects()
 })
 
 onUnmounted(() => {
@@ -405,46 +453,127 @@ async function confirmArchiveFinished(project?: Project) {
   flex-direction: column;
   gap: 0;
   /*font-family: 'Roboto', sans-serif;*/
-  background-color: var(--color-background);
+  /* transparent so the column gaps show the page background behind the board;
+     the columns' own color comes from the backdrop strips */
+  background-color: transparent;
   transition: background-color 0.5s, color 0.5s;
 
-  --color-column-background: #181818;
+  --kanban-column-gap: 0.75rem;
   margin-bottom: 2rem;
 }
-@media (prefers-color-scheme: light) {
-  .kanban-board {
-    --color-column-background: #e5e5e5;
-  }
+
+.kanban-board {
+  padding-top: 0.75rem;
+  position: relative;
+  /* creates a stacking context so the separator lines below can sit above the
+     board background yet behind all content */
+  z-index: 0;
+}
+
+/* Continuous column strips running the full height of the board; group
+   headers and task cards visually float on top of them */
+.column-backdrops {
+  position: absolute;
+  inset: 0;
+  /* starts at the padded content edge so the rounded strip tops are visible
+     instead of butting up against the view header */
+  top: 0.75rem;
+  display: flex;
+  gap: var(--kanban-column-gap);
+  z-index: -1;
+}
+
+.column-backdrops > div {
+  flex: 1;
+  background: var(--color-background);
+  border-radius: var(--kanban-radius);
 }
 
 .board-column-headings {
   display: flex;
   width: 100%;
+  gap: var(--kanban-column-gap);
   margin-bottom: 0.5rem;
 }
 
 .board-column-headings h2 {
   flex: 1;
   width: 33.3%;
+  margin: 0;
   /* lines up with the kanban column padding and task card padding */
   padding-left: calc(var(--kanban-gap) + var(--task-pad) / 2);
+  padding-right: var(--kanban-gap);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2.1875rem;
   font-family: sans-serif;
   font-weight: 400;
   font-size: 1.2rem;
+  line-height: 1.4;
+}
+
+.board-column-headings .mini-button {
+  font-size: 1.5rem;
+  font-weight: 200;
+  width: 2.1875rem;
+  height: 2.1875rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.3125rem;
+  color: var(--color-text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.board-column-headings h2:hover .mini-button,
+.board-column-headings .mini-button:focus-visible {
+  opacity: 1;
+}
+
+.board-column-headings .mini-button:hover {
+  border-color: var(--color-border-hover);
+  background-color: var(--color-background-hover);
 }
 
 .project-group + .project-group {
-  margin-top: 1.5rem;
+  margin-top: 1rem;
+}
+
+/* A collapsed group is just its header, so only a slim gap follows it */
+.project-group:has(.project-group-header.collapsed) + .project-group {
+  margin-top: 0.375rem;
 }
 
 .project-group-header {
+  display: flex;
+  align-items: stretch;
   font-family: sans-serif;
   font-weight: 500;
-  font-size: 1.1rem;
+  /* matches the task card title size */
+  font-size: 1.05rem;
   color: var(--color-heading);
-  margin-bottom: 0.5rem;
-  background-color: var(--color-background-soft);
-  border-radius: 0.5rem;
+  margin: 0 0 0.5rem;
+  /* matches the task card background in dark mode */
+  background-color: color-mix(in srgb, white 7%, var(--color-background));
+  border-radius: var(--kanban-radius);
+}
+
+@media (prefers-color-scheme: light) {
+  .project-group-header {
+    /* halfway to the mute shade: stands out from the columns without being
+       too heavy */
+    background-color: color-mix(in srgb, var(--color-background-mute) 50%, var(--color-background));
+  }
+}
+
+/* A collapsed group has no body, so it shouldn't reserve any trailing space */
+.project-group-header.collapsed {
+  margin-bottom: 0;
 }
 
 .project-group-toggle {
@@ -453,12 +582,52 @@ async function confirmArchiveFinished(project?: Project) {
   background: transparent;
   border: none;
   padding: 0.375rem 0.75rem;
-  width: 100%;
+  flex: 2;
+  min-width: 0;
   text-align: left;
   display: flex;
   align-items: center;
   cursor: pointer;
   user-select: none;
+}
+
+/* Occupies the header segment above the Finished column, hosting the
+   per-group archive action */
+.project-group-finished-segment {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: var(--kanban-gap);
+}
+
+.project-group-archive {
+  font: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.3125rem;
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 0.125rem 0.375rem;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.project-group-archive svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.project-group-finished-segment:hover .project-group-archive,
+.project-group-archive:focus-visible {
+  opacity: 1;
+}
+
+.project-group-archive:hover {
+  border-color: var(--color-border-hover);
+  background-color: var(--color-background-hover);
 }
 
 .project-group-toggle::before {
@@ -568,5 +737,13 @@ async function confirmArchiveFinished(project?: Project) {
 .search-clear:hover {
   background-color: rgba(255, 255, 255, 0.07);
   border-color: var(--color-border-hover);
+}
+</style>
+
+<style>
+/* Reveal the group's archive action while hovering its Finished column; the
+   column lives inside the child column group, so this can't be scoped. */
+.project-group:has(.kanban-column:nth-child(3):hover) .project-group-archive {
+  opacity: 1;
 }
 </style>

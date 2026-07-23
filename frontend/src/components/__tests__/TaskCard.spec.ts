@@ -28,6 +28,15 @@ const task: FullTask = {
     expect(wrapper.exists()).toBe(true)
   })
 
+  it('wraps the card in a task-card-shell element', () => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task },
+    })
+    const shell = wrapper.find('.task-card-shell')
+    expect(shell.exists()).toBe(true)
+    expect(shell.find('.task-card').exists()).toBe(true)
+  })
+
   it('displays the task title, description, and status', () => {
     const wrapper = shallowMount(TaskCard, {
       props: { task },

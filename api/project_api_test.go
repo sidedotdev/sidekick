@@ -347,3 +347,31 @@ func TestProjectHandlers_RequireWorkspaceId(t *testing.T) {
 		})
 	}
 }
+
+// Route-level coverage: the projects collection must be served directly at
+// /projects (no trailing slash), not via a redirect, since fetch callers and
+// non-browser clients may not follow redirects.
+func TestProjectRoutes_CollectionWithoutTrailingSlash(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
+	workspaceId := "ws_" + ksuid.New().String()
+	baseUrl := "/api/v1/workspaces/" + workspaceId + "/projects"
+
+	body, err := json.Marshal(ProjectRequest{Title: "My Project"})
+	require.NoError(t, err)
+	postRecorder := httptest.NewRecorder()
+	router.ServeHTTP(postRecorder, httptest.NewRequest(http.MethodPost, baseUrl, bytes.NewBuffer(body)))
+	require.Equal(t, http.StatusCreated, postRecorder.Code, postRecorder.Body.String())
+
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, baseUrl, nil))
+	require.Equal(t, http.StatusOK, getRecorder.Code, getRecorder.Body.String())
+
+	var resp struct {
+		Projects []domain.Project `json:"projects"`
+	}
+	require.NoError(t, json.Unmarshal(getRecorder.Body.Bytes(), &resp))
+	require.Len(t, resp.Projects, 1)
+	assert.Equal(t, "My Project", resp.Projects[0].Title)
+}

@@ -1,12 +1,12 @@
 <template>
-  <div class="kanban-column-group" :class="{ compact: isCompact }">
+  <div class="kanban-column-group" :class="{ headingless: !showHeadings }">
     <div
       v-for="agentType in ['human', 'llm', 'none'] as const"
       :key="agentType"
       class="kanban-column"
     >
-      <h2 v-if="showHeadings || tasks.length > 0" :class="{ 'buttons-only': !showHeadings }">
-        <template v-if="showHeadings">{{ columnNames[agentType] }}</template>
+      <h2 v-if="showHeadings">
+        {{ columnNames[agentType] }}
         <button v-if="agentType !== 'none'" class="new-task mini-button" @click="emit('addTask', agentType)">+</button>
         <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="emit('archiveFinished')">📦</button>
       </h2>
@@ -19,11 +19,11 @@
         @updated="emit('refresh')"
         @error="(e: any) => emit('error', e)"
       />
-      <button class="new-task" v-if="agentType == 'human'" @click="emit('addTask', agentType)">
+      <button class="new-task" v-if="showHeadings && agentType == 'human'" @click="emit('addTask', agentType)">
         + Draft Task
         <ShortcutHint v-if="newTaskShortcutLabel" :label="newTaskShortcutLabel" />
       </button>
-      <button class="new-task" v-if="agentType == 'llm'" @click="emit('addTask', agentType)">
+      <button class="new-task" v-if="showHeadings && agentType == 'llm'" @click="emit('addTask', agentType)">
         + Queue Task
       </button>
     </div>
@@ -39,16 +39,13 @@ import ShortcutHint from './ShortcutHint.vue'
 const props = withDefaults(defineProps<{
   tasks: FullTask[]
   newTaskShortcutLabel?: string
-  // When headings are shown by the surrounding board instead (project
-  // groups), the per-column headings collapse down to just their buttons
+  // When headings (and their add/archive controls) are rendered once by the
+  // surrounding board instead (project groups), the per-column headings are
+  // omitted and the columns lose their boxed styling
   showHeadings?: boolean
 }>(), {
   showHeadings: true,
 })
-
-// A headingless group with no visible tasks shrinks to just the new-task
-// buttons instead of reserving the usual column height
-const isCompact = computed(() => !props.showHeadings && props.tasks.length === 0)
 
 const emit = defineEmits<{
   (e: 'addTask', agentType: AgentType): void
@@ -89,23 +86,22 @@ const groupedTasks = computed(() => {
 .kanban-column-group {
   display: flex;
   width: 100%;
+  gap: var(--kanban-column-gap, 0.75rem);
 }
 
+/* Columns draw no borders or background of their own: the board renders
+   continuous full-height backdrop strips behind them instead */
 .kanban-column {
   flex: 1;
   width: 33.3%;
-  border: 1px solid var(--color-border);
-  background-color: var(--color-background);
   padding: var(--kanban-gap);
   transition: box-shadow 0.3s ease;
   font-family: sans-serif;
   min-height: 25rem;
 }
-.kanban-column + .kanban-column {
-  border-left: 0;
-}
 
-.kanban-column-group.compact .kanban-column {
+/* Inside project groups, columns size to their content */
+.kanban-column-group.headingless .kanban-column {
   min-height: 0;
 }
 
@@ -118,10 +114,6 @@ h2 {
   justify-content: space-between;
   font-weight: 400;
   font-size: 1.2rem;
-}
-
-h2.buttons-only {
-  justify-content: flex-end;
 }
 
 .new-task {

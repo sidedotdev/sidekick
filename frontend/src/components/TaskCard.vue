@@ -1,25 +1,27 @@
 <template>
-  <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
-    <div class="actions">
-      <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
-      <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
-      <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
-      <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
-      <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask"><TrashIcon/></button>
-    </div>
+  <div class="task-card-shell">
+    <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
+      <div class="actions">
+        <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
+        <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
+        <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
+        <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
+        <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask"><TrashIcon/></button>
+      </div>
 
-    <h3 v-if="task.title" class="task-title">{{ task.title }}</h3>
-    <p class="task-description" @mouseleave.self="handleDescriptionBlur">{{ task.description }}</p>
-    <div class="card-footer">
-      <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
-      <span v-if="task.archived" class="archived-label">Archived</span>
-    </div>
+      <h3 v-if="task.title" class="task-title">{{ task.title }}</h3>
+      <p class="task-description" @mouseleave.self="handleDescriptionBlur">{{ task.description }}</p>
+      <div class="card-footer">
+        <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
+        <span v-if="task.archived" class="archived-label">Archived</span>
+      </div>
 
-    <div v-if="envIndicator || llmPresetLabel" class="card-meta">
-      <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
-        <component :is="envIndicator.icon"/>
-      </span>
-      <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
+      <div v-if="envIndicator || llmPresetLabel" class="card-meta">
+        <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
+          <component :is="envIndicator.icon"/>
+        </span>
+        <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
+      </div>
     </div>
   </div>
 
@@ -272,14 +274,20 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   }
 }
 
+/* Keeps virtualized row measurements stable while the hovered card expands. */
+.task-card-shell {
+  position: relative;
+  height: 7.5rem;
+}
+
 .task-card {
   border: 1px solid var(--task-card-border);
   background-color: var(--task-card-background);
-  border-radius: 2px;
+  border-radius: var(--kanban-radius);
   padding: calc(var(--task-pad) / 2);
   transition: box-shadow 0.3s ease;
   font-family: sans-serif;
-  height: 7.5rem;
+  height: 100%;
   overflow: hidden;
   position: relative;
 }
@@ -288,7 +296,12 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   box-shadow: 0 2px 5px var(--action-box-shadow);
   background-color: var(--task-card-hover-background);
   cursor: pointer;
-  overflow: visible;
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: auto;
+  min-height: 100%;
+  /* room for the absolutely positioned footer/meta row */
+  padding-bottom: calc(var(--task-pad) / 2 + 1.5rem);
   z-index: 10;
 }
 
@@ -349,7 +362,6 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   display: block;
   -webkit-line-clamp: unset;
   overflow: visible;
-  background-color: var(--task-card-hover-background);
 }
 
 .task-description {
@@ -377,17 +389,10 @@ const handleDescriptionBlur = (event: FocusEvent) => {
 .task-card:hover .task-description {
   display: block;
   -webkit-line-clamp: unset;
-  position: relative;
-  z-index: 1;
-  max-height: 24rem;
+  /* The half line makes it obvious that overflowing text was cut off. */
+  max-height: 18.5lh;
   /* TODO: only engage scroll capture when user starts scrolling within this element */
   overflow-y: auto;
-  background-color: var(--task-card-hover-background);
-  padding: calc(1px + var(--task-pad) / 2);
-  margin: calc(-1px - var(--task-pad) / 2);
-  padding-top: 0;
-  margin-top: 0;
-  border-radius: 0 0 2px 2px;
 }
 
 .card-footer {
