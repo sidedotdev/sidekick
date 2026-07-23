@@ -19,6 +19,10 @@ intent_links:
       - frontend/src/components/TaskModal.vue
       - frontend/src/components/__tests__/TaskModal.spec.ts
       - frontend/src/components/TaskCard.vue:copiedTask
+      - frontend/src/components/KanbanBoard.vue
+      - frontend/src/components/KanbanColumnGroup.vue
+      - frontend/src/components/VirtualTaskList.vue
+      - frontend/src/components/__tests__/KanbanBoard.spec.ts
 ---
 # Tasks
 

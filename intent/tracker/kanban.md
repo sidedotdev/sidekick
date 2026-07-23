@@ -1,3 +1,13 @@
+---
+intent_links:
+  - intent: "#projects"
+    code:
+      - api/api.go:ArchiveFinishedTasksHandler
+      - api/api_test.go:TestArchiveFinishedTasksHandler_ProjectFilter
+      - frontend/src/components/KanbanBoard.vue
+      - frontend/src/components/KanbanColumnGroup.vue
+      - frontend/src/components/__tests__/KanbanBoard.spec.ts
+---
 # Kanban
 
 Note: actual kanban code predates this intent file. Thus this intent file is

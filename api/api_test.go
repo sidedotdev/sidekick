@@ -1913,6 +1913,105 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 	assert.Nil(t, nonArchivedTask.Archived)
 }
 
+func TestArchiveFinishedTasksHandler_ProjectFilter(t *testing.T) {
+	t.Parallel()
+
+	projectA := "project_" + ksuid.New().String()
+	projectB := "project_" + ksuid.New().String()
+
+	newTask := func(workspaceId, projectId string, status domain.TaskStatus) domain.Task {
+		return domain.Task{
+			WorkspaceId: workspaceId,
+			Id:          "task_" + ksuid.New().String(),
+			Description: "task",
+			AgentType:   domain.AgentTypeLLM,
+			Status:      status,
+			ProjectId:   projectId,
+		}
+	}
+
+	testCases := []struct {
+		name          string
+		rawQuery      string
+		archivedCount int
+		// index into the tasks slice below of tasks expected archived
+		archivedIdx []int
+	}{
+		{
+			name:          "no param archives all finished tasks",
+			rawQuery:      "",
+			archivedCount: 3,
+			archivedIdx:   []int{0, 1, 2},
+		},
+		{
+			name:          "projectId filters to that project's finished tasks",
+			rawQuery:      "projectId=%s",
+			archivedCount: 1,
+			archivedIdx:   []int{0},
+		},
+		{
+			name:          "empty projectId archives only unassigned finished tasks",
+			rawQuery:      "projectId=",
+			archivedCount: 1,
+			archivedIdx:   []int{2},
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := NewMockController(t)
+			workspaceId := "ws_" + ksuid.New().String()
+
+			tasks := []domain.Task{
+				newTask(workspaceId, projectA, domain.TaskStatusComplete),
+				newTask(workspaceId, projectB, domain.TaskStatusFailed),
+				newTask(workspaceId, "", domain.TaskStatusCanceled),
+				newTask(workspaceId, projectA, domain.TaskStatusInProgress),
+			}
+			for _, task := range tasks {
+				require.NoError(t, ctrl.service.PersistTask(context.Background(), task))
+			}
+
+			rawQuery := tc.rawQuery
+			if strings.Contains(rawQuery, "%s") {
+				rawQuery = fmt.Sprintf(rawQuery, projectA)
+			}
+			url := "/workspaces/" + workspaceId + "/tasks/archive_finished"
+			if rawQuery != "" {
+				url += "?" + rawQuery
+			}
+
+			recorder := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(recorder)
+			ginCtx.Request = httptest.NewRequest(http.MethodPost, url, nil)
+			ginCtx.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+			ctrl.ArchiveFinishedTasksHandler(ginCtx)
+			assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+			var result map[string]int
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
+			assert.Equal(t, tc.archivedCount, result["archivedCount"])
+
+			archivedIdx := make(map[int]bool)
+			for _, idx := range tc.archivedIdx {
+				archivedIdx[idx] = true
+			}
+			for i, task := range tasks {
+				persisted, err := ctrl.service.GetTask(context.Background(), workspaceId, task.Id)
+				require.NoError(t, err)
+				if archivedIdx[i] {
+					assert.NotNil(t, persisted.Archived, "task %d should be archived", i)
+				} else {
+					assert.Nil(t, persisted.Archived, "task %d should not be archived", i)
+				}
+			}
+		})
+	}
+}
+
 func TestArchiveTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database

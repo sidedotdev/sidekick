@@ -170,9 +170,12 @@ func (ctrl *Controller) GetModelsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
-// ArchiveFinishedTasksHandler handles the request to archive all finished tasks
+// ArchiveFinishedTasksHandler handles the request to archive all finished
+// tasks. An optional projectId query param limits archiving to tasks assigned
+// to that project; an explicit empty value limits it to unassigned tasks.
 func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
+	projectId, filterByProject := c.GetQuery("projectId")
 
 	// Get all tasks with status 'complete', 'canceled', or 'failed'
 	tasks, err := ctrl.service.GetTasks(c.Request.Context(), workspaceId, []domain.TaskStatus{
@@ -189,6 +192,9 @@ func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	now := time.Now()
 
 	for _, task := range tasks {
+		if filterByProject && task.ProjectId != projectId {
+			continue
+		}
 		task.Archived = &now
 		err := ctrl.service.PersistTask(c.Request.Context(), task)
 		if err != nil {

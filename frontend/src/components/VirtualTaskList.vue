@@ -14,6 +14,8 @@
           transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
         }"
         class="virtual-task-card-container"
+        :draggable="draggable || undefined"
+        @dragstart="(event: DragEvent) => onDragStart(event, tasks[item.index])"
       >
         <TaskCard
           :task="tasks[item.index]"
@@ -36,11 +38,19 @@ const props = withDefaults(defineProps<{
   estimateSize?: number
   gap?: number
   readonly?: boolean
+  draggable?: boolean
 }>(), {
   estimateSize: 130,
   gap: 8,
   readonly: false,
+  draggable: false,
 })
+
+const onDragStart = (event: DragEvent, task: FullTask) => {
+  if (!props.draggable || !event.dataTransfer) return
+  event.dataTransfer.setData('text/plain', task.id)
+  event.dataTransfer.effectAllowed = 'move'
+}
 
 defineOptions({ inheritAttrs: false })
 
