@@ -279,13 +279,14 @@ Pressing the button to start immediately results in these actions:
   case). In the latter situation, the orchestrator is responsible for ensuring
   that there are tasks for every aspect of the diff. A final cleanup subtask to
   ensure the entire intent file is done is acceptable.
-- Titles provided for subtasks must be very short, and not repeat "Implement" or
-  "Update" similar fluff words, just describes the part of intent it's related
-  to in 2-3 words. These titles are always viewed in the context of an intent
-  file, which provides a lot of disambiguating context already.
-- The agent makes sure to either provide very strong interfaces between the
-  subtasks such that they can operate in parallel, or it serializes execution to
-  ensure.
+- Titles are provided by the orchestrator when it kicks off a subtask.
+- The agent is prompted to proide very short titles, and to not repeat
+  "Implement" or "Update" similar fluff words. Instead, they will just describe
+  the subtask in 2-3 words. These titles are always viewed in the context of an
+  intent file, which provides a lot of disambiguating context already.
+- The agent is prompted to either provide very strong interfaces between the
+  subtasks such that they can operate in parallel, or serialize execution to
+  ensure subtasks are done correctly.
 - When subtasks complete, the orchestrator is notified and can take an action,
   such as invoking the next subtask, if it wants to.
 
