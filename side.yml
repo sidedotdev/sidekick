@@ -65,6 +65,7 @@ openshell:
   from: "Dockerfile.openshell"
 
 modal:
+  vm: true
   dockerfile_path: "Dockerfile.modal"
   # Requests are billing floors; usage bursts freely up to the limits (CPU is
   # left unlimited at Modal's minimum 0.125-core request). Memory measured via
