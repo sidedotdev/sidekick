@@ -266,7 +266,7 @@ describe('TaskModal', () => {
     expect(wrapper.emitted('updated')).toBeTruthy()
   })
 
-  it('updates localStorage with last used flow type and env type after form submission', async () => {
+  it('updates global and workspace-scoped defaults after form submission', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     global.fetch = fetchMock
 
@@ -279,7 +279,9 @@ describe('TaskModal', () => {
     await wrapper.find('form').trigger('submit')
 
     expect(localStorage.getItem('lastUsedFlowType')).toBe('planned_dev')
+    expect(localStorage.getItem('lastUsedFlowType_test-workspace-id')).toBe('planned_dev')
     expect(localStorage.getItem('lastUsedEnvType')).toBe('local')
+    expect(localStorage.getItem('lastUsedEnvType_test-workspace-id')).toBe('local')
   })
 
   it('toggles determine requirements checkbox', async () => {

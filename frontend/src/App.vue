@@ -20,7 +20,6 @@ const route = useRoute()
 const applyWorkspaceId = (workspaceId: string) => {
   store.selectWorkspaceId(workspaceId)
   sessionStorage.setItem('selectedWorkspaceId', workspaceId)
-  localStorage.setItem('selectedWorkspaceId', workspaceId)
 }
 
 // Set workspace from query param or storage before child components mount
@@ -30,7 +29,7 @@ if (initialQueryWorkspaceId) {
 } else {
   const storedWorkspaceId = sessionStorage.getItem('selectedWorkspaceId') ?? localStorage.getItem('selectedWorkspaceId')
   if (storedWorkspaceId) {
-    store.selectWorkspaceId(storedWorkspaceId)
+    applyWorkspaceId(storedWorkspaceId)
   }
 }
 
@@ -105,9 +104,7 @@ onMounted(async () => {
     // lexicographically last ID (more recently created)
     const workspaceId = [...workspaces.value].map(w => w.id).sort().reverse()[0]
     if (workspaceId) {
-      store.selectWorkspaceId(workspaceId)
-      sessionStorage.setItem('selectedWorkspaceId', workspaceId)
-      localStorage.setItem('selectedWorkspaceId', workspaceId)
+      applyWorkspaceId(workspaceId)
     }
   }
 })
@@ -142,8 +139,7 @@ const kanbanAndSettingsRoutes = new Set(['kanban', 'workspace'])
 const selectedWorkspace = () => {
   console.log('selectedWorkspace', store.workspaceId)
   if (store.workspaceId) {
-    sessionStorage.setItem('selectedWorkspaceId', store.workspaceId)
-    localStorage.setItem('selectedWorkspaceId', store.workspaceId)
+    applyWorkspaceId(store.workspaceId)
   }
   if (!kanbanAndSettingsRoutes.has(route.name as string)) {
     router.push({ name: 'kanban' })

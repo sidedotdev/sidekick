@@ -126,6 +126,10 @@ import TrashIcon from './icons/TrashIcon.vue'
 import ShortcutHint from './ShortcutHint.vue'
 import { store, type TaskConfigData } from '../lib/store'
 import { useModelConfigPresets } from '../composables/useModelConfigPresets'
+import {
+  loadWorkspacePreference,
+  saveWorkspacePreference,
+} from '../lib/workspacePreferenceStorage'
 import type { Flow, Project, Task, TaskStatus, LLMConfig } from '../lib/models'
 
 const devMode = computed(() => import.meta.env.MODE === 'development')
@@ -173,7 +177,11 @@ const descriptionRef = ref<{ focus: () => void } | null>(null)
 const title = ref(props.task?.title ?? '')
 const titleRef = ref<HTMLInputElement | null>(null)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
-const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
+const flowType = ref(
+  props.task?.flowType
+    || loadWorkspacePreference('lastUsedFlowType', workspaceId.value)
+    || 'basic_dev',
+)
 
 // The Intent Driven flow type drives intent from a title rather than a task description.
 const isIdd = computed(() => flowType.value === 'idd')
@@ -183,14 +191,18 @@ const hasRequiredContent = computed(() =>
   isIdd.value ? !!title.value.trim() : !!description.value.trim()
 )
 const resolveEnvType = (raw: string): string => raw === 'local_git_worktree' ? 'local' : raw
-const envType = ref<string>(resolveEnvType(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local'))
+const envType = ref<string>(resolveEnvType(
+  props.task?.flowOptions?.envType
+    || loadWorkspacePreference('lastUsedEnvType', workspaceId.value)
+    || 'local',
+))
 const getInitialRepoMode = (): string => {
   const taskRepoMode = props.task?.flowOptions?.repoMode
   if (taskRepoMode) return taskRepoMode
   if (props.task?.flowOptions?.envType === 'local_git_worktree') return 'worktree'
   if (props.task?.id && props.task?.flowOptions?.envType === 'local') return 'in_place' // handles legacy persisted tasks without repoMode
 
-  const stored = localStorage.getItem('lastUsedRepoMode')
+  const stored = loadWorkspacePreference('lastUsedRepoMode', workspaceId.value)
   if (stored) return stored
   return 'worktree' // default for new tasks: we're async-first and parallel-by-default
 }
@@ -358,7 +370,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
 }
 
 const existingLlmConfig = props.task?.flowOptions?.configOverrides?.llm as LLMConfig | undefined
-const modelConfigPresetEditor = useModelConfigPresets(existingLlmConfig)
+const modelConfigPresetEditor = useModelConfigPresets(existingLlmConfig, {
+  workspaceId: workspaceId.value,
+})
 const {
   presets,
   selectedPresetValue,
@@ -609,9 +623,9 @@ const startTask = async () => {
   // Mark as clean so close() won't trigger another auto-save
   isDirty.value = false
 
-  localStorage.setItem('lastUsedFlowType', flowType.value)
-  localStorage.setItem('lastUsedEnvType', envType.value)
-  localStorage.setItem('lastUsedRepoMode', repoMode.value)
+  saveWorkspacePreference('lastUsedFlowType', flowType.value, workspaceId.value)
+  saveWorkspacePreference('lastUsedEnvType', envType.value, workspaceId.value)
+  saveWorkspacePreference('lastUsedRepoMode', repoMode.value, workspaceId.value)
 
   if (selectedBranch.value) {
     localStorage.setItem(getLastBranchKey(), selectedBranch.value)

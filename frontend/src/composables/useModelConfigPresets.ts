@@ -54,7 +54,11 @@ export interface ModelConfigPresetEditorState {
 
 export const useModelConfigPresets = (
   initialConfig?: LLMConfig,
-  options: { useDefaultWhenMissing?: boolean; initiallyCustom?: boolean } = {},
+  options: {
+    useDefaultWhenMissing?: boolean
+    initiallyCustom?: boolean
+    workspaceId?: string | null
+  } = {},
 ): ModelConfigPresetEditorState => {
   const presets = ref<ModelPreset[]>(loadPresets())
 
@@ -65,7 +69,7 @@ export const useModelConfigPresets = (
     if (match) return match.id
     if (initialConfig) return 'add_preset'
 
-    const lastSelection = loadLastPresetSelection()
+    const lastSelection = loadLastPresetSelection(options.workspaceId)
     if (lastSelection === 'add_preset') return lastSelection
     if (lastSelection === 'default' && options.useDefaultWhenMissing !== false) return lastSelection
     if (lastSelection && presets.value.some((preset) => preset.id === lastSelection)) return lastSelection
@@ -108,7 +112,7 @@ export const useModelConfigPresets = (
 
   const setSelectedPresetValue = (value: string) => {
     selectedPresetValue.value = value
-    saveLastPresetSelection(value)
+    saveLastPresetSelection(value, options.workspaceId)
   }
 
   const setNewPresetName = (value: string) => {

@@ -51,16 +51,22 @@ describe('model configuration presets', () => {
       },
     ])
 
-    const firstEditor = useModelConfigPresets(undefined)
+    const firstEditor = useModelConfigPresets(undefined, { workspaceId: 'workspace-1' })
     firstEditor.handlePresetChange('zebra')
 
-    const restoredEditor = useModelConfigPresets(undefined)
+    expect(localStorage.getItem('sidekick_last_model_preset_selection')).toBe('zebra')
+    expect(localStorage.getItem('sidekick_last_model_preset_selection_workspace-1')).toBe('zebra')
+
+    localStorage.setItem('sidekick_last_model_preset_selection', 'alpha')
+    const restoredEditor = useModelConfigPresets(undefined, { workspaceId: 'workspace-1' })
+    const fallbackEditor = useModelConfigPresets(undefined, { workspaceId: 'workspace-2' })
 
     expect(restoredEditor.selectedPresetValue.value).toBe('zebra')
     expect(restoredEditor.llmConfig.value.defaults[0]).toMatchObject({
       provider: 'anthropic',
       model: 'claude',
     })
+    expect(fallbackEditor.selectedPresetValue.value).toBe('alpha')
     expect(restoredEditor.presetOptions.value.map((option) => option.label)).toEqual([
       'Default',
       'Alpha models',

@@ -1,4 +1,8 @@
 import type { LLMConfig, ModelConfig } from './models'
+import {
+  loadWorkspacePreference,
+  saveWorkspacePreference,
+} from './workspacePreferenceStorage'
 
 export const PRESETS_STORAGE_KEY = 'sidekick_model_presets'
 export const LAST_PRESET_SELECTION_STORAGE_KEY = 'sidekick_last_model_preset_selection'
@@ -65,20 +69,14 @@ export const invalidatePresetsCache = () => {
   cacheTimestamp = 0
 }
 
-export const loadLastPresetSelection = (): string | null => {
-  try {
-    return localStorage.getItem(LAST_PRESET_SELECTION_STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
+export const loadLastPresetSelection = (workspaceId?: string | null): string | null =>
+  loadWorkspacePreference(LAST_PRESET_SELECTION_STORAGE_KEY, workspaceId)
 
-export const saveLastPresetSelection = (selection: string) => {
-  try {
-    localStorage.setItem(LAST_PRESET_SELECTION_STORAGE_KEY, selection)
-  } catch {
-    // Persisting the selection is optional when storage is unavailable.
-  }
+export const saveLastPresetSelection = (
+  selection: string,
+  workspaceId?: string | null,
+): void => {
+  saveWorkspacePreference(LAST_PRESET_SELECTION_STORAGE_KEY, selection, workspaceId)
 }
 
 export const savePresets = (presets: ModelPreset[]) => {

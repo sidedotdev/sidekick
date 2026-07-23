@@ -128,6 +128,7 @@ const loadConfiguration = async () => {
       editor.value = useModelConfigPresets(config, {
         initiallyCustom: true,
         useDefaultWhenMissing: false,
+        workspaceId: props.workspaceId,
       })
     }
   } catch (error) {
