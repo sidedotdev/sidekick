@@ -7,3 +7,8 @@ known to be incomplete.
 
 Incomplete Fields:
 
+- id (ksuid)
+- workspace id (required)
+- title
+- description
+- project id (optional)
