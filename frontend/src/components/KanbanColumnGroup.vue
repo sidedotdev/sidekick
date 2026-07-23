@@ -17,6 +17,8 @@
         @canceled="emit('refresh')"
         @archived="emit('refresh')"
         @updated="emit('refresh')"
+        @edit="(task: FullTask) => emit('edit', task)"
+        @copy="(task: Task) => emit('copy', task)"
         @error="(e: any) => emit('error', e)"
       />
       <button class="new-task" v-if="showHeadings && agentType == 'human'" @click="emit('addTask', agentType)">
@@ -32,7 +34,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { FullTask, AgentType } from '../lib/models'
+import type { FullTask, AgentType, Task } from '../lib/models'
 import VirtualTaskList from './VirtualTaskList.vue'
 import ShortcutHint from './ShortcutHint.vue'
 
@@ -51,6 +53,8 @@ const emit = defineEmits<{
   (e: 'addTask', agentType: AgentType): void
   (e: 'archiveFinished'): void
   (e: 'refresh'): void
+  (e: 'edit', task: FullTask): void
+  (e: 'copy', task: Task): void
   (e: 'error', err: unknown): void
 }>()
 

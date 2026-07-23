@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import VirtualTaskGrid from '@/components/VirtualTaskGrid.vue'
-import type { FullTask } from '@/lib/models'
+import TaskModal from '@/components/TaskModal.vue'
+import type { FullTask, Task } from '@/lib/models'
 import { store } from '../lib/store'
 
 const archivedTasks = ref<FullTask[]>([])
+const modalTask = ref<Task | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
 
@@ -45,6 +47,15 @@ onMounted(async () => {
       :tasks="archivedTasks"
       :readonly="true"
       @deleted="handleTaskDeleted"
+      @edit="(task: Task) => modalTask = task"
+      @copy="(task: Task) => modalTask = task"
+    />
+    <TaskModal
+      v-if="modalTask"
+      :task="modalTask"
+      @close="modalTask = null"
+      @updated="fetchArchivedTasks"
+      @deleted="fetchArchivedTasks"
     />
   </div>
 </template>

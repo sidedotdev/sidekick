@@ -1,5 +1,7 @@
 <template>
   <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" @updated="refresh" @deleted="refresh" :task="newTask" />
+  <TaskModal v-if="editingTask" :task="editingTask" @close="editingTask = null" @updated="refresh" @deleted="refresh" />
+  <TaskModal v-if="copyingTask" :task="copyingTask" @close="copyingTask = null" @created="refresh" @updated="refresh" />
   <div v-if="showGuidedOverlay" class="guided-overlay">
     <div class="guided-text">
       Get started by adding your first task to the AI Sidekick queue!
@@ -72,6 +74,8 @@
         @add-task="(agentType: AgentType) => addTask(agentType, project.id)"
         @archive-finished="confirmArchiveFinished(project)"
         @refresh="refresh"
+        @edit="openEditModal"
+        @copy="openCopyModal"
         @error="error"
       />
     </section>
@@ -114,6 +118,8 @@
         @add-task="(agentType: AgentType) => addTask(agentType)"
         @archive-finished="confirmArchiveFinished()"
         @refresh="refresh"
+        @edit="openEditModal"
+        @copy="openCopyModal"
         @error="error"
       />
     </section>
@@ -124,6 +130,8 @@
       @add-task="(agentType: AgentType) => addTask(agentType)"
       @archive-finished="confirmArchiveFinished()"
       @refresh="refresh"
+      @edit="openEditModal"
+      @copy="openCopyModal"
       @error="error"
     />
   </div>
@@ -357,6 +365,20 @@ const closeModal = () => {
     status: 'drafting',
     projectId: undefined,
   }
+}
+
+// Edit/copy modals are owned here rather than by the task cards, so that
+// background board updates (e.g. auto-save regrouping a task out of its
+// project group) can't unmount an open modal.
+const editingTask = ref<FullTask | null>(null)
+const copyingTask = ref<Task | null>(null)
+
+const openEditModal = (task: FullTask) => {
+  editingTask.value = task
+}
+
+const openCopyModal = (task: Task) => {
+  copyingTask.value = task
 }
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0

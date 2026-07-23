@@ -1,8 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import TaskCard from '../TaskCard.vue'
-import TaskModal from '../TaskModal.vue'
-import type { FullTask } from '../../lib/models'
+import type { FullTask, Task } from '../../lib/models'
 
 const { routerPushMock } = vi.hoisted(() => ({ routerPushMock: vi.fn() }))
 vi.mock('@/router', () => ({ default: { push: routerPushMock } }))
@@ -60,12 +59,25 @@ const task: FullTask = {
     expect(wrapper.find('.action.edit').exists()).toBe(true)
   })
 
-  it('opens the TaskModal when the edit button is clicked', async () => {
+  it('emits an edit event with the task when the edit button is clicked', async () => {
     const wrapper = shallowMount(TaskCard, {
       props: { task },
     })
     await wrapper.find('.action.edit').trigger('click')
-    expect(wrapper.findComponent(TaskModal).exists()).toBe(true)
+    expect(wrapper.emitted('edit')).toEqual([[task]])
+  })
+
+  it('emits a copy event with a duplicated task when the copy button is clicked', async () => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task },
+    })
+    await wrapper.find('.action.copy').trigger('click')
+    const emitted = wrapper.emitted('copy')
+    expect(emitted).toHaveLength(1)
+    const copied = emitted![0][0] as Task
+    expect(copied.id).toBeUndefined()
+    expect(copied.title).toBe(task.title)
+    expect(copied.agentType).toBe('llm')
   })
 
   it('routes an idd task to the intent canvas using the idd flow, not a sub-task flow', async () => {

@@ -24,17 +24,13 @@
       </div>
     </div>
   </div>
-
-  <TaskModal v-if="isCopyModalOpen" :task="copiedTask" @close="closeCopyModal" @updated="onUpdated" />
-  <TaskModal v-if="isEditModalOpen" :task="task" @close="closeEditModal" @updated="onUpdated" />
 </template>
 
 <script setup lang="ts">
-import { ref, computed, type Component } from 'vue'
+import { computed, type Component } from 'vue'
 import type { FullTask, Task, LLMConfig } from '../lib/models'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, llmConfigsEqual } from '../lib/llmPresetStorage'
-import TaskModal from './TaskModal.vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ContainerIcon from './icons/ContainerIcon.vue'
@@ -109,6 +105,8 @@ interface Emits {
   (event: 'error', message: string): void;
   (event: 'archived', id: string): void;
   (event: 'canceled', id: string): void;
+  (event: 'edit', task: FullTask): void;
+  (event: 'copy', task: Task): void;
 }
 
 const emit = defineEmits<Emits>();
@@ -140,19 +138,10 @@ const canArchive = computed(() => ['complete', 'failed', 'canceled'].includes(pr
 const canDelete = computed(() => props.task.status === 'drafting' || props.task.archived);
 const canCancel = computed(() => ['to_do', 'in_progress', 'blocked', 'in_review'].includes(props.task.status) && !props.task.archived);
 
-const isEditModalOpen = ref(false);
-const isCopyModalOpen = ref(false);
-
+// Edit/copy modals are owned by an ancestor (e.g. the kanban board) so that
+// background task updates that remount this card can't close an open modal.
 const openEditModal = () => {
-  isEditModalOpen.value = true
-}
-
-const closeEditModal = () => {
-  isEditModalOpen.value = false
-}
-
-const closeCopyModal = () => {
-  isCopyModalOpen.value = false
+  emit('edit', props.task)
 }
 
 
@@ -209,12 +198,8 @@ const cardClicked = async () => {
   }
 }
 
-const onUpdated = async () => {
-  emit('updated', props.task.id)
-}
-
-const copyTask = async () => {
-  isCopyModalOpen.value = true
+const copyTask = () => {
+  emit('copy', copiedTask.value)
 }
 
 const cancelTask = async () => {

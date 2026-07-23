@@ -116,6 +116,31 @@ describe('KanbanBoard', () => {
       expect(tasksIn(2).sort()).toEqual(['3', '4'])
     })
 
+    it('keeps the edit modal open when the task moves out of its project group', async () => {
+      const task = { id: '1', agentType: 'human', status: 'drafting', projectId: 'project_1' } as FullTask
+      const wrapper = await mountBoard({ tasks: [task] }, projects)
+
+      const group = wrapper.findAll('.project-group').at(0)!
+      group.findComponent(VirtualTaskList).vm.$emit('edit', task)
+      await wrapper.vm.$nextTick()
+
+      const modal = wrapper.findComponent(TaskModal)
+      expect(modal.exists()).toBe(true)
+      expect(modal.props('task')).toStrictEqual(task)
+
+      // Simulate auto-save removing the project and the board refreshing,
+      // which regroups the task into "Everything else"
+      await wrapper.setProps({ tasks: [{ ...task, projectId: undefined }] })
+
+      const modalAfter = wrapper.findComponent(TaskModal)
+      expect(modalAfter.exists()).toBe(true)
+      expect(modalAfter.props('task')).toStrictEqual(task)
+
+      modalAfter.vm.$emit('close')
+      await wrapper.vm.$nextTick()
+      expect(wrapper.findComponent(TaskModal).exists()).toBe(false)
+    })
+
     it('refetches projects when the workspace changes', async () => {
       const wrapper = await mountBoard({}, projects)
       expect(wrapper.findAll('.project-group').length).toBe(3)
