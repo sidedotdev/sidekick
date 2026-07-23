@@ -27,11 +27,11 @@ func SetupHibernateHandler(dCtx DevContext) {
 			if hibernateHandlerVersion == workflow.DefaultVersion {
 				selector := workflow.NewSelector(ctx)
 				selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
-								c.Receive(ctx, &HibernateSignal{})
-								if dCtx.Worktree == nil || dCtx.EnvContainer == nil {
-												return
-								}
-								hibernateWorktree(dCtx.WithContext(ctx))
+					c.Receive(ctx, &HibernateSignal{})
+					if dCtx.Worktree == nil || dCtx.EnvContainer == nil {
+						return
+					}
+					hibernateWorktree(dCtx.WithContext(ctx))
 				})
 				selector.Select(ctx)
 			} else {

@@ -239,6 +239,12 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	taskRoutes.POST("/:id/cancel", ctrl.CancelTaskHandler)
 	taskRoutes.POST("/archive_finished", ctrl.ArchiveFinishedTasksHandler)
 
+	projectRoutes := workspaceApiRoutes.Group("/projects")
+	projectRoutes.POST("/", ctrl.CreateProjectHandler)
+	projectRoutes.GET("/", ctrl.GetProjectsHandler)
+	projectRoutes.PUT("/:id", ctrl.UpdateProjectHandler)
+	projectRoutes.DELETE("/:id", ctrl.DeleteProjectHandler)
+
 	flowRoutes := workspaceApiRoutes.Group("/flows")
 	flowRoutes.GET("/:id", ctrl.GetFlowHandler)
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)

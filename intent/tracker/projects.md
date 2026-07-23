@@ -1,3 +1,20 @@
+---
+intent_links:
+  - intent: "#api"
+    code:
+      - domain/project.go
+      - srv/sqlite/project.go
+      - srv/sqlite/project_test.go
+      - srv/sqlite/migrations/014_create_projects_table.up.sql
+      - srv/sqlite/migrations/014_create_projects_table.down.sql
+      - srv/redis/project.go
+      - srv/redis/project_test.go
+      - srv/service.go:Storage
+      - srv/delegator.go
+      - api/project_api.go
+      - api/project_api_test.go
+      - api/api.go:DefineRoutes
+---
 # Projects
 
 ## Domain Model
