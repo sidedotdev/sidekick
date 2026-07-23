@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"os"
@@ -14,10 +15,12 @@ import (
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
+	"sidekick/logger"
 	"sidekick/utils"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	tree_sitter_lib "github.com/tree-sitter/go-tree-sitter"
 )
@@ -197,6 +200,15 @@ type fileOutput struct {
 // outputs symbol definitions formatted per file. Any symbols that were not
 // found are included in the failures
 func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSymDefRequest DirectorySymDefRequest) (SymDefResults, error) {
+	start := time.Now()
+	defer func() {
+		l := logger.Get()
+		l.Debug().
+			Dur("duration", time.Since(start)).
+			Int("numRequests", len(dirSymDefRequest.Requests)).
+			Str("envType", string(dirSymDefRequest.EnvContainer.Env.GetType())).
+			Msg("BulkGetSymbolDefinitions completed")
+	}()
 	if len(dirSymDefRequest.Requests) == 0 {
 		return SymDefResults{
 			SymbolDefinitions: "No symbol definition requests were provided.",
@@ -277,8 +289,25 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 		// Handle errors first
 		for _, result := range fileResults {
 			if result.Error != nil {
+				// Wildcard/header failures carry no symbol name, so their
+				// error already holds the complete hint and the repo-wide
+				// symbol index (expensive to build on remote envs) can't help.
+				if result.SymbolName == "" || result.SymbolName == "*" {
+					msg := result.Error.Error()
+					fileContentBuilder.WriteString(msg)
+					fileContentBuilder.WriteString("\n")
+					fileFailureBuilder.WriteString(msg)
+					fileFailureBuilder.WriteString("\n")
+					continue
+				}
 				if relativeFilePathsBySymbolName == nil {
+					indexStart := time.Now()
 					filePaths, err := getRelativeFilePathsBySymbolName(ctx, dirSymDefRequest.EnvContainer)
+					l := logger.Get()
+					l.Debug().
+						Dur("duration", time.Since(indexStart)).
+						Err(err).
+						Msg("built repo-wide symbol index for failure hints")
 					if err != nil {
 						msg := fmt.Sprintf("error getting file paths by symbol name: %v\n", err)
 						fileContentBuilder.WriteString(msg)
@@ -558,43 +587,94 @@ func CodeFenceStartForLanguage(langName string) string {
 	}
 }
 
+// getRelativeFilePathsBySymbolName builds a repo-wide index from symbol name
+// to the relative paths of files defining it, mirroring the structure of
+// tree_sitter.GetDirectoryRawOutlines: the entry-based walk avoids per-file
+// remote reads on SSH-backed envs, content is copied inline (entry readers
+// are only valid until the callback returns), and parsing runs in a bounded
+// worker pool. The index only powers best-effort failure hints, so
+// unreadable or unparsable files are skipped rather than failing the index.
 func getRelativeFilePathsBySymbolName(ctx context.Context, ec env.EnvContainer) (map[string][]string, error) {
 	directoryPath := ec.Env.GetWorkingDirectory()
-	symbolToPaths := make(map[string][]string, 0)
-	num := 0
-	err := ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
-		num++
-		if isDir {
-			return nil
-		}
 
-		langName := utils.InferLanguageNameFromFilePath(path)
-		fileBytes, readErr := ec.Env.ReadFile(ctx, path)
-		if readErr != nil {
-			return fmt.Errorf("error reading file %s: %w", path, readErr)
-		}
-		symbols, err := tree_sitter.GetAllAlternativeFileSymbolsFromBytes(path, langName, fileBytes)
+	type fileTask struct {
+		path         string
+		relativePath string
+		fileBytes    []byte
+	}
 
-		if err != nil {
-			if !errors.Is(err, tree_sitter.ErrFailedInferLanguage) {
-				return fmt.Errorf("error getting symbols for file %s: %w", path, err)
+	symbolToPaths := make(map[string][]string)
+	const maxConcurrency = 15
+	taskCh := make(chan fileTask, maxConcurrency)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for range maxConcurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskCh {
+				langName := utils.InferLanguageNameFromFilePath(t.path)
+				symbols, err := tree_sitter.GetAllAlternativeFileSymbolsFromBytes(t.path, langName, t.fileBytes)
+				if err != nil {
+					continue
+				}
+				mu.Lock()
+				for _, symbol := range symbols {
+					symbolToPaths[symbol.Content] = append(symbolToPaths[symbol.Content], t.relativePath)
+				}
+				mu.Unlock()
 			}
-			// If it's a language inference error, continue processing other files
+		}()
+	}
+
+	walkErr := env.WalkCodeDirectoryEntriesViaEnv(ctx, ec, func(entry env.WalkEntryWithContent) error {
+		if entry.IsDir {
 			return nil
 		}
-		relativePath, relErr := env.EnvRel(ec.Env, directoryPath, path)
+		if utils.InferLanguageNameFromFilePath(entry.Path) == "" {
+			// no supported language means no symbols; skip without reading
+			return nil
+		}
+		fileBytes, readErr := readWalkEntryContent(ctx, entry)
+		if readErr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			l := logger.Get()
+			l.Trace().Err(readErr).Msgf("error reading file %s", entry.Path)
+			return nil
+		}
+		relativePath, relErr := env.EnvRel(ec.Env, directoryPath, entry.Path)
 		if relErr != nil {
-			relativePath = path
+			relativePath = entry.Path
 		}
-		for _, symbol := range symbols {
-			symbolToPaths[symbol.Content] = append(symbolToPaths[symbol.Content], relativePath)
-		}
+		taskCh <- fileTask{path: entry.Path, relativePath: relativePath, fileBytes: fileBytes}
 		return nil
 	})
+	close(taskCh)
+	wg.Wait()
+	if walkErr != nil {
+		return nil, walkErr
+	}
+
+	// Concurrent parsing makes per-symbol path order nondeterministic; sort
+	// and compact for stable, duplicate-free hints.
+	for symbol, paths := range symbolToPaths {
+		slices.Sort(paths)
+		symbolToPaths[symbol] = slices.Compact(paths)
+	}
+	return symbolToPaths, nil
+}
+
+// readWalkEntryContent copies the entry's content inline; entry readers are
+// only valid until the walk callback returns.
+func readWalkEntryContent(ctx context.Context, entry env.WalkEntryWithContent) ([]byte, error) {
+	rc, err := entry.Open(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return symbolToPaths, nil
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
 
 func getHintForSymbolDefResultFailure(ctx context.Context, ec env.EnvContainer, err error, relativePath, symbolName string, filePathsBySymbolName *map[string][]string) string {

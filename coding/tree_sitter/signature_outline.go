@@ -79,7 +79,12 @@ func FormatSignatures(signatures []Signature) string {
 
 func sourceTransform(languageName string, sourceCode *[]byte) []byte {
 	if languageName == "golang" && len(*sourceCode) > 0 && (*sourceCode)[len(*sourceCode)-1] != '\n' {
-		*sourceCode = append(*sourceCode, '\n')
+		// Copy instead of append: callers may share the backing array across
+		// concurrent parses, and append could write into that shared array.
+		withNewline := make([]byte, len(*sourceCode)+1)
+		copy(withNewline, *sourceCode)
+		withNewline[len(withNewline)-1] = '\n'
+		*sourceCode = withNewline
 	}
 
 	return *sourceCode
