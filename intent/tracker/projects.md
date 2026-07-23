@@ -1,13 +1,8 @@
 # Projects
 
-## API
+## Domain Model
 
-REST endpoints to create, update and delete. 
-
-backend: add a "project" domain object, with associated api endpoints and
-redis/sqlite storage implementations.
-
-projects have:
+Fields:
 
 - id (ksuid)
 - workspace id (required)
@@ -15,12 +10,25 @@ projects have:
 - description (optional)
 - priority: no priority, low, medium, high, urgent
 
-while, projects have a priority within each priority bucket, we can adjust
-relative rankings of projects for fine-grained prioritization, using drag and
-drop to create this ordering in a dedicated projects page.
+## Storage
 
-the existing left sidebar has a projects tab to support managing projects
-easily.
+Redis and sqlite implementations exist to support persistence.
+
+## API
+
+REST endpoints exist to create, update and delete projects.
+
+## Ordering
+
+Phile projects have a priority within each priority bucket, we can adjust
+relative rankings of projects for fine-grained prioritization,
+
+## Frontend
+
+The projects page allows using drag and drop to order projects, and allows
+creating, editing and deleting proejcts.
+
+The main left sidebar has a projects tab to access this page.
 
 kanban board groups tasks by project. projects can be collapsed/expanded to
 hide/show tasks. projects are displayed in the kanban board in order, and show
