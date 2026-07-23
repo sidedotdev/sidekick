@@ -91,6 +91,7 @@ type Task struct {
 	Id          string                 `json:"id"`
 	Title       string                 `json:"title"`
 	Description string                 `json:"description"`
+	ProjectId   string                 `json:"projectId,omitempty"`
 	Status      TaskStatus             `json:"status"`
 	Links       []TaskLink             `json:"links,omitempty"`
 	AgentType   AgentType              `json:"agentType"`

@@ -732,6 +732,10 @@ type TaskRequest struct {
 	AgentType   string                 `json:"agentType"`
 	Status      string                 `json:"status"`
 	FlowOptions map[string]interface{} `json:"flowOptions"`
+	// ProjectId is a pointer to distinguish an absent field (leave the
+	// project assignment unchanged on update) from an explicit empty string
+	// (clear the project assignment).
+	ProjectId *string `json:"projectId"`
 }
 
 func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
@@ -784,6 +788,9 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 		AgentType:   agentType,
 		FlowType:    flowType,
 		FlowOptions: taskReq.FlowOptions,
+	}
+	if taskReq.ProjectId != nil {
+		task.ProjectId = *taskReq.ProjectId
 	}
 
 	if err := ctrl.service.PersistTask(c, task); err != nil {
@@ -1769,6 +1776,9 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 		task.Title = taskReq.Title
 	}
 	task.Description = taskReq.Description
+	if taskReq.ProjectId != nil {
+		task.ProjectId = *taskReq.ProjectId
+	}
 	task.AgentType = agentType
 	task.Status = status
 	task.FlowOptions = taskReq.FlowOptions

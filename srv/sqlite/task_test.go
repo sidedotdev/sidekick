@@ -21,6 +21,7 @@ func TestPersistTask(t *testing.T) {
 		Id:          "task1",
 		Title:       "Test Task",
 		Description: "This is a test task",
+		ProjectId:   "project_abc123",
 		Status:      domain.TaskStatusToDo,
 		Links: []domain.TaskLink{
 			{LinkType: "parent", TargetTaskId: "parent1"},
@@ -52,6 +53,7 @@ func TestPersistTask(t *testing.T) {
 	assert.Equal(t, task.Status, retrievedTask.Status)
 	assert.Equal(t, task.Links, retrievedTask.Links)
 	assert.Equal(t, task.FlowOptions, retrievedTask.FlowOptions)
+	assert.Equal(t, task.ProjectId, retrievedTask.ProjectId)
 }
 
 func TestDeleteTask(t *testing.T) {

@@ -3332,3 +3332,92 @@ func TestUpdateFlowModelConfigHandler_TemporalErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateTaskHandler_ProjectId(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+
+	projectId := "project_" + ksuid.New().String()
+	taskReq := TaskRequest{
+		Description: "task with project",
+		Status:      string(domain.TaskStatusDrafting),
+		FlowType:    domain.FlowTypeBasicDev,
+		ProjectId:   &projectId,
+	}
+	workspaceId := "ws_" + ksuid.New().String()
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+	jsonData, err := json.Marshal(taskReq)
+	assert.NoError(t, err)
+	c.Request = httptest.NewRequest("POST", "/tasks", bytes.NewBuffer(jsonData))
+	ctrl.CreateTaskHandler(c)
+
+	assert.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	responseBody := make(map[string]domain.Task)
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+	responseTask, hasTask := responseBody["task"]
+	assert.True(t, hasTask)
+	assert.Equal(t, projectId, responseTask.ProjectId)
+
+	persisted, err := ctrl.service.GetTask(context.Background(), workspaceId, responseTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, projectId, persisted.ProjectId)
+}
+
+func TestUpdateTaskHandler_ProjectIdPresenceSemantics(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+
+	task := domain.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Description: "test description",
+		AgentType:   domain.AgentTypeHuman,
+		Status:      domain.TaskStatusDrafting,
+		ProjectId:   "project_" + ksuid.New().String(),
+	}
+	if err := ctrl.service.PersistTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	updateTask := func(t *testing.T, body []byte) domain.Task {
+		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ginCtx.Request = httptest.NewRequest(http.MethodPut, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, bytes.NewBuffer(body))
+		ginCtx.Params = []gin.Param{
+			{Key: "workspaceId", Value: task.WorkspaceId},
+			{Key: "id", Value: task.Id},
+		}
+		ctrl.UpdateTaskHandler(ginCtx)
+		assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+		updated, err := ctrl.service.GetTask(context.Background(), task.WorkspaceId, task.Id)
+		assert.NoError(t, err)
+		return updated
+	}
+
+	baseBody := map[string]any{
+		"description": "updated description",
+		"agentType":   string(domain.AgentTypeHuman),
+		"status":      string(domain.TaskStatusDrafting),
+	}
+
+	// Omitted projectId leaves the assignment unchanged
+	body, _ := json.Marshal(baseBody)
+	updated := updateTask(t, body)
+	assert.Equal(t, task.ProjectId, updated.ProjectId)
+
+	// A new projectId reassigns the task
+	newProjectId := "project_" + ksuid.New().String()
+	baseBody["projectId"] = newProjectId
+	body, _ = json.Marshal(baseBody)
+	updated = updateTask(t, body)
+	assert.Equal(t, newProjectId, updated.ProjectId)
+
+	// An explicit empty projectId clears the assignment
+	baseBody["projectId"] = ""
+	body, _ = json.Marshal(baseBody)
+	updated = updateTask(t, body)
+	assert.Equal(t, "", updated.ProjectId)
+}

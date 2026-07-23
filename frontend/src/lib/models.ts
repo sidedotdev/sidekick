@@ -55,6 +55,7 @@ export interface Task {
   workspaceId: string
   title?: string
   description?: string
+  projectId?: string
   status: TaskStatus
   links?: null | TaskLink[]
   agentType: AgentType
@@ -72,6 +73,17 @@ export type FullTask = Task & {
   created: Date
   updated: Date
   flows: Flow[]
+}
+
+export interface Project {
+  id: string
+  workspaceId: string
+  title: string
+  description?: string
+  priority: string
+  rank?: string
+  created?: Date
+  updated?: Date
 }
 
 export type ActionStatus = 'pending' | 'started' | 'complete' | 'failed'
