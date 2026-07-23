@@ -58,6 +58,8 @@ intent_links:
       - dev/intent_requirements.go:renderIntentRequirements
       - dev/prompts/intent/requirements_prompt_only.mustache
       - dev/idd_workflow.go:IddState
+      - dev/idd_workflow.go:runIntentSubtask
+      - dev/idd_workflow.go:subtaskTerminalNotice
       - dev/idd_workflow.go:IddNudge
       - dev/idd_workflow.go:SetIddAutoModeSignal
       - dev/idd_workflow.go:RunIddOrchestratorSignal
@@ -229,6 +231,17 @@ sub-task's own flow view) and only ever appears in the orchestrator's
 internal turn prompt. Completed/failed/canceled sub-tasks drop their
 dispatched-diff snippet from the prompt since they no longer constrain
 fresh dispatches.
+
+When a sub-task reaches a terminal status (completed/failed/canceled),
+`runIntentSubtask` queues a human-readable notice
+(`subtaskTerminalNotice`, including a truncated result summary) on
+`IddState.PendingSubtaskNotices` and immediately requests an
+orchestrator turn — gated by the `idd-subtask-terminal-orchestrator-turn`
+workflow version — so the orchestrator is notified of the completion
+promptly rather than waiting for the next intent edit or the edit
+watcher's backstop. The next turn that runs drains the queued notices
+into its prompt, letting the orchestrator optionally act (e.g. dispatch
+the next serialized sub-task); taking no action remains a valid outcome.
 
 ## Resizable and minimizable canvas layout
 

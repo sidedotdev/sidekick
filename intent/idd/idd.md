@@ -44,8 +44,11 @@ intent_links:
       - dev/idd_workflow.go:SetIddAutoModeSignal
       - dev/idd_workflow.go:RunIddOrchestratorSignal
       - dev/idd_workflow.go:IddWorkflow
+      - dev/idd_workflow.go:runIntentSubtask
+      - dev/idd_workflow.go:subtaskTerminalNotice
       - dev/idd_watcher_activity.go:IddWatchEditIdleActivity
       - dev/idd_orchestrator.go:pendingIntentDiff
+      - dev/idd_orchestrator.go:runIddOrchestratorTurn
       - coding/git/git_diff.go:DiffUntrackedFilesActivity
       - dev/manage_chat_history.go
       - api/intent_api.go:SetIddAutoModeHandler
