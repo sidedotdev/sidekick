@@ -46,6 +46,10 @@ intent_links:
       - dev/idd_workflow.go:IddSubtask
       - dev/idd_workflow.go:setSubtaskStatus
       - dev/idd_workflow.go:runIntentSubtask
+  - intent: "#manual-sub-tasks-run-as-planned-dev"
+    code:
+      - api/intent_api.go:StartIntentSubtaskHandler
+      - dev/idd_workflow.go:runIntentSubtask
   - intent: "#background-orchestrator-agent"
     code:
       - dev/idd_orchestrator.go
@@ -288,3 +292,11 @@ folded into a collapsible "N Completed" entry with a caret toggle so a long
 history of finished work doesn't crowd out active sub-tasks. Sub-tasks carry
 `createdAt`/`updatedAt` timestamps (set from the workflow clock when launched
 and on every status change) to drive this ordering and the staleness cutoff.
+
+## Manual sub-tasks run as planned dev
+
+"Manually created" sub-tasks are those launched via the start-subtask API
+(the canvas button). These always run as a planned-dev child with
+determine-requirements disabled. Orchestrator-dispatched sub-tasks instead
+choose between basic and planned dev per sub-task via the `planned` tool
+argument.

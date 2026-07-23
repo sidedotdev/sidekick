@@ -32,6 +32,10 @@ intent_links:
     code:
       - frontend/src/components/IntentMarkdownEditor.vue
       - frontend/src/lib/markdown_format.ts
+  - intent: "#sub-tasks"
+    code:
+      - api/intent_api.go:StartIntentSubtaskHandler
+      - dev/idd_workflow.go:runIntentSubtask
   - intent: "#idd-instructions-for-coding-agents"
     code:
       - dev/prompts/author_edit_block/idd_instructions.mustache
