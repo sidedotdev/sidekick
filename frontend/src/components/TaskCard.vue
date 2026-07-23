@@ -85,6 +85,7 @@ const copiedTask = computed(() => {
     workspaceId: props.task.workspaceId,
     flowType: props.task.flowType,
     flowOptions: props.task.flowOptions,
+    projectId: props.task.projectId,
     status: props.task.status,
     agentType: 'llm',
   }

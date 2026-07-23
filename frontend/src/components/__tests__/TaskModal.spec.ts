@@ -1602,3 +1602,116 @@ describe('TaskModal context gathering option', () => {
     wrapper.unmount()
   })
 })
+
+describe('TaskModal project selection', () => {
+  const projectsResponse = {
+    projects: [
+      { id: 'project_1', workspaceId: 'test-workspace-id', title: 'Alpha', priority: 'none' },
+      { id: 'project_2', workspaceId: 'test-workspace-id', title: 'Beta', priority: 'high' },
+    ],
+  }
+
+  const createProjectsFetchMock = () =>
+    vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+      const urlStr = url.toString()
+      if (urlStr.includes('/projects')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(projectsResponse),
+        } as Response)
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }),
+      } as Response)
+    })
+
+  const ProjectDropdownStub = {
+    name: 'Dropdown',
+    props: ['modelValue', 'options', 'optionLabel', 'optionValue', 'placeholder'],
+    emits: ['update:modelValue'],
+    template: '<div class="dropdown-stub"></div>',
+  }
+
+  const mountWithProjects = (props: Record<string, any> = {}) =>
+    mountModal({
+      props,
+      global: {
+        stubs: {
+          Dropdown: ProjectDropdownStub,
+        },
+      },
+    })
+
+  const findProjectDropdown = (wrapper: VueWrapper) =>
+    wrapper.findAllComponents(ProjectDropdownStub).find((w) => w.props('optionLabel') === 'title')
+
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('populates the project dropdown from the projects list endpoint', async () => {
+    vi.stubGlobal('fetch', createProjectsFetchMock())
+    const wrapper = mountWithProjects()
+    await flushPromises()
+
+    const dropdown = findProjectDropdown(wrapper)
+    expect(dropdown).toBeDefined()
+    expect(dropdown!.props('options')).toEqual(projectsResponse.projects)
+    expect(dropdown!.props('modelValue')).toBeNull()
+  })
+
+  it('includes the selected project id in the task payload', async () => {
+    const fetchMock = createProjectsFetchMock()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountWithProjects()
+    await flushPromises()
+
+    await findProjectDropdown(wrapper)!.vm.$emit('update:modelValue', 'project_2')
+
+    const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
+    await descriptionInput.setValue('Test description')
+
+    await wrapper.find('.p-button-primary').trigger('click')
+    await flushPromises()
+
+    const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+    expect(taskCalls.length).toBeGreaterThan(0)
+    const requestBody = JSON.parse(taskCalls[0][1]?.body as string)
+    expect(requestBody.projectId).toBe('project_2')
+  })
+
+  it('prefills the assigned project and sends an empty projectId when cleared', async () => {
+    const fetchMock = createProjectsFetchMock()
+    vi.stubGlobal('fetch', fetchMock)
+    const task: Task = {
+      id: 'existing-task-id',
+      workspaceId: 'test-workspace-id',
+      description: 'Existing description',
+      status: 'drafting',
+      agentType: 'human',
+      flowType: 'basic_dev',
+      projectId: 'project_1',
+    }
+    const wrapper = mountWithProjects({ task })
+    await flushPromises()
+
+    const dropdown = findProjectDropdown(wrapper)!
+    expect(dropdown.props('modelValue')).toBe('project_1')
+
+    await dropdown.vm.$emit('update:modelValue', null)
+
+    await wrapper.find('.p-button-primary').trigger('click')
+    await flushPromises()
+
+    const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+    expect(taskCalls.length).toBeGreaterThan(0)
+    const requestBody = JSON.parse(taskCalls[0][1]?.body as string)
+    expect(requestBody.projectId).toBe('')
+  })
+})

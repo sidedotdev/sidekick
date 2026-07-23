@@ -1913,6 +1913,105 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 	assert.Nil(t, nonArchivedTask.Archived)
 }
 
+func TestArchiveFinishedTasksHandler_ProjectFilter(t *testing.T) {
+	t.Parallel()
+
+	projectA := "project_" + ksuid.New().String()
+	projectB := "project_" + ksuid.New().String()
+
+	newTask := func(workspaceId, projectId string, status domain.TaskStatus) domain.Task {
+		return domain.Task{
+			WorkspaceId: workspaceId,
+			Id:          "task_" + ksuid.New().String(),
+			Description: "task",
+			AgentType:   domain.AgentTypeLLM,
+			Status:      status,
+			ProjectId:   projectId,
+		}
+	}
+
+	testCases := []struct {
+		name          string
+		rawQuery      string
+		archivedCount int
+		// index into the tasks slice below of tasks expected archived
+		archivedIdx []int
+	}{
+		{
+			name:          "no param archives all finished tasks",
+			rawQuery:      "",
+			archivedCount: 3,
+			archivedIdx:   []int{0, 1, 2},
+		},
+		{
+			name:          "projectId filters to that project's finished tasks",
+			rawQuery:      "projectId=%s",
+			archivedCount: 1,
+			archivedIdx:   []int{0},
+		},
+		{
+			name:          "empty projectId archives only unassigned finished tasks",
+			rawQuery:      "projectId=",
+			archivedCount: 1,
+			archivedIdx:   []int{2},
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := NewMockController(t)
+			workspaceId := "ws_" + ksuid.New().String()
+
+			tasks := []domain.Task{
+				newTask(workspaceId, projectA, domain.TaskStatusComplete),
+				newTask(workspaceId, projectB, domain.TaskStatusFailed),
+				newTask(workspaceId, "", domain.TaskStatusCanceled),
+				newTask(workspaceId, projectA, domain.TaskStatusInProgress),
+			}
+			for _, task := range tasks {
+				require.NoError(t, ctrl.service.PersistTask(context.Background(), task))
+			}
+
+			rawQuery := tc.rawQuery
+			if strings.Contains(rawQuery, "%s") {
+				rawQuery = fmt.Sprintf(rawQuery, projectA)
+			}
+			url := "/workspaces/" + workspaceId + "/tasks/archive_finished"
+			if rawQuery != "" {
+				url += "?" + rawQuery
+			}
+
+			recorder := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(recorder)
+			ginCtx.Request = httptest.NewRequest(http.MethodPost, url, nil)
+			ginCtx.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+			ctrl.ArchiveFinishedTasksHandler(ginCtx)
+			assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+			var result map[string]int
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
+			assert.Equal(t, tc.archivedCount, result["archivedCount"])
+
+			archivedIdx := make(map[int]bool)
+			for _, idx := range tc.archivedIdx {
+				archivedIdx[idx] = true
+			}
+			for i, task := range tasks {
+				persisted, err := ctrl.service.GetTask(context.Background(), workspaceId, task.Id)
+				require.NoError(t, err)
+				if archivedIdx[i] {
+					assert.NotNil(t, persisted.Archived, "task %d should be archived", i)
+				} else {
+					assert.Nil(t, persisted.Archived, "task %d should not be archived", i)
+				}
+			}
+		})
+	}
+}
+
 func TestArchiveTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
@@ -3331,4 +3430,93 @@ func TestUpdateFlowModelConfigHandler_TemporalErrors(t *testing.T) {
 			mockTemporalClient.AssertExpectations(t)
 		})
 	}
+}
+
+func TestCreateTaskHandler_ProjectId(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+
+	projectId := "project_" + ksuid.New().String()
+	taskReq := TaskRequest{
+		Description: "task with project",
+		Status:      string(domain.TaskStatusDrafting),
+		FlowType:    domain.FlowTypeBasicDev,
+		ProjectId:   &projectId,
+	}
+	workspaceId := "ws_" + ksuid.New().String()
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+	jsonData, err := json.Marshal(taskReq)
+	assert.NoError(t, err)
+	c.Request = httptest.NewRequest("POST", "/tasks", bytes.NewBuffer(jsonData))
+	ctrl.CreateTaskHandler(c)
+
+	assert.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	responseBody := make(map[string]domain.Task)
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+	responseTask, hasTask := responseBody["task"]
+	assert.True(t, hasTask)
+	assert.Equal(t, projectId, responseTask.ProjectId)
+
+	persisted, err := ctrl.service.GetTask(context.Background(), workspaceId, responseTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, projectId, persisted.ProjectId)
+}
+
+func TestUpdateTaskHandler_ProjectIdPresenceSemantics(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+
+	task := domain.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Description: "test description",
+		AgentType:   domain.AgentTypeHuman,
+		Status:      domain.TaskStatusDrafting,
+		ProjectId:   "project_" + ksuid.New().String(),
+	}
+	if err := ctrl.service.PersistTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	updateTask := func(t *testing.T, body []byte) domain.Task {
+		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ginCtx.Request = httptest.NewRequest(http.MethodPut, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, bytes.NewBuffer(body))
+		ginCtx.Params = []gin.Param{
+			{Key: "workspaceId", Value: task.WorkspaceId},
+			{Key: "id", Value: task.Id},
+		}
+		ctrl.UpdateTaskHandler(ginCtx)
+		assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+		updated, err := ctrl.service.GetTask(context.Background(), task.WorkspaceId, task.Id)
+		assert.NoError(t, err)
+		return updated
+	}
+
+	baseBody := map[string]any{
+		"description": "updated description",
+		"agentType":   string(domain.AgentTypeHuman),
+		"status":      string(domain.TaskStatusDrafting),
+	}
+
+	// Omitted projectId leaves the assignment unchanged
+	body, _ := json.Marshal(baseBody)
+	updated := updateTask(t, body)
+	assert.Equal(t, task.ProjectId, updated.ProjectId)
+
+	// A new projectId reassigns the task
+	newProjectId := "project_" + ksuid.New().String()
+	baseBody["projectId"] = newProjectId
+	body, _ = json.Marshal(baseBody)
+	updated = updateTask(t, body)
+	assert.Equal(t, newProjectId, updated.ProjectId)
+
+	// An explicit empty projectId clears the assignment
+	baseBody["projectId"] = ""
+	body, _ = json.Marshal(baseBody)
+	updated = updateTask(t, body)
+	assert.Equal(t, "", updated.ProjectId)
 }

@@ -333,3 +333,23 @@ func (d Delegator) EndFlowEventStream(ctx context.Context, workspaceId, flowId, 
 func (d Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
 	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 }
+
+/* implements ProjectStorage interface */
+func (d Delegator) PersistProject(ctx context.Context, project domain.Project) error {
+	return d.storage.PersistProject(ctx, project)
+}
+
+/* implements ProjectStorage interface */
+func (d Delegator) GetProject(ctx context.Context, workspaceId, projectId string) (domain.Project, error) {
+	return d.storage.GetProject(ctx, workspaceId, projectId)
+}
+
+/* implements ProjectStorage interface */
+func (d Delegator) GetProjects(ctx context.Context, workspaceId string) ([]domain.Project, error) {
+	return d.storage.GetProjects(ctx, workspaceId)
+}
+
+/* implements ProjectStorage interface */
+func (d Delegator) DeleteProject(ctx context.Context, workspaceId, projectId string) error {
+	return d.storage.DeleteProject(ctx, workspaceId, projectId)
+}

@@ -16,41 +16,81 @@
       />
       <button class="search-clear" @click="clearSearch" title="Clear search">×</button>
     </div>
-    <div
-      v-for="agentType in ['human', 'llm', 'none'] as const"
-      :key="agentType"
-      class="kanban-column"
+    <section
+      v-for="project in projects"
+      :key="project.id"
+      class="project-group"
+      :class="{ 'drag-over': dragOverGroupKey === project.id }"
+      @dragover="(event: DragEvent) => onGroupDragOver(project.id, event)"
+      @dragleave="onGroupDragLeave"
+      @drop="(event: DragEvent) => onGroupDrop(project.id, event)"
     >
-      <h2>
-        {{ columnNames[agentType as keyof typeof columnNames] }}
-        <button v-if="agentType !== 'none'" class="new-task mini-button" @click="addTask(agentType)">+</button>
-        <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
-      </h2>
-      <VirtualTaskList
-        :tasks="groupedTasks[agentType] ?? []"
-        @deleted="refresh"
-        @canceled="refresh"
-        @archived="refresh"
-        @updated="refresh"
+      <h3
+        class="project-group-header"
+        :class="{ collapsed: !isGroupExpanded(project.id) }"
+      >
+        <button
+          type="button"
+          class="project-group-toggle"
+          :aria-expanded="isGroupExpanded(project.id)"
+          @click="toggleGroup(project.id)"
+        >{{ project.title }}</button>
+      </h3>
+      <KanbanColumnGroup
+        v-show="isGroupExpanded(project.id)"
+        :tasks="tasksByProjectId[project.id] ?? []"
+        @add-task="(agentType: AgentType) => addTask(agentType, project.id)"
+        @archive-finished="confirmArchiveFinished(project)"
+        @refresh="refresh"
         @error="error"
       />
-      <button class="new-task" v-if="agentType == 'human'" @click="addTask(agentType)">
-        + Draft Task
-        <ShortcutHint :label="newTaskShortcutLabel" />
-      </button>
-      <button class="new-task" v-if="agentType == 'llm'" @click="addTask(agentType)">
-        + Queue Task
-      </button>
-    </div>
+    </section>
+    <section
+      v-if="projects.length > 0"
+      class="project-group"
+      :class="{ 'drag-over': dragOverGroupKey === EVERYTHING_ELSE_KEY }"
+      @dragover="(event: DragEvent) => onGroupDragOver(EVERYTHING_ELSE_KEY, event)"
+      @dragleave="onGroupDragLeave"
+      @drop="(event: DragEvent) => onGroupDrop(EVERYTHING_ELSE_KEY, event)"
+    >
+      <h3
+        class="project-group-header"
+        :class="{ collapsed: !isGroupExpanded(EVERYTHING_ELSE_KEY) }"
+      >
+        <button
+          type="button"
+          class="project-group-toggle"
+          :aria-expanded="isGroupExpanded(EVERYTHING_ELSE_KEY)"
+          @click="toggleGroup(EVERYTHING_ELSE_KEY)"
+        >Everything else</button>
+      </h3>
+      <KanbanColumnGroup
+        v-show="isGroupExpanded(EVERYTHING_ELSE_KEY)"
+        :tasks="unassignedTasks"
+        :new-task-shortcut-label="newTaskShortcutLabel"
+        @add-task="(agentType: AgentType) => addTask(agentType)"
+        @archive-finished="confirmArchiveFinished()"
+        @refresh="refresh"
+        @error="error"
+      />
+    </section>
+    <KanbanColumnGroup
+      v-else
+      :tasks="unassignedTasks"
+      :new-task-shortcut-label="newTaskShortcutLabel"
+      @add-task="(agentType: AgentType) => addTask(agentType)"
+      @archive-finished="confirmArchiveFinished()"
+      @refresh="refresh"
+      @error="error"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
-import type { FullTask, AgentType, Task, TaskStatus } from '../lib/models'
-import VirtualTaskList from './VirtualTaskList.vue'
+import type { FullTask, AgentType, Project, Task, TaskStatus } from '../lib/models'
+import KanbanColumnGroup from './KanbanColumnGroup.vue'
 import TaskModal from './TaskModal.vue'
-import ShortcutHint from './ShortcutHint.vue'
 import { store } from '../lib/store'
 import { isInteractiveElement } from '../lib/dom'
 
@@ -58,12 +98,6 @@ const props = defineProps<{
   tasks: FullTask[],
   showGuidedOverlay: boolean
 }>()
-
-const columnNames = {
-  human: 'You',
-  llm: 'AI Sidekick',
-  none: 'Finished',
-}
 
 const emit = defineEmits(['refresh', 'dismissOverlay'])
 
@@ -95,26 +129,130 @@ const filteredTasks = computed(() => {
   })
 })
 
-const groupedTasks = computed(() => {
-  const grouped = filteredTasks.value.reduce((acc, task) => {
-    if (!acc[task.agentType]) {
-      acc[task.agentType] = [];
-    }
-    acc[task.agentType].push(task);
-    return acc;
-  }, {} as Record<AgentType, FullTask[]>);
+// Projects arrive already sorted by priority bucket then rank
+const projects = ref<Project[]>([])
 
-  for (const agentType in grouped) {
-    grouped[agentType as AgentType].sort((a: FullTask, b: FullTask) => {
-      if (b.updated === a.updated) {
-        return b.id > a.id ? 1 : -1;
-      }
-      return b.updated > a.updated ? 1 : -1;
-    });
+const fetchProjects = async () => {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/projects`)
+    if (!response.ok) return
+    const data = await response.json()
+    projects.value = data.projects ?? []
+  } catch {
+    // Without projects, all tasks simply show in the "everything else" group
   }
+}
 
-  return grouped;
+const tasksByProjectId = computed(() => {
+  const grouped: Record<string, FullTask[]> = {}
+  for (const task of filteredTasks.value) {
+    if (!task.projectId) continue
+    if (!grouped[task.projectId]) {
+      grouped[task.projectId] = []
+    }
+    grouped[task.projectId].push(task)
+  }
+  return grouped
 })
+
+// Tasks without a project, or whose project is unknown, fall into the
+// "everything else" group
+const unassignedTasks = computed(() => {
+  const projectIds = new Set(projects.value.map(project => project.id))
+  return filteredTasks.value.filter(task => !task.projectId || !projectIds.has(task.projectId))
+})
+
+// Collapse state for the "everything else" group is tracked under this
+// reserved key, which can never collide with a real project id
+const EVERYTHING_ELSE_KEY = ''
+
+// Per intent, "actionable" statuses are the ones needing human attention; a
+// project group with no actionable tasks (or no tasks at all) auto-collapses
+const ACTIONABLE_STATUSES: TaskStatus[] = ['drafting', 'blocked', 'in_review']
+
+// Manual toggles override the auto-computed state for the component's lifetime
+const manualExpansion = ref<Record<string, boolean>>({})
+
+// Auto-expansion is derived from the full task list (not the search-filtered
+// one) so searching can't collapse an otherwise actionable group
+const autoExpandedGroups = computed(() => {
+  const projectIds = new Set(projects.value.map(project => project.id))
+  const expanded = new Set<string>()
+  for (const task of props.tasks) {
+    if (!ACTIONABLE_STATUSES.includes(task.status)) continue
+    const key = task.projectId && projectIds.has(task.projectId)
+      ? task.projectId
+      : EVERYTHING_ELSE_KEY
+    expanded.add(key)
+  }
+  return expanded
+})
+
+const isGroupExpanded = (groupKey: string): boolean =>
+  manualExpansion.value[groupKey] ?? autoExpandedGroups.value.has(groupKey)
+
+const toggleGroup = (groupKey: string) => {
+  manualExpansion.value[groupKey] = !isGroupExpanded(groupKey)
+}
+
+const dragOverGroupKey = ref<string | null>(null)
+
+// A task's group key is its project id when the project is known, otherwise
+// the "everything else" key (mirroring how tasks are displayed)
+const groupKeyForTask = (task: FullTask): string => {
+  const projectIds = new Set(projects.value.map(project => project.id))
+  return task.projectId && projectIds.has(task.projectId)
+    ? task.projectId
+    : EVERYTHING_ELSE_KEY
+}
+
+const onGroupDragOver = (groupKey: string, event: DragEvent) => {
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+  dragOverGroupKey.value = groupKey
+}
+
+const onGroupDragLeave = (event: DragEvent) => {
+  // dragleave also fires when moving between children of the drop zone
+  const related = event.relatedTarget as Node | null
+  if (related && (event.currentTarget as Node)?.contains(related)) return
+  dragOverGroupKey.value = null
+}
+
+// Dropping a task on a group reassigns its project only; status and agent
+// type are sent unchanged so tasks never move across columns via drag
+const onGroupDrop = async (groupKey: string, event: DragEvent) => {
+  event.preventDefault()
+  dragOverGroupKey.value = null
+  const taskId = event.dataTransfer?.getData('text/plain')
+  if (!taskId) return
+  const task = props.tasks.find(t => t.id === taskId)
+  if (!task || groupKeyForTask(task) === groupKey) return
+  try {
+    const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks/${task.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: task.title,
+        description: task.description,
+        status: task.status,
+        agentType: task.agentType,
+        flowType: task.flowType,
+        flowOptions: task.flowOptions,
+        // An empty projectId clears the assignment (everything else group)
+        projectId: groupKey,
+      }),
+    })
+    if (!response.ok) {
+      throw new Error('Failed to move task to project')
+    }
+    refresh()
+  } catch (e) {
+    error(e)
+  }
+}
 
 
 function refresh() {
@@ -126,21 +264,24 @@ const isModalOpen = ref(false)
 const taskState = ref({
   agentType: 'human' as AgentType,
   status: 'drafting' as TaskStatus,
+  projectId: undefined as string | undefined,
 })
 
 const newTask = computed<Task>(() => {
   return {
     status: taskState.value.status,
     agentType: taskState.value.agentType,
+    projectId: taskState.value.projectId,
     workspaceId: store.workspaceId || '',
   }
 })
 
-const addTask = (agentType: AgentType) => {
+const addTask = (agentType: AgentType, projectId?: string) => {
   if (agentType !== 'none') {
     isModalOpen.value = true
     taskState.value.agentType = agentType
     taskState.value.status = agentType === 'human' ? 'drafting' : 'to_do'
+    taskState.value.projectId = projectId
     if (agentType === 'llm' && props.showGuidedOverlay) {
       emit('dismissOverlay')
     }
@@ -151,7 +292,8 @@ const closeModal = () => {
   isModalOpen.value = false
   taskState.value = {
     agentType: 'human',
-    status: 'drafting'
+    status: 'drafting',
+    projectId: undefined,
   }
 }
 
@@ -201,6 +343,7 @@ const clearSearch = () => {
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('keydown', handleEscape)
+  fetchProjects()
 })
 
 onUnmounted(() => {
@@ -221,10 +364,17 @@ function error(e: any) {
   alert(e)
 }
 
-async function confirmArchiveFinished() {
-  if (confirm('Are you sure you want to archive all finished tasks?')) {
+async function confirmArchiveFinished(project?: Project) {
+  const message = project
+    ? `Are you sure you want to archive all finished tasks in "${project.title}"?`
+    : projects.value.length > 0
+      ? 'Are you sure you want to archive all finished tasks not in a project?'
+      : 'Are you sure you want to archive all finished tasks?'
+  if (confirm(message)) {
     try {
-      const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks/archive_finished`, { method: 'POST' });
+      // An explicit empty projectId limits archiving to unassigned tasks
+      const projectId = encodeURIComponent(project?.id ?? '')
+      const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks/archive_finished?projectId=${projectId}`, { method: 'POST' });
       if (!response.ok) {
         throw new Error('Failed to archive finished tasks');
       }
@@ -239,8 +389,8 @@ async function confirmArchiveFinished() {
 <style scoped>
 .kanban-board {
   display: flex;
+  flex-direction: column;
   gap: 0;
-  flex-wrap: wrap;
   /*font-family: 'Roboto', sans-serif;*/
   background-color: var(--color-background);
   transition: background-color 0.5s, color 0.5s;
@@ -254,85 +404,43 @@ async function confirmArchiveFinished() {
   }
 }
 
-.kanban-column {
-  flex: 1;
-  width: 33.3%;
-  border: 1px solid var(--color-border);
-  background-color: var(--color-background);
-  padding: var(--kanban-gap);
-  transition: box-shadow 0.3s ease;
+.project-group + .project-group {
+  margin-top: 1.5rem;
+}
+
+.project-group-header {
   font-family: sans-serif;
-  min-height: 400px;
-}
-.kanban-column + .kanban-column {
-  border-left: 0;
-}
-
-.kanban-column:hover .new-task.mini-button {
-  opacity: 1.0;
-}
-
-h2 {
-  /* lines up with the task card padding */
+  font-weight: 500;
+  font-size: 1.1rem;
+  color: var(--color-heading);
+  margin-bottom: 0.5rem;
   padding-left: calc(var(--task-pad) / 2);
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-  justify-content: space-between;
-  font-weight: 400;
-  font-size: 1.2rem;
 }
 
-.new-task {
-  font-family: "JetBrains Mono", monospace;
-  margin-top: calc(var(--kanban-gap) / 2);
-  padding: calc(5px + var(--task-pad) / 2) calc(var(--task-pad) / 2);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 1.0rem;
-  line-height: 1.0;
+.project-group-toggle {
+  font: inherit;
+  color: inherit;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  width: 100%;
-  text-align: left;
-  color: var(--color-text);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  user-select: none;
 }
 
-.new-task.mini-button {
-  font-size: 1.5rem;
-  font-weight: 200;
-  padding: 0.25rem 0.5rem 0.4rem;
-  margin-top: 0;
-  margin-right: 0;
-  width: 35px;
-  height: 35px;
-  text-align: center;
-  line-height: 0.8;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.0;
-  transition: opacity 0.2s;
+.project-group-toggle::before {
+  content: '▾';
+  display: inline-block;
+  width: 1.25rem;
+  opacity: 0.6;
 }
 
-.kanban-column:hover .new-task.mini-button {
-  opacity: 1.0;
+.project-group-header.collapsed .project-group-toggle::before {
+  content: '▸';
 }
 
-.new-task:hover {
-  border-color: rgba(255, 255, 255, 0.02);
-  background-color: rgba(255, 255, 255, 0.07);
-}
-
-.new-task :deep(.shortcut-hint) {
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.new-task:hover :deep(.shortcut-hint) {
-  opacity: 0.7;
+.project-group.drag-over {
+  outline: 0.125rem dashed var(--color-border-hover);
+  outline-offset: 0.25rem;
 }
 
 .guided-overlay {

@@ -50,6 +50,20 @@
         </div>
       </div>
 
+      <div class="project-row">
+        <label for="project">Project</label>
+        <Dropdown
+          id="project"
+          v-model="projectId"
+          :options="projects"
+          optionLabel="title"
+          optionValue="id"
+          placeholder="No project"
+          showClear
+          class="project-pill"
+        />
+      </div>
+
       <label v-if="!isIdd">
         <input type="checkbox" v-model="determineRequirements" />
         Determine Requirements
@@ -106,12 +120,13 @@ import AutogrowTextarea from './AutogrowTextarea.vue'
 import Button from 'primevue/button'
 import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
+import Dropdown from 'primevue/dropdown'
 import ModelConfigPresetEditor from './ModelConfigPresetEditor.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ShortcutHint from './ShortcutHint.vue'
 import { store, type TaskConfigData } from '../lib/store'
 import { useModelConfigPresets } from '../composables/useModelConfigPresets'
-import type { Flow, Task, TaskStatus, LLMConfig } from '../lib/models'
+import type { Flow, Project, Task, TaskStatus, LLMConfig } from '../lib/models'
 
 const devMode = computed(() => import.meta.env.MODE === 'development')
 const props = withDefaults(defineProps<{
@@ -211,6 +226,20 @@ const advisorEnabled = ref<boolean>(
 )
 const selectedBranch = ref<string | null>(initialBranchValue)
 
+const projectId = ref<string | null>(props.task?.projectId ?? null)
+const projects = ref<Project[]>([])
+
+const fetchProjects = async () => {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${workspaceId.value}/projects`)
+    if (!response.ok) return
+    const data = await response.json()
+    projects.value = data.projects ?? []
+  } catch {
+    // The dropdown simply stays empty when projects can't be loaded
+  }
+}
+
 // Auto-save state
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const saveDebounceTimer = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -233,6 +262,7 @@ interface FormState {
   envType: string
   repoMode: string
   selectedBranch: string | null
+  projectId: string | null
   determineRequirements: boolean
   exploreContext: boolean
   planningPrompt: string
@@ -253,6 +283,7 @@ const captureFormState = (): FormState => ({
   envType: envType.value,
   repoMode: repoMode.value,
   selectedBranch: selectedBranch.value,
+  projectId: projectId.value,
   determineRequirements: determineRequirements.value,
   exploreContext: exploreContext.value,
   planningPrompt: planningPrompt.value,
@@ -270,6 +301,7 @@ const restoreFormState = (state: FormState) => {
   envType.value = state.envType
   repoMode.value = state.repoMode
   selectedBranch.value = state.selectedBranch
+  projectId.value = state.projectId
   determineRequirements.value = state.determineRequirements
   exploreContext.value = state.exploreContext
   planningPrompt.value = state.planningPrompt
@@ -398,6 +430,8 @@ const buildTaskData = (status: TaskStatus): Record<string, any> => {
   const taskData: Record<string, any> = {
     flowType: flowType.value,
     status,
+    // Always sent so an explicit empty string clears the assignment
+    projectId: projectId.value ?? '',
     flowOptions: buildFlowOptions(),
   }
   if (isIdd.value) {
@@ -475,7 +509,7 @@ const scheduleAutoSave = () => {
 }
 
 // Watch all form fields for auto-save
-watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, exploreContext, planningPrompt, advisorEnabled, selectedPresetValue, llmConfig, newPresetName], () => {
+watch([description, title, flowType, envType, repoMode, selectedBranch, projectId, determineRequirements, exploreContext, planningPrompt, advisorEnabled, selectedPresetValue, llmConfig, newPresetName], () => {
   if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()
@@ -666,6 +700,7 @@ onMounted(() => {
     descriptionRef.value?.focus()
   }
   fetchTaskConfig()
+  fetchProjects()
 })
 
 onUnmounted(() => {
@@ -876,6 +911,26 @@ label {
 
 .idd-row {
   display: flex;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+}
+
+.project-pill {
+  min-width: 12rem;
+}
+
+:deep(.project-pill.p-select),
+:deep(.project-pill.p-dropdown) {
+  border-radius: 100rem;
+  background-color: var(--color-background);
+}
+
+:deep(.project-pill .p-select-label),
+:deep(.project-pill .p-dropdown-label) {
+  padding: 0.375rem 0.5rem 0.375rem 1rem;
 }
 
 </style>

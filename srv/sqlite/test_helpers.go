@@ -14,6 +14,13 @@ func NewTestSqliteStorage(t *testing.T, dbName string) *Storage {
 	kvDb, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 
+	// Each pooled connection to ":memory:" opens its own independent database,
+	// so concurrent access can hit an empty database missing the migrated
+	// schema. Limiting the pool to a single connection keeps all access on the
+	// one database that was migrated.
+	db.SetMaxOpenConns(1)
+	kvDb.SetMaxOpenConns(1)
+
 	tracker := newBusyTracker()
 	storage := &Storage{
 		db:                    &trackedDB{DB: db, name: "main", tracker: tracker},

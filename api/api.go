@@ -170,9 +170,12 @@ func (ctrl *Controller) GetModelsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
-// ArchiveFinishedTasksHandler handles the request to archive all finished tasks
+// ArchiveFinishedTasksHandler handles the request to archive all finished
+// tasks. An optional projectId query param limits archiving to tasks assigned
+// to that project; an explicit empty value limits it to unassigned tasks.
 func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
+	projectId, filterByProject := c.GetQuery("projectId")
 
 	// Get all tasks with status 'complete', 'canceled', or 'failed'
 	tasks, err := ctrl.service.GetTasks(c.Request.Context(), workspaceId, []domain.TaskStatus{
@@ -189,6 +192,9 @@ func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	now := time.Now()
 
 	for _, task := range tasks {
+		if filterByProject && task.ProjectId != projectId {
+			continue
+		}
 		task.Archived = &now
 		err := ctrl.service.PersistTask(c.Request.Context(), task)
 		if err != nil {
@@ -238,6 +244,12 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	taskRoutes.POST("/:id/archive", ctrl.ArchiveTaskHandler)
 	taskRoutes.POST("/:id/cancel", ctrl.CancelTaskHandler)
 	taskRoutes.POST("/archive_finished", ctrl.ArchiveFinishedTasksHandler)
+
+	projectRoutes := workspaceApiRoutes.Group("/projects")
+	projectRoutes.POST("/", ctrl.CreateProjectHandler)
+	projectRoutes.GET("/", ctrl.GetProjectsHandler)
+	projectRoutes.PUT("/:id", ctrl.UpdateProjectHandler)
+	projectRoutes.DELETE("/:id", ctrl.DeleteProjectHandler)
 
 	flowRoutes := workspaceApiRoutes.Group("/flows")
 	flowRoutes.GET("/:id", ctrl.GetFlowHandler)
@@ -726,6 +738,10 @@ type TaskRequest struct {
 	AgentType   string                 `json:"agentType"`
 	Status      string                 `json:"status"`
 	FlowOptions map[string]interface{} `json:"flowOptions"`
+	// ProjectId is a pointer to distinguish an absent field (leave the
+	// project assignment unchanged on update) from an explicit empty string
+	// (clear the project assignment).
+	ProjectId *string `json:"projectId"`
 }
 
 func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
@@ -778,6 +794,9 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 		AgentType:   agentType,
 		FlowType:    flowType,
 		FlowOptions: taskReq.FlowOptions,
+	}
+	if taskReq.ProjectId != nil {
+		task.ProjectId = *taskReq.ProjectId
 	}
 
 	if err := ctrl.service.PersistTask(c, task); err != nil {
@@ -1763,6 +1782,9 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 		task.Title = taskReq.Title
 	}
 	task.Description = taskReq.Description
+	if taskReq.ProjectId != nil {
+		task.ProjectId = *taskReq.ProjectId
+	}
 	task.AgentType = agentType
 	task.Status = status
 	task.FlowOptions = taskReq.FlowOptions
