@@ -90,6 +90,8 @@ private class IrohHttpCall(
                 throw error
             } catch (error: Exception) {
                 throw IOException("Iroh request failed", error)
+            } catch (error: LinkageError) {
+                throw IOException("Iroh native transport unavailable", error)
             } finally {
                 closeQuietly(stream)
                 activeStream = null

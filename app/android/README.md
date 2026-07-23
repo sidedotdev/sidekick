@@ -70,10 +70,11 @@ SDK Manager under **SDK Tools → Android SDK Platform-Tools**).
 
 ## Remote access stack
 
-- `computer.iroh:iroh` supplies the Kotlin API and native `libiroh_ffi.so`
-  libraries used to open authenticated HTTP/1.1 streams to the sidekick server.
-  JNA uses its Android AAR variant so the required `libjnidispatch.so` libraries
-  are packaged without conflicting with JNA's transitive JVM JAR.
+- `computer.iroh:iroh-android` supplies the Android `libiroh_ffi.so` libraries
+  used to open authenticated HTTP/1.1 streams to the sidekick server, plus the
+  matching `computer.iroh:iroh` Kotlin bindings and JNA's Android AAR
+  (`libjnidispatch.so`). The bindings jar's desktop natives are excluded from
+  APK packaging.
 - Retrofit, OkHttp, and kotlinx.serialization provide the typed REST client.
   MockWebServer covers the HTTP layer in JVM tests.
 - ZXing Embedded scans the server-generated pairing QR code.

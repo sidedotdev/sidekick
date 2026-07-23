@@ -7,8 +7,7 @@ lifecycle = "2.9.4"
 coreKtx = "1.17.0"
 navigation = "2.9.6"
 dataStore = "1.2.0"
-iroh = "1.0.0"
-jna = "5.15.0"
+iroh = "1.1.0"
 retrofit = "2.11.0"
 okhttp = "4.12.0"
 serialization = "1.9.0"
@@ -34,8 +33,7 @@ androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graph
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 
-iroh = { group = "computer.iroh", name = "iroh", version.ref = "iroh" }
-jna-android = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+iroh-android = { group = "computer.iroh", name = "iroh-android", version.ref = "iroh" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutinesTest" }
 retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 retrofit-kotlinx-serialization = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "retrofit" }

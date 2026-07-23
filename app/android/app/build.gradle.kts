@@ -41,6 +41,15 @@ android {
         jniLibs {
             useLegacyPackaging = false
         }
+        resources {
+            // Exclude desktop natives embedded in the bindings jar.
+            excludes += setOf(
+                "darwin-aarch64/*",
+                "linux-aarch64/*",
+                "linux-x86-64/*",
+                "win32-x86-64/*",
+            )
+        }
     }
 
     compileOptions {
@@ -84,14 +93,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
 
-    implementation(libs.iroh) {
-        exclude(group = "net.java.dev.jna", module = "jna")
-    }
-    implementation(libs.jna.android) {
-        artifact {
-            type = "aar"
-        }
-    }
+    implementation(libs.iroh.android)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.kotlinx.serialization)

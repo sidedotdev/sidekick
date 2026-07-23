@@ -333,6 +333,36 @@ class IrohHttpCallFactoryTest {
     }
 
     @Test
+    fun `async call reports missing native library as failure instead of crashing`() {
+        val connector = object : IrohConnector {
+            override suspend fun connect(ticket: String): IrohConnection {
+                throw UnsatisfiedLinkError("libiroh_ffi.so not found")
+            }
+        }
+        val callbackCalled = CountDownLatch(1)
+        var callbackError: IOException? = null
+
+        IrohHttpCallFactory("ticket", connector)
+            .newCall(Request.Builder().url("http://sidekick/tasks").build())
+            .enqueue(
+                object : Callback {
+                    override fun onFailure(call: okhttp3.Call, e: IOException) {
+                        callbackError = e
+                        callbackCalled.countDown()
+                    }
+
+                    override fun onResponse(call: okhttp3.Call, response: Response) {
+                        response.close()
+                        callbackCalled.countDown()
+                    }
+                },
+            )
+
+        assertTrue(callbackCalled.await(2, TimeUnit.SECONDS))
+        assertTrue(callbackError?.cause is UnsatisfiedLinkError)
+    }
+
+    @Test
     fun `async callback failure does not invoke failure callback`() {
         val stream = FakeIrohStream("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
         val callbackCalled = CountDownLatch(1)
