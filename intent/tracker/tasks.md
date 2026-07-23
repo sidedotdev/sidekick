@@ -46,6 +46,4 @@ Incomplete Fields:
 #### Project
 
 When creating or editing tasks, projects can be assigned via a pill-style
-dropdown. existing tasks can be dragged and dropped between projects, though
-they keep their status as-is (no drag and drop between columns/statuses is
-allowed).
+dropdown.
