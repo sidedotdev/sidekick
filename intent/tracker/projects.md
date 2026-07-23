@@ -53,3 +53,11 @@ The projects list page allows using drag and drop to order projects. allows
 creating, editing and deleting projects.
 
 The main left sidebar has a projects tab to access this page.
+
+ORCHESTOR NOTE: Canceled your tasks again: they are confused as they again, are
+NOT ready until backend is there. Add a nudge here: why didn't you think of that
+when you kicked them off?
+
+Orchestrator note: I think you need a better way to think about how you manage
+tasks, and better tools. make a minimal suggestion here that would help you via
+a nudge.
