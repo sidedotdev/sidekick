@@ -16,6 +16,11 @@
       />
       <button class="search-clear" @click="clearSearch" title="Clear search">×</button>
     </div>
+    <div v-if="projects.length > 0" class="board-column-headings">
+      <h2>You</h2>
+      <h2>AI Sidekick</h2>
+      <h2>Finished</h2>
+    </div>
     <section
       v-for="project in projects"
       :key="project.id"
@@ -34,11 +39,15 @@
           class="project-group-toggle"
           :aria-expanded="isGroupExpanded(project.id)"
           @click="toggleGroup(project.id)"
-        >{{ project.title }}</button>
+        >
+          <ProjectsIcon class="project-group-icon" />
+          <span>{{ project.title }}</span>
+        </button>
       </h3>
       <KanbanColumnGroup
         v-show="isGroupExpanded(project.id)"
         :tasks="tasksByProjectId[project.id] ?? []"
+        :show-headings="false"
         @add-task="(agentType: AgentType) => addTask(agentType, project.id)"
         @archive-finished="confirmArchiveFinished(project)"
         @refresh="refresh"
@@ -62,12 +71,15 @@
           class="project-group-toggle"
           :aria-expanded="isGroupExpanded(EVERYTHING_ELSE_KEY)"
           @click="toggleGroup(EVERYTHING_ELSE_KEY)"
-        >Everything else</button>
+        >
+          <span>Everything else</span>
+        </button>
       </h3>
       <KanbanColumnGroup
         v-show="isGroupExpanded(EVERYTHING_ELSE_KEY)"
         :tasks="unassignedTasks"
         :new-task-shortcut-label="newTaskShortcutLabel"
+        :show-headings="false"
         @add-task="(agentType: AgentType) => addTask(agentType)"
         @archive-finished="confirmArchiveFinished()"
         @refresh="refresh"
@@ -90,6 +102,7 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Project, Task, TaskStatus } from '../lib/models'
 import KanbanColumnGroup from './KanbanColumnGroup.vue'
+import ProjectsIcon from './icons/ProjectsIcon.vue'
 import TaskModal from './TaskModal.vue'
 import { store } from '../lib/store'
 import { isInteractiveElement } from '../lib/dom'
@@ -404,6 +417,22 @@ async function confirmArchiveFinished(project?: Project) {
   }
 }
 
+.board-column-headings {
+  display: flex;
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.board-column-headings h2 {
+  flex: 1;
+  width: 33.3%;
+  /* lines up with the kanban column padding and task card padding */
+  padding-left: calc(var(--kanban-gap) + var(--task-pad) / 2);
+  font-family: sans-serif;
+  font-weight: 400;
+  font-size: 1.2rem;
+}
+
 .project-group + .project-group {
   margin-top: 1.5rem;
 }
@@ -414,7 +443,8 @@ async function confirmArchiveFinished(project?: Project) {
   font-size: 1.1rem;
   color: var(--color-heading);
   margin-bottom: 0.5rem;
-  padding-left: calc(var(--task-pad) / 2);
+  background-color: var(--color-background-soft);
+  border-radius: 0.5rem;
 }
 
 .project-group-toggle {
@@ -422,7 +452,11 @@ async function confirmArchiveFinished(project?: Project) {
   color: inherit;
   background: transparent;
   border: none;
-  padding: 0;
+  padding: 0.375rem 0.75rem;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
   cursor: pointer;
   user-select: none;
 }
@@ -431,7 +465,14 @@ async function confirmArchiveFinished(project?: Project) {
   content: '▾';
   display: inline-block;
   width: 1.25rem;
+  margin-right: 0.5rem;
   opacity: 0.6;
+}
+
+.project-group-icon {
+  flex-shrink: 0;
+  margin-right: 0.5rem;
+  opacity: 0.7;
 }
 
 .project-group-header.collapsed .project-group-toggle::before {

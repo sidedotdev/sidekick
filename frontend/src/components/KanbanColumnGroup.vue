@@ -1,12 +1,12 @@
 <template>
-  <div class="kanban-column-group">
+  <div class="kanban-column-group" :class="{ compact: isCompact }">
     <div
       v-for="agentType in ['human', 'llm', 'none'] as const"
       :key="agentType"
       class="kanban-column"
     >
-      <h2>
-        {{ columnNames[agentType] }}
+      <h2 v-if="showHeadings || tasks.length > 0" :class="{ 'buttons-only': !showHeadings }">
+        <template v-if="showHeadings">{{ columnNames[agentType] }}</template>
         <button v-if="agentType !== 'none'" class="new-task mini-button" @click="emit('addTask', agentType)">+</button>
         <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="emit('archiveFinished')">📦</button>
       </h2>
@@ -36,10 +36,19 @@ import type { FullTask, AgentType } from '../lib/models'
 import VirtualTaskList from './VirtualTaskList.vue'
 import ShortcutHint from './ShortcutHint.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   tasks: FullTask[]
   newTaskShortcutLabel?: string
-}>()
+  // When headings are shown by the surrounding board instead (project
+  // groups), the per-column headings collapse down to just their buttons
+  showHeadings?: boolean
+}>(), {
+  showHeadings: true,
+})
+
+// A headingless group with no visible tasks shrinks to just the new-task
+// buttons instead of reserving the usual column height
+const isCompact = computed(() => !props.showHeadings && props.tasks.length === 0)
 
 const emit = defineEmits<{
   (e: 'addTask', agentType: AgentType): void
@@ -96,6 +105,10 @@ const groupedTasks = computed(() => {
   border-left: 0;
 }
 
+.kanban-column-group.compact .kanban-column {
+  min-height: 0;
+}
+
 h2 {
   /* lines up with the task card padding */
   padding-left: calc(var(--task-pad) / 2);
@@ -105,6 +118,10 @@ h2 {
   justify-content: space-between;
   font-weight: 400;
   font-size: 1.2rem;
+}
+
+h2.buttons-only {
+  justify-content: flex-end;
 }
 
 .new-task {

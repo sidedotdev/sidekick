@@ -138,7 +138,9 @@ describe('KanbanBoard', () => {
       const wrapper = await mountBoard({}, projects)
 
       const groups = wrapper.findAll('.project-group')
-      await groups.at(0)!.find('.new-task.mini-button').trigger('click')
+      await groups.at(0)!.findAll('.new-task')
+        .find(button => button.text().includes('Draft Task'))!
+        .trigger('click')
 
       const modal = wrapper.findComponent(TaskModal)
       expect(modal.exists()).toBe(true)
@@ -150,11 +152,71 @@ describe('KanbanBoard', () => {
       const wrapper = await mountBoard({}, projects)
 
       const groups = wrapper.findAll('.project-group')
-      await groups.at(2)!.find('.new-task.mini-button').trigger('click')
+      await groups.at(2)!.findAll('.new-task')
+        .find(button => button.text().includes('Draft Task'))!
+        .trigger('click')
 
       const modal = wrapper.findComponent(TaskModal)
       expect(modal.exists()).toBe(true)
       expect(modal.props('task')!.projectId).toBeUndefined()
+    })
+
+    it('shows the column headings once at the top instead of repeating them per group', async () => {
+      const tasks = [
+        { id: '1', agentType: 'human', status: 'to_do', projectId: 'project_1' },
+      ] as FullTask[]
+      const wrapper = await mountBoard({ tasks }, projects)
+
+      const headings = wrapper.find('.board-column-headings')
+      expect(headings.exists()).toBe(true)
+      expect(headings.text()).toContain('You')
+      expect(headings.text()).toContain('AI Sidekick')
+      expect(headings.text()).toContain('Finished')
+
+      const columnHeadingTexts = wrapper.findAll('.kanban-column h2').map(h => h.text())
+      columnHeadingTexts.forEach(text => {
+        expect(text).not.toContain('You')
+        expect(text).not.toContain('AI Sidekick')
+        expect(text).not.toContain('Finished')
+      })
+    })
+
+    it('shows headings within the columns when there are no projects', async () => {
+      const wrapper = await mountBoard()
+
+      expect(wrapper.find('.board-column-headings').exists()).toBe(false)
+      const columnHeadingTexts = wrapper.findAll('.kanban-column h2').map(h => h.text())
+      expect(columnHeadingTexts.length).toBe(3)
+      expect(columnHeadingTexts[0]).toContain('You')
+      expect(columnHeadingTexts[1]).toContain('AI Sidekick')
+      expect(columnHeadingTexts[2]).toContain('Finished')
+    })
+
+    it('renders empty project groups compactly, with no column headings', async () => {
+      const wrapper = await mountBoard({}, projects)
+
+      const group = wrapper.findAll('.project-group').at(0)!
+      expect(group.find('.kanban-column-group').classes()).toContain('compact')
+      expect(group.find('.kanban-column h2').exists()).toBe(false)
+    })
+
+    it('does not render groups with tasks compactly', async () => {
+      const tasks = [
+        { id: '1', agentType: 'human', status: 'to_do', projectId: 'project_1' },
+      ] as FullTask[]
+      const wrapper = await mountBoard({ tasks }, projects)
+
+      const group = wrapper.findAll('.project-group').at(0)!
+      expect(group.find('.kanban-column-group').classes()).not.toContain('compact')
+    })
+
+    it('shows the project icon in project group headers', async () => {
+      const wrapper = await mountBoard({}, projects)
+
+      const groups = wrapper.findAll('.project-group')
+      expect(groups.at(0)!.find('.project-group-toggle .project-group-icon').exists()).toBe(true)
+      // The everything else group is not a project, so it has no icon
+      expect(groups.at(2)!.find('.project-group-toggle .project-group-icon').exists()).toBe(false)
     })
   })
 
