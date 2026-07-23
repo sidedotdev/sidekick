@@ -706,17 +706,32 @@ func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, p
 }
 
 func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*flow_action.UserResponse, error) {
+	req := flow_action.RequestForUser{
+		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
+		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
+		RequestKind:   flow_action.RequestKindApproval,
+	}
+
 	// IDD sub-task plans are auto-approved: the intent author reviews outcomes
 	// when the sub-task auto-merges back into the idd worktree, so pausing for
 	// plan approval would only stall the background sub-task. Version-gated so
 	// in-flight sub-tasks that already requested approval replay correctly.
-	if dCtx.Idd && workflow.GetVersion(dCtx, "idd-auto-approve-plan", workflow.DefaultVersion, 1) == 1 {
-		approved := true
-		return &flow_action.UserResponse{Approved: &approved, Content: "Plan auto-approved for IDD sub-task."}, nil
-	}
-	req := flow_action.RequestForUser{
-		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
-		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
+	if dCtx.Idd {
+		v := workflow.GetVersion(dCtx, "idd-auto-approve-plan", workflow.DefaultVersion, 2)
+		if v >= 1 {
+			approved := true
+			response := &flow_action.UserResponse{Approved: &approved, Content: "Plan auto-approved for IDD sub-task."}
+			if v < 2 {
+				return response, nil
+			}
+			// Record a completed flow action so the auto-approval is visible
+			// in the flow history.
+			actionCtx := dCtx.NewActionContext("user_request.approve.dev_plan")
+			actionCtx.ActionParams = req.ActionParams()
+			return Track(actionCtx, func(_ DevActionContext, _ *domain.FlowAction) (*flow_action.UserResponse, error) {
+				return response, nil
+			})
+		}
 	}
 	return GetUserApproval(dCtx, "dev_plan", req.Content, req.RequestParams)
 }

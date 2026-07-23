@@ -722,11 +722,41 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 
 	// Auto-merge bypasses human review, merging straight into the chosen target.
 	if autoMerge {
-		return MergeApprovalResponse{
+		response := MergeApprovalResponse{
 			Approved:      true,
 			TargetBranch:  defaultTarget,
 			MergeStrategy: MergeStrategySquash,
-		}, gitDiff, currentTreeHash, nil
+		}
+		// Record a completed flow action so the auto-approved review is
+		// visible in the flow history.
+		if workflow.GetVersion(dCtx, "auto-merge-flow-action", workflow.DefaultVersion, 1) >= 1 {
+			req := flow_action.RequestForUser{
+				Content: "Please review these changes",
+				RequestParams: map[string]any{
+					"mergeApprovalInfo": MergeApprovalParams{
+						SourceBranch:         dCtx.Worktree.Name,
+						DefaultTargetBranch:  defaultTarget,
+						Diff:                 gitDiff,
+						DiffSinceLastReview:  diffSinceLastReview,
+						DefaultMergeStrategy: MergeStrategySquash,
+					},
+					"lastReviewTreeHash": lastReviewTreeHash,
+				},
+				RequestKind: flow_action.RequestKindMergeApproval,
+			}
+			actionCtx := dCtx.NewActionContext("user_request.approve.merge")
+			actionCtx.ActionParams = req.ActionParams()
+			approved := true
+			if _, trackErr := Track(actionCtx, func(_ DevActionContext, _ *domain.FlowAction) (*flow_action.UserResponse, error) {
+				return &flow_action.UserResponse{
+					Approved: &approved,
+					Content:  fmt.Sprintf("Auto-approved merge into %s.", defaultTarget),
+				}, nil
+			}); trackErr != nil {
+				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to record auto-approved merge flow action: %w", trackErr)
+			}
+		}
+		return response, gitDiff, currentTreeHash, nil
 	}
 
 	// Request merge approval from user

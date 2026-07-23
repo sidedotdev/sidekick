@@ -93,6 +93,21 @@ func GetUserMergeApproval(
 		// TODO: add a self-review process in this case
 		approved := true
 		targetBranch := "main" // TODO: store the startBranch as part of the worktree object when creating it, then retrieve it here
+		// Record a completed flow action so the auto-approval is visible in
+		// the flow history.
+		if workflow.GetVersion(dCtx, "auto-approve-merge-flow-action", workflow.DefaultVersion, 1) >= 1 {
+			req := flow_action.RequestForUser{
+				Content:       approvalPrompt,
+				RequestParams: requestParams,
+				RequestKind:   flow_action.RequestKindMergeApproval,
+			}
+			actionCtx.ActionParams = req.ActionParams()
+			if _, err := Track(actionCtx, func(_ DevActionContext, _ *domain.FlowAction) (*flow_action.UserResponse, error) {
+				return &flow_action.UserResponse{Approved: &approved, Content: "Auto-approved: human-in-the-loop is disabled."}, nil
+			}); err != nil {
+				return MergeApprovalResponse{}, err
+			}
+		}
 		return MergeApprovalResponse{Approved: approved, TargetBranch: targetBranch, MergeStrategy: MergeStrategySquash}, nil
 	}
 
