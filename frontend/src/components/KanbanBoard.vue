@@ -46,6 +46,7 @@
       />
     </section>
     <section
+      v-if="projects.length > 0"
       class="project-group"
       :class="{ 'drag-over': dragOverGroupKey === EVERYTHING_ELSE_KEY }"
       @dragover="(event: DragEvent) => onGroupDragOver(EVERYTHING_ELSE_KEY, event)"
@@ -53,7 +54,6 @@
       @drop="(event: DragEvent) => onGroupDrop(EVERYTHING_ELSE_KEY, event)"
     >
       <h3
-        v-if="projects.length > 0"
         class="project-group-header"
         :class="{ collapsed: !isGroupExpanded(EVERYTHING_ELSE_KEY) }"
       >
@@ -65,7 +65,7 @@
         >Everything else</button>
       </h3>
       <KanbanColumnGroup
-        v-show="projects.length === 0 || isGroupExpanded(EVERYTHING_ELSE_KEY)"
+        v-show="isGroupExpanded(EVERYTHING_ELSE_KEY)"
         :tasks="unassignedTasks"
         :new-task-shortcut-label="newTaskShortcutLabel"
         @add-task="(agentType: AgentType) => addTask(agentType)"
@@ -74,6 +74,15 @@
         @error="error"
       />
     </section>
+    <KanbanColumnGroup
+      v-else
+      :tasks="unassignedTasks"
+      :new-task-shortcut-label="newTaskShortcutLabel"
+      @add-task="(agentType: AgentType) => addTask(agentType)"
+      @archive-finished="confirmArchiveFinished()"
+      @refresh="refresh"
+      @error="error"
+    />
   </div>
 </template>
 
@@ -157,9 +166,9 @@ const unassignedTasks = computed(() => {
 // reserved key, which can never collide with a real project id
 const EVERYTHING_ELSE_KEY = ''
 
-// Statuses that don't need attention right now; a group with only these (or
-// no tasks at all) auto-collapses
-const NON_ACTIONABLE_STATUSES: TaskStatus[] = ['drafting', 'blocked', 'in_review']
+// Per intent, "actionable" statuses are the ones needing human attention; a
+// project group with no actionable tasks (or no tasks at all) auto-collapses
+const ACTIONABLE_STATUSES: TaskStatus[] = ['drafting', 'blocked', 'in_review']
 
 // Manual toggles override the auto-computed state for the component's lifetime
 const manualExpansion = ref<Record<string, boolean>>({})
@@ -170,7 +179,7 @@ const autoExpandedGroups = computed(() => {
   const projectIds = new Set(projects.value.map(project => project.id))
   const expanded = new Set<string>()
   for (const task of props.tasks) {
-    if (NON_ACTIONABLE_STATUSES.includes(task.status)) continue
+    if (!ACTIONABLE_STATUSES.includes(task.status)) continue
     const key = task.projectId && projectIds.has(task.projectId)
       ? task.projectId
       : EVERYTHING_ELSE_KEY

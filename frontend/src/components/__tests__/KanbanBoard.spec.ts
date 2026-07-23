@@ -127,10 +127,11 @@ describe('KanbanBoard', () => {
       })
     })
 
-    it('does not render a header for the everything else group when there are no projects', async () => {
+    it('renders plain kanban columns with no group wrapper when there are no projects', async () => {
       const wrapper = await mountBoard()
-      expect(wrapper.findAll('.project-group').length).toBe(1)
+      expect(wrapper.findAll('.project-group').length).toBe(0)
       expect(wrapper.find('.project-group-header').exists()).toBe(false)
+      expect(wrapper.find('.kanban-column-group').exists()).toBe(true)
     })
 
     it('opens the task modal with the project preselected when adding from a project group', async () => {
@@ -180,17 +181,17 @@ describe('KanbanBoard', () => {
       ] as FullTask[]
       const wrapper = await mountBoard({ tasks }, projects)
 
-      expect(isGroupBodyVisible(wrapper, 0)).toBe(false)
-      expect(isGroupBodyVisible(wrapper, 1)).toBe(true)
+      expect(isGroupBodyVisible(wrapper, 0)).toBe(true)
+      expect(isGroupBodyVisible(wrapper, 1)).toBe(false)
     })
 
-    it('expands a project that has finished tasks', async () => {
+    it('auto-collapses a project whose tasks are all finished', async () => {
       const tasks = [
         { id: '1', agentType: 'none', status: 'complete', projectId: 'project_1' },
       ] as FullTask[]
       const wrapper = await mountBoard({ tasks }, projects)
 
-      expect(isGroupBodyVisible(wrapper, 0)).toBe(true)
+      expect(isGroupBodyVisible(wrapper, 0)).toBe(false)
     })
 
     it('auto-collapses empty projects and the empty everything else group', async () => {
@@ -201,15 +202,17 @@ describe('KanbanBoard', () => {
       expect(isGroupBodyVisible(wrapper, 2)).toBe(false)
     })
 
-    it('keeps the everything else group expanded when there are no projects', async () => {
+    it('always shows the plain kanban columns when there are no projects', async () => {
       const wrapper = await mountBoard()
 
-      expect(isGroupBodyVisible(wrapper, 0)).toBe(true)
+      expect(wrapper.findAll('.project-group').length).toBe(0)
+      const style = wrapper.find('.kanban-column-group').attributes('style') ?? ''
+      expect(style).not.toContain('display: none')
     })
 
     it('lets a manual toggle override the auto-collapsed state', async () => {
       const tasks = [
-        { id: '1', agentType: 'human', status: 'drafting', projectId: 'project_1' },
+        { id: '1', agentType: 'human', status: 'to_do', projectId: 'project_1' },
       ] as FullTask[]
       const wrapper = await mountBoard({ tasks }, projects)
 
@@ -225,7 +228,7 @@ describe('KanbanBoard', () => {
 
     it('does not auto-collapse an actionable project when search filters out its tasks', async () => {
       const tasks = [
-        { id: '1', agentType: 'human', status: 'to_do', title: 'Alpha work', projectId: 'project_1' },
+        { id: '1', agentType: 'human', status: 'drafting', title: 'Alpha work', projectId: 'project_1' },
       ] as FullTask[]
       const wrapper = await mountBoard({ tasks }, projects)
       expect(isGroupBodyVisible(wrapper, 0)).toBe(true)

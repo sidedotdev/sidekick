@@ -75,17 +75,6 @@ export type FullTask = Task & {
   flows: Flow[]
 }
 
-export interface Project {
-  id: string
-  workspaceId: string
-  title: string
-  description?: string
-  priority: string
-  rank?: string
-  created?: Date
-  updated?: Date
-}
-
 export type ActionStatus = 'pending' | 'started' | 'complete' | 'failed'
 
 export interface Flow {
