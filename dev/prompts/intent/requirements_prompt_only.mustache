@@ -1,0 +1,27 @@
+The current intent state has already been committed to {{{path}}} (commit
+{{{commit}}}). Your job is to update the code so that the system's behavior
+matches the intent, focused only on the portion scoped as follows:
+
+{{{scopePrompt}}}
+
+The full intent diff is deliberately not included here: read the committed
+intent file(s) in the repository to understand the scoped portion, then make
+the corresponding changes needed to the implementation. Analyze carefully
+whether the author's intent has actually been met and that no bugs remain,
+ensuring that there is a means to automatically verify that the intent has
+been met, e.g. via appropriate automated tests.
+
+Do NOT re-edit the intent markdown file itself, other than updating its intent
+links - treat the scoped intent as a specification that the code must now
+conform to fully. It may be underspecified, but no code should be in
+contradiction with the intent. Infer intent as well as you can where it is
+underspecified.
+
+Note that all other intent beyond the scoped portion is still in play but may
+or may not be implemented - if not implemented, we should expect that it will
+be in the near future, but that is outside our scope unless it is a dependency
+of the scoped portion. For dependencies, you can unblock yourself by adding a
+minimal placeholder, just ensure that you make it clear via naming as well.
+
+Scope exception: fixing any error/warning that may be blocking automated
+testing or otherwise hindering progress is always allowed.

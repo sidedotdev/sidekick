@@ -20,19 +20,43 @@ import (
 // implement the entire current intent diff.
 const IntentSubtaskScopeWhole = "whole"
 
-// IntentSubtaskScopePartial means the orchestrator launched a sub-task with a
-// custom prompt that narrows the scope to a chunk of the intent.
+// IntentSubtaskScopeSection means the orchestrator launched a sub-task whose
+// prompt names a specific section of an intent file; the sub-task still
+// receives the full intent diff for context.
+const IntentSubtaskScopeSection = "section"
+
+// IntentSubtaskScopePrompt means the orchestrator launched a sub-task scoped
+// by an arbitrary free-form prompt; the sub-task receives only that prompt,
+// not the full intent diff, so the orchestrator remains responsible for
+// following up on intent the prompt does not cover.
+const IntentSubtaskScopePrompt = "prompt"
+
+// IntentSubtaskScopePartial is the legacy scope value from before the
+// section/prompt split; it is still accepted (for replays of older histories)
+// and gets section semantics.
 const IntentSubtaskScopePartial = "partial"
+
+// resolveSubtaskScope normalizes a start_intent_subtask scope argument.
+// Unrecognized values (including the legacy 'partial') get section semantics:
+// a scope prompt alongside the full intent diff, matching pre-split behavior.
+func resolveSubtaskScope(rawScope string) string {
+	switch rawScope {
+	case IntentSubtaskScopeWhole, IntentSubtaskScopeSection, IntentSubtaskScopePrompt:
+		return rawScope
+	default:
+		return IntentSubtaskScopeSection
+	}
+}
 
 // StartIntentSubtaskToolArgs is the LLM-facing schema for the
 // start_intent_subtask tool the IDD orchestrator agent can call. The
-// 'partial' scope can target a specific section of an intent file (e.g.
-// "implement only the '### Finish UI' section of intent/idd/idd.md"), a
-// specific paragraph, or any other narrow focus the orchestrator can
-// describe in the prompt.
+// 'section' scope targets a named section of an intent file while still
+// giving the sub-task the full intent diff; the 'prompt' scope directs the
+// sub-task with only an arbitrary free-form prompt, deliberately omitting
+// the intent diff from its requirements.
 type StartIntentSubtaskToolArgs struct {
-	Scope   string `json:"scope" jsonschema:"description=Either 'whole' to implement the full pending intent diff or 'partial' to implement just the chunk described by 'prompt'.,enum=whole,enum=partial"`
-	Prompt  string `json:"prompt,omitempty" jsonschema:"description=Required when scope is 'partial'. A short prompt scoping the sub-task to a specific chunk of intent. May name a section heading (e.g. \"only the '### Finish UI' section of intent/idd/idd.md\"), a paragraph, or describe any other narrow focus. Ignored when scope is 'whole'."`
+	Scope   string `json:"scope" jsonschema:"description=How to scope the sub-task: 'whole' implements the full pending intent diff\\, 'section' implements just the intent-file section named in 'prompt' (the sub-task still sees the full intent diff)\\, 'prompt' implements an arbitrary free-form scope described in 'prompt' (the sub-task sees only that prompt\\, not the intent diff).,enum=whole,enum=section,enum=prompt"`
+	Prompt  string `json:"prompt,omitempty" jsonschema:"description=Required when scope is 'section' or 'prompt'. For 'section'\\, name the section heading (e.g. \"only the '### Finish UI' section of intent/idd/idd.md\"). For 'prompt'\\, describe the narrow focus in free-form language\\, self-contained enough to direct the sub-task without the intent diff. Ignored when scope is 'whole'."`
 	Planned bool   `json:"planned,omitempty" jsonschema:"description=Set true to run the sub-task as a planned-dev flow\\, which builds an explicit multi-step plan before coding. Prefer this for larger sub-tasks that span disparate changes or multiple areas of the codebase. Leave false (the default) for focused sub-tasks a single coding pass can handle."`
 }
 
@@ -65,9 +89,9 @@ Your job, every time intent settles after a burst of edits, is to decide:
 
 1. Is there a coherent, load-bearing chunk of intent — newly added, or already present but not yet dispatched — that is now ready to be implemented as a sub-task? If yes, call start_intent_subtask. You have three ways to scope the sub-task:
    (a) scope='whole' — implement the entire intent diff. Only valid for the very first dispatch in this IDD flow when no prior sub-tasks exist and the diff is small and cohesive.
-   (b) scope='partial' with a prompt naming a specific section of an intent file (e.g. "implement only the '### Finish UI' section of intent/idd/idd.md").
-   (c) scope='partial' with an arbitrary free-form prompt that directs the sub-task to a portion of the intent without naming a heading.
-   Prefer (b) or (c) over (a). Once any sub-task exists, always use partial scoping so each sub-task targets just the slice it owns.
+   (b) scope='section' with a prompt naming a specific section of an intent file (e.g. "implement only the '### Finish UI' section of intent/idd/idd.md"). The sub-task receives the full intent diff alongside your prompt.
+   (c) scope='prompt' with an arbitrary free-form prompt that directs the sub-task to a portion of the intent without naming a heading. The sub-task receives ONLY your prompt — not the intent diff — so make it self-contained, and you are responsible for following up on any intent it does not cover.
+   Prefer (b) or (c) over (a). Once any sub-task exists, always use section or prompt scoping so each sub-task targets just the slice it owns.
    Also decide how the sub-task should run: set planned=true to have it build an explicit multi-step plan before coding, which is preferred for larger sub-tasks that span disparate changes or multiple areas of the codebase. Leave planned=false (the default) for focused sub-tasks a single coding pass can handle.
 
 2. Is there anything in the current intent that looks highly ambiguous, contradictory, or load-bearing-but-underspecified — where a wrong assumption would cause a near-total rewrite of the implementation? If yes, call add_nudge once for each such concern.
@@ -293,17 +317,14 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 				continue
 			}
 
-			scope := args.Scope
-			if scope != IntentSubtaskScopeWhole && scope != IntentSubtaskScopePartial {
-				scope = IntentSubtaskScopePartial
-			}
+			scope := resolveSubtaskScope(args.Scope)
 			scopePrompt := strings.TrimSpace(args.Prompt)
-			if scope == IntentSubtaskScopePartial && scopePrompt == "" {
+			if scope != IntentSubtaskScopeWhole && scopePrompt == "" {
 				if err := addToolCallResponse(dCtx.ExecContext, chatHistory, llm2.ToolResultBlock{
 					Name:       tc.Name,
 					ToolCallId: tc.Id,
 					IsError:    true,
-					Content:    llm2.TextContentBlocks("scope='partial' requires a non-empty prompt"),
+					Content:    llm2.TextContentBlocks(fmt.Sprintf("scope='%s' requires a non-empty prompt", scope)),
 				}); err != nil {
 					log.Error("Orchestrator: failed to append empty-prompt tool result", "Error", err)
 				}
@@ -324,6 +345,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 				Update:      update,
 				ScopePrompt: scopePrompt,
 				Planned:     args.Planned,
+				PromptOnly:  scope == IntentSubtaskScopePrompt,
 			}
 			// Reserve the sub-task entry synchronously so the very next
 			// iteration of this tool-call loop (and any subsequent
@@ -344,8 +366,8 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 			startedAny = true
 
 			confirmation := fmt.Sprintf("Sub-task launched (scope=%s, planned=%t).", scope, args.Planned)
-			if scope == IntentSubtaskScopePartial {
-				confirmation = fmt.Sprintf("Sub-task launched (scope=partial, planned=%t, prompt=%q).", args.Planned, scopePrompt)
+			if scope != IntentSubtaskScopeWhole {
+				confirmation = fmt.Sprintf("Sub-task launched (scope=%s, planned=%t, prompt=%q).", scope, args.Planned, scopePrompt)
 			}
 			if err := addToolCallResponse(dCtx.ExecContext, chatHistory, llm2.ToolResultBlock{
 				Name:       tc.Name,

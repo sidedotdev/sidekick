@@ -37,6 +37,12 @@ func runGitMergeIntegration(t *testing.T, ctx context.Context, mergeEnvContainer
 
 	setupScript := strings.Join([]string{
 		"cd " + repoDir,
+		// The container (and thus these paths) may be reused across runs, and
+		// an interrupted run can leak the worktree dir/branch past t.Cleanup;
+		// clear any such leftovers so the worktree add below succeeds.
+		"git worktree remove --force " + worktreeDir + " 2>/dev/null || true",
+		"rm -rf " + worktreeDir,
+		"git branch -D merge-feature 2>/dev/null || true",
 		"git worktree add -b " + featureBranch + " " + worktreeDir,
 		"cd " + worktreeDir,
 		"echo hello > feature.txt",

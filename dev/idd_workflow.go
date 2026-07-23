@@ -78,6 +78,11 @@ type StartIntentSubtaskSignal struct {
 	// plan is built before coding) rather than the default BasicDev child. The
 	// orchestrator sets this for larger sub-tasks spanning disparate changes.
 	Planned bool
+	// PromptOnly omits the full intent diff from the sub-task's requirements,
+	// leaving only ScopePrompt to direct it (the orchestrator's free-form
+	// 'prompt' scope). The orchestrator then remains responsible for following
+	// up on intent the prompt does not cover.
+	PromptOnly bool
 }
 
 // FinishIddSignal is the payload for SignalNameFinishIdd, asking the workflow
@@ -527,6 +532,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 
 	reqInfo.ScopePrompt = sig.ScopePrompt
+	reqInfo.PromptOnly = sig.PromptOnly
 
 	// The sub-task gets its own descriptive title generated from the committed
 	// intent sha & diff, falling back to the IDD task title if generation fails.
