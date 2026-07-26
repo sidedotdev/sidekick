@@ -39,4 +39,4 @@ context-gathering-forget:
     t1: true
     c: false
   defaultRule:
-    variation: c
+    variation: t1
