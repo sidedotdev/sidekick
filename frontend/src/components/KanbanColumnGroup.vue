@@ -21,11 +21,11 @@
         @copy="(task: Task) => emit('copy', task)"
         @error="(e: any) => emit('error', e)"
       />
-      <button class="new-task" v-if="showHeadings && agentType == 'human'" @click="emit('addTask', agentType)">
+      <button class="new-task" v-if="agentType == 'human'" @click="emit('addTask', agentType)">
         + Draft Task
         <ShortcutHint v-if="newTaskShortcutLabel" :label="newTaskShortcutLabel" />
       </button>
-      <button class="new-task" v-if="showHeadings && agentType == 'llm'" @click="emit('addTask', agentType)">
+      <button class="new-task" v-if="agentType == 'llm'" @click="emit('addTask', agentType)">
         + Queue Task
       </button>
     </div>
@@ -41,9 +41,9 @@ import ShortcutHint from './ShortcutHint.vue'
 const props = withDefaults(defineProps<{
   tasks: FullTask[]
   newTaskShortcutLabel?: string
-  // When headings (and their add/archive controls) are rendered once by the
-  // surrounding board instead (project groups), the per-column headings are
-  // omitted and the columns lose their boxed styling
+  // When headings are rendered once by the surrounding board instead (project
+  // groups), the per-column headings are omitted and the columns lose their
+  // boxed styling; the add-task buttons remain visible in each column
   showHeadings?: boolean
 }>(), {
   showHeadings: true,

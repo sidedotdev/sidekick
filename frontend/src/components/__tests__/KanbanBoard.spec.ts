@@ -238,9 +238,9 @@ describe('KanbanBoard', () => {
       expect(columnHeadingTexts[2]).toContain('Finished')
     })
 
-    it('renders grouped sections without column headings or add controls', async () => {
+    it('renders grouped sections without column headings but with visible add-task buttons', async () => {
       const tasks = [
-        { id: '1', agentType: 'human', status: 'to_do', projectId: 'project_1' },
+        { id: '1', agentType: 'human', status: 'drafting', projectId: 'project_1' },
       ] as FullTask[]
       const wrapper = await mountBoard({ tasks }, projects)
 
@@ -249,8 +249,46 @@ describe('KanbanBoard', () => {
       groups.forEach(group => {
         expect(group.find('.kanban-column-group').classes()).toContain('headingless')
         expect(group.find('.kanban-column h2').exists()).toBe(false)
-        expect(group.find('.kanban-column .new-task').exists()).toBe(false)
+        expect(group.findAll('.kanban-column .new-task').length).toBe(2)
       })
+
+      // The buttons are actually visible within an expanded group, not just
+      // present in the DOM
+      groups.at(0)!.findAll('.kanban-column .new-task').forEach(button => {
+        expect(button.isVisible()).toBe(true)
+      })
+    })
+
+    it('opens the task modal with the project pre-selected when adding from a project group', async () => {
+      const tasks = [
+        { id: '1', agentType: 'human', status: 'drafting', projectId: 'project_1' },
+      ] as FullTask[]
+      const wrapper = await mountBoard({ tasks }, projects)
+
+      const group = wrapper.findAll('.project-group').at(0)!
+      const addButtons = group.findAll('.new-task')
+      expect(addButtons.length).toBe(2)
+      await addButtons.at(1)!.trigger('click')
+
+      const modal = wrapper.findComponent(TaskModal)
+      expect(modal.exists()).toBe(true)
+      expect(modal.props('task')!.projectId).toBe('project_1')
+      expect(modal.props('task')!.agentType).toBe('llm')
+    })
+
+    it('opens the task modal without a project when adding from the everything else group', async () => {
+      const tasks = [
+        { id: '1', agentType: 'human', status: 'drafting' },
+      ] as FullTask[]
+      const wrapper = await mountBoard({ tasks }, projects)
+
+      const group = wrapper.findAll('.project-group').at(2)!
+      await group.findAll('.new-task').at(0)!.trigger('click')
+
+      const modal = wrapper.findComponent(TaskModal)
+      expect(modal.exists()).toBe(true)
+      expect(modal.props('task')!.projectId).toBeUndefined()
+      expect(modal.props('task')!.agentType).toBe('human')
     })
 
     it('shows the project icon in project group headers', async () => {
