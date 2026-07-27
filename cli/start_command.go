@@ -139,6 +139,13 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 
 	var wg sync.WaitGroup
 
+	// When temporal runs in this process, its schema migration progress is
+	// observable, so dependent services hold off until it completes rather
+	// than exhausting dial retries against a server that isn't listening yet.
+	// When temporal runs in a separate process there is no way to know, and
+	// the normal dial retry/timeout behavior applies as-is.
+	migrationWaiter := newTemporalMigrationWaiter()
+
 	if temporal {
 		wg.Add(1)
 		go func() {
@@ -183,6 +190,9 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if temporal && !migrationWaiter.wait(ctx) {
+				return
+			}
 			log.Info().Msg("Starting server...")
 			srv := startServer()
 
@@ -227,6 +237,9 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if temporal && !migrationWaiter.wait(ctx) {
+				return
+			}
 			log.Info().Msg("Starting worker...")
 			w := startWorker()
 
@@ -274,8 +287,6 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 				return
 			}
 
-			fmt.Printf("\nRemote access enabled. Pair a device using this iroh ticket:\n\n  %s\n\n", remoteServer.Ticket())
-
 			// Wait for cancellation
 			<-ctx.Done()
 			log.Info().Msg("Stopping remote (iroh) API server...")
@@ -299,6 +310,46 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 	wg.Wait()
 	log.Info().Msg("Shut down gracefully")
 	return nil
+}
+
+// temporalMigrationWaiter blocks dependent services while the in-process
+// Temporal schema migration runs, emitting a single notice no matter how many
+// services wait.
+type temporalMigrationWaiter struct {
+	getState     func() temporalsrv.SchemaMigrationState
+	pollInterval time.Duration
+	notify       func()
+	notice       sync.Once
+}
+
+func newTemporalMigrationWaiter() *temporalMigrationWaiter {
+	return &temporalMigrationWaiter{
+		getState:     temporalsrv.GetSchemaMigrationState,
+		pollInterval: 100 * time.Millisecond,
+		notify: func() {
+			log.Info().Msg("Temporal schema migration in progress, waiting for it to complete...")
+		},
+	}
+}
+
+// wait polls the schema migration state until it resolves, returning false if
+// the migration failed or shutdown was requested.
+func (w *temporalMigrationWaiter) wait(ctx context.Context) bool {
+	for {
+		switch w.getState() {
+		case temporalsrv.SchemaMigrationSucceeded:
+			return true
+		case temporalsrv.SchemaMigrationFailed:
+			return false
+		case temporalsrv.SchemaMigrationRunning:
+			w.notice.Do(w.notify)
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(w.pollInterval):
+		}
+	}
 }
 
 func startServer() *api.Server {

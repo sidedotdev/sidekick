@@ -209,9 +209,19 @@ func startServer(cfg *serverConfig) temporal.Server {
 		},
 	}
 
+	// Migrate the on-disk schema before the server touches it: the embedded
+	// SQLite plugin does not migrate on version bump, so an existing database
+	// created by an older server must be upgraded first.
+	if err := migrateTemporalSchema(cfg.dbFilePath); err != nil {
+		log.Fatal().Err(err).Msg("Unable to migrate temporal schema")
+	}
+
 	// Setup namespace
-	if err := sqliteschema.CreateNamespaces(conf.Persistence.DataStores["sqlite-default"].SQL,
-		sqliteschema.NewNamespaceConfig(cfg.clusterName, cfg.namespace, false)); err != nil {
+	namespaceConfig, err := sqliteschema.NewNamespaceConfig(cfg.clusterName, cfg.namespace, false, nil)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Unable to build namespace config")
+	}
+	if err := sqliteschema.CreateNamespaces(conf.Persistence.DataStores["sqlite-default"].SQL, namespaceConfig); err != nil {
 		log.Fatal().Err(err).Msg("Unable to create namespace")
 	}
 

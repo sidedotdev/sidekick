@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"sidekick"
 	"sidekick/common"
@@ -40,7 +41,7 @@ func main() {
 
 	workflowID := args[0]
 	startEvent := 1
-	endEvent := 9999
+	endEvent := math.MaxInt
 	if len(args) >= 2 {
 		startEvent, _ = strconv.Atoi(args[1])
 	}
