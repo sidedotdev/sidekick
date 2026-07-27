@@ -137,12 +137,27 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 	}
 
 	for {
+		userResponse, err := UserRequestIfPaused(dCtx, "Context gathering is paused. Would you like to provide any guidance?", nil)
+		if err != nil {
+			return 0, fmt.Errorf("failed to check for pause during context gathering: %w", err)
+		}
+		if userResponse != nil && userResponse.Content != "" {
+			if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
+				Role:    llm.ChatMessageRoleUser,
+				Content: renderGeneralFeedbackPrompt(userResponse.Content, FeedbackTypePause),
+			}); err != nil {
+				return 0, fmt.Errorf("failed to append pause guidance: %w", err)
+			}
+		}
+
 		response, err := TrackedToolChat(dCtx.WithCancelOnPause(), "context_gather", options, chatHistory)
 		if err != nil {
+			if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
+				// likely interrupted by the pause: loop back so
+				// UserRequestIfPaused handles it instead of failing the flow
+				continue
+			}
 			return 0, fmt.Errorf("failed to gather repository context: %w", err)
-		}
-		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
-			continue
 		}
 
 		message := response.GetMessage()

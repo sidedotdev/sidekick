@@ -10,7 +10,9 @@ import (
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/utils"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -333,4 +335,144 @@ func contextGatherTerminalResponse(id, name string) *llm2.MessageResponse {
 			}},
 		},
 	}
+}
+
+// newContextGatherPauseTestDevContext builds a DevContext for pause-handling
+// workflow tests and exposes its GlobalState for pause manipulation.
+func newContextGatherPauseTestDevContext(ctx workflow.Context, workspaceId string) (DevContext, *flow_action.GlobalState, error) {
+	gs := &flow_action.GlobalState{}
+	gs.InitValues()
+	dCtx := DevContext{
+		ExecContext: flow_action.ExecContext{
+			Context:     ctx,
+			WorkspaceId: workspaceId,
+			GlobalState: gs,
+			FlowScope:   &flow_action.FlowScope{SubflowName: "test"},
+			Secrets: &secret_manager.SecretManagerContainer{
+				SecretManager: secret_manager.MockSecretManager{},
+			},
+		},
+	}
+	dCtx.SetLLMConfig(common.LLMConfig{
+		Defaults: []common.ModelConfig{{Provider: "test", Model: "default-model"}},
+		UseCaseConfigs: map[string][]common.ModelConfig{
+			common.CodeLocalizationKey: {{Provider: "test", Model: "localization-model"}},
+		},
+	})
+	if err := SetupModelConfigHandlers(dCtx); err != nil {
+		return DevContext{}, nil, err
+	}
+	return dCtx, gs, nil
+}
+
+// TestContextGatherPauseKeepsResponseAndRequestsGuidance covers the fixed
+// behavior: a pause landing while a stream is in flight must not drop the
+// completed response or its tool call, and the pause is resolved via a user
+// request before the next stream.
+func TestContextGatherPauseKeepsResponseAndRequestsGuidance(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
+
+	streamCalls := 0
+	streamLens := []int{}
+	userPromptCount := 0
+	var gatherState *flow_action.GlobalState
+
+	childWorkflow := func(ctx workflow.Context) error {
+		history := NewVersionedChatHistory(ctx, "context-gather-pause-workspace")
+		dCtx, gs, err := newContextGatherPauseTestDevContext(ctx, "context-gather-pause-workspace")
+		if err != nil {
+			return err
+		}
+		gatherState = gs
+		_, err = GatherContextForCoding(dCtx, history, InitialCodeInfo{Requirements: "Pause handling test"}, ContextGatherOptions{})
+		return err
+	}
+	env.RegisterWorkflow(childWorkflow)
+
+	parentWorkflow := func(ctx workflow.Context) error {
+		signalCh := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			var req flow_action.RequestForUser
+			signalCh.Receive(ctx, &req)
+			userPromptCount++
+			_ = workflow.SignalExternalWorkflow(
+				ctx,
+				req.OriginWorkflowId,
+				"",
+				flow_action.UserResponseSignalName(req.FlowActionId),
+				flow_action.UserResponse{
+					FlowActionId: req.FlowActionId,
+					Content:      "resume guidance marker",
+				},
+			).Get(ctx, nil)
+		})
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "context-gather-pause-child",
+		})
+		return workflow.ExecuteChildWorkflow(childCtx, childWorkflow).Get(ctx, nil)
+	}
+	env.RegisterWorkflow(parentWorkflow)
+	env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
+
+	var flowActivities *flow_action.FlowActivities
+	env.OnActivity(flowActivities.PersistSubflow, mock.Anything, mock.Anything).Return(nil).Twice()
+	env.OnActivity(flowActivities.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
+	env.OnActivity(flowActivities.GetModelMetadata, mock.Anything, mock.Anything, mock.Anything).
+		Return(common.ModelMetadata{}, nil).
+		Maybe()
+
+	var srvActivities srv.Activities
+	env.OnActivity(srvActivities.GetFlow, mock.Anything, mock.Anything, mock.Anything).Return(domain.Flow{}, nil).Maybe()
+	env.OnActivity(srvActivities.PersistFlow, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	appendedMessages := make([]llm2.Message, 0)
+	var chatHistoryActivities *persisted_ai.ChatHistoryActivities
+	env.OnActivity(chatHistoryActivities.AppendMessage, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, input persisted_ai.AppendMessageInput) (*persisted_ai.MessageRef, error) {
+			appendedMessages = append(appendedMessages, input.Message)
+			return &persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: string(input.Message.Role)}, nil
+		}).Maybe()
+
+	var flagActivities *fflag.FFlagActivities
+	env.OnActivity(flagActivities.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+
+	var llmActivities *persisted_ai.Llm2Activities
+	env.OnActivity(llmActivities.Stream, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+			streamCalls++
+			streamLens = append(streamLens, input.ChatHistory.Len())
+			if streamCalls == 1 {
+				// simulate a pause signal landing while the stream is in flight
+				gatherState.Paused = true
+				return contextGatherTerminalResponse("paused-call", "run_command"), nil
+			}
+			return contextGatherTerminalResponse("ready-call", contextGatherReadyTool.Name), nil
+		}).Twice()
+
+	env.ExecuteWorkflow(parentWorkflow)
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	assert.Equal(t, 2, streamCalls)
+	assert.Equal(t, 1, userPromptCount)
+	// prompt first, then assistant response, tool result and pause guidance are
+	// all retained before the second stream
+	assert.Equal(t, []int{1, 4}, streamLens)
+
+	toolResultAppended := false
+	guidanceAppended := false
+	for _, message := range appendedMessages {
+		for _, block := range message.Content {
+			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil && block.ToolResult.ToolCallId == "paused-call" {
+				toolResultAppended = true
+			}
+			if block.Type == llm2.ContentBlockTypeText && strings.Contains(block.Text, "resume guidance marker") {
+				guidanceAppended = true
+			}
+		}
+	}
+	assert.True(t, toolResultAppended, "tool result for the paused response should be appended")
+	assert.True(t, guidanceAppended, "pause guidance should be appended to chat history")
 }
