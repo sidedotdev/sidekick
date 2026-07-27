@@ -123,7 +123,8 @@ func isReplayableVersion(currentRef, workflowRef string) bool {
 // TestReplayRunningWorkflows connects to the local Temporal server, fetches
 // the most recently started running workflows, and replays each one against the
 // current registered workflows. Workflows listed in
-// $SIDE_CACHE_HOME/replay_blacklist.txt (one ID per line) are skipped.
+// $SIDE_CACHE_HOME/replay_blacklist.txt (one ID per line) are skipped; use
+// `go run ./worker/replay blacklist <workflow_id>` to manage it.
 func TestReplayRunningWorkflows(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
