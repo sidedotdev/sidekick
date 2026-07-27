@@ -148,6 +148,7 @@ import ProjectsIcon from './icons/ProjectsIcon.vue'
 import TaskModal from './TaskModal.vue'
 import { store } from '../lib/store'
 import { isInteractiveElement } from '../lib/dom'
+import { viewCache } from '../lib/viewCache'
 
 const props = defineProps<{
   tasks: FullTask[],
@@ -200,14 +201,16 @@ const fetchProjects = async () => {
     // Ignore out-of-order responses after switching workspaces
     if (store.workspaceId === workspaceId) {
       projects.value = data.projects ?? []
+      viewCache.setProjects(workspaceId, projects.value)
     }
   } catch {
     // Without projects, all tasks simply show in the "everything else" group
   }
 }
 
-watch(() => store.workspaceId, () => {
-  projects.value = []
+// Cached projects render immediately while the fresh list loads in the background
+watch(() => store.workspaceId, workspaceId => {
+  projects.value = workspaceId ? viewCache.getProjects(workspaceId) ?? [] : []
   fetchProjects()
 }, { immediate: true })
 

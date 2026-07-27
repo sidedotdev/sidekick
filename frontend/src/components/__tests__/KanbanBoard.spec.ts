@@ -4,6 +4,7 @@ import KanbanBoard from '../KanbanBoard.vue'
 import VirtualTaskList from '../VirtualTaskList.vue'
 import TaskModal from '../TaskModal.vue'
 import { store } from '../../lib/store'
+import { viewCache } from '../../lib/viewCache'
 import type { FullTask, Project } from '../../lib/models'
 
 describe('KanbanBoard', () => {
@@ -39,6 +40,8 @@ describe('KanbanBoard', () => {
 
   beforeEach(() => {
     store.workspaceId = 'test-workspace-id'
+    viewCache.setProjects('test-workspace-id', [])
+    viewCache.setProjects('other-workspace-id', [])
   })
 
   afterEach(() => {
@@ -164,6 +167,41 @@ describe('KanbanBoard', () => {
       const groups = wrapper.findAll('.project-group')
       expect(groups.length).toBe(2)
       expect(groups.at(0)!.find('.project-group-header').text()).toBe('Gamma')
+    })
+
+    it('renders cached projects immediately while refreshing in the background', async () => {
+      viewCache.setProjects('test-workspace-id', projects)
+
+      let resolveFetch: (value: Response) => void = () => {}
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => {
+        resolveFetch = resolve
+      })))
+
+      const wrapper = mount(KanbanBoard, {
+        props: defaultProps,
+        global: {
+          stubs: { VirtualTaskList: true, TaskModal: true, ShortcutHint: true },
+        },
+      })
+      await wrapper.vm.$nextTick()
+
+      const cachedGroups = wrapper.findAll('.project-group')
+      expect(cachedGroups.length).toBe(3)
+      expect(cachedGroups.at(0)!.find('.project-group-header').text()).toBe('Alpha')
+
+      resolveFetch({
+        ok: true,
+        json: () => Promise.resolve({
+          projects: [
+            { id: 'project_3', workspaceId: 'test-workspace-id', title: 'Delta', priority: 'none' },
+          ],
+        }),
+      } as Response)
+      await flushPromises()
+
+      const refreshedGroups = wrapper.findAll('.project-group')
+      expect(refreshedGroups.length).toBe(2)
+      expect(refreshedGroups.at(0)!.find('.project-group-header').text()).toBe('Delta')
     })
 
     it('renders projects with zero tasks as empty groups', async () => {
