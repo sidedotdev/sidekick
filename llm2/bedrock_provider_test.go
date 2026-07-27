@@ -714,3 +714,29 @@ func TestBedrockProvider_Integration_ClaudeHaikuThinking(t *testing.T) {
 	t.Logf("Reasoning: %s", reasoningText)
 	t.Logf("Answer: %s", answerText)
 }
+
+func TestBedrockFromLlm2Content_DropsNonReplayableReasoning(t *testing.T) {
+	t.Parallel()
+
+	blocks := []ContentBlock{
+		{
+			Id:   "rs_abc123",
+			Type: ContentBlockTypeReasoning,
+			Reasoning: &ReasoningBlock{
+				Summary:          "Multiplying step by step",
+				EncryptedContent: "gAAAAABopenai-encrypted-reasoning",
+			},
+		},
+		{Type: ContentBlockTypeReasoning, Reasoning: &ReasoningBlock{Text: "unsigned thinking"}},
+		{Type: ContentBlockTypeText, Text: "The answer is 44323."},
+	}
+
+	out, err := bedrockFromLlm2Content(blocks)
+	assert.NoError(t, err)
+	if assert.Len(t, out, 1) {
+		text, ok := out[0].(*types.ContentBlockMemberText)
+		if assert.True(t, ok) {
+			assert.Equal(t, "The answer is 44323.", text.Value)
+		}
+	}
+}

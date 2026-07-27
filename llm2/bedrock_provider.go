@@ -351,7 +351,9 @@ func bedrockFromLlm2Content(blocks []ContentBlock) ([]types.ContentBlock, error)
 			}
 			out = append(out, &types.ContentBlockMemberText{Value: blk.Refusal.Reason})
 		case ContentBlockTypeReasoning:
-			if blk.Reasoning == nil {
+			// Bedrock serves Anthropic models, so reasoning captured from other
+			// providers cannot be replayed here either.
+			if !anthropicReplayableReasoning(blk) {
 				continue
 			}
 			if blk.Reasoning.EncryptedContent != "" {

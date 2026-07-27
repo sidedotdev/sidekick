@@ -600,6 +600,26 @@ func roleToAnthropicParam(role Role) (anthropic.MessageParamRole, error) {
 	}
 }
 
+// anthropicReplayableReasoning reports whether a reasoning block matches one of
+// the two shapes Anthropic accepts on the wire: thinking text paired with the
+// signature Anthropic issued for it, or opaque redacted thinking data alone.
+// Reasoning captured from another provider has a different shape (eg OpenAI
+// Responses items carry an "rs_" id, a summary and their own encrypted
+// payload) and makes Anthropic reject the whole request.
+func anthropicReplayableReasoning(block ContentBlock) bool {
+	if block.Reasoning == nil {
+		return false
+	}
+	reasoning := block.Reasoning
+	if reasoning.Text != "" {
+		return len(reasoning.Signature) > 0
+	}
+	return reasoning.EncryptedContent != "" &&
+		reasoning.Summary == "" &&
+		len(reasoning.Signature) == 0 &&
+		block.Id == ""
+}
+
 func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, error) {
 	var result []anthropic.MessageParam
 	var currentRole anthropic.MessageParamRole
@@ -627,6 +647,12 @@ func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, er
 		currentRole = msgRole
 
 		for _, block := range msg.Content {
+			if block.Type == ContentBlockTypeReasoning && !anthropicReplayableReasoning(block) {
+				log.Debug().
+					Str("blockId", block.Id).
+					Msg("dropping reasoning block that Anthropic cannot replay")
+				continue
+			}
 			anthropicBlock, err := contentBlockToAnthropicParam(block, msg.Role)
 			if err != nil {
 				return nil, err
