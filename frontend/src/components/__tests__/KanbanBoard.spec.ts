@@ -479,5 +479,51 @@ describe('KanbanBoard', () => {
 
       expect(putCalls().length).toBe(0)
     })
+
+    // jsdom reports zero-size rects, so give each group a vertical extent
+    // with gaps in between to simulate the rendered board layout
+    const setGroupRects = (wrapper: VueWrapper, rects: { top: number, bottom: number }[]) => {
+      wrapper.findAll('.project-group').forEach((group, index) => {
+        (group.element as HTMLElement).getBoundingClientRect = () =>
+          ({ top: rects[index].top, bottom: rects[index].bottom } as DOMRect)
+      })
+    }
+
+    const gapRects = [
+      { top: 0, bottom: 100 },
+      { top: 116, bottom: 200 },
+      { top: 216, bottom: 300 },
+    ]
+
+    it('drops in the gap between groups onto the vertically nearest group', async () => {
+      const wrapper = await mountBoard({ tasks }, projects)
+      setGroupRects(wrapper, gapRects)
+
+      // in the gap below Alpha (project_1) but closer to Beta (project_2)
+      await wrapper.find('.kanban-board').trigger('drop', {
+        clientY: 110,
+        dataTransfer: { getData: () => '1' },
+      })
+      await flushPromises()
+
+      expect(putCalls().length).toBe(1)
+      const body = JSON.parse(putCalls()[0][1].body as string)
+      expect(body.projectId).toBe('project_2')
+    })
+
+    it('highlights the vertically nearest group when dragging over a gap', async () => {
+      const wrapper = await mountBoard({ tasks }, projects)
+      setGroupRects(wrapper, gapRects)
+
+      await wrapper.find('.kanban-board').trigger('dragover', {
+        clientY: 205,
+        dataTransfer: {},
+      })
+
+      const groups = wrapper.findAll('.project-group')
+      expect(groups.at(1)!.classes()).toContain('drag-over')
+      expect(groups.at(0)!.classes()).not.toContain('drag-over')
+      expect(groups.at(2)!.classes()).not.toContain('drag-over')
+    })
   })
 })

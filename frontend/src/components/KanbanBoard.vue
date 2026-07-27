@@ -7,7 +7,13 @@
       Get started by adding your first task to the AI Sidekick queue!
     </div>
   </div>
-  <div class="kanban-board">
+  <div
+    ref="boardRef"
+    class="kanban-board"
+    @dragover="onBoardDragOver"
+    @dragleave="onBoardDragLeave"
+    @drop="onBoardDrop"
+  >
     <div class="column-backdrops" aria-hidden="true">
       <div></div>
       <div></div>
@@ -39,9 +45,7 @@
       :key="project.id"
       class="project-group"
       :class="{ 'drag-over': dragOverGroupKey === project.id }"
-      @dragover="(event: DragEvent) => onGroupDragOver(project.id, event)"
-      @dragleave="onGroupDragLeave"
-      @drop="(event: DragEvent) => onGroupDrop(project.id, event)"
+      :data-group-key="project.id"
     >
       <h3
         class="project-group-header"
@@ -83,9 +87,7 @@
       v-if="projects.length > 0"
       class="project-group"
       :class="{ 'drag-over': dragOverGroupKey === EVERYTHING_ELSE_KEY }"
-      @dragover="(event: DragEvent) => onGroupDragOver(EVERYTHING_ELSE_KEY, event)"
-      @dragleave="onGroupDragLeave"
-      @drop="(event: DragEvent) => onGroupDrop(EVERYTHING_ELSE_KEY, event)"
+      :data-group-key="EVERYTHING_ELSE_KEY"
     >
       <h3
         class="project-group-header"
@@ -266,6 +268,7 @@ const toggleGroup = (groupKey: string) => {
 }
 
 const dragOverGroupKey = ref<string | null>(null)
+const boardRef = ref<HTMLElement | null>(null)
 
 // A task's group key is its project id when the project is known, otherwise
 // the "everything else" key (mirroring how tasks are displayed)
@@ -276,7 +279,34 @@ const groupKeyForTask = (task: FullTask): string => {
     : EVERYTHING_ELSE_KEY
 }
 
-const onGroupDragOver = (groupKey: string, event: DragEvent) => {
+// Resolves the group targeted by a drag event. When the pointer is over a
+// gap between groups (or above/below them), the vertically nearest group is
+// used so the board has no dead drop zones.
+const groupKeyForDragEvent = (event: DragEvent): string | null => {
+  const target = event.target as HTMLElement | null
+  const hovered = target?.closest?.('.project-group') as HTMLElement | null
+  if (hovered?.dataset.groupKey !== undefined) {
+    return hovered.dataset.groupKey
+  }
+  let nearestKey: string | null = null
+  let nearestDistance = Infinity
+  const groups = boardRef.value?.querySelectorAll<HTMLElement>('.project-group') ?? []
+  for (const group of groups) {
+    const rect = group.getBoundingClientRect()
+    const distance = event.clientY < rect.top
+      ? rect.top - event.clientY
+      : Math.max(0, event.clientY - rect.bottom)
+    if (distance < nearestDistance) {
+      nearestDistance = distance
+      nearestKey = group.dataset.groupKey ?? null
+    }
+  }
+  return nearestKey
+}
+
+const onBoardDragOver = (event: DragEvent) => {
+  const groupKey = groupKeyForDragEvent(event)
+  if (groupKey === null) return
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'move'
@@ -284,7 +314,7 @@ const onGroupDragOver = (groupKey: string, event: DragEvent) => {
   dragOverGroupKey.value = groupKey
 }
 
-const onGroupDragLeave = (event: DragEvent) => {
+const onBoardDragLeave = (event: DragEvent) => {
   // dragleave also fires when moving between children of the drop zone
   const related = event.relatedTarget as Node | null
   if (related && (event.currentTarget as Node)?.contains(related)) return
@@ -293,9 +323,11 @@ const onGroupDragLeave = (event: DragEvent) => {
 
 // Dropping a task on a group reassigns its project only; status and agent
 // type are sent unchanged so tasks never move across columns via drag
-const onGroupDrop = async (groupKey: string, event: DragEvent) => {
-  event.preventDefault()
+const onBoardDrop = async (event: DragEvent) => {
+  const groupKey = groupKeyForDragEvent(event)
   dragOverGroupKey.value = null
+  if (groupKey === null) return
+  event.preventDefault()
   const taskId = event.dataTransfer?.getData('text/plain')
   if (!taskId) return
   const task = props.tasks.find(t => t.id === taskId)
