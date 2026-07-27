@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -69,6 +71,7 @@ func (s *BulkSearchRepositoryE2ETestSuite) ResetWorkflowEnvironment() {
 	s.env.RegisterActivity(env.EnvRunCommandActivity)
 	s.env.RegisterActivity(GetSymbolsActivity)
 	s.env.RegisterActivity(EnsureCoreIgnoreFileActivity)
+	s.env.RegisterActivity(BulkSearchRepositoryActivity)
 
 	s.wrapperWorkflow = func(ctx workflow.Context, envContainer env.EnvContainer, params BulkSearchRepositoryParams) (string, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
@@ -147,6 +150,27 @@ type ExampleType struct {
 	s.Contains(result, "No results found for search term 'nonexistent' in file 'example.go'")
 	s.Contains(result, "ExampleFunc")
 	s.Contains(result, "ExampleType")
+}
+
+// TestSchedulesSingleActivity ensures the workflow no longer sends per-command
+// inputs and outputs over the activity boundary.
+func (s *BulkSearchRepositoryE2ETestSuite) TestSchedulesSingleActivity() {
+	s.createTestFile("test1.txt", "This is test file one\nwith some content\nfor testing")
+
+	scheduledActivities := []string{}
+	s.env.SetOnActivityStartedListener(func(activityInfo *activity.Info, ctx context.Context, args converter.EncodedValues) {
+		scheduledActivities = append(scheduledActivities, activityInfo.ActivityType.Name)
+	})
+
+	_, err := s.executeBulkSearchRepository(BulkSearchRepositoryParams{
+		ContextLines: 0,
+		Searches: []SingleSearchParams{
+			{PathGlob: "test1.txt", SearchTerm: "one"},
+			{PathGlob: "nonexistent.txt", SearchTerm: "missing"},
+		},
+	})
+	s.Require().NoError(err)
+	s.Require().Equal([]string{"BulkSearchRepositoryActivity"}, scheduledActivities)
 }
 
 func (s *BulkSearchRepositoryE2ETestSuite) TestBasicBulkSearch() {

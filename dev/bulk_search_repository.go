@@ -28,13 +28,51 @@ type BulkSearchRepositoryParams struct {
 	Searches     []SingleSearchParams `json:"searches" jsonschema:"description=The list of searches to perform."`
 }
 
+type BulkSearchRepositoryActivityInput struct {
+	EnvContainer env.EnvContainer           `json:"envContainer"`
+	Params       BulkSearchRepositoryParams `json:"params"`
+}
+
+type BulkSearchRepositoryActivityOutput struct {
+	Result string `json:"result"`
+}
+
+// BulkSearchRepositoryActivity performs all the searches within a single
+// activity, so that the many intermediate command inputs and outputs never
+// cross the activity boundary.
+func BulkSearchRepositoryActivity(ctx context.Context, input BulkSearchRepositoryActivityInput) (BulkSearchRepositoryActivityOutput, error) {
+	result, err := bulkSearchRepository(activitySearchRunner{ctx: ctx}, input.EnvContainer, input.Params)
+	if err != nil {
+		return BulkSearchRepositoryActivityOutput{}, err
+	}
+	return BulkSearchRepositoryActivityOutput{Result: result}, nil
+}
+
 func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, bulkSearchRepositoryParams BulkSearchRepositoryParams) (string, error) {
 	if len(bulkSearchRepositoryParams.Searches) == 0 {
 		return "", llm.ErrToolCallUnmarshal
 	}
+
+	v := workflow.GetVersion(ctx, "bulk-search-single-activity", workflow.DefaultVersion, 1)
+	if v >= 1 {
+		var output BulkSearchRepositoryActivityOutput
+		err := workflow.ExecuteActivity(ctx, BulkSearchRepositoryActivity, BulkSearchRepositoryActivityInput{
+			EnvContainer: envContainer,
+			Params:       bulkSearchRepositoryParams,
+		}).Get(ctx, &output)
+		if err != nil {
+			return "", err
+		}
+		return output.Result, nil
+	}
+
+	return bulkSearchRepository(workflowSearchRunner{ctx: ctx}, envContainer, bulkSearchRepositoryParams)
+}
+
+func bulkSearchRepository(runner searchRunner, envContainer env.EnvContainer, bulkSearchRepositoryParams BulkSearchRepositoryParams) (string, error) {
 	results := []string{}
 	for _, searchParams := range bulkSearchRepositoryParams.Searches {
-		result, err := SearchRepository(ctx, envContainer, SearchRepositoryInput{
+		result, err := searchRepository(runner, envContainer, SearchRepositoryInput{
 			PathGlob:     searchParams.PathGlob,
 			SearchTerm:   searchParams.SearchTerm,
 			ContextLines: bulkSearchRepositoryParams.ContextLines,
@@ -44,10 +82,10 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 		}
 
 		// If no results were found and the glob is just a file path, add information about available symbols
-		if strings.Contains(result, "No results found") && isExistentFilePath(ctx, envContainer, searchParams.PathGlob) {
+		if strings.Contains(result, "No results found") && isExistentFilePath(runner, envContainer, searchParams.PathGlob) {
 			// File exists, get symbols
 			filePath := searchParams.PathGlob
-			symbolsMsg, err := getSymbolsMessage(ctx, envContainer, filePath)
+			symbolsMsg, err := getSymbolsMessage(runner, envContainer, filePath)
 			if err != nil {
 				return "", err
 			}
@@ -84,17 +122,16 @@ func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *persisted_ai.Ch
 }
 
 // isExistentFilePath returns true if the given path is a specific file path rather than a glob pattern
-func isExistentFilePath(ctx workflow.Context, envContainer env.EnvContainer, path string) bool {
+func isExistentFilePath(runner searchRunner, envContainer env.EnvContainer, path string) bool {
 	// Glob patterns contain special characters: *, ?, [, ], {, }
 	if !strings.ContainsAny(path, "*?[]{}") && path != "" {
 		// TODO /gen replace with a new env.FileExistsActivity - we need to implement that.
-		var catOutput env.EnvRunCommandOutput
-		err := workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		catOutput, err := runner.runCommand(env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
 			RelativeWorkingDir: "./",
 			Command:            "cat",
 			Args:               []string{path},
-		}).Get(ctx, &catOutput)
+		})
 		if err != nil {
 			log.Error().Err(err).Msgf("failed to cat file %s", path)
 		}
@@ -108,7 +145,11 @@ func isExistentFilePath(ctx workflow.Context, envContainer env.EnvContainer, pat
 
 // getSymbolsMessage returns a message about available symbols in a file if it exists
 func GetSymbolsActivity(envContainer env.EnvContainer, filePath string) ([]tree_sitter.Symbol, error) {
-	fileBytes, err := envContainer.Env.ReadFile(context.Background(), filePath)
+	return getFileSymbols(context.Background(), envContainer, filePath)
+}
+
+func getFileSymbols(ctx context.Context, envContainer env.EnvContainer, filePath string) ([]tree_sitter.Symbol, error) {
+	fileBytes, err := envContainer.Env.ReadFile(ctx, filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
@@ -116,9 +157,8 @@ func GetSymbolsActivity(envContainer env.EnvContainer, filePath string) ([]tree_
 	return tree_sitter.GetFileSymbolsFromBytes(filePath, langName, fileBytes)
 }
 
-func getSymbolsMessage(ctx workflow.Context, envContainer env.EnvContainer, filePath string) (string, error) {
-	var symbols []tree_sitter.Symbol
-	err := workflow.ExecuteActivity(ctx, GetSymbolsActivity, envContainer, filePath).Get(ctx, &symbols)
+func getSymbolsMessage(runner searchRunner, envContainer env.EnvContainer, filePath string) (string, error) {
+	symbols, err := runner.getSymbols(envContainer, filePath)
 	//if err != nil && !errors.Is(err, tree_sitter.ErrFailedInferLanguage) {
 	if err != nil && !strings.Contains(err.Error(), tree_sitter.ErrFailedInferLanguage.Error()) {
 		return "", err

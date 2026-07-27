@@ -73,6 +73,7 @@ func runHandleToolCallToolSubtests(t *testing.T, ctx context.Context, envContain
 		tenv.RegisterActivity(env.EnvRunCommandActivity)
 		tenv.RegisterActivity(GetSymbolsActivity)
 		tenv.RegisterActivity(EnsureCoreIgnoreFileActivity)
+		tenv.RegisterActivity(BulkSearchRepositoryActivity)
 		tenv.RegisterActivity(CheckCommandPermissionActivity)
 		tenv.RegisterActivity(ReadFileActivity)
 		bra := &BulkReadFileActivities{Storage: storage}

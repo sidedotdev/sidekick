@@ -14,6 +14,7 @@ import (
 	tree_sitter "sidekick/coding/tree_sitter"
 
 	doublestar "github.com/bmatcuk/doublestar/v4"
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -105,8 +106,76 @@ type SearchRepositoryInput struct {
 
 // TODO /gen include the function name in the associated with each search result
 
+// searchRunner abstracts environment operations and workflow versioning, so
+// that search logic can run either as a workflow orchestrating one activity
+// per command, or entirely within a single activity, calling the underlying
+// operations directly.
+type searchRunner interface {
+	runCommand(input env.EnvRunCommandActivityInput) (env.EnvRunCommandOutput, error)
+	ensureCoreIgnoreFile(input EnsureCoreIgnoreFileActivityInput) (EnsureCoreIgnoreFileActivityOutput, error)
+	getSymbols(envContainer env.EnvContainer, filePath string) ([]tree_sitter.Symbol, error)
+	getVersion(changeID string, minSupported, maxSupported workflow.Version) workflow.Version
+	warn(msg string, keyvals ...any)
+}
+
+type workflowSearchRunner struct {
+	ctx workflow.Context
+}
+
+func (r workflowSearchRunner) runCommand(input env.EnvRunCommandActivityInput) (env.EnvRunCommandOutput, error) {
+	var output env.EnvRunCommandOutput
+	err := workflow.ExecuteActivity(r.ctx, env.EnvRunCommandActivity, input).Get(r.ctx, &output)
+	return output, err
+}
+
+func (r workflowSearchRunner) ensureCoreIgnoreFile(input EnsureCoreIgnoreFileActivityInput) (EnsureCoreIgnoreFileActivityOutput, error) {
+	var output EnsureCoreIgnoreFileActivityOutput
+	err := workflow.ExecuteActivity(r.ctx, EnsureCoreIgnoreFileActivity, input).Get(r.ctx, &output)
+	return output, err
+}
+
+func (r workflowSearchRunner) getSymbols(envContainer env.EnvContainer, filePath string) ([]tree_sitter.Symbol, error) {
+	var symbols []tree_sitter.Symbol
+	err := workflow.ExecuteActivity(r.ctx, GetSymbolsActivity, envContainer, filePath).Get(r.ctx, &symbols)
+	return symbols, err
+}
+
+func (r workflowSearchRunner) getVersion(changeID string, minSupported, maxSupported workflow.Version) workflow.Version {
+	return workflow.GetVersion(r.ctx, changeID, minSupported, maxSupported)
+}
+
+func (r workflowSearchRunner) warn(msg string, keyvals ...any) {
+	workflow.GetLogger(r.ctx).Warn(msg, keyvals...)
+}
+
+type activitySearchRunner struct {
+	ctx context.Context
+}
+
+func (r activitySearchRunner) runCommand(input env.EnvRunCommandActivityInput) (env.EnvRunCommandOutput, error) {
+	return env.EnvRunCommandActivity(r.ctx, input)
+}
+
+func (r activitySearchRunner) ensureCoreIgnoreFile(input EnsureCoreIgnoreFileActivityInput) (EnsureCoreIgnoreFileActivityOutput, error) {
+	return EnsureCoreIgnoreFileActivity(r.ctx, input)
+}
+
+func (r activitySearchRunner) getSymbols(envContainer env.EnvContainer, filePath string) ([]tree_sitter.Symbol, error) {
+	return getFileSymbols(r.ctx, envContainer, filePath)
+}
+
+// getVersion always resolves to the newest behavior: activity code has no
+// replay history to stay compatible with.
+func (r activitySearchRunner) getVersion(changeID string, minSupported, maxSupported workflow.Version) workflow.Version {
+	return maxSupported
+}
+
+func (r activitySearchRunner) warn(msg string, keyvals ...any) {
+	log.Warn().Fields(keyvals).Msg(msg)
+}
+
 type searchContext struct {
-	ctx                    workflow.Context
+	runner                 searchRunner
 	envContainer           env.EnvContainer
 	input                  SearchRepositoryInput
 	coreIgnorePath         string
@@ -118,14 +187,13 @@ type searchContext struct {
 	gitIgnoreExists        bool
 }
 
-func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (*searchContext, error) {
+func initSearchContext(runner searchRunner, envContainer env.EnvContainer, input SearchRepositoryInput) (*searchContext, error) {
 	var coreIgnorePath string
-	envSideCoreIgnoreVersion := workflow.GetVersion(ctx, "env-side-core-ignore", workflow.DefaultVersion, 1)
+	envSideCoreIgnoreVersion := runner.getVersion("env-side-core-ignore", workflow.DefaultVersion, 1)
 	if envSideCoreIgnoreVersion >= 1 {
-		var ensureOutput EnsureCoreIgnoreFileActivityOutput
-		err := workflow.ExecuteActivity(ctx, EnsureCoreIgnoreFileActivity, EnsureCoreIgnoreFileActivityInput{
+		ensureOutput, err := runner.ensureCoreIgnoreFile(EnsureCoreIgnoreFileActivityInput{
 			EnvContainer: envContainer,
-		}).Get(ctx, &ensureOutput)
+		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to ensure core ignore file in env: %w", err)
 		}
@@ -139,7 +207,7 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 	}
 
 	sCtx := &searchContext{
-		ctx:            ctx,
+		runner:         runner,
 		envContainer:   envContainer,
 		input:          input,
 		coreIgnorePath: coreIgnorePath,
@@ -168,7 +236,7 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 
 	// Determine if manual glob filtering should be used
 	// Version guard for manual glob filtering logic
-	v := workflow.GetVersion(sCtx.ctx, "manual-search-glob-filtering", workflow.DefaultVersion, 1)
+	v := sCtx.runner.getVersion("manual-search-glob-filtering", workflow.DefaultVersion, 1)
 	sCtx.useManualGlobFiltering = isSpecificPathGlob(sCtx.input.PathGlob) && v >= 1
 
 	if input.NoIgnore {
@@ -176,14 +244,13 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 	}
 
 	// Check for .sideignore file
-	var catOutput env.EnvRunCommandOutput
 	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that. (This comment is from original code, moved here with the logic)
-	err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	catOutput, err := sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 		EnvContainer:       sCtx.envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "cat",
 		Args:               []string{".sideignore"},
-	}).Get(sCtx.ctx, &catOutput)
+	})
 	if err != nil {
 		// This error means the activity execution failed (e.g., worker unavailable, panic in activity)
 		return nil, fmt.Errorf("failed to execute command to check for .sideignore file: %w", err)
@@ -194,7 +261,7 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 		sCtx.sideIgnoreExists = true
 
 		// Version guard for sideignore override behavior
-		sideignoreOverrideVersion := workflow.GetVersion(sCtx.ctx, "sideignore-overrides-gitignore", workflow.DefaultVersion, 1)
+		sideignoreOverrideVersion := sCtx.runner.getVersion("sideignore-overrides-gitignore", workflow.DefaultVersion, 1)
 		if sideignoreOverrideVersion >= 1 {
 			// Use --no-ignore-vcs to disable .gitignore processing, then add both
 			// .gitignore and .sideignore as ignore files. Since later ignore files
@@ -203,13 +270,12 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 			sCtx.rgArgs += " --no-ignore-vcs"
 
 			// Check if .gitignore exists before adding it
-			var gitignoreOutput env.EnvRunCommandOutput
-			_ = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			gitignoreOutput, _ := sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 				EnvContainer:       sCtx.envContainer,
 				RelativeWorkingDir: "./",
 				Command:            "cat",
 				Args:               []string{".gitignore"},
-			}).Get(sCtx.ctx, &gitignoreOutput)
+			})
 			if gitignoreOutput.ExitStatus == 0 {
 				sCtx.rgArgs += " --ignore-file .gitignore"
 				sCtx.gitIgnoreExists = true
@@ -355,12 +421,12 @@ func (sCtx *searchContext) executeMainSearch() (string, string, []string, []stri
 		// 3. Run git grep on the filtered files
 		listFilesCmd := fmt.Sprintf(`rg %s --files-with-matches -- %s`, sCtx.rgArgs, sCtx.escapedSearchTerm)
 
-		err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		listFilesOutput, err = sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 			EnvContainer:       sCtx.envContainer,
 			RelativeWorkingDir: "./",
 			Command:            "sh",
 			Args:               []string{"-c", listFilesCmd},
-		}).Get(sCtx.ctx, &listFilesOutput)
+		})
 		if err != nil {
 			return "", "", nil, nil, fmt.Errorf("failed to list files for manual glob filtering: %w", err)
 		}
@@ -394,13 +460,12 @@ func (sCtx *searchContext) executeMainSearch() (string, string, []string, []stri
 			filesArg := strings.Join(escapedFiles, " ")
 			fullCmd := fmt.Sprintf(`%s -- %s %s`, sCtx.gitGrepArgs, sCtx.escapedSearchTerm, filesArg)
 
-			// searchOutput will be populated by this activity
-			err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			searchOutput, err = sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 				EnvContainer:       sCtx.envContainer,
 				RelativeWorkingDir: "./",
 				Command:            "sh",
 				Args:               []string{"-c", fullCmd},
-			}).Get(sCtx.ctx, &searchOutput)
+			})
 			if err != nil {
 				return "", searchOutput.Stderr, allFilesMatchingSearchTerm, filesMatchingGlobAndSearchTerm, fmt.Errorf("failed to search filtered files: %w", err)
 			}
@@ -411,12 +476,12 @@ func (sCtx *searchContext) executeMainSearch() (string, string, []string, []stri
 		// Original behavior: use rg + git grep pipeline
 		fullCmd := fmt.Sprintf(`rg %s -- %s | xargs -r %s -- %s`, sCtx.rgArgs, sCtx.escapedSearchTerm, sCtx.gitGrepArgs, sCtx.escapedSearchTerm)
 
-		err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		searchOutput, err = sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 			EnvContainer:       sCtx.envContainer,
 			RelativeWorkingDir: "./",
 			Command:            "sh",
 			Args:               []string{"-c", fullCmd},
-		}).Get(sCtx.ctx, &searchOutput)
+		})
 		if err != nil {
 			return "", searchOutput.Stderr, nil, nil, fmt.Errorf("failed to search the repository: %w", err)
 		}
@@ -431,13 +496,12 @@ func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string, globMatche
 		var fileListString string
 
 		if sCtx.useManualGlobFiltering {
-			v := workflow.GetVersion(sCtx.ctx, "search-repo-remove-extra-command", workflow.DefaultVersion, 1)
+			v := sCtx.runner.getVersion("search-repo-remove-extra-command", workflow.DefaultVersion, 1)
 			if v < 1 {
 				// fake activity execution just to ensure workflows can be
 				// replayed deterministically: we never needed this and did it
 				// by mistake
-				var listFilesOutput env.EnvRunCommandOutput
-				err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{}).Get(sCtx.ctx, &listFilesOutput)
+				_, err = sCtx.runner.runCommand(env.EnvRunCommandActivityInput{})
 				if err != nil {
 					return "", true, fmt.Errorf("failed to list files (for too long output, manual glob): %w", err)
 				}
@@ -447,12 +511,12 @@ func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string, globMatche
 		} else {
 			var listFilesOutput env.EnvRunCommandOutput
 			filesToListCmd = fmt.Sprintf(`rg %s -- %s`, sCtx.rgArgs, sCtx.escapedSearchTerm)
-			err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			listFilesOutput, err = sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 				EnvContainer:       sCtx.envContainer,
 				RelativeWorkingDir: "./",
 				Command:            "sh",
 				Args:               []string{"-c", filesToListCmd},
-			}).Get(sCtx.ctx, &listFilesOutput)
+			})
 			if err != nil {
 				return "", true, fmt.Errorf("failed to list files (for too long output): %w", err)
 			}
@@ -545,7 +609,6 @@ func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string, globMatche
 // It uses rg to find files and then filters them using filterFilesByGlob.
 // This approach is consistent with how matchingFiles are determined in executeMainSearch when useManualGlobFiltering is true.
 func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
-	var rgFilesOutput env.EnvRunCommandOutput
 	rgFilesCmdParts := []string{"--files", "--hidden"}
 	if sCtx.input.NoIgnore {
 		rgFilesCmdParts = append(rgFilesCmdParts, "--no-ignore")
@@ -562,12 +625,12 @@ func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
 	}
 
 	// version guard not needed: this already existed before
-	err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	rgFilesOutput, err := sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 		EnvContainer:       sCtx.envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "rg",
 		Args:               rgFilesCmdParts,
-	}).Get(sCtx.ctx, &rgFilesOutput)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("activity execution failed for rg to list files for glob '%s': %w", sCtx.input.PathGlob, err)
 	}
@@ -583,7 +646,7 @@ func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
 // processGlobalFallbackResults processes files found by the global fallback search.
 // It may run git grep, parse results using ExtractSearchCodeBlocks, and truncate them if necessary.
 func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (string, error) {
-	v := workflow.GetVersion(sCtx.ctx, "search-repo-global-fallback", workflow.DefaultVersion, 1)
+	v := sCtx.runner.getVersion("search-repo-global-fallback", workflow.DefaultVersion, 1)
 	if v < 1 {
 		return "", nil
 	}
@@ -620,7 +683,6 @@ func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (stri
 	}
 
 	// Case: 0 < numFilesFound <= 3. Execute git grep.
-	var gitGrepOutput env.EnvRunCommandOutput
 	escapedFiles := make([]string, len(nonMatchingFiles))
 	for i, f := range nonMatchingFiles {
 		escapedFiles[i] = escapeShellArg(f)
@@ -631,13 +693,12 @@ func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (stri
 	// sCtx.escapedSearchTerm is already shell-escaped.
 	cmdStr := fmt.Sprintf("%s -- %s %s", sCtx.gitGrepArgs, sCtx.escapedSearchTerm, strings.Join(escapedFiles, " "))
 
-	err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	gitGrepOutput, err := sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 		EnvContainer:       sCtx.envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "sh",
 		Args:               []string{"-c", cmdStr},
-	}).Get(sCtx.ctx, &gitGrepOutput)
-
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to execute git grep for global fallback: %w", err)
 	}
@@ -658,7 +719,7 @@ func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (stri
 		for _, block := range allCodeBlocks {
 			if block.FilePath == "" {
 				// This should ideally not happen with git grep --heading. Log if it does.
-				workflow.GetLogger(sCtx.ctx).Warn("ExtractSearchCodeBlocks produced a block with an empty FilePath from git grep output.", "blockHeader", block.HeaderContent)
+				sCtx.runner.warn("ExtractSearchCodeBlocks produced a block with an empty FilePath from git grep output.", "blockHeader", block.HeaderContent)
 				continue
 			}
 			stats := fileStats[block.FilePath]
@@ -789,10 +850,16 @@ func constructFallbackMessage(input SearchRepositoryInput, allFilesMatchingGlob 
 	return message
 }
 
-// SearchRepository searches the repository for the given search term, using a searchContext
-// to manage state, retries, and fallback logic.
+// SearchRepository searches the repository for the given search term, running
+// one activity per underlying command.
 func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
-	sCtx, err := initSearchContext(ctx, envContainer, input)
+	return searchRepository(workflowSearchRunner{ctx: ctx}, envContainer, input)
+}
+
+// searchRepository searches the repository for the given search term, using a searchContext
+// to manage state, retries, and fallback logic.
+func searchRepository(runner searchRunner, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
+	sCtx, err := initSearchContext(runner, envContainer, input)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize search context: %w", err)
 	}
@@ -820,18 +887,18 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		}
 
 		if !sCtx.input.FixedStrings {
-			return SearchRepository(ctx, envContainer, updatedInputWithFixedStrings(sCtx.input))
+			return searchRepository(runner, envContainer, updatedInputWithFixedStrings(sCtx.input))
 		}
 		if !sCtx.input.CaseInsensitive {
-			return SearchRepository(ctx, envContainer, updatedInputWithCaseInsensitive(sCtx.input))
+			return searchRepository(runner, envContainer, updatedInputWithCaseInsensitive(sCtx.input))
 		}
 
 		// Retry with ignore files disabled for path-specific globs, so that
 		// files in .gitignored or .sideignored directories can still be found.
 		if !sCtx.input.NoIgnore && hasLiteralPathSegment(sCtx.input.PathGlob) {
-			v := workflow.GetVersion(sCtx.ctx, "search-no-ignore-fallback", workflow.DefaultVersion, 1)
+			v := runner.getVersion("search-no-ignore-fallback", workflow.DefaultVersion, 1)
 			if v >= 1 {
-				return SearchRepository(ctx, envContainer, updatedInputWithNoIgnore(sCtx.input))
+				return searchRepository(runner, envContainer, updatedInputWithNoIgnore(sCtx.input))
 			}
 		}
 
