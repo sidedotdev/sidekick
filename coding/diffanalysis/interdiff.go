@@ -42,7 +42,7 @@ func Interdiff(priorDiff, currentDiff string) (string, error) {
 		return "", fmt.Errorf("current diff: %w", err)
 	}
 
-	if result, ok := exactInterdiff(priorDiff, currentDiff, priorFiles, currentFiles); ok {
+	if result, ok := exactInterdiff(priorFiles, currentFiles); ok {
 		return result, nil
 	}
 
@@ -65,22 +65,117 @@ func parseForInterdiff(diff string) ([]FileDiff, error) {
 
 // exactInterdiff computes a true diff-of-diffs, which is only meaningful when
 // both diffs apply to the same source. Misalignment is detected either by the
-// underlying library erroring out or by the result's changed lines differing
-// from the delta implied by the two inputs: extra lines mean changes that are
-// identical in both inputs failed to cancel, missing lines mean the library
-// dropped part of the delta.
-func exactInterdiff(priorDiff, currentDiff string, priorFiles, currentFiles []FileDiff) (string, bool) {
-	if strings.TrimSpace(currentDiff) == "" {
+// underlying library erroring out or by a file's result differing from the
+// delta implied by the two inputs: extra lines mean changes that are identical
+// in both inputs failed to cancel, missing lines mean part of the delta was
+// dropped.
+//
+// Files are interdiffed one at a time because the library's multi-file path
+// collects its per-file results from several goroutines without synchronizing
+// between them, which crashes the process with a concurrent map write.
+//
+// Files present in the prior diff but not in the current one read as reverts,
+// which the best-effort delta describes rather than renders, so those fall back.
+func exactInterdiff(priorFiles, currentFiles []FileDiff) (string, bool) {
+	if len(currentFiles) == 0 {
 		return "", false
 	}
-	result, err := safeInterDiff(priorDiff, currentDiff)
-	if err != nil {
-		return "", false
+
+	priorByPath := make(map[string]FileDiff, len(priorFiles))
+	for _, file := range priorFiles {
+		priorByPath[filePathKey(file)] = file
 	}
-	if !maps.Equal(changedLineCounts(result), expectedDeltaCounts(priorFiles, currentFiles)) {
-		return "", false
+	currentPaths := make(map[string]struct{}, len(currentFiles))
+	for _, file := range currentFiles {
+		currentPaths[filePathKey(file)] = struct{}{}
 	}
-	return result, true
+	for path := range priorByPath {
+		if _, ok := currentPaths[path]; !ok {
+			return "", false
+		}
+	}
+
+	var out strings.Builder
+	for _, current := range currentFiles {
+		prior, ok := priorByPath[filePathKey(current)]
+		if !ok {
+			out.WriteString(ensureTrailingNewline(current.RawContent))
+			continue
+		}
+
+		section, err := safeInterDiff(ensureTrailingNewline(prior.RawContent), ensureTrailingNewline(current.RawContent))
+		if err != nil {
+			return "", false
+		}
+		if !maps.Equal(changedLineCounts(section), expectedDeltaCounts([]FileDiff{prior}, []FileDiff{current})) {
+			return "", false
+		}
+		out.WriteString(withGitFileHeader(dropEmptyFileSections(section), current))
+	}
+
+	return out.String(), true
+}
+
+// withGitFileHeader prefixes a rendered file section with the git header line,
+// which the exact interdiff omits, so that the result stays parseable as a
+// unified diff and can serve as the prior diff of a later review round.
+func withGitFileHeader(section string, file FileDiff) string {
+	if strings.TrimSpace(section) == "" {
+		return ""
+	}
+	if strings.HasPrefix(section, "diff --git ") {
+		return ensureTrailingNewline(section)
+	}
+	return gitFileHeader(file) + ensureTrailingNewline(section)
+}
+
+func gitFileHeader(file FileDiff) string {
+	oldPath, newPath := file.OldPath, file.NewPath
+	if oldPath == "" {
+		oldPath = newPath
+	}
+	if newPath == "" {
+		newPath = oldPath
+	}
+	return fmt.Sprintf("diff --git a/%s b/%s\n", oldPath, newPath)
+}
+
+func ensureTrailingNewline(s string) string {
+	if s == "" || strings.HasSuffix(s, "\n") {
+		return s
+	}
+	return s + "\n"
+}
+
+// dropEmptyFileSections removes file sections without any hunk, which the exact
+// interdiff emits for files whose changes are identical in both inputs.
+func dropEmptyFileSections(diff string) string {
+	lines := strings.Split(diff, "\n")
+
+	var kept, section []string
+	sectionHasHunk := false
+	flushSection := func() {
+		if sectionHasHunk {
+			kept = append(kept, section...)
+		}
+		section = nil
+		sectionHasHunk = false
+	}
+
+	for i, line := range lines {
+		startsSection := strings.HasPrefix(line, "diff --git ") ||
+			(strings.HasPrefix(line, "--- ") && i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++ "))
+		if startsSection {
+			flushSection()
+		}
+		if strings.HasPrefix(line, "@@") {
+			sectionHasHunk = true
+		}
+		section = append(section, line)
+	}
+	flushSection()
+
+	return strings.Join(kept, "\n")
 }
 
 func safeInterDiff(priorDiff, currentDiff string) (result string, err error) {
@@ -207,7 +302,7 @@ func renderFileDiff(file FileDiff, hunks []Hunk) string {
 	}
 
 	var out strings.Builder
-	fmt.Fprintf(&out, "diff --git a/%s b/%s\n", oldPath, newPath)
+	out.WriteString(gitFileHeader(file))
 	if file.IsNewFile {
 		out.WriteString("--- /dev/null\n")
 	} else {

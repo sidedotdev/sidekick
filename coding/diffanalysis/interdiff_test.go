@@ -234,3 +234,85 @@ func TestInterdiffDivergedBaseRendersEachChangeOnce(t *testing.T) {
 		"the prior change may appear as context of the emitted hunk, but never more than once")
 	assert.NotContains(t, result, revertedSectionHeader)
 }
+
+// Files whose changes are identical in both diffs must not leave behind bare
+// file headers, which would read as a change where there is none.
+func TestInterdiffOmitsUnchangedFiles(t *testing.T) {
+	t.Parallel()
+
+	prior := `diff --git a/stable.go b/stable.go
+--- a/stable.go
++++ b/stable.go
+@@ -1,2 +1,3 @@
+ package main
+ 
++var stable = 1
+`
+	current := `diff --git a/stable.go b/stable.go
+--- a/stable.go
++++ b/stable.go
+@@ -1,2 +1,3 @@
+ package main
+ 
++var stable = 1
+diff --git a/fresh.go b/fresh.go
+--- a/fresh.go
++++ b/fresh.go
+@@ -1,2 +1,3 @@
+ package main
+ 
++var fresh = 2
+`
+
+	result, err := Interdiff(prior, current)
+	require.NoError(t, err)
+	assert.Contains(t, result, "var fresh = 2")
+	assert.NotContains(t, result, "stable.go")
+}
+
+// An interdiff result becomes the prior diff of the next review round, so it
+// must be parseable as a unified diff in its own right.
+func TestInterdiffResultIsReusableAsPriorDiff(t *testing.T) {
+	t.Parallel()
+
+	prior := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,2 +1,3 @@
+ package main
+ 
++var first = 1
+`
+	current := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,2 +1,4 @@
+ package main
+ 
++var first = 1
++var second = 2
+`
+	later := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,2 +1,5 @@
+ package main
+ 
++var first = 1
++var second = 2
++var third = 3
+`
+
+	sinceFirstReview, err := Interdiff(prior, current)
+	require.NoError(t, err)
+	require.Contains(t, sinceFirstReview, "var second = 2")
+
+	files, err := ParseUnifiedDiff(sinceFirstReview)
+	require.NoError(t, err)
+	require.NotEmpty(t, files, "an interdiff result must parse as a unified diff")
+	require.NotEmpty(t, files[0].Hunks)
+
+	sinceSecondReview, err := Interdiff(sinceFirstReview, later)
+	require.NoError(t, err)
+	assert.Contains(t, sinceSecondReview, "var third = 3")
+}

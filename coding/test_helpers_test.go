@@ -39,6 +39,22 @@ func runGit(t *testing.T, repoDir string, args ...string) string {
 	return string(output)
 }
 
+// runGitAllowFailure runs a git command that is expected to fail sometimes, such
+// as a merge that conflicts on purpose, returning its combined output.
+func runGitAllowFailure(t *testing.T, repoDir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test User",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test User",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	output, _ := cmd.CombinedOutput()
+	return string(output)
+}
+
 func createFileAndCommit(t *testing.T, repoDir, filename, content, commitMsg string) {
 	t.Helper()
 	err := os.WriteFile(filepath.Join(repoDir, filename), []byte(content), 0644)
