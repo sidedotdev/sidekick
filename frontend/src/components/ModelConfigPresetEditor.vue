@@ -9,7 +9,8 @@
         optionLabel="label"
         optionValue="value"
         class="preset-dropdown"
-        :base-z-index="overlayBaseZIndex"
+        :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
+        :overlay-style="overlayStyle"
         @change="(event: any) => handlePresetChange(event.value)"
       >
         <template #option="{ option }">
@@ -74,6 +75,12 @@ const props = withDefaults(defineProps<{
   overlayBaseZIndex: 0,
 })
 
+const overlayStyle = computed(() => (
+  props.overlayBaseZIndex > 0
+    ? { '--model-config-editor-overlay-z-index': props.overlayBaseZIndex }
+    : undefined
+))
+
 const presetDropdownRef = ref<InstanceType<typeof Dropdown> | null>(null)
 
 const selectedPresetValue = computed({
@@ -106,6 +113,9 @@ const editPreset = (presetId: string) => {
 </script>
 
 <style scoped>
+:global(.model-config-editor-overlay) {
+  z-index: var(--model-config-editor-overlay-z-index) !important;
+}
 .preset-section {
   display: flex;
   align-items: center;
