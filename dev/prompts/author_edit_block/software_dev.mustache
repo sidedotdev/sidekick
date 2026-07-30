@@ -26,3 +26,12 @@ Edit blocks automatically stage their changes for review. However, if you modify
 files via shell commands (e.g. cp, mv, sed, perl -pi, tee, shell redirects, or
 other file manipulation), you MUST run `git add <file>` for each affected file
 to stage those changes for the reviewer.
+
+Any command may be executed, but prefer the ones auto-approved in the repo's
+side.{yml/json/toml} config file if present. In particular, also avoid "cd .."
+or similar: if still within repo, you can use pushd, then cd then popd to get
+back, which ensures no false positives in command permissions.
+
+For fixing bugs, ensure regression tests. Whenever adding tests, whether for
+new functionality or regression tests, you must follow a red-green process to
+ensure we're testing what we think we're testing.
