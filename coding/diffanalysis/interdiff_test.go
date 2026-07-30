@@ -65,6 +65,24 @@ diff --git a/other.go b/other.go
  // end
 `
 
+	currentWithBrandNewFile := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,4 +1,5 @@
+ package main
+ 
++var first = 1
+ func main() {
+ }
+diff --git a/brand_new.go b/brand_new.go
+new file mode 100644
+--- /dev/null
++++ b/brand_new.go
+@@ -0,0 +1,2 @@
++package main
++var brandNew = 4
+`
+
 	tests := []struct {
 		name        string
 		priorDiff   string
@@ -73,6 +91,13 @@ diff --git a/other.go b/other.go
 		contains    []string
 		notContains []string
 	}{
+		{
+			name:        "brand new file's changes are included, prior file's are not",
+			priorDiff:   priorSimple,
+			currentDiff: currentWithBrandNewFile,
+			contains:    []string{"+var brandNew = 4"},
+			notContains: []string{"+var first = 1", revertedSectionHeader},
+		},
 		{
 			name:        "empty prior diff yields empty result",
 			priorDiff:   "",

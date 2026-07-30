@@ -2,6 +2,7 @@ package diffanalysis
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	patchutils "github.com/google/go-patchutils"
@@ -64,8 +65,10 @@ func parseForInterdiff(diff string) ([]FileDiff, error) {
 
 // exactInterdiff computes a true diff-of-diffs, which is only meaningful when
 // both diffs apply to the same source. Misalignment is detected either by the
-// underlying library erroring out or by the result containing changes that are
-// identical in both inputs, which an aligned interdiff would have cancelled.
+// underlying library erroring out or by the result's changed lines differing
+// from the delta implied by the two inputs: extra lines mean changes that are
+// identical in both inputs failed to cancel, missing lines mean the library
+// dropped part of the delta.
 func exactInterdiff(priorDiff, currentDiff string, priorFiles, currentFiles []FileDiff) (string, bool) {
 	if strings.TrimSpace(currentDiff) == "" {
 		return "", false
@@ -74,11 +77,8 @@ func exactInterdiff(priorDiff, currentDiff string, priorFiles, currentFiles []Fi
 	if err != nil {
 		return "", false
 	}
-	expected := expectedDeltaKeys(priorFiles, currentFiles)
-	for key := range changedLineCounts(result) {
-		if !expected[key] {
-			return "", false
-		}
+	if !maps.Equal(changedLineCounts(result), expectedDeltaCounts(priorFiles, currentFiles)) {
+		return "", false
 	}
 	return result, true
 }
@@ -92,22 +92,22 @@ func safeInterDiff(priorDiff, currentDiff string) (result string, err error) {
 	return patchutils.InterDiff(strings.NewReader(priorDiff), strings.NewReader(currentDiff))
 }
 
-// expectedDeltaKeys is the set of normalized changed lines an interdiff may
-// legitimately contain: changes only the current diff has, plus the sign-flipped
+// expectedDeltaCounts is the multiset of normalized changed lines an interdiff
+// must contain: changes only the current diff has, plus the sign-flipped
 // changes only the prior diff had (which read as reverts).
-func expectedDeltaKeys(priorFiles, currentFiles []FileDiff) map[string]bool {
+func expectedDeltaCounts(priorFiles, currentFiles []FileDiff) map[string]int {
 	prior := allChangedLineCounts(priorFiles)
 	current := allChangedLineCounts(currentFiles)
 
-	expected := make(map[string]bool)
+	expected := make(map[string]int)
 	for key, count := range current {
 		if count > prior[key] {
-			expected[key] = true
+			expected[key] += count - prior[key]
 		}
 	}
 	for key, count := range prior {
 		if count > current[key] {
-			expected[flipSign(key)] = true
+			expected[flipSign(key)] += count - current[key]
 		}
 	}
 	return expected
