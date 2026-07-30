@@ -745,3 +745,139 @@ func TestReplayClosureExcludesApiPackage(t *testing.T) {
 		t.Errorf("replay closure unexpectedly includes %q; replay tests should not depend on the api package", apiPkg)
 	}
 }
+
+func packageHasHash(t *testing.T, profile, pkg, hash string) bool {
+	t.Helper()
+	path, err := cachePath()
+	if err != nil {
+		t.Fatalf("cachePath: %v", err)
+	}
+	c, err := readCacheFromPath(path)
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	prof := c.Profiles[profile]
+	if prof == nil {
+		return false
+	}
+	return prof.Packages[pkg].hasHash(hash)
+}
+
+func TestCacheWriterFlushesIncrementallyAndCoalesces(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", dir)
+
+	hashes := map[string]string{"sidekick/a": "ha", "sidekick/b": "hb", "sidekick/c": "hc"}
+	tick := make(chan time.Time)
+	var flushCalls int
+	flushed := make(chan struct{}, 8)
+	flushFn := func(sig, desc string, passed []string, h map[string]string) error {
+		flushCalls++
+		err := updateCachePasses(sig, desc, passed, h)
+		flushed <- struct{}{}
+		return err
+	}
+	w := newCacheWriter("prof", "go test", hashes, tick, flushFn, func(err error) {
+		t.Errorf("unexpected cache write failure: %v", err)
+	})
+	tracker := newPackageTracker()
+	tracker.onPass = w.enqueue
+
+	// Multiple package completions before a tick must coalesce into a single
+	// cache write; packages without a computed hash are ineligible, and
+	// test-level or fail events must not be persisted.
+	tracker.observeLine([]byte(`{"Action":"pass","Package":"sidekick/a"}`))
+	tracker.observeLine([]byte(`{"Action":"skip","Package":"sidekick/b"}`))
+	tracker.observeLine([]byte(`{"Action":"pass","Package":"sidekick/unhashed"}`))
+	tracker.observeLine([]byte(`{"Action":"pass","Package":"sidekick/c","Test":"TestX"}`))
+	tick <- time.Time{}
+	<-flushed
+
+	// Mid-run persistence: a and b are on disk while c is still outstanding.
+	if !packageHasHash(t, "prof", "sidekick/a", "ha") || !packageHasHash(t, "prof", "sidekick/b", "hb") {
+		t.Error("expected a and b cached after debounce flush")
+	}
+	if packageHasHash(t, "prof", "sidekick/c", "hc") {
+		t.Error("c should not be cached before it passes")
+	}
+	if packageHasHash(t, "prof", "sidekick/unhashed", "") {
+		t.Error("unhashed package must not be cached")
+	}
+	if flushCalls != 1 {
+		t.Errorf("flushCalls = %d, want 1 (completions must coalesce)", flushCalls)
+	}
+
+	// The final flush on close persists remaining pending passes.
+	tracker.observeLine([]byte(`{"Action":"pass","Package":"sidekick/c"}`))
+	w.close()
+	if !packageHasHash(t, "prof", "sidekick/c", "hc") {
+		t.Error("expected c cached after final flush")
+	}
+	if flushCalls != 2 {
+		t.Errorf("flushCalls = %d, want 2", flushCalls)
+	}
+}
+
+func TestCacheWriterNoWriteWhenNothingPending(t *testing.T) {
+	t.Parallel()
+	tick := make(chan time.Time)
+	var flushCalls int
+	flushFn := func(string, string, []string, map[string]string) error {
+		flushCalls++
+		return nil
+	}
+	w := newCacheWriter("prof", "go test", map[string]string{"sidekick/a": "ha"}, tick, flushFn, func(err error) {
+		t.Errorf("unexpected warn: %v", err)
+	})
+	tick <- time.Time{}
+	w.close()
+	if flushCalls != 0 {
+		t.Errorf("flushCalls = %d, want 0 when nothing is pending", flushCalls)
+	}
+}
+
+func TestCacheWriterRetriesFailedBatchOnFinalFlush(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", dir)
+
+	tick := make(chan time.Time)
+	var flushCalls, warns int
+	flushFn := func(sig, desc string, passed []string, h map[string]string) error {
+		flushCalls++
+		if flushCalls == 1 {
+			return fmt.Errorf("transient failure")
+		}
+		return updateCachePasses(sig, desc, passed, h)
+	}
+	w := newCacheWriter("prof", "go test", map[string]string{"sidekick/a": "ha"}, tick, flushFn, func(error) {
+		warns++
+	})
+	w.enqueue("sidekick/a")
+	tick <- time.Time{}
+	w.close()
+
+	if flushCalls != 2 {
+		t.Errorf("flushCalls = %d, want 2 (failed batch must be retried)", flushCalls)
+	}
+	if warns != 1 {
+		t.Errorf("warns = %d, want 1", warns)
+	}
+	if !packageHasHash(t, "prof", "sidekick/a", "ha") {
+		t.Error("expected pass persisted by final flush after transient incremental failure")
+	}
+}
+
+func TestCacheWriterWarnsOnFlushFailure(t *testing.T) {
+	t.Parallel()
+	var warned error
+	w := newCacheWriter("prof", "go test", map[string]string{"sidekick/a": "ha"}, make(chan time.Time), func(string, string, []string, map[string]string) error {
+		return fmt.Errorf("disk full")
+	}, func(err error) {
+		warned = err
+	})
+	w.enqueue("sidekick/a")
+	w.close()
+	if warned == nil || !strings.Contains(warned.Error(), "disk full") {
+		t.Errorf("expected warn callback with flush error, got %v", warned)
+	}
+}
