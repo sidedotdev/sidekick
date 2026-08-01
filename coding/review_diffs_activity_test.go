@@ -369,6 +369,28 @@ func TestGenerateReviewDiffsActivity_SuccessiveReviewRounds(t *testing.T) {
 	}
 }
 
+func TestGenerateReviewDiffsActivity_DegradesOnUnusablePriorDiff(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	createFileAndCommit(t, repoDir, "shared.go", "package shared\n", "initial commit")
+	runGit(t, repoDir, "checkout", "-b", "feature")
+	writeAndStage(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n")
+
+	ca := &CodingActivities{}
+	result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
+		EnvContainer:    newReviewDiffsTestEnv(t, ctx, repoDir),
+		StartPoint:      "main",
+		PriorReviewDiff: "this is not a diff at all\n",
+	})
+	require.NoError(t, err, "an unusable prior review diff must not fail the review flow")
+
+	assert.Contains(t, result.FullDiff, "feature.go")
+	assert.Equal(t, result.FullDiff, result.SinceDiff, "the full diff stands in when the comparison is impossible")
+	assert.NotEmpty(t, result.SinceDiffError, "callers need to know the since diff is not really since the last review")
+}
+
 func TestGenerateReviewDiffsActivity_RequiresStartPoint(t *testing.T) {
 	t.Parallel()
 

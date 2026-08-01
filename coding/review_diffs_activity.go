@@ -38,6 +38,12 @@ type GenerateReviewDiffsParams struct {
 type GenerateReviewDiffsResult struct {
 	FullDiff  string `json:"fullDiff"`
 	SinceDiff string `json:"sinceDiff"`
+
+	// SinceDiffError describes why the diff since the last review could not be
+	// computed, in which case SinceDiff falls back to the full diff. Callers
+	// that show diffs to a human can surface this instead of pretending the
+	// full diff is what changed since the last review.
+	SinceDiffError string `json:"sinceDiffError,omitempty"`
 }
 
 // GenerateReviewDiffsActivity produces both diffs a review round needs: the full
@@ -67,6 +73,7 @@ func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, par
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to compute diff since last review, falling back to the full diff")
 		result.SinceDiff = fullDiff
+		result.SinceDiffError = err.Error()
 		return result, nil
 	}
 	result.SinceDiff = sinceDiff
