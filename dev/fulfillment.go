@@ -3,6 +3,7 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
+	"sidekick/coding"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/fflag"
@@ -30,6 +31,47 @@ type CriteriaFulfillment struct {
 	FeedbackMessage string `json:"feedbackMessage,omitempty" jsonschema:"description=Provide this only when the criteria is not fulfilled. It is a short message containing salient details to help someone else doing the work understand and figure out how to fulfill the criteria."`
 }
 
+// criteriaFulfillmentReviewDiff generates the diff the auto-reviewer judges:
+// what changed since the last review when there was one, otherwise everything
+// since the start point.
+//
+// The activity degrades comparison trouble internally, so an error here means
+// git itself failed, which user-prompted retries can't resolve. We therefore
+// skip such retries and fall back to the full diff so review keeps progressing.
+func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ignoreWhitespace bool) (string, error) {
+	startPoint := promptInfo.StartPoint
+	if startPoint == "" {
+		startPoint = promptInfo.BaseBranch
+	}
+	fallbackBase := promptInfo.BaseBranch
+	if fallbackBase == "" {
+		fallbackBase = startPoint
+	}
+
+	var ca *coding.CodingActivities
+	var diffs coding.GenerateReviewDiffsResult
+	err := workflow.ExecuteActivity(dCtx, ca.GenerateReviewDiffsActivity, coding.GenerateReviewDiffsParams{
+		EnvContainer:     *dCtx.EnvContainer,
+		StartPoint:       startPoint,
+		BaseBranch:       promptInfo.BaseBranch,
+		PriorReviewDiff:  promptInfo.LastReviewDiff,
+		IgnoreWhitespace: ignoreWhitespace,
+	}).Get(dCtx, &diffs)
+	if err != nil {
+		workflow.GetLogger(dCtx).Warn("Failed to generate review diffs, falling back to base branch diff", "error", err)
+		fallbackDiff, fallbackErr := GetGitDiff(dCtx, fallbackBase, ignoreWhitespace)
+		if fallbackErr != nil {
+			return "", fmt.Errorf("failed to get fallback base branch diff: %v", fallbackErr)
+		}
+		return fallbackDiff, nil
+	}
+
+	if promptInfo.LastReviewDiff != "" && diffs.SinceDiffError == "" {
+		return diffs.SinceDiff, nil
+	}
+	return diffs.FullDiff, nil
+}
+
 // TODO /gen add a test for this function
 func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
 	// Use GlobalState as single source of truth for base branch, falling back to caller-provided value
@@ -44,7 +86,7 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 
 	ignoreWhitespace := true
 
-	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 6)
+	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 7)
 	if v >= 6 && fflag.IsEnabled(dCtx, fflag.CheckEdits) {
 		// When CheckEdits is enabled, all current-step work is staged, so
 		// git diff --staged captures exactly the relevant changes without
@@ -59,6 +101,11 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get staged git diff: %v", err)
+		}
+	} else if v >= 7 && (promptInfo.StartPoint != "" || promptInfo.BaseBranch != "") {
+		diff, err = criteriaFulfillmentReviewDiff(dCtx, promptInfo, ignoreWhitespace)
+		if err != nil {
+			return CriteriaFulfillment{}, err
 		}
 	} else if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
 		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)

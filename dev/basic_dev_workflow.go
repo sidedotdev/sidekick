@@ -338,10 +338,10 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
 	if v == 1 {
 		result, err = RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
-			return codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "")
+			return codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "", "")
 		})
 	} else {
-		result, err = codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "")
+		result, err = codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "", "")
 	}
 
 	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
@@ -418,7 +418,7 @@ func prepareBasicCodingContext(
 	return codeContext, len(fullCodeContext) - len(codeContext), nil
 }
 
-func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
+func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, lastReviewDiff string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
 	var chatHistory *persisted_ai.ChatHistoryContainer
 	gatherHandoff := false
 	if shouldGatherContext(dCtx.ContextGatherType, true) {
@@ -601,6 +601,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 			Requirements:       requirements,
 			AutoChecks:         testOutput,
 			LastReviewTreeHash: lastReviewTreeHash,
+			LastReviewDiff:     lastReviewDiff,
 			BaseBranch:         baseBranch,
 		})
 		if err != nil {
@@ -945,7 +946,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				// must commit before merge at this point, as codingSubflow
 				// doesn't do so inherently
 				params.CommitRequired = true
-				_, err = codingSubflow(dCtx, requirements, params.StartBranch, lastReviewTreeHash, feedbackRankQueries...)
+				_, err = codingSubflow(dCtx, requirements, params.StartBranch, lastReviewTreeHash, lastReviewDiff, feedbackRankQueries...)
 
 				if err != nil {
 					if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
@@ -1121,6 +1122,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				Requirements:       params.Requirements,
 				PreviousReview:     params.PreviousReview,
 				LastReviewTreeHash: lastReviewTreeHash,
+				LastReviewDiff:     lastReviewDiff,
 				BaseBranch:         mergeInfo.TargetBranch,
 				CommitterName:      committerName,
 				CommitterEmail:     committerEmail,

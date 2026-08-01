@@ -181,6 +181,15 @@ type CheckWorkInfo struct {
 	LastReviewTreeHash string
 	BaseBranch         string
 
+	// StartPoint is what our changes are diffed against: a branch name for
+	// whole-task flows, or a pinned commit for flows that review one step at a
+	// time. Falls back to BaseBranch when empty.
+	StartPoint string
+	// LastReviewDiff is the diff shown at the previous review round, used to
+	// derive what changed since then without depending on git objects that
+	// garbage collection could prune.
+	LastReviewDiff string
+
 	// ResolvingMergeConflicts selects the conflict-resolution fulfillment
 	// prompt, where Requirements and PreviousReview are treated as context for
 	// intent rather than as acceptance criteria to (re)fulfill in the diff.

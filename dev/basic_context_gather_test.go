@@ -132,7 +132,7 @@ func TestBasicContextGatherRunsForEachCodingInvocation(t *testing.T) {
 	wrapper := func(ctx workflow.Context) (basicContextCallSiteResult, error) {
 		dCtx := contextGatherCallSiteDevContext(ctx, ContextGatherTypeExplore)
 
-		if _, err := codingSubflow(dCtx, "complete basic requirements", nil, ""); err == nil {
+		if _, err := codingSubflow(dCtx, "complete basic requirements", nil, "", ""); err == nil {
 			return result, errors.New("expected initial coding invocation to stop at the coding model")
 		}
 
@@ -146,6 +146,7 @@ func TestBasicContextGatherRunsForEachCodingInvocation(t *testing.T) {
 			"review-updated requirements",
 			&startBranch,
 			"review-tree-hash",
+			"prior review diff",
 			feedbackRankQueries...,
 		); err == nil {
 			return result, errors.New("expected review coding invocation to stop at the coding model")
@@ -185,7 +186,7 @@ func TestExploreHandoffHistoryConstruction(t *testing.T) {
 			return result, err
 		}
 		expectedInitialPrompt = expectedMessage.Content
-		if _, err := codingSubflow(dCtx, "complete basic requirements", nil, ""); err == nil {
+		if _, err := codingSubflow(dCtx, "complete basic requirements", nil, "", ""); err == nil {
 			return result, errors.New("expected coding invocation to stop at the coding model")
 		}
 		return result, nil
