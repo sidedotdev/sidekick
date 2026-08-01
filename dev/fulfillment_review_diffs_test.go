@@ -76,7 +76,8 @@ func (s *CriteriaFulfillmentDiffTestSuite) runDiffWorkflow(promptInfo CheckWorkI
 			requestForUserSeen = true
 		})
 
-		return criteriaFulfillmentReviewDiff(s.newDevContext(ctx), promptInfo, true)
+		reviewDiff, _, err := criteriaFulfillmentReviewDiff(s.newDevContext(ctx), promptInfo, true)
+		return reviewDiff, err
 	}
 
 	s.env.RegisterWorkflow(testWorkflow)

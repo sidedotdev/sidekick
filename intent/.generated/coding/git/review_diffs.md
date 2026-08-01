@@ -14,6 +14,9 @@ intent_links:
       - coding/review_diffs_activity.go:fullReviewDiff
       - coding/review_diffs_activity.go:diffAtStartPoint
       - coding/review_diffs_activity_test.go:reviewDiffsScenarios
+      - coding/git/git_rev_parse.go:GitRevParseActivity
+      - dev/follow_dev_plan.go:stepReviewState
+      - dev/follow_dev_plan.go:pinStepReviewState
   - intent: "#activity-level-cases"
     code:
       - coding/review_diffs_activity_test.go:TestGenerateReviewDiffsActivity_FirstRound
@@ -26,7 +29,10 @@ intent_links:
       - dev/basic_dev_workflow.go:getMergeApproval
       - dev/basic_dev_workflow.go:reviewAndResolve
       - dev/fulfillment.go:CheckWorkMeetsCriteria
+      - dev/fulfillment.go:CheckWorkMeetsCriteriaWithDiff
       - dev/follow_dev_plan.go:checkIfDevStepCompleted
+      - dev/follow_dev_plan.go:completeDevStepSubflow
+      - dev/step_start_pin_test.go:StepStartPinTestSuite
       - coding/git/git_conflict_resolution.go:GitConflictResolutionDiffActivity
   - intent: "#degradation"
     code:
