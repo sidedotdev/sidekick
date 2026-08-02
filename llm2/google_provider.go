@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"sidekick/common"
-	"sidekick/utils"
 	"strings"
 	"time"
 
@@ -109,6 +108,12 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	modelInfo, _ := common.GetModel(options.Provider, model)
 	isReasoningModel := modelInfo != nil && modelInfo.Reasoning
 
+	// The legacy generateContent API has no way to echo search grounding back
+	// in request history, so all builtin tool blocks — including google-origin
+	// ones — are converted to client-style tool pairs, keeping prior search
+	// results visible to the model. Revisit native replay once the Go genai
+	// SDK ships the Interactions API.
+	messages = convertForeignBuiltinToolBlocks(messages, noNativeBuiltinToolBlocks)
 	contents, err := googleFromLlm2Messages(messages, isReasoningModel, model)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert messages: %w", err)
@@ -122,7 +127,10 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 			return nil, err
 		}
 		config.ToolConfig = toolConfig
-		config.Tools = googleFromLlm2Tools(options.Tools)
+		config.Tools, err = googleFromLlm2Tools(options.Tools)
+		if err != nil {
+			return nil, err
+		}
 
 		// Google API does not support a parallel tool calls toggle;
 		// the model decides autonomously whether to emit multiple calls.
@@ -173,6 +181,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 
 	var events []Event
 	var lastResult *genai.GenerateContentResponse
+	var groundingMetadata *genai.GroundingMetadata
 	state := &googleStreamState{}
 
 	for result, err := range stream {
@@ -180,6 +189,9 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 			return nil, fmt.Errorf("failed to iterate on %s stream: %w", providerName, err)
 		}
 		lastResult = result
+		if len(result.Candidates) > 0 && result.Candidates[0].GroundingMetadata != nil {
+			groundingMetadata = result.Candidates[0].GroundingMetadata
+		}
 
 		newEvents := googleResultToEvents(result, state)
 		for _, ev := range newEvents {
@@ -195,7 +207,12 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 		eventChan <- ev
 	}
 
-	output := accumulateGoogleEventsToMessage(events)
+	for _, ev := range googleGroundingToEvents(groundingMetadata, state) {
+		events = append(events, ev)
+		eventChan <- ev
+	}
+
+	output := reorderSyntheticGroundingBlocks(accumulateGoogleEventsToMessage(events))
 
 	usage := Usage{}
 	if lastResult != nil && lastResult.UsageMetadata != nil {
@@ -372,6 +389,98 @@ func googleFinalizeStream(state *googleStreamState) []Event {
 		return []Event{event}
 	}
 	return nil
+}
+
+// googleGroundingToEvents synthesizes a builtin tool use/result pair from
+// search grounding metadata. Google reports grounding out-of-band rather than
+// as content parts and does not support echoing it back in history, so the
+// blocks use a sidekick-generated id that marks them as non-native on replay.
+func googleGroundingToEvents(gm *genai.GroundingMetadata, state *googleStreamState) []Event {
+	if gm == nil || len(gm.WebSearchQueries) == 0 {
+		return nil
+	}
+
+	argsBytes, err := json.Marshal(map[string]any{"queries": gm.WebSearchQueries})
+	if err != nil {
+		argsBytes = []byte("{}")
+	}
+	id := fmt.Sprintf("%s%d", googleWebSearchCallIdPrefix, time.Now().UnixNano())
+
+	result := &BuiltinToolResultBlock{
+		ToolCallId: id,
+		Name:       webSearchToolName,
+	}
+	for _, chunk := range gm.GroundingChunks {
+		if chunk != nil && chunk.Web != nil {
+			result.SearchResults = append(result.SearchResults, WebSearchResult{
+				URL:   chunk.Web.URI,
+				Title: chunk.Web.Title,
+			})
+		}
+	}
+
+	useIdx := state.nextBlockIndex
+	state.nextBlockIndex++
+	resultIdx := state.nextBlockIndex
+	state.nextBlockIndex++
+
+	return []Event{
+		{
+			Type:  EventBlockStarted,
+			Index: useIdx,
+			ContentBlock: &ContentBlock{
+				Type: ContentBlockTypeBuiltinToolUse,
+				BuiltinToolUse: &BuiltinToolUseBlock{
+					Id:        id,
+					Name:      webSearchToolName,
+					Arguments: string(argsBytes),
+				},
+			},
+		},
+		{Type: EventBlockDone, Index: useIdx},
+		{
+			Type:  EventBlockStarted,
+			Index: resultIdx,
+			ContentBlock: &ContentBlock{
+				Type:             ContentBlockTypeBuiltinToolResult,
+				BuiltinToolResult: result,
+			},
+		},
+		{Type: EventBlockDone, Index: resultIdx},
+	}
+}
+
+// reorderSyntheticGroundingBlocks moves builtin tool blocks synthesized from
+// grounding metadata ahead of the first text block: the searches happened
+// before the grounded answer, but grounding metadata only arrives at the end
+// of the stream. This keeps call→result→answer chronology in recorded history.
+func reorderSyntheticGroundingBlocks(msg Message) Message {
+	var builtinBlocks, rest []ContentBlock
+	insertIdx := -1
+	for _, b := range msg.Content {
+		switch b.Type {
+		case ContentBlockTypeBuiltinToolUse, ContentBlockTypeBuiltinToolResult:
+			builtinBlocks = append(builtinBlocks, b)
+		default:
+			if b.Type == ContentBlockTypeText && insertIdx == -1 {
+				insertIdx = len(rest)
+			}
+			rest = append(rest, b)
+		}
+	}
+	if len(builtinBlocks) == 0 {
+		return msg
+	}
+	if insertIdx == -1 {
+		insertIdx = len(rest)
+	}
+
+	content := make([]ContentBlock, 0, len(msg.Content))
+	content = append(content, rest[:insertIdx]...)
+	content = append(content, builtinBlocks...)
+	content = append(content, rest[insertIdx:]...)
+	msg.Content = content
+	return msg
 }
 
 func accumulateGoogleEventsToMessage(events []Event) Message {
@@ -719,6 +828,11 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 					log.Warn().Str("url", url).Msg("unsupported image URL scheme for Google provider, skipping")
 				}
 
+			case ContentBlockTypeBuiltinToolUse, ContentBlockTypeBuiltinToolResult:
+				// Never reached via GoogleProvider.Stream: builtin tool blocks
+				// are converted to client tool pairs before message conversion.
+				log.Warn().Str("type", string(block.Type)).Msg("unexpected builtin tool block for Google provider, skipping")
+
 			case ContentBlockTypeFile:
 				log.Warn().Str("type", string(block.Type)).Msg("unsupported content block type for Google provider, skipping")
 			}
@@ -726,24 +840,71 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 	}
 
 	addContent()
-	return contents, nil
+	return splitGoogleFunctionResponseContents(contents), nil
 }
 
-func googleFromLlm2Tools(tools []*common.Tool) []*genai.Tool {
+// splitGoogleFunctionResponseContents separates functionResponse parts from
+// other parts within user contents: Gemini returns an empty candidate when a
+// single turn mixes functionResponse parts with regular parts (e.g. text).
+func splitGoogleFunctionResponseContents(contents []*genai.Content) []*genai.Content {
+	result := make([]*genai.Content, 0, len(contents))
+	for _, content := range contents {
+		if content.Role != "user" {
+			result = append(result, content)
+			continue
+		}
+
+		var group []*genai.Part
+		var groupIsFuncResponse bool
+		flush := func() {
+			if len(group) > 0 {
+				result = append(result, &genai.Content{Role: content.Role, Parts: group})
+				group = nil
+			}
+		}
+		for _, part := range content.Parts {
+			isFuncResponse := part.FunctionResponse != nil
+			if len(group) > 0 && isFuncResponse != groupIsFuncResponse {
+				flush()
+			}
+			groupIsFuncResponse = isFuncResponse
+			group = append(group, part)
+		}
+		flush()
+	}
+	return result
+}
+
+func googleFromLlm2Tools(tools []*common.Tool) ([]*genai.Tool, error) {
 	if len(tools) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	genaiTool := &genai.Tool{
-		FunctionDeclarations: utils.Map(tools, func(tool *common.Tool) *genai.FunctionDeclaration {
-			return &genai.FunctionDeclaration{
-				Name:        tool.Name,
-				Description: tool.Description,
-				Parameters:  googleFromLlm2Schema(tool.Parameters),
-			}
-		}),
+	var functionDeclarations []*genai.FunctionDeclaration
+	hasWebSearch := false
+	for _, tool := range tools {
+		if tool.Type == common.ToolTypeWebSearch {
+			hasWebSearch = true
+			continue
+		}
+		if !tool.IsFunction() {
+			return nil, fmt.Errorf("provider-native tool type %q is not supported by the google provider", tool.Type)
+		}
+		functionDeclarations = append(functionDeclarations, &genai.FunctionDeclaration{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  googleFromLlm2Schema(tool.Parameters),
+		})
 	}
-	return []*genai.Tool{genaiTool}
+
+	var result []*genai.Tool
+	if len(functionDeclarations) > 0 {
+		result = append(result, &genai.Tool{FunctionDeclarations: functionDeclarations})
+	}
+	if hasWebSearch {
+		result = append(result, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
+	}
+	return result, nil
 }
 
 func googleFromLlm2Schema(schema *jsonschema.Schema) *genai.Schema {

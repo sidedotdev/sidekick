@@ -190,6 +190,27 @@ func convertLlm2EventToFlowEvent(event llm2.Event, flowActionId string, blocks m
 					}},
 				})
 			}
+		case llm2.ContentBlockTypeBuiltinToolUse:
+			if event.ContentBlock.BuiltinToolUse != nil {
+				builtinToolUse := event.ContentBlock.BuiltinToolUse
+				return chatDelta(common.ChatMessageDelta{
+					ToolCalls: []common.ToolCall{{
+						Id:        builtinToolUse.Id,
+						Name:      builtinToolUse.Name,
+						Arguments: builtinToolUse.Arguments,
+					}},
+				})
+			}
+		case llm2.ContentBlockTypeBuiltinToolResult:
+			if event.ContentBlock.BuiltinToolResult != nil {
+				builtinToolResult := event.ContentBlock.BuiltinToolResult
+				return domain.ProgressTextEvent{
+					EventType: domain.ProgressTextEventType,
+					ParentId:  flowActionId,
+					Text: fmt.Sprintf("%s results:\n%s\n", builtinToolResult.Name,
+						llm2.BuiltinToolResultText(builtinToolResult)),
+				}
+			}
 		}
 		return nil
 	case llm2.EventTextDelta:
@@ -206,6 +227,16 @@ func convertLlm2EventToFlowEvent(event llm2.Event, flowActionId string, blocks m
 					ToolCalls: []common.ToolCall{{
 						Id:        block.ToolUse.Id,
 						Name:      block.ToolUse.Name,
+						Arguments: event.Delta,
+					}},
+				})
+			}
+		case llm2.ContentBlockTypeBuiltinToolUse:
+			if block.BuiltinToolUse != nil {
+				return chatDelta(common.ChatMessageDelta{
+					ToolCalls: []common.ToolCall{{
+						Id:        block.BuiltinToolUse.Id,
+						Name:      block.BuiltinToolUse.Name,
 						Arguments: event.Delta,
 					}},
 				})
@@ -291,6 +322,7 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 				DefaultModel:  providerConfig.DefaultLLM,
 				AuthType:      authType,
 				CustomHeaders: providerConfig.CustomHeaders,
+				BuiltinTools:   providerConfig.BuiltinTools,
 			}, nil
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
@@ -315,6 +347,7 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 					AuthType:            p.AuthType,
 					AnthropicCompatible: true,
 					CustomHeaders:       p.CustomHeaders,
+					BuiltinTools:         p.BuiltinTools,
 				}, nil
 			}
 		}

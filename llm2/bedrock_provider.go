@@ -296,6 +296,9 @@ func bedrockFromLlm2Tools(tools []*common.Tool, choice common.ToolChoice) (*type
 	}
 	cfg := &types.ToolConfiguration{}
 	for _, t := range tools {
+		if !t.IsFunction() {
+			return nil, fmt.Errorf("bedrock: provider-native tool type %q is not supported via Bedrock Converse", t.Type)
+		}
 		schemaDoc, err := bedrockToolSchemaDocument(t.Parameters)
 		if err != nil {
 			return nil, fmt.Errorf("bedrock: tool %q schema: %w", t.Name, err)

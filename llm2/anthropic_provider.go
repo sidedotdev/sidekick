@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sidekick/common"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,17 @@ type AnthropicProvider struct {
 	AnthropicCompatible bool
 	AuthType            common.ProviderAuthType
 	CustomHeaders       map[string]string
+	// BuiltinTools opts protocol-compatible proxy providers into specific
+	// provider-native tools (e.g. "web_search"). First-party Anthropic ignores
+	// this and always supports its native tools.
+	BuiltinTools []string
+}
+
+// webSearchToolEnabled reports whether the native web search tool may be sent.
+// Compatible proxies are opted out by default since their backend may not
+// support Anthropic builtin tools.
+func (p AnthropicProvider) webSearchToolEnabled() bool {
+	return !p.AnthropicCompatible || slices.Contains(p.BuiltinTools, webSearchToolName)
 }
 
 func anthropicBetaHeader(model string, useOAuth bool, tools []*common.Tool, assumeAnthropicModelNames, fastMode bool) string {
@@ -173,6 +185,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		params.ServiceTier = anthropic.MessageNewParamsServiceTier(options.ServiceTier)
 	}
 
+	messages = convertForeignBuiltinToolBlocks(messages, isAnthropicNativeBuiltinToolBlock)
 	anthropicMessages, err := messagesToAnthropicParams(messages)
 	if err != nil {
 		return nil, err
@@ -180,7 +193,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	params.Messages = anthropicMessages
 
 	if len(options.Tools) > 0 {
-		tools, err := toolsToAnthropicParams(options.Tools)
+		tools, err := toolsToAnthropicParams(options.Tools, p.webSearchToolEnabled())
 		if err != nil {
 			return nil, err
 		}
@@ -312,6 +325,21 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 					Reasoning: &ReasoningBlock{
 						Text: "",
 					},
+				}
+			case "server_tool_use":
+				contentBlock = ContentBlock{
+					Type: ContentBlockTypeBuiltinToolUse,
+					BuiltinToolUse: &BuiltinToolUseBlock{
+						Id:        evt.ContentBlock.ID,
+						Name:      evt.ContentBlock.Name,
+						Arguments: "",
+					},
+				}
+			case "web_search_tool_result":
+				resultBlock := evt.ContentBlock.AsWebSearchToolResult()
+				contentBlock = ContentBlock{
+					Type:             ContentBlockTypeBuiltinToolResult,
+					BuiltinToolResult: anthropicWebSearchResultToBlock(resultBlock),
 				}
 			default:
 				return nil, fmt.Errorf("unsupported content block type in start event: %s", evt.ContentBlock.Type)
@@ -520,6 +548,29 @@ func parseAnthropicVersion(model string) (major, minor int, ok bool) {
 	return 0, 0, false
 }
 
+// anthropicWebSearchResultToBlock converts Anthropic's web_search_tool_result
+// content into the normalized builtin tool result block.
+func anthropicWebSearchResultToBlock(resultBlock anthropic.WebSearchToolResultBlock) *BuiltinToolResultBlock {
+	result := &BuiltinToolResultBlock{
+		ToolCallId: resultBlock.ToolUseID,
+		Name:       webSearchToolName,
+	}
+	if resultBlock.Content.ErrorCode != "" {
+		result.IsError = true
+		result.Content = string(resultBlock.Content.ErrorCode)
+		return result
+	}
+	for _, res := range resultBlock.Content.OfWebSearchResultBlockArray {
+		result.SearchResults = append(result.SearchResults, WebSearchResult{
+			URL:              res.URL,
+			Title:            res.Title,
+			PageAge:          res.PageAge,
+			EncryptedContent: res.EncryptedContent,
+		})
+	}
+	return result
+}
+
 func accumulateAnthropicEventsToMessage(events []Event) Message {
 	msg := Message{
 		Role:    RoleAssistant,
@@ -542,6 +593,10 @@ func accumulateAnthropicEventsToMessage(events []Event) Message {
 				case ContentBlockTypeToolUse:
 					if block.ToolUse != nil {
 						block.ToolUse.Arguments += event.Delta
+					}
+				case ContentBlockTypeBuiltinToolUse:
+					if block.BuiltinToolUse != nil {
+						block.BuiltinToolUse.Arguments += event.Delta
 					}
 				case ContentBlockTypeReasoning:
 					if block.Reasoning != nil {
@@ -824,6 +879,63 @@ func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.Cont
 		}
 		return imgBlock, nil
 
+	case ContentBlockTypeBuiltinToolUse:
+		if role != RoleAssistant {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("builtin_tool_use blocks only allowed in assistant messages")
+		}
+		if block.BuiltinToolUse == nil {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("builtin_tool_use block missing BuiltinToolUse data")
+		}
+		var input any
+		if block.BuiltinToolUse.Arguments != "" {
+			if err := json.Unmarshal([]byte(block.BuiltinToolUse.Arguments), &input); err != nil {
+				input = map[string]any{"invalid_json_stringified": block.BuiltinToolUse.Arguments}
+			}
+		} else {
+			input = map[string]any{}
+		}
+		return anthropic.ContentBlockParamUnion{
+			OfServerToolUse: &anthropic.ServerToolUseBlockParam{
+				ID:    block.BuiltinToolUse.Id,
+				Input: input,
+				Name:  anthropic.ServerToolUseBlockParamName(block.BuiltinToolUse.Name),
+			},
+		}, nil
+
+	case ContentBlockTypeBuiltinToolResult:
+		if role != RoleAssistant {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("builtin_tool_result blocks only allowed in assistant messages")
+		}
+		if block.BuiltinToolResult == nil {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("builtin_tool_result block missing BuiltinToolResult data")
+		}
+		var content anthropic.WebSearchToolResultBlockParamContentUnion
+		if block.BuiltinToolResult.IsError {
+			content.OfRequestWebSearchToolResultError = &anthropic.WebSearchToolRequestErrorParam{
+				ErrorCode: anthropic.WebSearchToolResultErrorCode(block.BuiltinToolResult.Content),
+			}
+		} else {
+			items := make([]anthropic.WebSearchResultBlockParam, 0, len(block.BuiltinToolResult.SearchResults))
+			for _, res := range block.BuiltinToolResult.SearchResults {
+				item := anthropic.WebSearchResultBlockParam{
+					EncryptedContent: res.EncryptedContent,
+					Title:            res.Title,
+					URL:              res.URL,
+				}
+				if res.PageAge != "" {
+					item.PageAge = anthropic.Opt(res.PageAge)
+				}
+				items = append(items, item)
+			}
+			content.OfWebSearchToolResultBlockItem = items
+		}
+		return anthropic.ContentBlockParamUnion{
+			OfWebSearchToolResult: &anthropic.WebSearchToolResultBlockParam{
+				ToolUseID: block.BuiltinToolResult.ToolCallId,
+				Content:   content,
+			},
+		}, nil
+
 	case ContentBlockTypeFile:
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file blocks not yet supported")
 
@@ -835,10 +947,31 @@ func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.Cont
 	}
 }
 
-func toolsToAnthropicParams(tools []*common.Tool) ([]anthropic.ToolUnionParam, error) {
-	result := make([]anthropic.ToolUnionParam, len(tools))
-	for i, tool := range tools {
-		result[i] = anthropic.ToolUnionParam{
+func toolsToAnthropicParams(tools []*common.Tool, includeWebSearch bool) ([]anthropic.ToolUnionParam, error) {
+	result := make([]anthropic.ToolUnionParam, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Type == common.ToolTypeWebSearch {
+			if !includeWebSearch {
+				return nil, fmt.Errorf("web_search tool requested, but this anthropic-compatible provider is not opted into builtin tools")
+			}
+			webSearchTool := &anthropic.WebSearchTool20250305Param{}
+			if tool.WebSearch != nil {
+				if tool.WebSearch.MaxUses > 0 {
+					webSearchTool.MaxUses = anthropic.Opt(int64(tool.WebSearch.MaxUses))
+				}
+				if len(tool.WebSearch.AllowedDomains) > 0 {
+					webSearchTool.AllowedDomains = tool.WebSearch.AllowedDomains
+				}
+			}
+			result = append(result, anthropic.ToolUnionParam{
+				OfWebSearchTool20250305: webSearchTool,
+			})
+			continue
+		}
+		if !tool.IsFunction() {
+			return nil, fmt.Errorf("provider-native tool type %q is not supported by the anthropic provider", tool.Type)
+		}
+		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        tool.Name,
 				Description: anthropic.Opt(tool.Description),
@@ -849,7 +982,7 @@ func toolsToAnthropicParams(tools []*common.Tool) ([]anthropic.ToolUnionParam, e
 					ExtraFields: tool.Parameters.Extras,
 				},
 			},
-		}
+		})
 	}
 	return result, nil
 }

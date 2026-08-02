@@ -572,6 +572,9 @@ func openaiChatFromTools(tools []*common.Tool) ([]openai.ChatCompletionToolUnion
 	result := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
 
 	for _, tool := range tools {
+		if !tool.IsFunction() {
+			return nil, fmt.Errorf("provider-native tool type %q is not supported by the chat completions API", tool.Type)
+		}
 		params, err := jsonSchemaToMap(tool.Parameters)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert parameters for tool %s: %w", tool.Name, err)

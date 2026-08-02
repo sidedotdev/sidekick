@@ -24,6 +24,7 @@ type ModelProviderPublicConfig struct {
 	SmallLLM      string            `json:"small_llm,omitempty"`
 	AuthType      ProviderAuthType  `json:"auth_type,omitempty"`
 	CustomHeaders map[string]string `json:"custom_headers,omitempty"`
+	BuiltinTools   []string          `json:"builtin_tools,omitempty"`
 }
 
 // GetLocalConfig loads the local configuration and converts it to a format
@@ -55,6 +56,7 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 			SmallLLM:      p.SmallLLM,
 			AuthType:      NormalizeProviderAuthType(string(p.AuthType)),
 			CustomHeaders: p.CustomHeaders,
+			BuiltinTools:   p.BuiltinTools,
 		}
 	}
 

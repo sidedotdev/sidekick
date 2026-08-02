@@ -33,14 +33,16 @@ type Usage struct {
 type ContentBlockType string
 
 const (
-	ContentBlockTypeText       ContentBlockType = "text"
-	ContentBlockTypeImage      ContentBlockType = "image"
-	ContentBlockTypeFile       ContentBlockType = "file"
-	ContentBlockTypeToolUse    ContentBlockType = "tool_use"
-	ContentBlockTypeToolResult ContentBlockType = "tool_result"
-	ContentBlockTypeRefusal    ContentBlockType = "refusal"
-	ContentBlockTypeReasoning  ContentBlockType = "reasoning"
-	ContentBlockTypeMcpCall    ContentBlockType = "mcp_call"
+	ContentBlockTypeText             ContentBlockType = "text"
+	ContentBlockTypeImage            ContentBlockType = "image"
+	ContentBlockTypeFile             ContentBlockType = "file"
+	ContentBlockTypeToolUse          ContentBlockType = "tool_use"
+	ContentBlockTypeToolResult       ContentBlockType = "tool_result"
+	ContentBlockTypeRefusal          ContentBlockType = "refusal"
+	ContentBlockTypeReasoning        ContentBlockType = "reasoning"
+	ContentBlockTypeMcpCall          ContentBlockType = "mcp_call"
+	ContentBlockTypeBuiltinToolUse    ContentBlockType = "builtin_tool_use"
+	ContentBlockTypeBuiltinToolResult ContentBlockType = "builtin_tool_result"
 )
 
 // Media references for input blocks.
@@ -88,6 +90,39 @@ type ToolResultBlock struct {
 	Content    []ContentBlock `json:"content,omitempty"`
 }
 
+// BuiltinToolUseBlock is a provider-native (server-side) tool invocation, e.g.
+// web search, executed by the provider itself rather than the client. Name is
+// normalized across providers (e.g. "web_search").
+type BuiltinToolUseBlock struct {
+	Id        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON string
+	// Status is only populated by providers that require it for exact history
+	// replay (OpenAI web_search_call: completed/failed).
+	Status string `json:"status,omitempty"`
+}
+
+// WebSearchResult is a single result of a server-side web search.
+type WebSearchResult struct {
+	URL     string `json:"url"`
+	Title   string `json:"title"`
+	PageAge string `json:"pageAge,omitempty"`
+	// EncryptedContent must be echoed back verbatim for Anthropic same-provider
+	// history replay; it is dropped in cross-provider conversion.
+	EncryptedContent string `json:"encryptedContent,omitempty"`
+}
+
+// BuiltinToolResultBlock is the provider-reported result of a server-side tool
+// invocation, modeled within the same assistant message as its
+// BuiltinToolUseBlock.
+type BuiltinToolResultBlock struct {
+	ToolCallId    string            `json:"toolCallId"`
+	Name          string            `json:"name"`
+	IsError       bool              `json:"isError,omitempty"`
+	Content       string            `json:"content,omitempty"` // error code or generic text
+	SearchResults []WebSearchResult `json:"searchResults,omitempty"`
+}
+
 // TextContent returns the concatenated text from all text content blocks.
 func (tr *ToolResultBlock) TextContent() string {
 	var sb strings.Builder
@@ -111,12 +146,14 @@ type ContentBlock struct {
 	Text         string           `json:"text,omitempty"`
 	Image        *ImageRef        `json:"image,omitempty"`
 	File         *FileRef         `json:"file,omitempty"`
-	ToolUse      *ToolUseBlock    `json:"toolUse,omitempty"`
-	ToolResult   *ToolResultBlock `json:"toolResult,omitempty"`
-	Refusal      *RefusalBlock    `json:"refusal,omitempty"`
-	Reasoning    *ReasoningBlock  `json:"reasoning,omitempty"`
-	McpCall      *McpCallBlock    `json:"mcpCall,omitempty"`
-	CacheControl string           `json:"cacheControl,omitempty"`
+	ToolUse          *ToolUseBlock          `json:"toolUse,omitempty"`
+	ToolResult       *ToolResultBlock       `json:"toolResult,omitempty"`
+	Refusal          *RefusalBlock          `json:"refusal,omitempty"`
+	Reasoning        *ReasoningBlock        `json:"reasoning,omitempty"`
+	McpCall          *McpCallBlock          `json:"mcpCall,omitempty"`
+	BuiltinToolUse    *BuiltinToolUseBlock    `json:"builtinToolUse,omitempty"`
+	BuiltinToolResult *BuiltinToolResultBlock `json:"builtinToolResult,omitempty"`
+	CacheControl     string                 `json:"cacheControl,omitempty"`
 	// Signature is a provider-specific opaque token (e.g., Google's ThoughtSignature)
 	// that must be preserved and returned verbatim in subsequent turns.
 	Signature []byte `json:"signature,omitempty"`
@@ -326,7 +363,7 @@ const (
 //   - content_block_delta {type=text_delta} on text/reasoning -> text_delta
 //   - content_block_delta {type=thinking_delta} on reasoning -> text_delta
 //   - content_block_delta {type=signature_delta} on reasoning -> signature_delta
-//   - content_block_delta {type=input_json_delta} for server tool use -> text_delta targeting tool_use
+//   - content_block_delta {type=input_json_delta} for builtin tool use -> text_delta targeting tool_use
 //   - content_block_stop -> block_done
 //   - OpenAI Responses:
 //   - response.output_item.added -> block_started when the item corresponds 1:1 to a single content block

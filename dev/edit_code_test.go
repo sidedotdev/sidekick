@@ -447,6 +447,64 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 	s.Contains(toolNames, getHelpOrInputTool.Name)
 }
 
+func (s *BuildAuthorEditBlockInputTestSuite) TestWebSearchToolUsableOnlyInNonLocalEnv() {
+	wrapperWorkflow := func(ctx workflow.Context, useDevPodEnv bool) (llm2.Options, error) {
+		envContainer := &env.EnvContainer{Env: &env.LocalEnv{}}
+		if useDevPodEnv {
+			envContainer = &env.EnvContainer{Env: &env.DevPodEnv{}}
+		}
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context: ctx,
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+				EnvContainer: envContainer,
+			},
+			RepoConfig: common.RepoConfig{},
+		}
+		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
+
+		return buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, true, false, "OS: Linux, Arch: x86_64")
+	}
+
+	var ffa *fflag.FFlagActivities
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+
+	s.env.ExecuteWorkflow(wrapperWorkflow, true)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var options llm2.Options
+	s.NoError(s.env.GetWorkflowResult(&options))
+
+	webSearchCount := 0
+	functionToolCount := 0
+	for _, tool := range options.Tools {
+		if tool.Type == common.ToolTypeWebSearch {
+			webSearchCount++
+		} else {
+			functionToolCount++
+		}
+	}
+	s.Equal(1, webSearchCount, "non-local env should enable the web search tool")
+	s.Greater(functionToolCount, 0, "function tools should remain available alongside web search")
+	// Auto tool choice keeps the web search tool usable: providers only
+	// filter the tool list down when a specific tool is forced.
+	s.Equal(common.ToolChoiceTypeAuto, options.ToolChoice.Type)
+
+	// Local envs must not get web search by default.
+	s.SetupTest()
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	s.env.ExecuteWorkflow(wrapperWorkflow, false)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.NoError(s.env.GetWorkflowResult(&options))
+	for _, tool := range options.Tools {
+		s.NotEqual(common.ToolTypeWebSearch, tool.Type)
+	}
+}
+
 func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 	wrapperWorkflow := func(ctx workflow.Context, disableHumanInTheLoop bool) ([]string, error) {
 		dCtx := DevContext{

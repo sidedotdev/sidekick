@@ -70,7 +70,7 @@ require (
 	go.temporal.io/server v1.25.2
 	golang.org/x/image v0.36.0
 	golang.org/x/tools v0.44.0
-	google.golang.org/genai v1.36.0
+	google.golang.org/genai v1.63.0
 	logur.dev/adapter/zerolog v0.6.0
 	logur.dev/logur v0.17.0
 	modernc.org/sqlite v1.34.4

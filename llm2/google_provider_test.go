@@ -826,18 +826,23 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 
 		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
-		assert.Len(t, contents, 1)
+		// Function responses never share a turn with regular parts (Gemini
+		// returns empty candidates for mixed turns), so the fallback image
+		// lands in a follow-up user content.
+		assert.Len(t, contents, 2)
 		assert.Equal(t, "user", contents[0].Role)
 
-		// First part: function response (text-only, no Parts)
+		// First content: function response (text-only, no Parts)
+		assert.Len(t, contents[0].Parts, 1)
 		frPart := contents[0].Parts[0]
 		assert.NotNil(t, frPart.FunctionResponse)
 		assert.Equal(t, "call-img-2", frPart.FunctionResponse.ID)
 		assert.Len(t, frPart.FunctionResponse.Parts, 0)
 
-		// Second part: fallback inline image
-		assert.Len(t, contents[0].Parts, 2)
-		assert.NotNil(t, contents[0].Parts[1].InlineData)
+		// Second content: fallback inline image
+		assert.Equal(t, "user", contents[1].Role)
+		assert.Len(t, contents[1].Parts, 1)
+		assert.NotNil(t, contents[1].Parts[0].InlineData)
 	})
 
 	t.Run("error tool result", func(t *testing.T) {
@@ -1023,7 +1028,8 @@ func TestGoogleFromLlm2Tools(t *testing.T) {
 		},
 	}
 
-	result := googleFromLlm2Tools(tools)
+	result, err := googleFromLlm2Tools(tools)
+	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Len(t, result[0].FunctionDeclarations, 1)
 	assert.Equal(t, "get_weather", result[0].FunctionDeclarations[0].Name)

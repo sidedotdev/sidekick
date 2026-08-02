@@ -657,6 +657,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	}
 
 	tools := authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan)
+	tools = appendWebSearchToolIfNonLocal(dCtx, tools)
 
 	options := llm2.Options{
 		Tools: tools,

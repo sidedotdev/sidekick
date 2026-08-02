@@ -21,6 +21,10 @@ type ModelProviderConfig struct {
 	SmallLLM      string            `koanf:"small_llm,omitempty" json:"small_llm,omitempty"`
 	AuthType      ProviderAuthType  `koanf:"auth_type,omitempty" json:"auth_type,omitempty"`
 	CustomHeaders map[string]string `koanf:"custom_headers,omitempty" json:"custom_headers,omitempty"`
+	// BuiltinTools opts protocol-compatible proxy providers into specific
+	// provider-native tools, e.g. "web_search". First-party providers support
+	// their native tools without this.
+	BuiltinTools []string `koanf:"builtin_tools,omitempty" json:"builtin_tools,omitempty"`
 }
 
 // Validate ensures the CustomProviderConfig is valid
