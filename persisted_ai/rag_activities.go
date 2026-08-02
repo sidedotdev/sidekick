@@ -13,8 +13,10 @@ import (
 	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
+	"time"
 
 	"github.com/kelindar/binary"
+	"github.com/rs/zerolog/log"
 )
 
 type RagActivities struct {
@@ -70,10 +72,44 @@ func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options 
 		return "", fmt.Errorf("failed to calculate embedding char limits: %w", err)
 	}
 
-	fileSignatureSubkeys, err := t.CreateDirSignatureOutlines(ctx, options.WorkspaceId, options.EnvContainer, maxChars)
+	stepStart := time.Now()
+	logStep := func(step string) {
+		log.Debug().Str("step", step).Dur("duration", time.Since(stepStart)).Msg("ranked dir signature outline step")
+		stepStart = time.Now()
+	}
+
+	cacheState := ra.loadOutlineWalkCache(ctx, options.WorkspaceId, options.EnvContainer)
+	logStep("load outline cache")
+
+	// A single raw entry set feeds all three consumers below (signature
+	// outlines, dir chunk paths and the final limited outline). With a cached
+	// snapshot it is reconstructed from cache + git diff without walking;
+	// only a cold cache pays for a full walk.
+	rawEntries, cached, err := tree_sitter.GetDirectoryRawOutlinesFromCache(ctx, options.EnvContainer, cacheState.cache)
+	if err != nil {
+		// Reconstruction failures (eg transient read errors) are recoverable:
+		// the full walk below re-records every path from scratch.
+		log.Debug().Err(err).Msg("outline cache reconstruction failed, falling back to full walk")
+		cached = false
+	}
+	if !cached {
+		rawEntries, err = tree_sitter.GetDirectoryRawOutlines(ctx, options.EnvContainer, cacheState.cache)
+		if err != nil {
+			return "", err
+		}
+	}
+	logStep("raw outlines")
+	log.Debug().Bool("cachedOutlines", cached).Int("rawEntryCount", len(rawEntries)).Msg("directory raw outlines")
+	if len(rawEntries) == 0 {
+		log.Warn().Bool("cachedOutlines", cached).Msg("no raw outline entries found; ranked outline will be empty")
+	}
+	ra.storeOutlineWalkCache(ctx, options.WorkspaceId, cacheState)
+
+	fileSignatureSubkeys, err := t.PersistDirSignatureOutlines(ctx, options.WorkspaceId, tree_sitter.OutlinesFromRawEntries(rawEntries, nil, nil), maxChars)
 	if err != nil {
 		return "", err
 	}
+	logStep("persist dir signature outlines")
 
 	rankedFileSignatureSubkeys, err := ra.RankedSubkeys(ctx, RankedSubkeysOptions{
 		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions,
@@ -83,19 +119,30 @@ func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options 
 	if err != nil {
 		return "", err
 	}
+	logStep("rank file signature subkeys")
 
-	rankedDirChunkSubkeys, err := ra.RankedDirChunkSubkeys(ctx, RankedDirChunkSubkeysOptions{options.RankedViaEmbeddingOptions})
+	pathInfos := make([]PathInfo, len(rawEntries))
+	for i, entry := range rawEntries {
+		pathInfos[i] = PathInfo{Path: "/" + entry.RelativePath, IsDir: entry.IsDir, present: true}
+	}
+	rankedDirChunkSubkeys, err := ra.RankedDirChunkSubkeys(ctx, RankedDirChunkSubkeysOptions{
+		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions,
+		pathInfos:                 pathInfos,
+	})
 	if err != nil {
 		return "", err
 	}
+	logStep("rank dir chunk subkeys")
 
-	return ra.LimitedDirSignatureOutline(ctx, DirSignatureOutlineOptions{
+	outline, err := ra.LimitedDirSignatureOutline(ctx, DirSignatureOutlineOptions{
 		WorkspaceId:          options.WorkspaceId,
 		FileSignatureSubkeys: rankedFileSignatureSubkeys,
 		DirChunkSubkeys:      rankedDirChunkSubkeys,
-		EnvContainer:         options.EnvContainer,
 		CharLimit:            options.CharLimit,
+		rawEntries:           rawEntries,
 	})
+	logStep("limited dir signature outline")
+	return outline, err
 }
 
 type RankedSubkeysOptions struct {
@@ -140,10 +187,13 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 
 	var queryChunks []string
 	var chunkWeights []float64
+	var rerankQueryParts []string
 	for _, wq := range weightedQueries {
-		if strings.TrimSpace(wq.Query) == "" {
+		query := strings.TrimSpace(wq.Query)
+		if query == "" {
 			continue
 		}
+		rerankQueryParts = append(rerankQueryParts, query)
 		var chunks []string
 		if len(wq.Query) > maxQueryChars {
 			chunks = splitQueryIntoChunks(wq.Query, goodQueryChars, maxQueryChars)
@@ -190,7 +240,88 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	for i, set := range resultSets {
 		rankings[i] = WeightedRanking{Items: set, Weight: chunkWeights[i]}
 	}
-	return FuseResults(rankings), nil
+	rankings = append(rankings, ra.bm25WeightedRankings(ctx, options.WorkspaceId, options.ContentType, options.Subkeys, weightedQueries)...)
+
+	reranker, err := GetReranker(options.Secrets.SecretManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reranker: %w", err)
+	}
+
+	fusedSubkeys := FuseResults(rankings)
+	return ra.rerankSubkeys(
+		ctx,
+		options.WorkspaceId,
+		options.ContentType,
+		strings.Join(rerankQueryParts, "\n\n"),
+		fusedSubkeys,
+		reranker,
+	)
+}
+
+// bm25WeightedRankings hydrates the documents behind the given subkeys and
+// produces one lexical BM25 ranking per non-empty weighted query, so lexical
+// results can be fused with embedding-based rankings. It is best-effort: on
+// storage or unmarshal errors it logs at debug level and returns nil so the
+// embedding-only path still works.
+func (ra *RagActivities) bm25WeightedRankings(
+	ctx context.Context,
+	workspaceId string,
+	contentType string,
+	subkeys []string,
+	weightedQueries []WeightedRankQuery,
+) []WeightedRanking {
+	if len(subkeys) == 0 {
+		return nil
+	}
+
+	contentKeys := make([]string, len(subkeys))
+	for i, subkey := range subkeys {
+		contentKeys[i] = fmt.Sprintf("%s:%s", contentType, subkey)
+	}
+	values, err := ra.DatabaseAccessor.MGet(ctx, workspaceId, contentKeys)
+	if err != nil {
+		log.Debug().Err(err).Msg("bm25: failed to hydrate documents, skipping lexical ranking")
+		return nil
+	}
+	if len(values) != len(contentKeys) {
+		log.Debug().Int("got", len(values)).Int("expected", len(contentKeys)).Msg("bm25: unexpected hydration result count, skipping lexical ranking")
+		return nil
+	}
+
+	documents := make([]string, 0, len(values))
+	documentSubkeys := make([]string, 0, len(values))
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		var document string
+		if err := binary.Unmarshal(value, &document); err != nil {
+			log.Debug().Err(err).Str("key", contentKeys[i]).Msg("bm25: failed to unmarshal document, skipping lexical ranking")
+			return nil
+		}
+		documents = append(documents, document)
+		documentSubkeys = append(documentSubkeys, subkeys[i])
+	}
+	if len(documents) == 0 {
+		return nil
+	}
+
+	var rankings []WeightedRanking
+	for _, wq := range weightedQueries {
+		if strings.TrimSpace(wq.Query) == "" {
+			continue
+		}
+		rankedIndices := RankBM25(wq.Query, documents)
+		if len(rankedIndices) == 0 {
+			continue
+		}
+		items := make([]string, len(rankedIndices))
+		for i, docIdx := range rankedIndices {
+			items[i] = documentSubkeys[docIdx]
+		}
+		rankings = append(rankings, WeightedRanking{Items: items, Weight: wq.Weight * bm25RankWeight})
+	}
+	return rankings
 }
 
 // splitQueryIntoChunks splits a query into chunks based on sentence boundaries and size limits.
@@ -274,9 +405,11 @@ type DirSignatureOutlineOptions struct {
 	WorkspaceId          string
 	FileSignatureSubkeys []string // these are file signature subkeys
 	DirChunkSubkeys      []string
-	EnvContainer         env.EnvContainer
 	EmbeddingType        string
 	CharLimit            int
+	// rawEntries provides the pre-walked raw outline entries the subset
+	// outline is derived from, so no additional walk or parse is needed.
+	rawEntries []tree_sitter.RawOutlineEntry
 }
 
 // LimitedDirSignatureOutline returns a string containing the directory structure with signature outlines expanded only for the given subkeys.
@@ -289,7 +422,7 @@ func (ra *RagActivities) LimitedDirSignatureOutline(ctx context.Context, options
 	for i, subkey := range options.DirChunkSubkeys {
 		dirChunkKeys[i] = fmt.Sprintf("%s:%s", tree_sitter.ContentTypeDirChunk, subkey)
 	}
-	dirChunks, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, dirChunkKeys)
+	dirChunks, err := ra.DatabaseAccessor.MGet(ctx, options.WorkspaceId, dirChunkKeys)
 	if err != nil {
 		return "", err
 	}
@@ -330,7 +463,7 @@ chunksLoop:
 	for i, subkey := range options.FileSignatureSubkeys {
 		fileSignatureKeys[i] = fmt.Sprintf("%s:%s", tree_sitter.ContentTypeFileSignature, subkey)
 	}
-	fileSignatures, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, fileSignatureKeys)
+	fileSignatures, err := ra.DatabaseAccessor.MGet(ctx, options.WorkspaceId, fileSignatureKeys)
 	if err != nil {
 		return "", err
 	}
@@ -389,22 +522,27 @@ chunksLoop:
 		}
 	}
 
-	outlines, err := tree_sitter.GetDirectorySignatureOutlines(ctx, options.EnvContainer, &showPaths, &signaturePaths)
-	if err != nil {
-		return "", err
-	}
-
+	outlines := tree_sitter.OutlinesFromRawEntries(options.rawEntries, &showPaths, &signaturePaths)
 	return tree_sitter.GetFileOutlinesString(outlines)
 }
 
 type RankedDirChunkSubkeysOptions struct {
 	RankedViaEmbeddingOptions
+	// pathInfos optionally provides pre-walked paths so chunking needs no
+	// additional walk. In-process only: it intentionally does not serialize.
+	pathInfos []PathInfo
 }
 
 func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options RankedDirChunkSubkeysOptions) ([]string, error) {
-	chunks, err := GetDirectoryChunks(ctx, options.EnvContainer)
-	if err != nil {
-		return []string{}, fmt.Errorf("get directory chunks: %w", err)
+	var chunks []DirChunk
+	if options.pathInfos != nil {
+		chunks = GetDirectoryChunksFromPaths(options.pathInfos)
+	} else {
+		var err error
+		chunks, err = GetDirectoryChunks(ctx, options.EnvContainer)
+		if err != nil {
+			return []string{}, fmt.Errorf("get directory chunks: %w", err)
+		}
 	}
 
 	values := make(map[string]interface{})
@@ -417,7 +555,7 @@ func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options Rank
 		key := fmt.Sprintf("%s:%s", tree_sitter.ContentTypeDirChunk, hash)
 		values[key] = value
 	}
-	err = ra.DatabaseAccessor.MSet(ctx, options.WorkspaceId, values)
+	err := ra.DatabaseAccessor.MSet(ctx, options.WorkspaceId, values)
 	if err != nil {
 		return []string{}, fmt.Errorf("error persisting dir chunk content: %w", err)
 	}
@@ -431,5 +569,69 @@ func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options Rank
 }
 
 /*
-
  */
+func (ra *RagActivities) rerankSubkeys(
+	ctx context.Context,
+	workspaceId string,
+	contentType string,
+	query string,
+	fusedSubkeys []string,
+	reranker Reranker,
+) ([]string, error) {
+	if reranker == nil || len(fusedSubkeys) == 0 {
+		return fusedSubkeys, nil
+	}
+
+	candidateCount := min(len(fusedSubkeys), rerankCandidateLimit)
+	contentKeys := make([]string, candidateCount)
+	for i, subkey := range fusedSubkeys[:candidateCount] {
+		contentKeys[i] = fmt.Sprintf("%s:%s", contentType, subkey)
+	}
+
+	values, err := ra.DatabaseAccessor.MGet(ctx, workspaceId, contentKeys)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate rerank candidates: %w", err)
+	}
+	if len(values) != candidateCount {
+		return nil, fmt.Errorf("hydrated %d rerank candidates, expected %d", len(values), candidateCount)
+	}
+
+	documents := make([]string, candidateCount)
+	for i, value := range values {
+		if value == nil {
+			return nil, fmt.Errorf("missing value for rerank candidate key: %s", contentKeys[i])
+		}
+		if err := binary.Unmarshal(value, &documents[i]); err != nil {
+			return nil, fmt.Errorf("value %v for rerank candidate key %s failed to unmarshal: %w", value, contentKeys[i], err)
+		}
+	}
+
+	rerankedSubkeys, err := reranker.Rerank(ctx, query, documents)
+	if err != nil {
+		return nil, fmt.Errorf("failed to rerank subkeys: %w", err)
+	}
+
+	subkeysByDocument := make(map[string][]string, candidateCount)
+	for i, document := range documents {
+		subkeysByDocument[document] = append(subkeysByDocument[document], fusedSubkeys[i])
+	}
+
+	result := make([]string, 0, len(fusedSubkeys))
+	for _, document := range rerankedSubkeys {
+		subkeys := subkeysByDocument[document]
+		if len(subkeys) == 0 {
+			return nil, fmt.Errorf("reranker returned an unknown or duplicate document")
+		}
+		result = append(result, subkeys[0])
+		if len(subkeys) == 1 {
+			delete(subkeysByDocument, document)
+		} else {
+			subkeysByDocument[document] = subkeys[1:]
+		}
+	}
+	if len(result) != candidateCount {
+		return nil, fmt.Errorf("reranker returned %d candidates, expected %d", len(result), candidateCount)
+	}
+
+	return append(result, fusedSubkeys[candidateCount:]...), nil
+}

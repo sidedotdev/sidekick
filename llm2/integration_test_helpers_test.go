@@ -34,6 +34,11 @@ func requireIntegrationAPIKey(t *testing.T, names ...string) secret_manager.Secr
 	return secretManager
 }
 
+func requireOpenAIIntegrationCredentials(t *testing.T) secret_manager.SecretManager {
+	t.Helper()
+	return requireIntegrationAPIKey(t, "OPENAI_OAUTH", "OPENAI_API_KEY")
+}
+
 func hasAnyIntegrationSecret(secretManager secret_manager.SecretManager, names ...string) bool {
 	for _, name := range names {
 		if _, err := secretManager.GetSecret(name); err == nil {

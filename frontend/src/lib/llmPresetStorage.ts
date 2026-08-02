@@ -1,6 +1,11 @@
 import type { LLMConfig, ModelConfig } from './models'
+import {
+  loadWorkspacePreference,
+  saveWorkspacePreference,
+} from './workspacePreferenceStorage'
 
 export const PRESETS_STORAGE_KEY = 'sidekick_model_presets'
+export const LAST_PRESET_SELECTION_STORAGE_KEY = 'sidekick_last_model_preset_selection'
 
 export interface ModelPreset {
   id: string
@@ -62,6 +67,16 @@ export const loadPresets = (): ModelPreset[] => {
 export const invalidatePresetsCache = () => {
   cachedPresets = null
   cacheTimestamp = 0
+}
+
+export const loadLastPresetSelection = (workspaceId?: string | null): string | null =>
+  loadWorkspacePreference(LAST_PRESET_SELECTION_STORAGE_KEY, workspaceId)
+
+export const saveLastPresetSelection = (
+  selection: string,
+  workspaceId?: string | null,
+): void => {
+  saveWorkspacePreference(LAST_PRESET_SELECTION_STORAGE_KEY, selection, workspaceId)
 }
 
 export const savePresets = (presets: ModelPreset[]) => {

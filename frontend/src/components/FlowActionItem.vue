@@ -2,7 +2,7 @@
   <div class="flow-action" :class="{ 'expanded-action': expand }" ref="container">
     <div class="flow-action-header" :class="{ 'expanded-header': expand }">
       <a @click="toggle()" :class="{'disable-toggle': disableToggle}">
-        <h3>
+        <h3 :title="`Updated: ${formatActionTimestamp(flowAction.updated)}`">
           {{ actionHeading }}
           <span v-if="flowAction?.actionStatus == 'started'">...</span>
           <span v-if="flowAction?.actionStatus == 'failed'">Failed</span>
@@ -94,6 +94,10 @@ function toggle() {
 
 const humanizeText = (text: string): string => {
   return text.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+};
+
+const formatActionTimestamp = (timestamp: Date): string => {
+  return new Date(timestamp).toLocaleString();
 };
 
 const actionHeading = computed(() => {

@@ -257,6 +257,19 @@ func GetUserApproval(eCtx ExecContext, approvalType, approvalPrompt string, requ
 		// auto-approve for now if humans are not in the loop
 		// TODO: add a self-review process in this case
 		approved := true
+		// Record a completed flow action so the auto-approval is visible in
+		// the flow history.
+		if workflow.GetVersion(eCtx, "auto-approve-flow-action", workflow.DefaultVersion, 1) >= 1 {
+			req := RequestForUser{
+				Content:       approvalPrompt,
+				RequestParams: requestParams,
+				RequestKind:   RequestKindApproval,
+			}
+			actionCtx.ActionParams = req.ActionParams()
+			return Track(actionCtx, func(_ ActionContext, _ *domain.FlowAction) (*UserResponse, error) {
+				return &UserResponse{Approved: &approved, Content: "Auto-approved: human-in-the-loop is disabled."}, nil
+			})
+		}
 		return &UserResponse{Approved: &approved}, nil
 	}
 

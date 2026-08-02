@@ -2,6 +2,7 @@ package llm2
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,11 +81,20 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		return nil, err
 	}
 
+	if request.Options.Speed == anthropicSpeedFast {
+		log.Debug().Str("model", model).Msg("bedrock: fast mode is not supported by the Converse API; ignoring speed option")
+	}
+
+	additionalFields, maxTokens, resolvedEffort := bedrockAnthropicRequestFields(request.Options, model)
+
 	input := &bedrockruntime.ConverseStreamInput{
 		ModelId:         aws.String(model),
 		Messages:        messages,
 		System:          system,
-		InferenceConfig: bedrockInferenceConfig(request.Options),
+		InferenceConfig: bedrockInferenceConfig(request.Options, maxTokens),
+	}
+	if additionalFields != nil {
+		input.AdditionalModelRequestFields = document.NewLazyDocument(additionalFields)
 	}
 
 	toolCfg, err := bedrockFromLlm2Tools(request.Options.Tools, request.Options.ToolChoice)
@@ -103,14 +113,14 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 	stream := streamOut.GetStream()
 	defer stream.Close()
 
-	// TODO: surface reasoning content blocks once we plumb them through here.
+	streamState := &bedrockStreamState{}
 
 	var collected []Event
 	var stopReason string
 	var usage Usage
 
 	for evt := range stream.Events() {
-		for _, mapped := range bedrockOutputToEvents(evt) {
+		for _, mapped := range bedrockOutputToEvents(evt, streamState) {
 			collected = append(collected, mapped)
 			select {
 			case eventChan <- mapped:
@@ -139,20 +149,30 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 
 	output := accumulateBedrockEventsToMessage(collected)
 
+	// Report the resolved effort. When "lowest" resolved to "" (thinking off),
+	// report "none" so consumers know thinking was intentionally skipped.
+	reportedEffort := resolvedEffort
+	if strings.Contains(strings.ToLower(model), "claude") &&
+		request.Options.ReasoningEffort == "lowest" && resolvedEffort == "" {
+		reportedEffort = "none"
+	}
+
 	return &MessageResponse{
-		Model:      model,
-		Provider:   bedrockProviderName,
-		Output:     output,
-		StopReason: stopReason,
-		Usage:      usage,
+		Model:           model,
+		Provider:        bedrockProviderName,
+		Output:          output,
+		StopReason:      stopReason,
+		Usage:           usage,
+		AuthType:        common.ProviderAuthTypeAPI,
+		ReasoningEffort: reportedEffort,
 	}, nil
 }
 
-func bedrockInferenceConfig(opts Options) *types.InferenceConfiguration {
+func bedrockInferenceConfig(opts Options, maxTokens int) *types.InferenceConfiguration {
 	cfg := &types.InferenceConfiguration{}
 	set := false
-	if opts.MaxTokens > 0 {
-		cfg.MaxTokens = aws.Int32(int32(opts.MaxTokens))
+	if maxTokens > 0 {
+		cfg.MaxTokens = aws.Int32(int32(maxTokens))
 		set = true
 	}
 	if opts.Temperature != nil {
@@ -165,13 +185,96 @@ func bedrockInferenceConfig(opts Options) *types.InferenceConfiguration {
 	return cfg
 }
 
+// bedrockAnthropicRequestFields builds the Claude-specific extended/adaptive
+// thinking configuration to pass via Converse AdditionalModelRequestFields,
+// mirroring AnthropicProvider.Stream semantics: adaptive thinking with an
+// effort output config on 4.6+ models, budget-based thinking otherwise, and
+// no thinking when effort resolves to "" or tool_choice forces tool use.
+//
+// Capability gating per the AWS Bedrock docs ("Adaptive thinking" and
+// "Extended thinking" under Anthropic Claude Messages API): thinking.type
+// "adaptive" with thinking.display and a separate output_config.effort object
+// is supported on Claude 4.6+ models (which anthropicSupportsAdaptiveThinking
+// gates on), while 4.5-generation and older models only accept budget-based
+// {"type": "enabled", "budget_tokens": N}, which is the fallback here.
+// Anthropic-API-only features without a Converse equivalent (anthropic_beta
+// values such as interleaved thinking, fast mode / the speed param) are
+// intentionally omitted: adaptive thinking enables interleaved thinking
+// automatically, and passing those fields would fail on some Bedrock models.
+//
+// Returns nil fields for non-Claude models. The returned maxTokens is
+// options.MaxTokens, raised when needed so that max_tokens > budget_tokens.
+func bedrockAnthropicRequestFields(options Options, model string) (fields map[string]any, maxTokens int, resolvedEffort string) {
+	maxTokens = options.MaxTokens
+	if !strings.Contains(strings.ToLower(model), "claude") {
+		return nil, maxTokens, ""
+	}
+
+	resolvedEffort = resolveAnthropicReasoningEffort(options.ReasoningEffort, model)
+
+	// Anthropic does not allow thinking when tool_choice forces tool use
+	forcesTool := options.ToolChoice.Type == common.ToolChoiceTypeRequired || options.ToolChoice.Type == common.ToolChoiceTypeTool
+	if forcesTool {
+		if resolvedEffort != "" {
+			log.Info().
+				Str("model", model).
+				Str("toolChoiceType", string(options.ToolChoice.Type)).
+				Msg("disabling thinking because tool_choice forces tool use")
+		}
+		return nil, maxTokens, resolvedEffort
+	}
+
+	// Display must be set explicitly: some models default to "omitted", which
+	// redacts thinking text to signature-only blocks.
+	adaptiveThinking := map[string]any{"type": "adaptive", "display": "summarized"}
+
+	if anthropicSupportsAdaptiveThinking(model) && resolvedEffort != "" {
+		// Adaptive-capable models: thinking and effort are orthogonal.
+		return map[string]any{
+			"thinking":      adaptiveThinking,
+			"output_config": map[string]any{"effort": resolvedEffort},
+		}, maxTokens, resolvedEffort
+	}
+	if anthropicSupportsAdaptiveThinking(model) && resolvedEffort == "" && options.ReasoningEffort == "" {
+		// Adaptive-capable model with no explicit effort: enable adaptive thinking at defaults.
+		return map[string]any{"thinking": adaptiveThinking}, maxTokens, resolvedEffort
+	}
+	if resolvedEffort == "" {
+		// "lowest" resolved to "": thinking is intentionally skipped.
+		return nil, maxTokens, resolvedEffort
+	}
+
+	// Non-adaptive models (or adaptive with future effort levels):
+	// use budget-based thinking.
+	budgetTokens := 10000 // default for unrecognized effort levels
+	switch resolvedEffort {
+	case "low":
+		budgetTokens = 5000
+	case "medium":
+		budgetTokens = 10000
+	case "high":
+		budgetTokens = 20000
+	case "max":
+		return map[string]any{"thinking": adaptiveThinking}, maxTokens, resolvedEffort
+	}
+	// max_tokens must be greater than thinking.budget_tokens; the Converse
+	// default max tokens can be lower than typical budgets, so always set it
+	// when budget-based thinking is enabled.
+	if maxTokens <= 0 {
+		maxTokens = anthropicDefaultMaxTokens
+	}
+	if maxTokens <= budgetTokens {
+		maxTokens = budgetTokens + 1000
+	}
+	return map[string]any{
+		"thinking": map[string]any{"type": "enabled", "budget_tokens": budgetTokens},
+	}, maxTokens, resolvedEffort
+}
+
 func bedrockUsageFrom(u *types.TokenUsage) Usage {
 	out := Usage{}
 	if u == nil {
 		return out
-	}
-	if u.InputTokens != nil {
-		out.InputTokens = int(*u.InputTokens)
 	}
 	if u.OutputTokens != nil {
 		out.OutputTokens = int(*u.OutputTokens)
@@ -182,6 +285,13 @@ func bedrockUsageFrom(u *types.TokenUsage) Usage {
 	if u.CacheWriteInputTokens != nil {
 		out.CacheWriteInputTokens = int(*u.CacheWriteInputTokens)
 	}
+	// Converse reports non-cached tokens in InputTokens; per AWS docs, the
+	// total prompt token count is the sum of all three fields. Matches the
+	// Anthropic provider's InputTokens semantics.
+	if u.InputTokens != nil {
+		out.InputTokens = int(*u.InputTokens)
+	}
+	out.InputTokens += out.CacheReadInputTokens + out.CacheWriteInputTokens
 	return out
 }
 
@@ -193,6 +303,11 @@ func bedrockFromLlm2Messages(messages []Message) ([]types.SystemContentBlock, []
 			for _, blk := range m.Content {
 				if blk.Type == ContentBlockTypeText && blk.Text != "" {
 					system = append(system, &types.SystemContentBlockMemberText{Value: blk.Text})
+					if blk.CacheControl != "" {
+						system = append(system, &types.SystemContentBlockMemberCachePoint{
+							Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
+						})
+					}
 				}
 			}
 			continue
@@ -223,12 +338,50 @@ func bedrockFromLlm2Messages(messages []Message) ([]types.SystemContentBlock, []
 func bedrockFromLlm2Content(blocks []ContentBlock) ([]types.ContentBlock, error) {
 	var out []types.ContentBlock
 	for _, blk := range blocks {
+		lenBefore := len(out)
 		switch blk.Type {
 		case ContentBlockTypeText:
 			if blk.Text == "" {
 				continue
 			}
 			out = append(out, &types.ContentBlockMemberText{Value: blk.Text})
+		case ContentBlockTypeRefusal:
+			if blk.Refusal == nil || blk.Refusal.Reason == "" {
+				continue
+			}
+			out = append(out, &types.ContentBlockMemberText{Value: blk.Refusal.Reason})
+		case ContentBlockTypeReasoning:
+			// Bedrock serves Anthropic models, so reasoning captured from other
+			// providers cannot be replayed here either.
+			if !anthropicReplayableReasoning(blk) {
+				continue
+			}
+			if blk.Reasoning.EncryptedContent != "" {
+				redacted, err := base64.StdEncoding.DecodeString(blk.Reasoning.EncryptedContent)
+				if err != nil {
+					return nil, fmt.Errorf("bedrock: decoding redacted reasoning content: %w", err)
+				}
+				out = append(out, &types.ContentBlockMemberReasoningContent{
+					Value: &types.ReasoningContentBlockMemberRedactedContent{Value: redacted},
+				})
+			} else {
+				text := types.ReasoningTextBlock{Text: aws.String(blk.Reasoning.Text)}
+				if len(blk.Reasoning.Signature) > 0 {
+					text.Signature = aws.String(string(blk.Reasoning.Signature))
+				}
+				out = append(out, &types.ContentBlockMemberReasoningContent{
+					Value: &types.ReasoningContentBlockMemberReasoningText{Value: text},
+				})
+			}
+		case ContentBlockTypeImage:
+			if blk.Image == nil || blk.Image.Url == "" {
+				return nil, fmt.Errorf("bedrock: image block missing ImageRef or URL")
+			}
+			img, err := bedrockImageBlockFromURL(blk.Image.Url)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, &types.ContentBlockMemberImage{Value: *img})
 		case ContentBlockTypeToolUse:
 			if blk.ToolUse == nil {
 				continue
@@ -260,15 +413,37 @@ func bedrockFromLlm2Content(blocks []ContentBlock) ([]types.ContentBlock, error)
 				Status:    status,
 			}})
 		}
+		if blk.CacheControl != "" && len(out) > lenBefore {
+			out = append(out, &types.ContentBlockMemberCachePoint{
+				Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
+			})
+		}
 	}
 	return out, nil
 }
 
+// bedrockFromLlm2ToolResultContent converts nested tool_result content.
+// CacheControl on nested blocks is intentionally ignored: the Converse
+// ToolResultContentBlock union has no cachePoint member, so cache control is
+// only honored at the outer tool_result block level (see
+// bedrockFromLlm2Content), matching the Anthropic provider.
 func bedrockFromLlm2ToolResultContent(blocks []ContentBlock) ([]types.ToolResultContentBlock, error) {
 	var out []types.ToolResultContentBlock
 	for _, blk := range blocks {
-		if blk.Type == ContentBlockTypeText && blk.Text != "" {
-			out = append(out, &types.ToolResultContentBlockMemberText{Value: blk.Text})
+		switch blk.Type {
+		case ContentBlockTypeText:
+			if blk.Text != "" {
+				out = append(out, &types.ToolResultContentBlockMemberText{Value: blk.Text})
+			}
+		case ContentBlockTypeImage:
+			if blk.Image == nil || blk.Image.Url == "" {
+				return nil, fmt.Errorf("bedrock: nested image block in tool_result missing ImageRef or URL")
+			}
+			img, err := bedrockImageBlockFromURL(blk.Image.Url)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, &types.ToolResultContentBlockMemberImage{Value: *img})
 		}
 	}
 	if len(out) == 0 {
@@ -276,6 +451,34 @@ func bedrockFromLlm2ToolResultContent(blocks []ContentBlock) ([]types.ToolResult
 		out = append(out, &types.ToolResultContentBlockMemberText{Value: ""})
 	}
 	return out, nil
+}
+
+// bedrockImageBlockFromURL converts an image data URL into a Converse image
+// block. The Converse API only accepts inline image bytes, so remote http(s)
+// URLs are not supported.
+func bedrockImageBlockFromURL(url string) (*types.ImageBlock, error) {
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
+		return nil, fmt.Errorf("bedrock: remote image URLs are not supported by the Converse API, only data URLs")
+	}
+
+	// Converse limits images to 3.75 MB; the long-edge limit matches the
+	// Anthropic provider since these images target Claude models.
+	const bedrockMaxImageBytes = 3*1024*1024 + 768*1024
+	const bedrockMaxLongEdgePx = 1568
+	newDataURL, mime, _, err := PrepareImageDataURLForLimits(url, bedrockMaxImageBytes, bedrockMaxLongEdgePx)
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: preparing image: %w", err)
+	}
+
+	_, raw, err := ParseDataURL(newDataURL)
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: re-parsing prepared image data URL: %w", err)
+	}
+
+	return &types.ImageBlock{
+		Format: types.ImageFormat(strings.TrimPrefix(mime, "image/")),
+		Source: &types.ImageSourceMemberBytes{Value: raw},
+	}, nil
 }
 
 func bedrockDocumentFromJSON(raw string) (document.Interface, error) {
@@ -342,7 +545,19 @@ func bedrockToolSchemaDocument(schema *jsonschema.Schema) (document.Interface, e
 	return document.NewLazyDocument(m), nil
 }
 
-func bedrockOutputToEvents(event types.ConverseStreamOutput) []Event {
+// bedrockStreamState tracks per-stream bookkeeping needed to synthesize
+// events that the Converse stream does not emit directly: Bedrock sends no
+// content block start event for reasoning blocks, so an EventBlockStarted is
+// emitted on the first reasoning delta per block index. Redacted reasoning
+// bytes are buffered per block index so the full payload can be emitted as a
+// single base64 EncryptedContent fragment at block stop, since independently
+// base64-encoded fragments would not concatenate into valid base64.
+type bedrockStreamState struct {
+	reasoningStarted map[int]bool
+	redactedContent  map[int][]byte
+}
+
+func bedrockOutputToEvents(event types.ConverseStreamOutput, state *bedrockStreamState) []Event {
 	switch e := event.(type) {
 	case *types.ConverseStreamOutputMemberContentBlockStart:
 		idx := int(int32Deref(e.Value.ContentBlockIndex))
@@ -367,11 +582,49 @@ func bedrockOutputToEvents(event types.ConverseStreamOutput) []Event {
 			return []Event{{Type: EventTextDelta, Index: idx, Delta: d.Value}}
 		case *types.ContentBlockDeltaMemberToolUse:
 			return []Event{{Type: EventTextDelta, Index: idx, Delta: aws.ToString(d.Value.Input)}}
+		case *types.ContentBlockDeltaMemberReasoningContent:
+			var events []Event
+			if state.reasoningStarted == nil {
+				state.reasoningStarted = make(map[int]bool)
+			}
+			if !state.reasoningStarted[idx] {
+				state.reasoningStarted[idx] = true
+				events = append(events, Event{
+					Type:  EventBlockStarted,
+					Index: idx,
+					ContentBlock: &ContentBlock{
+						Type:      ContentBlockTypeReasoning,
+						Reasoning: &ReasoningBlock{},
+					},
+				})
+			}
+			switch r := d.Value.(type) {
+			case *types.ReasoningContentBlockDeltaMemberText:
+				events = append(events, Event{Type: EventTextDelta, Index: idx, Delta: r.Value})
+			case *types.ReasoningContentBlockDeltaMemberSignature:
+				events = append(events, Event{Type: EventSignatureDelta, Index: idx, Signature: []byte(r.Value)})
+			case *types.ReasoningContentBlockDeltaMemberRedactedContent:
+				// Buffer the opaque redacted bytes; they are surfaced as a
+				// single EncryptedContent fragment at block stop.
+				if state.redactedContent == nil {
+					state.redactedContent = make(map[int][]byte)
+				}
+				state.redactedContent[idx] = append(state.redactedContent[idx], r.Value...)
+			}
+			return events
 		}
 		return nil
 	case *types.ConverseStreamOutputMemberContentBlockStop:
 		idx := int(int32Deref(e.Value.ContentBlockIndex))
-		return []Event{{Type: EventBlockDone, Index: idx}}
+		var events []Event
+		if raw, ok := state.redactedContent[idx]; ok {
+			// Emit the redacted payload as a single signature_delta whose
+			// Delta accumulates into Reasoning.EncryptedContent, matching the
+			// documented EventSignatureDelta semantics used by other providers.
+			events = append(events, Event{Type: EventSignatureDelta, Index: idx, Delta: base64.StdEncoding.EncodeToString(raw)})
+			delete(state.redactedContent, idx)
+		}
+		return append(events, Event{Type: EventBlockDone, Index: idx})
 	}
 	return nil
 }
@@ -385,10 +638,14 @@ func int32Deref(p *int32) int32 {
 
 // accumulateBedrockEventsToMessage reconstructs the final assistant message
 // from the ordered Events emitted during a Bedrock stream. Bedrock streams
-// text blocks as text_delta events and tool_use blocks as a block_started
+// text blocks as text_delta events, tool_use blocks as a block_started
 // (with id/name) followed by text_delta events carrying JSON argument
-// fragments, terminated by block_done. Mirrors accumulateGoogleEventsToMessage
-// but scoped to the kinds Bedrock emits.
+// fragments, and reasoning blocks as a block_started followed by text_delta
+// (thinking text) and signature_delta events (Signature carries the thinking
+// signature, as in the Anthropic provider; Delta carries base64
+// EncryptedContent fragments, as in the OpenAI Responses provider),
+// terminated by block_done. Mirrors accumulateGoogleEventsToMessage but
+// scoped to the kinds Bedrock emits.
 func accumulateBedrockEventsToMessage(events []Event) Message {
 	blocks := make(map[int]*ContentBlock)
 	maxIndex := -1
@@ -403,6 +660,10 @@ func accumulateBedrockEventsToMessage(events []Event) Message {
 				if cb.ToolUse != nil {
 					tu := *cb.ToolUse
 					cb.ToolUse = &tu
+				}
+				if cb.Reasoning != nil {
+					r := *cb.Reasoning
+					cb.Reasoning = &r
 				}
 				blocks[evt.Index] = &cb
 			}
@@ -420,7 +681,24 @@ func accumulateBedrockEventsToMessage(events []Event) Message {
 					block.ToolUse = &ToolUseBlock{}
 				}
 				block.ToolUse.Arguments += evt.Delta
+			case ContentBlockTypeReasoning:
+				if block.Reasoning == nil {
+					block.Reasoning = &ReasoningBlock{}
+				}
+				block.Reasoning.Text += evt.Delta
 			}
+		case EventSignatureDelta:
+			block, ok := blocks[evt.Index]
+			if !ok || block.Type != ContentBlockTypeReasoning {
+				break
+			}
+			if block.Reasoning == nil {
+				block.Reasoning = &ReasoningBlock{}
+			}
+			if len(evt.Signature) > 0 {
+				block.Reasoning.Signature = append(block.Reasoning.Signature, evt.Signature...)
+			}
+			block.Reasoning.EncryptedContent += evt.Delta
 		case EventBlockDone:
 			// No-op: tool_use Arguments accumulate via EventTextDelta;
 			// completion is signaled by ordering, not by trailing payload.

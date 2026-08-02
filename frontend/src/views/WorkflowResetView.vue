@@ -127,6 +127,13 @@ interface EventDetail {
   output: JSONDataType[]
 }
 
+interface EventDetailResponse {
+  event: Omit<EventDetail, 'input' | 'output'> & {
+    input: JSONDataType[] | null
+    output: JSONDataType[] | null
+  }
+}
+
 const devMode = import.meta.env.MODE === 'development'
 const route = useRoute()
 const router = useRouter()
@@ -198,8 +205,16 @@ const toggleDetails = async (eventId: number) => {
       const data = await response.json().catch(() => ({}))
       throw new Error(data.error || `Failed to fetch event details: ${response.statusText}`)
     }
-    const data = await response.json()
-    eventDetails.value = { ...eventDetails.value, [eventId]: data.event }
+    const data = await response.json() as EventDetailResponse
+    const event = data.event
+    eventDetails.value = {
+      ...eventDetails.value,
+      [eventId]: {
+        ...event,
+        input: Array.isArray(event.input) ? event.input : [],
+        output: Array.isArray(event.output) ? event.output : [],
+      },
+    }
   } catch (e) {
     detailError.value = {
       ...detailError.value,

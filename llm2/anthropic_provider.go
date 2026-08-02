@@ -103,6 +103,16 @@ func anthropicRequestHeaders(model string, useOAuth bool, accessToken string, to
 	return headers
 }
 
+func accumulateAnthropicMessageMetadata(message *anthropic.Message, event anthropic.MessageStreamEventUnion) error {
+	switch event.AsAny().(type) {
+	case anthropic.MessageStartEvent, anthropic.MessageDeltaEvent:
+		if err := message.Accumulate(event); err != nil {
+			return fmt.Errorf("failed to accumulate message metadata: %w", err)
+		}
+	}
+	return nil
+}
+
 func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options
@@ -293,9 +303,8 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	for stream.Next() {
 		event := stream.Current()
 
-		err := finalMessage.Accumulate(event)
-		if err != nil {
-			return nil, fmt.Errorf("failed to accumulate message: %w", err)
+		if err := accumulateAnthropicMessageMetadata(&finalMessage, event); err != nil {
+			return nil, err
 		}
 
 		switch evt := event.AsAny().(type) {
@@ -446,6 +455,11 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		reportedEffort = "none"
 	}
 
+	authType := common.ProviderAuthTypeAPI
+	if useOAuth {
+		authType = common.ProviderAuthTypeSubscription
+	}
+
 	response := &MessageResponse{
 		Id:              finalMessage.ID,
 		Model:           responseModel,
@@ -454,6 +468,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		StopReason:      string(finalMessage.StopReason),
 		StopSequence:    finalMessage.StopSequence,
 		Usage:           usage,
+		AuthType:        authType,
 		ReasoningEffort: reportedEffort,
 	}
 
@@ -640,6 +655,26 @@ func roleToAnthropicParam(role Role) (anthropic.MessageParamRole, error) {
 	}
 }
 
+// anthropicReplayableReasoning reports whether a reasoning block matches one of
+// the two shapes Anthropic accepts on the wire: thinking text paired with the
+// signature Anthropic issued for it, or opaque redacted thinking data alone.
+// Reasoning captured from another provider has a different shape (eg OpenAI
+// Responses items carry an "rs_" id, a summary and their own encrypted
+// payload) and makes Anthropic reject the whole request.
+func anthropicReplayableReasoning(block ContentBlock) bool {
+	if block.Reasoning == nil {
+		return false
+	}
+	reasoning := block.Reasoning
+	if reasoning.Text != "" {
+		return len(reasoning.Signature) > 0
+	}
+	return reasoning.EncryptedContent != "" &&
+		reasoning.Summary == "" &&
+		len(reasoning.Signature) == 0 &&
+		block.Id == ""
+}
+
 func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, error) {
 	var result []anthropic.MessageParam
 	var currentRole anthropic.MessageParamRole
@@ -667,6 +702,12 @@ func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, er
 		currentRole = msgRole
 
 		for _, block := range msg.Content {
+			if block.Type == ContentBlockTypeReasoning && !anthropicReplayableReasoning(block) {
+				log.Debug().
+					Str("blockId", block.Id).
+					Msg("dropping reasoning block that Anthropic cannot replay")
+				continue
+			}
 			anthropicBlock, err := contentBlockToAnthropicParam(block, msg.Role)
 			if err != nil {
 				return nil, err

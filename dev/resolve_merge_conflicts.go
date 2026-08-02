@@ -11,6 +11,8 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ResolveMergeConflictsParams describes a single conflict-resolution
@@ -84,13 +86,15 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 		return finalizeMergeCommit(dCtx, params)
 	}
 
-	codingModelConfig := dCtx.GetModelConfig(common.CodingKey, 0, "default")
+	resolveModelConfig := func() common.ModelConfig {
+		return dCtx.GetModelConfig(common.CodingKey, 0, "default")
+	}
 
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
 	var advisor *Advisor
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
-		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
 
 	conflictDiff, err := computeConflictResolutionDiff(dCtx, params.WorktreePath, snapshot)
@@ -106,7 +110,7 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 	}
 
 	for attempt := 0; attempt < maxConflictResolutionAttempts; attempt++ {
-		if err := EditCode(dCtx, codingModelConfig, 0, chatHistory, promptInfo, advisor); err != nil {
+		if err := EditCodeWithModelConfigResolver(dCtx, resolveModelConfig, 0, chatHistory, promptInfo, advisor); err != nil {
 			if errors.Is(err, flow_action.PendingActionError) {
 				return err
 			}
@@ -133,6 +137,15 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 		// 2. Re-run tests on the resolved state.
 		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
+			if errors.Is(err, flow_action.PendingActionError) {
+				promptInfo = SkipInfo{}
+				continue
+			}
+			if gracefullyHandlePausedTestError(dCtx) {
+				log.Debug().Err(err).Msg("Ignoring conflict resolution test error while paused")
+				promptInfo = SkipInfo{}
+				continue
+			}
 			return fmt.Errorf("failed to run tests during conflict resolution: %w", err)
 		}
 		if !testResult.TestsPassed && !testResult.TestsSkipped {

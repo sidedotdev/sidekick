@@ -264,13 +264,14 @@ func sanitizeToolName(name string) string {
 
 // Provider-agnostic response with metadata and a single synthesized output message.
 type MessageResponse struct {
-	Id           string  `json:"id"`
-	Model        string  `json:"model"`
-	Provider     string  `json:"provider"`
-	Output       Message `json:"output"`
-	StopReason   string  `json:"stopReason"`
-	StopSequence string  `json:"stopSequence,omitempty"`
-	Usage        Usage   `json:"usage"`
+	Id           string                  `json:"id"`
+	Model        string                  `json:"model"`
+	Provider     string                  `json:"provider"`
+	Output       Message                 `json:"output"`
+	StopReason   string                  `json:"stopReason"`
+	StopSequence string                  `json:"stopSequence,omitempty"`
+	Usage        Usage                   `json:"usage"`
+	AuthType     common.ProviderAuthType `json:"authType"`
 
 	// the reasoning effort actually applied for the provider (may not match the
 	// effort requested if the model does not support reasoning or uses a

@@ -52,7 +52,7 @@ func SetupDevRunStateQuery(dCtx DevContext) {
 func SetupUserActionHandler(dCtx DevContext) {
 	signalChan := workflow.GetSignalChannel(dCtx, SignalNameUserAction)
 
-	workflow.Go(dCtx, func(ctx workflow.Context) {
+	workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 		for {
 			selector := workflow.NewSelector(ctx)
 			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
@@ -137,7 +137,7 @@ func handleDevRunStart(dCtx DevContext) {
 				StartToCloseTimeout: 24 * time.Hour,
 				HeartbeatTimeout:    30 * time.Second,
 			})
-			workflow.Go(dCtx, func(ctx workflow.Context) {
+			workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 				var monitorOutput MonitorDevRunOutput
 				err := workflow.ExecuteActivity(monitorCtx, dra.MonitorDevRun, MonitorDevRunInput{
 					DevRunConfig: dCtx.RepoConfig.DevRun,

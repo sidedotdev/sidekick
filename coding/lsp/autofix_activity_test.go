@@ -203,7 +203,7 @@ func golangIntegrationTest(t *testing.T, code string, expectedCode string) {
 	content, err := os.ReadFile(tmpFile.Name())
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCode, string(content))
-	passed, errorString, err := check.CheckFileValidity(envContainer, filepath.Base(tmpFile.Name()))
+	passed, errorString, err := check.CheckFileValidity(t.Context(), envContainer, filepath.Base(tmpFile.Name()))
 	assert.NoError(t, err)
 	if !passed {
 		t.Errorf("Go file failed to pass check. Errors:\n%s", errorString)

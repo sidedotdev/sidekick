@@ -1,4 +1,4 @@
-import type { FullTask, Flow, FlowAction, Subflow, SubflowTree, Workspace } from './models'
+import type { FullTask, Flow, FlowAction, Project, Subflow, SubflowTree, Workspace } from './models'
 
 export interface FlowViewCacheEntry {
   flow: Flow
@@ -12,6 +12,7 @@ const MAX_CACHED_FLOWS = 10
 
 class ViewCache {
   private kanbanTasks = new Map<string, FullTask[]>()
+  private projects = new Map<string, Project[]>()
   private flowViews = new Map<string, FlowViewCacheEntry>()
 
   getKanbanTasks(workspaceId: string): FullTask[] | null {
@@ -20,6 +21,14 @@ class ViewCache {
 
   setKanbanTasks(workspaceId: string, tasks: FullTask[]): void {
     this.kanbanTasks.set(workspaceId, [...tasks])
+  }
+
+  getProjects(workspaceId: string): Project[] | null {
+    return this.projects.get(workspaceId) ?? null
+  }
+
+  setProjects(workspaceId: string, projects: Project[]): void {
+    this.projects.set(workspaceId, [...projects])
   }
 
   getFlowView(flowId: string): FlowViewCacheEntry | null {

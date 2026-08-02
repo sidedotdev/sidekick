@@ -44,10 +44,11 @@ const SignalNameRunIddOrchestrator = "runIddOrchestrator"
 const QueryNameIddState = "idd_state"
 
 type IddOptions struct {
-	EnvType         env.EnvType            `json:"envType,omitempty" default:"local"`
-	RepoMode        env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
-	StartBranch     *string                `json:"startBranch,omitempty"`
-	ConfigOverrides common.ConfigOverrides `json:"configOverrides"`
+	EnvType           env.EnvType            `json:"envType,omitempty" default:"local"`
+	RepoMode          env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
+	StartBranch       *string                `json:"startBranch,omitempty"`
+	ConfigOverrides   common.ConfigOverrides `json:"configOverrides"`
+	ContextGatherType ContextGatherType      `json:"contextGatherType,omitempty"`
 }
 
 type IddWorkflowInput struct {
@@ -77,6 +78,11 @@ type StartIntentSubtaskSignal struct {
 	// plan is built before coding) rather than the default BasicDev child. The
 	// orchestrator sets this for larger sub-tasks spanning disparate changes.
 	Planned bool
+	// PromptOnly omits the full intent diff from the sub-task's requirements,
+	// leaving only ScopePrompt to direct it (the orchestrator's free-form
+	// 'prompt' scope). The orchestrator then remains responsible for following
+	// up on intent the prompt does not cover.
+	PromptOnly bool
 }
 
 // FinishIddSignal is the payload for SignalNameFinishIdd, asking the workflow
@@ -206,6 +212,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		signalWorkflowFailureOrCancel(ctx)
 		return err
 	}
+	dCtx.ContextGatherType = input.ContextGatherType
 	dCtx.Idd = true
 	defer handleFlowCancel(dCtx)
 	defer stopActiveDevRun(dCtx)
@@ -219,6 +226,9 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	SetupUserActionHandler(dCtx)
 	SetupDevRunConfigQuery(dCtx)
 	SetupDevRunStateQuery(dCtx)
+	if err = SetupModelConfigHandlers(dCtx); err != nil {
+		return err
+	}
 
 	state.DefaultTargetBranch = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 
@@ -270,7 +280,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		// state, both deciding to dispatch, and double-creating sub-tasks
 		// for the same intent diff.
 		orchestratorTriggerCh = workflow.NewBufferedChannel(dCtx, 1)
-		workflow.Go(dCtx, func(goCtx workflow.Context) {
+		workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
 			for {
 				var sig RunIddOrchestratorSignal
 				if !orchestratorTriggerCh.Receive(goCtx, &sig) {
@@ -300,7 +310,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		if worktreeDir == "" {
 			return
 		}
-		workflow.Go(dCtx, func(goCtx workflow.Context) {
+		workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
 			watchCtx := workflow.WithActivityOptions(goCtx, workflow.ActivityOptions{
 				StartToCloseTimeout: 30 * time.Minute,
 				HeartbeatTimeout:    2 * time.Minute,
@@ -381,7 +391,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			}
 			// Spawn a coroutine so committing and running the sub-task to
 			// completion doesn't block the selector from handling more signals.
-			workflow.Go(dCtx, func(goCtx workflow.Context) {
+			workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
 				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId, requestOrchestratorTurn)
 			})
 		})
@@ -522,6 +532,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	}
 
 	reqInfo.ScopePrompt = sig.ScopePrompt
+	reqInfo.PromptOnly = sig.PromptOnly
 
 	// The sub-task gets its own descriptive title generated from the committed
 	// intent sha & diff, falling back to the IDD task title if generation fails.
@@ -558,6 +569,9 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			"sidekickVersion": sidekickVersionSideEffect(dCtx),
 		}
 	}
+	if workflow.GetVersion(dCtx, "flow-workflow-task-timeout", workflow.DefaultVersion, 1) == 1 {
+		childOptions.WorkflowTaskTimeout = FlowWorkflowTaskTimeout
+	}
 	childCtx := workflow.WithChildOptions(dCtx, childOptions)
 	requirements := renderIntentRequirements(reqInfo)
 	var childFuture workflow.ChildWorkflowFuture
@@ -572,6 +586,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 				RepoMode:              input.RepoMode,
 				StartBranch:           &branch,
 				ConfigOverrides:       input.ConfigOverrides,
+				ContextGatherType:     input.ContextGatherType,
 				AutoMerge:             true,
 				Idd:                   true,
 			},
@@ -587,6 +602,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 				RepoMode:              input.RepoMode,
 				StartBranch:           &branch,
 				ConfigOverrides:       input.ConfigOverrides,
+				ContextGatherType:     input.ContextGatherType,
 				AutoMerge:             true,
 				Idd:                   true,
 			},

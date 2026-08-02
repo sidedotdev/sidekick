@@ -21,17 +21,34 @@ type HibernateSignal struct{}
 // clearing the workflow-level flag.
 func SetupHibernateHandler(dCtx DevContext) {
 	signalChan := workflow.GetSignalChannel(dCtx, SignalNameHibernate)
-	workflow.Go(dCtx, func(ctx workflow.Context) {
+	hibernateHandlerVersion := workflow.GetVersion(dCtx, "hibernate", workflow.DefaultVersion, 1)
+	workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 		for {
-			selector := workflow.NewSelector(ctx)
-			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
-				c.Receive(ctx, &HibernateSignal{})
-				if dCtx.Worktree == nil || dCtx.EnvContainer == nil {
+			if hibernateHandlerVersion == workflow.DefaultVersion {
+				selector := workflow.NewSelector(ctx)
+				selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
+					c.Receive(ctx, &HibernateSignal{})
+					if dCtx.Worktree == nil || dCtx.EnvContainer == nil {
+						return
+					}
+					hibernateWorktree(dCtx.WithContext(ctx))
+				})
+				selector.Select(ctx)
+			} else {
+				// Receive directly in this coroutine rather than via a Selector
+				// callback: blocking on the hibernation activity inside a
+				// callback panics with "trying to block on coroutine which is
+				// already blocked". Direct receive also serializes handling of
+				// re-sent hibernate signals.
+				signalChan.Receive(ctx, &HibernateSignal{})
+				if ctx.Err() != nil {
 					return
 				}
-				hibernateWorktree(dCtx)
-			})
-			selector.Select(ctx)
+				if dCtx.Worktree == nil || dCtx.EnvContainer == nil {
+					continue
+				}
+				hibernateWorktree(dCtx.WithContext(ctx))
+			}
 		}
 	})
 }

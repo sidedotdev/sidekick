@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -86,6 +87,98 @@ func (s *CleanupWorktreesWorkflowTestSuite) TestNoWorkspaces() {
 
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
+}
+
+func (s *CleanupWorktreesWorkflowTestSuite) TestSkipsUnhealthyHibernationCandidates() {
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).ListWorkspaces,
+		mock.Anything,
+	).Return(ListWorkspacesResult{WorkspaceIds: []string{"ws_1"}}, nil)
+
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).CleanupStaleWorktrees,
+		mock.Anything,
+		CleanupStaleWorktreesInput{WorkspaceId: "ws_1", DryRun: false},
+	).Return(CleanupStaleWorktreesReport{}, nil)
+
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).FindHibernationCandidates,
+		mock.Anything,
+		mock.Anything,
+	).Return(HibernationCandidatesOutput{Candidates: []HibernationCandidate{
+		{FlowId: "flow_healthy"},
+		{FlowId: "flow_stuck"},
+	}}, nil)
+
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).CheckWorkflowHealth,
+		mock.Anything,
+		WorkflowHealthInput{WorkflowId: "flow_healthy"},
+	).Return(WorkflowHealthOutput{PendingWorkflowTaskAttempt: 1}, nil)
+
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).CheckWorkflowHealth,
+		mock.Anything,
+		WorkflowHealthInput{WorkflowId: "flow_stuck"},
+	).Return(WorkflowHealthOutput{
+		PendingWorkflowTaskAttempt: 27,
+		PendingWorkflowTaskAge:     time.Hour,
+	}, nil)
+
+	var signaled []string
+	s.env.OnSignalExternalWorkflow(
+		mock.Anything, mock.Anything, mock.Anything, SignalNameHibernate, mock.Anything,
+	).Return(nil).Run(func(args mock.Arguments) {
+		signaled = append(signaled, args.Get(1).(string))
+	})
+
+	s.env.ExecuteWorkflow(CleanupWorktreesWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal([]string{"flow_healthy"}, signaled)
+	s.env.AssertExpectations(s.T())
+}
+
+func (s *CleanupWorktreesWorkflowTestSuite) TestHibernatesWhenHealthCheckFails() {
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).ListWorkspaces,
+		mock.Anything,
+	).Return(ListWorkspacesResult{WorkspaceIds: []string{"ws_1"}}, nil)
+
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).CleanupStaleWorktrees,
+		mock.Anything,
+		CleanupStaleWorktreesInput{WorkspaceId: "ws_1", DryRun: false},
+	).Return(CleanupStaleWorktreesReport{}, nil)
+
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).FindHibernationCandidates,
+		mock.Anything,
+		mock.Anything,
+	).Return(HibernationCandidatesOutput{Candidates: []HibernationCandidate{
+		{FlowId: "flow_1"},
+	}}, nil)
+
+	s.env.OnActivity(
+		(&DevAgentManagerActivities{}).CheckWorkflowHealth,
+		mock.Anything,
+		WorkflowHealthInput{WorkflowId: "flow_1"},
+	).Return(WorkflowHealthOutput{}, fmt.Errorf("describe failed"))
+
+	var signaled []string
+	s.env.OnSignalExternalWorkflow(
+		mock.Anything, mock.Anything, mock.Anything, SignalNameHibernate, mock.Anything,
+	).Return(nil).Run(func(args mock.Arguments) {
+		signaled = append(signaled, args.Get(1).(string))
+	})
+
+	s.env.ExecuteWorkflow(CleanupWorktreesWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal([]string{"flow_1"}, signaled)
+	s.env.AssertExpectations(s.T())
 }
 
 func TestCleanupWorktreesWorkflow(t *testing.T) {

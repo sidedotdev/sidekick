@@ -223,6 +223,20 @@ func ValidateAndCleanPlan(plan DevPlan) (DevPlan, error) {
 	return plan, nil
 }
 
+func validateCompletedPlanHasSteps(plan DevPlan) error {
+	if plan.Complete && len(plan.Steps) == 0 {
+		return fmt.Errorf("the plan must contain at least one step with a valid type")
+	}
+	return nil
+}
+
+func validateFinalDevPlan(plan *DevPlan) error {
+	if plan == nil || len(plan.Steps) == 0 {
+		return fmt.Errorf("planning finished without recording any executable steps")
+	}
+	return nil
+}
+
 // TODO also add EstimatedDevStep struct, or do it in one go within DevStep with an StepSize field
 type DevStep struct {
 	StepNumber         string `json:"step_number" jsonschema:"description=Step number in the plan\\, eg \"1\" for the first step and \"2\" for the second step"`
@@ -263,30 +277,48 @@ func BuildDevPlan(dCtx DevContext, requirements, planningPrompt string, reproduc
 }
 
 func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, reproduceIssue bool) (*DevPlan, error) {
-	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to prepare code context: %w", err)
-	}
-	contextSizeExtension := len(fullCodeContext) - len(codeContext)
-
-	// prepend a concise repository summary to the other code context in the initial prompt
-	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-	if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
-		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get repo summary: %w", err)
+	chatHistory, seededInitialPrompt, contextSizeExtension, err := gatherPlanningContext(dCtx, requirements, func(codeContext string) llm.ChatMessage {
+		return llm.ChatMessage{
+			Role:         llm.ChatMessageRoleUser,
+			Content:      renderInitialRecordPlanPrompt(dCtx, codeContext, requirements, planningPrompt, reproduceIssue),
+			CacheControl: "ephemeral",
+			ContextType:  ContextTypeInitialInstructions,
 		}
-		codeContext = repoSummary + "\n\n" + codeContext
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to gather context for planning: %w", err)
 	}
+	codeContext := ""
+	if chatHistory == nil {
+		var fullCodeContext string
+		codeContext, fullCodeContext, err = PrepareInitialCodeContext(dCtx, requirements, nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare code context: %w", err)
+		}
+		contextSizeExtension = len(fullCodeContext) - len(codeContext)
+	}
+	if !seededInitialPrompt {
+		// prepend a concise repository summary to the other code context in the initial prompt
+		version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
+		if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+			repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get repo summary: %w", err)
+			}
+			codeContext = repoSummary + "\n\n" + codeContext
+		}
 
-	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
-	if err := addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
-		CodeContext:    codeContext,
-		Requirements:   requirements,
-		PlanningPrompt: planningPrompt,
-		ReproduceIssue: reproduceIssue,
-	}); err != nil {
-		return nil, err
+		if chatHistory == nil {
+			chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		}
+		if err := addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
+			CodeContext:    codeContext,
+			Requirements:   requirements,
+			PlanningPrompt: planningPrompt,
+			ReproduceIssue: reproduceIssue,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	maxIterations := 17
@@ -302,7 +334,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		reproduceIssue:              reproduceIssue,
 	}
 	if v := workflow.GetVersion(dCtx, "dev-plan-advisor", workflow.DefaultVersion, 1); v == 1 {
-		initialState.advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		initialState.advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.PlanningKey)
 	}
 
 	feedbackIterations := 5
@@ -329,6 +361,9 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 	if err != nil {
 		return nil, fmt.Errorf("failed to run LlmLoop: %w", err)
 	}
+	if err := validateFinalDevPlan(result); err != nil {
+		return nil, err
+	}
 
 	return result, nil
 }
@@ -347,10 +382,18 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig)
 
 	hasExistingPlan := len(state.devPlan.Steps) > 0
+	var recordedPlan *DevPlan
+	customHandlers := devPlanToolHandlers(iteration, state, &recordedPlan)
 
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-advisor", workflow.DefaultVersion, 1); v == 1 {
-		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devPlanTools(iteration.ExecCtx, hasExistingPlan)); err != nil {
+		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devPlanTools(iteration.ExecCtx, hasExistingPlan), customHandlers); err != nil {
+			if state.advisor.handlePauseInterruption(iteration.ExecCtx) {
+				return nil, nil
+			}
 			return nil, fmt.Errorf("error running advisor: %w", err)
+		}
+		if recordedPlan != nil {
+			return recordedPlan, nil
 		}
 	}
 
@@ -375,143 +418,6 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	}
 
 	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
-		var recordedPlan *DevPlan
-		customHandlers := map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
-			updateDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
-				result := llm2.ToolResultBlock{
-					Name:       toolCall.Name,
-					ToolCallId: toolCall.Id,
-				}
-
-				var planUpdate DevPlanUpdate
-				if err := json.Unmarshal([]byte(toolCall.Arguments), &planUpdate); err != nil {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Failed to parse update: " + err.Error())
-					return result, nil
-				}
-
-				updatedPlan, err := applyDevPlanUpdates(state.devPlan, planUpdate)
-				if err != nil {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Failed to apply updates: " + err.Error())
-					return result, nil
-				}
-
-				validatedPlan, err := ValidateAndCleanPlan(updatedPlan)
-				if err != nil {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Plan failed validation after update: " + err.Error())
-					return result, nil
-				}
-
-				if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 && len(validatedPlan.Steps) == 0 {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Plan failed validation after update: the plan must contain at least one step with a valid type. The previously-recorded plan was not overwritten.")
-					return result, nil
-				}
-
-				state.devPlan = validatedPlan
-
-				if validatedPlan.Complete {
-					if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
-						state.hasRevisedPerPlanningPrompt = true
-						result.Content = llm2.TextContentBlocks("List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt)
-						return result, nil
-					}
-
-					if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
-						state.hasRevisedPerReproPrompt = true
-						result.Content = llm2.TextContentBlocks(reviseReproPrompt)
-						return result, nil
-					}
-
-					userResponse, err := ApproveDevPlan(dCtx, validatedPlan)
-					if err != nil {
-						return llm2.ToolResultBlock{}, fmt.Errorf("error getting plan approval: %w", err)
-					}
-
-					v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
-					if v == 1 {
-						iteration.AutoIterationCount = 0
-					}
-
-					if userResponse.Approved != nil && *userResponse.Approved {
-						recordedPlan = &validatedPlan
-						result.Content = llm2.TextContentBlocks("Plan updated and approved.")
-						return result, nil
-					} else {
-						result.Content = llm2.TextContentBlocks(fmt.Sprintf("Plan updated but not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedPlan.String(), userResponse.Content))
-						return result, nil
-					}
-				}
-
-				result.Content = llm2.TextContentBlocks("Plan updated successfully. Current plan:\n" + validatedPlan.String())
-				return result, nil
-			},
-			recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
-				result := llm2.ToolResultBlock{
-					Name:       toolCall.Name,
-					ToolCallId: toolCall.Id,
-				}
-				unvalidatedDevPlan, err := unmarshalPlan(toolCall.Arguments)
-				if err != nil {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan failed to be parsed and was NOT recorded: " + err.Error())
-					return result, nil
-				}
-
-				validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
-				if err != nil {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan failed validation and was NOT recorded: " + err.Error())
-					return result, nil
-				}
-
-				if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 && len(validatedDevPlan.Steps) == 0 {
-					result.IsError = true
-					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan was NOT recorded because it contains no steps with a valid type. The previously-recorded plan, if any, was not overwritten.")
-					return result, nil
-				}
-
-				state.devPlan = validatedDevPlan
-				if validatedDevPlan.Complete {
-					if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
-						state.hasRevisedPerPlanningPrompt = true
-						result.Content = llm2.TextContentBlocks("List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt)
-						return result, nil
-					}
-
-					if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
-						state.hasRevisedPerReproPrompt = true
-						result.Content = llm2.TextContentBlocks(reviseReproPrompt)
-						return result, nil
-					}
-
-					userResponse, err := ApproveDevPlan(dCtx, validatedDevPlan)
-					if err != nil {
-						return llm2.ToolResultBlock{}, fmt.Errorf("error getting plan approval: %w", err)
-					}
-
-					v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
-					if v == 1 {
-						iteration.AutoIterationCount = 0
-					}
-
-					if userResponse.Approved != nil && *userResponse.Approved {
-						recordedPlan = &validatedDevPlan
-						result.Content = llm2.TextContentBlocks("Plan approved")
-						return result, nil
-					} else {
-						result.Content = llm2.TextContentBlocks(fmt.Sprintf("Plan was not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedDevPlan.String(), userResponse.Content))
-						return result, nil
-					}
-				} else {
-					result.Content = llm2.TextContentBlocks("Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.")
-					return result, nil
-				}
-			},
-		}
-
 		toolCallResponses, err := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
 		if err != nil {
 			return nil, err
@@ -582,6 +488,152 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	}
 
 	return nil, nil // continue the loop
+}
+
+func devPlanToolHandlers(
+	iteration *LlmIteration,
+	state *buildDevPlanState,
+	recordedPlan **DevPlan,
+) map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error) {
+	return map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
+		updateDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
+			result := llm2.ToolResultBlock{
+				Name:       toolCall.Name,
+				ToolCallId: toolCall.Id,
+			}
+
+			var planUpdate DevPlanUpdate
+			if err := json.Unmarshal([]byte(toolCall.Arguments), &planUpdate); err != nil {
+				result.IsError = true
+				result.Content = llm2.TextContentBlocks("Failed to parse update: " + err.Error())
+				return result, nil
+			}
+
+			updatedPlan, err := applyDevPlanUpdates(state.devPlan, planUpdate)
+			if err != nil {
+				result.IsError = true
+				result.Content = llm2.TextContentBlocks("Failed to apply updates: " + err.Error())
+				return result, nil
+			}
+
+			validatedPlan, err := ValidateAndCleanPlan(updatedPlan)
+			if err != nil {
+				result.IsError = true
+				result.Content = llm2.TextContentBlocks("Plan failed validation after update: " + err.Error())
+				return result, nil
+			}
+
+			if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 {
+				if err := validateCompletedPlanHasSteps(validatedPlan); err != nil {
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Plan failed validation after update: " + err.Error() + ". The previously-recorded plan was not overwritten.")
+					return result, nil
+				}
+			}
+
+			state.devPlan = validatedPlan
+
+			if validatedPlan.Complete {
+				if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
+					state.hasRevisedPerPlanningPrompt = true
+					result.Content = llm2.TextContentBlocks("List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt)
+					return result, nil
+				}
+
+				if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
+					state.hasRevisedPerReproPrompt = true
+					result.Content = llm2.TextContentBlocks(reviseReproPrompt)
+					return result, nil
+				}
+
+				userResponse, err := ApproveDevPlan(dCtx, validatedPlan)
+				if err != nil {
+					return llm2.ToolResultBlock{}, fmt.Errorf("error getting plan approval: %w", err)
+				}
+
+				v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
+				if v == 1 {
+					iteration.AutoIterationCount = 0
+				}
+
+				if userResponse.Approved != nil && *userResponse.Approved {
+					*recordedPlan = &validatedPlan
+					result.Content = llm2.TextContentBlocks("Plan updated and approved.")
+					return result, nil
+				} else {
+					result.Content = llm2.TextContentBlocks(fmt.Sprintf("Plan updated but not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedPlan.String(), userResponse.Content))
+					return result, nil
+				}
+			}
+
+			result.Content = llm2.TextContentBlocks("Plan updated successfully. Current plan:\n" + validatedPlan.String())
+			return result, nil
+		},
+		recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
+			result := llm2.ToolResultBlock{
+				Name:       toolCall.Name,
+				ToolCallId: toolCall.Id,
+			}
+			unvalidatedDevPlan, err := unmarshalPlan(toolCall.Arguments)
+			if err != nil {
+				result.IsError = true
+				result.Content = llm2.TextContentBlocks("Please output a new plan: Plan failed to be parsed and was NOT recorded: " + err.Error())
+				return result, nil
+			}
+
+			validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
+			if err != nil {
+				result.IsError = true
+				result.Content = llm2.TextContentBlocks("Please output a new plan: Plan failed validation and was NOT recorded: " + err.Error())
+				return result, nil
+			}
+
+			if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 {
+				if err := validateCompletedPlanHasSteps(validatedDevPlan); err != nil {
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan was NOT recorded because " + err.Error() + ". The previously-recorded plan, if any, was not overwritten.")
+					return result, nil
+				}
+			}
+
+			state.devPlan = validatedDevPlan
+			if validatedDevPlan.Complete {
+				if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
+					state.hasRevisedPerPlanningPrompt = true
+					result.Content = llm2.TextContentBlocks("List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt)
+					return result, nil
+				}
+
+				if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
+					state.hasRevisedPerReproPrompt = true
+					result.Content = llm2.TextContentBlocks(reviseReproPrompt)
+					return result, nil
+				}
+
+				userResponse, err := ApproveDevPlan(dCtx, validatedDevPlan)
+				if err != nil {
+					return llm2.ToolResultBlock{}, fmt.Errorf("error getting plan approval: %w", err)
+				}
+
+				v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
+				if v == 1 {
+					iteration.AutoIterationCount = 0
+				}
+
+				if userResponse.Approved != nil && *userResponse.Approved {
+					*recordedPlan = &validatedDevPlan
+					result.Content = llm2.TextContentBlocks("Plan approved")
+					return result, nil
+				} else {
+					result.Content = llm2.TextContentBlocks(fmt.Sprintf("Plan was not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedDevPlan.String(), userResponse.Content))
+					return result, nil
+				}
+			} else {
+				result.Content = llm2.TextContentBlocks("Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.")
+				return result, nil
+			}
+		},
+	}
 }
 
 func unmarshalPlan(jsonStr string) (DevPlan, error) {
@@ -655,17 +707,32 @@ func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, p
 }
 
 func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*flow_action.UserResponse, error) {
+	req := flow_action.RequestForUser{
+		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
+		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
+		RequestKind:   flow_action.RequestKindApproval,
+	}
+
 	// IDD sub-task plans are auto-approved: the intent author reviews outcomes
 	// when the sub-task auto-merges back into the idd worktree, so pausing for
 	// plan approval would only stall the background sub-task. Version-gated so
 	// in-flight sub-tasks that already requested approval replay correctly.
-	if dCtx.Idd && workflow.GetVersion(dCtx, "idd-auto-approve-plan", workflow.DefaultVersion, 1) == 1 {
-		approved := true
-		return &flow_action.UserResponse{Approved: &approved, Content: "Plan auto-approved for IDD sub-task."}, nil
-	}
-	req := flow_action.RequestForUser{
-		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
-		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
+	if dCtx.Idd {
+		v := workflow.GetVersion(dCtx, "idd-auto-approve-plan", workflow.DefaultVersion, 2)
+		if v >= 1 {
+			approved := true
+			response := &flow_action.UserResponse{Approved: &approved, Content: "Plan auto-approved for IDD sub-task."}
+			if v < 2 {
+				return response, nil
+			}
+			// Record a completed flow action so the auto-approval is visible
+			// in the flow history.
+			actionCtx := dCtx.NewActionContext("user_request.approve.dev_plan")
+			actionCtx.ActionParams = req.ActionParams()
+			return Track(actionCtx, func(_ DevActionContext, _ *domain.FlowAction) (*flow_action.UserResponse, error) {
+				return response, nil
+			})
+		}
 	}
 	return GetUserApproval(dCtx, "dev_plan", req.Content, req.RequestParams)
 }

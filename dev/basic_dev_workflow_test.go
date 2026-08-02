@@ -14,11 +14,13 @@ import (
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/srv"
+	"sidekick/temporalmeta"
 	"sidekick/utils"
 )
 
 // AutoMergeApprovalTestSuite verifies the AutoMerge option causes getMergeApproval
-// to approve and target the configured branch without a human-in-the-loop request.
+// to approve and target the configured branch without blocking for human input,
+// while still recording a completed flow action.
 type AutoMergeApprovalTestSuite struct {
 	suite.Suite
 	testsuite.WorkflowTestSuite
@@ -37,6 +39,9 @@ func (s *AutoMergeApprovalTestSuite) AfterTest(suiteName, testName string) {
 func (s *AutoMergeApprovalTestSuite) setupCommonMocks() {
 	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("diff content", nil).Maybe()
 	s.env.OnActivity(git.WriteTreeActivity, mock.Anything, mock.Anything).Return("tree-hash", nil).Maybe()
+	var meta *temporalmeta.TemporalMetaActivities
+	s.env.OnActivity(meta.FetchFlowActionActivities, mock.Anything, mock.Anything).
+		Return([]domain.TemporalActivityRef{}, nil).Maybe()
 }
 
 func (s *AutoMergeApprovalTestSuite) approvalWorkflow(target string, autoMerge bool) func(ctx workflow.Context) (MergeApprovalResponse, error) {
@@ -54,6 +59,9 @@ func (s *AutoMergeApprovalTestSuite) approvalWorkflow(target string, autoMerge b
 					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
 				},
 			},
+			Worktree: &domain.Worktree{
+				Name: "side/sub-task",
+			},
 			RepoConfig: common.RepoConfig{},
 		}
 		response, _, _, err := getMergeApproval(dCtx, target, true, "", autoMerge)
@@ -68,6 +76,14 @@ func (s *AutoMergeApprovalTestSuite) approvalWorkflow(target string, autoMerge b
 func (s *AutoMergeApprovalTestSuite) TestAutoMergeApprovesWithoutUserRequest() {
 	s.setupCommonMocks()
 
+	var persistedActions []domain.FlowAction
+	var fa *flow_action.FlowActivities
+	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			persistedActions = append(persistedActions, args.Get(1).(domain.FlowAction))
+		}).
+		Return(nil)
+
 	testWorkflow := s.approvalWorkflow("side/idd-worktree", true)
 	s.env.RegisterWorkflow(testWorkflow)
 
@@ -81,6 +97,14 @@ func (s *AutoMergeApprovalTestSuite) TestAutoMergeApprovesWithoutUserRequest() {
 	s.True(result.Approved)
 	s.Equal("side/idd-worktree", result.TargetBranch)
 	s.Equal(MergeStrategySquash, result.MergeStrategy)
+
+	// The auto-approval must still be recorded as a completed, non-human flow action
+	s.Require().NotEmpty(persistedActions)
+	last := persistedActions[len(persistedActions)-1]
+	s.Equal("user_request.approve.merge", last.ActionType)
+	s.Equal(domain.ActionStatusComplete, last.ActionStatus)
+	s.False(last.IsHumanAction)
+	s.Contains(last.ActionResult, `"Approved":true`)
 }
 
 func (s *AutoMergeApprovalTestSuite) setupMergeMocks() {

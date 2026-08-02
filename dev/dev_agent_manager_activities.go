@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/srv"
 	"strings"
@@ -579,6 +580,13 @@ func (ima *DevAgentManagerActivities) FindHibernationCandidates(ctx context.Cont
 			continue
 		}
 
+		// An already-hibernated worktree keeps its task in blocked/in_review
+		// with a stale Updated timestamp indefinitely, so without this check
+		// it would be re-signaled on every scheduled run.
+		if env.IsHibernated(workingDir) {
+			continue
+		}
+
 		flow, err := ima.Storage.GetFlow(ctx, input.WorkspaceId, wt.FlowId)
 		if err != nil {
 			continue
@@ -611,4 +619,40 @@ func (ima *DevAgentManagerActivities) FindHibernationCandidates(ctx context.Cont
 	}
 
 	return HibernationCandidatesOutput{Candidates: candidates}, nil
+}
+
+// WorkflowHealthInput is the input for CheckWorkflowHealth.
+type WorkflowHealthInput struct {
+	WorkflowId string `json:"workflowId"`
+}
+
+// WorkflowHealthOutput describes whether a workflow's pending workflow task is
+// making progress. A high attempt count means the task keeps failing or timing
+// out (e.g. replay exceeds the workflow task timeout, or replay is
+// non-deterministic), so the workflow cannot currently process signals.
+type WorkflowHealthOutput struct {
+	// PendingWorkflowTaskAttempt is zero when no workflow task is pending.
+	PendingWorkflowTaskAttempt int32         `json:"pendingWorkflowTaskAttempt"`
+	PendingWorkflowTaskAge     time.Duration `json:"pendingWorkflowTaskAge"`
+}
+
+// CheckWorkflowHealth reports the retry state of a workflow's pending workflow
+// task via DescribeWorkflowExecution.
+func (ima *DevAgentManagerActivities) CheckWorkflowHealth(ctx context.Context, input WorkflowHealthInput) (WorkflowHealthOutput, error) {
+	desc, err := ima.TemporalClient.DescribeWorkflowExecution(ctx, input.WorkflowId, "")
+	if err != nil {
+		return WorkflowHealthOutput{}, err
+	}
+	var output WorkflowHealthOutput
+	if pending := desc.GetPendingWorkflowTask(); pending != nil {
+		output.PendingWorkflowTaskAttempt = pending.GetAttempt()
+		scheduled := pending.GetOriginalScheduledTime().AsTime()
+		if scheduled.IsZero() || scheduled.Unix() == 0 {
+			scheduled = pending.GetScheduledTime().AsTime()
+		}
+		if !scheduled.IsZero() && scheduled.Unix() != 0 {
+			output.PendingWorkflowTaskAge = time.Since(scheduled)
+		}
+	}
+	return output, nil
 }

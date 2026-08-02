@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sidekick/common"
+	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/mocks"
@@ -90,7 +92,7 @@ func NewMockController(t *testing.T) Controller {
 	mockTemporalClient.On("GetWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(MockWorkflow{}, nil).Maybe()
 	mockTemporalClient.On("SignalWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockTemporalClient.On("CancelWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(MockWorkflowUpdateHandle{}, nil).Maybe()
+	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(MockWorkflowUpdateHandle{}, nil).Maybe()
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
@@ -1911,6 +1913,105 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 	assert.Nil(t, nonArchivedTask.Archived)
 }
 
+func TestArchiveFinishedTasksHandler_ProjectFilter(t *testing.T) {
+	t.Parallel()
+
+	projectA := "project_" + ksuid.New().String()
+	projectB := "project_" + ksuid.New().String()
+
+	newTask := func(workspaceId, projectId string, status domain.TaskStatus) domain.Task {
+		return domain.Task{
+			WorkspaceId: workspaceId,
+			Id:          "task_" + ksuid.New().String(),
+			Description: "task",
+			AgentType:   domain.AgentTypeLLM,
+			Status:      status,
+			ProjectId:   projectId,
+		}
+	}
+
+	testCases := []struct {
+		name          string
+		rawQuery      string
+		archivedCount int
+		// index into the tasks slice below of tasks expected archived
+		archivedIdx []int
+	}{
+		{
+			name:          "no param archives all finished tasks",
+			rawQuery:      "",
+			archivedCount: 3,
+			archivedIdx:   []int{0, 1, 2},
+		},
+		{
+			name:          "projectId filters to that project's finished tasks",
+			rawQuery:      "projectId=%s",
+			archivedCount: 1,
+			archivedIdx:   []int{0},
+		},
+		{
+			name:          "empty projectId archives only unassigned finished tasks",
+			rawQuery:      "projectId=",
+			archivedCount: 1,
+			archivedIdx:   []int{2},
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := NewMockController(t)
+			workspaceId := "ws_" + ksuid.New().String()
+
+			tasks := []domain.Task{
+				newTask(workspaceId, projectA, domain.TaskStatusComplete),
+				newTask(workspaceId, projectB, domain.TaskStatusFailed),
+				newTask(workspaceId, "", domain.TaskStatusCanceled),
+				newTask(workspaceId, projectA, domain.TaskStatusInProgress),
+			}
+			for _, task := range tasks {
+				require.NoError(t, ctrl.service.PersistTask(context.Background(), task))
+			}
+
+			rawQuery := tc.rawQuery
+			if strings.Contains(rawQuery, "%s") {
+				rawQuery = fmt.Sprintf(rawQuery, projectA)
+			}
+			url := "/workspaces/" + workspaceId + "/tasks/archive_finished"
+			if rawQuery != "" {
+				url += "?" + rawQuery
+			}
+
+			recorder := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(recorder)
+			ginCtx.Request = httptest.NewRequest(http.MethodPost, url, nil)
+			ginCtx.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+			ctrl.ArchiveFinishedTasksHandler(ginCtx)
+			assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+			var result map[string]int
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
+			assert.Equal(t, tc.archivedCount, result["archivedCount"])
+
+			archivedIdx := make(map[int]bool)
+			for _, idx := range tc.archivedIdx {
+				archivedIdx[idx] = true
+			}
+			for i, task := range tasks {
+				persisted, err := ctrl.service.GetTask(context.Background(), workspaceId, task.Id)
+				require.NoError(t, err)
+				if archivedIdx[i] {
+					assert.NotNil(t, persisted.Archived, "task %d should be archived", i)
+				} else {
+					assert.Nil(t, persisted.Archived, "task %d should not be archived", i)
+				}
+			}
+		})
+	}
+}
+
 func TestArchiveTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
@@ -2731,7 +2832,7 @@ func TestGetProvidersHandler(t *testing.T) {
 		expectedNotToContain []string
 	}{
 		{
-			name:                 "does not include openai without OPENAI_API_KEY",
+			name:                 "does not include openai without any credentials",
 			secrets:              map[string]string{},
 			expectedToContain:    []string{},
 			expectedNotToContain: []string{"openai", "anthropic", "google"},
@@ -2740,6 +2841,23 @@ func TestGetProvidersHandler(t *testing.T) {
 			name: "includes openai when OPENAI_API_KEY is present",
 			secrets: map[string]string{
 				"OPENAI_API_KEY": "sk-test-key",
+			},
+			expectedToContain:    []string{"openai"},
+			expectedNotToContain: []string{"anthropic", "google"},
+		},
+		{
+			name: "includes openai when OPENAI_OAUTH is present",
+			secrets: map[string]string{
+				"OPENAI_OAUTH": `{"access_token":"tok","refresh_token":"ref","expires_at":9999999999,"account_id":"acct"}`,
+			},
+			expectedToContain:    []string{"openai"},
+			expectedNotToContain: []string{"anthropic", "google"},
+		},
+		{
+			name: "openai appears once even with both API key and OAuth",
+			secrets: map[string]string{
+				"OPENAI_API_KEY": "sk-test-key",
+				"OPENAI_OAUTH":   `{"access_token":"tok","refresh_token":"ref","expires_at":9999999999,"account_id":"acct"}`,
 			},
 			expectedToContain:    []string{"openai"},
 			expectedNotToContain: []string{"anthropic", "google"},
@@ -3121,4 +3239,284 @@ func TestUpdateTaskHandler_StartError(t *testing.T) {
 	updatedTask, _ := service.GetTask(context.Background(), workspaceId, task.Id)
 	assert.Equal(t, domain.TaskStatusDrafting, updatedTask.Status)
 	assert.Equal(t, domain.AgentTypeHuman, updatedTask.AgentType)
+}
+func TestUpdateFlowModelConfigHandler_AcceptsTargetedUpdate(t *testing.T) {
+	t.Parallel()
+
+	ctrl := NewMockController(t)
+	mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
+	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Unset()
+
+	workspaceId := "ws-model-config-" + ksuid.New().String()
+	flowId := "flow-model-config-" + ksuid.New().String()
+	require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
+	require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+	llmConfig := common.LLMConfig{
+		Defaults: []common.ModelConfig{
+			{Provider: "openai", Model: "default-model"},
+		},
+		UseCaseConfigs: map[string][]common.ModelConfig{
+			common.CodingKey: {
+				{Provider: "anthropic", Model: "coding-model", ReasoningEffort: "high"},
+			},
+		},
+	}
+	mockTemporalClient.On(
+		"UpdateWorkflow",
+		mock.Anything,
+		mock.MatchedBy(func(options client.UpdateWorkflowOptions) bool {
+			return options.WorkflowID == flowId &&
+				options.RunID == "" &&
+				options.UpdateName == dev.UpdateNameModelConfig &&
+				options.WaitForStage == client.WorkflowUpdateStageAccepted &&
+				len(options.Args) == 1 &&
+				assert.ObjectsAreEqual(llmConfig, options.Args[0])
+		}),
+	).Return(MockWorkflowUpdateHandle{}, nil).Once()
+
+	payload, err := json.Marshal(ModelConfigUpdateRequest{Config: llmConfig})
+	require.NoError(t, err)
+	req := httptest.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/model_config", workspaceId, flowId),
+		bytes.NewReader(payload),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusAccepted, rr.Code)
+	assert.JSONEq(t, `{"message":"Model configuration update accepted"}`, rr.Body.String())
+	mockTemporalClient.AssertExpectations(t)
+}
+func TestUpdateFlowModelConfigHandler_ValidatesRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		payload string
+		error   string
+	}{
+		{
+			name:    "malformed JSON",
+			payload: `{`,
+			error:   "Invalid request payload:",
+		},
+		{
+			name:    "missing config",
+			payload: `{}`,
+			error:   "at least one default model configuration is required",
+		},
+		{
+			name:    "missing defaults",
+			payload: `{"config":{"defaults":[],"useCaseConfigs":{}}}`,
+			error:   "at least one default model configuration is required",
+		},
+		{
+			name:    "default missing provider",
+			payload: `{"config":{"defaults":[{"model":"default-model"}],"useCaseConfigs":{}}}`,
+			error:   "default model configuration 0 is missing a provider",
+		},
+		{
+			name:    "use case missing provider",
+			payload: `{"config":{"defaults":[{"provider":"openai","model":"default-model"}],"useCaseConfigs":{"coding":[{"model":"coding-model"}]}}}`,
+			error:   `model configuration 0 for use case "coding" is missing a provider`,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl := NewMockController(t)
+			workspaceId := "ws-model-validation-" + ksuid.New().String()
+			flowId := "flow-model-validation-" + ksuid.New().String()
+			require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
+			require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+			req := httptest.NewRequest(
+				http.MethodPut,
+				fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/model_config", workspaceId, flowId),
+				strings.NewReader(test.payload),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusBadRequest, rr.Code)
+			var response map[string]string
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+			assert.Contains(t, response["error"], test.error)
+			ctrl.temporalClient.(*mocks.Client).AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
+		})
+	}
+}
+func TestUpdateFlowModelConfigHandler_FlowNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctrl := NewMockController(t)
+	workspaceId := "ws-model-not-found-" + ksuid.New().String()
+	flowId := "flow-model-not-found-" + ksuid.New().String()
+	payload := `{"config":{"defaults":[{"provider":"openai","model":"default-model"}],"useCaseConfigs":{}}}`
+	req := httptest.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/model_config", workspaceId, flowId),
+		strings.NewReader(payload),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	assert.JSONEq(t, `{"error":"Flow not found"}`, rr.Body.String())
+	ctrl.temporalClient.(*mocks.Client).AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
+}
+func TestUpdateFlowModelConfigHandler_TemporalErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		updateErr    error
+		expectedCode int
+		expectedBody string
+	}{
+		{
+			name:         "workflow not found",
+			updateErr:    serviceerror.NewNotFound("workflow not found"),
+			expectedCode: http.StatusNotFound,
+			expectedBody: "Flow with ID",
+		},
+		{
+			name:         "update failure",
+			updateErr:    serviceerror.NewDeadlineExceeded("deadline exceeded"),
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: "Failed to update workflow model configuration",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl := NewMockController(t)
+			mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
+			mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Unset()
+			mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(nil, test.updateErr).Once()
+
+			workspaceId := "ws-model-temporal-" + ksuid.New().String()
+			flowId := "flow-model-temporal-" + ksuid.New().String()
+			require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
+			require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+			payload := `{"config":{"defaults":[{"provider":"openai","model":"default-model"}],"useCaseConfigs":{}}}`
+			req := httptest.NewRequest(
+				http.MethodPut,
+				fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/model_config", workspaceId, flowId),
+				strings.NewReader(payload),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+			require.Equal(t, test.expectedCode, rr.Code)
+			assert.Contains(t, rr.Body.String(), test.expectedBody)
+			mockTemporalClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCreateTaskHandler_ProjectId(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+
+	projectId := "project_" + ksuid.New().String()
+	taskReq := TaskRequest{
+		Description: "task with project",
+		Status:      string(domain.TaskStatusDrafting),
+		FlowType:    domain.FlowTypeBasicDev,
+		ProjectId:   &projectId,
+	}
+	workspaceId := "ws_" + ksuid.New().String()
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+	jsonData, err := json.Marshal(taskReq)
+	assert.NoError(t, err)
+	c.Request = httptest.NewRequest("POST", "/tasks", bytes.NewBuffer(jsonData))
+	ctrl.CreateTaskHandler(c)
+
+	assert.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	responseBody := make(map[string]domain.Task)
+	assert.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+	responseTask, hasTask := responseBody["task"]
+	assert.True(t, hasTask)
+	assert.Equal(t, projectId, responseTask.ProjectId)
+
+	persisted, err := ctrl.service.GetTask(context.Background(), workspaceId, responseTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, projectId, persisted.ProjectId)
+}
+
+func TestUpdateTaskHandler_ProjectIdPresenceSemantics(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+
+	task := domain.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Description: "test description",
+		AgentType:   domain.AgentTypeHuman,
+		Status:      domain.TaskStatusDrafting,
+		ProjectId:   "project_" + ksuid.New().String(),
+	}
+	if err := ctrl.service.PersistTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	updateTask := func(t *testing.T, body []byte) domain.Task {
+		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ginCtx.Request = httptest.NewRequest(http.MethodPut, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, bytes.NewBuffer(body))
+		ginCtx.Params = []gin.Param{
+			{Key: "workspaceId", Value: task.WorkspaceId},
+			{Key: "id", Value: task.Id},
+		}
+		ctrl.UpdateTaskHandler(ginCtx)
+		assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+		updated, err := ctrl.service.GetTask(context.Background(), task.WorkspaceId, task.Id)
+		assert.NoError(t, err)
+		return updated
+	}
+
+	baseBody := map[string]any{
+		"description": "updated description",
+		"agentType":   string(domain.AgentTypeHuman),
+		"status":      string(domain.TaskStatusDrafting),
+	}
+
+	// Omitted projectId leaves the assignment unchanged
+	body, _ := json.Marshal(baseBody)
+	updated := updateTask(t, body)
+	assert.Equal(t, task.ProjectId, updated.ProjectId)
+
+	// A new projectId reassigns the task
+	newProjectId := "project_" + ksuid.New().String()
+	baseBody["projectId"] = newProjectId
+	body, _ = json.Marshal(baseBody)
+	updated = updateTask(t, body)
+	assert.Equal(t, newProjectId, updated.ProjectId)
+
+	// An explicit empty projectId clears the assignment
+	baseBody["projectId"] = ""
+	body, _ = json.Marshal(baseBody)
+	updated = updateTask(t, body)
+	assert.Equal(t, "", updated.ProjectId)
 }

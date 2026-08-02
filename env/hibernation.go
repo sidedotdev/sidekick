@@ -80,6 +80,8 @@ func EnvWithDir(original Env, dir string) Env {
 		return &DevPodEnv{WorkingDirectory: dir, WorkspaceName: e.WorkspaceName, LocalRepoDir: e.LocalRepoDir, Hibernated: e.Hibernated}
 	case *OpenShellEnv:
 		return &OpenShellEnv{WorkingDirectory: dir, SandboxName: e.SandboxName, LocalRepoDir: e.LocalRepoDir, Hibernated: e.Hibernated}
+	case *ModalEnv:
+		return &ModalEnv{WorkingDirectory: dir, SandboxName: e.SandboxName, SSHHost: e.SSHHost, SSHPort: e.SSHPort, LocalRepoDir: e.LocalRepoDir, PortForwards: e.PortForwards, Hibernated: e.Hibernated}
 	default:
 		return &LocalEnv{WorkingDirectory: dir}
 	}
@@ -99,6 +101,8 @@ func setEnvHibernated(e Env, val bool) {
 	case *DevPodEnv:
 		et.Hibernated = val
 	case *OpenShellEnv:
+		et.Hibernated = val
+	case *ModalEnv:
 		et.Hibernated = val
 	}
 }
@@ -476,6 +480,14 @@ func HibernateEnv(ctx context.Context, e Env, branchName string) (HibernationMet
 		return HibernationMetadata{}, fmt.Errorf("branch name is required for hibernation")
 	}
 
+	// Worktree hibernation is a disk-space-saving mechanism for environments
+	// backed by local storage. Modal sandboxes already snapshot their entire
+	// filesystem and terminate when idle, so hibernating their worktrees buys
+	// nothing and only adds overhead.
+	if _, isModal := e.(*ModalEnv); isModal {
+		return HibernationMetadata{}, nil
+	}
+
 	release, err := acquireHibernationWriteLock(ctx, e)
 	if err != nil {
 		return HibernationMetadata{}, err
@@ -616,7 +628,7 @@ func wakeIfHibernatedLocal(ctx context.Context, e Env) error {
 }
 
 // wakeIfHibernatedRemote wakes the worktree if it is hibernated, using a remote
-// shell check. For remote Env types (DevPod, OpenShell).
+// shell check. For remote Env types (DevPod, OpenShell, Modal).
 func wakeIfHibernatedRemote(ctx context.Context, e Env) error {
 	result, err := runSkipWake(ctx, e, EnvRunCommandInput{
 		Command: "test",
@@ -661,4 +673,14 @@ func (e *OpenShellEnv) Hibernate(ctx context.Context, branchName string) (Hibern
 
 func (e *OpenShellEnv) WakeIfHibernated(ctx context.Context) error {
 	return wakeIfHibernatedRemote(ctx, e)
+}
+
+func (e *ModalEnv) Hibernate(ctx context.Context, branchName string) (HibernationMetadata, error) {
+	return HibernateEnv(ctx, e, branchName)
+}
+
+// WakeIfHibernated is a no-op: worktree hibernation is not used on Modal, so
+// no Modal worktree is ever hibernated.
+func (e *ModalEnv) WakeIfHibernated(ctx context.Context) error {
+	return nil
 }

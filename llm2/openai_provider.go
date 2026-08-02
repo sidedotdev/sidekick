@@ -14,6 +14,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	openaiRespJSON "github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/shared"
 )
 
@@ -54,8 +55,16 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	messages := request.Messages
 	options := request.Options
 
+	authType := common.NormalizeProviderAuthType(string(p.AuthType))
+	if authType == common.ProviderAuthTypeSubscription {
+		return nil, fmt.Errorf("OpenAI subscription auth is not supported by the chat-completions provider; use the OpenAI Responses provider")
+	}
+	if authType == common.ProviderAuthTypeAny {
+		authType = common.ProviderAuthTypeAPI
+	}
+
 	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
-	token, err := request.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
+	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
 	if err != nil {
 		return nil, err
 	}
@@ -64,11 +73,14 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		Timeout: 45 * time.Minute,
 	}
 	clientOptions := []option.RequestOption{
-		option.WithAPIKey(token),
+		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	if credentials.useOAuth {
+		clientOptions = append(clientOptions, option.WithHeader("ChatGPT-Account-Id", credentials.accountID))
 	}
 	for k, v := range p.CustomHeaders {
 		clientOptions = append(clientOptions, option.WithHeader(k, v))
@@ -161,13 +173,8 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 			if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
 				usage.CacheReadInputTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
 			}
-			// litellm proxying Anthropic models returns cache_creation_input_tokens
-			// as a top-level field in the usage object.
-			if f, ok := chunk.Usage.JSON.ExtraFields["cache_creation_input_tokens"]; ok {
-				var cacheWriteTokens int
-				if json.Unmarshal([]byte(f.Raw()), &cacheWriteTokens) == nil {
-					usage.CacheWriteInputTokens = cacheWriteTokens
-				}
+			if cacheWriteTokens, ok := openAICacheWriteTokens(chunk.Usage); ok {
+				usage.CacheWriteInputTokens = cacheWriteTokens
 			}
 		}
 
@@ -294,6 +301,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		Output:          outputMessage,
 		StopReason:      stopReason,
 		Usage:           usage,
+		AuthType:        credentials.authType,
 		ReasoningEffort: actualReasoningEffort, // FIXME if we didn't set reasoning effort, we should report the default value here
 	}, nil
 }
@@ -661,4 +669,31 @@ func wrapOpenAIError(err error) error {
 	}
 
 	return err
+}
+func openAICacheWriteTokens(usage openai.CompletionUsage) (int, bool) {
+	fields := []map[string]openaiRespJSON.Field{
+		usage.PromptTokensDetails.JSON.ExtraFields,
+		usage.JSON.ExtraFields,
+	}
+	names := []string{
+		"cache_write_tokens",
+		"cache_creation_input_tokens",
+		"cache_creation_tokens",
+	}
+
+	for _, extraFields := range fields {
+		for _, name := range names {
+			field, ok := extraFields[name]
+			if !ok {
+				continue
+			}
+
+			var tokens int
+			if json.Unmarshal([]byte(field.Raw()), &tokens) == nil {
+				return tokens, true
+			}
+		}
+	}
+
+	return 0, false
 }

@@ -27,6 +27,7 @@ var version string
 // program struct and its methods (Start, run, Stop) are for system service mode
 type program struct {
 	server *api.Server
+	remote *api.RemoteServer
 }
 
 func (p *program) Start(s system_service.Service) error {
@@ -36,14 +37,25 @@ func (p *program) Start(s system_service.Service) error {
 
 func (p *program) run() {
 	p.server = startServer()
+	remoteServer, err := api.RunRemoteServer(context.Background())
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to start remote (iroh) API server; remote pairing will be unavailable")
+	} else {
+		p.remote = remoteServer
+	}
 	startWorker()
 	temporal.Start()
 }
 
 func (p *program) Stop(s system_service.Service) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if p.remote != nil {
+		if err := p.remote.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Msg("Error shutting down remote (iroh) API server")
+		}
+	}
 	if p.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
 		if err := p.server.Shutdown(ctx); err != nil {
 			log.Error().Err(err).Msg("Error shutting down server")
 		}

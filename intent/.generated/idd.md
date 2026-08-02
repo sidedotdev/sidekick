@@ -46,13 +46,24 @@ intent_links:
       - dev/idd_workflow.go:IddSubtask
       - dev/idd_workflow.go:setSubtaskStatus
       - dev/idd_workflow.go:runIntentSubtask
+  - intent: "#manual-sub-tasks-run-as-planned-dev"
+    code:
+      - api/intent_api.go:StartIntentSubtaskHandler
+      - dev/idd_workflow.go:runIntentSubtask
   - intent: "#background-orchestrator-agent"
     code:
       - dev/idd_orchestrator.go
       - dev/idd_orchestrator.go:runIddOrchestratorTurn
       - dev/idd_orchestrator.go:startIntentSubtaskTool
       - dev/idd_orchestrator.go:addNudgeTool
+      - dev/idd_orchestrator.go:StartIntentSubtaskToolArgs
+      - dev/idd_orchestrator.go:resolveSubtaskScope
+      - dev/idd_workflow.go:StartIntentSubtaskSignal
+      - dev/intent_requirements.go:renderIntentRequirements
+      - dev/prompts/intent/requirements_prompt_only.mustache
       - dev/idd_workflow.go:IddState
+      - dev/idd_workflow.go:runIntentSubtask
+      - dev/idd_workflow.go:subtaskTerminalNotice
       - dev/idd_workflow.go:IddNudge
       - dev/idd_workflow.go:SetIddAutoModeSignal
       - dev/idd_workflow.go:RunIddOrchestratorSignal
@@ -188,15 +199,16 @@ freeze every subsequent turn until that sub-task finishes. The
 fire-and-forget shape mirrors the user-signal handler in `IddWorkflow`
 and keeps each turn (and the drainer) snappy.
 
-Partial-scope sub-tasks pass their scoping intent through the
-`start_intent_subtask` tool's free-form `prompt` argument: the agent can
-name a section heading from an intent file, pick out a paragraph, or
-describe any other narrow focus in plain language, and that string flows
-directly into the sub-task's requirements text. A dedicated structured
-field for "intent file path + section heading" was considered and
-rejected because the intent explicitly lists free-form prompt as one of
-the allowed scope shapes, and the existing prompt already accommodates
-both file-section references and arbitrary narrowing instructions.
+Sub-task scoping is a three-way `scope` enum on the `start_intent_subtask`
+tool: 'whole' (full intent diff), 'section' (the `prompt` names a specific
+intent-file section; the sub-task still receives the full intent diff for
+context), and 'prompt' (arbitrary free-form `prompt`). Prompt-scoped
+sub-tasks receive only that prompt in their requirements — the intent diff
+is deliberately omitted, per the intent's scoping bullet — so the prompt
+must be self-contained and the orchestrator remains responsible for
+following up on intent the prompt does not cover. The legacy 'partial'
+scope value from older histories is still accepted and treated as
+'section'.
 
 The intent diff the orchestrator sees each turn is computed against the
 IDD flow's start branch (`state.DefaultTargetBranch`), not the worktree
@@ -223,6 +235,17 @@ sub-task's own flow view) and only ever appears in the orchestrator's
 internal turn prompt. Completed/failed/canceled sub-tasks drop their
 dispatched-diff snippet from the prompt since they no longer constrain
 fresh dispatches.
+
+When a sub-task reaches a terminal status (completed/failed/canceled),
+`runIntentSubtask` queues a human-readable notice
+(`subtaskTerminalNotice`, including a truncated result summary) on
+`IddState.PendingSubtaskNotices` and immediately requests an
+orchestrator turn — gated by the `idd-subtask-terminal-orchestrator-turn`
+workflow version — so the orchestrator is notified of the completion
+promptly rather than waiting for the next intent edit or the edit
+watcher's backstop. The next turn that runs drains the queued notices
+into its prompt, letting the orchestrator optionally act (e.g. dispatch
+the next serialized sub-task); taking no action remains a valid outcome.
 
 ## Resizable and minimizable canvas layout
 
@@ -269,3 +292,11 @@ folded into a collapsible "N Completed" entry with a caret toggle so a long
 history of finished work doesn't crowd out active sub-tasks. Sub-tasks carry
 `createdAt`/`updatedAt` timestamps (set from the workflow clock when launched
 and on every status change) to drive this ordering and the staleness cutoff.
+
+## Manual sub-tasks run as planned dev
+
+"Manually created" sub-tasks are those launched via the start-subtask API
+(the canvas button). These always run as a planned-dev child with
+determine-requirements disabled. Orchestrator-dispatched sub-tasks instead
+choose between basic and planned dev per sub-task via the `planned` tool
+argument.

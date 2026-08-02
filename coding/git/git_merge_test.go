@@ -753,3 +753,58 @@ func TestGitTransferWorktreeChangesActivityPreservesExistingStash(t *testing.T) 
 	assert.Contains(t, stashList, "preexisting")
 	assert.Equal(t, existingStashSha, strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "rev-parse", "stash@{0}")))
 }
+
+// targetBranchSyncerEnv wraps a real env to simulate an environment whose
+// repository is an independent clone of a host repository, refreshing
+// branches from the host repo on demand.
+type targetBranchSyncerEnv struct {
+	env.Env
+	t              *testing.T
+	envRepoDir     string
+	hostRepoDir    string
+	syncedBranches []string
+}
+
+func (e *targetBranchSyncerEnv) SyncBranchToRemote(ctx context.Context, branch string) error {
+	e.syncedBranches = append(e.syncedBranches, branch)
+	runGitCommandInTestRepo(e.t, e.envRepoDir, "fetch", e.hostRepoDir, "+refs/heads/"+branch+":refs/heads/"+branch)
+	return nil
+}
+
+func TestGitMergeActivityRefreshesTargetBranchFromLocal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	envRepoDir := setupTestGitRepo(t)
+	createCommitWithFile(t, envRepoDir, "Initial commit", "base.txt", "base")
+
+	// The host repo's main advances after the env repo's clone point, so the
+	// env repo's main is stale when the merge is requested.
+	hostRepoDir := filepath.Join(t.TempDir(), "host")
+	runGitCommandInTestRepo(t, envRepoDir, "clone", envRepoDir, hostRepoDir)
+	createCommitWithFile(t, hostRepoDir, "Host commit", "host.txt", "host")
+	hostCommit := runGitCommandInTestRepo(t, hostRepoDir, "rev-parse", "main")
+
+	runGitCommandInTestRepo(t, envRepoDir, "checkout", "-b", "feature")
+	createCommitWithFile(t, envRepoDir, "Feature commit", "feature.txt", "feature")
+	featureCommit := runGitCommandInTestRepo(t, envRepoDir, "rev-parse", "feature")
+
+	localEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: envRepoDir})
+	require.NoError(t, err)
+	syncerEnv := &targetBranchSyncerEnv{Env: localEnv, t: t, envRepoDir: envRepoDir, hostRepoDir: hostRepoDir}
+
+	result, err := GitMergeActivity(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
+		SourceBranch: "feature",
+		TargetBranch: "main",
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.HasConflicts)
+	assert.Equal(t, []string{"main"}, syncerEnv.syncedBranches)
+
+	// The merge must include the host repo's commits so the result can
+	// fast-forward the host branch afterwards.
+	mergedCommits := runGitCommandInTestRepo(t, envRepoDir, "rev-list", "main")
+	assert.Contains(t, mergedCommits, hostCommit)
+	assert.Contains(t, mergedCommits, featureCommit)
+}

@@ -11,7 +11,7 @@ type Pause struct{}
 
 func SetupPauseHandler(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) {
 	signalChan := workflow.GetSignalChannel(dCtx, SignalNamePause)
-	workflow.Go(dCtx, func(ctx workflow.Context) {
+	workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 		for {
 			selector := workflow.NewSelector(ctx)
 			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {

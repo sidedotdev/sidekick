@@ -20,6 +20,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/frontend"
 	"sidekick/llm"
+	"sidekick/openai_oauth"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/telemetry"
@@ -109,6 +110,10 @@ type Controller struct {
 	allowedOrigins    *AllowedOrigins
 }
 
+type ModelConfigUpdateRequest struct {
+	Config common.LLMConfig `json:"config"`
+}
+
 // UserActionRequest defines the expected request body for user actions.
 type UserActionRequest struct {
 	ActionType string `json:"actionType"`
@@ -165,9 +170,12 @@ func (ctrl *Controller) GetModelsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
-// ArchiveFinishedTasksHandler handles the request to archive all finished tasks
+// ArchiveFinishedTasksHandler handles the request to archive all finished
+// tasks. An optional projectId query param limits archiving to tasks assigned
+// to that project; an explicit empty value limits it to unassigned tasks.
 func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
+	projectId, filterByProject := c.GetQuery("projectId")
 
 	// Get all tasks with status 'complete', 'canceled', or 'failed'
 	tasks, err := ctrl.service.GetTasks(c.Request.Context(), workspaceId, []domain.TaskStatus{
@@ -184,6 +192,9 @@ func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	now := time.Now()
 
 	for _, task := range tasks {
+		if filterByProject && task.ProjectId != projectId {
+			continue
+		}
 		task.Archived = &now
 		err := ctrl.service.PersistTask(c.Request.Context(), task)
 		if err != nil {
@@ -234,12 +245,19 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	taskRoutes.POST("/:id/cancel", ctrl.CancelTaskHandler)
 	taskRoutes.POST("/archive_finished", ctrl.ArchiveFinishedTasksHandler)
 
+	projectRoutes := workspaceApiRoutes.Group("/projects")
+	projectRoutes.POST("", ctrl.CreateProjectHandler)
+	projectRoutes.GET("", ctrl.GetProjectsHandler)
+	projectRoutes.PUT("/:id", ctrl.UpdateProjectHandler)
+	projectRoutes.DELETE("/:id", ctrl.DeleteProjectHandler)
+
 	flowRoutes := workspaceApiRoutes.Group("/flows")
 	flowRoutes.GET("/:id", ctrl.GetFlowHandler)
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
 	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
+	flowRoutes.PUT("/:id/model_config", ctrl.UpdateFlowModelConfigHandler)
 	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
 	flowRoutes.GET("/:id/history/:eventId", ctrl.GetFlowEventDetailHandler)
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
@@ -345,7 +363,7 @@ func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 		var secretNames []string
 		switch builtinProvider {
 		case "openai":
-			secretNames = []string{llm.OpenaiApiKeySecretName}
+			secretNames = []string{llm.OpenaiApiKeySecretName, openai_oauth.SecretName}
 		case "anthropic":
 			secretNames = []string{llm.AnthropicApiKeySecretName, "ANTHROPIC_OAUTH"}
 		case "google":
@@ -597,6 +615,69 @@ func (ctrl *Controller) UserActionHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "User action '" + req.ActionType + "' signaled successfully"})
 }
 
+func validateModelConfig(llmConfig common.LLMConfig) error {
+	if len(llmConfig.Defaults) == 0 {
+		return errors.New("at least one default model configuration is required")
+	}
+	for i, modelConfig := range llmConfig.Defaults {
+		if strings.TrimSpace(modelConfig.Provider) == "" {
+			return fmt.Errorf("default model configuration %d is missing a provider", i)
+		}
+	}
+	for useCase, modelConfigs := range llmConfig.UseCaseConfigs {
+		for i, modelConfig := range modelConfigs {
+			if strings.TrimSpace(modelConfig.Provider) == "" {
+				return fmt.Errorf("model configuration %d for use case %q is missing a provider", i, useCase)
+			}
+		}
+	}
+	return nil
+}
+
+func (ctrl *Controller) UpdateFlowModelConfigHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	_, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var req ModelConfigUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
+		return
+	}
+	if err := validateModelConfig(req.Config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid model configuration: " + err.Error()})
+		return
+	}
+
+	_, err = ctrl.temporalClient.UpdateWorkflow(c.Request.Context(), client.UpdateWorkflowOptions{
+		WorkflowID:   flowId,
+		UpdateName:   dev.UpdateNameModelConfig,
+		Args:         []interface{}{req.Config},
+		WaitForStage: client.WorkflowUpdateStageAccepted,
+	})
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to update workflow model configuration")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update workflow model configuration: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{"message": "Model configuration update accepted"})
+}
+
 // QueryFlowHandler handles requests to query a workflow.
 func (ctrl *Controller) QueryFlowHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
@@ -657,6 +738,10 @@ type TaskRequest struct {
 	AgentType   string                 `json:"agentType"`
 	Status      string                 `json:"status"`
 	FlowOptions map[string]interface{} `json:"flowOptions"`
+	// ProjectId is a pointer to distinguish an absent field (leave the
+	// project assignment unchanged on update) from an explicit empty string
+	// (clear the project assignment).
+	ProjectId *string `json:"projectId"`
 }
 
 func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
@@ -709,6 +794,9 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 		AgentType:   agentType,
 		FlowType:    flowType,
 		FlowOptions: taskReq.FlowOptions,
+	}
+	if taskReq.ProjectId != nil {
+		task.ProjectId = *taskReq.ProjectId
 	}
 
 	if err := ctrl.service.PersistTask(c, task); err != nil {
@@ -1047,7 +1135,7 @@ func completionSourceEventId(event *historypb.HistoryEvent) int64 {
 // remainder of the response is still usable.
 func decodePayloads(dc converter.DataConverter, payloads *commonpb.Payloads) []interface{} {
 	if payloads == nil {
-		return nil
+		return []interface{}{}
 	}
 	result := make([]interface{}, 0, len(payloads.Payloads))
 	for _, p := range payloads.Payloads {
@@ -1271,8 +1359,9 @@ func (ctrl *Controller) resetParentTaskWorkflow(ctx context.Context, workspaceId
 	// The child signals its parent by workflow ID (no run ID), so the new
 	// execution will receive signals from the reset child.
 	_, err = ctrl.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:        taskWfId,
-		TaskQueue: ctrl.temporalTaskQueue,
+		ID:                  taskWfId,
+		TaskQueue:           ctrl.temporalTaskQueue,
+		WorkflowTaskTimeout: dev.FlowWorkflowTaskTimeout,
 	}, dev.TaskWorkflow, dev.TaskWorkflowInput{
 		WorkspaceId:    workspaceId,
 		TaskId:         flow.ParentId,
@@ -1693,6 +1782,9 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 		task.Title = taskReq.Title
 	}
 	task.Description = taskReq.Description
+	if taskReq.ProjectId != nil {
+		task.ProjectId = *taskReq.ProjectId
+	}
 	task.AgentType = agentType
 	task.Status = status
 	task.FlowOptions = taskReq.FlowOptions

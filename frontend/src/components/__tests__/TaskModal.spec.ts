@@ -266,7 +266,7 @@ describe('TaskModal', () => {
     expect(wrapper.emitted('updated')).toBeTruthy()
   })
 
-  it('updates localStorage with last used flow type and env type after form submission', async () => {
+  it('updates global and workspace-scoped defaults after form submission', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     global.fetch = fetchMock
 
@@ -279,7 +279,9 @@ describe('TaskModal', () => {
     await wrapper.find('form').trigger('submit')
 
     expect(localStorage.getItem('lastUsedFlowType')).toBe('planned_dev')
+    expect(localStorage.getItem('lastUsedFlowType_test-workspace-id')).toBe('planned_dev')
     expect(localStorage.getItem('lastUsedEnvType')).toBe('local')
+    expect(localStorage.getItem('lastUsedEnvType_test-workspace-id')).toBe('local')
   })
 
   it('toggles determine requirements checkbox', async () => {
@@ -294,6 +296,35 @@ describe('TaskModal', () => {
     await wrapper.find('.overlay').trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.emitted('close')).toBeTruthy()
+  })
+
+  it('closes globally on Escape and removes the handler when unmounted', async () => {
+    mountComponent()
+    const outsideInput = document.createElement('input')
+    document.body.appendChild(outsideInput)
+    outsideInput.focus()
+
+    const escapeEvent = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    })
+    outsideInput.dispatchEvent(escapeEvent)
+    await wrapper.vm.$nextTick()
+
+    expect(escapeEvent.defaultPrevented).toBe(true)
+    const closeEvents = wrapper.emitted('close')
+    expect(closeEvents).toHaveLength(1)
+
+    wrapper.unmount()
+    outsideInput.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    }))
+
+    expect(closeEvents).toHaveLength(1)
+    outsideInput.remove()
   })
 
   it('has Start Task button as primary action', async () => {
@@ -1448,5 +1479,270 @@ describe('TaskModal determineRequirements behavior', () => {
         params: { id: 'idd-flow-id' },
       })
     })
+  })
+})
+describe('TaskModal context gathering option', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    vi.stubEnv('MODE', 'development')
+    vi.stubGlobal('fetch', createMockFetch())
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  const mountContextGatherModal = (task?: Task) =>
+    mountModal({
+      props: task ? { task } : {},
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+
+  const submittedTaskBody = (fetchMock: ReturnType<typeof vi.fn>) => {
+    const taskCall = fetchMock.mock.calls.find((call) =>
+      call[0].toString().includes('/tasks') &&
+      (call[1]?.method === 'POST' || call[1]?.method === 'PUT')
+    )
+    expect(taskCall).toBeTruthy()
+    return JSON.parse(taskCall![1]!.body as string)
+  }
+
+  it.each([
+    { flowType: 'basic_dev', title: undefined, description: 'Basic task' },
+    { flowType: 'planned_dev', title: undefined, description: 'Planned task' },
+    { flowType: 'idd', title: 'IDD task', description: undefined },
+  ])('serializes explore context for $flowType tasks when checked', async ({
+    flowType,
+    title,
+    description,
+  }) => {
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContextGatherModal()
+
+    ;(wrapper.vm as any).flowType = flowType
+    ;(wrapper.vm as any).title = title ?? ''
+    ;(wrapper.vm as any).description = description ?? ''
+    await wrapper.vm.$nextTick()
+
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+    await checkbox.setValue(true)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(submittedTaskBody(fetchMock).flowOptions.contextGatherType).toBe('explore')
+    wrapper.unmount()
+  })
+
+  it.each([
+    { flowType: 'basic_dev', title: undefined, description: 'Basic task' },
+    { flowType: 'planned_dev', title: undefined, description: 'Planned task' },
+    { flowType: 'idd', title: 'IDD task', description: undefined },
+  ])('omits contextGatherType for $flowType tasks when unchecked', async ({
+    flowType,
+    title,
+    description,
+  }) => {
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContextGatherModal()
+
+    ;(wrapper.vm as any).flowType = flowType
+    ;(wrapper.vm as any).title = title ?? ''
+    ;(wrapper.vm as any).description = description ?? ''
+    await wrapper.vm.$nextTick()
+
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(submittedTaskBody(fetchMock).flowOptions).not.toHaveProperty('contextGatherType')
+    wrapper.unmount()
+  })
+
+  it('initializes the checkbox from an editable explore task', () => {
+    const wrapper = mountContextGatherModal(createTestTask({
+      flowOptions: {
+        determineRequirements: true,
+        contextGatherType: 'explore',
+      },
+    }))
+
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+    wrapper.unmount()
+  })
+
+  it.each([
+    undefined,
+    'legacy',
+    'unsupported',
+  ])('initializes the checkbox as unchecked for contextGatherType %s', (contextGatherType) => {
+    const wrapper = mountContextGatherModal(createTestTask({
+      flowOptions: {
+        determineRequirements: true,
+        ...(contextGatherType === undefined ? {} : { contextGatherType }),
+      },
+    }))
+
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('restores the checkbox through undo and redo and serializes the redone value', async () => {
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContextGatherModal()
+    const checkbox = wrapper.get('[data-testid="context-gather-explore"]')
+
+    await checkbox.setValue(true)
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+
+    await wrapper.find('.modal').trigger('keydown', { key: 'z', ctrlKey: true })
+    await wrapper.vm.$nextTick()
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+
+    await wrapper.find('.modal').trigger('keydown', { key: 'y', ctrlKey: true })
+    await wrapper.vm.$nextTick()
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+
+    ;(wrapper.vm as any).description = 'Task with gathered context'
+    await wrapper.vm.$nextTick()
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(submittedTaskBody(fetchMock).flowOptions.contextGatherType).toBe('explore')
+    wrapper.unmount()
+  })
+
+  it('does not render the checkbox outside development mode', () => {
+    vi.stubEnv('MODE', 'production')
+    const wrapper = mountContextGatherModal()
+
+    expect(wrapper.find('[data-testid="context-gather-explore"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+describe('TaskModal project selection', () => {
+  const projectsResponse = {
+    projects: [
+      { id: 'project_1', workspaceId: 'test-workspace-id', title: 'Alpha', priority: 'none' },
+      { id: 'project_2', workspaceId: 'test-workspace-id', title: 'Beta', priority: 'high' },
+    ],
+  }
+
+  const createProjectsFetchMock = () =>
+    vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+      const urlStr = url.toString()
+      if (urlStr.includes('/projects')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(projectsResponse),
+        } as Response)
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }),
+      } as Response)
+    })
+
+  const ProjectDropdownStub = {
+    name: 'Dropdown',
+    props: ['modelValue', 'options', 'optionLabel', 'optionValue', 'placeholder'],
+    emits: ['update:modelValue'],
+    template: '<div class="dropdown-stub"></div>',
+  }
+
+  const mountWithProjects = (props: Record<string, any> = {}) =>
+    mountModal({
+      props,
+      global: {
+        stubs: {
+          Dropdown: ProjectDropdownStub,
+        },
+      },
+    })
+
+  const findProjectDropdown = (wrapper: VueWrapper) =>
+    wrapper.findAllComponents(ProjectDropdownStub).find((w) => w.props('optionLabel') === 'title')
+
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('populates the project dropdown from the projects list endpoint', async () => {
+    vi.stubGlobal('fetch', createProjectsFetchMock())
+    const wrapper = mountWithProjects()
+    await flushPromises()
+
+    const dropdown = findProjectDropdown(wrapper)
+    expect(dropdown).toBeDefined()
+    expect(dropdown!.props('options')).toEqual(projectsResponse.projects)
+    expect(dropdown!.props('modelValue')).toBeNull()
+  })
+
+  it('includes the selected project id in the task payload', async () => {
+    const fetchMock = createProjectsFetchMock()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountWithProjects()
+    await flushPromises()
+
+    await findProjectDropdown(wrapper)!.vm.$emit('update:modelValue', 'project_2')
+
+    const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
+    await descriptionInput.setValue('Test description')
+
+    await wrapper.find('.p-button-primary').trigger('click')
+    await flushPromises()
+
+    const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+    expect(taskCalls.length).toBeGreaterThan(0)
+    const requestBody = JSON.parse(taskCalls[0][1]?.body as string)
+    expect(requestBody.projectId).toBe('project_2')
+  })
+
+  it('prefills the assigned project and sends an empty projectId when cleared', async () => {
+    const fetchMock = createProjectsFetchMock()
+    vi.stubGlobal('fetch', fetchMock)
+    const task: Task = {
+      id: 'existing-task-id',
+      workspaceId: 'test-workspace-id',
+      description: 'Existing description',
+      status: 'drafting',
+      agentType: 'human',
+      flowType: 'basic_dev',
+      projectId: 'project_1',
+    }
+    const wrapper = mountWithProjects({ task })
+    await flushPromises()
+
+    const dropdown = findProjectDropdown(wrapper)!
+    expect(dropdown.props('modelValue')).toBe('project_1')
+
+    await dropdown.vm.$emit('update:modelValue', null)
+
+    await wrapper.find('.p-button-primary').trigger('click')
+    await flushPromises()
+
+    const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+    expect(taskCalls.length).toBeGreaterThan(0)
+    const requestBody = JSON.parse(taskCalls[0][1]?.body as string)
+    expect(requestBody.projectId).toBe('')
   })
 })

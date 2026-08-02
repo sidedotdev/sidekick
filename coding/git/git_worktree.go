@@ -109,8 +109,19 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	// Create archive tag before deleting the branch
 	// Try with incrementing suffix if tag already exists
 	baseTagName := fmt.Sprintf("archive/%s", branchName)
-	if _, err := createArchiveTag(ctx, envContainer, baseTagName, branchName, archiveMessage); err != nil {
+	tagName, err := createArchiveTag(ctx, envContainer, baseTagName, branchName, archiveMessage)
+	if err != nil {
 		return err
+	}
+
+	// In environments whose repo is an independent clone (e.g. remote
+	// sandboxes), the archive tag only exists inside the environment.
+	// Propagate it to the host repo now, while the worktree still exists, so
+	// the archived state survives the environment's deletion.
+	if syncer, ok := envContainer.Env.(env.GitRefSyncer); ok {
+		if err := syncer.SyncGitRefToLocal(ctx, "refs/tags/"+tagName); err != nil {
+			return fmt.Errorf("failed to sync archive tag %s to local repo: %w", tagName, err)
+		}
 	}
 
 	// Delete the branch before removing the worktree

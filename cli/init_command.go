@@ -17,6 +17,7 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/llm"
+	"sidekick/openai_oauth"
 	"sidekick/srv"
 	"strconv"
 	"strings"
@@ -36,6 +37,10 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
+
+// keyringGet is the function used to read secrets from the keyring.
+// Overridable in tests to avoid OS keyring dependency.
+var keyringGet = keyring.Get
 
 type InitCommandHandler struct {
 	storage srv.Storage
@@ -610,22 +615,29 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 func getConfiguredBuiltinLLMProviders() []string {
 	var providers []string
 
-	// Check OpenAI
-	if key, err := keyring.Get(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
+	// Check OpenAI (either API key or OAuth)
+	hasOpenAI := false
+	if key, err := keyringGet(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
+		hasOpenAI = true
+	}
+	if creds, err := keyringGet(keyringService, openai_oauth.SecretName); err == nil && creds != "" {
+		hasOpenAI = true
+	}
+	if hasOpenAI {
 		providers = append(providers, "openai")
 	}
 
 	// Check Google
-	if key, err := keyring.Get(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+	if key, err := keyringGet(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
 		providers = append(providers, "google")
 	}
 
 	// Check Anthropic (either API key or OAuth)
 	hasAnthropicKey := false
-	if key, err := keyring.Get(keyringService, llm.AnthropicApiKeySecretName); err == nil && key != "" {
+	if key, err := keyringGet(keyringService, llm.AnthropicApiKeySecretName); err == nil && key != "" {
 		hasAnthropicKey = true
 	}
-	if creds, err := keyring.Get(keyringService, AnthropicOAuthSecretName); err == nil && creds != "" {
+	if creds, err := keyringGet(keyringService, AnthropicOAuthSecretName); err == nil && creds != "" {
 		hasAnthropicKey = true
 	}
 	if hasAnthropicKey {
@@ -709,12 +721,12 @@ func getConfiguredBuiltinEmbeddingProviders() []string {
 	var providers []string
 
 	// Check OpenAI
-	if key, err := keyring.Get(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
+	if key, err := keyringGet(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
 		providers = append(providers, "openai")
 	}
 
 	// Check Google
-	if key, err := keyring.Get(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+	if key, err := keyringGet(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
 		providers = append(providers, "google")
 	}
 

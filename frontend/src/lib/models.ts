@@ -41,6 +41,7 @@ export interface ActionData {
 
 // TODO add the rest
 export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'in_review' | 'complete' | 'failed'
+export type FlowStatus = 'in_progress' | 'paused' | 'completed' | 'failed' | 'canceled'
 export type AgentType = 'human' | 'llm' | 'none'
 
 export interface TaskLink {
@@ -54,6 +55,7 @@ export interface Task {
   workspaceId: string
   title?: string
   description?: string
+  projectId?: string
   status: TaskStatus
   links?: null | TaskLink[]
   agentType: AgentType
@@ -80,7 +82,7 @@ export interface Flow {
   id: string
   type: string
   parentId: string
-  status: string
+  status: FlowStatus
   description?: string
   worktrees?: Worktree[]
 }
@@ -297,4 +299,20 @@ export function extractToolCallArguments(parsedResult: any): string | null {
     return toolUseBlock?.toolUse?.arguments ?? null;
   }
   return parsedResult.toolCalls?.[0]?.arguments ?? null;
+}
+
+export type ProjectPriority = 'none' | 'low' | 'medium' | 'high' | 'urgent'
+
+// Ordered from most to least urgent, matching backend sort buckets.
+export const allProjectPriorities: ProjectPriority[] = ['urgent', 'high', 'medium', 'low', 'none']
+
+export interface Project {
+  workspaceId: string
+  id: string
+  title: string
+  description?: string
+  priority: ProjectPriority
+  rank?: string
+  created: string
+  updated: string
 }

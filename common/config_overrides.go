@@ -23,6 +23,7 @@ type ConfigOverrides struct {
 	RepoMode           *string                  `json:"repoMode,omitempty"`
 	DevPodConfig       *DevPodEnvConfig         `json:"devPodConfig,omitempty"`
 	OpenShellConfig    *OpenShellEnvConfig      `json:"openShellConfig,omitempty"`
+	ModalConfig        *ModalEnvConfig          `json:"modalConfig,omitempty"`
 
 	// LocalConfig overrides
 	LLM       *LLMConfig                   `json:"llm,omitempty"`
@@ -97,5 +98,8 @@ func (o ConfigOverrides) ApplyToRepoConfig(c *RepoConfig) {
 	}
 	if o.OpenShellConfig != nil {
 		c.OpenShellConfig = *o.OpenShellConfig
+	}
+	if o.ModalConfig != nil {
+		c.ModalConfig = *o.ModalConfig
 	}
 }

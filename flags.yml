@@ -34,3 +34,9 @@ disable-done-coding:
     c: false
   defaultRule:
     variation: c
+context-gathering-forget:
+  variations:
+    t1: true
+    c: false
+  defaultRule:
+    variation: t1

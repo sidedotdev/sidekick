@@ -15,9 +15,13 @@ type IntentRequirementsInfo struct {
 	// update to existing intent.
 	Update bool
 	// ScopePrompt, when non-empty, narrows the sub-task's focus to a chunk of
-	// the diff (used by the background orchestrator's "partial" scope). It is
-	// emitted ahead of the diff in the rendered requirements.
+	// the diff (used by the background orchestrator's "section" and "prompt"
+	// scopes). It is emitted ahead of the diff in the rendered requirements.
 	ScopePrompt string
+	// PromptOnly renders requirements that carry only ScopePrompt, omitting
+	// the intent diff entirely (the orchestrator's free-form "prompt" scope).
+	// It has no effect when ScopePrompt is empty.
+	PromptOnly bool
 }
 
 // renderIntentRequirements builds the sub-task requirements text describing the
@@ -29,12 +33,16 @@ func renderIntentRequirements(info IntentRequirementsInfo) string {
 	if strings.TrimSpace(cleanDiff) == "" {
 		cleanDiff = info.Diff
 	}
+	scopePrompt := strings.TrimSpace(info.ScopePrompt)
 	data := map[string]interface{}{
 		"commit":      info.Commit,
 		"clean_diff":  strings.TrimSuffix(cleanDiff, "\n"),
 		"update":      info.Update,
 		"path":        intentDiffPaths(info.Diff),
-		"scopePrompt": strings.TrimSpace(info.ScopePrompt),
+		"scopePrompt": scopePrompt,
+	}
+	if info.PromptOnly && scopePrompt != "" {
+		return RenderPrompt(IntentRequirementsPromptOnly, data)
 	}
 	return RenderPrompt(IntentRequirements, data)
 }

@@ -14,6 +14,8 @@
           transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
         }"
         class="virtual-task-card-container"
+        :draggable="draggable || undefined"
+        @dragstart="(event: DragEvent) => onDragStart(event, tasks[item.index])"
       >
         <TaskCard
           :task="tasks[item.index]"
@@ -36,11 +38,19 @@ const props = withDefaults(defineProps<{
   estimateSize?: number
   gap?: number
   readonly?: boolean
+  draggable?: boolean
 }>(), {
   estimateSize: 130,
   gap: 8,
   readonly: false,
+  draggable: false,
 })
+
+const onDragStart = (event: DragEvent, task: FullTask) => {
+  if (!props.draggable || !event.dataTransfer) return
+  event.dataTransfer.setData('text/plain', task.id)
+  event.dataTransfer.effectAllowed = 'move'
+}
 
 defineOptions({ inheritAttrs: false })
 
@@ -112,7 +122,18 @@ onUnmounted(() => {
   position: relative;
   z-index: 1;
 }
+/* Sibling lists are equal stacking contexts painted in DOM order, so the list
+   owning the hovered card must be raised for its expansion to reach across
+   lists in later groups. */
+.virtual-task-list:has(.virtual-task-card-container:hover) {
+  z-index: 10;
+}
+.virtual-task-card-container {
+  z-index: 0;
+}
+/* Each transformed row is its own stacking context, so the hovered row must
+   be raised for its expanded card to paint over later sibling rows. */
 .virtual-task-card-container:hover {
-  z-index: 1; /* hovering allow rendering over next ones */
+  z-index: 10;
 }
 </style>

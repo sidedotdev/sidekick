@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { viewCache } from './viewCache'
 import type { FlowViewCacheEntry } from './viewCache'
-import type { FullTask, Flow, Subflow, SubflowTree } from './models'
+import type { FullTask, Flow, Project, Subflow, SubflowTree } from './models'
 import { SubflowStatus } from './models'
 
 function makeTask(id: string): FullTask {
@@ -20,9 +20,20 @@ function makeTask(id: string): FullTask {
   } as unknown as FullTask
 }
 
+function makeProject(id: string): Project {
+  return {
+    id,
+    workspaceId: 'ws1',
+    title: `Project ${id}`,
+    priority: 'none',
+    created: '',
+    updated: '',
+  }
+}
+
 function makeFlowViewCache(flowId: string): FlowViewCacheEntry {
   return {
-    flow: { id: flowId, workspaceId: 'ws1', status: 'started' } as Flow,
+    flow: { id: flowId, workspaceId: 'ws1', status: 'in_progress' } as Flow,
     flowActions: [{ id: `action_${flowId}`, flowId } as any],
     subflowsById: {
       [`sf_${flowId}`]: { id: `sf_${flowId}`, type: 'step.dev', status: SubflowStatus.Started } as Subflow,
@@ -68,6 +79,36 @@ describe('ViewCache', () => {
 
       expect(viewCache.getKanbanTasks('ws1')).toHaveLength(1)
       expect(viewCache.getKanbanTasks('ws2')).toHaveLength(2)
+    })
+  })
+
+  describe('projects', () => {
+    it('returns null for unknown workspace', () => {
+      expect(viewCache.getProjects('unknown_ws')).toBeNull()
+    })
+
+    it('stores and retrieves projects by workspace ID', () => {
+      viewCache.setProjects('ws1', [makeProject('p1'), makeProject('p2')])
+
+      const cached = viewCache.getProjects('ws1')
+      expect(cached).toHaveLength(2)
+      expect(cached![0].id).toBe('p1')
+    })
+
+    it('stores a shallow copy so mutations do not affect cache', () => {
+      const projects = [makeProject('p1')]
+      viewCache.setProjects('ws1', projects)
+
+      projects.push(makeProject('p2'))
+      expect(viewCache.getProjects('ws1')).toHaveLength(1)
+    })
+
+    it('separates projects by workspace ID', () => {
+      viewCache.setProjects('ws1', [makeProject('p1')])
+      viewCache.setProjects('ws2', [makeProject('p2'), makeProject('p3')])
+
+      expect(viewCache.getProjects('ws1')).toHaveLength(1)
+      expect(viewCache.getProjects('ws2')).toHaveLength(2)
     })
   })
 

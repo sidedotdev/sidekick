@@ -96,6 +96,20 @@ describe('useIdeOpener', () => {
       })
     })
 
+    it('opens file directly in VimR when preference is stored', async () => {
+      mockSessionStorage['sidekick-preferred-ide'] = 'vimr'
+      const { showIdeSelector, openInIde } = useIdeOpener()
+      
+      openInIde('/path/to/file.ts')
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+      
+      expect(showIdeSelector.value).toBe(false)
+      expect(lastFetchBody).toEqual({
+        ide: 'vimr',
+        filePath: '/path/to/file.ts',
+      })
+    })
+
     it('opens Zed with line number when provided', async () => {
       mockSessionStorage['sidekick-preferred-ide'] = 'zed'
       const { openInIde } = useIdeOpener()
@@ -225,6 +239,22 @@ describe('useIdeOpener', () => {
       expect(mockSessionStorage['sidekick-preferred-ide']).toBe('zed')
       expect(lastFetchBody).toEqual({
         ide: 'zed',
+        filePath: '/path/to/file.ts',
+      })
+      expect(showIdeSelector.value).toBe(false)
+      expect(pendingFilePath.value).toBe(null)
+    })
+
+    it('stores VimR preference and opens pending file', async () => {
+      const { showIdeSelector, pendingFilePath, openInIde, selectIde } = useIdeOpener()
+      
+      openInIde('/path/to/file.ts')
+      selectIde('vimr')
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+      
+      expect(mockSessionStorage['sidekick-preferred-ide']).toBe('vimr')
+      expect(lastFetchBody).toEqual({
+        ide: 'vimr',
         filePath: '/path/to/file.ts',
       })
       expect(showIdeSelector.value).toBe(false)

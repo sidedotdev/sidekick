@@ -202,8 +202,8 @@ func TestOpenAIProvider_UsageOnChunkWithChoices_OpenAISemantics(t *testing.T) {
 		flusher.Flush()
 
 		// prompt_tokens=700 already includes cached_tokens=200 and
-		// cache_creation_input_tokens=100 (OpenAI semantics: total >= sum of subsets).
-		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":700,\"completion_tokens\":5,\"total_tokens\":705,\"prompt_tokens_details\":{\"cached_tokens\":200},\"cache_creation_input_tokens\":100}}\n\n")
+		// cache_write_tokens=100 (OpenAI semantics: total >= sum of subsets).
+		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":700,\"completion_tokens\":5,\"total_tokens\":705,\"prompt_tokens_details\":{\"cached_tokens\":200,\"cache_write_tokens\":100}}}\n\n")
 		flusher.Flush()
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
@@ -348,7 +348,8 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words.",
+					Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words. " +
+						strings.Repeat("Keep this weather-request context available while deciding how to respond. ", 400),
 				},
 			},
 		},
@@ -358,8 +359,9 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
-			Provider: "openai",
-			Model:    "gpt-4.1-nano-2025-04-14",
+			Provider:        "openai",
+			Model:           "gpt-5.6-luna",
+			ReasoningEffort: "none",
 		},
 		Temperature: utils.Ptr(float32(0)),
 		Tools:       []*common.Tool{mockTool},
@@ -694,4 +696,84 @@ func TestOpenAIProvider_ToolResultImageIntegration(t *testing.T) {
 	t.Logf("Model response: %q", responseText)
 	assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
 		"Expected model to read %q from the image, got %q", expectedText, responseText)
+}
+
+func TestOpenAIProvider_AnyUsesAPIKeyAtChatCompletionsEndpoint(t *testing.T) {
+	var requestPath string
+	var authorization string
+	var accountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		accountID = r.Header.Get("ChatGPT-Account-Id")
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	oauthJSON := `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH":   oauthJSON,
+			"OPENAI_API_KEY": "api-key",
+		},
+	}
+	provider := OpenAIProvider{
+		BaseURL:  server.URL + "/v1",
+		AuthType: common.ProviderAuthTypeAny,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.Error(t, err)
+	assert.Equal(t, "/v1/chat/completions", requestPath)
+	assert.Equal(t, "Bearer api-key", authorization)
+	assert.Empty(t, accountID)
+	assert.Equal(t, []string{"OPENAI_API_KEY"}, manager.calls)
+}
+
+func TestOpenAIProvider_SubscriptionRejectedBeforeRequest(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH": `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`,
+		},
+	}
+	provider := OpenAIProvider{
+		BaseURL:  server.URL + "/v1",
+		AuthType: common.ProviderAuthTypeSubscription,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.ErrorContains(t, err, "subscription auth is not supported by the chat-completions provider")
+	assert.False(t, requested)
+	assert.Empty(t, manager.calls)
 }

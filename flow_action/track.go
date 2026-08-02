@@ -295,7 +295,7 @@ func trackFlowAction[T any](actionCtx ActionContext, isHumanAction bool, f func(
 // history for a completed/failed flow action and persists the activity refs.
 func decorateFlowActionWithActivities(eCtx ExecContext, flowAction domain.FlowAction) {
 	wfInfo := workflow.GetInfo(eCtx)
-	workflow.Go(eCtx, func(gCtx workflow.Context) {
+	workflow.Go(eCtx.Context, func(gCtx workflow.Context) {
 		disconnectedCtx, _ := workflow.NewDisconnectedContext(gCtx)
 		var meta *temporalmeta.TemporalMetaActivities
 		params := temporalmeta.FetchFlowActionActivitiesParams{

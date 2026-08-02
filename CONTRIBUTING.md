@@ -102,6 +102,12 @@ to put in the flow id, then run the "Replay Flow" launch configuration.
 
 ## Miscellaneous
 
+### Android app
+
+See [app/android/README.md](app/android/README.md) for how to build and test
+the Android companion app, and how to install it on a device and pair it with
+a locally running sidekick server.
+
 ### Build static binary
 
 To get a (mostly - libc still required) static binary, we need a static version

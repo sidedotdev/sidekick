@@ -16,3 +16,4 @@ const DisableContextCodeVisibilityCheck = "disable-context-code-visibility-check
 const InitialRepoSummary = "initial-repo-summary"
 const ManageHistoryWithContextMarkers = "manage-history-with-context-markers"
 const DisableDoneCoding = "disable-done-coding"
+const ContextGatheringForget = "context-gathering-forget"

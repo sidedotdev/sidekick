@@ -10,9 +10,12 @@ import (
 	"sidekick/env"
 	"sidekick/utils"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBulkGetSymbolDefinitions(t *testing.T) {
@@ -1451,5 +1454,144 @@ func TestShouldRetrieveFullFile(t *testing.T) {
 			result := shouldRetrieveFullFile(tc.symbols, tc.absolutePath)
 			assert.Equal(t, tc.expected, result)
 		})
+	}
+}
+
+// The symbol index is built via the content-aware entry walk (which sources
+// remote content from local git objects) rather than Env.Walk + one
+// Env.ReadFile per file.
+func TestGetRelativeFilePathsBySymbolName(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "a.go"), []byte("package main\n\nfunc Alpha() {}\n"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(testDir, "b"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "b", "b.go"), []byte("package b\n\nfunc Alpha() {}\n\ntype Beta struct{}\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "notes.txt"), []byte("Alpha Beta not code\n"), 0644))
+
+	// An unreadable file must be skipped without failing the whole index,
+	// since the index only powers best-effort failure hints.
+	if os.Geteuid() != 0 {
+		unreadable := filepath.Join(testDir, "unreadable.go")
+		require.NoError(t, os.WriteFile(unreadable, []byte("package main\n\nfunc Hidden() {}\n"), 0644))
+		require.NoError(t, os.Chmod(unreadable, 0o000))
+	}
+
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+	symbolToPaths, err := getRelativeFilePathsBySymbolName(context.Background(), ec)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"a.go", filepath.Join("b", "b.go")}, symbolToPaths["Alpha"])
+	assert.Equal(t, []string{filepath.Join("b", "b.go")}, symbolToPaths["Beta"])
+	assert.NotContains(t, symbolToPaths, "Hidden")
+}
+
+type readRecordingEnv struct {
+	env.Env
+	mu        sync.Mutex
+	readPaths []string
+}
+
+func (e *readRecordingEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	e.mu.Lock()
+	e.readPaths = append(e.readPaths, path)
+	e.mu.Unlock()
+	return e.Env.ReadFile(ctx, path)
+}
+
+// A full-file request for a missing file yields a failure without a symbol
+// name; that must not trigger building the repo-wide symbol index, which
+// reads every file (very slow on remote envs).
+func TestBulkGetSymbolDefinitionsMissingFullFileNoRepoScan(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "KanbanBoard.vue"), []byte("<template><div/></template>\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0644))
+
+	recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+	ca := &CodingActivities{}
+	result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+		EnvContainer: env.EnvContainer{Env: recordingEnv},
+		Requests: []FileSymDefRequest{
+			{
+				FilePath: "Kanban.vue",
+				Symbols:  []RequestedSymbol{{Name: "Kanban"}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, result.Failures, "No file at 'Kanban.vue' exists in the repository")
+	assert.Equal(t, 1, strings.Count(result.Failures, "No file at 'Kanban.vue'"), "hint should not be duplicated")
+	assert.NotContains(t, result.Failures, "is not defined in any repo files")
+
+	// Only the missing file itself may be read; other repo files must not be
+	// scanned to build a symbol index that can't help a symbolless failure.
+	recordingEnv.mu.Lock()
+	defer recordingEnv.mu.Unlock()
+	assert.Equal(t, []string{"Kanban.vue"}, recordingEnv.readPaths)
+}
+
+type cancellationRecordingEnv struct {
+	env.Env
+	started     chan struct{}
+	startedOnce sync.Once
+}
+
+func (e *cancellationRecordingEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	e.startedOnce.Do(func() {
+		close(e.started)
+	})
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (e *cancellationRecordingEnv) GetType() env.EnvType {
+	return env.EnvTypeModal
+}
+
+func (e *cancellationRecordingEnv) GetWorkingDirectory() string {
+	return "/workspace"
+}
+
+func (e *cancellationRecordingEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestBulkGetSymbolDefinitionsCancellationUnblocksFileRead(t *testing.T) {
+	t.Parallel()
+
+	recordingEnv := &cancellationRecordingEnv{started: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	completed := make(chan error, 1)
+
+	go func() {
+		_, err := (&CodingActivities{}).BulkGetSymbolDefinitions(ctx, DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{Env: recordingEnv},
+			Requests: []FileSymDefRequest{
+				{
+					FilePath: "example.go",
+					Symbols:  []RequestedSymbol{{Name: "Target"}},
+				},
+			},
+		})
+		completed <- err
+	}()
+
+	select {
+	case <-recordingEnv.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the file read to start")
+	}
+
+	cancel()
+
+	select {
+	case err := <-completed:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("BulkGetSymbolDefinitions did not return after cancellation")
 	}
 }

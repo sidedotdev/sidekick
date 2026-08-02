@@ -12,6 +12,9 @@ vi.mock('@/components/icons/IntellijIcon.vue', () => ({
 vi.mock('@/components/icons/ZedIcon.vue', () => ({
   default: { template: '<svg class="zed-icon"></svg>' }
 }))
+vi.mock('@/components/icons/VimRIcon.vue', () => ({
+  default: { template: '<svg class="vimr-icon"></svg>' }
+}))
 
 describe('IdeSelectorDialog', () => {
   let wrapper: VueWrapper
@@ -40,14 +43,15 @@ describe('IdeSelectorDialog', () => {
     expect(wrapper.find('h3').text()).toBe('Open file in...')
   })
 
-  it('displays VSCode, IntelliJ, and Zed buttons', () => {
+  it('displays VSCode, IntelliJ, Zed, and VimR buttons', () => {
     mountComponent(true)
     
     const buttons = wrapper.findAll('.ide-button')
-    expect(buttons).toHaveLength(3)
+    expect(buttons).toHaveLength(4)
     expect(buttons[0].text()).toContain('VS Code')
     expect(buttons[1].text()).toContain('IntelliJ')
     expect(buttons[2].text()).toContain('Zed')
+    expect(buttons[3].text()).toContain('VimR')
   })
 
   it('displays cancel button', () => {
@@ -88,6 +92,16 @@ describe('IdeSelectorDialog', () => {
     expect(wrapper.emitted('select')![0]).toEqual(['zed'])
   })
 
+  it('emits select event with vimr when VimR button is clicked', async () => {
+    mountComponent(true)
+    
+    const vimrButton = wrapper.findAll('.ide-button')[3]
+    await vimrButton.trigger('click')
+    
+    expect(wrapper.emitted('select')).toHaveLength(1)
+    expect(wrapper.emitted('select')![0]).toEqual(['vimr'])
+  })
+
   it('emits cancel event when cancel button is clicked', async () => {
     mountComponent(true)
     
@@ -121,5 +135,6 @@ describe('IdeSelectorDialog', () => {
     expect(wrapper.find('.vscode-icon').exists()).toBe(true)
     expect(wrapper.find('.intellij-icon').exists()).toBe(true)
     expect(wrapper.find('.zed-icon').exists()).toBe(true)
+    expect(wrapper.find('.vimr-icon').exists()).toBe(true)
   })
 })

@@ -3,6 +3,7 @@ package env
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"sidekick/common"
@@ -587,4 +588,219 @@ func TestPosixRel(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+func TestModalRunCommandRetriesTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	refreshes := 0
+	var refreshedSandbox string
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "old.modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			if attempts == 1 {
+				return EnvRunCommandOutput{
+					ExitStatus: 255,
+				}, "ssh: connect to address old.modal.host port 1234: Connection refused", nil
+			}
+			return EnvRunCommandOutput{ExitStatus: 0, Stdout: "completed"}, "", nil
+		},
+		refreshModalEndpoint: func(_ context.Context, sandboxName string) (string, int, error) {
+			refreshes++
+			refreshedSandbox = sandboxName
+			return "new.modal.host", 5678, nil
+		},
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+	require.NoError(t, err)
+	assert.Equal(t, 0, output.ExitStatus)
+	assert.Equal(t, "completed", output.Stdout)
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, 1, refreshes)
+	assert.Equal(t, "sandbox", refreshedSandbox)
+	assert.Equal(t, "new.modal.host", modalEnv.SSHHost)
+	assert.Equal(t, 5678, modalEnv.SSHPort)
+}
+
+func TestModalRunCommandDoesNotRetryRemoteExit255(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	refreshes := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "old.modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{
+				ExitStatus: 255,
+				Stdout:     "connection closed",
+				Stderr:     "ssh: connect to host nested.example port 22: Connection refused",
+			}, "debug1: channel 0: free", nil
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			return "new.modal.host", 5678, nil
+		},
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+	require.NoError(t, err)
+	assert.Equal(t, 255, output.ExitStatus)
+	assert.Contains(t, output.Stderr, "debug1: channel 0: free")
+	assert.Equal(t, 1, attempts)
+	assert.Zero(t, refreshes)
+}
+func TestModalRunCommandPreservesDiagnosticsWhenRefreshFails(t *testing.T) {
+	t.Parallel()
+
+	const diagnostics = "debug1: connect to address 127.0.0.1 port 22: Connection refused"
+	attempts := 0
+	refreshes := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "old.modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{
+				ExitStatus: 255,
+				Stderr:     "remote stderr",
+			}, diagnostics, nil
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			return "", 0, context.DeadlineExceeded
+		},
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+	require.NoError(t, err)
+	assert.Equal(t, 255, output.ExitStatus)
+	assert.Equal(t, "remote stderr\n"+diagnostics, output.Stderr)
+	assert.Equal(t, 1, attempts)
+	assert.Equal(t, 1, refreshes)
+}
+func TestModalRecoverSSHTransport(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		cause         error
+		refreshErr    error
+		wantRecovered bool
+		wantRefreshes int
+		wantErr       bool
+	}{
+		{
+			name:          "connection refused",
+			cause:         errors.New("create sftp client: unexpected EOF: ssh diagnostics: ssh: connect to host old.modal.host port 1234: Connection refused"),
+			wantRecovered: true,
+			wantRefreshes: 1,
+		},
+		{
+			name:          "unrelated SFTP failure",
+			cause:         errors.New("create sftp client: malformed version packet"),
+			wantRecovered: false,
+			wantRefreshes: 0,
+		},
+		{
+			name:          "endpoint refresh failure",
+			cause:         errors.New("ssh: connect to address old.modal.host port 1234: Connection refused"),
+			refreshErr:    context.DeadlineExceeded,
+			wantRecovered: true,
+			wantRefreshes: 1,
+			wantErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			refreshes := 0
+			var refreshedSandbox string
+			modalEnv := &ModalEnv{
+				SandboxName: "sandbox",
+				SSHHost:     "old.modal.host",
+				SSHPort:     1234,
+				refreshModalEndpoint: func(_ context.Context, sandboxName string) (string, int, error) {
+					refreshes++
+					refreshedSandbox = sandboxName
+					if tt.refreshErr != nil {
+						return "", 0, tt.refreshErr
+					}
+					return "new.modal.host", 5678, nil
+				},
+			}
+
+			recovered, err := modalEnv.recoverSSHTransport(context.Background(), tt.cause)
+
+			assert.Equal(t, tt.wantRecovered, recovered)
+			assert.Equal(t, tt.wantRefreshes, refreshes)
+			if tt.wantRefreshes > 0 {
+				assert.Equal(t, "sandbox", refreshedSandbox)
+			}
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, "old.modal.host", modalEnv.SSHHost)
+				assert.Equal(t, 1234, modalEnv.SSHPort)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantRecovered {
+				assert.Equal(t, "new.modal.host", modalEnv.SSHHost)
+				assert.Equal(t, 5678, modalEnv.SSHPort)
+			}
+		})
+	}
+}
+
+func TestModalRunCommandPassesThroughHibernatedExitCode(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	modalEnv := &ModalEnv{
+		WorkingDirectory: "/root/hibernated-exit-code",
+		SandboxName:      "sandbox-hibernated-exit-code",
+		SSHHost:          "modal.host",
+		SSHPort:          1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{ExitStatus: hibernatedRemoteExitCode}, "", nil
+		},
+	}
+
+	// Modal commands are not wrapped in the hibernation read lock, so the
+	// sentinel exit code has no special meaning and must not trigger a
+	// wake/retry.
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{Command: "echo"})
+	require.NoError(t, err)
+	assert.Equal(t, hibernatedRemoteExitCode, output.ExitStatus)
+	assert.Equal(t, 1, attempts)
+}
+
+func TestHibernateEnvIsNoOpForModal(t *testing.T) {
+	t.Parallel()
+
+	commands := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			commands++
+			return EnvRunCommandOutput{ExitStatus: 0}, "", nil
+		},
+	}
+
+	metadata, err := HibernateEnv(context.Background(), modalEnv, "some-branch")
+	require.NoError(t, err)
+	assert.Equal(t, HibernationMetadata{}, metadata)
+	assert.Zero(t, commands, "modal hibernation must not touch the sandbox")
 }

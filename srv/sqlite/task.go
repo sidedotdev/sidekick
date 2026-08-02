@@ -44,8 +44,8 @@ func (s *Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	query := `
 		INSERT OR REPLACE INTO tasks (
 			workspace_id, id, title, description, status, links, agent_type,
-			flow_type, archived, created, updated, flow_options
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			flow_type, archived, created, updated, flow_options, project_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	if task.Archived != nil {
@@ -57,7 +57,7 @@ func (s *Storage) PersistTask(ctx context.Context, task domain.Task) error {
 
 	_, err = s.db.ExecContext(ctx, query,
 		task.WorkspaceId, task.Id, task.Title, task.Description, task.Status, linksJSON, task.AgentType,
-		task.FlowType, task.Archived, task.Created, task.Updated, flowOptionsJSON,
+		task.FlowType, task.Archived, task.Created, task.Updated, flowOptionsJSON, task.ProjectId,
 	)
 
 	if err != nil {
@@ -170,12 +170,12 @@ func (s *Storage) GetTask(ctx context.Context, workspaceId, taskId string) (doma
 	var linksJSON, flowOptionsJSON []byte
 	var archivedStr *string
 
-	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options
+	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options, project_id
 			  FROM tasks WHERE workspace_id = ? AND id = ?`
 	err := s.db.QueryRowContext(ctx, query, workspaceId, taskId).Scan(
 		&task.WorkspaceId, &task.Id, &task.Title, &task.Description, &task.Status,
 		&linksJSON, &task.AgentType, &task.FlowType, &archivedStr,
-		&task.Created, &task.Updated, &flowOptionsJSON)
+		&task.Created, &task.Updated, &flowOptionsJSON, &task.ProjectId)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -219,7 +219,7 @@ func (s *Storage) GetTasks(ctx context.Context, workspaceId string, statuses []d
 		attribute.String("workspace_id", workspaceId),
 	)
 
-	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options
+	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options, project_id
 			  FROM tasks WHERE workspace_id = ? AND archived IS NULL`
 	args := []interface{}{workspaceId}
 
@@ -249,7 +249,7 @@ func (s *Storage) GetTasks(ctx context.Context, workspaceId string, statuses []d
 		err := rows.Scan(
 			&task.WorkspaceId, &task.Id, &task.Title, &task.Description, &task.Status,
 			&linksJSON, &task.AgentType, &task.FlowType, &archivedStr,
-			&task.Created, &task.Updated, &flowOptionsJSON)
+			&task.Created, &task.Updated, &flowOptionsJSON, &task.ProjectId)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
@@ -311,7 +311,7 @@ func (s *Storage) GetArchivedTasks(ctx context.Context, workspaceId string, page
 		return nil, 0, fmt.Errorf("failed to get total count of archived tasks: %w", err)
 	}
 
-	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options
+	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options, project_id
 			  FROM tasks WHERE workspace_id = ? AND archived IS NOT NULL ORDER BY archived DESC, updated DESC LIMIT ? OFFSET ?`
 
 	limit := pageSize
@@ -333,7 +333,7 @@ func (s *Storage) GetArchivedTasks(ctx context.Context, workspaceId string, page
 		err := rows.Scan(
 			&task.WorkspaceId, &task.Id, &task.Title, &task.Description, &task.Status,
 			&linksJSON, &task.AgentType, &task.FlowType, &archivedStr,
-			&task.Created, &task.Updated, &flowOptionsJSON)
+			&task.Created, &task.Updated, &flowOptionsJSON, &task.ProjectId)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())

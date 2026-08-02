@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sidekick/common"
 	"sidekick/utils"
 	"strings"
 	"time"
@@ -88,11 +89,16 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	// this is a hacky way to infer that we should merge messages
 	shouldMerge := o.BaseURL != "" && !strings.HasPrefix(model, "gpt") && !strings.HasPrefix(model, "o1-") && !strings.HasPrefix(model, "o3-")
 
+	tools, err := openaiFromTools(options.Params.Tools)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert tools: %w", err)
+	}
+
 	req := openai.ChatCompletionRequest{
 		Model:             model,
 		Messages:          openaiFromChatMessages(options.Params.Messages, shouldMerge),
 		ToolChoice:        openaiFromToolChoice(options.Params.ToolChoice, options.Params.Tools),
-		Tools:             openaiFromTools(options.Params.Tools),
+		Tools:             tools,
 		Stream:            true,
 		Temperature:       temperature,
 		ParallelToolCalls: parallelToolCalls,
@@ -219,17 +225,26 @@ func isUserLikeRole(s string) bool {
 	return s == "user" || s == "system" || s == "tool"
 }
 
-func openaiFromTools(tools []*Tool) []openai.Tool {
-	return utils.Map(tools, func(tool *Tool) openai.Tool {
-		return openai.Tool{
+func openaiFromTools(tools []*Tool) ([]openai.Tool, error) {
+	result := make([]openai.Tool, 0, len(tools))
+
+	for _, tool := range tools {
+		parameters, err := common.JSONSchemaWithRequiredNullableOptionals(tool.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert parameters for tool %s: %w", tool.Name, err)
+		}
+
+		result = append(result, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        tool.Name,
 				Description: tool.Description,
-				Parameters:  tool.Parameters,
+				Parameters:  parameters,
 			},
-		}
-	})
+		})
+	}
+
+	return result, nil
 }
 
 func openaiFromToolChoice(toolChoice ToolChoice, tools []*Tool) any {

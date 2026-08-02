@@ -17,6 +17,8 @@ import (
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Weights used when fusing repo-summary RAG rankings derived from review
@@ -43,6 +45,7 @@ type BasicDevOptions struct {
 	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
 	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
+	ContextGatherType     ContextGatherType      `json:"contextGatherType,omitempty"`
 	// AutoMerge skips the human merge approval and merges automatically into the
 	// start branch. Used by IDD sub-tasks so their worktree merges back into the
 	// parent idd worktree.
@@ -256,6 +259,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		signalWorkflowFailureOrCancel(ctx)
 		return "", err
 	}
+	dCtx.ContextGatherType = input.BasicDevOptions.ContextGatherType
 	dCtx.Idd = input.BasicDevOptions.Idd
 	defer handleFlowCancel(dCtx)
 	defer stopActiveDevRun(dCtx)
@@ -271,6 +275,9 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	SetupUserActionHandler(dCtx)
 	SetupDevRunConfigQuery(dCtx)
 	SetupDevRunStateQuery(dCtx)
+	if err = SetupModelConfigHandlers(dCtx); err != nil {
+		return "", err
+	}
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
@@ -344,21 +351,84 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	return result, nil
 }
 
-func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
-	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil, weightedRankQueries...)
-	contextSizeExtension := len(fullCodeContext) - len(codeContext)
-	if err != nil {
-		return "", fmt.Errorf("failed to prepare code context: %w", err)
+type basicContextPreparer func(DevContext, string, *DevPlanExecution, *DevStep, ...persisted_ai.WeightedRankQuery) (string, string, error)
+
+func prepareBasicCodingContext(
+	dCtx DevContext,
+	requirements string,
+	chatHistory *persisted_ai.ChatHistoryContainer,
+	gatherPromptInfo *InitialCodeInfo,
+	prepareLegacy basicContextPreparer,
+	weightedRankQueries ...persisted_ai.WeightedRankQuery,
+) (string, int, error) {
+	if shouldGatherContext(dCtx.ContextGatherType, true) {
+		promptInfo := InitialCodeInfo{Requirements: requirements}
+		opts := ContextGatherOptions{}
+		if gatherPromptInfo != nil {
+			promptInfo = *gatherPromptInfo
+			opts.EnvironmentContext = resolveEnvironmentContext(dCtx)
+			initialMessage, err := buildInitialCodingMessage(dCtx, promptInfo, opts.EnvironmentContext)
+			if err != nil {
+				return "", 0, err
+			}
+			opts.InitialMessage = &initialMessage
+		}
+		contextSizeExtension, err := GatherContextForCoding(dCtx, chatHistory, promptInfo, opts)
+		if err != nil {
+			return "", 0, fmt.Errorf("failed to gather context for coding: %w", err)
+		}
+		return "", contextSizeExtension, nil
 	}
-	testResult := TestResult{Output: ""}
+
+	codeContext, fullCodeContext, err := prepareLegacy(dCtx, requirements, nil, nil, weightedRankQueries...)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to prepare code context: %w", err)
+	}
+	return codeContext, len(fullCodeContext) - len(codeContext), nil
+}
+
+func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
+	var chatHistory *persisted_ai.ChatHistoryContainer
+	gatherHandoff := false
+	if shouldGatherContext(dCtx.ContextGatherType, true) {
+		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		gatherHandoff = contextGatherHandoffEnabled(dCtx)
+	}
+
+	var gatherPromptInfo *InitialCodeInfo
+	if gatherHandoff {
+		// the legacy-equivalent ranked repo summary feeds both the gather
+		// prompt and the initial coding instructions that head the gathered
+		// handoff history
+		repoSummary, _, err := PrepareRepoSummary(dCtx, requirements, weightedRankQueries...)
+		if err != nil {
+			return "", fmt.Errorf("failed to prepare repo summary: %w", err)
+		}
+		gatherPromptInfo = &InitialCodeInfo{CodeContext: repoSummary, Requirements: requirements}
+	}
+
+	codeContext, contextSizeExtension, err := prepareBasicCodingContext(
+		dCtx,
+		requirements,
+		chatHistory,
+		gatherPromptInfo,
+		PrepareInitialCodeContext,
+		weightedRankQueries...,
+	)
+	if err != nil {
+		return "", err
+	}
 
 	// TODO store chat history in a way that can be referred to by id, and pass
 	// id to the activities to avoid bloating temporal db
-	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	if chatHistory == nil {
+		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	}
+	testResult := TestResult{Output: ""}
 
 	var advisor *Advisor
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
-		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
 
 	maxAttempts := 17
@@ -372,7 +442,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 
 	// prepend a concise repository summary to the other code context in the initial prompt
 	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-	if version >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+	if version >= 1 && !gatherHandoff && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000, weightedRankQueries...)
 		if err != nil {
 			return "", fmt.Errorf("failed to get repo summary: %w", err)
@@ -380,8 +450,13 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		codeContext = repoSummary + "\n\n" + codeContext
 	}
 
-	initialCodeInfo := InitialCodeInfo{CodeContext: codeContext, Requirements: requirements}
-	promptInfo = initialCodeInfo
+	if gatherHandoff {
+		// the gathered handoff history already starts with the real initial
+		// coding instructions, so nothing more is appended for the first turn
+		promptInfo = SkipInfo{}
+	} else {
+		promptInfo = InitialCodeInfo{CodeContext: codeContext, Requirements: requirements}
+	}
 	var fulfillment CriteriaFulfillment
 	for {
 		overallName := "Basic Dev"
@@ -401,9 +476,18 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 			autoIterations = cfg.AutoIterations
 		}
 
-		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
-		// in completeDevStep to switch models when ErrMaxIterationsReached
-		modelConfig := dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
+		// Preserve the original command ordering until a model configuration
+		// update requires subsequent attempts to resolve dynamically.
+		var codingModelConfig common.ModelConfig
+		if ModelConfigRevision(dCtx) == 0 {
+			codingModelConfig = dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
+		}
+		resolveModelConfig := func() common.ModelConfig {
+			if ModelConfigRevision(dCtx) == 0 {
+				return codingModelConfig
+			}
+			return dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
+		}
 
 		// TODO don't force getting help if it just got help recently already
 		if attemptCount > 0 && attemptCount%autoIterations == 0 {
@@ -432,7 +516,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		}
 
 		// Step 2: edit code
-		err = EditCode(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		err = EditCodeWithModelConfigResolver(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
 		if err != nil {
 			return "", fmt.Errorf("failed to write edit blocks: %w", err)
 		}
@@ -440,6 +524,10 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		// Step 3: run tests
 		testResult, err = RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
+			if handleCodingTestError(dCtx, err, false) {
+				promptInfo = SkipInfo{}
+				continue
+			}
 			return "", fmt.Errorf("failed to run tests: %w", err)
 		}
 
@@ -457,6 +545,10 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
 			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
 			if err != nil {
+				if handleCodingTestError(dCtx, err, true) {
+					promptInfo = SkipInfo{}
+					continue
+				}
 				return "", fmt.Errorf("failed to run integration tests: %w", err)
 			}
 			if !integrationTestResult.TestsPassed && !integrationTestResult.TestsSkipped {
@@ -630,11 +722,41 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 
 	// Auto-merge bypasses human review, merging straight into the chosen target.
 	if autoMerge {
-		return MergeApprovalResponse{
+		response := MergeApprovalResponse{
 			Approved:      true,
 			TargetBranch:  defaultTarget,
 			MergeStrategy: MergeStrategySquash,
-		}, gitDiff, currentTreeHash, nil
+		}
+		// Record a completed flow action so the auto-approved review is
+		// visible in the flow history.
+		if workflow.GetVersion(dCtx, "auto-merge-flow-action", workflow.DefaultVersion, 1) >= 1 {
+			req := flow_action.RequestForUser{
+				Content: "Please review these changes",
+				RequestParams: map[string]any{
+					"mergeApprovalInfo": MergeApprovalParams{
+						SourceBranch:         dCtx.Worktree.Name,
+						DefaultTargetBranch:  defaultTarget,
+						Diff:                 gitDiff,
+						DiffSinceLastReview:  diffSinceLastReview,
+						DefaultMergeStrategy: MergeStrategySquash,
+					},
+					"lastReviewTreeHash": lastReviewTreeHash,
+				},
+				RequestKind: flow_action.RequestKindMergeApproval,
+			}
+			actionCtx := dCtx.NewActionContext("user_request.approve.merge")
+			actionCtx.ActionParams = req.ActionParams()
+			approved := true
+			if _, trackErr := Track(actionCtx, func(_ DevActionContext, _ *domain.FlowAction) (*flow_action.UserResponse, error) {
+				return &flow_action.UserResponse{
+					Approved: &approved,
+					Content:  fmt.Sprintf("Auto-approved merge into %s.", defaultTarget),
+				}, nil
+			}); trackErr != nil {
+				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to record auto-approved merge flow action: %w", trackErr)
+			}
+		}
+		return response, gitDiff, currentTreeHash, nil
 	}
 
 	// Request merge approval from user
@@ -1112,28 +1234,46 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
-	if !mergeResult.HasConflicts && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
-		devPodEnv := dCtx.EnvContainer.Env.(*env.DevPodEnv)
-		if dCtx.Worktree != nil {
-			err := workflow.ExecuteActivity(dCtx, env.DevPodDeleteActivity, devPodEnv.WorkspaceName).Get(dCtx, nil)
-			if err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to delete DevPod workspace", "error", err)
+	if !mergeResult.HasConflicts {
+		if sandboxEnv, ok := dCtx.EnvContainer.Env.(env.SandboxEnv); ok {
+			envType := sandboxEnv.GetType()
+			sandboxName := sandboxEnv.GetSandboxName()
+			if dCtx.Worktree != nil {
+				// With the worktree merged and cleaned up there is nothing to
+				// resume later, so delete rather than stop (they only differ
+				// for providers with a stop-without-delete lifecycle).
+				err := workflow.ExecuteActivity(dCtx, env.DeleteSandboxActivity, env.DeleteSandboxInput{
+					EnvType:     envType,
+					SandboxName: sandboxName,
+				}).Get(dCtx, nil)
+				if err != nil {
+					workflow.GetLogger(dCtx).Error("Failed to delete sandbox", "envType", envType, "error", err)
+				}
+			} else {
+				err := workflow.ExecuteActivity(dCtx, env.StopSandboxActivity, env.StopSandboxInput{
+					EnvType:     envType,
+					SandboxName: sandboxName,
+				}).Get(dCtx, nil)
+				if err != nil {
+					workflow.GetLogger(dCtx).Error("Failed to stop sandbox", "envType", envType, "error", err)
+				}
 			}
-		} else {
-			err := workflow.ExecuteActivity(dCtx, env.DevPodStopActivity, devPodEnv.WorkspaceName).Get(dCtx, nil)
-			if err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to stop DevPod workspace", "error", err)
-			}
-		}
-	}
-
-	if !mergeResult.HasConflicts && dCtx.EnvContainer.Env.GetType() == env.EnvTypeOpenShell {
-		openShellEnv := dCtx.EnvContainer.Env.(*env.OpenShellEnv)
-		err := workflow.ExecuteActivity(dCtx, env.OpenShellStopActivity, openShellEnv.SandboxName).Get(dCtx, nil)
-		if err != nil {
-			workflow.GetLogger(dCtx).Error("Failed to stop OpenShell sandbox", "error", err)
 		}
 	}
 
 	return gitDiff, mergeInfo, currentTreeHash, err
+}
+func handleCodingTestError(dCtx DevContext, err error, integration bool) bool {
+	if errors.Is(err, flow_action.PendingActionError) {
+		return true
+	}
+	if !gracefullyHandlePausedTestError(dCtx) {
+		return false
+	}
+
+	log.Debug().
+		Err(err).
+		Bool("integration", integration).
+		Msg("Ignoring test error while paused")
+	return true
 }

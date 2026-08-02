@@ -14,7 +14,11 @@ mission: |
      design intent, constraints and preferences
 
 worktree_setup: |
-  cd frontend && bun ci && touch dist/empty.txt
+  cd frontend && if ! command -v bun >/dev/null 2>&1; then
+    echo "error: bun is not installed; skipping frontend setup" >&2
+  else
+    bun ci
+  fi && touch dist/empty.txt
 
 test_commands:
   - command: "go run ./scripts/affected_tests/ -test.timeout 120s ./..."
@@ -29,6 +33,7 @@ integration_test_commands:
   - command: "SIDE_INTEGRATION_TEST=true go run ./scripts/affected_tests/ -test.timeout 240s ./..."
   - command: "go run ./scripts/lint_chat_history_append/"
   - command: "go run ./scripts/lint_track_callback/ ./..."
+  - command: "go run ./scripts/lint_workflow_go_context/ ./..."
   - command: "SIDE_E2E_TEST=true go run ./scripts/affected_tests/ -test.timeout 295s ./..."
 
 agent_config:
@@ -58,6 +63,18 @@ command_permissions:
 
 openshell:
   from: "Dockerfile.openshell"
+
+modal:
+  vm: true
+  dockerfile_path: "Dockerfile.modal"
+  # Requests are billing floors; usage bursts freely up to the limits (CPU is
+  # left unlimited at Modal's minimum 0.125-core request). Memory measured via
+  # scripts/modal_mem_measure: sampled peak ~2.9 GiB running test_commands
+  # concurrently and ~4.2 GiB for integration_test_commands, so an 8 GiB limit
+  # leaves ~2x headroom against OOM while the 1 GiB floor minimizes cost.
+  cpu: 0.125
+  memory: 1024
+  memory_limit: 8192
 
 # Reverse-forward the host's read-only Temporal proxy (exposed by dev builds
 # of `side start`) into devpod/openshell containers so integration tests that

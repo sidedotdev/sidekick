@@ -67,7 +67,7 @@ type RepoConfig struct {
 	// for pre-approval manual QA in the worktree environment.
 	DevRun DevRunConfig `toml:"dev_run,omitempty"`
 
-	// EnvType specifies the default environment type for this repo (e.g., "local", "devpod", "openshell").
+	// EnvType specifies the default environment type for this repo (e.g., "local", "devpod", "openshell", "modal").
 	EnvType string `toml:"env_type,omitempty"`
 
 	// RepoMode specifies the default repo mode for this repo (e.g., "worktree", "in_place").
@@ -81,6 +81,7 @@ type RepoConfig struct {
 
 	DevPodConfig    DevPodEnvConfig    `toml:"devpod,omitempty"`
 	OpenShellConfig OpenShellEnvConfig `toml:"openshell,omitempty"`
+	ModalConfig     ModalEnvConfig     `toml:"modal,omitempty"`
 }
 
 // PortForwardConfig declares a single host port to reverse-forward into a
@@ -118,6 +119,45 @@ type OpenShellEnvConfig struct {
 	PrebuildCommand string `toml:"prebuild_command,omitempty"`
 	// From is passed as the --from flag to "openshell sandbox create".
 	From string `toml:"from,omitempty"`
+}
+
+// ModalEnvConfig holds configuration specific to the Modal environment type.
+type ModalEnvConfig struct {
+	// VM runs the sandbox on Modal's VM runtime (alpha) — a real Linux kernel
+	// instead of gVisor — enabling tools that need kernel features (e.g.
+	// perf). Memory is statically provisioned on the VM runtime.
+	VM bool `toml:"vm,omitempty" json:"vm,omitempty"`
+	// Image is the base container image reference. It must be Debian-based and
+	// run as root, since sidekick layers its remote-access dependencies on top.
+	Image string `toml:"image,omitempty" json:"image,omitempty"`
+	// DockerfilePath selects a single-stage, context-free Dockerfile relative
+	// to the repository root. Its FROM supplies the base image, so Image must
+	// be unset. COPY, ADD, and BuildKit context mounts are unsupported.
+	DockerfilePath string `toml:"dockerfile_path,omitempty" json:"dockerfilePath,omitempty"`
+	// CPU is the number of fractional physical CPU cores reserved for the
+	// sandbox. Unset defaults to 0.125, Modal's minimum; usage above the
+	// request bursts freely unless CPULimit is set.
+	CPU float64 `toml:"cpu,omitempty" json:"cpu,omitempty"`
+	// CPULimit is a hard cap in fractional physical CPU cores. Zero means no
+	// limit.
+	CPULimit float64 `toml:"cpu_limit,omitempty" json:"cpuLimit,omitempty"`
+	// Memory is the sandbox memory reservation in MiB. Unset defaults to
+	// 1024; usage above the request bursts freely unless MemoryLimit is set.
+	Memory int `toml:"memory,omitempty" json:"memory,omitempty"`
+	// MemoryLimit is a hard memory cap in MiB. Zero means no limit.
+	MemoryLimit int `toml:"memory_limit,omitempty" json:"memoryLimit,omitempty"`
+	// IdleSeconds arms the in-sandbox idle watchdog: after this many seconds
+	// without activity the sandbox snapshots its filesystem and terminates
+	// itself (via the sidekick guard app), stopping billing even when the
+	// sidekick host is offline. It is restored from the snapshot on next
+	// use. Unset defaults to 30 seconds; negative values are rejected.
+	IdleSeconds int `toml:"idle_seconds,omitempty" json:"idleSeconds,omitempty"`
+	// ActiveSnapshotSeconds sets how often the in-sandbox watchdog takes a
+	// best-effort filesystem snapshot while the sandbox is busy, bounding
+	// the work lost if the sandbox is forcefully killed before the idle
+	// shutdown can run. Unset defaults to 180 seconds; negative values
+	// disable active snapshots (idle snapshots are unaffected).
+	ActiveSnapshotSeconds int `toml:"active_snapshot_seconds,omitempty" json:"activeSnapshotSeconds,omitempty"`
 }
 
 // GlobalState keys for workflow-specific state

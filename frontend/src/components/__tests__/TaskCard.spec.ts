@@ -1,8 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import TaskCard from '../TaskCard.vue'
-import TaskModal from '../TaskModal.vue'
-import type { FullTask } from '../../lib/models'
+import type { FullTask, Task } from '../../lib/models'
 
 const { routerPushMock } = vi.hoisted(() => ({ routerPushMock: vi.fn() }))
 vi.mock('@/router', () => ({ default: { push: routerPushMock } }))
@@ -28,6 +27,15 @@ const task: FullTask = {
     expect(wrapper.exists()).toBe(true)
   })
 
+  it('wraps the card in a task-card-shell element', () => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task },
+    })
+    const shell = wrapper.find('.task-card-shell')
+    expect(shell.exists()).toBe(true)
+    expect(shell.find('.task-card').exists()).toBe(true)
+  })
+
   it('displays the task title, description, and status', () => {
     const wrapper = shallowMount(TaskCard, {
       props: { task },
@@ -51,12 +59,25 @@ const task: FullTask = {
     expect(wrapper.find('.action.edit').exists()).toBe(true)
   })
 
-  it('opens the TaskModal when the edit button is clicked', async () => {
+  it('emits an edit event with the task when the edit button is clicked', async () => {
     const wrapper = shallowMount(TaskCard, {
       props: { task },
     })
     await wrapper.find('.action.edit').trigger('click')
-    expect(wrapper.findComponent(TaskModal).exists()).toBe(true)
+    expect(wrapper.emitted('edit')).toEqual([[task]])
+  })
+
+  it('emits a copy event with a duplicated task when the copy button is clicked', async () => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task },
+    })
+    await wrapper.find('.action.copy').trigger('click')
+    const emitted = wrapper.emitted('copy')
+    expect(emitted).toHaveLength(1)
+    const copied = emitted![0][0] as Task
+    expect(copied.id).toBeUndefined()
+    expect(copied.title).toBe(task.title)
+    expect(copied.agentType).toBe('llm')
   })
 
   it('routes an idd task to the intent canvas using the idd flow, not a sub-task flow', async () => {
@@ -113,14 +134,13 @@ const task: FullTask = {
   })
 
   it.each([
-    ['devpod', 'DevPod'],
-    ['openshell', 'OpenShell'],
-  ])('renders a Container indicator with tooltip for %s', (envType, title) => {
+    ['devpod', 'DevPod container'],
+    ['openshell', 'OpenShell container'],
+    ['modal', 'Modal cloud sandbox'],
+  ])('renders an env indicator with tooltip for %s', (envType, title) => {
     const wrapper = shallowMount(TaskCard, {
       props: { task: { ...task, flowOptions: { envType } } },
     })
-    const indicator = wrapper.get('.env-indicator')
-    expect(indicator.text()).toContain('Container')
-    expect(indicator.attributes('title')).toBe(title)
+    expect(wrapper.get('.env-indicator').attributes('title')).toBe(title)
   })
 })

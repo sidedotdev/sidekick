@@ -18,6 +18,8 @@
         class="model-input-wrapper"
         inputClass="model-input-inner"
         :suggestions="filteredModels"
+        :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
+        :overlay-style="overlayStyle"
         @complete="(e) => searchModels(e, defaultConfig.provider)"
         @item-select="emitUpdate"
         @change="emitUpdate"
@@ -66,6 +68,8 @@
           inputClass="model-input-inner"
           :disabled="!useCaseStates[useCase].enabled"
           :suggestions="filteredModels"
+          :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
+          :overlay-style="overlayStyle"
           @complete="(e) => searchModels(e, useCaseStates[useCase].config.provider)"
           @item-select="emitUpdate"
           @change="emitUpdate"
@@ -95,14 +99,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted } from 'vue'
+import { computed, ref, reactive, watch, onMounted } from 'vue'
 import AutoComplete from 'primevue/autocomplete'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue?: LLMConfig | null
-}>()
+  overlayBaseZIndex?: number
+}>(), {
+  overlayBaseZIndex: 0,
+})
+
+const overlayStyle = computed(() => (
+  props.overlayBaseZIndex > 0
+    ? { '--model-config-editor-overlay-z-index': props.overlayBaseZIndex }
+    : undefined
+))
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: LLMConfig): void
@@ -287,6 +300,10 @@ watch(() => props.modelValue, (newValue) => {
 </script>
 
 <style scoped>
+:global(.model-config-editor-overlay) {
+  z-index: var(--model-config-editor-overlay-z-index) !important;
+}
+
 :disabled, :deep(.p-disabled), :deep(:disabled) {
   opacity: 0.5;
   cursor: not-allowed;

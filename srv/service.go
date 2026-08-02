@@ -15,6 +15,7 @@ type Service interface {
 
 type Storage interface {
 	domain.TaskStorage
+	domain.ProjectStorage
 	domain.FlowStorage
 	domain.SubflowStorage
 	domain.FlowActionStorage

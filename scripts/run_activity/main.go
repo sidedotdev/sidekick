@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"sidekick"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,8 +31,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/api/enums/v1"
+	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/opentelemetry"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -165,14 +170,14 @@ func buildActivityRegistry() map[string]interface{} {
 		env.NewLocalGitWorktreeActivity,
 		env.CreateDevPodWorktreeActivity,
 		env.DevPodUpActivity,
-		env.DevPodDeleteActivity,
-		env.DevPodStopActivity,
-		env.OpenShellCreateActivity,
-		env.OpenShellSyncRepoActivity,
-		env.OpenShellCheckSandboxActivity,
-		env.CreateOpenShellWorktreeActivity,
-		env.OpenShellDeleteActivity,
-		env.OpenShellStopActivity,
+		env.CreateSandboxActivity,
+		env.CheckSandboxActivity,
+		env.StopSandboxActivity,
+		env.DeleteSandboxActivity,
+		env.SyncRepoToRemoteActivity,
+		env.DeepenRepoActivity,
+		env.SnapshotEnvironmentActivity,
+		env.CreateRemoteWorktreeActivity,
 		sidekick.GithubCloneRepoActivity,
 		env.EnvRunCommandActivity,
 		env.GetEnvironmentInfoActivity,
@@ -209,6 +214,8 @@ func buildActivityRegistry() map[string]interface{} {
 		dev.SummarizeDiffActivity,
 		dev.AssessResolutionSubstantialityActivity,
 		dev.CheckCommandPermissionActivity,
+		dev.EnsureCoreIgnoreFileActivity,
+		dev.BulkSearchRepositoryActivity,
 		common.GetLocalConfig,
 		common.BaseCommandPermissionsActivity,
 		persisted_ai.RepairToolCallArgumentsActivity,
@@ -319,6 +326,191 @@ func executeActivityDirect(activityName string, activityArgs []json.RawMessage, 
 	return json.RawMessage("null"), nil
 }
 
+type historyIterator interface {
+	HasNext() bool
+	Next() (*historypb.HistoryEvent, error)
+}
+
+type activityInvocation struct {
+	Name string
+	Args []json.RawMessage
+}
+
+func findActivityInvocation(iter historyIterator, dataConverter converter.DataConverter, registry map[string]interface{}, identifier string) (activityInvocation, error) {
+	scheduledActivities := make(map[int64]*historypb.ActivityTaskScheduledEventAttributes)
+	var matchedActivity *historypb.ActivityTaskScheduledEventAttributes
+	var matchedActivityScheduledEventID int64
+	var matchedEvent *historypb.ActivityTaskScheduledEventAttributes
+	var matchedEventScheduledEventID int64
+
+	eventID, parseErr := strconv.ParseInt(identifier, 10, 64)
+	identifierIsEventID := parseErr == nil
+
+	for iter.HasNext() {
+		event, err := iter.Next()
+		if err != nil {
+			return activityInvocation{}, fmt.Errorf("error fetching workflow history: %w", err)
+		}
+
+		switch event.EventType {
+		case enums.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
+			attrs := event.GetActivityTaskScheduledEventAttributes()
+			if attrs == nil {
+				continue
+			}
+
+			scheduledActivities[event.EventId] = attrs
+			if identifier == attrs.ActivityId && matchedActivity == nil {
+				matchedActivity = attrs
+				matchedActivityScheduledEventID = event.EventId
+			}
+			if identifierIsEventID && eventID == event.EventId {
+				matchedEvent = attrs
+				matchedEventScheduledEventID = event.EventId
+			}
+		case enums.EVENT_TYPE_ACTIVITY_TASK_STARTED:
+			if !identifierIsEventID || eventID != event.EventId {
+				continue
+			}
+			attrs := event.GetActivityTaskStartedEventAttributes()
+			if attrs != nil {
+				matchedEvent = scheduledActivities[attrs.ScheduledEventId]
+				matchedEventScheduledEventID = attrs.ScheduledEventId
+			}
+		case enums.EVENT_TYPE_ACTIVITY_TASK_COMPLETED:
+			if !identifierIsEventID || eventID != event.EventId {
+				continue
+			}
+			attrs := event.GetActivityTaskCompletedEventAttributes()
+			if attrs != nil {
+				matchedEvent = scheduledActivities[attrs.ScheduledEventId]
+				matchedEventScheduledEventID = attrs.ScheduledEventId
+			}
+		}
+	}
+
+	matched := matchedEvent
+	matchedScheduledEventID := matchedEventScheduledEventID
+	if matchedActivity != nil {
+		matched = matchedActivity
+		matchedScheduledEventID = matchedActivityScheduledEventID
+	}
+	if matched == nil {
+		return activityInvocation{}, fmt.Errorf("activity %q not found in workflow history", identifier)
+	}
+
+	activityName := matched.ActivityType.GetName()
+	activityFn, ok := registry[activityName]
+	if !ok {
+		return activityInvocation{}, fmt.Errorf("activity %q not found in registry", activityName)
+	}
+
+	invocation, err := decodeActivityInvocation(dataConverter, activityName, matched.Input, activityFn)
+	if err != nil {
+		return activityInvocation{}, fmt.Errorf("decode activity %q at scheduled event %d: %w", matched.ActivityId, matchedScheduledEventID, err)
+	}
+	return invocation, nil
+}
+
+func decodeActivityInvocation(
+	dataConverter converter.DataConverter,
+	activityName string,
+	payloads interface{ GetPayloads() []*commonpb.Payload },
+	activityFn interface{},
+) (activityInvocation, error) {
+	invocation := activityInvocation{Name: activityName}
+	if payloads == nil {
+		return invocation, nil
+	}
+
+	fnType := reflect.TypeOf(activityFn)
+	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
+	firstActivityArg := 0
+	if fnType.NumIn() > 0 && fnType.In(0) == contextType {
+		firstActivityArg = 1
+	}
+
+	inputPayloads := payloads.GetPayloads()
+	expectedArgs := fnType.NumIn() - firstActivityArg
+	if len(inputPayloads) != expectedArgs {
+		return activityInvocation{}, fmt.Errorf("activity expects %d arguments but history contains %d", expectedArgs, len(inputPayloads))
+	}
+
+	for i, payload := range inputPayloads {
+		argType := fnType.In(firstActivityArg + i)
+		argPtr := reflect.New(argType)
+		if err := dataConverter.FromPayload(payload, argPtr.Interface()); err != nil {
+			return activityInvocation{}, fmt.Errorf("decode argument %d as %s: %w", i, argType, err)
+		}
+		argument, err := json.Marshal(argPtr.Elem().Interface())
+		if err != nil {
+			return activityInvocation{}, fmt.Errorf("marshal argument %d: %w", i, err)
+		}
+		invocation.Args = append(invocation.Args, argument)
+	}
+
+	return invocation, nil
+}
+
+func loadActivityInvocation(ctx context.Context, flowID string, identifier string) (activityInvocation, error) {
+	service, err := sidekick.GetService()
+	if err != nil {
+		return activityInvocation{}, fmt.Errorf("error initializing storage: %w", err)
+	}
+
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	if err != nil {
+		return activityInvocation{}, fmt.Errorf("error creating Temporal client options: %w", err)
+	}
+
+	temporalClient, err := client.Dial(clientOptions)
+	if err != nil {
+		return activityInvocation{}, fmt.Errorf("error connecting to Temporal: %w", err)
+	}
+	defer temporalClient.Close()
+
+	iter := temporalClient.GetWorkflowHistory(ctx, flowID, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+	return findActivityInvocation(iter, clientOptions.DataConverter, buildActivityRegistry(), identifier)
+}
+
+func loadJSONInvocation(activityName string, path string, readFile func(string) ([]byte, error)) (activityInvocation, error) {
+	inputBytes, err := readFile(path)
+	if err != nil {
+		return activityInvocation{}, fmt.Errorf("read input file: %w", err)
+	}
+
+	var activityArgs []json.RawMessage
+	if err := json.Unmarshal(inputBytes, &activityArgs); err != nil {
+		return activityInvocation{}, fmt.Errorf("parse input JSON: %w", err)
+	}
+
+	return activityInvocation{
+		Name: activityName,
+		Args: activityArgs,
+	}, nil
+}
+
+func resolveActivityInvocation(
+	ctx context.Context,
+	args []string,
+	loadFromHistory func(context.Context, string, string) (activityInvocation, error),
+	readFile func(string) ([]byte, error),
+	stat func(string) (os.FileInfo, error),
+) (activityInvocation, error) {
+	if len(args) == 3 && args[0] == "json" {
+		return loadJSONInvocation(args[1], args[2], readFile)
+	}
+	if len(args) != 2 {
+		return activityInvocation{}, fmt.Errorf("invalid arguments")
+	}
+
+	if fileInfo, err := stat(args[1]); err == nil && fileInfo.Mode().IsRegular() {
+		return loadJSONInvocation(args[0], args[1], readFile)
+	}
+
+	return loadFromHistory(ctx, args[0], args[1])
+}
+
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
@@ -326,31 +518,33 @@ func main() {
 	var direct bool
 	flag.DurationVar(&timeout, "timeout", 180*time.Second, "Timeout for the activity execution")
 	flag.BoolVar(&direct, "direct", true, "Execute activity directly without Temporal workflow")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] <flow-id> <activity-id-or-scheduled-started-completed-event-id>\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] json <activity-name> <json-file-path>\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] <activity-name> <existing-json-file-path>\n", os.Args[0])
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	args := flag.Args()
-	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s [--timeout duration] [--direct] <activity_name> <json_file_path>\n", os.Args[0])
+	if (len(args) != 2 && len(args) != 3) || (len(args) == 3 && args[0] != "json") {
+		flag.Usage()
 		os.Exit(1)
 	}
 
-	activityName := args[0]
-	jsonFilePath := args[1]
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-	inputBytes, err := os.ReadFile(jsonFilePath)
+	invocation, err := resolveActivityInvocation(ctx, args, loadActivityInvocation, os.ReadFile, os.Stat)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error loading activity: %v\n", err)
 		os.Exit(1)
 	}
-
-	var activityArgs []json.RawMessage
-	if err := json.Unmarshal(inputBytes, &activityArgs); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing JSON: %v\n", err)
-		os.Exit(1)
-	}
+	activityName := invocation.Name
+	activityArgs := invocation.Args
 
 	var result json.RawMessage
-
 	if direct {
 		log.Info().Str("activity", activityName).Msg("Executing activity directly")
 		result, err = executeActivityDirect(activityName, activityArgs, timeout)

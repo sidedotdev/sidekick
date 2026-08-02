@@ -317,9 +317,9 @@ func generateTagAssignments(tagNames []string) []map[string]bool {
 // (GOOS/GOARCH, cgo, and custom tags) that satisfies the target file's constraint,
 // then includes only files that match that same context. The target file is
 // always included.
-func filterFilesByBuildTags(filePaths []string, targetFile string, envContainer env.EnvContainer) []string {
+func filterFilesByBuildTags(ctx context.Context, filePaths []string, targetFile string, envContainer env.EnvContainer) []string {
 	readConstraint := func(path string) constraint.Expr {
-		data, err := envContainer.Env.ReadFile(context.Background(), path)
+		data, err := envContainer.Env.ReadFile(ctx, path)
 		if err != nil {
 			return nil
 		}
@@ -329,8 +329,8 @@ func filterFilesByBuildTags(filePaths []string, targetFile string, envContainer 
 	targetConstraint := readConstraint(targetFile)
 
 	// Find a build context that satisfies the target constraint
-	ctx := findSatisfyingContext(targetConstraint)
-	if ctx.goos == "" {
+	buildCtx := findSatisfyingContext(targetConstraint)
+	if buildCtx.goos == "" {
 		// No satisfying context found - just return the target file
 		for _, fp := range filePaths {
 			if fp == targetFile {
@@ -349,7 +349,7 @@ func filterFilesByBuildTags(filePaths []string, targetFile string, envContainer 
 			continue
 		}
 		expr := readConstraint(fp)
-		if matchesBuildContextFull(expr, ctx) {
+		if matchesBuildContextFull(expr, buildCtx) {
 			result = append(result, fp)
 		}
 	}
@@ -362,13 +362,13 @@ func filterFilesByBuildTags(filePaths []string, targetFile string, envContainer 
 // Returns true if the file is valid, false otherwise, along with a string containing any errors found.
 // This is limited to considering errors that are blacklisted, i.e. only very
 // bad errors that should revert the edit that caused them.
-func CheckViaGoBuild(envContainer env.EnvContainer, relativeFilePath string) (bool, string, error) {
+func CheckViaGoBuild(ctx context.Context, envContainer env.EnvContainer, relativeFilePath string) (bool, string, error) {
 	// Get all files in the directory to build, to avoid errors due to missing dependencies from other files within the same package
 	dir := filepath.Dir(relativeFilePath)
 	args := []string{"test", "-c"}
 
 	isTest := strings.HasSuffix(relativeFilePath, "_test.go")
-	entries, err := envContainer.Env.ReadDir(context.Background(), dir)
+	entries, err := envContainer.Env.ReadDir(ctx, dir)
 	if err != nil {
 		return false, fmt.Sprintf("Failed to read directory: %v", err), err
 	}
@@ -383,10 +383,10 @@ func CheckViaGoBuild(envContainer env.EnvContainer, relativeFilePath string) (bo
 		goFiles = append(goFiles, filepath.Join(dir, entry.Name()))
 	}
 	targetFilePath := filepath.Join(dir, filepath.Base(relativeFilePath))
-	goFiles = filterFilesByBuildTags(goFiles, targetFilePath, envContainer)
+	goFiles = filterFilesByBuildTags(ctx, goFiles, targetFilePath, envContainer)
 	args = append(args, goFiles...)
 
-	result, err := envContainer.Env.RunCommand(context.Background(), env.EnvRunCommandInput{
+	result, err := envContainer.Env.RunCommand(ctx, env.EnvRunCommandInput{
 		Command: "go",
 		Args:    args,
 	})

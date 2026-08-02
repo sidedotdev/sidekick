@@ -42,6 +42,18 @@ describe('FlowActionItem', () => {
     expect(wrapper.text()).toContain('...')
   })
 
+  it('displays the updated timestamp on the heading', () => {
+    flowAction.updated = new Date('2025-01-02T04:05:06Z')
+
+    const wrapper = mount(FlowActionItem, {
+      props: { flowAction },
+    })
+
+    expect(wrapper.find('h3').attributes('title')).toBe(
+      `Updated: ${flowAction.updated.toLocaleString()}`,
+    )
+  })
+
   /*
   it('displays the request content and a textarea for user input when the action is a pending user request', () => {
     const wrapper = mount(FlowActionItem, {

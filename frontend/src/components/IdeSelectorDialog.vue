@@ -15,6 +15,10 @@
           <ZedIcon />
           <span>Zed</span>
         </button>
+        <button @click="$emit('select', 'vimr')" class="ide-button">
+          <VimRIcon />
+          <span>VimR</span>
+        </button>
       </div>
       <button @click="$emit('cancel')" class="ide-cancel-button">Cancel</button>
     </div>
@@ -25,6 +29,7 @@
 import VSCodeIcon from '@/components/icons/VSCodeIcon.vue'
 import IntellijIcon from '@/components/icons/IntellijIcon.vue'
 import ZedIcon from '@/components/icons/ZedIcon.vue'
+import VimRIcon from '@/components/icons/VimRIcon.vue'
 import type { IdeType } from '@/composables/useIdeOpener'
 
 defineProps<{

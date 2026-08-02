@@ -26,7 +26,7 @@ func TestCheckFileActivity_invalidGoFile(t *testing.T) {
 		EnvContainer: envContainer,
 	}
 
-	output, err := CheckFileActivity(input)
+	output, err := CheckFileActivity(t.Context(), input)
 	assert.NoError(t, err)
 	if output.Output == "" {
 		t.Fatalf("expected output NOT to be empty, but it was")
@@ -54,7 +54,7 @@ func TestCheckFileActivity_invalidVueFile(t *testing.T) {
 		EnvContainer: envContainer,
 	}
 
-	output, err := CheckFileActivity(input)
+	output, err := CheckFileActivity(t.Context(), input)
 	assert.NoError(t, err)
 	if output.Output == "" {
 		t.Fatalf("expected output NOT to be empty, but it was")
@@ -82,7 +82,7 @@ func TestCheckFileActivity_validGoFile(t *testing.T) {
 		EnvContainer: envContainer,
 	}
 
-	output, err := CheckFileActivity(input)
+	output, err := CheckFileActivity(t.Context(), input)
 	assert.NoError(t, err)
 	assert.True(t, output.AllPassed)
 	assert.Empty(t, output.Output)

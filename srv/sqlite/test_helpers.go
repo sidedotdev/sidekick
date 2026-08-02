@@ -7,12 +7,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testMemoryDsn = "file::memory:?_pragma=auto_vacuum%28INCREMENTAL%29"
+
 func NewTestSqliteStorage(t *testing.T, dbName string) *Storage {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite", testMemoryDsn)
 	require.NoError(t, err)
-	kvDb, err := sql.Open("sqlite", ":memory:")
+	kvDb, err := sql.Open("sqlite", testMemoryDsn)
 	require.NoError(t, err)
+
+	// Each pooled connection to ":memory:" opens its own independent database,
+	// so concurrent access can hit an empty database missing the migrated
+	// schema. Limiting the pool to a single connection keeps all access on the
+	// one database that was migrated.
+	db.SetMaxOpenConns(1)
+	kvDb.SetMaxOpenConns(1)
 
 	tracker := newBusyTracker()
 	storage := &Storage{

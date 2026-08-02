@@ -39,6 +39,7 @@ type DiffSummarizeOptions struct {
 	SecretManager   secret_manager.SecretManager
 	Embedder        embedding.Embedder
 	ContentProvider FileContentProvider
+	Reranker        Reranker
 }
 
 // SummarizeDiff summarizes a git diff to fit within the character budget.
@@ -480,6 +481,11 @@ func rankChunksByRelevance(ctx context.Context, chunks []DiffChunk, feedback str
 	}
 	fusedRanking := FuseResults(rankings)
 
+	fusedRanking, err = rerankDiffChunkTexts(ctx, feedback, fusedRanking, opts.Reranker)
+	if err != nil {
+		return nil, fmt.Errorf("failed to rerank chunks: %w", err)
+	}
+
 	// Convert back to DiffChunk slice
 	result := make([]DiffChunk, 0, len(fusedRanking))
 	for _, text := range fusedRanking {
@@ -488,6 +494,37 @@ func rankChunksByRelevance(ctx context.Context, chunks []DiffChunk, feedback str
 		}
 	}
 
+	return result, nil
+}
+
+func rerankDiffChunkTexts(ctx context.Context, query string, fusedTexts []string, reranker Reranker) ([]string, error) {
+	if reranker == nil || len(fusedTexts) == 0 {
+		return fusedTexts, nil
+	}
+
+	candidateCount := min(len(fusedTexts), rerankCandidateLimit)
+	rerankedTexts, err := reranker.Rerank(ctx, query, fusedTexts[:candidateCount])
+	if err != nil {
+		return nil, err
+	}
+
+	remainingOccurrences := make(map[string]int, candidateCount)
+	for _, text := range fusedTexts[:candidateCount] {
+		remainingOccurrences[text]++
+	}
+	for _, text := range rerankedTexts {
+		if remainingOccurrences[text] == 0 {
+			return nil, fmt.Errorf("reranker returned an unknown or duplicate diff chunk")
+		}
+		remainingOccurrences[text]--
+	}
+	if len(rerankedTexts) != candidateCount {
+		return nil, fmt.Errorf("reranker returned %d candidates, expected %d", len(rerankedTexts), candidateCount)
+	}
+
+	result := make([]string, 0, len(fusedTexts))
+	result = append(result, rerankedTexts...)
+	result = append(result, fusedTexts[candidateCount:]...)
 	return result, nil
 }
 

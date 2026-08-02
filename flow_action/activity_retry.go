@@ -3,6 +3,7 @@ package flow_action
 import (
 	"fmt"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -11,7 +12,13 @@ import (
 // The actionCtx parameter provides the action context for tracking and naming the retry operation.
 // The valuePtr is a pointer to a variable that will receive the activity's result.
 func PerformWithUserRetry(actionCtx ActionContext, activity interface{}, valuePtr interface{}, args ...interface{}) error {
-	return performWithUserRetry(actionCtx.ExecContext, actionCtx.ActionType, activity, valuePtr, args...)
+	return performWithUserRetry(actionCtx.ExecContext, actionCtx.ActionType, false, activity, valuePtr, args...)
+}
+
+// PerformWithUserRetryOrCancel returns activity cancellation to callers that
+// distinguish cancellation from ordinary activity failures.
+func PerformWithUserRetryOrCancel(actionCtx ActionContext, activity interface{}, valuePtr interface{}, args ...interface{}) error {
+	return performWithUserRetry(actionCtx.ExecContext, actionCtx.ActionType, true, activity, valuePtr, args...)
 }
 
 // PerformActivity executes an activity once (subject to any automatic retries
@@ -25,16 +32,19 @@ func PerformActivity(eCtx ExecContext, activity interface{}, valuePtr interface{
 // PerformActivityWithUserRetry is like PerformWithUserRetry but takes an
 // ExecContext and explicit action name instead of a full ActionContext.
 func PerformActivityWithUserRetry(eCtx ExecContext, actionName string, activity interface{}, valuePtr interface{}, args ...interface{}) error {
-	return performWithUserRetry(eCtx, actionName, activity, valuePtr, args...)
+	return performWithUserRetry(eCtx, actionName, false, activity, valuePtr, args...)
 }
 
-func performWithUserRetry(eCtx ExecContext, actionName string, activity interface{}, valuePtr interface{}, args ...interface{}) error {
+func performWithUserRetry(eCtx ExecContext, actionName string, propagateCancellation bool, activity interface{}, valuePtr interface{}, args ...interface{}) error {
 	for {
 		// Execute the activity
 		activityFuture := workflow.ExecuteActivity(eCtx, activity, args...)
 		err := activityFuture.Get(eCtx, valuePtr)
 		if err == nil {
 			return nil
+		}
+		if propagateCancellation && temporal.IsCanceledError(err) {
+			return err
 		}
 
 		// Activity failed, check if we should retry with user prompt based on workflow version

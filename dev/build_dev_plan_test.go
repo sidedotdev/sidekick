@@ -488,3 +488,83 @@ func TestValidateAndCleanPlan(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateCompletedPlanHasSteps(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		plan      DevPlan
+		wantError string
+	}{
+		{
+			name:      "completed plan without steps is rejected for retry",
+			plan:      DevPlan{Complete: true},
+			wantError: "the plan must contain at least one step with a valid type",
+		},
+		{
+			name: "incomplete plan without steps remains valid",
+			plan: DevPlan{Complete: false},
+		},
+		{
+			name: "completed plan with an executable step remains valid",
+			plan: DevPlan{
+				Complete: true,
+				Steps:    []DevStep{{Type: "edit"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateCompletedPlanHasSteps(tt.plan)
+			if tt.wantError != "" {
+				require.EqualError(t, err, tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+func TestValidateFinalDevPlan(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		plan      *DevPlan
+		wantError string
+	}{
+		{
+			name:      "nil plan is rejected",
+			wantError: "planning finished without recording any executable steps",
+		},
+		{
+			name:      "zero-step plan is rejected",
+			plan:      &DevPlan{},
+			wantError: "planning finished without recording any executable steps",
+		},
+		{
+			name: "plan with an executable step is accepted",
+			plan: &DevPlan{
+				Steps: []DevStep{{Type: "edit"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateFinalDevPlan(tt.plan)
+			if tt.wantError != "" {
+				require.EqualError(t, err, tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}

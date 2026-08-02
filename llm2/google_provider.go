@@ -233,6 +233,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 		Output:          output,
 		StopReason:      stopReason,
 		Usage:           usage,
+		AuthType:        common.ProviderAuthTypeAPI,
 		ReasoningEffort: actualReasoningEffort,
 	}, nil
 }

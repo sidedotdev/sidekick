@@ -38,8 +38,8 @@ const SyntaxError = "Syntax error(s)"
 // Returns true if the file is valid, false otherwise, along with a string
 // containing any errors found, or warnings for errors that should not revert
 // edits.
-func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (bool, string, error) {
-	fileBytes, readErr := envContainer.Env.ReadFile(context.Background(), relativeFilePath)
+func CheckFileValidity(ctx context.Context, envContainer env.EnvContainer, relativeFilePath string) (bool, string, error) {
+	fileBytes, readErr := envContainer.Env.ReadFile(ctx, relativeFilePath)
 	if readErr != nil {
 		return false, fmt.Sprintf("Failed to read file: %v", readErr), readErr
 	}
@@ -80,7 +80,7 @@ func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (
 		valid, errorString := checkGoTree(sourceCode, tree.RootNode())
 
 		if valid {
-			valid, errorString, err = CheckViaGoBuild(envContainer, relativeFilePath)
+			valid, errorString, err = CheckViaGoBuild(ctx, envContainer, relativeFilePath)
 		}
 
 		return valid, errorString, err

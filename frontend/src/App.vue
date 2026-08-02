@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { RouterLink, RouterView, useRouter, useRoute } from 'vue-router'
-import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { store } from './lib/store'
 import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
-import Select from 'primevue/select'
 import GearIcon from './components/icons/GearIcon.vue'
 import BoardIcon from './components/icons/BoardIcon.vue'
 import ArchiveIcon from './components/icons/ArchiveIcon.vue'
+import ProjectsIcon from './components/icons/ProjectsIcon.vue'
 import PlusIcon from './components/icons/PlusIcon.vue'
+import SmartphoneIcon from './components/icons/SmartphoneIcon.vue'
 import ShortcutTooltip from './components/ShortcutTooltip.vue'
-import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
+import FuzzySelect from './components/FuzzySelect.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -18,7 +19,6 @@ const route = useRoute()
 const applyWorkspaceId = (workspaceId: string) => {
   store.selectWorkspaceId(workspaceId)
   sessionStorage.setItem('selectedWorkspaceId', workspaceId)
-  localStorage.setItem('selectedWorkspaceId', workspaceId)
 }
 
 // Set workspace from query param or storage before child components mount
@@ -28,7 +28,7 @@ if (initialQueryWorkspaceId) {
 } else {
   const storedWorkspaceId = sessionStorage.getItem('selectedWorkspaceId') ?? localStorage.getItem('selectedWorkspaceId')
   if (storedWorkspaceId) {
-    store.selectWorkspaceId(storedWorkspaceId)
+    applyWorkspaceId(storedWorkspaceId)
   }
 }
 
@@ -43,18 +43,7 @@ const fetchWorkspaces = async () => {
 }
 const mode = import.meta.env.MODE
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
-const workspaceSelectRef = ref<InstanceType<typeof Select> | null>(null)
-const filterText = ref('')
-
-const filteredWorkspaces = computed(() => {
-  const query = filterText.value
-  if (!query) return workspaces.value
-
-  return workspaces.value
-    .map(w => ({ ...w, _rank: fuzzyWordPrefixRank(w.name, query), _q: query }))
-    .filter(w => w._rank >= 0)
-    .sort((a, b) => a._rank !== b._rank ? a._rank - b._rank : a.name.localeCompare(b.name))
-})
+const workspaceSelectRef = ref<InstanceType<typeof FuzzySelect> | null>(null)
 
 const handleGlobalKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
@@ -103,45 +92,17 @@ onMounted(async () => {
     // lexicographically last ID (more recently created)
     const workspaceId = [...workspaces.value].map(w => w.id).sort().reverse()[0]
     if (workspaceId) {
-      store.selectWorkspaceId(workspaceId)
-      sessionStorage.setItem('selectedWorkspaceId', workspaceId)
-      localStorage.setItem('selectedWorkspaceId', workspaceId)
+      applyWorkspaceId(workspaceId)
     }
   }
 })
-
-const handleFilter = (event: { value: string }) => {
-  filterText.value = event.value
-  nextTick(() => {
-    const instance = workspaceSelectRef.value as any
-    if (!instance) return
-    const options = instance.visibleOptions
-    if (options && options.length > 0) {
-      instance.changeFocusedOptionIndex(null, 0)
-    }
-  })
-}
-
-const handleShow = () => {
-}
-
-const handleHide = () => {
-  filterText.value = ''
-  nextTick(() => {
-    const selectEl = workspaceSelectRef.value?.$el as HTMLElement | undefined
-    if (selectEl?.contains(document.activeElement)) {
-      (document.activeElement as HTMLElement)?.blur()
-    }
-  })
-}
 
 const kanbanAndSettingsRoutes = new Set(['kanban', 'workspace'])
 
 const selectedWorkspace = () => {
   console.log('selectedWorkspace', store.workspaceId)
   if (store.workspaceId) {
-    sessionStorage.setItem('selectedWorkspaceId', store.workspaceId)
-    localStorage.setItem('selectedWorkspaceId', store.workspaceId)
+    applyWorkspaceId(store.workspaceId)
   }
   if (!kanbanAndSettingsRoutes.has(route.name as string)) {
     router.push({ name: 'kanban' })
@@ -177,11 +138,17 @@ onUnmounted(() => {
         <ShortcutTooltip label="Board" :shortcut="isMac ? '⌘B' : 'Ctrl+B'">
           <RouterLink to="/kanban" class="nav-icon-link" aria-label="Board"><BoardIcon /></RouterLink>
         </ShortcutTooltip>
+        <ShortcutTooltip label="Projects">
+          <RouterLink to="/projects" class="nav-icon-link" aria-label="Projects"><ProjectsIcon /></RouterLink>
+        </ShortcutTooltip>
         <ShortcutTooltip label="Archived Tasks">
           <RouterLink to="/archived-tasks" class="nav-icon-link" aria-label="Archived Tasks"><ArchiveIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="New Space">
           <RouterLink to="/workspaces/new" class="nav-icon-link" aria-label="New Space"><PlusIcon /></RouterLink>
+        </ShortcutTooltip>
+        <ShortcutTooltip label="Remote Control">
+          <RouterLink to="/remote-control" class="nav-icon-link" aria-label="Remote Control"><SmartphoneIcon /></RouterLink>
         </ShortcutTooltip>
       </nav>
     </div>
@@ -190,27 +157,20 @@ onUnmounted(() => {
       <header>
         <div class="container">
           <div class="workspace-selector">
-            <Select
+            <FuzzySelect
               ref="workspaceSelectRef"
               v-model="store.workspaceId"
-              :options="filteredWorkspaces"
+              :options="workspaces"
               optionLabel="name"
               optionValue="id"
-              filter
-              autoFilterFocus
-              resetFilterOnHide
-              :filterFields="['_q']"
-              filterPlaceholder="Search"
-              @filter="handleFilter"
-              @show="handleShow"
-              @hide="handleHide"
+              filterPlaceholder="Search spaces"
               @change="selectedWorkspace"
               class="workspace-select"
             >
               <template #value>
                 <span>{{ workspaces.find(w => w.id === store.workspaceId)?.name || '' }}</span>
               </template>
-            </Select>
+            </FuzzySelect>
             <RouterLink v-if="mode === 'development'" :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button"><GearIcon /></RouterLink>
           </div>
 

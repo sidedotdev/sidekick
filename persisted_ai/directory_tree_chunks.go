@@ -45,35 +45,18 @@ func GetDirectoryChunks(ctx context.Context, ec env.EnvContainer) ([]DirChunk, e
 		return nil, err
 	}
 
+	return GetDirectoryChunksFromPaths(allPaths), nil
+}
+
+// GetDirectoryChunksFromPaths groups pre-collected paths (relative to the
+// working directory, with a leading path separator) into directory chunks
+// without walking the environment.
+func GetDirectoryChunksFromPaths(allPaths []PathInfo) []DirChunk {
 	allPaths = breadthFirstOrder(allPaths)
-	//fmt.Println("All paths in order:")
 	for i, path := range allPaths {
-		pathStr := strings.TrimPrefix(path.Path, string(filepath.Separator))
-		allPaths[i].Path = pathStr
-
-		//if path.DirEntry.IsDir() {
-		//	pathStr += string(filepath.Separator)
-		//}
-		//fmt.Println(pathStr)
+		allPaths[i].Path = strings.TrimPrefix(path.Path, string(filepath.Separator))
 	}
-
-	//fmt.Println()
-	//fmt.Println("List of chunks:")
-	chunks := groupIntoChunks(allPaths)
-	for _, chunk := range chunks {
-		//fmt.Println("Chunk:", chunk.Name)
-		for _, path := range chunk.Paths {
-			pathStr := path.Path
-			if path.IsDir {
-				pathStr += string(filepath.Separator)
-			}
-			//fmt.Println(pathStr)
-		}
-		//fmt.Println(len(chunk.Paths))
-		//fmt.Println()
-	}
-
-	return chunks, nil
+	return groupIntoChunks(allPaths)
 }
 
 func breadthFirstOrder(pathInfos []PathInfo) []PathInfo {

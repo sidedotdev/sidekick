@@ -72,4 +72,33 @@ func TestRenderIntentRequirements(t *testing.T) {
 		// The scope blurb must precede the diff fence.
 		assert.Less(t, strings.Index(out, "Focus only on"), strings.Index(out, "$ git show"))
 	})
+
+	t.Run("prompt-only scope omits the intent diff entirely", func(t *testing.T) {
+		t.Parallel()
+		out := renderIntentRequirements(IntentRequirementsInfo{
+			Commit:      "abc123",
+			Diff:        "diff --git a/intent/mission.md b/intent/mission.md\n+Build great things\n",
+			Update:      true,
+			ScopePrompt: "Implement only the notification debounce behavior described in the intent.",
+			PromptOnly:  true,
+		})
+
+		assert.Contains(t, out, "Implement only the notification debounce behavior described in the intent.")
+		assert.Contains(t, out, "intent/mission.md")
+		assert.Contains(t, out, "abc123")
+		assert.NotContains(t, out, "$ git show")
+		assert.NotContains(t, out, "Build great things")
+	})
+
+	t.Run("prompt-only without a scope prompt falls back to full requirements", func(t *testing.T) {
+		t.Parallel()
+		out := renderIntentRequirements(IntentRequirementsInfo{
+			Commit:     "abc123",
+			Diff:       "diff --git a/intent/mission.md b/intent/mission.md\n+Build great things\n",
+			PromptOnly: true,
+		})
+
+		assert.Contains(t, out, "$ git show abc123")
+		assert.Contains(t, out, "Build great things")
+	})
 }

@@ -32,6 +32,10 @@ intent_links:
     code:
       - frontend/src/components/IntentMarkdownEditor.vue
       - frontend/src/lib/markdown_format.ts
+  - intent: "#sub-tasks"
+    code:
+      - api/intent_api.go:StartIntentSubtaskHandler
+      - dev/idd_workflow.go:runIntentSubtask
   - intent: "#idd-instructions-for-coding-agents"
     code:
       - dev/prompts/author_edit_block/idd_instructions.mustache
@@ -44,13 +48,21 @@ intent_links:
       - dev/idd_workflow.go:SetIddAutoModeSignal
       - dev/idd_workflow.go:RunIddOrchestratorSignal
       - dev/idd_workflow.go:IddWorkflow
+      - dev/idd_workflow.go:runIntentSubtask
+      - dev/idd_workflow.go:subtaskTerminalNotice
       - dev/idd_watcher_activity.go:IddWatchEditIdleActivity
       - dev/idd_orchestrator.go:pendingIntentDiff
+      - dev/idd_orchestrator.go:runIddOrchestratorTurn
       - coding/git/git_diff.go:DiffUntrackedFilesActivity
       - dev/manage_chat_history.go
       - api/intent_api.go:SetIddAutoModeHandler
       - api/intent_api.go:RunIddOrchestratorHandler
       - frontend/src/views/IntentCanvasView.vue
+      - dev/idd_orchestrator.go:StartIntentSubtaskToolArgs
+      - dev/idd_orchestrator.go:resolveSubtaskScope
+      - dev/idd_workflow.go:StartIntentSubtaskSignal
+      - dev/intent_requirements.go:renderIntentRequirements
+      - dev/prompts/intent/requirements_prompt_only.mustache
 ---
 # Seamless Intent Driven Development Flow
 
@@ -85,7 +97,7 @@ according to the human author/user.
 - Doesn't ask for task description in the UI to start. In fact, it removes task
   fields other than model config, title (required for idd, unlike other flow
   types), and start branch.
-  
+
 ### Interface
 
 - Starting an idd task/flow creates a new worktree and takes you directly to the
@@ -263,11 +275,23 @@ Pressing the button to start immediately results in these actions:
   history.
 - It can scope the intent to a specific section of an intent file, or the entire
   intent diff, or just an arbitrary prompt that scopes and directs the subtask
-  to a portion of the intent.
+  to a portion of the intent (not providing it the entire intent diff in this
+  case). In the latter situation, the orchestrator is responsible for ensuring
+  that there are tasks for every aspect of the diff. A final cleanup subtask to
+  ensure the entire intent file is done is acceptable.
+- Titles are provided by the orchestrator when it kicks off a subtask.
+- The agent is prompted to proide very short titles, and to not repeat
+  "Implement" or "Update" similar fluff words. Instead, they will just describe
+  the subtask in 2-3 words. These titles are always viewed in the context of an
+  intent file, which provides a lot of disambiguating context already.
+- The agent is prompted to either provide very strong interfaces between the
+  subtasks such that they can operate in parallel, or serialize execution to
+  ensure subtasks are done correctly.
+- When subtasks complete, the orchestrator is notified and can take an action,
+  such as invoking the next subtask, if it wants to.
 
 ### Sub tasks
-   
-- Uses basic dev flow type with determine requirements disabled
+- When manually created, uses planned dev flow type with determine requirements disabled
 - Makes a worktree based off of HEAD of the worktree for the idd flow
 - Automatically gets merged into the idd worktree when completed (new basic dev
   / planned dev workflow option)

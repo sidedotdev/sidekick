@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"sidekick"
 	"sidekick/common"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
@@ -24,8 +26,9 @@ import (
 
 func main() {
 	verbose := flag.Bool("verbose", false, "print complete activity payloads and all workflow events")
+	subflowsOnly := flag.Bool("subflows", false, "print only the subflow hierarchy decoded from PersistSubflow activity inputs")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [-verbose] <workflow-id> [start-event-id] [end-event-id]\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [-verbose] [-subflows] <workflow-id> [start-event-id] [end-event-id]\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -38,12 +41,16 @@ func main() {
 
 	workflowID := args[0]
 	startEvent := 1
-	endEvent := 9999
+	endEvent := math.MaxInt
 	if len(args) >= 2 {
 		startEvent, _ = strconv.Atoi(args[1])
 	}
 	if len(args) >= 3 {
 		endEvent, _ = strconv.Atoi(args[2])
+	}
+	if *subflowsOnly {
+		// suppress per-event output; only the hierarchy is printed at the end
+		startEvent, endEvent = 0, -1
 	}
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -68,7 +75,26 @@ func main() {
 	}
 	defer c.Close()
 
-	activityTypes := make(map[int64]string)
+	type scheduledActivity struct {
+		activityType string
+		scheduledAt  string
+		startedAt    string
+		identity     string
+	}
+	activities := make(map[int64]*scheduledActivity)
+	type subflowInfo struct {
+		Id              string `json:"id"`
+		Name            string `json:"name"`
+		Type            string `json:"type"`
+		Status          string `json:"status"`
+		ParentSubflowId string `json:"parentSubflowId"`
+	}
+	subflows := make(map[string]*subflowInfo)
+	var subflowOrder []string
+	eventPrefix := func(eventID int64, eventTime interface{ AsTime() time.Time }) string {
+		return fmt.Sprintf("%d %s", eventID, eventTime.AsTime().Format(time.RFC3339Nano))
+	}
+
 	iter := c.GetWorkflowHistory(ctx, workflowID, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 	for iter.HasNext() {
 		event, err := iter.Next()
@@ -86,12 +112,32 @@ func main() {
 			}
 
 			activityType := attrs.ActivityType.GetName()
-			activityTypes[eid] = activityType
+			activities[eid] = &scheduledActivity{
+				activityType: activityType,
+				scheduledAt:  event.EventTime.AsTime().Format(time.RFC3339Nano),
+			}
+			if activityType == "PersistSubflow" && attrs.Input != nil {
+				for _, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
+					var info subflowInfo
+					if err := json.Unmarshal([]byte(input), &info); err != nil || info.Id == "" {
+						continue
+					}
+					if _, seen := subflows[info.Id]; !seen {
+						subflowOrder = append(subflowOrder, info.Id)
+					}
+					subflows[info.Id] = &info
+				}
+			}
 			if eid < int64(startEvent) || eid > int64(endEvent) {
 				continue
 			}
 
-			fmt.Printf("%d ActivityTaskScheduled %s id=%s\n", eid, activityType, attrs.ActivityId)
+			fmt.Printf("%s ActivityTaskScheduled %s id=%s scheduleToStart=%s startToClose=%s\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ActivityId,
+				attrs.ScheduleToStartTimeout.AsDuration(),
+				attrs.StartToCloseTimeout.AsDuration())
 			if attrs.Input != nil {
 				for i, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
 					if *verbose {
@@ -101,6 +147,29 @@ func main() {
 					}
 				}
 			}
+		case enums.EVENT_TYPE_ACTIVITY_TASK_STARTED:
+			attrs := event.GetActivityTaskStartedEventAttributes()
+			if attrs == nil {
+				continue
+			}
+			activity := activities[attrs.ScheduledEventId]
+			if activity != nil {
+				activity.startedAt = event.EventTime.AsTime().Format(time.RFC3339Nano)
+				activity.identity = attrs.Identity
+			}
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			activityType := ""
+			if activity != nil {
+				activityType = activity.activityType
+			}
+			fmt.Printf("%s ActivityTaskStarted %s scheduled=%d identity=%q attempt=%d\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ScheduledEventId,
+				attrs.Identity,
+				attrs.Attempt)
 		case enums.EVENT_TYPE_ACTIVITY_TASK_COMPLETED:
 			if eid < int64(startEvent) || eid > int64(endEvent) {
 				continue
@@ -110,8 +179,16 @@ func main() {
 				continue
 			}
 
-			activityType := activityTypes[attrs.ScheduledEventId]
-			fmt.Printf("%d ActivityTaskCompleted %s scheduled=%d\n", eid, activityType, attrs.ScheduledEventId)
+			activity := activities[attrs.ScheduledEventId]
+			activityType := ""
+			if activity != nil {
+				activityType = activity.activityType
+			}
+			fmt.Printf("%s ActivityTaskCompleted %s scheduled=%d identity=%q\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ScheduledEventId,
+				activity.identity)
 			if attrs.Result != nil {
 				for i, result := range clientOptions.DataConverter.ToStrings(attrs.Result) {
 					if *verbose {
@@ -130,13 +207,92 @@ func main() {
 				continue
 			}
 
-			activityType := activityTypes[attrs.ScheduledEventId]
-			fmt.Printf("%d ActivityTaskFailed %s scheduled=%d started=%d\n",
-				eid, activityType, attrs.ScheduledEventId, attrs.StartedEventId)
+			activity := activities[attrs.ScheduledEventId]
+			activityType := ""
+			identity := ""
+			if activity != nil {
+				activityType = activity.activityType
+				identity = activity.identity
+			}
+			fmt.Printf("%s ActivityTaskFailed %s scheduled=%d started=%d identity=%q\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ScheduledEventId,
+				attrs.StartedEventId,
+				identity)
 			if attrs.Failure != nil {
 				fmt.Printf("    Failure: %s\n", attrs.Failure.Message)
 				if attrs.Failure.Cause != nil {
 					fmt.Printf("    Cause: %s\n", attrs.Failure.Cause.Message)
+				}
+			}
+		case enums.EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetActivityTaskTimedOutEventAttributes()
+			if attrs == nil {
+				continue
+			}
+			activity := activities[attrs.ScheduledEventId]
+			activityType := ""
+			identity := ""
+			scheduledAt := ""
+			startedAt := ""
+			if activity != nil {
+				activityType = activity.activityType
+				identity = activity.identity
+				scheduledAt = activity.scheduledAt
+				startedAt = activity.startedAt
+			}
+			fmt.Printf("%s ActivityTaskTimedOut %s scheduled=%d started=%d identity=%q retryState=%s scheduledAt=%s startedAt=%s\n",
+				eventPrefix(eid, event.EventTime),
+				activityType,
+				attrs.ScheduledEventId,
+				attrs.StartedEventId,
+				identity,
+				attrs.RetryState,
+				scheduledAt,
+				startedAt)
+			if attrs.Failure != nil {
+				fmt.Printf("    Failure: %s\n", attrs.Failure.Message)
+			}
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetWorkflowExecutionStartedEventAttributes()
+			if attrs == nil {
+				continue
+			}
+
+			fmt.Printf("%d WorkflowExecutionStarted %s\n", eid, attrs.WorkflowType.GetName())
+			if attrs.Input != nil {
+				for i, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
+					if *verbose {
+						fmt.Printf("    Input[%d]: %s\n", i, input)
+					} else {
+						fmt.Printf("    Input[%d]: %s\n", i, summarizePayload(ctx, service, input))
+					}
+				}
+			}
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetWorkflowExecutionSignaledEventAttributes()
+			if attrs == nil {
+				continue
+			}
+
+			fmt.Printf("%d WorkflowExecutionSignaled %s\n", eid, attrs.SignalName)
+			if attrs.Input != nil {
+				for i, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
+					if *verbose {
+						fmt.Printf("    Input[%d]: %s\n", i, input)
+					} else {
+						fmt.Printf("    Input[%d]: %s\n", i, summarizePayload(ctx, service, input))
+					}
 				}
 			}
 		case enums.EVENT_TYPE_MARKER_RECORDED:
@@ -156,10 +312,87 @@ func main() {
 					}
 				}
 			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_SCHEDULED:
+			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskScheduledEventAttributes()
+				fmt.Printf("%s WorkflowTaskScheduled queue=%q kind=%s attempt=%d\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetTaskQueue().GetName(),
+					attrs.GetTaskQueue().GetKind(),
+					attrs.GetAttempt())
+			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_STARTED:
+			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskStartedEventAttributes()
+				fmt.Printf("%s WorkflowTaskStarted identity=%q historySizeBytes=%d suggestContinueAsNew=%t\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetIdentity(),
+					attrs.GetHistorySizeBytes(),
+					attrs.GetSuggestContinueAsNew())
+			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED:
+			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskCompletedEventAttributes()
+				fmt.Printf("%s WorkflowTaskCompleted scheduled=%d started=%d identity=%q\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetScheduledEventId(),
+					attrs.GetStartedEventId(),
+					attrs.GetIdentity())
+			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_TIMED_OUT:
+			if eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskTimedOutEventAttributes()
+				fmt.Printf("%s WorkflowTaskTimedOut scheduled=%d started=%d timeoutType=%s\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetScheduledEventId(),
+					attrs.GetStartedEventId(),
+					attrs.GetTimeoutType())
+			}
+		case enums.EVENT_TYPE_WORKFLOW_TASK_FAILED:
+			if eid >= int64(startEvent) && eid <= int64(endEvent) {
+				attrs := event.GetWorkflowTaskFailedEventAttributes()
+				fmt.Printf("%s WorkflowTaskFailed scheduled=%d started=%d cause=%s identity=%q\n",
+					eventPrefix(eid, event.EventTime),
+					attrs.GetScheduledEventId(),
+					attrs.GetStartedEventId(),
+					attrs.GetCause(),
+					attrs.GetIdentity())
+				if attrs.GetFailure() != nil {
+					fmt.Printf("    Failure: %s\n", attrs.GetFailure().GetMessage())
+					if attrs.GetFailure().GetCause() != nil {
+						fmt.Printf("    Cause: %s\n", attrs.GetFailure().GetCause().GetMessage())
+					}
+				}
+			}
 		default:
 			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
 				fmt.Printf("%d %s\n", eid, event.EventType.String())
 			}
+		}
+	}
+
+	if *subflowsOnly {
+		children := make(map[string][]string)
+		var roots []string
+		for _, id := range subflowOrder {
+			parentId := subflows[id].ParentSubflowId
+			if parentId == "" || subflows[parentId] == nil {
+				roots = append(roots, id)
+			} else {
+				children[parentId] = append(children[parentId], id)
+			}
+		}
+		var printTree func(id string, depth int)
+		printTree = func(id string, depth int) {
+			info := subflows[id]
+			fmt.Printf("%s%s name=%q type=%s status=%s\n",
+				strings.Repeat("  ", depth), info.Id, info.Name, info.Type, info.Status)
+			for _, childId := range children[id] {
+				printTree(childId, depth+1)
+			}
+		}
+		for _, id := range roots {
+			printTree(id, 0)
 		}
 	}
 }

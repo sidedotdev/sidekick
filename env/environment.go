@@ -63,10 +63,11 @@ const (
 	EnvTypeLocalGitWorktree EnvType = "local_git_worktree"
 	EnvTypeDevPod           EnvType = "devpod"
 	EnvTypeOpenShell        EnvType = "openshell"
+	EnvTypeModal            EnvType = "modal"
 )
 
 func (e EnvType) IsValid() bool {
-	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree || e == EnvTypeDevPod || e == EnvTypeOpenShell
+	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree || e == EnvTypeDevPod || e == EnvTypeOpenShell || e == EnvTypeModal
 }
 
 type RepoMode string
@@ -122,6 +123,13 @@ type Env interface {
 	WakeIfHibernated(ctx context.Context) error
 }
 
+// SnapshottingEnv is implemented by environments that can persist their
+// current filesystem state for use by future environments.
+type SnapshottingEnv interface {
+	Env
+	Snapshot(ctx context.Context) (EnvRunCommandOutput, error)
+}
+
 // SSHCapableEnv is implemented by environments that support direct SSH access.
 type SSHCapableEnv interface {
 	Env
@@ -129,6 +137,10 @@ type SSHCapableEnv interface {
 	// The returned args end with the destination; a remote command string
 	// can be appended directly.
 	SSHArgs(ctx context.Context) ([]string, error)
+}
+
+type sshTransportRecoverer interface {
+	recoverSSHTransport(ctx context.Context, cause error) (bool, error)
 }
 
 // MergeResultSyncer is implemented by environments whose repository is an
@@ -139,6 +151,31 @@ type MergeResultSyncer interface {
 	// SyncMergeResultToLocal transfers the given branch's merged state from the
 	// environment back to the host repository.
 	SyncMergeResultToLocal(ctx context.Context, branch string) error
+}
+
+// GitRefSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. It
+// propagates a single ref created inside the environment (e.g. an archive
+// tag) back to the host repository, so that git state survives the
+// environment's deletion.
+type GitRefSyncer interface {
+	// SyncGitRefToLocal transfers the given fully-qualified ref (e.g.
+	// "refs/tags/archive/foo") from the environment to the host repository.
+	SyncGitRefToLocal(ctx context.Context, ref string) error
+}
+
+// TargetBranchSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. Before
+// merging into a branch inside such an environment, the branch must be
+// refreshed from the host repository (the source of truth), otherwise the
+// merge result may diverge from the host branch and fail to fast-forward it
+// when synced back.
+type TargetBranchSyncer interface {
+	// SyncBranchToRemote force-updates the given branch in the environment
+	// from the host repository, realigning any environment worktree that has
+	// the branch checked out. Branches missing from the host repository are
+	// skipped.
+	SyncBranchToRemote(ctx context.Context, branch string) error
 }
 
 // EnvSeparator returns the path separator string for the env.
@@ -266,6 +303,31 @@ type OpenShellEnv struct {
 	// the SSH connection used to run commands.
 	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
 	Hibernated   bool                       `json:"hibernated,omitempty"`
+}
+
+// ModalEnv is a Modal (https://modal.com) sandbox reachable over SSH through
+// a Modal tunnel. Both the default gVisor runtime and the alpha VM runtime
+// (real Linux kernel) are supported; which one a sandbox uses is decided at
+// creation time via common.ModalEnvConfig.
+type ModalEnv struct {
+	WorkingDirectory string `json:"workingDirectory"`
+	SandboxName      string `json:"sandboxName"`
+	// SSHHost and SSHPort are the Modal tunnel endpoint exposing the
+	// sandbox's sshd. They are fixed for the sandbox's lifetime.
+	SSHHost string `json:"sshHost"`
+	SSHPort int    `json:"sshPort"`
+	// LocalRepoDir is the path to the local checkout of the repo whose
+	// remote copy lives in this Modal sandbox. It is used by file-walking
+	// to read tracked content from local git objects instead of paying the
+	// per-file SSH/sftp cost.
+	LocalRepoDir string `json:"localRepoDir,omitempty"`
+	// PortForwards are host ports reverse-forwarded into the sandbox over
+	// the SSH connection used to run commands.
+	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
+	Hibernated   bool                       `json:"hibernated,omitempty"`
+
+	runModalCommand      func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error)
+	refreshModalEndpoint func(context.Context, string) (string, int, error)
 }
 
 type LocalEnvParams struct {
@@ -992,6 +1054,225 @@ func (e *OpenShellEnv) SetLatency(d time.Duration) {
 	sc.closeLocked()
 }
 
+func (e *ModalEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	return walkCodeDirectorySSH(ctx, e, e.LocalRepoDir, e.WorkingDirectory, ignoreFileNames, handleEntry)
+}
+
+func (e *ModalEnv) GetType() EnvType {
+	return EnvTypeModal
+}
+
+func (e *ModalEnv) GetWorkingDirectory() string {
+	return e.WorkingDirectory
+}
+
+// RunCommand runs a command in the sandbox. Worktree hibernation is not used
+// on Modal (the idle watchdog snapshots and terminates the whole sandbox when
+// idle instead), so commands run without hibernation preflights or read-lock
+// wrapping.
+func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+
+	runCommand := e.runCommandInner
+	if e.runModalCommand != nil {
+		runCommand = e.runModalCommand
+	}
+	refreshEndpoint := refreshModalEndpoint
+	if e.refreshModalEndpoint != nil {
+		refreshEndpoint = e.refreshModalEndpoint
+	}
+
+	output, diagnostics, err := runCommand(ctx, input)
+	appendDiagnostics := func() {
+		if diagnostics == "" {
+			return
+		}
+		if output.Stderr != "" && !strings.HasSuffix(output.Stderr, "\n") {
+			output.Stderr += "\n"
+		}
+		output.Stderr += diagnostics
+	}
+	appendDiagnostics()
+
+	// The stored tunnel endpoint may be stale because the idle watchdog
+	// snapshotted and terminated the sandbox. Only SSH client diagnostics
+	// kept separate from remote output can prove the command never started.
+	if err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics) {
+		host, port, refreshErr := refreshEndpoint(ctx, e.SandboxName)
+		if refreshErr != nil {
+			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
+		} else {
+			e.SSHHost, e.SSHPort = host, port
+			output, diagnostics, err = runCommand(ctx, input)
+			appendDiagnostics()
+		}
+	}
+
+	return output, err
+}
+
+func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
+	return e.RunCommand(ctx, EnvRunCommandInput{
+		Command: "/usr/local/bin/sidekick-snapshot",
+	})
+}
+
+func (e *ModalEnv) recoverSSHTransport(ctx context.Context, cause error) (bool, error) {
+	if cause == nil || !isModalSSHTransportFailure(cause.Error()) {
+		return false, nil
+	}
+	refreshEndpoint := refreshModalEndpoint
+	if e.refreshModalEndpoint != nil {
+		refreshEndpoint = e.refreshModalEndpoint
+	}
+	host, port, err := refreshEndpoint(ctx, e.SandboxName)
+	if err != nil {
+		return true, err
+	}
+	e.SSHHost, e.SSHPort = host, port
+	return true, nil
+}
+
+func isModalSSHTransportFailure(diagnostics string) bool {
+	diagnostics = strings.ToLower(diagnostics)
+	for _, fragment := range []string{
+		"connect to address",
+		"connect to host",
+		"could not resolve hostname",
+		"no route to host",
+	} {
+		if strings.Contains(diagnostics, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
+	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+	fullCommand = modalLoginShellCommand(fullCommand)
+	// Refresh the idle-watchdog activity marker with every command.
+	fullCommand = "touch " + remoteActivityMarker + " 2>/dev/null; " + fullCommand
+
+	sshArgs, err := e.SSHArgs(ctx)
+	if err != nil {
+		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to get SSH args for modal sandbox %s: %w", e.SandboxName, err)
+	}
+	diagnosticsFile, err := os.CreateTemp("", "sidekick-modal-ssh-*.log")
+	if err != nil {
+		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to create modal SSH diagnostics file: %w", err)
+	}
+	diagnosticsPath := diagnosticsFile.Name()
+	if err := diagnosticsFile.Close(); err != nil {
+		os.Remove(diagnosticsPath)
+		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to close modal SSH diagnostics file: %w", err)
+	}
+	defer os.Remove(diagnosticsPath)
+
+	sshArgs = insertBeforeSSHDestination(sshArgs, []string{"-v", "-E", diagnosticsPath})
+	sshArgs = append(sshArgs, fullCommand)
+
+	runCommandInput := unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       sshArgs,
+	}
+	output, err := unix.RunCommandActivity(ctx, runCommandInput)
+	if err != nil || output.ExitStatus != 255 {
+		return output, "", err
+	}
+	diagnostics, readErr := os.ReadFile(diagnosticsPath)
+	if readErr != nil {
+		log.Warn().Err(readErr).Str("sandbox", e.SandboxName).Msg("failed to read modal SSH diagnostics")
+		return output, "", nil
+	}
+	return output, string(diagnostics), nil
+}
+
+func modalLoginShellCommand(command string) string {
+	return "bash -lc " + shellQuote(command)
+}
+
+// baseSSHArgs returns ssh args (ending with the destination) for reaching the
+// sandbox's sshd through its Modal tunnel endpoint, without reverse forwards.
+func (e *ModalEnv) baseSSHArgs(ctx context.Context) ([]string, error) {
+	if e.SSHHost == "" || e.SSHPort == 0 {
+		return nil, fmt.Errorf("modal env for sandbox %s has no SSH endpoint", e.SandboxName)
+	}
+	keyPath, _, err := ensureModalSSHKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return modalSSHArgs(e.SandboxName, e.SSHHost, e.SSHPort, keyPath), nil
+}
+
+func (e *ModalEnv) SSHArgs(ctx context.Context) ([]string, error) {
+	sshArgs, err := e.baseSSHArgs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards)), nil
+}
+
+// sftpConnKey returns the stable per-sandbox identity used to share a pooled
+// sftpConn across separately-constructed envs. Modal tunnel endpoints can
+// change while the sandbox remains alive; transport recovery reconnects the
+// pooled entry when its endpoint becomes stale.
+func (e *ModalEnv) sftpConnKey() string {
+	return "modal:" + e.SandboxName
+}
+
+func (e *ModalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+}
+
+func (e *ModalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+}
+
+func (e *ModalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
+}
+
+func (e *ModalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
+}
+
+func (e *ModalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+}
+
+func (e *ModalEnv) Remove(ctx context.Context, p string) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+}
+
+func (e *ModalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if dir == "" {
+		dir = "/tmp"
+	} else if !strings.HasPrefix(dir, "/") {
+		dir = path.Join(e.WorkingDirectory, dir)
+	}
+	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
+}
+
 // shellQuote wraps a string in single quotes, escaping any embedded single quotes.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
@@ -1110,6 +1391,12 @@ func (ec *EnvContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		ec.Env = ose
+	case string(EnvTypeModal):
+		var me *ModalEnv
+		if err := json.Unmarshal(v.Env, &me); err != nil {
+			return err
+		}
+		ec.Env = me
 	case "":
 		ec.Env = nil
 	default:

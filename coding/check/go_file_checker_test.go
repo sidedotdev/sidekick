@@ -69,18 +69,18 @@ func main() {}
 	}
 
 	// Check the unix file - should pass because windows file is filtered out (conflicting constraint)
-	passed, errStr, err := CheckViaGoBuild(envContainer, "process_unix.go")
+	passed, errStr, err := CheckViaGoBuild(t.Context(), envContainer, "process_unix.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 
 	// Check the windows file - should also pass (unix file filtered out)
-	passed, errStr, err = CheckViaGoBuild(envContainer, "process_windows.go")
+	passed, errStr, err = CheckViaGoBuild(t.Context(), envContainer, "process_windows.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 
 	// Check the main file - has no constraint, so we filter mutually conflicting files
 	// keeping only one of the conflicting pair
-	passed, errStr, err = CheckViaGoBuild(envContainer, "main.go")
+	passed, errStr, err = CheckViaGoBuild(t.Context(), envContainer, "main.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 }
@@ -123,7 +123,7 @@ func main() {}
 		},
 	}
 
-	passed, errStr, err := CheckViaGoBuild(envContainer, "platform_unix.go")
+	passed, errStr, err := CheckViaGoBuild(t.Context(), envContainer, "platform_unix.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 }
@@ -167,12 +167,12 @@ func main() {}
 	}
 
 	// Check the cgo file - should pass because nocgo file is filtered out
-	passed, errStr, err := CheckViaGoBuild(envContainer, "build_cgo.go")
+	passed, errStr, err := CheckViaGoBuild(t.Context(), envContainer, "build_cgo.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 
 	// Check the nocgo file - should also pass
-	passed, errStr, err = CheckViaGoBuild(envContainer, "build_nocgo.go")
+	passed, errStr, err = CheckViaGoBuild(t.Context(), envContainer, "build_nocgo.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 }
@@ -216,12 +216,12 @@ func main() {}
 	}
 
 	// Check the integration file - should pass because unit file is filtered out
-	passed, errStr, err := CheckViaGoBuild(envContainer, "test_integration.go")
+	passed, errStr, err := CheckViaGoBuild(t.Context(), envContainer, "test_integration.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 
 	// Check the unit file - should also pass
-	passed, errStr, err = CheckViaGoBuild(envContainer, "test_unit.go")
+	passed, errStr, err = CheckViaGoBuild(t.Context(), envContainer, "test_unit.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 }
@@ -265,12 +265,12 @@ func main() {}
 	}
 
 	// Check the unix file - should pass because windows file is filtered out
-	passed, errStr, err := CheckViaGoBuild(envContainer, "process_unix.go")
+	passed, errStr, err := CheckViaGoBuild(t.Context(), envContainer, "process_unix.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 
 	// Check the windows file - should also pass
-	passed, errStr, err = CheckViaGoBuild(envContainer, "process_windows.go")
+	passed, errStr, err = CheckViaGoBuild(t.Context(), envContainer, "process_windows.go")
 	assert.NoError(t, err)
 	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
 }
@@ -378,7 +378,7 @@ func (b B) foo() {}
 					WorkingDirectory: dir,
 				},
 			}
-			passed, goCheckErrorString, err := CheckViaGoBuild(envContainer, filename)
+			passed, goCheckErrorString, err := CheckViaGoBuild(t.Context(), envContainer, filename)
 			assert.NoError(t, err)
 			// fmt.Println(goCheckErrorString) // debug
 			if passed != tc.wantPass {

@@ -59,6 +59,17 @@ func renderExecutorTranscript(msgs []common.Message, maxRecent int) string {
 	}
 	var b strings.Builder
 	for _, m := range msgs[start:] {
+		if message, ok := m.(llm2.Message); ok {
+			for _, block := range message.Content {
+				if block.Reasoning == nil {
+					continue
+				}
+				summary := strings.TrimSpace(block.Reasoning.Summary)
+				if summary != "" {
+					b.WriteString(fmt.Sprintf("[%s] thinking_summary %s\n", m.GetRole(), summary))
+				}
+			}
+		}
 		content := strings.TrimSpace(m.GetContentString())
 		if content != "" {
 			b.WriteString(fmt.Sprintf("[%s] %s\n", m.GetRole(), content))

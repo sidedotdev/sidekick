@@ -79,7 +79,23 @@ func handleAuthCommand() error {
 }
 
 func handleOpenAIAuth() error {
-	return handleManualAPIKeyAuth("OpenAI", llm.OpenaiApiKeySecretName)
+	methodSelection := selection.New("Select authentication method", []string{
+		"ChatGPT/Codex subscription (OAuth)",
+		"Manually enter API Key",
+	})
+	method, err := methodSelection.RunPrompt()
+	if err != nil {
+		return fmt.Errorf("authentication method selection failed: %w", err)
+	}
+
+	switch method {
+	case "ChatGPT/Codex subscription (OAuth)":
+		return handleOpenAIOAuthSubscription()
+	case "Manually enter API Key":
+		return handleManualAPIKeyAuth("OpenAI", llm.OpenaiApiKeySecretName)
+	default:
+		return fmt.Errorf("unknown authentication method: %s", method)
+	}
 }
 
 func handleGoogleAuth() error {

@@ -15,6 +15,7 @@ import (
 // if called) and overriding only what the gopls command builder exercises.
 type fakeEnv struct {
 	env.Env
+	envType    env.EnvType
 	workDir    string
 	runCommand func(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error)
 	readFile   func(ctx context.Context, path string) ([]byte, error)
@@ -25,6 +26,10 @@ func (f *fakeEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) 
 }
 
 func (f *fakeEnv) GetWorkingDirectory() string { return f.workDir }
+
+func (f *fakeEnv) GetType() env.EnvType {
+	return f.envType
+}
 
 func (f *fakeEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return f.readFile(ctx, path)
@@ -99,4 +104,52 @@ func TestFindOrInstallGopls_InstallsWhenMissing(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, installed, "expected gopls install to be attempted")
 	assert.Equal(t, "/home/dev/go/bin/gopls", path)
+}
+
+// TestLSPServerCommand_SSHCapableEnvUsesAbsoluteGoplsPath verifies gopls is
+// resolved to an absolute path during probing, so the raw SSH launch (whose
+// minimal PATH may lack the go bin directory, unlike the login shell some
+// envs run commands under) starts the same binary the probe found.
+func TestLSPServerCommand_SSHCapableEnvUsesAbsoluteGoplsPath(t *testing.T) {
+	t.Parallel()
+	sshEnv := &fakeSSHEnv{
+		fakeEnv: &fakeEnv{runCommand: func(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
+			switch {
+			case input.Command == "sh" && len(input.Args) == 2 && input.Args[1] == "command -v gopls":
+				return env.EnvRunCommandOutput{ExitStatus: 0, Stdout: "/root/go/bin/gopls\n"}, nil
+			case input.Command == "/root/go/bin/gopls":
+				return env.EnvRunCommandOutput{ExitStatus: 0, Stdout: "gopls v0.0.0"}, nil
+			}
+			return env.EnvRunCommandOutput{ExitStatus: 127}, nil
+		}},
+		sshArgs: []string{"-p", "22", "root@modal.host"},
+	}
+
+	cmd, err := lspServerCommand(context.Background(), "golang", &env.EnvContainer{Env: sshEnv})
+	require.NoError(t, err)
+
+	remoteCmd := cmd.Args[len(cmd.Args)-1]
+	assert.True(t, strings.HasPrefix(remoteCmd, "'/root/go/bin/gopls'"),
+		"remote command should launch gopls via its absolute path, got %q", remoteCmd)
+}
+
+// TestLSPServerCommand_ModalEnvLaunchesGoplsUnderLoginShell verifies the Modal
+// remote command wraps gopls in `bash -lc`: Modal's raw sshd environment lacks
+// the go toolchain on PATH, which the gopls daemon needs to build workspace
+// views. Other SSH envs keep the raw exec covered by the tests above.
+func TestLSPServerCommand_ModalEnvLaunchesGoplsUnderLoginShell(t *testing.T) {
+	t.Parallel()
+	sshEnv := &fakeSSHEnv{
+		fakeEnv: &fakeEnv{envType: env.EnvTypeModal, runCommand: goplsPresent},
+		sshArgs: []string{"-p", "22", "root@modal.host"},
+	}
+
+	cmd, err := lspServerCommand(context.Background(), "golang", &env.EnvContainer{Env: sshEnv})
+	require.NoError(t, err)
+
+	remoteCmd := cmd.Args[len(cmd.Args)-1]
+	assert.True(t, strings.HasPrefix(remoteCmd, "bash -lc "),
+		"modal remote command should launch gopls under a login shell, got %q", remoteCmd)
+	assert.Contains(t, remoteCmd, "gopls")
+	assert.Contains(t, remoteCmd, "-remote=auto")
 }

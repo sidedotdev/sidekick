@@ -1,39 +1,40 @@
 <template>
-  <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
-    <div class="actions">
-      <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
-      <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
-      <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
-      <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
-      <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask"><TrashIcon/></button>
-    </div>
+  <div class="task-card-shell">
+    <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
+      <div class="actions">
+        <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
+        <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
+        <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
+        <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
+        <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask"><TrashIcon/></button>
+      </div>
 
-    <h3 v-if="task.title" class="task-title">{{ task.title }}</h3>
-    <p class="task-description" @mouseleave.self="handleDescriptionBlur">{{ task.description }}</p>
-    <div class="card-footer">
-      <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
-      <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
-        <ContainerIcon/>{{ envIndicator.label }}
-      </span>
-      <span v-if="task.archived" class="archived-label">Archived</span>
-    </div>
+      <h3 v-if="task.title" class="task-title">{{ task.title }}</h3>
+      <p class="task-description" @mouseleave.self="handleDescriptionBlur">{{ task.description }}</p>
+      <div class="card-footer">
+        <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
+        <span v-if="task.archived" class="archived-label">Archived</span>
+      </div>
 
-    <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
+      <div v-if="envIndicator || llmPresetLabel" class="card-meta">
+        <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
+          <component :is="envIndicator.icon"/>
+        </span>
+        <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
+      </div>
+    </div>
   </div>
-
-  <TaskModal v-if="isCopyModalOpen" :task="copiedTask" @close="closeCopyModal" @updated="onUpdated" />
-  <TaskModal v-if="isEditModalOpen" :task="task" @close="closeEditModal" @updated="onUpdated" />
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, type Component } from 'vue'
 import type { FullTask, Task, LLMConfig } from '../lib/models'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, llmConfigsEqual } from '../lib/llmPresetStorage'
-import TaskModal from './TaskModal.vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ContainerIcon from './icons/ContainerIcon.vue'
+import CloudIcon from './icons/CloudIcon.vue'
 import router from '@/router'
 
 const props = defineProps({
@@ -43,16 +44,16 @@ const props = defineProps({
   },
 })
 
-type EnvIndicator = { label: string; title: string }
+type EnvIndicator = { title: string; icon: Component }
 
-// Maps concrete env types to their execution-location category. Only env types
-// that deviate from the default (local machine) are listed, so unmapped types
-// (local, local_git_worktree, unknown) render no indicator. Adding a future
-// remote/cloud category is a matter of adding entries here, not new template
-// branches.
+// Maps concrete env types to an icon conveying where the task executes, with
+// the tooltip carrying the specifics. Only env types that deviate from the
+// default (local machine) are listed, so unmapped types (local,
+// local_git_worktree, unknown) render no indicator.
 const envIndicatorMap: Record<string, EnvIndicator> = {
-  devpod: { label: 'Container', title: 'DevPod' },
-  openshell: { label: 'Container', title: 'OpenShell' },
+  devpod: { title: 'DevPod container', icon: ContainerIcon },
+  openshell: { title: 'OpenShell container', icon: ContainerIcon },
+  modal: { title: 'Modal cloud sandbox', icon: CloudIcon },
 }
 
 const envIndicator = computed<EnvIndicator | null>(() => {
@@ -82,6 +83,7 @@ const copiedTask = computed(() => {
     workspaceId: props.task.workspaceId,
     flowType: props.task.flowType,
     flowOptions: props.task.flowOptions,
+    projectId: props.task.projectId,
     status: props.task.status,
     agentType: 'llm',
   }
@@ -103,6 +105,8 @@ interface Emits {
   (event: 'error', message: string): void;
   (event: 'archived', id: string): void;
   (event: 'canceled', id: string): void;
+  (event: 'edit', task: FullTask): void;
+  (event: 'copy', task: Task): void;
 }
 
 const emit = defineEmits<Emits>();
@@ -134,19 +138,10 @@ const canArchive = computed(() => ['complete', 'failed', 'canceled'].includes(pr
 const canDelete = computed(() => props.task.status === 'drafting' || props.task.archived);
 const canCancel = computed(() => ['to_do', 'in_progress', 'blocked', 'in_review'].includes(props.task.status) && !props.task.archived);
 
-const isEditModalOpen = ref(false);
-const isCopyModalOpen = ref(false);
-
+// Edit/copy modals are owned by an ancestor (e.g. the kanban board) so that
+// background task updates that remount this card can't close an open modal.
 const openEditModal = () => {
-  isEditModalOpen.value = true
-}
-
-const closeEditModal = () => {
-  isEditModalOpen.value = false
-}
-
-const closeCopyModal = () => {
-  isCopyModalOpen.value = false
+  emit('edit', props.task)
 }
 
 
@@ -203,12 +198,8 @@ const cardClicked = async () => {
   }
 }
 
-const onUpdated = async () => {
-  emit('updated', props.task.id)
-}
-
-const copyTask = async () => {
-  isCopyModalOpen.value = true
+const copyTask = () => {
+  emit('copy', copiedTask.value)
 }
 
 const cancelTask = async () => {
@@ -268,14 +259,20 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   }
 }
 
+/* Keeps virtualized row measurements stable while the hovered card expands. */
+.task-card-shell {
+  position: relative;
+  height: 7.5rem;
+}
+
 .task-card {
   border: 1px solid var(--task-card-border);
   background-color: var(--task-card-background);
-  border-radius: 2px;
+  border-radius: var(--kanban-radius);
   padding: calc(var(--task-pad) / 2);
   transition: box-shadow 0.3s ease;
   font-family: sans-serif;
-  height: 7.5rem;
+  height: 100%;
   overflow: hidden;
   position: relative;
 }
@@ -284,7 +281,12 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   box-shadow: 0 2px 5px var(--action-box-shadow);
   background-color: var(--task-card-hover-background);
   cursor: pointer;
-  overflow: visible;
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: auto;
+  min-height: 100%;
+  /* room for the absolutely positioned footer/meta row */
+  padding-bottom: calc(var(--task-pad) / 2 + 1.5rem);
   z-index: 10;
 }
 
@@ -345,7 +347,6 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   display: block;
   -webkit-line-clamp: unset;
   overflow: visible;
-  background-color: var(--task-card-hover-background);
 }
 
 .task-description {
@@ -373,17 +374,10 @@ const handleDescriptionBlur = (event: FocusEvent) => {
 .task-card:hover .task-description {
   display: block;
   -webkit-line-clamp: unset;
-  position: relative;
-  z-index: 1;
-  max-height: 24rem;
+  /* The half line makes it obvious that overflowing text was cut off. */
+  max-height: 18.5lh;
   /* TODO: only engage scroll capture when user starts scrolling within this element */
   overflow-y: auto;
-  background-color: var(--task-card-hover-background);
-  padding: calc(1px + var(--task-pad) / 2);
-  margin: calc(-1px - var(--task-pad) / 2);
-  padding-top: 0;
-  margin-top: 0;
-  border-radius: 0 0 2px 2px;
 }
 
 .card-footer {
@@ -452,29 +446,33 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   font-family: "JetBrains Mono", monospace;
 }
 
-.env-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  margin-left: 0.5rem;
-  padding: 0 0.4375rem;
-  border-radius: 0.0625rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  background-color: var(--color-background-mute);
-  color: var(--color-text);
-  font-family: "JetBrains Mono", monospace;
-}
-.env-indicator svg {
-  width: 0.85rem;
-  height: 0.85rem;
-}
-
-.llm-preset-label {
+.card-meta {
   position: absolute;
   right: calc(var(--task-pad) / 2);
   bottom: calc(var(--task-pad) / 2);
   max-width: calc(100% - var(--task-pad));
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.env-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.25rem;
+  border-radius: 0.2rem;
+  opacity: 0.75;
+  background-color: var(--color-background-mute);
+  color: var(--color-text);
+}
+.env-indicator svg {
+  display: block;
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.llm-preset-label {
+  min-width: 0;
   padding: 0.1rem 0.4rem;
   border-radius: 0.2rem;
   font-size: 0.75rem;

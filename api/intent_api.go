@@ -289,7 +289,10 @@ func (ctrl *Controller) StartIntentSubtaskHandler(c *gin.Context) {
 		return
 	}
 
-	err := ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameStartIntentSubtask, dev.StartIntentSubtaskSignal{Update: req.Update})
+	// Manually created sub-tasks always run as a planned dev flow (with
+	// determine-requirements disabled); only orchestrator-dispatched sub-tasks
+	// choose between basic and planned per sub-task.
+	err := ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameStartIntentSubtask, dev.StartIntentSubtaskSignal{Update: req.Update, Planned: true})
 	if err != nil {
 		var serviceErrNotFound *serviceerror.NotFound
 		if errors.As(err, &serviceErrNotFound) {

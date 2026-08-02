@@ -244,38 +244,60 @@ func BuildDevRequirements(dCtx DevContext, initialInfo InitialDevRequirementsInf
 func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirementsInfo) (*DevRequirements, error) {
 	// Step 1: prepare code context + retrieve mission
 	contextSizeExtension := 0
-	if initialInfo.Context == "" {
-		codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, initialInfo.Requirements, nil, nil)
-		initialInfo.Context = codeContext
-		contextSizeExtension = len(fullCodeContext) - len(codeContext)
-		if err != nil {
-			return nil, fmt.Errorf("failed to prepare code context: %v", err)
-		}
-	}
 	if initialInfo.Mission == "" {
 		initialInfo.Mission = dCtx.RepoConfig.Mission
 	}
 
-	// prepend a concise repository summary to the other code context in the initial prompt
-	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-	if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
-		repoSummary, err := GetRepoSummaryForPrompt(dCtx, initialInfo.Requirements, 5000)
+	var chatHistory *persisted_ai.ChatHistoryContainer
+	seededInitialPrompt := false
+	if initialInfo.Context == "" {
+		var err error
+		chatHistory, seededInitialPrompt, contextSizeExtension, err = gatherPlanningContext(dCtx, initialInfo.Requirements, func(codeContext string) llm.ChatMessage {
+			return llm.ChatMessage{
+				Role:         llm.ChatMessageRoleUser,
+				Content:      getInitialDevRequirementsPrompt(initialInfo.Mission, codeContext, initialInfo.Requirements),
+				CacheControl: "ephemeral",
+				ContextType:  ContextTypeInitialInstructions,
+			}
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to get repo summary: %w", err)
+			return nil, fmt.Errorf("failed to gather context for dev requirements: %w", err)
 		}
-		initialInfo.Context = repoSummary + "\n\n" + initialInfo.Context
+		if chatHistory == nil {
+			codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, initialInfo.Requirements, nil, nil)
+			initialInfo.Context = codeContext
+			contextSizeExtension = len(fullCodeContext) - len(codeContext)
+			if err != nil {
+				return nil, fmt.Errorf("failed to prepare code context: %v", err)
+			}
+		}
 	}
 
-	// Step 2: run the dev requirements loop
-	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
-	if err := addDevRequirementsPrompt(dCtx.ExecContext, chatHistory, initialInfo); err != nil {
-		return nil, err
+	// Step 2: run the dev requirements loop, seeding the initial prompt unless
+	// the gathered handoff history already starts with it
+	if !seededInitialPrompt {
+		// prepend a concise repository summary to the other code context in the initial prompt
+		version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
+		if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+			repoSummary, err := GetRepoSummaryForPrompt(dCtx, initialInfo.Requirements, 5000)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get repo summary: %w", err)
+			}
+			initialInfo.Context = repoSummary + "\n\n" + initialInfo.Context
+		}
+
+		if chatHistory == nil {
+			chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		}
+		if err := addDevRequirementsPrompt(dCtx.ExecContext, chatHistory, initialInfo); err != nil {
+			return nil, err
+		}
 	}
 	initialState := &buildDevRequirementsState{
 		contextSizeExtension: contextSizeExtension,
 	}
 	if v := workflow.GetVersion(dCtx, "dev-requirements-advisor", workflow.DefaultVersion, 1); v == 1 {
-		initialState.advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled)
+		initialState.advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.PlanningKey)
 	}
 
 	feedbackIterations := 5
@@ -309,7 +331,10 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	hasExistingRequirements := len(state.devRequirements.AcceptanceCriteria) > 0 || state.devRequirements.Overview != ""
 
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-requirements-advisor", workflow.DefaultVersion, 1); v == 1 {
-		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devRequirementsTools(iteration.ExecCtx, hasExistingRequirements)); err != nil {
+		if err := state.advisor.MaybeAdvise(iteration.ExecCtx, iteration.ChatHistory, devRequirementsTools(iteration.ExecCtx, hasExistingRequirements), nil); err != nil {
+			if state.advisor.handlePauseInterruption(iteration.ExecCtx) {
+				return nil, nil
+			}
 			return nil, fmt.Errorf("error running advisor: %w", err)
 		}
 	}
@@ -483,9 +508,14 @@ func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHist
 
 // TrackedToolChat delegates to persisted_ai.ExecuteChatStream for LLM calls,
 // taking chat history as a separate parameter from options.
-func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, chatHistory *persisted_ai.ChatHistoryContainer) (common.MessageResponse, error) {
+func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, chatHistory *persisted_ai.ChatHistoryContainer, optionsResolvers ...persisted_ai.OptionsResolver) (common.MessageResponse, error) {
 	if chatHistory == nil {
 		return nil, fmt.Errorf("chatHistory is required for TrackedToolChat")
+	}
+
+	var resolveOptions persisted_ai.OptionsResolver
+	if len(optionsResolvers) > 0 {
+		resolveOptions = optionsResolvers[0]
 	}
 
 	streamInput := persisted_ai.StreamInput{
@@ -512,14 +542,27 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 		streamInput.FlowId = workflow.GetInfo(trackedCtx).WorkflowExecution.ID
 		streamInput.FlowActionId = flowAction.Id
 
-		response, err := persisted_ai.ExecuteChatStream(
+		var resolveAttempt persisted_ai.StreamAttemptResolver
+		if resolveOptions != nil {
+			resolveAttempt = func() (llm2.Options, *persisted_ai.ToolNameMappingConfig, error) {
+				attemptOptions := resolveOptions()
+				attemptToolNameMapping, err := resolveStreamToolNameMapping(trackedCtx.ExecContext, attemptOptions.ModelConfig, *trackedCtx.Secrets)
+				if err != nil {
+					return llm2.Options{}, nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+				}
+				return attemptOptions, attemptToolNameMapping, nil
+			}
+		}
+
+		response, err := persisted_ai.ExecuteChatStreamWithAttemptResolver(
 			trackedCtx.FlowActionContext(),
 			streamInput,
 			toolNameMapping,
 			false,
+			resolveAttempt,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
+			return nil, fmt.Errorf("error during tracked tool chat action '%s': %w", actionType, err)
 		}
 
 		return response, nil

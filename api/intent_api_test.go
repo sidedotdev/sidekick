@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"sidekick/dev"
 	"sidekick/domain"
+	"sidekick/mocks"
 
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
@@ -238,7 +240,9 @@ func TestIntentHandlers_WaitsForWorktree(t *testing.T) {
 
 	prevTimeout := flowWorktreeWaitTimeout
 	prevInterval := flowWorktreePollInterval
-	flowWorktreeWaitTimeout = 2 * time.Second
+	// Generous deadline: the handler returns as soon as the worktree appears
+	// (~100ms), but a loaded machine running the full suite can be slow.
+	flowWorktreeWaitTimeout = 10 * time.Second
 	flowWorktreePollInterval = 20 * time.Millisecond
 	t.Cleanup(func() {
 		flowWorktreeWaitTimeout = prevTimeout
@@ -296,8 +300,24 @@ func TestStartIntentSubtaskHandler(t *testing.T) {
 	ctrl := NewMockController(t)
 	router := DefineRoutes(ctrl, TestAllowedOrigins())
 	workspaceId, flowId := setupIntentTestFlow(t, ctrl, t.TempDir())
+	mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
 
 	startURL := fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/intent/start_subtask", workspaceId, flowId)
+
+	lastSubtaskSignal := func(t *testing.T) dev.StartIntentSubtaskSignal {
+		t.Helper()
+		for i := len(mockTemporalClient.Calls) - 1; i >= 0; i-- {
+			call := mockTemporalClient.Calls[i]
+			if call.Method != "SignalWorkflow" {
+				continue
+			}
+			sig, ok := call.Arguments.Get(4).(dev.StartIntentSubtaskSignal)
+			require.True(t, ok, "SignalWorkflow payload should be a StartIntentSubtaskSignal")
+			return sig
+		}
+		require.FailNow(t, "no SignalWorkflow call recorded")
+		return dev.StartIntentSubtaskSignal{}
+	}
 
 	t.Run("with update body", func(t *testing.T) {
 		body, _ := json.Marshal(StartIntentSubtaskRequest{Update: true})
@@ -306,6 +326,10 @@ func TestStartIntentSubtaskHandler(t *testing.T) {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 		assert.Equal(t, http.StatusOK, rr.Code)
+
+		sig := lastSubtaskSignal(t)
+		assert.True(t, sig.Update)
+		assert.True(t, sig.Planned, "manually created sub-tasks must run as planned dev")
 	})
 
 	t.Run("with empty body", func(t *testing.T) {
@@ -313,6 +337,10 @@ func TestStartIntentSubtaskHandler(t *testing.T) {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 		assert.Equal(t, http.StatusOK, rr.Code)
+
+		sig := lastSubtaskSignal(t)
+		assert.False(t, sig.Update)
+		assert.True(t, sig.Planned, "manually created sub-tasks must run as planned dev")
 	})
 }
 

@@ -1950,6 +1950,32 @@ func TestBasePermissions_BunxTsc(t *testing.T) {
 	})
 }
 
+func TestBasePermissions_BunxVitest(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("bunx vitest commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"bunx vitest",
+			"bunx vitest run",
+			"bunx vitest run src/components/Foo.spec.ts",
+			"bunx vitest --coverage",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("similar-prefix commands are not auto-approved", func(t *testing.T) {
+		t.Parallel()
+		result, _ := EvaluateCommandPermission(config, "bunx vitestfake")
+		assert.Equal(t, PermissionRequireApproval, result)
+	})
+}
+
 func TestBasePermissions_GolangciLint(t *testing.T) {
 	t.Parallel()
 	config := BaseCommandPermissions()
@@ -2171,9 +2197,7 @@ func TestBaseCommandPermissionsForIsolatedEnv(t *testing.T) {
 	t.Run("dangerous-but-sometimes-legit commands require approval", func(t *testing.T) {
 		t.Parallel()
 		needsApproval := []string{
-			"sudo apt update",
 			"su - root",
-			"doas mkdir /etc/foo",
 			"chmod 777 secret",
 			"chmod -R 777 secret",
 			"mkfs.ext4 /dev/sda1",
@@ -2188,10 +2212,22 @@ func TestBaseCommandPermissionsForIsolatedEnv(t *testing.T) {
 			"init 6",
 			"history -c",
 			"echo wiped > ~/.bash_history",
+			"sudo mkfs.ext4 /dev/sda1",
+			"sudo shutdown -h now",
+			"doas reboot",
+			"sudo dd if=/dev/zero of=/dev/sda",
 		}
 		for _, cmd := range needsApproval {
 			result, _ := EvaluateCommandPermissionWithOptions(base, cmd, opts)
 			assert.Equal(t, PermissionRequireApproval, result, "expected require_approval for: %s", cmd)
+		}
+	})
+
+	t.Run("destructive commands stay denied with privilege wrapper", func(t *testing.T) {
+		t.Parallel()
+		for _, cmd := range []string{"sudo rm -rf /", "doas rm -rf ~"} {
+			result, _ := EvaluateCommandPermissionWithOptions(base, cmd, opts)
+			assert.Equal(t, PermissionDeny, result, "expected deny for: %s", cmd)
 		}
 	})
 
@@ -2229,6 +2265,58 @@ func TestBaseCommandPermissionsForIsolatedEnv(t *testing.T) {
 			result, _ := EvaluateCommandPermissionWithOptions(base, cmd, opts)
 			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
 		}
+	})
+
+	t.Run("package managers auto-approve with optional privilege wrapper", func(t *testing.T) {
+		t.Parallel()
+		autoApproved := []string{
+			"sudo apt update",
+			"sudo apt-get install -y build-essential",
+			"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk-headless",
+			"apt-get install ripgrep",
+			"sudo aptitude install foo",
+			"sudo dpkg -i pkg.deb",
+			"sudo add-apt-repository ppa:foo/bar",
+			"sudo yum install gcc",
+			"sudo dnf install -y git",
+			"sudo microdnf install curl",
+			"sudo zypper install make",
+			"sudo apk add bash",
+			"doas apk add bash",
+			"sudo pacman -S base-devel",
+			"sudo emerge dev-vcs/git",
+			"sudo xbps-install -S git",
+			"sudo pkg install git",
+			"sudo snap install core",
+			"sudo flatpak install flathub org.foo.Bar",
+			"brew install jq",
+			"sudo nix-env -iA nixpkgs.git",
+			"sudo pip install requests",
+			"sudo pip3 install requests",
+			"sudo npm install -g typescript",
+			"sudo gem install bundler",
+			"sudo update-alternatives --config editor",
+		}
+		for _, cmd := range autoApproved {
+			result, _ := EvaluateCommandPermissionWithOptions(base, cmd, opts)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("conditional JDK installation auto-approves", func(t *testing.T) {
+		t.Parallel()
+		script := `set -eu
+if [ "$(id -u)" -eq 0 ]; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk-headless
+else
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk-headless
+fi
+java -version
+javac -version`
+		result, _ := EvaluateScriptPermissionWithOptions(base, script, opts)
+		assert.Equal(t, PermissionAutoApprove, result)
 	})
 
 	t.Run("unmatched commands auto-approve", func(t *testing.T) {

@@ -106,24 +106,23 @@ func run(args []string, stdout, stderr io.Writer) (int, error) {
 	}
 
 	tracker := newPackageTracker()
+	// Persist passes incrementally while go test runs, so a killed run (CI
+	// timeout, Ctrl-C) still caches the packages that already passed. Only
+	// eligible when hashing succeeded, mirroring the pre-existing end-of-run
+	// caching condition.
+	var writer *cacheWriter
+	if profileSig != "" && len(pkgHashes) > 0 {
+		writer = newCacheWriter(profileSig, describeProfile(flags), pkgHashes, nil, updateCachePasses, func(err error) {
+			fmt.Fprintf(stderr, "affected-tests: failed to update cache: %v\n", err)
+		})
+		tracker.onPass = writer.enqueue
+	}
 	exitCode, err := runGoTest(flags, toRun, stdout, stderr, tracker)
+	if writer != nil {
+		writer.close()
+	}
 	if err != nil {
 		return exitCode, err
-	}
-
-	if profileSig != "" && len(pkgHashes) > 0 {
-		passed := tracker.passed()
-		toCache := make([]string, 0, len(passed))
-		for _, p := range passed {
-			if _, ok := pkgHashes[p]; ok {
-				toCache = append(toCache, p)
-			}
-		}
-		if len(toCache) > 0 {
-			if err := updateCachePasses(profileSig, describeProfile(flags), toCache, pkgHashes); err != nil {
-				fmt.Fprintf(stderr, "affected-tests: failed to update cache: %v\n", err)
-			}
-		}
 	}
 
 	return exitCode, nil
@@ -797,6 +796,9 @@ func applyPasses(c *cacheFile, profileSig, description string, passed []string, 
 type packageTracker struct {
 	mu      sync.Mutex
 	results map[string]string // package -> "pass" | "fail" | "skip"
+	// onPass, when set, is invoked (from the output-streaming goroutine) for
+	// each package-level pass/skip event; it must be cheap and non-blocking.
+	onPass func(pkg string)
 }
 
 func newPackageTracker() *packageTracker {
@@ -823,6 +825,9 @@ func (t *packageTracker) observeLine(line []byte) {
 		t.mu.Lock()
 		t.results[ev.Package] = ev.Action
 		t.mu.Unlock()
+		if t.onPass != nil && ev.Action != "fail" {
+			t.onPass(ev.Package)
+		}
 	}
 }
 
@@ -843,6 +848,106 @@ func (t *packageTracker) passed() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// cacheFlushInterval bounds how often mid-run pass results are written to the
+// affected-tests cache: each write re-reads and re-marshals the whole cache
+// file, so batching amortizes that cost across package completions.
+const cacheFlushInterval = 2 * time.Second
+
+// cacheWriter persists package pass results to the affected-tests cache
+// incrementally on a dedicated goroutine, so a run killed mid-way still
+// benefits future runs. enqueue is cheap and never blocks on flock
+// acquisition or disk I/O, keeping the go test output-streaming path
+// unstalled.
+type cacheWriter struct {
+	profileSig  string
+	description string
+	hashes      map[string]string
+	flushFn     func(profileSig, description string, passed []string, hashes map[string]string) error
+	warn        func(error)
+
+	mu       sync.Mutex
+	pending  []string
+	enqueued map[string]bool
+
+	stop chan struct{}
+	done chan struct{}
+}
+
+// newCacheWriter starts the flush goroutine, which writes pending passes at
+// most once per tick. tick may be injected by tests; when nil, a ticker at
+// cacheFlushInterval is used. close must be called to stop the goroutine and
+// persist any remaining pending passes.
+func newCacheWriter(profileSig, description string, hashes map[string]string, tick <-chan time.Time, flushFn func(string, string, []string, map[string]string) error, warn func(error)) *cacheWriter {
+	w := &cacheWriter{
+		profileSig:  profileSig,
+		description: description,
+		hashes:      hashes,
+		flushFn:     flushFn,
+		warn:        warn,
+		enqueued:    map[string]bool{},
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
+	}
+	go func() {
+		defer close(w.done)
+		if tick == nil {
+			t := time.NewTicker(cacheFlushInterval)
+			defer t.Stop()
+			tick = t.C
+		}
+		for {
+			select {
+			case <-tick:
+				w.flushPending()
+			case <-w.stop:
+				w.flushPending()
+				return
+			}
+		}
+	}()
+	return w
+}
+
+// enqueue records a package pass for eventual persistence. Packages without a
+// computed hash are ignored (same eligibility filter as the end-of-run logic)
+// and each package is persisted at most once.
+func (w *cacheWriter) enqueue(pkg string) {
+	if _, ok := w.hashes[pkg]; !ok {
+		return
+	}
+	w.mu.Lock()
+	if !w.enqueued[pkg] {
+		w.enqueued[pkg] = true
+		w.pending = append(w.pending, pkg)
+	}
+	w.mu.Unlock()
+}
+
+func (w *cacheWriter) flushPending() {
+	w.mu.Lock()
+	batch := w.pending
+	w.pending = nil
+	w.mu.Unlock()
+	if len(batch) == 0 {
+		return
+	}
+	if err := w.flushFn(w.profileSig, w.description, batch, w.hashes); err != nil {
+		w.warn(err)
+		// Requeue so a later tick or the final flush retries the batch,
+		// merging with anything enqueued while the write was in flight.
+		w.mu.Lock()
+		w.pending = append(batch, w.pending...)
+		w.mu.Unlock()
+	}
+}
+
+// close signals the flush goroutine to perform a final flush of anything
+// still pending and waits for it to finish, so no observed pass is lost.
+func (w *cacheWriter) close() {
+	close(w.stop)
+	<-w.done
 }
 
 func runGoTest(flags, pkgs []string, stdout, stderr io.Writer, tracker *packageTracker) (int, error) {

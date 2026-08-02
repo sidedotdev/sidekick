@@ -153,7 +153,8 @@ func TestDecodePayloads(t *testing.T) {
 
 	t.Run("nil payloads", func(t *testing.T) {
 		t.Parallel()
-		assert.Nil(t, decodePayloads(dc, nil))
+		assert.Empty(t, decodePayloads(dc, nil))
+		assert.NotNil(t, decodePayloads(dc, nil))
 	})
 
 	t.Run("round trip", func(t *testing.T) {

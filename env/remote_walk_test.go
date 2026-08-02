@@ -521,6 +521,63 @@ func TestWalkCodeDirectorySSHEntries_ContentParityAcrossModes(t *testing.T) {
 	require.NotContains(t, paths, "rename_from.go", "deleted source of rename should not appear")
 }
 
+// readCountingSSHEnv records remote content reads so tests can prove
+// snapshot mode serves unchanged tracked files from local git objects
+// instead of one remote read per file.
+type readCountingSSHEnv struct {
+	*fakeSSHEnv
+	readPaths []string
+}
+
+func (e *readCountingSSHEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	e.readPaths = append(e.readPaths, p)
+	return e.fakeSSHEnv.ReadFile(ctx, p)
+}
+
+func TestWalkCodeDirectorySSHEntries_SnapshotAvoidsRemoteReadsForUnchangedFiles(t *testing.T) {
+	t.Parallel()
+
+	localRepo, remoteRepo := setupLocalAndRemoteGitRepos(t, map[string]string{
+		"clean.go":        "package clean\n",
+		"modify.go":       "package modify\n// before\n",
+		"subdir/other.go": "package sub\n",
+	})
+	require.NoError(t, os.WriteFile(filepath.Join(remoteRepo, "modify.go"),
+		[]byte("package modify\n// after\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(remoteRepo, "untracked.go"),
+		[]byte("package untracked\n"), 0644))
+
+	envObj := &readCountingSSHEnv{fakeSSHEnv: &fakeSSHEnv{LocalEnv: &LocalEnv{WorkingDirectory: remoteRepo}}}
+	err := walkCodeDirectorySSHEntries(context.Background(), envObj, localRepo, remoteRepo,
+		common.SidekickIgnoreFileNames, RemoteWalkContentModeSnapshot, func(e WalkEntryWithContent) error {
+			if e.IsDir {
+				return nil
+			}
+			rc, err := e.Open(context.Background())
+			if err != nil {
+				return err
+			}
+			_, err = io.ReadAll(rc)
+			rc.Close()
+			return err
+		})
+	require.NoError(t, err)
+
+	readRels := make(map[string]struct{}, len(envObj.readPaths))
+	for _, p := range envObj.readPaths {
+		rel, relErr := filepath.Rel(remoteRepo, p)
+		require.NoError(t, relErr)
+		readRels[rel] = struct{}{}
+	}
+	var got []string
+	for rel := range readRels {
+		got = append(got, rel)
+	}
+	sort.Strings(got)
+	require.Equal(t, []string{"modify.go", "untracked.go"}, got,
+		"only overlay files may be read remotely; unchanged tracked files must come from local git objects")
+}
+
 // BenchmarkWalkCodeDirectorySSHEntries_Modes times the two content modes
 // over a synthetic repo so the default mode choice can be revisited with
 // real measurements. Set BENCH_REMOTE_WALK=1 to run.

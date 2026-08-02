@@ -50,6 +50,7 @@ type BaseCommandPermissionsInput struct {
 var IsolatedSandboxEnvTypes = map[string]bool{
 	"devpod":    true,
 	"openshell": true,
+	"modal":     true,
 }
 
 // BaseCommandPermissionsActivity is a Temporal activity wrapper that returns
@@ -88,39 +89,71 @@ func BaseCommandPermissionsForIsolatedEnv() CommandPermissionConfig {
 			{Pattern: `cd /home/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 			{Pattern: `cd /Users/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 			{Pattern: `cd /repo`, Message: "cd not needed, the command will already be run in the correct working directory"},
+			// Package installation only mutates the disposable sandbox.
+			{Pattern: `(?:sudo\s+|doas\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+apt(?:-get)?\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?apt(?:-get)?\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?aptitude\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?dpkg\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?add-apt-repository\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?yum\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?dnf\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?microdnf\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?rpm\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?zypper\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?apk\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?pacman\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?emerge\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?xbps-install\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?pkg\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?eopkg\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?snap\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?flatpak\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?brew\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?port\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?nix-env\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?nix\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?pip3?\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?npm\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?pnpm\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?yarn\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?gem\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?cargo\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?conda\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?poetry\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?gdebi\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?update-alternatives\b`},
+			{Pattern: `(?:sudo\s+|doas\s+)?ldconfig\b`},
 		},
 		RequireApproval: []CommandPattern{
-			// Privilege escalation - still want a human in the loop.
-			{Pattern: "sudo"},
+			// Interactive privilege escalation to a root shell still wants a
+			// human in the loop.
 			{Pattern: "su "},
-			{Pattern: "doas"},
-			// Dangerous permission changes.
-			{Pattern: "chmod 777"},
-			{Pattern: "chmod -R 777"},
-			// Disk/filesystem operations.
-			{Pattern: "mkfs"},
-			{Pattern: "dd if="},
-			{Pattern: "fdisk"},
-			{Pattern: "parted"},
-			// Shutdown/reboot.
-			{Pattern: "shutdown"},
-			{Pattern: "reboot"},
-			{Pattern: "poweroff"},
-			{Pattern: "halt"},
-			{Pattern: "init 0"},
-			{Pattern: "init 6"},
+			// These operations can undermine a run rather than merely mutate
+			// disposable sandbox state.
+			{Pattern: `(?:sudo\s+|doas\s+)?chmod 777`},
+			{Pattern: `(?:sudo\s+|doas\s+)?chmod -R 777`},
+			{Pattern: `(?:sudo\s+|doas\s+)?mkfs`},
+			{Pattern: `(?:sudo\s+|doas\s+)?dd if=`},
+			{Pattern: `(?:sudo\s+|doas\s+)?fdisk`},
+			{Pattern: `(?:sudo\s+|doas\s+)?parted`},
+			{Pattern: `(?:sudo\s+|doas\s+)?shutdown`},
+			{Pattern: `(?:sudo\s+|doas\s+)?reboot`},
+			{Pattern: `(?:sudo\s+|doas\s+)?poweroff`},
+			{Pattern: `(?:sudo\s+|doas\s+)?halt`},
+			{Pattern: `(?:sudo\s+|doas\s+)?init 0`},
+			{Pattern: `(?:sudo\s+|doas\s+)?init 6`},
 			// History manipulation.
 			{Pattern: "history -c"},
 			{Pattern: `.*>\s*~/\.bash_history`},
 		},
 		Deny: []CommandPattern{
 			// Catastrophic-and-pointless: recursive force-delete of root or home.
-			{Pattern: `^rm -rf /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
-			{Pattern: `^rm -rf ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
-			{Pattern: `^rm -rf /\*`, Message: "Recursive force delete of root contents is extremely dangerous"},
-			{Pattern: `^rm -rf ~/\*`, Message: "Recursive force delete of home contents is extremely dangerous"},
-			{Pattern: `^rm -fr /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
-			{Pattern: `^rm -fr ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
+			{Pattern: `^(?:sudo\s+|doas\s+)?rm -rf /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: `^(?:sudo\s+|doas\s+)?rm -rf ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
+			{Pattern: `^(?:sudo\s+|doas\s+)?rm -rf /\*`, Message: "Recursive force delete of root contents is extremely dangerous"},
+			{Pattern: `^(?:sudo\s+|doas\s+)?rm -rf ~/\*`, Message: "Recursive force delete of home contents is extremely dangerous"},
+			{Pattern: `^(?:sudo\s+|doas\s+)?rm -fr /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: `^(?:sudo\s+|doas\s+)?rm -fr ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
 			// Fork bombs.
 			{Pattern: ":(){:|:&};:", Message: "Fork bomb detected - this will crash the system"},
 			{Pattern: ":(){ :|:& };:", Message: "Fork bomb detected - this will crash the system"},
@@ -279,6 +312,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bun tsc"},
 			{Pattern: "bun run tsc"},
 			{Pattern: "bunx tsc"},
+			{Pattern: "bunx vitest"},
 			{Pattern: "npx tsc"},
 			// Python commands
 			{Pattern: "python --version"},

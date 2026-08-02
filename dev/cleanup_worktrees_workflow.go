@@ -15,6 +15,14 @@ const CleanupWorktreesWorkflowID = "cleanup_stale_worktrees"
 
 const HibernationInactivityTimeout = 24 * time.Hour
 
+// A pending workflow task at this attempt or higher has already failed or
+// timed out repeatedly, meaning the workflow cannot currently make progress
+// (e.g. history replay exceeds the workflow task timeout, or replay is
+// non-deterministic). Signaling such a workflow only re-triggers full-history
+// replay retries that can starve the worker and the Temporal server, so
+// hibernation leaves it alone.
+const unhealthyWorkflowTaskAttemptThreshold = 3
+
 func CleanupWorktreesWorkflow(ctx workflow.Context) error {
 	log := workflow.GetLogger(ctx)
 
@@ -61,7 +69,25 @@ func CleanupWorktreesWorkflow(ctx workflow.Context) error {
 				log.Error("Failed to find hibernation candidates", "WorkspaceId", wsId, "Error", err)
 				continue
 			}
+			healthVersion := workflow.GetVersion(ctx, "skip-unhealthy-hibernation-candidates", workflow.DefaultVersion, 1)
 			for _, candidate := range hibernationOutput.Candidates {
+				if healthVersion >= 1 {
+					var health WorkflowHealthOutput
+					err := workflow.ExecuteActivity(ctx, ima.CheckWorkflowHealth, WorkflowHealthInput{
+						WorkflowId: candidate.FlowId,
+					}).Get(ctx, &health)
+					if err != nil {
+						// Fail open: an unreachable describe shouldn't block
+						// hibernation, and signaling a gone workflow is harmless.
+						log.Warn("Failed to check flow workflow health before hibernation", "FlowId", candidate.FlowId, "Error", err)
+					} else if health.PendingWorkflowTaskAttempt >= unhealthyWorkflowTaskAttemptThreshold {
+						log.Warn("Skipping hibernation signal for unhealthy flow workflow",
+							"FlowId", candidate.FlowId,
+							"PendingWorkflowTaskAttempt", health.PendingWorkflowTaskAttempt,
+							"PendingWorkflowTaskAge", health.PendingWorkflowTaskAge)
+						continue
+					}
+				}
 				err := workflow.SignalExternalWorkflow(ctx, candidate.FlowId, "", SignalNameHibernate, HibernateSignal{}).Get(ctx, nil)
 				if err != nil {
 					log.Warn("Failed to signal flow for hibernation", "FlowId", candidate.FlowId, "Error", err)

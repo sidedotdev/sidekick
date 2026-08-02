@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,8 +29,8 @@ func (ctrl *Controller) OpenInIdeHandler(c *gin.Context) {
 		return
 	}
 
-	if req.Ide != "vscode" && req.Ide != "intellij" && req.Ide != "zed" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid IDE type. Must be 'vscode', 'intellij', or 'zed'"})
+	if req.Ide != "vscode" && req.Ide != "intellij" && req.Ide != "zed" && req.Ide != "vimr" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid IDE type. Must be 'vscode', 'intellij', 'zed', or 'vimr'"})
 		return
 	}
 
@@ -53,6 +54,8 @@ func openInIde(ide, filePath string, line *int, baseDir string) error {
 		return openInVSCode(filePath, line, baseDir)
 	case "zed":
 		return openInZed(filePath, line, baseDir)
+	case "vimr":
+		return openInVimR(filePath, line, baseDir)
 	default:
 		return openInIntelliJ(filePath, line)
 	}
@@ -88,6 +91,22 @@ func openInIntelliJ(filePath string, line *int) error {
 	}
 	url := fmt.Sprintf("idea://open?file=%s%s", filePath, lineFragment)
 	return openURL(url)
+}
+
+func openInVimR(filePath string, line *int, baseDir string) error {
+	var args []string
+	if line != nil {
+		args = append(args, "--line", strconv.Itoa(*line))
+	}
+	args = append(args, filePath)
+
+	cmd := exec.Command("vimr", args...)
+	// Launching from baseDir makes it the working directory of the nvim
+	// instance, which is the closest equivalent to a workspace root
+	if baseDir != "" {
+		cmd.Dir = baseDir
+	}
+	return cmd.Start()
 }
 
 func openInZed(filePath string, line *int, baseDir string) error {

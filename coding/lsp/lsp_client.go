@@ -117,7 +117,18 @@ func lspServerCommand(ctx context.Context, languageName string, envContainer *en
 		for i, part := range remoteParts {
 			quoted[i] = lspShellQuote(part)
 		}
-		args := append(append([]string{}, sshArgs...), strings.Join(quoted, " "))
+		remoteCommand := strings.Join(quoted, " ")
+		// Modal sandboxes expose the go toolchain on PATH only in a login
+		// shell (ModalEnv.RunCommand itself wraps commands in `bash -lc`, and
+		// Modal images are Debian-based so bash is guaranteed). gopls must be
+		// launched the same way, or the daemon it spawns cannot find `go` and
+		// fails to build workspace views. Other SSH envs keep a raw exec:
+		// their images may provide only POSIX sh, and their sshd environment
+		// already matches the one RunCommand probed gopls under.
+		if envContainer.Env.GetType() == env.EnvTypeModal {
+			remoteCommand = "bash -lc " + lspShellQuote(remoteCommand)
+		}
+		args := append(append([]string{}, sshArgs...), remoteCommand)
 		return exec.Command("ssh", args...), nil
 	}
 
@@ -149,6 +160,19 @@ func findOrInstallGopls(ctx context.Context, envContainer *env.EnvContainer) (st
 		return common.FindOrInstallGopls()
 	}
 	e := envContainer.Env
+
+	// Resolve gopls to an absolute path when possible: the probe runs through
+	// env.RunCommand (which some envs, e.g. Modal, wrap in a login shell with
+	// a fuller PATH), while the LSP server is later launched via a raw SSH
+	// exec whose minimal PATH may lack the go bin directory. An absolute path
+	// works identically in both contexts.
+	if out, err := e.RunCommand(ctx, env.EnvRunCommandInput{
+		Command: "sh", Args: []string{"-c", "command -v gopls"},
+	}); err == nil && out.ExitStatus == 0 {
+		if goplsPath := strings.TrimSpace(out.Stdout); strings.HasPrefix(goplsPath, "/") && goplsRuns(ctx, e, goplsPath) {
+			return goplsPath, nil
+		}
+	}
 
 	if goplsRuns(ctx, e, "gopls") {
 		return "gopls", nil

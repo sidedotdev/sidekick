@@ -3,17 +3,16 @@ package env
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"sidekick/coding/unix"
+	"sidekick/common"
 
 	"github.com/rs/zerolog/log"
-	"go.temporal.io/sdk/temporal"
 )
 
 // openShellGatewayProbeTimeout bounds the fast `sandbox list` gateway
@@ -54,8 +53,8 @@ func OpenShellSandboxName(repoDir string) string {
 	return "side--" + DevPodWorkspaceName(repoDir)
 }
 
-// OpenShellCreateActivity creates an OpenShell sandbox.
-func OpenShellCreateActivity(ctx context.Context, input OpenShellCreateInput) (OpenShellCreateOutput, error) {
+// openShellCreateSandbox creates an OpenShell sandbox.
+func openShellCreateSandbox(ctx context.Context, input OpenShellCreateInput) (OpenShellCreateOutput, error) {
 	if err := ensureDockerReady(ctx); err != nil {
 		return OpenShellCreateOutput{}, err
 	}
@@ -208,144 +207,6 @@ func parseCreatedSandboxName(output string) string {
 	return ""
 }
 
-type OpenShellSyncRepoInput struct {
-	SandboxName      string `json:"sandboxName"`
-	LocalRepoDir     string `json:"localRepoDir"`
-	ContainerRepoDir string `json:"containerRepoDir"`
-}
-
-type OpenShellSyncRepoOutput struct {
-	ContainerRepoDir string `json:"containerRepoDir"`
-}
-
-// OpenShellSyncRepoActivity uploads a local git repository to an OpenShell
-// sandbox using a git bundle transferred over ssh.
-func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput) (OpenShellSyncRepoOutput, error) {
-	sshArgs, err := openShellSSHArgs(ctx, input.SandboxName)
-	if err != nil {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to get SSH args: %w", err)
-	}
-
-	containerRepoDir := input.ContainerRepoDir
-	if containerRepoDir == "" {
-		homeArgs := make([]string, len(sshArgs))
-		copy(homeArgs, sshArgs)
-		homeArgs = append(homeArgs, "echo $HOME")
-		homeOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-			WorkingDir: ".",
-			Command:    "ssh",
-			Args:       homeArgs,
-		})
-		if err != nil {
-			return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to resolve $HOME in sandbox: %w", err)
-		}
-		home := strings.TrimSpace(homeOutput.Stdout)
-		if home == "" {
-			home = "/tmp"
-		}
-		containerRepoDir = filepath.Join(home, filepath.Base(input.LocalRepoDir))
-	}
-
-	// Create a git bundle containing all refs. The bundle path must be unique
-	// per invocation: `git bundle create` creates a sibling .lock file and
-	// will refuse to run if either it or the bundle already exists, so a
-	// fixed path keyed only on SandboxName collides with concurrent or
-	// previously-crashed invocations against the same sandbox.
-	bundleFile, err := os.CreateTemp("", fmt.Sprintf("openshell-repo-%s-*.bundle", input.SandboxName))
-	if err != nil {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to allocate bundle temp file: %w", err)
-	}
-	bundlePath := bundleFile.Name()
-	// Close immediately so git can write to it; also remove the empty
-	// placeholder so `git bundle create` does not see a pre-existing file
-	// (git refuses to overwrite an existing bundle target).
-	bundleFile.Close()
-	if err := os.Remove(bundlePath); err != nil && !os.IsNotExist(err) {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to clear bundle temp file: %w", err)
-	}
-	defer os.Remove(bundlePath)
-
-	// FIXME skip creating the bundle when it's not needed (when updating)
-	bundleOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: input.LocalRepoDir,
-		Command:    "git",
-		Args:       []string{"bundle", "create", bundlePath, "--all"},
-	})
-	if err != nil {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to create git bundle: %w", err)
-	}
-	if bundleOutput.ExitStatus != 0 {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("git bundle create failed (exit %d): %s", bundleOutput.ExitStatus, bundleOutput.Stderr)
-	}
-
-	// Upload the bundle using ssh with cat + stdin redirect
-	// (avoids needing scp binary or separate SSH config for scp)
-	remoteBundlePath := "/tmp/repo-" + input.SandboxName + ".bundle"
-	uploadArgs := make([]string, len(sshArgs))
-	copy(uploadArgs, sshArgs)
-	uploadArgs = append(uploadArgs, fmt.Sprintf("cat > %s", shellQuote(remoteBundlePath)))
-
-	uploadOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "sh",
-		Args:       []string{"-c", fmt.Sprintf("cat %s | ssh %s", shellQuote(bundlePath), strings.Join(quoteArgs(uploadArgs), " "))},
-	})
-	if err != nil {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to upload bundle to sandbox: %w", err)
-	}
-	if uploadOutput.ExitStatus != 0 {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("bundle upload failed (exit %d): %s", uploadOutput.ExitStatus, uploadOutput.Stderr)
-	}
-
-	// Clone or update the repo inside the sandbox.
-	// If the repo already exists (sandbox reuse), fetch from the bundle and
-	// reset to match; otherwise clone fresh. On reuse, the bundle's prior
-	// HEAD branch may have been pruned by --prune, leaving the sandbox HEAD
-	// dangling; we re-point HEAD at the bundle's HEAD ref and reset via
-	// FETCH_HEAD to recover.
-	quotedRepo := shellQuote(containerRepoDir)
-	quotedBundle := shellQuote(remoteBundlePath)
-	cloneScript := fmt.Sprintf(
-		"if [ -d %s/.git ]; then "+
-			"cd %s && "+
-			"head_ref=$(git ls-remote --symref %s HEAD 2>/dev/null | awk '/^ref:/ {print $2; exit}') && "+
-			"git fetch --update-head-ok %s '+refs/*:refs/*' --prune && "+
-			"if [ -n \"$head_ref\" ]; then git symbolic-ref HEAD \"$head_ref\"; fi && "+
-			"git fetch %s && "+
-			"if ! git rev-parse --verify HEAD >/dev/null 2>&1; then git update-ref --no-deref HEAD \"$(git rev-parse FETCH_HEAD)\"; fi && "+
-			"git reset --hard FETCH_HEAD; "+
-			"else "+
-			"mkdir -p %s && git clone %s %s && cd %s && "+
-			"git config user.name 'Sidekick' && git config user.email 'sidekick@side.dev'; "+
-			"fi && rm -f %s",
-		quotedRepo,
-		quotedRepo,
-		quotedBundle,
-		quotedBundle,
-		quotedBundle,
-		shellQuote(filepath.Dir(containerRepoDir)), quotedBundle, quotedRepo, quotedRepo,
-		quotedBundle,
-	)
-
-	cloneArgs := make([]string, len(sshArgs))
-	copy(cloneArgs, sshArgs)
-	cloneArgs = append(cloneArgs, cloneScript)
-
-	cloneOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       cloneArgs,
-	})
-	if err != nil {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to clone bundle in sandbox: %w", err)
-	}
-	if cloneOutput.ExitStatus != 0 {
-		return OpenShellSyncRepoOutput{}, fmt.Errorf("git clone in sandbox failed (exit %d): %s", cloneOutput.ExitStatus, cloneOutput.Stderr)
-	}
-
-	return OpenShellSyncRepoOutput{ContainerRepoDir: containerRepoDir}, nil
-}
-
 // SyncMergeResultToLocal transfers the given branch from the OpenShell sandbox
 // back to the local host repository. OpenShell holds an independent clone of
 // the repo (synced in via a git bundle) rather than a bind mount, so a merge
@@ -363,86 +224,33 @@ func (e *OpenShellEnv) SyncMergeResultToLocal(ctx context.Context, branch string
 	if err != nil {
 		return fmt.Errorf("failed to get SSH args: %w", err)
 	}
+	return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+}
 
-	// Bundle the branch inside the sandbox. The working directory is a worktree
-	// that shares the object store, so the branch ref is reachable from here.
-	remoteBundlePath := "/tmp/repo-back-" + e.SandboxName + ".bundle"
-	bundleScript := fmt.Sprintf(
-		"cd %s && rm -f %s && git bundle create %s %s",
-		shellQuote(e.WorkingDirectory),
-		shellQuote(remoteBundlePath),
-		shellQuote(remoteBundlePath),
-		shellQuote(branch),
-	)
-	bundleArgs := append(append([]string{}, sshArgs...), bundleScript)
-	bundleOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       bundleArgs,
-	})
+var _ GitRefSyncer = (*OpenShellEnv)(nil)
+
+func (e *OpenShellEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync git ref to local: OpenShellEnv has no LocalRepoDir")
+	}
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
 	if err != nil {
-		return fmt.Errorf("failed to create git bundle in sandbox: %w", err)
+		return fmt.Errorf("failed to get SSH args: %w", err)
 	}
-	if bundleOutput.ExitStatus != 0 {
-		return fmt.Errorf("git bundle create in sandbox failed (exit %d): %s", bundleOutput.ExitStatus, bundleOutput.Stderr)
-	}
+	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
+}
 
-	localBundle, err := os.CreateTemp("", fmt.Sprintf("openshell-back-%s-*.bundle", e.SandboxName))
+var _ TargetBranchSyncer = (*OpenShellEnv)(nil)
+
+func (e *OpenShellEnv) SyncBranchToRemote(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync branch to remote: OpenShellEnv has no LocalRepoDir")
+	}
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
 	if err != nil {
-		return fmt.Errorf("failed to allocate bundle temp file: %w", err)
+		return fmt.Errorf("failed to get SSH args: %w", err)
 	}
-	localBundlePath := localBundle.Name()
-	localBundle.Close()
-	defer os.Remove(localBundlePath)
-
-	downloadArgs := append(append([]string{}, sshArgs...), fmt.Sprintf("cat %s", shellQuote(remoteBundlePath)))
-	downloadOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "sh",
-		Args:       []string{"-c", fmt.Sprintf("ssh %s > %s", strings.Join(quoteArgs(downloadArgs), " "), shellQuote(localBundlePath))},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to download bundle from sandbox: %w", err)
-	}
-	if downloadOutput.ExitStatus != 0 {
-		return fmt.Errorf("bundle download failed (exit %d): %s", downloadOutput.ExitStatus, downloadOutput.Stderr)
-	}
-
-	// Best-effort cleanup of the sandbox-side bundle.
-	cleanupArgs := append(append([]string{}, sshArgs...), fmt.Sprintf("rm -f %s", shellQuote(remoteBundlePath)))
-	_, _ = unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       cleanupArgs,
-	})
-
-	// Apply the branch to the local repo. The bundle path and branch are passed
-	// as positional arguments ($1, $2) rather than interpolated into the script
-	// so that arbitrary branch names cannot alter the shell command. Fetch into
-	// a temporary ref first, which is always permitted (even for the currently
-	// checked-out branch), then advance the local branch: when a worktree has it
-	// checked out, merge --ff-only there so both the ref and the working tree
-	// move; otherwise update the ref directly.
-	applyScript := `set -e
-bundle="$1"
-branch="$2"
-tempref="refs/sidekick-sync/$branch"
-git fetch "$bundle" "+refs/heads/$branch:$tempref"
-wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p; exit}')
-if [ -n "$wt" ]; then git -C "$wt" merge --ff-only "$tempref"; else git update-ref "refs/heads/$branch" "$tempref"; fi
-git update-ref -d "$tempref"`
-	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: e.LocalRepoDir,
-		Command:    "sh",
-		Args:       []string{"-c", applyScript, "sh", localBundlePath, branch},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to apply synced branch to local repo: %w", err)
-	}
-	if applyOutput.ExitStatus != 0 {
-		return fmt.Errorf("applying synced branch to local repo failed (exit %d): %s", applyOutput.ExitStatus, applyOutput.Stderr)
-	}
-	return nil
+	return syncBranchToRemoteOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
 }
 
 // quoteArgs shell-quotes each argument for use in a sh -c command.
@@ -454,100 +262,23 @@ func quoteArgs(args []string) []string {
 	return quoted
 }
 
-type CreateOpenShellWorktreeInput struct {
-	EnvContainer EnvContainer `json:"envContainer"`
-	RepoDir      string       `json:"repoDir"`
-	BranchName   string       `json:"branchName"`
-	StartBranch  string       `json:"startBranch,omitempty"`
-	WorkspaceId  string       `json:"workspaceId"`
-}
-
-type CreateOpenShellWorktreeOutput struct {
-	WorktreePath string `json:"worktreePath"`
-}
-
-// CreateOpenShellWorktreeActivity creates a git worktree inside a running
-// OpenShell sandbox so that worktree .git references resolve within the
-// sandbox filesystem.
-func CreateOpenShellWorktreeActivity(ctx context.Context, input CreateOpenShellWorktreeInput) (CreateOpenShellWorktreeOutput, error) {
-	repoName := filepath.Base(input.RepoDir)
-	branchSuffix := strings.TrimPrefix(input.BranchName, "side/")
-	dirName := repoName + "-" + branchSuffix
-
-	homeOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-		Command: "sh",
-		Args:    []string{"-c", "echo $HOME"},
-	})
-	if err != nil {
-		return CreateOpenShellWorktreeOutput{}, fmt.Errorf("failed to resolve $HOME in environment: %w", err)
-	}
-	baseDir := strings.TrimSpace(homeOutput.Stdout)
-	if baseDir == "" {
-		baseDir = "/tmp"
-	}
-	worktreePath := filepath.Join(baseDir, "sidekick-worktrees", input.WorkspaceId, dirName)
-
-	mkdirOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-		Command: "mkdir",
-		Args:    []string{"-p", worktreePath},
-	})
-	if err != nil {
-		return CreateOpenShellWorktreeOutput{}, fmt.Errorf("failed to create worktree directory in sandbox: %w", err)
-	}
-	if mkdirOutput.ExitStatus != 0 {
-		return CreateOpenShellWorktreeOutput{}, fmt.Errorf("mkdir failed in sandbox (exit %d): %s", mkdirOutput.ExitStatus, mkdirOutput.Stderr)
-	}
-
-	baseRef := "HEAD"
-	if input.StartBranch != "" {
-		baseRef = input.StartBranch
-	}
-	addOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-		Command: "git",
-		Args:    []string{"worktree", "add", "-b", input.BranchName, worktreePath, baseRef},
-	})
-	if err != nil {
-		return CreateOpenShellWorktreeOutput{}, fmt.Errorf("failed to run git worktree add in sandbox: %w", err)
-	}
-	if addOutput.ExitStatus != 0 {
-		err := fmt.Errorf("git worktree add failed in sandbox (exit %d): %s", addOutput.ExitStatus, addOutput.Stderr)
-		if strings.Contains(addOutput.Stderr, "already exists") {
-			return CreateOpenShellWorktreeOutput{}, temporal.NewNonRetryableApplicationError(
-				err.Error(),
-				ErrTypeBranchAlreadyExists,
-				err,
-			)
-		}
-		return CreateOpenShellWorktreeOutput{}, err
-	}
-
-	return CreateOpenShellWorktreeOutput{WorktreePath: worktreePath}, nil
-}
-
-type OpenShellCheckSandboxInput struct {
-	SandboxName string `json:"sandboxName"`
-}
-
-type OpenShellCheckSandboxOutput struct {
-	Alive bool `json:"alive"`
-}
-
-// OpenShellCheckSandboxActivity checks whether a named sandbox exists and is
-// reachable by fetching its metadata.
-func OpenShellCheckSandboxActivity(ctx context.Context, input OpenShellCheckSandboxInput) (OpenShellCheckSandboxOutput, error) {
+// openShellCheckSandbox checks whether a named sandbox exists and is
+// reachable by fetching its metadata. Failures are treated as "not alive" so
+// callers can fall through to (re)creation.
+func openShellCheckSandbox(ctx context.Context, sandboxName string) (bool, error) {
 	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: ".",
 		Command:    "openshell",
-		Args:       []string{"sandbox", "get", input.SandboxName},
+		Args:       []string{"sandbox", "get", sandboxName},
 	})
 	if err != nil {
-		return OpenShellCheckSandboxOutput{Alive: false}, nil
+		return false, nil
 	}
-	return OpenShellCheckSandboxOutput{Alive: output.ExitStatus == 0}, nil
+	return output.ExitStatus == 0, nil
 }
 
-// OpenShellDeleteActivity deletes an OpenShell sandbox.
-func OpenShellDeleteActivity(ctx context.Context, sandboxName string) error {
+// openShellDeleteSandbox deletes an OpenShell sandbox.
+func openShellDeleteSandbox(ctx context.Context, sandboxName string) error {
 	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: ".",
 		Command:    "openshell",
@@ -562,10 +293,45 @@ func OpenShellDeleteActivity(ctx context.Context, sandboxName string) error {
 	return nil
 }
 
-// OpenShellStopActivity deletes an OpenShell sandbox.
-// OpenShell has no stop-without-delete; this is equivalent to delete.
-func OpenShellStopActivity(ctx context.Context, sandboxName string) error {
-	return OpenShellDeleteActivity(ctx, sandboxName)
+// openShellSandboxProvider adapts OpenShell sandbox management to the
+// generic SandboxProvider interface.
+type openShellSandboxProvider struct{}
+
+func init() {
+	RegisterSandboxProvider(EnvTypeOpenShell, openShellSandboxProvider{})
+}
+
+func (openShellSandboxProvider) CreateSandbox(ctx context.Context, input CreateSandboxInput) (CreateSandboxOutput, error) {
+	var config common.OpenShellEnvConfig
+	if len(input.Config) > 0 {
+		if err := json.Unmarshal(input.Config, &config); err != nil {
+			return CreateSandboxOutput{}, fmt.Errorf("invalid openshell sandbox config: %w", err)
+		}
+	}
+	output, err := openShellCreateSandbox(ctx, OpenShellCreateInput{
+		Name:    input.Name,
+		Source:  config.From,
+		RepoDir: input.RepoDir,
+	})
+	if err != nil {
+		return CreateSandboxOutput{}, err
+	}
+	return CreateSandboxOutput{SandboxName: output.SandboxName}, nil
+}
+
+func (openShellSandboxProvider) CheckSandbox(ctx context.Context, input CheckSandboxInput) (CheckSandboxOutput, error) {
+	alive, err := openShellCheckSandbox(ctx, input.SandboxName)
+	return CheckSandboxOutput{Alive: alive}, err
+}
+
+// StopSandbox deletes the sandbox: OpenShell has no stop-without-delete
+// lifecycle.
+func (openShellSandboxProvider) StopSandbox(ctx context.Context, input StopSandboxInput) error {
+	return openShellDeleteSandbox(ctx, input.SandboxName)
+}
+
+func (openShellSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteSandboxInput) error {
+	return openShellDeleteSandbox(ctx, input.SandboxName)
 }
 
 // openShellSSHArgs runs `openshell sandbox ssh-config <name>`, parses the

@@ -14,8 +14,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// GetStorage initializes only the storage backend selected via SIDE_STORAGE,
-// without the streamer (and thus without requiring a NATS connection).
+// GetStorage constructs the configured srv.Storage backend (per SIDE_STORAGE)
+// without initializing a streamer. This suits callers that only need storage,
+// e.g. building a Temporal payload codec, and must avoid the side effects of
+// starting an embedded NATS server.
 func GetStorage() (srv.Storage, error) {
 	storageType := os.Getenv("SIDE_STORAGE")
 	switch storageType {
@@ -30,8 +32,7 @@ func GetStorage() (srv.Storage, error) {
 		log.Info().Msg("Using SQLite storage")
 		return storage, nil
 	default:
-		log.Fatal().Str("storage", storageType).Msg("Unknown storage type")
-		return nil, nil
+		return nil, fmt.Errorf("unknown storage type: %q", storageType)
 	}
 }
 

@@ -26,10 +26,18 @@ func main() {
 
 	srv := api.RunServer()
 
+	remoteServer, err := api.RunRemoteServer(context.Background())
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to start remote (iroh) API server; remote pairing will be unavailable")
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	// graceful shutdown
+	if remoteServer != nil {
+		remoteServer.Shutdown(context.Background())
+	}
 	srv.Shutdown(context.Background())
 }

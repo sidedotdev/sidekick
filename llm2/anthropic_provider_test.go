@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/invopop/jsonschema"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -805,6 +806,9 @@ func TestAnthropicResponsesProvider_FastModeIntegration(t *testing.T) {
 		if contains(err.Error(), "does not support the `speed` parameter") {
 			t.Skipf("Skipping fast-mode test: model %q does not support speed (set ANTHROPIC_FAST_MODEL to a supported model): %v", fastModel, err)
 		}
+		if contains(err.Error(), "Fast mode is not enabled") {
+			t.Skipf("Skipping fast-mode test: fast mode is not enabled for this Anthropic organization: %v", err)
+		}
 		t.Fatalf("Stream returned an error: %v", err)
 	}
 
@@ -966,4 +970,273 @@ func TestAnthropicResponsesProvider_FastModeSpeedup(t *testing.T) {
 	if fastAvg >= normalAvg {
 		t.Fatalf("expected fast-mode avg latency (%s) to be lower than normal-mode avg (%s)", fastAvg, normalAvg)
 	}
+}
+func TestAccumulateAnthropicMessageMetadataIgnoresMalformedToolInput(t *testing.T) {
+	t.Parallel()
+
+	rawEvents := []string{
+		`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-opus-4-8","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_test","name":"get_help_or_input","input":{}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"requests\": <parameter name=\"content\">broken"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":9}}`,
+	}
+
+	var message anthropic.Message
+	for _, rawEvent := range rawEvents {
+		var event anthropic.MessageStreamEventUnion
+		assert.NoError(t, json.Unmarshal([]byte(rawEvent), &event))
+		assert.NoError(t, accumulateAnthropicMessageMetadata(&message, event))
+	}
+
+	assert.Equal(t, "msg_test", message.ID)
+	assert.Equal(t, int64(12), message.Usage.InputTokens)
+	assert.Equal(t, int64(9), message.Usage.OutputTokens)
+	assert.Equal(t, anthropic.StopReasonToolUse, message.StopReason)
+	assert.Empty(t, message.Content)
+}
+
+func anthropicBlockKind(block anthropic.ContentBlockParamUnion) string {
+	switch {
+	case block.OfText != nil:
+		return "text"
+	case block.OfThinking != nil:
+		return "thinking"
+	case block.OfRedactedThinking != nil:
+		return "redacted_thinking"
+	case block.OfToolUse != nil:
+		return "tool_use"
+	case block.OfToolResult != nil:
+		return "tool_result"
+	case block.OfImage != nil:
+		return "image"
+	default:
+		return "unknown"
+	}
+}
+
+func TestMessagesToAnthropicParams_ReasoningCleanup(t *testing.T) {
+	t.Parallel()
+
+	textBlock := ContentBlock{Type: ContentBlockTypeText, Text: "The answer is 44323."}
+	toolUseBlock := ContentBlock{
+		Type: ContentBlockTypeToolUse,
+		ToolUse: &ToolUseBlock{
+			Id:        "toolu_1",
+			Name:      "get_current_weather",
+			Arguments: `{"location":"New York"}`,
+		},
+	}
+	openaiReasoningBlock := ContentBlock{
+		Id:   "rs_abc123",
+		Type: ContentBlockTypeReasoning,
+		Reasoning: &ReasoningBlock{
+			Summary:          "Multiplying step by step",
+			EncryptedContent: "gAAAAABopenai-encrypted-reasoning",
+		},
+	}
+
+	testCases := []struct {
+		name          string
+		content       []ContentBlock
+		expectedKinds []string
+	}{
+		{
+			name: "anthropic thinking block is replayed",
+			content: []ContentBlock{
+				{Type: ContentBlockTypeReasoning, Reasoning: &ReasoningBlock{Text: "127 * 349 = ...", Signature: []byte("anthropic-signature")}},
+				textBlock,
+			},
+			expectedKinds: []string{"thinking", "text"},
+		},
+		{
+			name: "anthropic redacted thinking block is replayed",
+			content: []ContentBlock{
+				{Type: ContentBlockTypeReasoning, Reasoning: &ReasoningBlock{EncryptedContent: "anthropic-opaque-data"}},
+				textBlock,
+			},
+			expectedKinds: []string{"redacted_thinking", "text"},
+		},
+		{
+			name:          "openai reasoning is dropped without losing later blocks",
+			content:       []ContentBlock{openaiReasoningBlock, textBlock, toolUseBlock},
+			expectedKinds: []string{"text", "tool_use"},
+		},
+		{
+			name: "reasoning missing thinking text or signature is dropped",
+			content: []ContentBlock{
+				{Type: ContentBlockTypeReasoning, Reasoning: &ReasoningBlock{Text: "unsigned thinking"}},
+				{Type: ContentBlockTypeReasoning, Reasoning: &ReasoningBlock{Summary: "summary only"}},
+				{Type: ContentBlockTypeReasoning, Reasoning: &ReasoningBlock{}},
+				{Type: ContentBlockTypeReasoning},
+				textBlock,
+			},
+			expectedKinds: []string{"text"},
+		},
+		{
+			name:          "assistant message with only foreign reasoning is omitted",
+			content:       []ContentBlock{openaiReasoningBlock},
+			expectedKinds: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			params, err := messagesToAnthropicParams([]Message{{Role: RoleAssistant, Content: tc.content}})
+			assert.NoError(t, err)
+
+			if len(tc.expectedKinds) == 0 {
+				assert.Empty(t, params)
+				return
+			}
+
+			if !assert.Len(t, params, 1) {
+				return
+			}
+
+			var kinds []string
+			for _, block := range params[0].Content {
+				kinds = append(kinds, anthropicBlockKind(block))
+				if block.OfThinking != nil {
+					assert.NotEmpty(t, block.OfThinking.Thinking, "thinking blocks must contain thinking")
+					assert.NotEmpty(t, block.OfThinking.Signature, "thinking blocks must contain a signature")
+				}
+				if block.OfRedactedThinking != nil {
+					assert.NotEmpty(t, block.OfRedactedThinking.Data, "redacted thinking blocks must contain data")
+				}
+			}
+			assert.Equal(t, tc.expectedKinds, kinds)
+		})
+	}
+}
+
+// Covers switching models mid-conversation, which previously failed with
+// "each thinking block must contain thinking" once an OpenAI reasoning turn
+// was replayed to Anthropic.
+func TestAnthropicProvider_CrossProviderReasoningHandoffIntegration(t *testing.T) {
+	t.Parallel()
+
+	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
+	if !hasAnyIntegrationSecret(secretManager, "OPENAI_OAUTH", "OPENAI_API_KEY") {
+		t.Skip("Skipping cross-provider handoff test; no OpenAI credentials available")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	openaiModel := os.Getenv("OPENAI_REASONING_MODEL")
+	if openaiModel == "" {
+		openaiModel = "gpt-5.6-luna"
+	}
+	anthropicModel := os.Getenv("ANTHROPIC_REASONING_MODEL")
+	if anthropicModel == "" {
+		anthropicModel = "claude-sonnet-4-5"
+	}
+
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "What is 127 * 349? Think through this step by step, showing your work.",
+				},
+			},
+		},
+	}
+
+	openaiEvents := make(chan Event, 1000)
+	go func() {
+		for range openaiEvents {
+		}
+	}()
+	openaiResponse, err := OpenAIResponsesProvider{}.Stream(ctx, StreamRequest{
+		Messages: messages,
+		Options: Options{
+			ModelConfig: common.ModelConfig{
+				Provider:        "openai",
+				Model:           openaiModel,
+				ReasoningEffort: "medium",
+				MaxTokens:       2048,
+			},
+		},
+		SecretManager: secretManager,
+	}, openaiEvents)
+	close(openaiEvents)
+	if err != nil {
+		t.Skipf("Skipping cross-provider handoff test; OpenAI stream failed: %v", err)
+	}
+
+	assistantTurn := openaiResponse.Output
+	var openaiReasoning *ReasoningBlock
+	var openaiReasoningId string
+	for _, block := range assistantTurn.Content {
+		if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
+			openaiReasoning = block.Reasoning
+			openaiReasoningId = block.Id
+			break
+		}
+	}
+	if openaiReasoning == nil {
+		t.Fatalf("Expected OpenAI reasoning block to replay to Anthropic, got content: %v", assistantTurn.Content)
+	}
+	t.Logf("OpenAI reasoning block: id=%s textLen=%d summaryLen=%d encryptedContentLen=%d",
+		openaiReasoningId, len(openaiReasoning.Text), len(openaiReasoning.Summary), len(openaiReasoning.EncryptedContent))
+
+	handoffMessages := append(append([]Message{}, messages...),
+		assistantTurn,
+		Message{
+			Role:    RoleUser,
+			Content: TextContentBlocks("Now double-check that result and reply with just the number."),
+		},
+	)
+
+	params, err := messagesToAnthropicParams(handoffMessages)
+	assert.NoError(t, err)
+	for _, param := range params {
+		for _, block := range param.Content {
+			if block.OfThinking != nil {
+				assert.NotEmpty(t, block.OfThinking.Thinking, "thinking blocks must contain thinking")
+				assert.NotEmpty(t, block.OfThinking.Signature, "thinking blocks must contain a signature")
+			}
+			if block.OfRedactedThinking != nil {
+				assert.NotEqual(t, openaiReasoning.EncryptedContent, block.OfRedactedThinking.Data,
+					"OpenAI encrypted reasoning must not be replayed as Anthropic redacted thinking")
+			}
+		}
+	}
+
+	anthropicEvents := make(chan Event, 1000)
+	go func() {
+		for range anthropicEvents {
+		}
+	}()
+	anthropicResponse, err := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}.Stream(ctx, StreamRequest{
+		Messages: handoffMessages,
+		Options: Options{
+			ModelConfig: common.ModelConfig{
+				Provider:        "anthropic",
+				Model:           anthropicModel,
+				ReasoningEffort: "low",
+				MaxTokens:       2048,
+			},
+		},
+		SecretManager: secretManager,
+	}, anthropicEvents)
+	close(anthropicEvents)
+
+	if err != nil {
+		if isAnthropicTransientError(err) {
+			t.Skipf("Skipping cross-provider handoff test due to transient Anthropic API error: %v", err)
+		}
+		if isAnthropicCredentialError(err) {
+			t.Skipf("Skipping cross-provider handoff test due to Anthropic credentials not configured/invalid: %v", err)
+		}
+		t.Fatalf("Anthropic stream failed after switching from OpenAI: %v", err)
+	}
+
+	assert.NotEmpty(t, anthropicResponse.Output.Content)
+	assert.Greater(t, anthropicResponse.Usage.InputTokens, 0)
 }

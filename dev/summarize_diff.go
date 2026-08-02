@@ -51,6 +51,11 @@ func SummarizeDiffActivity(ctx context.Context, input SummarizeDiffActivityInput
 		return string(content), nil
 	}
 
+	reranker, err := persisted_ai.GetReranker(input.SecretManagerContainer.SecretManager)
+	if err != nil {
+		return "", fmt.Errorf("failed to get reranker: %w", err)
+	}
+
 	opts := persisted_ai.DiffSummarizeOptions{
 		GitDiff:         input.GitDiff,
 		ReviewFeedback:  input.ReviewFeedback,
@@ -59,6 +64,7 @@ func SummarizeDiffActivity(ctx context.Context, input SummarizeDiffActivityInput
 		SecretManager:   input.SecretManagerContainer.SecretManager,
 		Embedder:        embedder,
 		ContentProvider: contentProvider,
+		Reranker:        reranker,
 	}
 
 	return persisted_ai.SummarizeDiff(ctx, opts)

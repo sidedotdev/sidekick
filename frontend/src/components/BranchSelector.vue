@@ -1,10 +1,11 @@
 <template>
   <div>
-    <Dropdown
+    <FuzzySelect
       v-model="selectedBranchValue"
       :options="branches"
       optionLabel="name"
       optionValue="name"
+      filterPlaceholder="Search branches"
       :loading="isLoadingBranches"
       placeholder="Select Branch"
       class="w-full"
@@ -15,9 +16,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import Dropdown from 'primevue/dropdown'
 import { store } from '../lib/store'
 import type { BranchInfo } from '../lib/store'
+import FuzzySelect from './FuzzySelect.vue'
 
 const props = defineProps<{
   workspaceId: string

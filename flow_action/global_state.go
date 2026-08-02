@@ -2,6 +2,7 @@ package flow_action
 
 import (
 	"errors"
+	"sort"
 	"sync"
 )
 
@@ -16,10 +17,13 @@ const (
 )
 
 type GlobalState struct {
-	Paused            bool
-	cancelQueue       []func()
-	mu                sync.Mutex
-	PendingUserAction *UserActionType
+	Paused                      bool
+	cancelQueue                 []func()
+	namedCancelQueues           map[string]map[uint64]func()
+	namedCancellationGeneration map[string]uint64
+	nextCancelRegistrationID    uint64
+	mu                          sync.Mutex
+	PendingUserAction           *UserActionType
 	// values stores arbitrary key-value pairs for workflow-specific state.
 	// This allows different workflow types to store custom state without
 	// polluting the GlobalState struct with use-case-specific fields.
@@ -42,13 +46,100 @@ func (g *GlobalState) AddCancelFunc(cancel func()) {
 	g.cancelQueue = append(g.cancelQueue, cancel)
 }
 
+func (g *GlobalState) AddNamedCancelFunc(name string, cancel func()) {
+	g.RegisterNamedCancelFunc(name, cancel)
+}
+
+// RegisterNamedCancelFunc registers cancellation under name and returns a
+// function that removes the registration after the operation completes.
+func (g *GlobalState) RegisterNamedCancelFunc(name string, cancel func()) func() {
+	g.mu.Lock()
+	if g.namedCancelQueues == nil {
+		g.namedCancelQueues = make(map[string]map[uint64]func())
+	}
+	g.nextCancelRegistrationID++
+	registrationID := g.nextCancelRegistrationID
+	if g.namedCancelQueues[name] == nil {
+		g.namedCancelQueues[name] = make(map[uint64]func())
+	}
+	g.namedCancelQueues[name][registrationID] = cancel
+	g.mu.Unlock()
+
+	return func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		queue := g.namedCancelQueues[name]
+		delete(queue, registrationID)
+		if len(queue) == 0 {
+			delete(g.namedCancelQueues, name)
+		}
+	}
+}
+
 func (g *GlobalState) Cancel() {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	for _, cancel := range g.cancelQueue {
+	cancelQueue := g.cancelQueue
+	g.cancelQueue = nil
+
+	names := make([]string, 0, len(g.namedCancelQueues))
+	for name := range g.namedCancelQueues {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		namedQueue := g.namedCancelQueues[name]
+		registrationIDs := make([]uint64, 0, len(namedQueue))
+		for registrationID := range namedQueue {
+			registrationIDs = append(registrationIDs, registrationID)
+		}
+		sort.Slice(registrationIDs, func(i, j int) bool {
+			return registrationIDs[i] < registrationIDs[j]
+		})
+		for _, registrationID := range registrationIDs {
+			cancelQueue = append(cancelQueue, namedQueue[registrationID])
+		}
+	}
+	g.namedCancelQueues = nil
+	g.mu.Unlock()
+
+	for _, cancel := range cancelQueue {
 		cancel()
 	}
-	g.cancelQueue = nil
+}
+
+func (g *GlobalState) CancelNamed(name string) {
+	g.mu.Lock()
+	namedQueue := g.namedCancelQueues[name]
+	delete(g.namedCancelQueues, name)
+	if g.namedCancellationGeneration == nil {
+		g.namedCancellationGeneration = make(map[string]uint64)
+	}
+	g.namedCancellationGeneration[name]++
+
+	registrationIDs := make([]uint64, 0, len(namedQueue))
+	for registrationID := range namedQueue {
+		registrationIDs = append(registrationIDs, registrationID)
+	}
+	sort.Slice(registrationIDs, func(i, j int) bool {
+		return registrationIDs[i] < registrationIDs[j]
+	})
+	cancelQueue := make([]func(), 0, len(registrationIDs))
+	for _, registrationID := range registrationIDs {
+		cancelQueue = append(cancelQueue, namedQueue[registrationID])
+	}
+	g.mu.Unlock()
+
+	for _, cancel := range cancelQueue {
+		cancel()
+	}
+}
+
+// NamedCancellationGeneration returns how many times the named cancellation
+// queue has been processed.
+func (g *GlobalState) NamedCancellationGeneration(name string) uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.namedCancellationGeneration[name]
 }
 
 // SetUserAction sets the pending user action.

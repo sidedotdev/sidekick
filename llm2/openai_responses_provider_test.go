@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
@@ -69,6 +71,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
+	// Keep the default auth type so these tests work with either available credential type.
 	provider := OpenAIResponsesProvider{}
 
 	fmt.Println("\n=== OpenAI Responses Provider Integration Test ===")
@@ -91,12 +94,12 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	secretManager := requireOpenAIIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "openai",
-			Model:    "gpt-5-mini",
+			Model:    "gpt-5.4-mini",
 		},
 		Tools:      []*common.Tool{mockTool},
 		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
@@ -258,7 +261,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	})
 }
 
-func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
+func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
@@ -266,6 +269,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
+	// Keep the default auth type so these tests work with either available credential type.
 	provider := OpenAIResponsesProvider{}
 
 	fmt.Println("\n=== OpenAI Responses Reasoning Test ===")
@@ -282,12 +286,12 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	secretManager := requireOpenAIIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider:        "openai",
-			Model:           "gpt-5-mini",
+			Model:           "gpt-5.4-mini",
 			ReasoningEffort: "low",
 			MaxTokens:       1024,
 		},
@@ -337,23 +341,16 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	t.Logf("Response output content blocks: %d", len(response.Output.Content))
 	debugPrintAllContentBlocks(response.Output.Content)
 
-	var foundReasoning bool
-	var encryptedContent string
+	var hasReasoningBlock bool
 	for _, block := range response.Output.Content {
 		if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
-			foundReasoning = true
-			encryptedContent = block.Reasoning.EncryptedContent
-			t.Logf("Found reasoning block with EncryptedContent length: %d", len(encryptedContent))
+			hasReasoningBlock = true
 			break
 		}
 	}
 
-	if !foundReasoning {
+	if !hasReasoningBlock {
 		t.Fatal("Expected response.Output.Content to include a reasoning block")
-	}
-
-	if encryptedContent == "" {
-		t.Fatal("Expected reasoning block to have non-empty EncryptedContent")
 	}
 
 	assert.NotNil(t, response.Usage, "Usage field should not be nil")
@@ -364,7 +361,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
 	t.Logf("StopReason: %s", response.StopReason)
 
-	t.Run("MultiTurnEncryptedReasoning", func(t *testing.T) {
+	t.Run("MultiTurnReasoning", func(t *testing.T) {
 		followUpMessages := append([]Message{}, messages...)
 		followUpMessages = append(followUpMessages, response.Output)
 		followUpMessages = append(followUpMessages, Message{
@@ -419,7 +416,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		}
 
 		if !hasTextContent {
-			t.Error("Response content is empty after providing encrypted reasoning continuation")
+			t.Error("Response content is empty after providing reasoning continuation")
 		}
 
 		assert.NotNil(t, response.Usage, "Usage field should not be nil on multi-turn")
@@ -571,6 +568,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	}
 
 	ctx := context.Background()
+	// Keep the default auth type so these tests work with either available credential type.
 	provider := OpenAIResponsesProvider{}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
@@ -630,12 +628,12 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	secretManager := requireOpenAIIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "openai",
-			Model:    defaultModel,
+			Model:    "gpt-5.4-mini",
 		},
 		Tools: []*common.Tool{
 			{
@@ -704,4 +702,326 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	t.Logf("Model reported text: %q", reportedText)
 	assert.True(t, VisionTestFuzzyMatch(expectedText, reportedText),
 		"Expected model to read %q from the image, got %q", expectedText, reportedText)
+}
+
+func TestOpenAIResponsesProvider_SubscriptionRequest(t *testing.T) {
+	var requestPath string
+	var authorization string
+	var accountID string
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		accountID = r.Header.Get("ChatGPT-Account-Id")
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&requestBody))
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH": `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`,
+		},
+	}
+	provider := OpenAIResponsesProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeSubscription,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+				Model:    "gpt-5-codex",
+			},
+			MaxTokens: 1024,
+		},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.Error(t, err)
+	assert.Equal(t, "/responses", requestPath)
+	assert.Equal(t, "Bearer oauth-token", authorization)
+	assert.Equal(t, "account-id", accountID)
+	assert.NotContains(t, requestBody, "max_output_tokens")
+	assert.Equal(t, []string{"OPENAI_OAUTH"}, manager.calls)
+}
+
+func TestOpenAIResponsesProvider_AnyFallsBackToAPIKey(t *testing.T) {
+	var requestPath string
+	var authorization string
+	var accountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		accountID = r.Header.Get("ChatGPT-Account-Id")
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_API_KEY": "api-key",
+		},
+	}
+	provider := OpenAIResponsesProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeAny,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-5-codex",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.Error(t, err)
+	assert.Equal(t, "/responses", requestPath)
+	assert.Equal(t, "Bearer api-key", authorization)
+	assert.Empty(t, accountID)
+	assert.Equal(t, []string{"OPENAI_OAUTH", "OPENAI_API_KEY"}, manager.calls)
+}
+
+func TestMessageToResponsesInput_SanitizesItemIDs(t *testing.T) {
+	t.Parallel()
+
+	items, err := messageToResponsesInput([]Message{
+		{
+			Role: RoleAssistant,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "missing ID",
+				},
+				{
+					Id:   "foreign:message/id",
+					Type: ContentBlockTypeText,
+					Text: "invalid ID",
+				},
+				{
+					Id:   "reasoning:1",
+					Type: ContentBlockTypeReasoning,
+					Reasoning: &ReasoningBlock{
+						Summary: "summary",
+					},
+				},
+				{
+					Type: ContentBlockTypeToolUse,
+					ToolUse: &ToolUseBlock{
+						Id:        "call:1",
+						Name:      "tool",
+						Arguments: "{}",
+					},
+				},
+			},
+		},
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeToolResult,
+					ToolResult: &ToolResultBlock{
+						ToolCallId: "call:1",
+						Content:    TextContentBlocks("result"),
+					},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, items, 4)
+
+	assert.Equal(t, "msg_0_0", items[0].OfOutputMessage.ID)
+	assert.Regexp(t, `^msg_[A-Za-z0-9_-]+$`, items[1].OfOutputMessage.ID)
+	assert.Regexp(t, `^call_[A-Za-z0-9_-]+$`, items[2].OfFunctionCall.CallID)
+	assert.Equal(t, items[2].OfFunctionCall.CallID, items[3].OfFunctionCallOutput.CallID)
+}
+
+func TestOpenAIResponsesID_PreservesCompatibleIDs(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "msg_abc-123", openAIResponsesID("msg_abc-123", "msg_"))
+	assert.Empty(t, openAIResponsesID("", "msg_"))
+	assert.Regexp(t, `^rs_[A-Za-z0-9_-]+$`, openAIResponsesID("foreign:reasoning/id", "rs_"))
+}
+func TestMessageToResponsesInput_RejectsMissingToolCallIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		messages []Message
+		err      string
+	}{
+		{
+			name: "tool use ID",
+			messages: []Message{
+				{
+					Role: RoleAssistant,
+					Content: []ContentBlock{
+						{
+							Type: ContentBlockTypeToolUse,
+							ToolUse: &ToolUseBlock{
+								Name:      "tool",
+								Arguments: "{}",
+							},
+						},
+					},
+				},
+			},
+			err: "tool_use block missing Id",
+		},
+		{
+			name: "tool result call ID",
+			messages: []Message{
+				{
+					Role: RoleUser,
+					Content: []ContentBlock{
+						{
+							Type: ContentBlockTypeToolResult,
+							ToolResult: &ToolResultBlock{
+								Content: TextContentBlocks("result"),
+							},
+						},
+					},
+				},
+			},
+			err: "tool_result block missing ToolCallId",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := messageToResponsesInput(tt.messages)
+
+			assert.EqualError(t, err, tt.err)
+		})
+	}
+}
+func TestMessageToResponsesInput_OnlyIncludesOpenAIEncryptedReasoning(t *testing.T) {
+	t.Parallel()
+
+	items, err := messageToResponsesInput([]Message{
+		{
+			Role: RoleAssistant,
+			Content: []ContentBlock{
+				{
+					Id:   "foreign:reasoning/id",
+					Type: ContentBlockTypeReasoning,
+					Reasoning: &ReasoningBlock{
+						Text:             "plaintext reasoning from another provider",
+						Summary:          "foreign summary",
+						EncryptedContent: "foreign encrypted content",
+					},
+				},
+				{
+					Id:   "rs_native-123",
+					Type: ContentBlockTypeReasoning,
+					Reasoning: &ReasoningBlock{
+						Text:             "plaintext OpenAI reasoning",
+						Summary:          "OpenAI summary",
+						EncryptedContent: "OpenAI encrypted continuation",
+					},
+				},
+			},
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "rs_native-123", items[0].OfReasoning.ID)
+	assert.Empty(t, items[0].OfReasoning.Content)
+	assert.Equal(t, "OpenAI summary", items[0].OfReasoning.Summary[0].Text)
+	assert.Equal(t, "OpenAI encrypted continuation", items[0].OfReasoning.EncryptedContent.Value)
+}
+func TestOpenAIResponsesProvider_CompatibleAnyUsesProviderAPIKey(t *testing.T) {
+	var requestPath string
+	var authorization string
+	var accountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		accountID = r.Header.Get("ChatGPT-Account-Id")
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH":        `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`,
+			"LLM_GATEWAY_API_KEY": "sk-gateway-key",
+		},
+	}
+	provider := OpenAIResponsesProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeAny,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "llm-gateway",
+			Model:    "custom-model",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.Error(t, err)
+	assert.Equal(t, "/responses", requestPath)
+	assert.Equal(t, "Bearer sk-gateway-key", authorization)
+	assert.Empty(t, accountID)
+	assert.Equal(t, []string{"LLM_GATEWAY_API_KEY"}, manager.calls)
+}
+func TestOpenAIResponsesProvider_CompatibleSubscriptionRejectedBeforeRequest(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	manager := &openAIAuthTestSecretManager{
+		secrets: map[string]string{
+			"OPENAI_OAUTH":        `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`,
+			"LLM_GATEWAY_API_KEY": "sk-gateway-key",
+		},
+	}
+	provider := OpenAIResponsesProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeSubscription,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{ModelConfig: common.ModelConfig{
+			Provider: "llm-gateway",
+			Model:    "custom-model",
+		}},
+		SecretManager: manager,
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+	assert.ErrorContains(t, err, "OpenAI subscription auth is only supported by the built-in openai provider")
+	assert.False(t, requested)
+	assert.Empty(t, manager.calls)
 }

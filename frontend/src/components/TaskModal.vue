@@ -10,51 +10,7 @@
       </button>
     </div>
     <form @submit.prevent="startTask">
-      <div class="preset-section">
-        <label>Model Config</label>
-        <Dropdown
-          ref="presetDropdownRef"
-          v-model="selectedPresetValue"
-          :options="presetOptions"
-          optionLabel="label"
-          optionValue="value"
-          @change="(e: any) => handlePresetChange(e.value)"
-          class="preset-dropdown"
-        >
-          <template #option="{ option }">
-            <div class="preset-option">
-              <div class="preset-option-content">
-                <div class="preset-option-text">
-                  <div class="preset-name">{{ option.label }}</div>
-                  <div v-if="option.preset && option.label != getModelSummary(option.preset.config)" class="preset-summary">{{ getModelSummary(option.preset.config) }}</div>
-                </div>
-                <span v-if="option.preset" class="preset-action-icons">
-                  <span
-                    class="preset-edit-icon"
-                    @click.stop="editPreset(option.preset.id)"
-                  >✎</span>
-                  <span
-                    class="preset-delete-icon"
-                    @click.stop="deletePreset(option.preset.id)"
-                  >x</span>
-                </span>
-              </div>
-            </div>
-          </template>
-        </Dropdown>
-      </div>
-
-      <div v-if="isAddPresetMode" class="add-preset-section">
-        <div v-if="isEditingPreset" class="preset-editing-label">Editing preset</div>
-        <input
-          type="text"
-          v-model="newPresetName"
-          :placeholder="isEditingPreset ? 'Preset name' : 'Preset name (optional)'"
-          class="preset-name-input"
-        />
-        <LlmConfigEditor v-model="llmConfig" />
-      </div>
-
+      <ModelConfigPresetEditor :editor="modelConfigPresetEditor" />
 
       <div>
         <label>Flow</label>
@@ -94,6 +50,20 @@
         </div>
       </div>
 
+      <div class="project-row">
+        <label for="project">Project</label>
+        <Dropdown
+          id="project"
+          v-model="projectId"
+          :options="projects"
+          optionLabel="title"
+          optionValue="id"
+          placeholder="No project"
+          showClear
+          class="project-pill"
+        />
+      </div>
+
       <label v-if="!isIdd">
         <input type="checkbox" v-model="determineRequirements" />
         Determine Requirements
@@ -102,6 +72,15 @@
       <label>
         <input type="checkbox" v-model="advisorEnabled" />
         Enable Advisor
+      </label>
+
+      <label v-if="devMode">
+        <input
+          data-testid="context-gather-explore"
+          type="checkbox"
+          v-model="exploreContext"
+        />
+        Explore Repository Context
       </label>
 
       <div v-if="!isIdd">
@@ -139,74 +118,21 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import Button from 'primevue/button'
-import Dropdown from 'primevue/dropdown'
 import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
-import LlmConfigEditor from './LlmConfigEditor.vue'
+import Dropdown from 'primevue/dropdown'
+import ModelConfigPresetEditor from './ModelConfigPresetEditor.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ShortcutHint from './ShortcutHint.vue'
 import { store, type TaskConfigData } from '../lib/store'
-import { getModelSummary } from '../lib/llmPresets'
-import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
-import type { Flow, Task, TaskStatus, LLMConfig } from '../lib/models'
+import { useModelConfigPresets } from '../composables/useModelConfigPresets'
+import {
+  loadWorkspacePreference,
+  saveWorkspacePreference,
+} from '../lib/workspacePreferenceStorage'
+import type { Flow, Project, Task, TaskStatus, LLMConfig } from '../lib/models'
 
-type PresetOption = 
-  | { value: 'default'; label: string }
-  | { value: 'add_preset'; label: string }
-  | { value: string; label: string; preset: ModelPreset }
-
-const validateLlmConfig = (config: LLMConfig): boolean => {
-  const defaultConfig = config.defaults?.[0]
-  if (!defaultConfig?.provider) return false
-  
-  for (const [, configs] of Object.entries(config.useCaseConfigs || {})) {
-    const ucConfig = configs?.[0]
-    if (ucConfig && !ucConfig.provider) return false
-  }
-  
-  return true
-}
-
-const saveOrUpdatePreset = (options: { finalSave?: boolean } = {}): boolean => {
-  const { finalSave = false } = options
-  
-  if (!isAddPresetMode.value && !currentPresetId.value) return true
-  
-  const isValid = validateLlmConfig(llmConfig.value)
-  if (!isValid) {
-    if (finalSave) {
-      alert('Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.')
-    }
-    return false
-  }
-  
-  const existingPresetIndex = presets.value.findIndex(p => p.id === currentPresetId.value)
-  
-  if (existingPresetIndex >= 0) {
-    presets.value[existingPresetIndex] = {
-      id: currentPresetId.value!,
-      name: newPresetName.value.trim(),
-      config: JSON.parse(JSON.stringify(llmConfig.value))
-    }
-  } else {
-    const newId = crypto.randomUUID()
-    currentPresetId.value = newId
-    const newPreset: ModelPreset = {
-      id: newId,
-      name: newPresetName.value.trim(),
-      config: JSON.parse(JSON.stringify(llmConfig.value))
-    }
-    presets.value.push(newPreset)
-    if (finalSave) {
-      selectedPresetValue.value = newId
-    }
-  }
-  
-  savePresets(presets.value)
-  return true
-}
-
-const devMode = import.meta.env.MODE === 'development'
+const devMode = computed(() => import.meta.env.MODE === 'development')
 const props = withDefaults(defineProps<{
   task?: Task
   teleport?: boolean
@@ -251,7 +177,11 @@ const descriptionRef = ref<{ focus: () => void } | null>(null)
 const title = ref(props.task?.title ?? '')
 const titleRef = ref<HTMLInputElement | null>(null)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
-const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
+const flowType = ref(
+  props.task?.flowType
+    || loadWorkspacePreference('lastUsedFlowType', workspaceId.value)
+    || 'basic_dev',
+)
 
 // The Intent Driven flow type drives intent from a title rather than a task description.
 const isIdd = computed(() => flowType.value === 'idd')
@@ -261,14 +191,18 @@ const hasRequiredContent = computed(() =>
   isIdd.value ? !!title.value.trim() : !!description.value.trim()
 )
 const resolveEnvType = (raw: string): string => raw === 'local_git_worktree' ? 'local' : raw
-const envType = ref<string>(resolveEnvType(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local'))
+const envType = ref<string>(resolveEnvType(
+  props.task?.flowOptions?.envType
+    || loadWorkspacePreference('lastUsedEnvType', workspaceId.value)
+    || 'local',
+))
 const getInitialRepoMode = (): string => {
   const taskRepoMode = props.task?.flowOptions?.repoMode
   if (taskRepoMode) return taskRepoMode
   if (props.task?.flowOptions?.envType === 'local_git_worktree') return 'worktree'
   if (props.task?.id && props.task?.flowOptions?.envType === 'local') return 'in_place' // handles legacy persisted tasks without repoMode
 
-  const stored = localStorage.getItem('lastUsedRepoMode')
+  const stored = loadWorkspacePreference('lastUsedRepoMode', workspaceId.value)
   if (stored) return stored
   return 'worktree' // default for new tasks: we're async-first and parallel-by-default
 }
@@ -294,6 +228,7 @@ const getInitialDetermineRequirements = (): boolean => {
 }
 
 const determineRequirements = ref<boolean>(getInitialDetermineRequirements())
+const exploreContext = ref(props.task?.flowOptions?.contextGatherType === 'explore')
 const userModifiedDetermineRequirements = ref(false)
 const isApplyingTaskConfig = ref(false)
 const taskConfig = ref<TaskConfigData | null>(store.getTaskConfigCache(workspaceId.value)?.data ?? null)
@@ -302,6 +237,20 @@ const advisorEnabled = ref<boolean>(
   props.task?.flowOptions?.configOverrides?.advisorEnabled ?? true
 )
 const selectedBranch = ref<string | null>(initialBranchValue)
+
+const projectId = ref<string | null>(props.task?.projectId ?? null)
+const projects = ref<Project[]>([])
+
+const fetchProjects = async () => {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${workspaceId.value}/projects`)
+    if (!response.ok) return
+    const data = await response.json()
+    projects.value = data.projects ?? []
+  } catch {
+    // The dropdown simply stays empty when projects can't be loaded
+  }
+}
 
 // Auto-save state
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -325,7 +274,9 @@ interface FormState {
   envType: string
   repoMode: string
   selectedBranch: string | null
+  projectId: string | null
   determineRequirements: boolean
+  exploreContext: boolean
   planningPrompt: string
   advisorEnabled: boolean
   selectedPresetValue: string
@@ -344,7 +295,9 @@ const captureFormState = (): FormState => ({
   envType: envType.value,
   repoMode: repoMode.value,
   selectedBranch: selectedBranch.value,
+  projectId: projectId.value,
   determineRequirements: determineRequirements.value,
+  exploreContext: exploreContext.value,
   planningPrompt: planningPrompt.value,
   advisorEnabled: advisorEnabled.value,
   selectedPresetValue: selectedPresetValue.value,
@@ -360,7 +313,9 @@ const restoreFormState = (state: FormState) => {
   envType.value = state.envType
   repoMode.value = state.repoMode
   selectedBranch.value = state.selectedBranch
+  projectId.value = state.projectId
   determineRequirements.value = state.determineRequirements
+  exploreContext.value = state.exploreContext
   planningPrompt.value = state.planningPrompt
   advisorEnabled.value = state.advisorEnabled
   selectedPresetValue.value = state.selectedPresetValue
@@ -396,13 +351,17 @@ const redo = () => {
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
 const shortcutLabel = computed(() => isMac ? '⌘↵' : 'Ctrl+↵')
 
+const handleGlobalEscape = (event: KeyboardEvent) => {
+  if (event.key !== 'Escape') return
+
+  event.preventDefault()
+  close()
+}
+
 const handleKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
   
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    close()
-  } else if (modKey && event.key === 'Enter') {
+  if (modKey && event.key === 'Enter') {
     event.preventDefault()
     startTask()
   } else if (modKey && event.key === 'z' && !event.shiftKey) {
@@ -414,92 +373,25 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 }
 
-// Model configuration presets
-const presets = ref<ModelPreset[]>(loadPresets())
 const existingLlmConfig = props.task?.flowOptions?.configOverrides?.llm as LLMConfig | undefined
-
-const findMatchingPreset = (): string => {
-  if (!existingLlmConfig) return 'default'
-  const match = presets.value.find(p => llmConfigsEqual(p.config, existingLlmConfig))
-  return match ? match.id : 'add_preset'
-}
-
-const selectedPresetValue = ref<string>(findMatchingPreset())
-const currentPresetId = ref<string | null>(null)
-const newPresetName = ref('')
-const presetDropdownRef = ref<InstanceType<typeof Dropdown> | null>(null)
-const llmConfig = ref<LLMConfig>(existingLlmConfig || {
-  defaults: [{ provider: '', model: '', reasoningEffort: '' }],
-  useCaseConfigs: {},
+const modelConfigPresetEditor = useModelConfigPresets(existingLlmConfig, {
+  workspaceId: workspaceId.value,
 })
+const {
+  presets,
+  selectedPresetValue,
+  currentPresetId,
+  newPresetName,
+  llmConfig,
+  handlePresetChange,
+  saveOrUpdatePreset,
+} = modelConfigPresetEditor
 
-const presetOptions = computed((): PresetOption[] => {
-  const options: PresetOption[] = [
-    { value: 'default', label: 'Default' }
-  ]
-  
-  presets.value.forEach((preset) => {
-    options.push({
-      value: preset.id,
-      label: preset.name || getModelSummary(preset.config),
-      preset
-    })
-  })
-  
-  options.push({ value: 'add_preset', label: 'Custom' })
-  return options
+defineExpose({
+  presets,
+  currentPresetId,
+  handlePresetChange,
 })
-
-const isAddPresetMode = computed(() => selectedPresetValue.value === 'add_preset')
-const isEditingPreset = computed(() => isAddPresetMode.value && currentPresetId.value !== null)
-
-const handlePresetChange = (value: string) => {
-  selectedPresetValue.value = value
-  currentPresetId.value = null
-  if (value !== 'default' && value !== 'add_preset') {
-    const preset = presets.value.find(p => p.id === value)
-    if (preset) {
-      llmConfig.value = JSON.parse(JSON.stringify(preset.config))
-    }
-  } else if (value === 'add_preset') {
-    llmConfig.value = {
-      defaults: [{ provider: '', model: '', reasoningEffort: '' }],
-      useCaseConfigs: {},
-    }
-    newPresetName.value = ''
-  }
-}
-
-const editPreset = (presetId: string) => {
-  const preset = presets.value.find(p => p.id === presetId)
-  if (!preset) return
-
-  selectedPresetValue.value = 'add_preset'
-  currentPresetId.value = presetId
-  newPresetName.value = preset.name
-  llmConfig.value = JSON.parse(JSON.stringify(preset.config))
-  presetDropdownRef.value?.hide()
-}
-
-const deletePreset = (presetId: string, event?: Event) => {
-  if (event) {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-  
-  const preset = presets.value.find(p => p.id === presetId)
-  if (!preset) return
-  
-  const name = preset.name || getModelSummary(preset.config)
-  if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return
-  
-  presets.value = presets.value.filter(p => p.id !== presetId)
-  savePresets(presets.value)
-  
-  if (selectedPresetValue.value === presetId) {
-    selectedPresetValue.value = 'default'
-  }
-}
 
 const flowTypeOptions = [
   { label: 'Just Code', value: 'basic_dev' },
@@ -511,6 +403,7 @@ const envTypeOptions = [
   { label: 'Local', value: 'local' },
   { label: 'DevPod', value: 'devpod' },
   { label: 'OpenShell', value: 'openshell' },
+  { label: 'Modal', value: 'modal' },
 ]
 
 const repoModeOptions = [
@@ -524,6 +417,10 @@ const buildFlowOptions = (): Record<string, any> => {
     determineRequirements: determineRequirements.value,
     envType: envType.value,
     repoMode: repoMode.value,
+  }
+
+  if (exploreContext.value) {
+    flowOptions.contextGatherType = 'explore'
   }
 
   if (repoMode.value === 'worktree') {
@@ -551,6 +448,8 @@ const buildTaskData = (status: TaskStatus): Record<string, any> => {
   const taskData: Record<string, any> = {
     flowType: flowType.value,
     status,
+    // Always sent so an explicit empty string clears the assignment
+    projectId: projectId.value ?? '',
     flowOptions: buildFlowOptions(),
   }
   if (isIdd.value) {
@@ -628,7 +527,7 @@ const scheduleAutoSave = () => {
 }
 
 // Watch all form fields for auto-save
-watch([description, title, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, advisorEnabled, selectedPresetValue, llmConfig, newPresetName], () => {
+watch([description, title, flowType, envType, repoMode, selectedBranch, projectId, determineRequirements, exploreContext, planningPrompt, advisorEnabled, selectedPresetValue, llmConfig, newPresetName], () => {
   if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()
@@ -728,9 +627,9 @@ const startTask = async () => {
   // Mark as clean so close() won't trigger another auto-save
   isDirty.value = false
 
-  localStorage.setItem('lastUsedFlowType', flowType.value)
-  localStorage.setItem('lastUsedEnvType', envType.value)
-  localStorage.setItem('lastUsedRepoMode', repoMode.value)
+  saveWorkspacePreference('lastUsedFlowType', flowType.value, workspaceId.value)
+  saveWorkspacePreference('lastUsedEnvType', envType.value, workspaceId.value)
+  saveWorkspacePreference('lastUsedRepoMode', repoMode.value, workspaceId.value)
 
   if (selectedBranch.value) {
     localStorage.setItem(getLastBranchKey(), selectedBranch.value)
@@ -811,6 +710,8 @@ const close = async () => {
 }
 
 onMounted(() => {
+  document.addEventListener('keydown', handleGlobalEscape)
+
   // Initialize history with current state
   pushHistory()
   if (isIdd.value) {
@@ -819,9 +720,12 @@ onMounted(() => {
     descriptionRef.value?.focus()
   }
   fetchTaskConfig()
+  fetchProjects()
 })
 
 onUnmounted(() => {
+  document.removeEventListener('keydown', handleGlobalEscape)
+
   if (saveDebounceTimer.value) {
     clearTimeout(saveDebounceTimer.value)
   }
@@ -995,85 +899,6 @@ label {
   background-color: field;
 }
 
-.preset-dropdown {
-  flex: 1;
-  max-width: 20rem;
-}
-
-.preset-option {
-  width: 100%;
-}
-
-.preset-option-content {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.preset-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  flex: 1;
-}
-
-.preset-name {
-  font-weight: 500;
-}
-
-.preset-summary {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-}
-
-.preset-action-icons {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  visibility: hidden;
-}
-
-.preset-option:hover .preset-action-icons {
-  visibility: visible;
-}
-
-.preset-edit-icon,
-.preset-delete-icon {
-  opacity: 0.4;
-  cursor: pointer;
-  padding: 0.25rem;
-  transition: opacity 0.2s ease;
-  font-size: 0.875rem;
-}
-
-.preset-edit-icon:hover,
-.preset-delete-icon:hover {
-  opacity: 1;
-}
-
-.preset-editing-label {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-  font-style: italic;
-}
-
-.add-preset-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-}
-
-.preset-name-input {
-  padding: 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-  background-color: var(--color-background);
-  color: var(--color-text);
-  max-width: 20rem;
-}
-
 .title-input {
   flex: 1;
   width: 100%;
@@ -1108,6 +933,26 @@ label {
 
 .idd-row {
   display: flex;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+}
+
+.project-pill {
+  min-width: 12rem;
+}
+
+:deep(.project-pill.p-select),
+:deep(.project-pill.p-dropdown) {
+  border-radius: 100rem;
+  background-color: var(--color-background);
+}
+
+:deep(.project-pill .p-select-label),
+:deep(.project-pill .p-dropdown-label) {
+  padding: 0.375rem 0.5rem 0.375rem 1rem;
 }
 
 </style>

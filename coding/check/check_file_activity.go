@@ -30,7 +30,7 @@ type CheckFileActivityInput struct {
 	SkipBaseFileValidityCheck bool
 }
 
-func CheckFileActivity(input CheckFileActivityInput) (CheckFileActivityOutput, error) {
+func CheckFileActivity(ctx context.Context, input CheckFileActivityInput) (CheckFileActivityOutput, error) {
 	// Initialize a variable to store the combined output of all check commands
 	var combinedOutput string
 	allPassed := true
@@ -39,7 +39,7 @@ func CheckFileActivity(input CheckFileActivityInput) (CheckFileActivityOutput, e
 	// Run all the check_commands via a shell using the envContainer.Env.RunCommand
 	for _, command := range input.CheckCommands {
 		shellCommand := strings.ReplaceAll(command.Command, "{file}", input.FilePath)
-		output, err := input.EnvContainer.Env.RunCommand(context.Background(), env.EnvRunCommandInput{
+		output, err := input.EnvContainer.Env.RunCommand(ctx, env.EnvRunCommandInput{
 			RelativeWorkingDir: command.WorkingDir,
 			Command:            "/usr/bin/env",
 			Args:               []string{"sh", "-c", shellCommand},
@@ -68,7 +68,7 @@ func CheckFileActivity(input CheckFileActivityInput) (CheckFileActivityOutput, e
 		combinedOutput += "skipped base file validity check: file had pre-existing syntax errors\n"
 		checkPassed["baseFileValidityChecks"] = true
 	} else {
-		valid, checkOutput, err := CheckFileValidity(input.EnvContainer, input.FilePath)
+		valid, checkOutput, err := CheckFileValidity(ctx, input.EnvContainer, input.FilePath)
 		if err != nil {
 			return CheckFileActivityOutput{}, fmt.Errorf("failed to check file validity: %w", err)
 		}

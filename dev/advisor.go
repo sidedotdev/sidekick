@@ -58,10 +58,11 @@ var advisorGuideTool = llm.Tool{
 type Advisor struct {
 	Enabled     bool
 	EveryNTurns int
-	ModelConfig common.ModelConfig
 	ChatHistory *persisted_ai.ChatHistoryContainer
 
-	turnsSinceAdvice int
+	executorUseCase      string
+	dynamicSkipSameModel bool
+	turnsSinceAdvice     int
 
 	// requirementsLength is the retention-accounting length of the executor's
 	// initial-instructions message seeded into the advisor history. It sizes
@@ -72,16 +73,17 @@ type Advisor struct {
 // newAdvisor constructs an Advisor, resolving the advising model (falling back
 // to the default Anthropic opus model when the "advising" use case is
 // unconfigured) and the advising cadence from repo config.
-func newAdvisor(dCtx DevContext, enabled bool) *Advisor {
-	_, isDefault := dCtx.LLMConfig.GetModelConfig(common.AdvisingKey, 0)
-	var modelConfig common.ModelConfig
-	if isDefault {
-		modelConfig = common.ModelConfig{
-			Provider: string(common.AnthropicChatProvider),
-			Model:    advisorDefaultModel,
+func newAdvisor(dCtx DevContext, enabled bool, executorUseCase string) *Advisor {
+	initialAdvisorModelConfig := resolveAdvisorModelConfig(dCtx)
+	dynamicSkipSameModel := false
+	if v := workflow.GetVersion(dCtx, "advisor-skip-same-model", workflow.DefaultVersion, 1); v == 1 {
+		baseEnabled := enabled
+		executorModelConfig := dCtx.GetModelConfig(executorUseCase, 0, "default")
+		enabled = enabled && !sameAdvisorModelAndReasoning(initialAdvisorModelConfig, executorModelConfig)
+		if dynamicVersion := workflow.GetVersion(dCtx, "advisor-dynamic-skip-same-model", workflow.DefaultVersion, 1); dynamicVersion == 1 {
+			enabled = baseEnabled
+			dynamicSkipSameModel = true
 		}
-	} else {
-		modelConfig = dCtx.GetModelConfig(common.AdvisingKey, 0, "default")
 	}
 
 	everyN := defaultAdvisorEveryNTurns
@@ -90,11 +92,29 @@ func newAdvisor(dCtx DevContext, enabled bool) *Advisor {
 	}
 
 	return &Advisor{
-		Enabled:     enabled,
-		EveryNTurns: everyN,
-		ModelConfig: modelConfig,
-		ChatHistory: NewVersionedChatHistory(dCtx, dCtx.WorkspaceId),
+		Enabled:              enabled,
+		EveryNTurns:          everyN,
+		ChatHistory:          NewVersionedChatHistory(dCtx, dCtx.WorkspaceId),
+		executorUseCase:      executorUseCase,
+		dynamicSkipSameModel: dynamicSkipSameModel,
 	}
+}
+
+func resolveAdvisorModelConfig(dCtx DevContext) common.ModelConfig {
+	_, isDefault := dCtx.GetLLMConfig().GetModelConfig(common.AdvisingKey, 0)
+	if isDefault {
+		return common.ModelConfig{
+			Provider: string(common.AnthropicChatProvider),
+			Model:    advisorDefaultModel,
+		}
+	}
+	return dCtx.GetModelConfig(common.AdvisingKey, 0, "default")
+}
+
+func sameAdvisorModelAndReasoning(advisor, executor common.ModelConfig) bool {
+	return advisor.Model != "" &&
+		advisor.Model == executor.Model &&
+		advisor.ReasoningEffort == executor.ReasoningEffort
 }
 
 // shouldAdvise increments the turn counter and reports whether the advisor
@@ -111,15 +131,35 @@ func (a *Advisor) shouldAdvise() bool {
 	return true
 }
 
+func (a *Advisor) handlePauseInterruption(dCtx DevContext) bool {
+	if dCtx.GlobalState == nil || !dCtx.GlobalState.Paused {
+		return false
+	}
+
+	a.turnsSinceAdvice = max(0, a.EveryNTurns-1)
+	return true
+}
+
 // MaybeAdvise runs one advisor turn when the cadence is due. It reviews the
 // executor's recent history, forces a single tool call over the advisor tools
 // plus the executor's own tools, and applies the result: proceed is a no-op,
 // guide appends feedback to the executor history, and an executor tool call is
 // injected into the executor history while the advisor history records a
 // synthetic success.
-func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, executorTools []*llm.Tool) error {
+func (a *Advisor) MaybeAdvise(
+	dCtx DevContext,
+	executorHistory *persisted_ai.ChatHistoryContainer,
+	executorTools []*llm.Tool,
+	customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error),
+) error {
 	if !a.shouldAdvise() {
 		return nil
+	}
+	if a.dynamicSkipSameModel {
+		executorModelConfig := dCtx.GetModelConfig(a.executorUseCase, 0, "default")
+		if sameAdvisorModelAndReasoning(resolveAdvisorModelConfig(dCtx), executorModelConfig) {
+			return nil
+		}
 	}
 
 	if a.ChatHistory == nil {
@@ -167,12 +207,14 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 
 	if manageAdvisorHistory {
 		keepLength := min(defaultRequestedKeepLength+a.requirementsLength, extendedRequestedKeepLength)
-		ManageChatHistory(dCtx, a.ChatHistory, dCtx.WorkspaceId, keepLength, a.ModelConfig)
+		ManageChatHistory(dCtx, a.ChatHistory, dCtx.WorkspaceId, keepLength, resolveAdvisorModelConfig(dCtx))
 	}
 
 	tools := append([]*llm.Tool{&advisorProceedTool, &advisorGuideTool}, executorTools...)
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.advise")
-	response, err := persisted_ai.ForceParallelToolCall(actionCtx, a.ModelConfig, a.ChatHistory, tools...)
+	response, err := persisted_ai.ForceParallelToolCallWithModelConfigResolver(actionCtx, func() common.ModelConfig {
+		return resolveAdvisorModelConfig(dCtx)
+	}, a.ChatHistory, tools...)
 	if err != nil {
 		// Treat a refusal like "proceed": skip advising this turn so the
 		// executor continues unchanged rather than failing the workflow.
@@ -192,7 +234,7 @@ func (a *Advisor) MaybeAdvise(dCtx DevContext, executorHistory *persisted_ai.Cha
 	// tool_use blocks. They must be resolved with matching tool results before
 	// the executor's LLM runs again, otherwise the provider rejects the request.
 	if len(injectedToolCalls) > 0 {
-		if _, err := handleToolCalls(dCtx, injectedToolCalls, executorHistory, nil); err != nil {
+		if _, err := handleToolCalls(dCtx, injectedToolCalls, executorHistory, customHandlers); err != nil {
 			return fmt.Errorf("advisor: failed to handle injected executor tool calls: %w", err)
 		}
 	}
@@ -215,7 +257,7 @@ func (a *Advisor) seedRequirements(dCtx DevContext, executorHistory *persisted_a
 		var out *SeedAdvisorRequirementsOutput
 		err := workflow.ExecuteActivity(dCtx, aa.SeedAdvisorRequirementsActivity, SeedAdvisorRequirementsInput{
 			ExecutorHistory: executorHistory,
-			Provider:        a.ModelConfig.Provider,
+			Provider:        resolveAdvisorModelConfig(dCtx).Provider,
 			FlowId:          llm2Hist.FlowId(),
 			WorkspaceId:     llm2Hist.WorkspaceId(),
 		}).Get(dCtx, &out)

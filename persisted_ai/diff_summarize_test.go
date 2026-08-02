@@ -1093,3 +1093,123 @@ func TestChunkFileDiffs_SplitsOversizedSingleHunk(t *testing.T) {
 		assert.Equal(t, "huge.go", chunk.FilePath)
 	}
 }
+
+type stubDiffReranker struct {
+	query     string
+	documents []string
+	result    []string
+	err       error
+}
+
+func (r *stubDiffReranker) Rerank(_ context.Context, query string, documents []string) ([]string, error) {
+	r.query = query
+	r.documents = append([]string(nil), documents...)
+	if r.result != nil {
+		return append([]string(nil), r.result...), r.err
+	}
+
+	result := append([]string(nil), documents...)
+	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+		result[left], result[right] = result[right], result[left]
+	}
+	return result, r.err
+}
+
+type completeMockEmbedder struct{}
+
+func (e *completeMockEmbedder) Embed(_ context.Context, _ common.ModelConfig, _ secret_manager.SecretManager, texts []string, _ string) ([]embedding.EmbeddingVector, error) {
+	vectors := make([]embedding.EmbeddingVector, len(texts))
+	for i := range texts {
+		vectors[i] = embedding.EmbeddingVector{float32(i + 1), 1}
+	}
+	return vectors, nil
+}
+func TestRankChunksByRelevanceUsesConfiguredReranker(t *testing.T) {
+	t.Parallel()
+
+	chunks := []DiffChunk{
+		{FilePath: "alpha.go", Content: "alpha"},
+		{FilePath: "beta.go", Content: "beta"},
+		{FilePath: "gamma.go", Content: "gamma"},
+	}
+	reranker := &stubDiffReranker{}
+	feedback := "review the changed functions"
+	opts := DiffSummarizeOptions{
+		Embedder:    &completeMockEmbedder{},
+		ModelConfig: common.ModelConfig{Provider: "mock", Model: fmt.Sprintf("diff-rerank-%d", time.Now().UnixNano())},
+		Reranker:    reranker,
+	}
+
+	result, err := rankChunksByRelevance(context.Background(), chunks, feedback, opts)
+	require.NoError(t, err)
+	require.Len(t, result, len(chunks))
+	assert.Equal(t, feedback, reranker.query)
+	require.Len(t, reranker.documents, len(chunks))
+
+	chunksByText := make(map[string]DiffChunk, len(chunks))
+	for _, chunk := range chunks {
+		chunksByText[fmt.Sprintf("File: %s\n%s", chunk.FilePath, chunk.Content)] = chunk
+	}
+	expected := make([]DiffChunk, len(reranker.documents))
+	for i, document := range reranker.documents {
+		expected[len(expected)-1-i] = chunksByText[document]
+	}
+	assert.Equal(t, expected, result)
+}
+func TestRankChunksByRelevanceSkipsUnconfiguredReranker(t *testing.T) {
+	t.Parallel()
+
+	chunks := []DiffChunk{
+		{FilePath: "alpha.go", Content: "alpha"},
+		{FilePath: "beta.go", Content: "beta"},
+	}
+	opts := DiffSummarizeOptions{
+		Embedder:    &completeMockEmbedder{},
+		ModelConfig: common.ModelConfig{Provider: "mock", Model: fmt.Sprintf("diff-no-rerank-%d", time.Now().UnixNano())},
+	}
+
+	result, err := rankChunksByRelevance(context.Background(), chunks, "review changes", opts)
+	require.NoError(t, err)
+	assert.Equal(t, chunks, result)
+}
+func TestRerankDiffChunkTextsLimitsCandidateWindow(t *testing.T) {
+	t.Parallel()
+
+	fusedTexts := make([]string, rerankCandidateLimit+5)
+	for i := range fusedTexts {
+		fusedTexts[i] = fmt.Sprintf("chunk-%d", i)
+	}
+	reranker := &stubDiffReranker{}
+
+	result, err := rerankDiffChunkTexts(context.Background(), "review changes", fusedTexts, reranker)
+	require.NoError(t, err)
+	require.Len(t, reranker.documents, rerankCandidateLimit)
+	require.Len(t, result, len(fusedTexts))
+
+	expectedHead := append([]string(nil), fusedTexts[:rerankCandidateLimit]...)
+	for left, right := 0, len(expectedHead)-1; left < right; left, right = left+1, right-1 {
+		expectedHead[left], expectedHead[right] = expectedHead[right], expectedHead[left]
+	}
+	assert.Equal(t, expectedHead, result[:rerankCandidateLimit])
+	assert.Equal(t, fusedTexts[rerankCandidateLimit:], result[rerankCandidateLimit:])
+}
+func TestRankChunksByRelevanceReturnsRerankerError(t *testing.T) {
+	t.Parallel()
+
+	reranker := &stubDiffReranker{err: fmt.Errorf("reranker unavailable")}
+	opts := DiffSummarizeOptions{
+		Embedder:    &completeMockEmbedder{},
+		ModelConfig: common.ModelConfig{Provider: "mock", Model: fmt.Sprintf("diff-rerank-error-%d", time.Now().UnixNano())},
+		Reranker:    reranker,
+	}
+
+	_, err := rankChunksByRelevance(
+		context.Background(),
+		[]DiffChunk{{FilePath: "alpha.go", Content: "alpha"}},
+		"review changes",
+		opts,
+	)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "failed to rerank chunks")
+	assert.ErrorContains(t, err, "reranker unavailable")
+}
