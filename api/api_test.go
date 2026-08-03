@@ -3520,3 +3520,110 @@ func TestUpdateTaskHandler_ProjectIdPresenceSemantics(t *testing.T) {
 	updated = updateTask(t, body)
 	assert.Equal(t, "", updated.ProjectId)
 }
+
+func TestUpdateFlowModalConfigHandler_AcceptsValidConfig(t *testing.T) {
+	t.Parallel()
+
+	ctrl := NewMockController(t)
+	mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
+	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Unset()
+
+	workspaceId := "ws-modal-config-" + ksuid.New().String()
+	flowId := "flow-modal-config-" + ksuid.New().String()
+	require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
+	require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+	modalConfig := common.ModalEnvConfig{
+		Memory:      2048,
+		MemoryLimit: 8192,
+		Volumes: []common.ModalVolumeMount{
+			{Name: "test-cache", MountPath: "/cache"},
+		},
+	}
+	mockTemporalClient.On(
+		"UpdateWorkflow",
+		mock.Anything,
+		mock.MatchedBy(func(options client.UpdateWorkflowOptions) bool {
+			return options.WorkflowID == flowId &&
+				options.RunID == "" &&
+				options.UpdateName == dev.UpdateNameModalConfig &&
+				options.WaitForStage == client.WorkflowUpdateStageCompleted &&
+				len(options.Args) == 1 &&
+				assert.ObjectsAreEqual(modalConfig, options.Args[0])
+		}),
+	).Return(MockWorkflowUpdateHandle{}, nil).Once()
+
+	payload, err := json.Marshal(ModalConfigUpdateRequest{Config: modalConfig})
+	require.NoError(t, err)
+	req := httptest.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/modal_config", workspaceId, flowId),
+		bytes.NewReader(payload),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.JSONEq(t, `{"message":"Modal environment recreated"}`, rr.Body.String())
+	mockTemporalClient.AssertExpectations(t)
+}
+
+func TestUpdateFlowModalConfigHandler_RejectsInvalidConfigBeforeUpdatingWorkflow(t *testing.T) {
+	t.Parallel()
+
+	ctrl := NewMockController(t)
+	mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
+	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Unset()
+
+	workspaceId := "ws-modal-config-" + ksuid.New().String()
+	flowId := "flow-modal-config-" + ksuid.New().String()
+	require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
+	require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
+	tests := []struct {
+		name    string
+		payload string
+		error   string
+	}{
+		{
+			name:    "duplicate normalized mount paths",
+			payload: `{"config":{"volumes":[{"name":"a","mountPath":"/cache"},{"name":"b","mountPath":"/cache/"}]}}`,
+			error:   "configured more than once",
+		},
+		{
+			name:    "image and dockerfile conflict",
+			payload: `{"config":{"image":"ubuntu:24.04","dockerfilePath":"Dockerfile.modal"}}`,
+			error:   "cannot both be set",
+		},
+		{
+			name:    "memory limit below request",
+			payload: `{"config":{"memory":4096,"memoryLimit":2048}}`,
+			error:   "memory_limit",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(
+				http.MethodPut,
+				fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/modal_config", workspaceId, flowId),
+				strings.NewReader(test.payload),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			router.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusBadRequest, rr.Code)
+			var response map[string]string
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+			assert.Contains(t, response["error"], "Invalid Modal configuration")
+			assert.Contains(t, response["error"], test.error)
+		})
+	}
+	// No workflow update may be attempted for any rejected config.
+	mockTemporalClient.AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
+}

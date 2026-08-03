@@ -10,6 +10,25 @@ export interface LLMConfig {
   useCaseConfigs: { [key: string]: ModelConfig[] }
 }
 
+export interface ModalVolumeMount {
+  name: string
+  mountPath: string
+  readOnly?: boolean
+}
+
+export interface ModalEnvConfig {
+  vm?: boolean
+  image?: string
+  dockerfilePath?: string
+  cpu?: number
+  cpuLimit?: number
+  memory?: number
+  memoryLimit?: number
+  idleSeconds?: number
+  activeSnapshotSeconds?: number
+  volumes?: ModalVolumeMount[]
+}
+
 export interface EmbeddingConfig {
   defaults: ModelConfig[]
   useCaseConfigs: { [key: string]: ModelConfig[] }

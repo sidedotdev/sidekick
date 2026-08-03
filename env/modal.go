@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +21,8 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 	modal "github.com/modal-labs/libmodal/modal-go"
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/temporal"
+	"golang.org/x/net/http/httpproxy"
 )
 
 // modalAppName is the Modal app under which all sidekick-managed sandboxes
@@ -305,13 +309,31 @@ func modalSSHControlPath(sandboxName string) string {
 	return filepath.Join(os.TempDir(), "modal-ssh-"+name)
 }
 
+// modalSSHProxyCommandArgs returns ssh options routing the connection through
+// an HTTP CONNECT proxy when the standard proxy environment variables
+// (HTTPS_PROXY/NO_PROXY) apply to the tunnel host. OpenSSH ignores those
+// variables, resolves DNS itself and dials directly, so on proxy-only
+// networks the ephemeral *.modal.host tunnel endpoints are unreachable
+// without this; the CONNECT tunnel also delegates hostname resolution to the
+// proxy.
+func modalSSHProxyCommandArgs(sshHost string, sshPort int) []string {
+	proxyURL, err := httpproxy.FromEnvironment().ProxyFunc()(&url.URL{
+		Scheme: "https",
+		Host:   net.JoinHostPort(sshHost, strconv.Itoa(sshPort)),
+	})
+	if err != nil || proxyURL == nil || proxyURL.Host == "" {
+		return nil
+	}
+	return []string{"-o", "ProxyCommand=nc -X connect -x " + proxyURL.Host + " %h %p"}
+}
+
 // modalSSHArgs builds ssh CLI args (ending with the destination) for reaching
 // a Modal sandbox's sshd through its Modal tunnel endpoint. Host key checking
 // is disabled because sandbox host keys are generated at boot and the tunnel
 // endpoint is ephemeral; the sandbox is authenticated by possession of the
 // tunnel address and our injected key instead.
 func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string) []string {
-	return []string{
+	args := []string{
 		"-o", "ControlMaster=auto",
 		"-S", modalSSHControlPath(sandboxName),
 		// A long ControlPersist is safe billing-wise: the in-sandbox idle
@@ -327,10 +349,13 @@ func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string)
 		"-o", "ServerAliveInterval=10",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "LogLevel=ERROR",
+	}
+	args = append(args, modalSSHProxyCommandArgs(sshHost, sshPort)...)
+	return append(args,
 		"-i", identityFile,
 		"-p", strconv.Itoa(sshPort),
-		"root@" + sshHost,
-	}
+		"root@"+sshHost,
+	)
 }
 
 // enableModalPerfCounters opens up kernel perf counters so profiling tools
@@ -366,6 +391,86 @@ type ModalCreateSandboxOutput struct {
 	Reused      bool   `json:"reused"`
 }
 
+type ModalRecreateSandboxInput struct {
+	EnvContainer EnvContainer          `json:"envContainer"`
+	Config       common.ModalEnvConfig `json:"config"`
+}
+
+type ModalRecreateSandboxOutput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+}
+
+// modalRecreate* are seams so tests can drive the destructive
+// snapshot/delete/create sequence without a Modal client.
+var (
+	modalRecreateCheckSandbox = modalCheckSandbox
+	modalRecreateSnapshot     = func(ctx context.Context, modalEnv *ModalEnv) error {
+		_, err := modalEnv.Snapshot(ctx)
+		return err
+	}
+	modalRecreateDeleteSandbox = func(ctx context.Context, sandboxName string) error {
+		_, err := DeleteSandboxActivity(ctx, DeleteSandboxInput{
+			EnvType:     EnvTypeModal,
+			SandboxName: sandboxName,
+		})
+		return err
+	}
+	modalRecreateCreateSandbox = CreateSandboxActivity
+)
+
+// ModalRecreateSandboxActivity checkpoints a sandbox before replacing it with
+// one using new resource settings. The replacement keeps the same name so the
+// filesystem snapshot selected by modalCreateSandbox contains the current
+// repository and worktrees. The configuration is fully validated before the
+// old sandbox is touched, and the snapshot/delete steps only run while it is
+// still alive, so a retry after a failed creation resumes from the snapshot
+// instead of failing on the already-deleted sandbox.
+func ModalRecreateSandboxActivity(ctx context.Context, input ModalRecreateSandboxInput) (ModalRecreateSandboxOutput, error) {
+	modalEnv, ok := input.EnvContainer.Env.(*ModalEnv)
+	if !ok {
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("environment is not Modal")
+	}
+	if err := input.Config.Validate(); err != nil {
+		return ModalRecreateSandboxOutput{}, temporal.NewNonRetryableApplicationError(
+			"invalid Modal configuration", "InvalidModalEnvConfig", err)
+	}
+	configJSON, err := json.Marshal(input.Config)
+	if err != nil {
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to marshal Modal configuration: %w", err)
+	}
+	check, err := modalRecreateCheckSandbox(ctx, modalEnv.SandboxName)
+	if err != nil {
+		return ModalRecreateSandboxOutput{}, err
+	}
+	if check.Alive {
+		if err := modalRecreateSnapshot(ctx, modalEnv); err != nil {
+			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to snapshot Modal sandbox %s: %w", modalEnv.SandboxName, err)
+		}
+		if err := modalRecreateDeleteSandbox(ctx, modalEnv.SandboxName); err != nil {
+			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to delete Modal sandbox %s: %w", modalEnv.SandboxName, err)
+		}
+	}
+	createOutput, err := modalRecreateCreateSandbox(ctx, CreateSandboxInput{
+		EnvType: EnvTypeModal,
+		Name:    modalEnv.SandboxName,
+		RepoDir: modalEnv.LocalRepoDir,
+		Config:  configJSON,
+	})
+	if err != nil {
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to recreate Modal sandbox %s: %w", modalEnv.SandboxName, err)
+	}
+	return ModalRecreateSandboxOutput{
+		EnvContainer: EnvContainer{Env: &ModalEnv{
+			WorkingDirectory: modalEnv.WorkingDirectory,
+			SandboxName:      createOutput.SandboxName,
+			SSHHost:          createOutput.SSHHost,
+			SSHPort:          createOutput.SSHPort,
+			LocalRepoDir:     modalEnv.LocalRepoDir,
+			PortForwards:     modalEnv.PortForwards,
+		}},
+	}, nil
+}
+
 // modalSandboxCreateParams builds the sandbox creation parameters for the
 // given config, selecting between the default gVisor runtime and Modal's
 // alpha VM runtime (real Linux kernel). extraEnv entries (e.g. the idle
@@ -382,11 +487,11 @@ func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey stri
 	// workloads, and on the VM runtime memory is statically provisioned).
 	cpuRequest := config.CPU
 	if cpuRequest == 0 {
-		cpuRequest = 0.125
+		cpuRequest = common.ModalDefaultCPU
 	}
 	memoryRequestMiB := config.Memory
 	if memoryRequestMiB == 0 {
-		memoryRequestMiB = 1024
+		memoryRequestMiB = common.ModalDefaultMemoryMiB
 	}
 	params := &modal.SandboxCreateParams{
 		Name:             name,
@@ -404,6 +509,31 @@ func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey stri
 		params.ExperimentalOptions = map[string]any{"vm_runtime": true}
 	}
 	return params
+}
+
+// modalVolumes resolves the configured volume mounts, creating any volume that
+// does not exist yet. Volumes are named, account-level resources: sandboxes
+// come and go, but a volume's contents persist until it is explicitly deleted.
+func modalVolumes(ctx context.Context, client *modal.Client, config common.ModalEnvConfig) (map[string]*modal.Volume, error) {
+	mounts, err := config.NormalizedVolumeMounts()
+	if err != nil {
+		return nil, err
+	}
+	if len(mounts) == 0 {
+		return nil, nil
+	}
+	volumes := make(map[string]*modal.Volume, len(mounts))
+	for _, mount := range mounts {
+		volume, err := client.Volumes.FromName(ctx, mount.Name, &modal.VolumeFromNameParams{CreateIfMissing: true})
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve modal volume %s: %w", mount.Name, err)
+		}
+		if mount.ReadOnly {
+			volume = volume.ReadOnly()
+		}
+		volumes[mount.MountPath] = volume
+	}
+	return volumes, nil
 }
 
 // refreshModalEndpoint re-resolves a sandbox's SSH tunnel endpoint after a
@@ -512,7 +642,12 @@ func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (Mod
 		if wdErr != nil {
 			return ModalCreateSandboxOutput{}, wdErr
 		}
+		volumes, volErr := modalVolumes(ctx, client, input.Config)
+		if volErr != nil {
+			return ModalCreateSandboxOutput{}, volErr
+		}
 		params := modalSandboxCreateParams(input.Config, input.Name, publicKey, watchdogEnv)
+		params.Volumes = volumes
 		sb, err = client.Sandboxes.Create(ctx, app, image, params)
 		if err != nil {
 			// Concurrent creates for the same deterministic name race: one

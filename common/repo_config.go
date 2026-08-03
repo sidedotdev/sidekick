@@ -1,6 +1,12 @@
 package common
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+)
 
 type RepoConfig struct {
 	/** A set of commands to run to check the code for basic issues, eg syntax
@@ -121,11 +127,43 @@ type OpenShellEnvConfig struct {
 	From string `toml:"from,omitempty"`
 }
 
+// ModalVolumeMount attaches a named Modal Volume at an absolute path inside
+// the sandbox. Volumes outlive the sandboxes that mount them and are shared by
+// every sandbox using the same name, so names should be scoped to the data
+// they hold. What a volume contains is entirely up to the repository: it is
+// the place for caches that are expensive to rebuild, such as compiler,
+// package-manager or test-selection caches.
+type ModalVolumeMount struct {
+	Name      string `toml:"name" json:"name"`
+	MountPath string `toml:"mount_path" json:"mountPath"`
+	// ReadOnly mounts the volume without write access, which is how a volume
+	// populated elsewhere can be consumed safely by many sandboxes at once.
+	ReadOnly bool `toml:"read_only,omitempty" json:"readOnly,omitempty"`
+}
+
+// Validate reports whether the mount can be attached to a sandbox. Mount paths
+// must be absolute because they are interpreted inside the container, and the
+// filesystem root is rejected since mounting over it would hide the image.
+func (m ModalVolumeMount) Validate() error {
+	if strings.TrimSpace(m.Name) == "" {
+		return errors.New("modal volume mount requires a name")
+	}
+	mountPath := strings.TrimSpace(m.MountPath)
+	if !strings.HasPrefix(mountPath, "/") {
+		return fmt.Errorf("modal volume %q requires an absolute mount_path, got %q", m.Name, m.MountPath)
+	}
+	if filepath.Clean(mountPath) == "/" {
+		return fmt.Errorf("modal volume %q cannot be mounted at the filesystem root", m.Name)
+	}
+	return nil
+}
+
 // ModalEnvConfig holds configuration specific to the Modal environment type.
 type ModalEnvConfig struct {
 	// VM runs the sandbox on Modal's VM runtime (alpha) — a real Linux kernel
 	// instead of gVisor — enabling tools that need kernel features (e.g.
-	// perf). Memory is statically provisioned on the VM runtime.
+	// perf). Memory is statically provisioned from Memory on the VM runtime,
+	// so MemoryLimit does not provide burst capacity.
 	VM bool `toml:"vm,omitempty" json:"vm,omitempty"`
 	// Image is the base container image reference. It must be Debian-based and
 	// run as root, since sidekick layers its remote-access dependencies on top.
@@ -158,6 +196,81 @@ type ModalEnvConfig struct {
 	// shutdown can run. Unset defaults to 180 seconds; negative values
 	// disable active snapshots (idle snapshots are unaffected).
 	ActiveSnapshotSeconds int `toml:"active_snapshot_seconds,omitempty" json:"activeSnapshotSeconds,omitempty"`
+	// Volumes mounts named, persistent Modal Volumes into the sandbox. Unlike
+	// the sandbox filesystem, whose snapshots are tied to a single sandbox
+	// lineage, volumes are reachable from any sandbox that mounts them, so
+	// data placed there survives sandbox recreation.
+	Volumes []ModalVolumeMount `toml:"volumes,omitempty" json:"volumes,omitempty"`
+}
+
+// ModalDefaultCPU and ModalDefaultMemoryMiB are the effective resource
+// requests applied at sandbox creation when CPU/Memory are unset.
+const (
+	ModalDefaultCPU       = 0.125
+	ModalDefaultMemoryMiB = 1024
+)
+
+// NormalizedVolumeMounts validates the configured volume mounts and returns
+// copies with cleaned mount paths, rejecting mounts whose paths collide once
+// normalized (e.g. "/cache" and "/cache/").
+func (c ModalEnvConfig) NormalizedVolumeMounts() ([]ModalVolumeMount, error) {
+	if len(c.Volumes) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool, len(c.Volumes))
+	mounts := make([]ModalVolumeMount, 0, len(c.Volumes))
+	for _, mount := range c.Volumes {
+		if err := mount.Validate(); err != nil {
+			return nil, err
+		}
+		mount.MountPath = filepath.Clean(strings.TrimSpace(mount.MountPath))
+		if seen[mount.MountPath] {
+			return nil, fmt.Errorf("modal volume mount path %s is configured more than once", mount.MountPath)
+		}
+		seen[mount.MountPath] = true
+		mounts = append(mounts, mount)
+	}
+	return mounts, nil
+}
+
+// Validate covers every configuration check that does not require talking to
+// Modal, so callers can reject a bad configuration before provisioning — or,
+// when reconfiguring a live environment, before its sandbox is destroyed.
+func (c ModalEnvConfig) Validate() error {
+	if c.Image != "" && c.DockerfilePath != "" {
+		return errors.New("modal image and dockerfile_path cannot both be set")
+	}
+	if c.CPU < 0 {
+		return fmt.Errorf("modal cpu must not be negative, got %v", c.CPU)
+	}
+	if c.CPULimit < 0 {
+		return fmt.Errorf("modal cpu_limit must not be negative, got %v", c.CPULimit)
+	}
+	cpuRequest := c.CPU
+	if cpuRequest == 0 {
+		cpuRequest = ModalDefaultCPU
+	}
+	if c.CPULimit > 0 && c.CPULimit < cpuRequest {
+		return fmt.Errorf("modal cpu_limit (%v) must not be below the effective cpu request (%v)", c.CPULimit, cpuRequest)
+	}
+	if c.Memory < 0 {
+		return fmt.Errorf("modal memory must not be negative, got %d", c.Memory)
+	}
+	if c.MemoryLimit < 0 {
+		return fmt.Errorf("modal memory_limit must not be negative, got %d", c.MemoryLimit)
+	}
+	memoryRequest := c.Memory
+	if memoryRequest == 0 {
+		memoryRequest = ModalDefaultMemoryMiB
+	}
+	if c.MemoryLimit > 0 && c.MemoryLimit < memoryRequest {
+		return fmt.Errorf("modal memory_limit (%d MiB) must not be below the effective memory request (%d MiB)", c.MemoryLimit, memoryRequest)
+	}
+	if c.IdleSeconds < 0 {
+		return fmt.Errorf("modal idle_seconds must not be negative, got %d", c.IdleSeconds)
+	}
+	_, err := c.NormalizedVolumeMounts()
+	return err
 }
 
 // GlobalState keys for workflow-specific state

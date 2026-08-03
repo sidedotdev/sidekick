@@ -229,6 +229,9 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return err
 	}
+	if err = SetupModalConfigHandlers(dCtx); err != nil {
+		return err
+	}
 
 	state.DefaultTargetBranch = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 

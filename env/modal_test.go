@@ -1,7 +1,9 @@
 package env
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 )
 
 func TestModalEnvironment_MarshalUnmarshal(t *testing.T) {
@@ -113,8 +116,97 @@ func TestModalSandboxCreateParams(t *testing.T) {
 	})
 }
 
-func TestModalSSHArgs(t *testing.T) {
+func TestModalVolumes(t *testing.T) {
 	t.Parallel()
+
+	t.Run("no volumes configured", func(t *testing.T) {
+		t.Parallel()
+		volumes, err := modalVolumes(context.Background(), nil, common.ModalEnvConfig{})
+		require.NoError(t, err)
+		assert.Nil(t, volumes)
+	})
+
+	tests := []struct {
+		name   string
+		mounts []common.ModalVolumeMount
+		error  string
+	}{
+		{
+			name:   "missing name",
+			mounts: []common.ModalVolumeMount{{MountPath: "/root/.cache/example"}},
+			error:  "requires a name",
+		},
+		{
+			name:   "relative mount path",
+			mounts: []common.ModalVolumeMount{{Name: "cache", MountPath: "cache"}},
+			error:  "requires an absolute mount_path",
+		},
+		{
+			name:   "filesystem root",
+			mounts: []common.ModalVolumeMount{{Name: "cache", MountPath: "/"}},
+			error:  "filesystem root",
+		},
+		{
+			name: "duplicate mount path",
+			mounts: []common.ModalVolumeMount{
+				{Name: "cache-a", MountPath: "/root/.cache/example"},
+				{Name: "cache-b", MountPath: "/root/.cache/example/"},
+			},
+			error: "configured more than once",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			// Invalid configuration is rejected before any Modal call, so a
+			// nil client is enough to prove validation happens up front.
+			_, err := modalVolumes(context.Background(), nil, common.ModalEnvConfig{Volumes: test.mounts})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.error)
+		})
+	}
+}
+
+func TestModalSSHProxyCommandArgs(t *testing.T) {
+	// Not parallel: subtests mutate proxy environment variables.
+	clearProxyEnv := func(t *testing.T) {
+		for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+			t.Setenv(name, "")
+		}
+	}
+
+	t.Run("no proxy configured", func(t *testing.T) {
+		clearProxyEnv(t)
+		assert.Empty(t, modalSSHProxyCommandArgs("tunnel.example.com", 443))
+	})
+
+	t.Run("https proxy configured", func(t *testing.T) {
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", "http://192.0.2.1:8282")
+		args := modalSSHProxyCommandArgs("tunnel.example.com", 443)
+		require.Equal(t, []string{"-o", "ProxyCommand=nc -X connect -x 192.0.2.1:8282 %h %p"}, args)
+
+		// The proxy option must end up in the full ssh args, before the
+		// destination.
+		sshArgs := modalSSHArgs("side--myrepo", "tunnel.example.com", 443, "/keys/id_ed25519")
+		assert.Contains(t, sshArgs, "ProxyCommand=nc -X connect -x 192.0.2.1:8282 %h %p")
+		assert.Equal(t, "root@tunnel.example.com", sshArgs[len(sshArgs)-1])
+	})
+
+	t.Run("host excluded via NO_PROXY", func(t *testing.T) {
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", "http://192.0.2.1:8282")
+		t.Setenv("NO_PROXY", "*.example.com")
+		assert.Empty(t, modalSSHProxyCommandArgs("tunnel.example.com", 443))
+	})
+}
+
+func TestModalSSHArgs(t *testing.T) {
+	// Not parallel: proxy environment variables affect the generated args.
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(name, "")
+	}
 	args := modalSSHArgs("side--myrepo", "tunnel.example.com", 12345, "/keys/id_ed25519")
 	require.NotEmpty(t, args)
 	// The destination must be last so remote commands can be appended directly.
@@ -226,4 +318,123 @@ func TestModalSnapshotImageVersion(t *testing.T) {
 	assert.Zero(t, decoded.ImageVersion)
 	assert.False(t, modalSnapshotCompatible(&decoded))
 	assert.False(t, modalSnapshotCompatible(nil))
+}
+
+func TestModalRecreateSandboxActivity(t *testing.T) {
+	// Not parallel: subtests swap the package-level recreation seams.
+	origCheck := modalRecreateCheckSandbox
+	origSnapshot := modalRecreateSnapshot
+	origDelete := modalRecreateDeleteSandbox
+	origCreate := modalRecreateCreateSandbox
+	t.Cleanup(func() {
+		modalRecreateCheckSandbox = origCheck
+		modalRecreateSnapshot = origSnapshot
+		modalRecreateDeleteSandbox = origDelete
+		modalRecreateCreateSandbox = origCreate
+	})
+
+	newInput := func(config common.ModalEnvConfig) ModalRecreateSandboxInput {
+		return ModalRecreateSandboxInput{
+			EnvContainer: EnvContainer{Env: &ModalEnv{
+				WorkingDirectory: "/root/repo",
+				SandboxName:      "side--repo-abc",
+				SSHHost:          "old.modal.host",
+				SSHPort:          1111,
+				LocalRepoDir:     "/host/repo",
+				PortForwards:     []common.PortForwardConfig{{HostPort: 18855}},
+			}},
+			Config: config,
+		}
+	}
+
+	install := func(alive bool, createErr error) *[]string {
+		sequence := &[]string{}
+		modalRecreateCheckSandbox = func(context.Context, string) (ModalCheckSandboxOutput, error) {
+			*sequence = append(*sequence, "check")
+			return ModalCheckSandboxOutput{Alive: alive, SSHHost: "old.modal.host", SSHPort: 1111}, nil
+		}
+		modalRecreateSnapshot = func(context.Context, *ModalEnv) error {
+			*sequence = append(*sequence, "snapshot")
+			return nil
+		}
+		modalRecreateDeleteSandbox = func(context.Context, string) error {
+			*sequence = append(*sequence, "delete")
+			return nil
+		}
+		modalRecreateCreateSandbox = func(_ context.Context, input CreateSandboxInput) (CreateSandboxOutput, error) {
+			*sequence = append(*sequence, "create")
+			if createErr != nil {
+				return CreateSandboxOutput{}, createErr
+			}
+			return CreateSandboxOutput{SandboxName: input.Name, SSHHost: "new.modal.host", SSHPort: 2222}, nil
+		}
+		return sequence
+	}
+
+	t.Run("rejects non-Modal environment without touching sandbox", func(t *testing.T) {
+		sequence := install(true, nil)
+		_, err := ModalRecreateSandboxActivity(context.Background(), ModalRecreateSandboxInput{
+			EnvContainer: EnvContainer{Env: &LocalEnv{}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not Modal")
+		assert.Empty(t, *sequence)
+	})
+
+	t.Run("rejects invalid config before destroying sandbox", func(t *testing.T) {
+		sequence := install(true, nil)
+		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{
+			Volumes: []common.ModalVolumeMount{
+				{Name: "a", MountPath: "/cache"},
+				{Name: "b", MountPath: "/cache/"},
+			},
+		}))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid Modal configuration")
+		var appErr *temporal.ApplicationError
+		require.ErrorAs(t, err, &appErr)
+		assert.True(t, appErr.NonRetryable())
+		assert.Empty(t, *sequence)
+	})
+
+	t.Run("snapshots and deletes live sandbox before recreating", func(t *testing.T) {
+		sequence := install(true, nil)
+		output, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"check", "snapshot", "delete", "create"}, *sequence)
+
+		modalEnv, ok := output.EnvContainer.Env.(*ModalEnv)
+		require.True(t, ok)
+		assert.Equal(t, "side--repo-abc", modalEnv.SandboxName)
+		assert.Equal(t, "new.modal.host", modalEnv.SSHHost)
+		assert.Equal(t, 2222, modalEnv.SSHPort)
+		assert.Equal(t, "/root/repo", modalEnv.WorkingDirectory)
+		assert.Equal(t, "/host/repo", modalEnv.LocalRepoDir)
+		assert.Equal(t, []common.PortForwardConfig{{HostPort: 18855}}, modalEnv.PortForwards)
+	})
+
+	t.Run("skips snapshot and delete when sandbox is already gone", func(t *testing.T) {
+		sequence := install(false, nil)
+		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"check", "create"}, *sequence)
+	})
+
+	t.Run("retry after failed creation resumes without a live sandbox", func(t *testing.T) {
+		input := newInput(common.ModalEnvConfig{Memory: 2048})
+
+		sequence := install(true, errors.New("transient provisioning failure"))
+		_, err := ModalRecreateSandboxActivity(context.Background(), input)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to recreate")
+		assert.Equal(t, []string{"check", "snapshot", "delete", "create"}, *sequence)
+
+		// The retry finds the sandbox already deleted and goes straight to
+		// creation, which restores from the snapshot taken above.
+		sequence = install(false, nil)
+		output, err := ModalRecreateSandboxActivity(context.Background(), input)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"check", "create"}, *sequence)
+		assert.Equal(t, "new.modal.host", output.EnvContainer.Env.(*ModalEnv).SSHHost)
+	})
 }
