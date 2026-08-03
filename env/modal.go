@@ -23,6 +23,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/temporal"
 	"golang.org/x/net/http/httpproxy"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // modalAppName is the Modal app under which all sidekick-managed sandboxes
@@ -126,6 +128,52 @@ func findModalSandbox(ctx context.Context, client *modal.Client, name string) (*
 	return sb, nil
 }
 
+// isModalSandboxTerminatingOrTerminated reports whether err indicates an
+// operation hit a sandbox that was terminated (e.g. by the idle watchdog's
+// guard) while still polling as running. Depending on how far the shutdown
+// has progressed, exec and similar RPCs fail either with a gRPC
+// FailedPrecondition "shutting down" or with libmodal's plain "has already
+// completed" error carrying a TERMINATED task result.
+func isModalSandboxTerminatingOrTerminated(err error) bool {
+	if err == nil {
+		return false
+	}
+	if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition &&
+		strings.Contains(strings.ToLower(st.Message()), "shutting down") {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "has already completed") && strings.Contains(msg, "GENERIC_STATUS_TERMINATED")
+}
+
+// waitForModalSandboxGone blocks until the named sandbox's name no longer
+// resolves at all. "Not running" (a completed poll result) is not enough: the
+// dying sandbox keeps its deterministic name reserved — and lookups can even
+// flap back to "running" — until Modal fully releases it, so only NotFound
+// guarantees a follow-up create with the same name gets a fresh sandbox.
+func waitForModalSandboxGone(ctx context.Context, client *modal.Client, name string) error {
+	const timeout = 2 * time.Minute
+	deadline := time.Now().Add(timeout)
+	for {
+		_, err := client.Sandboxes.FromName(ctx, modalAppName, name, nil)
+		var notFound modal.NotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to look up modal sandbox %s: %w", name, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("modal sandbox %s is still shutting down after %s", name, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // modalTunnelEndpoint returns the public host/port of the sandbox's SSH
 // tunnel. The port is exposed unencrypted at the tunnel level because SSH
 // provides its own encryption.
@@ -171,8 +219,62 @@ func modalSandboxSetupCommands() []string {
 	}
 }
 
-func modalSnapshotCompatible(record *modalSnapshotRecord) bool {
-	return record != nil && record.ImageVersion == modalSnapshotImageVersion
+// modalVolumeMountSetupCommands ensures Modal can attach each configured
+// volume: Modal refuses to mount a volume over a path that is not empty in
+// the image, which a base image or a repository's Dockerfile can easily
+// populate (e.g. a cache directory warmed at build time).
+func modalVolumeMountSetupCommands(config common.ModalEnvConfig) ([]string, error) {
+	mounts, err := config.NormalizedVolumeMounts()
+	if err != nil {
+		return nil, err
+	}
+	if len(mounts) == 0 {
+		return nil, nil
+	}
+	commands := make([]string, 0, len(mounts))
+	for _, mount := range mounts {
+		path := shellQuote(mount.MountPath)
+		commands = append(commands, "RUN rm -rf -- "+path+" && mkdir -p -- "+path)
+	}
+	return commands, nil
+}
+
+// modalSnapshotCompatible reports whether a snapshot can seed a sandbox
+// running the given configuration. Every configured volume mount path must
+// also have been a volume mount when the snapshot was taken: Modal excludes
+// mounted volumes from filesystem snapshots, so only then is that path empty
+// in the snapshot and therefore mountable. A snapshot predating the volume
+// instead holds an ordinary populated directory that Modal refuses to mount
+// over, leaving the sandbox unable to start.
+func modalSnapshotCompatible(record *modalSnapshotRecord, config common.ModalEnvConfig) bool {
+	if record == nil || record.ImageVersion != modalSnapshotImageVersion {
+		return false
+	}
+	mounts, err := config.NormalizedVolumeMounts()
+	if err != nil {
+		return false
+	}
+	if len(mounts) == 0 {
+		return true
+	}
+	var snapshotConfig common.ModalEnvConfig
+	if len(record.Meta) == 0 || json.Unmarshal(record.Meta, &snapshotConfig) != nil {
+		return false
+	}
+	snapshotMounts, err := snapshotConfig.NormalizedVolumeMounts()
+	if err != nil {
+		return false
+	}
+	snapshotPaths := make(map[string]bool, len(snapshotMounts))
+	for _, mount := range snapshotMounts {
+		snapshotPaths[mount.MountPath] = true
+	}
+	for _, mount := range mounts {
+		if !snapshotPaths[mount.MountPath] {
+			return false
+		}
+	}
+	return true
 }
 
 // modalSandboxImage layers Sidekick's remote-access dependencies onto the
@@ -194,6 +296,11 @@ func modalSandboxImage(client *modal.Client, config common.ModalEnvConfig, repoD
 		imageRef = modalDefaultImage
 	}
 	commands = append(commands, modalSandboxSetupCommands()...)
+	volumeCommands, err := modalVolumeMountSetupCommands(config)
+	if err != nil {
+		return nil, err
+	}
+	commands = append(commands, volumeCommands...)
 	return client.Images.FromRegistry(imageRef, nil).DockerfileCommands(commands, nil), nil
 }
 
@@ -550,10 +657,18 @@ func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int,
 		return "", 0, err
 	}
 	if sb != nil {
-		if err := waitForModalSSHD(ctx, sb); err != nil {
+		err := waitForModalSSHD(ctx, sb)
+		if err == nil {
+			return modalTunnelEndpoint(ctx, sb)
+		}
+		if !isModalSandboxTerminatingOrTerminated(err) {
 			return "", 0, err
 		}
-		return modalTunnelEndpoint(ctx, sb)
+		// The sandbox is mid-shutdown (idle watchdog terminate): wait it out,
+		// then fall through to restore from its snapshot as if already gone.
+		if waitErr := waitForModalSandboxGone(ctx, client, sandboxName); waitErr != nil {
+			return "", 0, waitErr
+		}
 	}
 	record, err := modalLatestSnapshot(ctx, client, sandboxName)
 	if err != nil {
@@ -579,7 +694,28 @@ func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int,
 // tunnel, or reuses the live sandbox with the same name. Both the default
 // gVisor runtime and the alpha VM runtime (real kernel) are supported via
 // Config.VM.
+//
+// A sandbox that polls as running may actually be mid-shutdown (the idle
+// watchdog's guard-initiated terminate leaves such a window). When reuse
+// trips over it, wait for the shutdown to finish and create afresh, which
+// restores from the snapshot the watchdog took just before terminating.
 func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
+	output, err := modalCreateSandboxOnce(ctx, input)
+	if err == nil || !isModalSandboxTerminatingOrTerminated(err) {
+		return output, err
+	}
+	log.Info().Str("sandbox", input.Name).Msg("modal sandbox is shutting down; waiting before recreating it")
+	client, clientErr := getModalClient()
+	if clientErr != nil {
+		return ModalCreateSandboxOutput{}, clientErr
+	}
+	if waitErr := waitForModalSandboxGone(ctx, client, input.Name); waitErr != nil {
+		return ModalCreateSandboxOutput{}, waitErr
+	}
+	return modalCreateSandboxOnce(ctx, input)
+}
+
+func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
 	_, publicKey, err := ensureModalSSHKey(ctx)
 	if err != nil {
 		return ModalCreateSandboxOutput{}, err
@@ -615,7 +751,7 @@ func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (Mod
 			if record == nil {
 				continue
 			}
-			if !modalSnapshotCompatible(record) {
+			if !modalSnapshotCompatible(record, input.Config) {
 				log.Info().
 					Str("sandbox", snapName).
 					Int("snapshotImageVersion", record.ImageVersion).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/temporal"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestModalEnvironment_MarshalUnmarshal(t *testing.T) {
@@ -114,6 +117,62 @@ func TestModalSandboxCreateParams(t *testing.T) {
 		assert.Equal(t, "https://guard.example", params.Env["SIDE_GUARD_URL"])
 		assert.Equal(t, "180", params.Env["SIDE_ACTIVE_SNAPSHOT_SECONDS"])
 	})
+}
+
+func TestModalVolumeMountSetupCommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		config   common.ModalEnvConfig
+		expected []string
+		error    string
+	}{
+		{
+			name:   "no volumes",
+			config: common.ModalEnvConfig{},
+		},
+		{
+			name: "clears every normalized mount path",
+			config: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{
+				{Name: "cache", MountPath: "/root/.cache/sidekick/"},
+				{Name: "packages", MountPath: "/var/cache/packages"},
+			}},
+			expected: []string{
+				"RUN rm -rf -- '/root/.cache/sidekick' && mkdir -p -- '/root/.cache/sidekick'",
+				"RUN rm -rf -- '/var/cache/packages' && mkdir -p -- '/var/cache/packages'",
+			},
+		},
+		{
+			name: "quotes mount paths",
+			config: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{
+				{Name: "cache", MountPath: "/root/cache's data"},
+			}},
+			expected: []string{
+				`RUN rm -rf -- '/root/cache'"'"'s data' && mkdir -p -- '/root/cache'"'"'s data'`,
+			},
+		},
+		{
+			name: "rejects invalid configuration",
+			config: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{
+				{Name: "cache", MountPath: "relative"},
+			}},
+			error: "requires an absolute mount_path",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			commands, err := modalVolumeMountSetupCommands(test.config)
+			if test.error != "" {
+				require.ErrorContains(t, err, test.error)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, commands)
+		})
+	}
 }
 
 func TestModalVolumes(t *testing.T) {
@@ -311,13 +370,83 @@ func TestModalSnapshotImageVersion(t *testing.T) {
 	var decoded modalSnapshotRecord
 	require.NoError(t, json.Unmarshal(encoded, &decoded))
 	assert.Equal(t, modalSnapshotImageVersion, decoded.ImageVersion)
-	assert.True(t, modalSnapshotCompatible(&decoded))
+	assert.True(t, modalSnapshotCompatible(&decoded, common.ModalEnvConfig{}))
 
 	decoded = modalSnapshotRecord{}
 	require.NoError(t, json.Unmarshal([]byte(`{"imageId":"im-stale"}`), &decoded))
 	assert.Zero(t, decoded.ImageVersion)
-	assert.False(t, modalSnapshotCompatible(&decoded))
-	assert.False(t, modalSnapshotCompatible(nil))
+	assert.False(t, modalSnapshotCompatible(&decoded, common.ModalEnvConfig{}))
+	assert.False(t, modalSnapshotCompatible(nil, common.ModalEnvConfig{}))
+}
+
+func TestModalSnapshotCompatibleVolumes(t *testing.T) {
+	t.Parallel()
+
+	meta := func(mounts ...common.ModalVolumeMount) json.RawMessage {
+		encoded, err := json.Marshal(common.ModalEnvConfig{Volumes: mounts})
+		require.NoError(t, err)
+		return encoded
+	}
+	cacheMount := common.ModalVolumeMount{Name: "cache", MountPath: "/root/.cache/sidekick"}
+
+	tests := []struct {
+		name       string
+		record     modalSnapshotRecord
+		config     common.ModalEnvConfig
+		compatible bool
+	}{
+		{
+			name:       "no volumes configured",
+			record:     modalSnapshotRecord{ImageVersion: modalSnapshotImageVersion},
+			compatible: true,
+		},
+		{
+			name:       "snapshot mounted the same path",
+			record:     modalSnapshotRecord{ImageVersion: modalSnapshotImageVersion, Meta: meta(cacheMount)},
+			config:     common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{cacheMount}},
+			compatible: true,
+		},
+		{
+			name: "mount path renamed volume still matches",
+			record: modalSnapshotRecord{ImageVersion: modalSnapshotImageVersion,
+				Meta: meta(common.ModalVolumeMount{Name: "old-cache", MountPath: "/root/.cache/sidekick/"})},
+			config:     common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{cacheMount}},
+			compatible: true,
+		},
+		{
+			name:   "snapshot predates the volume",
+			record: modalSnapshotRecord{ImageVersion: modalSnapshotImageVersion, Meta: meta()},
+			config: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{cacheMount}},
+		},
+		{
+			name: "snapshot mounted a different path",
+			record: modalSnapshotRecord{ImageVersion: modalSnapshotImageVersion,
+				Meta: meta(common.ModalVolumeMount{Name: "cache", MountPath: "/root/.cache/other"})},
+			config: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{cacheMount}},
+		},
+		{
+			name:   "missing metadata",
+			record: modalSnapshotRecord{ImageVersion: modalSnapshotImageVersion},
+			config: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{cacheMount}},
+		},
+		{
+			name:   "malformed metadata",
+			record: modalSnapshotRecord{ImageVersion: modalSnapshotImageVersion, Meta: json.RawMessage(`{`)},
+			config: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{cacheMount}},
+		},
+		{
+			name:   "invalid volume configuration",
+			record: modalSnapshotRecord{ImageVersion: modalSnapshotImageVersion, Meta: meta(cacheMount)},
+			config: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{{Name: "cache", MountPath: "relative"}}},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, test.compatible, modalSnapshotCompatible(&test.record, test.config))
+		})
+	}
 }
 
 func TestModalRecreateSandboxActivity(t *testing.T) {
@@ -437,4 +566,26 @@ func TestModalRecreateSandboxActivity(t *testing.T) {
 		assert.Equal(t, []string{"check", "create"}, *sequence)
 		assert.Equal(t, "new.modal.host", output.EnvContainer.Env.(*ModalEnv).SSHHost)
 	})
+}
+
+func TestIsModalSandboxTerminatingOrTerminated(t *testing.T) {
+	t.Parallel()
+
+	shuttingDown := status.Error(codes.FailedPrecondition, "Modal Sandbox is shutting down.")
+	assert.True(t, isModalSandboxTerminatingOrTerminated(shuttingDown))
+	assert.True(t, isModalSandboxTerminatingOrTerminated(
+		fmt.Errorf("failed to exec sshd readiness check in modal sandbox: %w", shuttingDown)),
+		"wrapped grpc status errors must be detected")
+	assert.True(t, isModalSandboxTerminatingOrTerminated(
+		errors.New(`failed to exec sshd readiness check in modal sandbox: Sandbox sb-HKrWc3S5zR2umGmVqpNGzV has already completed with result: status:GENERIC_STATUS_TERMINATED exception:"Container terminated due to user termination request"`)),
+		"libmodal's completed-with-TERMINATED error must be detected")
+
+	assert.False(t, isModalSandboxTerminatingOrTerminated(nil))
+	assert.False(t, isModalSandboxTerminatingOrTerminated(errors.New("Modal Sandbox is shutting down.")),
+		"plain errors without a FailedPrecondition grpc status are not shutdown signals")
+	assert.False(t, isModalSandboxTerminatingOrTerminated(status.Error(codes.FailedPrecondition, "some other precondition failed")))
+	assert.False(t, isModalSandboxTerminatingOrTerminated(status.Error(codes.Unavailable, "Modal Sandbox is shutting down.")))
+	assert.False(t, isModalSandboxTerminatingOrTerminated(
+		errors.New("Sandbox sb-123 has already completed with result: status:GENERIC_STATUS_FAILURE exit_code:1")),
+		"completed-with-failure is not a shutdown race and must not trigger recreation")
 }
