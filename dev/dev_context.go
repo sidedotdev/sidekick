@@ -623,10 +623,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	// Merge command permissions from all config sources: base → local → repo → workspace
 	var baseCommandPermissions common.CommandPermissionConfig
+	baseSource := common.CommandPatternSourceBase
 	if v := workflow.GetVersion(ctx, "base-command-permissions-activity", workflow.DefaultVersion, 1); v >= 1 {
 		var input common.BaseCommandPermissionsInput
 		if sv := workflow.GetVersion(ctx, "sandbox-command-permissions", workflow.DefaultVersion, 1); sv >= 1 {
 			input.EnvType = envType
+		}
+		if common.IsolatedSandboxEnvTypes[input.EnvType] {
+			baseSource = common.CommandPatternSourceBaseIsolatedSandbox
 		}
 		err = workflow.ExecuteActivity(ctx, common.BaseCommandPermissionsActivity, input).Get(ctx, &baseCommandPermissions)
 		if err != nil {
@@ -636,10 +640,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		baseCommandPermissions = common.BaseCommandPermissions()
 	}
 	repoConfig.CommandPermissions = common.MergeCommandPermissions(
-		baseCommandPermissions,
-		localConfig.CommandPermissions,
-		repoConfig.CommandPermissions,
-		workspaceConfig.CommandPermissions,
+		common.TagCommandPatternSources(baseCommandPermissions, baseSource),
+		common.TagCommandPatternSources(localConfig.CommandPermissions, common.CommandPatternSourceLocalConfig),
+		common.TagCommandPatternSources(repoConfig.CommandPermissions, common.CommandPatternSourceRepoConfig),
+		common.TagCommandPatternSources(workspaceConfig.CommandPermissions, common.CommandPatternSourceWorkspaceConfig),
 	)
 
 	// Execute worktree setup script if configured and using worktree mode

@@ -316,3 +316,36 @@ export interface Project {
   created: string
   updated: string
 }
+
+// Command-permission evaluation metadata, mirroring the camelCase JSON of the
+// Go types in common/command_permission_evaluation.go.
+export type PermissionResult = 'auto_approve' | 'require_approval' | 'deny'
+
+export interface PermissionMatchedRule {
+  action: PermissionResult
+  pattern: string
+  message?: string
+  source?: string
+}
+
+export interface PermissionFactor {
+  kind: string
+  outcome?: PermissionResult
+  message?: string
+  paths?: string[]
+}
+
+export interface CommandPermissionEvaluation {
+  command: string
+  outcome: PermissionResult
+  matchedRules?: PermissionMatchedRule[]
+  factors?: PermissionFactor[]
+  decidedBy: 'rule' | 'factor'
+  decidedByIndex: number
+}
+
+export interface ScriptPermissionEvaluation {
+  outcome: PermissionResult
+  commands?: CommandPermissionEvaluation[]
+  factors?: PermissionFactor[]
+}

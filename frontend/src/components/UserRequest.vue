@@ -13,6 +13,10 @@
     <div v-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
+    <PermissionEvaluationDetails
+      v-if="devMode && flowAction.actionParams.permissionEvaluation"
+      :evaluation="flowAction.actionParams.permissionEvaluation"
+    />
     <div v-if="flowAction.actionParams.mergeApprovalInfo?.diff" class="diff-container" @click="restoreFocus">
       <div v-if="showEmptyDiffMessage" class="empty-diff-message">
         No changes since last review
@@ -147,6 +151,10 @@
     <div v-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
+    <PermissionEvaluationDetails
+      v-if="devMode && flowAction.actionParams.permissionEvaluation"
+      :evaluation="flowAction.actionParams.permissionEvaluation"
+    />
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
       <div class="diff-options-row">
         <label for="diffScopeNonPending">Show</label>
@@ -198,6 +206,7 @@ import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';
 import Select from 'primevue/select';
 import DevRunControls from './DevRunControls.vue';
+import PermissionEvaluationDetails from './PermissionEvaluationDetails.vue';
 import { registerGlobalShortcut, unregisterGlobalShortcut } from '../lib/globalShortcutRegistry';
 
 interface UserResponse {
@@ -228,6 +237,7 @@ const errorMessage = ref('');
 const textareaRef = ref<{ focus: () => void } | null>(null);
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const hasResponseText = computed(() => responseContent.value.trim() !== '');
+const devMode = computed(() => import.meta.env.MODE === 'development');
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
 const diffScope = ref<'all' | 'since_last_review'>('all');
