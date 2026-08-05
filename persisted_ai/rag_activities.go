@@ -64,6 +64,13 @@ func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
 
 // RankedDirSignatureOutline generates a ranked outline of the directory structure based on the query.
 func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options RankedDirSignatureOutlineOptions) (string, error) {
+	// Embedding models are optional: without one there is nothing to rank by,
+	// so the outline is skipped rather than failing the calling flow.
+	if options.ModelConfig.Provider == "" && options.ModelConfig.Model == "" {
+		log.Debug().Msg("no embedding model configured, skipping ranked dir signature outline")
+		return "", nil
+	}
+
 	// FIXME put tree sitter activities inside rag activities struct
 	t := tree_sitter.TreeSitterActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
