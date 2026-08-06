@@ -582,6 +582,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		childFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
 			WorkspaceId:  input.WorkspaceId,
 			Requirements: requirements,
+			Title:        title,
 			RepoDir:      input.RepoDir,
 			PlannedDevOptions: PlannedDevOptions{
 				DetermineRequirements: false,
@@ -598,6 +599,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		childFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
 			WorkspaceId:  input.WorkspaceId,
 			Requirements: requirements,
+			Title:        title,
 			RepoDir:      input.RepoDir,
 			BasicDevOptions: BasicDevOptions{
 				DetermineRequirements: false,
