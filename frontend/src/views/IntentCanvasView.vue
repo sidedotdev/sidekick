@@ -1425,11 +1425,6 @@ onBeforeUnmount(() => {
   transform: rotate(90deg);
 }
 
-.clarify-list {
-  max-height: 40vh;
-  overflow: scroll;
-}
-
 .subtask-list,
 .clarify-list {
   list-style: none;

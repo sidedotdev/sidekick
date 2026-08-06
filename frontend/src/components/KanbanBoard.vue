@@ -518,6 +518,10 @@ async function confirmArchiveFinished(project?: Project) {
   --kanban-column-gap: 0.75rem;
   --kanban-column-heading-height: 2.6875rem;
   margin-bottom: 2rem;
+}
+
+.kanban-board {
+  padding-top: 0.75rem;
   position: relative;
   /* creates a stacking context so the separator lines below can sit above the
      board background yet behind all content */
@@ -545,12 +549,12 @@ async function confirmArchiveFinished(project?: Project) {
 
 .board-column-headings {
   position: sticky;
-  top: 0;
+  top: var(--main-sticky-top, 0);
   z-index: 3;
   display: flex;
-  height: var(--kanban-column-heading-height);
   width: 100%;
   gap: var(--kanban-column-gap);
+  padding-bottom: 0.5rem;
   background-color: var(--color-background-soft);
 }
 
@@ -561,8 +565,6 @@ async function confirmArchiveFinished(project?: Project) {
   /* lines up with the kanban column padding and task card padding */
   padding-left: calc(var(--kanban-gap) + var(--task-pad) / 2);
   padding-right: var(--kanban-gap);
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -571,9 +573,6 @@ async function confirmArchiveFinished(project?: Project) {
   font-weight: 400;
   font-size: 1.2rem;
   line-height: 1.4;
-  border-top-left-radius: var(--kanban-radius);
-  border-top-right-radius: var(--kanban-radius);
-  background-color: var(--color-background);
 }
 
 .board-column-headings .mini-button {
@@ -614,7 +613,7 @@ async function confirmArchiveFinished(project?: Project) {
 
 .project-group-header {
   position: sticky;
-  top: var(--kanban-column-heading-height);
+  top: calc(var(--main-sticky-top, 0rem) + var(--kanban-column-heading-height));
   z-index: 2;
   display: flex;
   align-items: stretch;
@@ -763,7 +762,7 @@ async function confirmArchiveFinished(project?: Project) {
 }
 
 .search-container {
-  position: fixed;
+  position: absolute;
   top: 1rem;
   right: 1rem;
   display: flex;
