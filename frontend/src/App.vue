@@ -132,6 +132,8 @@ onUnmounted(() => {
 
   <div class="app-container">
     <div class="sidebar">
+      <RouterLink id="logo-link" to="/kanban"><div id="logo">~</div></RouterLink>
+
       <nav class="container">
         <ShortcutTooltip label="Board" :shortcut="isMac ? '⌘B' : 'Ctrl+B'">
           <RouterLink to="/kanban" class="nav-icon-link" aria-label="Board"><BoardIcon /></RouterLink>
@@ -194,8 +196,6 @@ onUnmounted(() => {
     "sidebar main";
   height: 100vh;
   width: 100vw;
-  overflow: scroll;
-  --app-header-height: 3.6rem;
   --workspace-select-background-color: var(--color-background-hover);
 }
 
@@ -213,20 +213,15 @@ onUnmounted(() => {
   flex-direction: column;
   background-color: var(--color-background);
   border-right: 1px solid var(--color-border);
-  position: sticky;
-  top: 0;
-  height: 100vh;
 }
 
 header {
   grid-area: header;
   line-height: 1.5;
-  height: var(--app-header-height);
+  height: var(--header-height);
   width: 100%;
   padding: 1rem 0;
-  background: inherit;
   position: sticky;
-  top: 0;
   z-index: 1;
 }
 
@@ -267,12 +262,42 @@ header {
   grid-area: main;
   background-color: var(--color-background-soft);
   padding-left: 1rem;
+  height: 100vh;
   width: 100%;
 }
 
 main {
+  --header-height: 3.6rem;
+  height: 100vh;
+  overflow: scroll;
 }
 
+#logo-link {
+  overflow: hidden;
+  margin: 0 -1rem;
+  padding: 0 1rem;
+}
+
+
+#logo {
+  height: 100%;
+  position: relative;
+  word-spacing: -0.2em;
+  letter-spacing: -0.07em;
+
+  background:  linear-gradient(90deg, rgba(176, 78, 241, 0.7) 0%, rgba(253,29,29,0.45) 100%), #fff;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 4rem;
+  font-weight: 500;
+  font-style: italic;
+
+  background-position-x: 0%;
+  padding-right: 0.6rem;
+  padding-left: 3.5px;
+  line-height: 0.6;
+  vertical-align: middle;
+}
 
 nav {
   font-size: 12px;

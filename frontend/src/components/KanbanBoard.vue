@@ -545,7 +545,7 @@ async function confirmArchiveFinished(project?: Project) {
 
 .board-column-headings {
   position: sticky;
-  top: var(--app-header-height);
+  top: 0;
   z-index: 3;
   display: flex;
   height: var(--kanban-column-heading-height);
@@ -614,7 +614,7 @@ async function confirmArchiveFinished(project?: Project) {
 
 .project-group-header {
   position: sticky;
-  top: calc(var(--app-header-height) + var(--kanban-column-heading-height));
+  top: var(--kanban-column-heading-height);
   z-index: 2;
   display: flex;
   align-items: stretch;
@@ -764,7 +764,7 @@ async function confirmArchiveFinished(project?: Project) {
 
 .search-container {
   position: fixed;
-  top: calc(0.25rem + var(--app-header-height)); /* FIXME: make this floating in indedendent stacking context */
+  top: 1rem;
   right: 1rem;
   display: flex;
   align-items: center;
