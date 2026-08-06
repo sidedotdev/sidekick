@@ -218,11 +218,10 @@ onUnmounted(() => {
 header {
   grid-area: header;
   line-height: 1.5;
-  max-height: 100vh;
+  height: var(--header-height);
   width: 100%;
   padding: 1rem 0;
-  position: fixed;
-  background-color: var(--color-background-soft);
+  position: sticky;
   z-index: 1;
 }
 
@@ -268,8 +267,7 @@ header {
 }
 
 main {
-  --main-sticky-top: 3.6rem;
-  padding-top: var(--main-sticky-top);
+  --header-height: 3.6rem;
   height: 100vh;
   overflow: scroll;
 }
