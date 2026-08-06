@@ -18,7 +18,10 @@ vi.mock('primevue/select', () => ({
       'filterPlaceholder',
     ],
     emits: ['update:modelValue', 'filter', 'hide'],
-    template: '<div><slot name="value" :value="modelValue" /></div>',
+    methods: {
+      hide() {},
+    },
+    template: '<div><slot name="value" :value="modelValue" /><slot name="footer" /></div>',
   },
 }))
 
@@ -51,6 +54,8 @@ const branchSelect = (wrapper: VueWrapper) => wrapper.findAllComponents({ name: 
 const optionLabels = (wrapper: VueWrapper) =>
   branchSelect(wrapper).props('options').map((option: { label: string }) => option.label)
 
+const createButton = (wrapper: VueWrapper) => wrapper.find('button.fuzzy-append-option')
+
 describe('BranchSelector', () => {
   beforeEach(() => {
     sessionStorage.clear()
@@ -58,16 +63,14 @@ describe('BranchSelector', () => {
     global.fetch = fetchMock as unknown as typeof fetch
   })
 
-  it('offers branch creation after matching branches when creation is allowed', async () => {
+  it('offers branch creation alongside matching branches when creation is allowed', async () => {
     const wrapper = await mountSelector({ allowCreate: true })
 
     branchSelect(wrapper).vm.$emit('filter', { value: 'feature' })
     await wrapper.vm.$nextTick()
 
-    expect(optionLabels(wrapper)).toEqual([
-      'feature/alpha',
-      'Create branch "feature"',
-    ])
+    expect(optionLabels(wrapper)).toEqual(['feature/alpha'])
+    expect(createButton(wrapper).text()).toBe('Create branch "feature"')
   })
 
   it('offers branch creation when nothing matches', async () => {
@@ -76,7 +79,8 @@ describe('BranchSelector', () => {
     branchSelect(wrapper).vm.$emit('filter', { value: 'zzz-new' })
     await wrapper.vm.$nextTick()
 
-    expect(optionLabels(wrapper)).toEqual(['Create branch "zzz-new"'])
+    expect(optionLabels(wrapper)).toEqual([])
+    expect(createButton(wrapper).text()).toBe('Create branch "zzz-new"')
   })
 
   it('does not offer creation when the filter exactly matches a branch', async () => {
@@ -86,6 +90,7 @@ describe('BranchSelector', () => {
     await wrapper.vm.$nextTick()
 
     expect(optionLabels(wrapper)).toEqual(['main'])
+    expect(createButton(wrapper).exists()).toBe(false)
   })
 
   it('does not offer creation when the option is disabled', async () => {
@@ -95,6 +100,7 @@ describe('BranchSelector', () => {
     await wrapper.vm.$nextTick()
 
     expect(optionLabels(wrapper)).toEqual([])
+    expect(createButton(wrapper).exists()).toBe(false)
   })
 
   it('creates the branch from the chosen base and selects it', async () => {
@@ -112,7 +118,7 @@ describe('BranchSelector', () => {
 
     branchSelect(wrapper).vm.$emit('filter', { value: 'feature/new-thing' })
     await wrapper.vm.$nextTick()
-    branchSelect(wrapper).vm.$emit('update:modelValue', '__create_branch__:feature/new-thing')
+    await createButton(wrapper).trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.create-branch-dialog').exists()).toBe(true)

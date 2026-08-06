@@ -46,6 +46,7 @@
             id="startBranch"
             v-model="selectedBranch"
             :workspaceId="workspaceId"
+            allow-create
           />
         </div>
       </div>

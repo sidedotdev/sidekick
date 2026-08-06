@@ -6,7 +6,7 @@
       optionLabel="label"
       optionValue="value"
       :appendOption="createOption"
-      filterPlaceholder="Search branches"
+      :filterPlaceholder="filterPlaceholder"
       :loading="isLoadingBranches"
       placeholder="Select Branch"
       class="w-full"
@@ -79,6 +79,9 @@ const branchOptions = computed(() => branches.value.map(branch => ({
   label: branch.name,
   value: branch.name,
 })))
+
+const filterPlaceholder = computed(() =>
+  props.allowCreate ? 'Search or create branch' : 'Search branches')
 
 const createOption = computed(() => {
   if (!props.allowCreate) return null
