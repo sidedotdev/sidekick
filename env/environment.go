@@ -327,6 +327,7 @@ type ModalEnv struct {
 	Hibernated   bool                       `json:"hibernated,omitempty"`
 
 	runModalCommand      func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error)
+	runModalAPICommand   func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error)
 	refreshModalEndpoint func(context.Context, string) (string, int, error)
 }
 
@@ -1076,6 +1077,10 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	if e.runModalCommand != nil {
 		runCommand = e.runModalCommand
 	}
+	runAPICommand := e.runAPICommandInner
+	if e.runModalAPICommand != nil {
+		runAPICommand = e.runModalAPICommand
+	}
 	refreshEndpoint := refreshModalEndpoint
 	if e.refreshModalEndpoint != nil {
 		refreshEndpoint = e.refreshModalEndpoint
@@ -1093,21 +1098,41 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	}
 	appendDiagnostics()
 
+	// Only SSH client diagnostics kept separate from remote output can prove
+	// the command never started, which is what makes re-running it safe.
+	transportFailed := func() bool {
+		return err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
+	}
+	if !transportFailed() {
+		return output, err
+	}
+
 	// The stored tunnel endpoint may be stale because the idle watchdog
-	// snapshotted and terminated the sandbox. Only SSH client diagnostics
-	// kept separate from remote output can prove the command never started.
-	if err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics) {
-		host, port, refreshErr := refreshEndpoint(ctx, e.SandboxName)
-		if refreshErr != nil {
-			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
-		} else {
-			e.SSHHost, e.SSHPort = host, port
-			output, diagnostics, err = runCommand(ctx, input)
-			appendDiagnostics()
+	// snapshotted and terminated the sandbox; refreshing restores it.
+	host, port, refreshErr := refreshEndpoint(ctx, e.SandboxName)
+	if refreshErr != nil {
+		log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
+	} else {
+		e.SSHHost, e.SSHPort = host, port
+		output, diagnostics, err = runCommand(ctx, input)
+		appendDiagnostics()
+		if !transportFailed() {
+			return output, err
 		}
 	}
 
-	return output, err
+	// SSH is preferred for its multiplexed connection, but the tunnel endpoint
+	// is only reachable by dialing an ephemeral high port, which some networks
+	// forbid (e.g. HTTP proxies that only allow CONNECT to 443). Modal's API
+	// stays usable there, at the cost of losing the reverse port forwards that
+	// only SSH can provide.
+	apiOutput, apiErr := runAPICommand(ctx, input)
+	if apiErr != nil {
+		log.Warn().Err(apiErr).Str("sandbox", e.SandboxName).Msg("failed to run command via modal API after SSH transport failure")
+		return output, err
+	}
+	log.Info().Str("sandbox", e.SandboxName).Msg("ran command via modal API after SSH transport failure")
+	return apiOutput, nil
 }
 
 func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
@@ -1132,6 +1157,13 @@ func (e *ModalEnv) recoverSSHTransport(ctx context.Context, cause error) (bool, 
 	return true, nil
 }
 
+// isModalSSHTransportFailure reports whether ssh client diagnostics describe a
+// failure that happened before the remote command could start. Callers retry
+// on it, so every fragment must denote either a dial that never succeeded or a
+// connection that died during the pre-authentication identification and banner
+// exchange. Connections made through a ProxyCommand only ever produce the
+// latter kind: the dial failure happens inside the proxy helper, and ssh sees
+// nothing but a closed pipe.
 func isModalSSHTransportFailure(diagnostics string) bool {
 	diagnostics = strings.ToLower(diagnostics)
 	for _, fragment := range []string{
@@ -1139,6 +1171,8 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 		"connect to host",
 		"could not resolve hostname",
 		"no route to host",
+		"exchange_identification",
+		"banner exchange",
 	} {
 		if strings.Contains(diagnostics, fragment) {
 			return true
@@ -1147,12 +1181,16 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 	return false
 }
 
-func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+// remoteCommand returns the shell command to run inside the sandbox, prefixed
+// with a refresh of the idle-watchdog activity marker.
+func (e *ModalEnv) remoteCommand(input EnvRunCommandInput) string {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
-	fullCommand = modalLoginShellCommand(fullCommand)
-	// Refresh the idle-watchdog activity marker with every command.
-	fullCommand = "touch " + remoteActivityMarker + " 2>/dev/null; " + fullCommand
+	return "touch " + remoteActivityMarker + " 2>/dev/null; " +
+		buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+}
+
+func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+	fullCommand := modalLoginShellCommand(e.remoteCommand(input))
 
 	sshArgs, err := e.SSHArgs(ctx)
 	if err != nil {
@@ -1191,6 +1229,13 @@ func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput
 
 func modalLoginShellCommand(command string) string {
 	return "bash -lc " + shellQuote(command)
+}
+
+// runAPICommandInner runs the command through Modal's API rather than SSH.
+// Reverse port forwards are an SSH-only feature, so host services stay
+// unreachable from commands run this way.
+func (e *ModalEnv) runAPICommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	return modalExecCommand(ctx, e.SandboxName, e.remoteCommand(input))
 }
 
 // baseSSHArgs returns ssh args (ending with the destination) for reaching the

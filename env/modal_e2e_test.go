@@ -101,6 +101,52 @@ func TestModalIntegration(t *testing.T) {
 		assert.Contains(t, output.Stdout, "ripgrep")
 	})
 
+	t.Run("api fallback when the ssh endpoint is unusable", func(t *testing.T) {
+		// Injecting a dead endpoint that survives refresh forces the real
+		// libmodal fallback, which otherwise only happens on networks that
+		// cannot reach the tunnel port.
+		deadListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		deadPort := deadListener.Addr().(*net.TCPAddr).Port
+		require.NoError(t, deadListener.Close())
+
+		fallbackEnv := &ModalEnv{
+			SandboxName:      sandboxName,
+			SSHHost:          "127.0.0.1",
+			SSHPort:          deadPort,
+			WorkingDirectory: syncOutput.RemoteRepoDir,
+			refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+				return "127.0.0.1", deadPort, nil
+			},
+		}
+		output, err := fallbackEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "sh",
+			Args:    []string{"-c", "echo hello-from-api; exit 5"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "hello-from-api\n", output.Stdout)
+		assert.Equal(t, 5, output.ExitStatus, "the fallback must report the command's exit status")
+	})
+
+	t.Run("api command matches ssh output", func(t *testing.T) {
+		input := EnvRunCommandInput{
+			Command: "sh",
+			Args:    []string{"-c", "echo to-stdout; echo term-is-${TERM+set}; echo to-stderr >&2; exit 7"},
+		}
+		sshOutput, err := modalEnv.RunCommand(ctx, input)
+		require.NoError(t, err)
+		apiOutput, err := modalEnv.runAPICommandInner(ctx, input)
+		require.NoError(t, err)
+
+		assert.Equal(t, "to-stdout\nterm-is-\n", apiOutput.Stdout)
+		assert.Equal(t, sshOutput.Stdout, apiOutput.Stdout)
+		assert.Equal(t, sshOutput.ExitStatus, apiOutput.ExitStatus)
+		assert.Equal(t, 7, apiOutput.ExitStatus)
+		assert.Contains(t, apiOutput.Stderr, "to-stderr")
+		assert.NotContains(t, apiOutput.Stdout, "\x1b", "output must not carry terminal escape sequences")
+		assert.NotContains(t, apiOutput.Stderr, "\x1b", "output must not carry terminal escape sequences")
+	})
+
 	t.Run("file operations", func(t *testing.T) {
 		content := []byte("hello from modal\n")
 		require.NoError(t, modalEnv.WriteFile(ctx, "modal-test.txt", content, 0o644))

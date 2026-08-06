@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -463,6 +464,64 @@ func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string)
 		"-p", strconv.Itoa(sshPort),
 		"root@"+sshHost,
 	)
+}
+
+// modalExecCommand runs a shell command inside the named sandbox through
+// Modal's API. The API is reached over HTTPS on port 443 and honors the
+// standard proxy environment variables, so it remains usable on networks
+// where the sandbox's ephemeral tunnel port cannot be dialed.
+func modalExecCommand(ctx context.Context, sandboxName, command string) (EnvRunCommandOutput, error) {
+	client, err := getModalClient()
+	if err != nil {
+		return EnvRunCommandOutput{}, err
+	}
+	sb, err := findModalSandbox(ctx, client, sandboxName)
+	if err != nil {
+		return EnvRunCommandOutput{}, err
+	}
+	if sb == nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("modal sandbox %s is not running", sandboxName)
+	}
+	// Modal's login shell integration installs a DEBUG trap that decorates
+	// stdout with terminal title escape sequences whenever TERM names a
+	// terminal, which the API sets but a tty-less ssh session does not.
+	// Unsetting it rather than emptying it, which is all the exec params can
+	// express, keeps both the output bytes and the environment the command
+	// observes identical to the ssh path.
+	argv := []string{"env", "-u", "TERM", "bash", "-lc", command}
+	process, err := sb.Exec(ctx, argv, nil)
+	if err != nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("failed to exec in modal sandbox %s: %w", sandboxName, err)
+	}
+
+	// Both streams are drained concurrently: either one filling up while the
+	// other is being read would stall the command.
+	var stdout, stderr []byte
+	var stdoutErr, stderrErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		stdout, stdoutErr = io.ReadAll(process.Stdout)
+	}()
+	go func() {
+		defer wg.Done()
+		stderr, stderrErr = io.ReadAll(process.Stderr)
+	}()
+	wg.Wait()
+	if readErr := errors.Join(stdoutErr, stderrErr); readErr != nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("failed to read output of command in modal sandbox %s: %w", sandboxName, readErr)
+	}
+
+	exitCode, err := process.Wait(ctx)
+	if err != nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("failed to wait for command in modal sandbox %s: %w", sandboxName, err)
+	}
+	return EnvRunCommandOutput{
+		Stdout:     string(stdout),
+		Stderr:     string(stderr),
+		ExitStatus: exitCode,
+	}, nil
 }
 
 // enableModalPerfCounters opens up kernel perf counters so profiling tools
