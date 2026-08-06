@@ -268,7 +268,8 @@ header {
 }
 
 main {
-  padding-top: 3.6rem;
+  --main-sticky-top: 3.6rem;
+  padding-top: var(--main-sticky-top);
   height: 100vh;
   overflow: scroll;
 }

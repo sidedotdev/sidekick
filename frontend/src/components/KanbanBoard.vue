@@ -516,6 +516,7 @@ async function confirmArchiveFinished(project?: Project) {
   transition: background-color 0.5s, color 0.5s;
 
   --kanban-column-gap: 0.75rem;
+  --kanban-column-heading-height: 2.6875rem;
   margin-bottom: 2rem;
 }
 
@@ -547,10 +548,14 @@ async function confirmArchiveFinished(project?: Project) {
 }
 
 .board-column-headings {
+  position: sticky;
+  top: var(--main-sticky-top, 0);
+  z-index: 3;
   display: flex;
   width: 100%;
   gap: var(--kanban-column-gap);
-  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  background-color: var(--color-background-soft);
 }
 
 .board-column-headings h2 {
@@ -607,6 +612,9 @@ async function confirmArchiveFinished(project?: Project) {
 }
 
 .project-group-header {
+  position: sticky;
+  top: calc(var(--main-sticky-top, 0rem) + var(--kanban-column-heading-height));
+  z-index: 2;
   display: flex;
   align-items: stretch;
   font-family: sans-serif;
