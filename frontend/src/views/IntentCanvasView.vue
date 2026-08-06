@@ -272,6 +272,7 @@
             v-if="store.workspaceId"
             :workspace-id="store.workspaceId"
             v-model="finishTargetBranch"
+            allow-create
           />
         </div>
 

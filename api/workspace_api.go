@@ -85,6 +85,7 @@ func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup 
 	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceHandler)
 	workspaceApiRoutes.PUT(":workspaceId", ctrl.UpdateWorkspaceHandler)
 	workspaceApiRoutes.GET(":workspaceId/branches", ctrl.GetWorkspaceBranchesHandler)
+	workspaceApiRoutes.POST(":workspaceId/branches", ctrl.CreateWorkspaceBranchHandler)
 	workspaceApiRoutes.GET(":workspaceId/task_config", ctrl.GetTaskConfigHandler)
 
 	// Create a group with workspaceId parameter for nested routes
@@ -135,6 +136,90 @@ func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"branches": filteredBranches})
+}
+
+// CreateBranchRequest is the request body for creating a new local git branch.
+type CreateBranchRequest struct {
+	Name       string `json:"name"`
+	BaseBranch string `json:"baseBranch"`
+}
+
+// CreateWorkspaceBranchHandler creates a new local git branch in the workspace
+// repository, based on the given base branch, without checking it out.
+func (ctrl *Controller) CreateWorkspaceBranchHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	if workspaceId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workspaceId is required"})
+		return
+	}
+
+	var req CreateBranchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	branchName := strings.TrimSpace(req.Name)
+	baseBranch := strings.TrimSpace(req.BaseBranch)
+	if branchName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	if baseBranch == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "baseBranch is required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	workspace, err := ctrl.service.GetWorkspace(ctx, workspaceId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
+		} else {
+			log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to get workspace")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get workspace"})
+		}
+		return
+	}
+
+	if workspace.LocalRepoDir == "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "Workspace repository directory not configured"})
+		return
+	}
+	repoDir := workspace.LocalRepoDir
+
+	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Workspace repository directory not found"})
+		return
+	}
+
+	if err := git.CreateBranch(ctx, repoDir, branchName, baseBranch); err != nil {
+		switch {
+		case errors.Is(err, git.ErrBranchExists):
+			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("Branch %s already exists", branchName)})
+		case errors.Is(err, git.ErrInvalidRefName):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			log.Error().Err(err).Str("workspaceId", workspaceId).Str("branch", branchName).Msg("Failed to create branch")
+			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to create branch: %v", err))
+		}
+		return
+	}
+
+	createdBranch := BranchInfo{Name: branchName}
+	branches, err := getFilteredBranches(ctx, repoDir, &workspace)
+	if err != nil {
+		log.Warn().Err(err).Str("repoDir", repoDir).Msg("Could not list branches after creation")
+	} else {
+		for _, branch := range branches {
+			if branch.Name == branchName {
+				createdBranch = branch
+				break
+			}
+		}
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"branch": createdBranch})
 }
 
 func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
