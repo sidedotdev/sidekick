@@ -171,3 +171,24 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* NOTE: use ~ for logo content */
+#logo {
+  height: 100%;
+  position: relative;
+  word-spacing: -0.2em;
+  letter-spacing: -0.07em;
+
+  background:  linear-gradient(90deg, rgba(176, 78, 241, 0.7) 0%, rgba(253,29,29,0.45) 100%), #fff;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 4rem;
+  font-weight: 500;
+  font-style: italic;
+
+  background-position-x: 0%;
+  padding-right: 0.6rem;
+  padding-left: 3.5px;
+  line-height: 0.6;
+  vertical-align: middle;
+}
