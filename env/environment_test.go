@@ -1021,3 +1021,34 @@ func TestHibernateEnvIsNoOpForModal(t *testing.T) {
 	assert.Equal(t, HibernationMetadata{}, metadata)
 	assert.Zero(t, commands, "modal hibernation must not touch the sandbox")
 }
+func TestModalRunCommandDoesNotRetryEstablishedChannelFailure(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	refreshes := 0
+	cause := errors.New("agent exec channel closed")
+	diagnostics := "ssh: connect to host old.modal.host port 1234: Connection refused"
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "old.modal.host",
+		SSHPort:     1234,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{}, diagnostics, &agentExecTransportError{
+				cause:       cause,
+				diagnostics: diagnostics,
+			}
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			return "new.modal.host", 5678, nil
+		},
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{Command: "mutate-state"})
+
+	require.ErrorIs(t, err, cause)
+	assert.Equal(t, 1, attempts, "unknown execution state must not be retried")
+	assert.Equal(t, 0, refreshes, "unknown execution state must not refresh and rerun")
+	assert.Contains(t, output.Stderr, diagnostics)
+}

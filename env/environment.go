@@ -18,6 +18,7 @@ import (
 	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/sideagent"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
@@ -141,6 +142,13 @@ type SSHCapableEnv interface {
 
 type sshTransportRecoverer interface {
 	recoverSSHTransport(ctx context.Context, cause error) (bool, error)
+}
+
+// nonRecoveringSSHEnv hides an env's sshTransportRecoverer implementation, for
+// callers that own transport recovery themselves and must not have a second
+// recovery nested inside each dial attempt.
+type nonRecoveringSSHEnv struct {
+	SSHCapableEnv
 }
 
 // MergeResultSyncer is implemented by environments whose repository is an
@@ -678,35 +686,50 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 	return e.WorkingDirectory
 }
 
-// buildRemoteShellCommand builds a single POSIX shell command line that runs
-// input's command inside workDir over SSH. It exports the requested environment
-// variables, changes into workDir, and only then runs the command. A failed cd
-// (e.g. the directory does not exist in the remote container) aborts with a
-// non-zero exit and a clear message on stderr, so callers get an explicit error
-// instead of empty output from a command that silently ran in the SSH session's
-// default directory.
-func buildRemoteShellCommand(workDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) string {
-	allEnvVars := append(input.EnvVars, envVarsToInject(envType, portForwards)...)
-	shellParts := make([]string, 0, len(allEnvVars)+3)
-
-	// Detach stdin from the SSH channel so remote commands behave like local
-	// ones, which get /dev/null as stdin. Otherwise tools like ripgrep read
-	// from the (empty) SSH stream instead of recursing the working directory.
-	shellParts = append(shellParts, "exec 0</dev/null")
-
-	for _, envVar := range allEnvVars {
-		shellParts = append(shellParts, "export "+shellQuote(envVar))
+// agentExecRequest maps an EnvRunCommandInput onto a structured side-agent
+// exec request: argv, cwd and env cross the channel verbatim, so no shell
+// command line is ever assembled from user-controlled input.
+func agentExecRequest(workingDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) sideagent.ExecRequest {
+	return sideagent.ExecRequest{
+		Dir:  filepath.Join(workingDir, input.RelativeWorkingDir),
+		Argv: append([]string{input.Command}, input.Args...),
+		Env:  append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards)...),
 	}
-	cdFailure := shellQuote("cd: " + workDir + ": No such file or directory")
-	shellParts = append(shellParts, "cd "+shellQuote(workDir)+" || { echo "+cdFailure+" >&2; exit 1; }")
+}
 
-	cmdStr := shellQuote(input.Command)
-	for _, arg := range input.Args {
-		cmdStr += " " + shellQuote(arg)
+// withRemoteReadLock makes req run under the per-worktree shared hibernation
+// read lock, bailing before execution when the worktree is hibernated so the
+// Go side can wake it and retry.
+func withRemoteReadLock(req sideagent.ExecRequest, workDir string) sideagent.ExecRequest {
+	req.ReadLockFile = hibernationLockFile(workDir)
+	req.HibernationSentinel = workDir + "/" + HibernationMetadataFile
+	return req
+}
+
+// agentExecOutput maps a structured agent response onto command output.
+// Hibernation preemption keeps its sentinel exit code, and failures to start
+// the command at all (e.g. missing executable or working directory) surface
+// like a failed command: non-zero exit with the reason on stderr.
+func agentExecOutput(resp sideagent.ExecResponse) EnvRunCommandOutput {
+	output := EnvRunCommandOutput{
+		Stdout:     string(resp.Stdout),
+		Stderr:     string(resp.Stderr),
+		ExitStatus: resp.ExitStatus,
 	}
-	shellParts = append(shellParts, cmdStr)
-
-	return strings.Join(shellParts, " && ")
+	if resp.Hibernated {
+		output.ExitStatus = hibernatedRemoteExitCode
+		return output
+	}
+	if resp.Error != "" {
+		if output.Stderr != "" && !strings.HasSuffix(output.Stderr, "\n") {
+			output.Stderr += "\n"
+		}
+		output.Stderr += resp.Error + "\n"
+		if output.ExitStatus == 0 {
+			output.ExitStatus = -1
+		}
+	}
+	return output
 }
 
 // reverseForwardArgs returns ssh -R flags exposing the configured host ports
@@ -758,39 +781,22 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 }
 
 func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
 	if !input.SkipWaking {
-		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
+		req = withRemoteReadLock(req, e.WorkingDirectory)
 	}
 
-	controlPath := devpodSSHControlPath(e.WorkspaceName)
-	sshHost := e.WorkspaceName + ".devpod"
-	sshArgs := []string{
-		"-o", "ControlMaster=auto",
-		"-S", controlPath,
-		"-o", "ControlPersist=3600",
-		"-o", "BatchMode=yes",
-		"-o", "ServerAliveInterval=10",
-		"-o", "ServerAliveCountMax=3",
-		"-o", "LogLevel=ERROR",
-	}
-	sshArgs = append(sshArgs, reverseForwardArgs(e.PortForwards)...)
-	sshArgs = append(sshArgs, sshHost, "--", fullCommand)
-
-	runCommandInput := unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       sshArgs,
-	}
 	// Commands run over SSH into the container ultimately depend on the docker
 	// engine; a hung engine makes them block forever. Guard so such a hang is
 	// detected and the engine restarted instead of stalling the activity.
 	var output EnvRunCommandOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
-		var runErr error
-		output, runErr = unix.RunCommandActivity(ctx, runCommandInput)
-		return runErr
+		resp, execErr := runAgentExec(ctx, agentExecConnKey(e.sftpConnKey(), e.PortForwards), e, req)
+		if execErr != nil {
+			return execErr
+		}
+		output = agentExecOutput(resp)
+		return nil
 	})
 	if err != nil {
 		return output, err
@@ -932,25 +938,15 @@ func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput)
 }
 
 func (e *OpenShellEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
 	if !input.SkipWaking {
-		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
+		req = withRemoteReadLock(req, e.WorkingDirectory)
 	}
-
-	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	resp, err := runAgentExec(ctx, agentExecConnKey(e.sftpConnKey(), e.PortForwards), e, req)
 	if err != nil {
-		return EnvRunCommandOutput{}, fmt.Errorf("failed to get SSH config for sandbox %s: %w", e.SandboxName, err)
+		return EnvRunCommandOutput{}, err
 	}
-	sshArgs = insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards))
-	sshArgs = append(sshArgs, fullCommand)
-
-	runCommandInput := unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       sshArgs,
-	}
-	return unix.RunCommandActivity(ctx, runCommandInput)
+	return agentExecOutput(resp), nil
 }
 
 func (e *OpenShellEnv) SSHArgs(ctx context.Context) ([]string, error) {
@@ -1173,12 +1169,48 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 		"no route to host",
 		"exchange_identification",
 		"banner exchange",
+		// Marker emitted by sshDialTransportError: the ssh client exited 255
+		// before the agent protocol answered, sometimes with no stderr at all.
+		"transport failure before agent channel established",
 	} {
 		if strings.Contains(diagnostics, fragment) {
 			return true
 		}
 	}
 	return false
+}
+
+// buildRemoteShellCommand builds a single POSIX shell command line that runs
+// input's command inside workDir. It exports the requested environment
+// variables, changes into workDir, and only then runs the command. A failed cd
+// (e.g. the directory does not exist in the remote container) aborts with a
+// non-zero exit and a clear message on stderr, so callers get an explicit error
+// instead of empty output from a command that silently ran in the session's
+// default directory. Only the Modal API fallback path needs shell
+// serialization; SSH-reachable environments run commands as verbatim argv over
+// the side-agent exec channel instead.
+func buildRemoteShellCommand(workDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) string {
+	allEnvVars := append(input.EnvVars, envVarsToInject(envType, portForwards)...)
+	shellParts := make([]string, 0, len(allEnvVars)+3)
+
+	// Detach stdin so remote commands behave like local ones, which get
+	// /dev/null as stdin. Otherwise tools like ripgrep read from the (empty)
+	// session stream instead of recursing the working directory.
+	shellParts = append(shellParts, "exec 0</dev/null")
+
+	for _, envVar := range allEnvVars {
+		shellParts = append(shellParts, "export "+shellQuote(envVar))
+	}
+	cdFailure := shellQuote("cd: " + workDir + ": No such file or directory")
+	shellParts = append(shellParts, "cd "+shellQuote(workDir)+" || { echo "+cdFailure+" >&2; exit 1; }")
+
+	cmdStr := shellQuote(input.Command)
+	for _, arg := range input.Args {
+		cmdStr += " " + shellQuote(arg)
+	}
+	shellParts = append(shellParts, cmdStr)
+
+	return strings.Join(shellParts, " && ")
 }
 
 // remoteCommand returns the shell command to run inside the sandbox, prefixed
@@ -1189,46 +1221,35 @@ func (e *ModalEnv) remoteCommand(input EnvRunCommandInput) string {
 		buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
 }
 
+// runCommandInner executes input over the pooled side-agent exec channel.
+// Channel-level SSH transport failures never reached the remote command; they
+// are returned as diagnostics with a 255 exit status (matching a failed ssh
+// exec) so RunCommand can refresh a stale tunnel endpoint and retry. Remote
+// commands that themselves exit 255 arrive as structured responses and are
+// therefore never mistaken for transport failures.
 func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
-	fullCommand := modalLoginShellCommand(e.remoteCommand(input))
+	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
+	// Commands run under the login environment (sandbox toolchains land on
+	// PATH via profile scripts) and refresh the idle-watchdog activity marker.
+	req.LoginEnv = true
+	req.TouchPath = remoteActivityMarker
 
-	sshArgs, err := e.SSHArgs(ctx)
+	// RunCommand owns endpoint refresh, retry, and the Modal API fallback for
+	// the command path; hiding recoverSSHTransport from the dial keeps it the
+	// sole owner instead of nesting a second refresh inside every attempt.
+	resp, err := runAgentExec(ctx, agentExecConnKey(e.sftpConnKey(), e.PortForwards), nonRecoveringSSHEnv{e}, req)
 	if err != nil {
-		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to get SSH args for modal sandbox %s: %w", e.SandboxName, err)
+		var establishedFailure *agentExecTransportError
+		if errors.As(err, &establishedFailure) {
+			return EnvRunCommandOutput{}, establishedFailure.Diagnostics(), err
+		}
+		var dialFailure *sshDialTransportError
+		if ctx.Err() == nil && (errors.As(err, &dialFailure) || isModalSSHTransportFailure(err.Error())) {
+			return EnvRunCommandOutput{ExitStatus: 255}, err.Error(), nil
+		}
+		return EnvRunCommandOutput{}, "", err
 	}
-	diagnosticsFile, err := os.CreateTemp("", "sidekick-modal-ssh-*.log")
-	if err != nil {
-		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to create modal SSH diagnostics file: %w", err)
-	}
-	diagnosticsPath := diagnosticsFile.Name()
-	if err := diagnosticsFile.Close(); err != nil {
-		os.Remove(diagnosticsPath)
-		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to close modal SSH diagnostics file: %w", err)
-	}
-	defer os.Remove(diagnosticsPath)
-
-	sshArgs = insertBeforeSSHDestination(sshArgs, []string{"-v", "-E", diagnosticsPath})
-	sshArgs = append(sshArgs, fullCommand)
-
-	runCommandInput := unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       sshArgs,
-	}
-	output, err := unix.RunCommandActivity(ctx, runCommandInput)
-	if err != nil || output.ExitStatus != 255 {
-		return output, "", err
-	}
-	diagnostics, readErr := os.ReadFile(diagnosticsPath)
-	if readErr != nil {
-		log.Warn().Err(readErr).Str("sandbox", e.SandboxName).Msg("failed to read modal SSH diagnostics")
-		return output, "", nil
-	}
-	return output, string(diagnostics), nil
-}
-
-func modalLoginShellCommand(command string) string {
-	return "bash -lc " + shellQuote(command)
+	return agentExecOutput(resp), "", nil
 }
 
 // runAPICommandInner runs the command through Modal's API rather than SSH.

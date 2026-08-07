@@ -304,13 +304,19 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 		SSHPort:          createOutput.SSHPort,
 		WorkingDirectory: "/root",
 	}
-	// A long-running command holds an ssh session open, keeping is_busy true
-	// across watchdog polls while the guard record is polled below.
+	// A long-running command keeps the activity heartbeat fresh across
+	// watchdog polls while the guard record is polled below.
+	commandDone := make(chan error, 1)
 	go func() {
-		_, _ = modalEnv.RunCommand(ctx, EnvRunCommandInput{
+		output, runErr := modalEnv.RunCommand(ctx, EnvRunCommandInput{
 			Command: "sleep",
 			Args:    []string{"120"},
 		})
+		if runErr != nil {
+			commandDone <- fmt.Errorf("run long-lived command: %w", runErr)
+			return
+		}
+		commandDone <- fmt.Errorf("long-lived command ended unexpectedly with exit %d: %s", output.ExitStatus, output.Stderr)
 	}()
 
 	// The watchdog polls every 15s and snapshots on the first busy poll once
@@ -319,6 +325,11 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 	pollDeadline := time.Now().Add(25 * time.Second)
 	var record *modalSnapshotRecord
 	for time.Now().Before(pollDeadline) {
+		select {
+		case commandErr := <-commandDone:
+			require.NoError(t, commandErr)
+		default:
+		}
 		record, err = modalLatestSnapshot(ctx, client, sandboxName)
 		require.NoError(t, err)
 		if record != nil {

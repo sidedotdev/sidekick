@@ -163,6 +163,12 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 		return []string{}, errors.New("Attempted to perform RAG with an empty query")
 	}
 
+	stepStart := time.Now()
+	logStep := func(step string) {
+		log.Debug().Str("step", step).Str("contentType", options.ContentType).Dur("duration", time.Since(stepStart)).Msg("ranked subkeys step")
+		stepStart = time.Now()
+	}
+
 	ea := EmbedActivities{Storage: ra.DatabaseAccessor}
 	err := ea.CachedEmbedActivity(ctx, CachedEmbedActivityOptions{
 		Secrets:     options.Secrets,
@@ -174,6 +180,7 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	if err != nil {
 		return []string{}, err
 	}
+	logStep("cached embed subkeys")
 
 	va := VectorActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
@@ -228,6 +235,7 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	if len(queryVectors) == 0 {
 		return []string{}, nil
 	}
+	logStep("embed query chunks")
 
 	// get closest results, one result set for each query chunk
 	resultSets, err := va.MultiVectorSearch(MultiVectorSearchOptions{
@@ -242,12 +250,14 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	if err != nil {
 		return []string{}, fmt.Errorf("failed multi-vector search: %w", err)
 	}
+	logStep("multi vector search")
 
 	rankings := make([]WeightedRanking, len(resultSets))
 	for i, set := range resultSets {
 		rankings[i] = WeightedRanking{Items: set, Weight: chunkWeights[i]}
 	}
 	rankings = append(rankings, ra.bm25WeightedRankings(ctx, options.WorkspaceId, options.ContentType, options.Subkeys, weightedQueries)...)
+	logStep("bm25 rankings")
 
 	reranker, err := GetReranker(options.Secrets.SecretManager)
 	if err != nil {
@@ -255,7 +265,7 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	}
 
 	fusedSubkeys := FuseResults(rankings)
-	return ra.rerankSubkeys(
+	result, err := ra.rerankSubkeys(
 		ctx,
 		options.WorkspaceId,
 		options.ContentType,
@@ -263,6 +273,8 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 		fusedSubkeys,
 		reranker,
 	)
+	logStep("rerank")
+	return result, err
 }
 
 // bm25WeightedRankings hydrates the documents behind the given subkeys and

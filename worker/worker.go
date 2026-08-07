@@ -43,6 +43,7 @@ type Worker struct {
 func (w *Worker) Stop() {
 	w.Worker.Stop()
 	env.CloseAllSharedSFTPConns()
+	env.CloseAllSharedAgentExecConns()
 	if w.shutdownTracer != nil {
 		if err := w.shutdownTracer(context.Background()); err != nil {
 			log.Error().Err(err).Msg("Failed to shutdown telemetry tracer")

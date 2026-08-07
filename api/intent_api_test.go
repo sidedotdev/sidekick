@@ -235,8 +235,15 @@ func TestIntentHandlers_WaitsForWorktree(t *testing.T) {
 	require.NoError(t, ctrl.service.PersistWorkspace(ctx, domain.Workspace{Id: workspaceId}))
 	require.NoError(t, ctrl.service.PersistFlow(ctx, domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
 
-	worktreeDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(worktreeDir, "intent"), 0o755))
+	worktreeDir := filepath.Join(t.TempDir(), "materializing-worktree")
+	require.NoError(t, ctrl.service.PersistWorktree(ctx, domain.Worktree{
+		Id:               "wt_" + ksuid.New().String(),
+		FlowId:           flowId,
+		WorkspaceId:      workspaceId,
+		Name:             "side/intent-test",
+		Created:          time.Now(),
+		WorkingDirectory: worktreeDir,
+	}))
 
 	prevTimeout := flowWorktreeWaitTimeout
 	prevInterval := flowWorktreePollInterval
@@ -249,25 +256,18 @@ func TestIntentHandlers_WaitsForWorktree(t *testing.T) {
 		flowWorktreePollInterval = prevInterval
 	})
 
-	// Persist the worktree after a short delay to simulate the IDD workflow
-	// creating it just after the canvas issues its first request.
+	materialized := make(chan error, 1)
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		_ = ctrl.service.PersistWorktree(context.Background(), domain.Worktree{
-			Id:               "wt_" + ksuid.New().String(),
-			FlowId:           flowId,
-			WorkspaceId:      workspaceId,
-			Name:             "side/intent-test",
-			Created:          time.Now(),
-			WorkingDirectory: worktreeDir,
-		})
+		materialized <- os.MkdirAll(filepath.Join(worktreeDir, "intent"), 0o755)
 	}()
 
 	listURL := fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/intent/files", workspaceId, flowId)
 	req, _ := http.NewRequest(http.MethodGet, listURL, nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
-	assert.Equal(t, http.StatusOK, rr.Code)
+	require.NoError(t, <-materialized)
+	assert.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 }
 
 func TestIntentHandlers_NoWorktree(t *testing.T) {
