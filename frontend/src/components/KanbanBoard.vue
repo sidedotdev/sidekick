@@ -521,7 +521,6 @@ async function confirmArchiveFinished(project?: Project) {
 }
 
 .kanban-board {
-  padding-top: 0.75rem;
   position: relative;
   /* creates a stacking context so the separator lines below can sit above the
      board background yet behind all content */
@@ -549,7 +548,7 @@ async function confirmArchiveFinished(project?: Project) {
 
 .board-column-headings {
   position: sticky;
-  top: var(--main-sticky-top, 0);
+  top: 0;
   z-index: 3;
   display: flex;
   width: 100%;
@@ -613,7 +612,7 @@ async function confirmArchiveFinished(project?: Project) {
 
 .project-group-header {
   position: sticky;
-  top: calc(var(--main-sticky-top, 0rem) + var(--kanban-column-heading-height));
+  top: var(--kanban-column-heading-height);
   z-index: 2;
   display: flex;
   align-items: stretch;

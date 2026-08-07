@@ -1991,5 +1991,8 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--color-border);
 }
 
-
+.clarify-list {
+  max-height: 40vh;
+  overflow: scroll;
+}
 </style>
