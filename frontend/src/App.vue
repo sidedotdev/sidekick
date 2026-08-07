@@ -197,6 +197,7 @@ onUnmounted(() => {
   height: 100vh;
   width: 100vw;
   --workspace-select-background-color: var(--color-background-hover);
+  --app-header-height: 3.6rem;
 }
 
 @media (prefers-color-scheme: light) {
@@ -224,6 +225,7 @@ header {
   position: fixed;
   background-color: var(--color-background-soft);
   z-index: 1;
+  height: var(--app-header-height);
 }
 
 .workspace-selector {
@@ -268,8 +270,7 @@ header {
 }
 
 main {
-  --main-sticky-top: 3.6rem;
-  padding-top: var(--main-sticky-top);
+  padding-top: var(--app-header-height);
   height: 100vh;
   overflow: scroll;
 }

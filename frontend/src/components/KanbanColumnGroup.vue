@@ -111,8 +111,8 @@ const groupedTasks = computed(() => {
 
 h2 {
   position: sticky;
-  top: var(--main-sticky-top, 0);
-  z-index: 3;
+  top: 0;
+  z-index: 13;
   /* lines up with the task card padding */
   padding-left: calc(var(--task-pad) / 2);
   display: flex;

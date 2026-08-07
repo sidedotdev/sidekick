@@ -29,7 +29,7 @@
       />
       <button class="search-clear" @click="clearSearch" title="Clear search">×</button>
     </div>
-    <div v-if="projects.length > 0" class="board-column-headings">
+    <div class="board-column-headings">
       <h2>
         You
         <button type="button" class="mini-button" title="Draft task" @click="addTask('human')">+</button>
@@ -129,6 +129,7 @@
       v-else
       :tasks="unassignedTasks"
       :new-task-shortcut-label="newTaskShortcutLabel"
+      :show-headings="false"
       @add-task="(agentType: AgentType) => addTask(agentType)"
       @archive-finished="confirmArchiveFinished()"
       @refresh="refresh"
@@ -549,12 +550,10 @@ async function confirmArchiveFinished(project?: Project) {
 .board-column-headings {
   position: sticky;
   top: 0;
-  z-index: 3;
+  z-index: 13;
   display: flex;
   width: 100%;
   gap: var(--kanban-column-gap);
-  padding-bottom: 0.5rem;
-  background-color: var(--color-background-soft);
 }
 
 .board-column-headings h2 {
@@ -564,6 +563,7 @@ async function confirmArchiveFinished(project?: Project) {
   /* lines up with the kanban column padding and task card padding */
   padding-left: calc(var(--kanban-gap) + var(--task-pad) / 2);
   padding-right: var(--kanban-gap);
+  padding-top: 0.5rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -572,6 +572,9 @@ async function confirmArchiveFinished(project?: Project) {
   font-weight: 400;
   font-size: 1.2rem;
   line-height: 1.4;
+  background-color: var(--color-background);
+  border-top-left-radius: var(--kanban-radius);
+  border-top-right-radius: var(--kanban-radius);
 }
 
 .board-column-headings .mini-button {
