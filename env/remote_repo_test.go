@@ -11,6 +11,7 @@ import (
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 )
 
 func TestCreateRemoteWorktreeActivity(t *testing.T) {
@@ -87,6 +88,106 @@ func TestCreateRemoteWorktreeActivity(t *testing.T) {
 		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
 		assert.Contains(t, output.WorktreePath, "remote-dir-test")
 		assert.NotContains(t, output.WorktreePath, "side/")
+	})
+}
+
+func TestCreateRemoteWorktreeActivity_LocalBranchReservation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	gitRevParse := func(t *testing.T, repoDir, ref string) string {
+		t.Helper()
+		cmd := exec.Command("git", "-C", repoDir, "rev-parse", ref)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git rev-parse %s failed: %s", ref, string(out))
+		return strings.TrimSpace(string(out))
+	}
+
+	newRemoteEnvContainer := func(t *testing.T, repoDir string) EnvContainer {
+		t.Helper()
+		remoteEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		return EnvContainer{Env: remoteEnv}
+	}
+
+	t.Run("reserves branch in local repo at start point", func(t *testing.T) {
+		t.Parallel()
+		remoteRepoDir := setupTestGitRepo(t)
+		localRepoDir := setupTestGitRepo(t)
+
+		output, err := CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+			EnvContainer: newRemoteEnvContainer(t, remoteRepoDir),
+			RepoDir:      remoteRepoDir,
+			BranchName:   "side/reserved-branch",
+			StartBranch:  "main",
+			WorkspaceId:  "ws-" + ksuid.New().String(),
+			LocalRepoDir: localRepoDir,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
+		assert.DirExists(t, output.WorktreePath)
+
+		assert.Equal(t,
+			gitRevParse(t, localRepoDir, "main"),
+			gitRevParse(t, localRepoDir, "side/reserved-branch"),
+			"local branch should be reserved at the start point",
+		)
+
+		cmd := exec.Command("git", "-C", localRepoDir, "branch", "--show-current")
+		branchOut, err := cmd.CombinedOutput()
+		require.NoError(t, err)
+		assert.Equal(t, "main", strings.TrimSpace(string(branchOut)), "local repo should stay on its original branch")
+	})
+
+	t.Run("existing local branch yields branch already exists error", func(t *testing.T) {
+		t.Parallel()
+		remoteRepoDir := setupTestGitRepo(t)
+		localRepoDir := setupTestGitRepo(t)
+
+		cmd := exec.Command("git", "-C", localRepoDir, "branch", "side/taken-branch")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git branch failed: %s", string(out))
+
+		_, err = CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+			EnvContainer: newRemoteEnvContainer(t, remoteRepoDir),
+			RepoDir:      remoteRepoDir,
+			BranchName:   "side/taken-branch",
+			WorkspaceId:  "ws-" + ksuid.New().String(),
+			LocalRepoDir: localRepoDir,
+		})
+		require.Error(t, err)
+		var appErr *temporal.ApplicationError
+		require.ErrorAs(t, err, &appErr)
+		assert.Equal(t, ErrTypeBranchAlreadyExists, appErr.Type())
+	})
+
+	t.Run("tolerates stale same-name branch and worktree in sandbox", func(t *testing.T) {
+		t.Parallel()
+		remoteRepoDir := setupTestGitRepo(t)
+		localRepoDir := setupTestGitRepo(t)
+		branchName := "side/stale-branch"
+
+		staleWorktreePath := filepath.Join(t.TempDir(), "stale-worktree")
+		cmd := exec.Command("git", "-C", remoteRepoDir, "worktree", "add", "-b", branchName, staleWorktreePath, "main")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "stale worktree setup failed: %s", string(out))
+
+		output, err := CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+			EnvContainer: newRemoteEnvContainer(t, remoteRepoDir),
+			RepoDir:      remoteRepoDir,
+			BranchName:   branchName,
+			StartBranch:  "main",
+			WorkspaceId:  "ws-" + ksuid.New().String(),
+			LocalRepoDir: localRepoDir,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
+		assert.DirExists(t, output.WorktreePath)
+
+		cmd = exec.Command("git", "-C", output.WorktreePath, "branch", "--show-current")
+		branchOut, err := cmd.CombinedOutput()
+		require.NoError(t, err)
+		assert.Equal(t, branchName, strings.TrimSpace(string(branchOut)))
 	})
 }
 

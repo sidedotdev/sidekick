@@ -459,6 +459,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 					BranchName:   wt.Name,
 					StartBranch:  startBranchStr,
 					WorkspaceId:  workspaceId,
+					LocalRepoDir: repoDir,
 				}).Get(ctx, &wtOutput)
 				if err != nil {
 					return "", err
@@ -548,6 +549,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 					BranchName:   wt.Name,
 					StartBranch:  startBranchStr,
 					WorkspaceId:  workspaceId,
+					LocalRepoDir: repoDir,
 				}).Get(ctx, &wtOutput)
 				if err != nil {
 					return "", err

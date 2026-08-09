@@ -450,10 +450,70 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 	return nil
 }
 
+// reserveLocalBranch creates the flow branch in the worker-local repository,
+// which is the sole authority on flow branch name availability. The branch is
+// never checked out locally, so no working tree is affected.
+func reserveLocalBranch(ctx context.Context, localRepoDir, branchName, startBranch string) error {
+	startRef := "HEAD"
+	if startBranch != "" {
+		startRef = startBranch
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", localRepoDir, "branch", branchName, startRef).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	reserveErr := fmt.Errorf("failed to reserve branch %s in local repo %s: %w: %s", branchName, localRepoDir, err, string(out))
+	if strings.Contains(string(out), "already exists") {
+		return temporal.NewNonRetryableApplicationError(
+			reserveErr.Error(),
+			ErrTypeBranchAlreadyExists,
+			reserveErr,
+		)
+	}
+	return reserveErr
+}
+
+// clearStaleRemoteWorktree removes same-name branch worktrees and leftover
+// worktree directories in the sandbox, which can survive in restored or reused
+// snapshots. It is only used when the local repo holds branch-name authority,
+// so stale sandbox state must never block or rename a flow branch.
+func clearStaleRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, worktreePath string) error {
+	quotedRepo := shellQuote(repoDir)
+	quotedPath := shellQuote(worktreePath)
+	script := fmt.Sprintf(
+		`cd %s && git worktree prune && `+
+			`git worktree list --porcelain | awk -v b=%s '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p}' | `+
+			`while IFS= read -r wt; do git worktree unlock "$wt" >/dev/null 2>&1; git worktree remove --force "$wt" >/dev/null 2>&1; done; `+
+			`git worktree unlock %s >/dev/null 2>&1; git worktree remove --force %s >/dev/null 2>&1; `+
+			`rm -rf %s; git worktree prune`,
+		quotedRepo, shellQuote("refs/heads/"+branchName), quotedPath, quotedPath, quotedPath,
+	)
+	output, err := envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", script},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to clear stale worktree state in sandbox: %w", err)
+	}
+	if output.ExitStatus != 0 {
+		return fmt.Errorf("clearing stale worktree state failed in sandbox (exit %d): %s", output.ExitStatus, output.Stderr)
+	}
+	return nil
+}
+
 // createRemoteWorktree creates a git worktree under $HOME/sidekick-worktrees
 // inside a remote environment via its RunCommand, so that the worktree's .git
-// references resolve within the remote filesystem.
-func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, startBranch, workspaceId string) (string, error) {
+// references resolve within the remote filesystem. When localRepoDir is set,
+// the same-name branch is first reserved in the worker-local repository, which
+// then decides name availability and makes the sandbox side tolerant of stale
+// same-name state.
+func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, startBranch, workspaceId, localRepoDir string) (string, error) {
+	if localRepoDir != "" {
+		if err := reserveLocalBranch(ctx, localRepoDir, branchName, startBranch); err != nil {
+			return "", err
+		}
+	}
+
 	repoName := filepath.Base(repoDir)
 	branchSuffix := strings.TrimPrefix(branchName, "side/")
 	dirName := repoName + "-" + branchSuffix
@@ -471,6 +531,12 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 	}
 	worktreePath := filepath.Join(baseDir, "sidekick-worktrees", workspaceId, dirName)
 
+	if localRepoDir != "" {
+		if err := clearStaleRemoteWorktree(ctx, envContainer, repoDir, branchName, worktreePath); err != nil {
+			return "", err
+		}
+	}
+
 	mkdirOutput, err := envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "mkdir",
 		Args:    []string{"-p", worktreePath},
@@ -486,16 +552,20 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 	if startBranch != "" {
 		baseRef = startBranch
 	}
+	createFlag := "-b"
+	if localRepoDir != "" {
+		createFlag = "-B"
+	}
 	addOutput, err := envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "git",
-		Args:    []string{"worktree", "add", "-b", branchName, worktreePath, baseRef},
+		Args:    []string{"worktree", "add", createFlag, branchName, worktreePath, baseRef},
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to run git worktree add in sandbox: %w", err)
 	}
 	if addOutput.ExitStatus != 0 {
 		err := fmt.Errorf("git worktree add failed in sandbox (exit %d): %s", addOutput.ExitStatus, addOutput.Stderr)
-		if strings.Contains(addOutput.Stderr, "already exists") {
+		if localRepoDir == "" && strings.Contains(addOutput.Stderr, "already exists") {
 			return "", temporal.NewNonRetryableApplicationError(
 				err.Error(),
 				ErrTypeBranchAlreadyExists,
@@ -552,6 +622,9 @@ type CreateRemoteWorktreeInput struct {
 	BranchName   string       `json:"branchName"`
 	StartBranch  string       `json:"startBranch,omitempty"`
 	WorkspaceId  string       `json:"workspaceId"`
+	// LocalRepoDir is the worker-local repository in which the flow branch is
+	// reserved. When set, it is the sole authority on branch name availability.
+	LocalRepoDir string `json:"localRepoDir,omitempty"`
 }
 
 type CreateRemoteWorktreeOutput struct {
@@ -562,7 +635,7 @@ type CreateRemoteWorktreeOutput struct {
 // environment via its RunCommand, so that the worktree's .git references
 // resolve within the remote filesystem.
 func CreateRemoteWorktreeActivity(ctx context.Context, input CreateRemoteWorktreeInput) (CreateRemoteWorktreeOutput, error) {
-	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId)
+	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId, input.LocalRepoDir)
 	if err != nil {
 		return CreateRemoteWorktreeOutput{}, err
 	}
