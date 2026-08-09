@@ -240,6 +240,19 @@ func (e *OpenShellEnv) SyncGitRefToLocal(ctx context.Context, ref string) error 
 	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
 }
 
+var _ FlowBranchBackupSyncer = (*OpenShellEnv)(nil)
+
+func (e *OpenShellEnv) SyncFlowBranchToLocal(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync flow branch to local: OpenShellEnv has no LocalRepoDir")
+	}
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return fmt.Errorf("failed to get SSH args: %w", err)
+	}
+	return syncFlowBranchToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+}
+
 var _ TargetBranchSyncer = (*OpenShellEnv)(nil)
 
 func (e *OpenShellEnv) SyncBranchToRemote(ctx context.Context, branch string) error {

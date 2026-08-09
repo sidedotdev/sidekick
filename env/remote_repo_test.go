@@ -207,6 +207,50 @@ func TestSyncRepoToRemoteActivity_RequiresSSHCapableEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not support SSH-based repo sync")
 }
 
+// TestSyncFlowBranchToLocalOverSSH exercises the real git-over-ssh transport
+// between two local fixture repos, with a fake ssh on PATH that runs the
+// requested remote command locally. It must not be parallel: PATH is set.
+func TestSyncFlowBranchToLocalOverSSH(t *testing.T) {
+	ctx := context.Background()
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+
+	gitRun := func(t *testing.T, repoDir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), string(out))
+		return strings.TrimSpace(string(out))
+	}
+
+	remoteRepoDir := setupTestGitRepo(t)
+	localRepoDir := setupTestGitRepo(t)
+	branchName := "side/backup-branch"
+
+	require.NoError(t, os.WriteFile(filepath.Join(localRepoDir, "local.txt"), []byte("local content"), 0644))
+	gitRun(t, localRepoDir, "add", "local.txt")
+	gitRun(t, localRepoDir, "commit", "-m", "local main commit")
+
+	// The local branch starts out diverged from the remote one, so only a
+	// forced update can bring it to the remote tip.
+	gitRun(t, localRepoDir, "branch", branchName)
+	gitRun(t, remoteRepoDir, "checkout", "-b", branchName)
+	require.NoError(t, os.WriteFile(filepath.Join(remoteRepoDir, "remote.txt"), []byte("remote content"), 0644))
+	gitRun(t, remoteRepoDir, "add", "remote.txt")
+	gitRun(t, remoteRepoDir, "commit", "-m", "remote flow commit")
+	remoteTip := gitRun(t, remoteRepoDir, "rev-parse", branchName)
+
+	err := syncFlowBranchToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, branchName)
+	require.NoError(t, err)
+
+	assert.Equal(t, remoteTip, gitRun(t, localRepoDir, "rev-parse", branchName))
+	assert.Equal(t, "main", gitRun(t, localRepoDir, "branch", "--show-current"))
+	assert.Empty(t, gitRun(t, localRepoDir, "status", "--porcelain"))
+	assert.NoFileExists(t, filepath.Join(localRepoDir, "remote.txt"))
+	assert.FileExists(t, filepath.Join(localRepoDir, "local.txt"))
+}
+
 func TestSyncRefspecs(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t,

@@ -172,6 +172,17 @@ type GitRefSyncer interface {
 	SyncGitRefToLocal(ctx context.Context, ref string) error
 }
 
+// FlowBranchBackupSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. It backs up
+// a flow branch's commits to the host repository, which is the durable home
+// for work in progress even while the environment is alive.
+type FlowBranchBackupSyncer interface {
+	// SyncFlowBranchToLocal force-updates the same-name branch ref in the host
+	// repository from the environment's branch. The branch is never checked
+	// out locally, so no host working tree is touched.
+	SyncFlowBranchToLocal(ctx context.Context, branch string) error
+}
+
 // TargetBranchSyncer is implemented by environments whose repository is an
 // independent clone rather than a bind mount of the host checkout. Before
 // merging into a branch inside such an environment, the branch must be
