@@ -102,7 +102,11 @@ export interface Flow {
   type: string
   parentId: string
   status: FlowStatus
+  title?: string
+  metadata?: { [key: string]: any }
   description?: string
+  created?: Date
+  updated?: Date
   worktrees?: Worktree[]
 }
 
