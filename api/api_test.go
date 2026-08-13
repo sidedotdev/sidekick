@@ -2264,6 +2264,142 @@ func TestGetTaskHandler(t *testing.T) {
 	}
 }
 
+func TestGetTaskFlowsHandler(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+	ctx := context.Background()
+	workspaceId := "ws_1"
+	taskId := "task_" + ksuid.New().String()
+
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          taskId,
+		Status:      domain.TaskStatusInProgress,
+	}
+	require.Nil(t, ctrl.service.PersistTask(ctx, task))
+
+	iddFlow := domain.Flow{
+		WorkspaceId: workspaceId,
+		ParentId:    taskId,
+		Id:          "flow_" + ksuid.New().String(),
+		Type:        domain.FlowTypeIdd,
+		Status:      "in_progress",
+		Metadata:    map[string]any{"autoMode": true},
+	}
+	subtaskFlow := domain.Flow{
+		WorkspaceId: workspaceId,
+		ParentId:    taskId,
+		Id:          "flow_" + ksuid.New().String(),
+		Type:        domain.FlowTypeBasicDev,
+		Status:      "pending",
+		Title:       "Add a widget",
+	}
+	require.Nil(t, ctrl.service.PersistFlow(ctx, iddFlow))
+	require.Nil(t, ctrl.service.PersistFlow(ctx, subtaskFlow))
+
+	emptyTaskId := "task_" + ksuid.New().String()
+	require.Nil(t, ctrl.service.PersistTask(ctx, domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          emptyTaskId,
+		Status:      domain.TaskStatusToDo,
+	}))
+
+	testCases := []struct {
+		name          string
+		workspaceId   string
+		taskId        string
+		expectedCode  int
+		expectedError string
+		expectedFlows []domain.Flow
+	}{
+		{
+			name:          "returns all flows for the task",
+			workspaceId:   workspaceId,
+			taskId:        taskId,
+			expectedCode:  http.StatusOK,
+			expectedFlows: []domain.Flow{iddFlow, subtaskFlow},
+		},
+		{
+			name:          "returns empty list when task has no flows",
+			workspaceId:   workspaceId,
+			taskId:        emptyTaskId,
+			expectedCode:  http.StatusOK,
+			expectedFlows: []domain.Flow{},
+		},
+		{
+			name:          "missing task",
+			workspaceId:   workspaceId,
+			taskId:        "nonexistent_task",
+			expectedCode:  http.StatusNotFound,
+			expectedError: "Task not found",
+		},
+		{
+			name:          "missing workspace id",
+			workspaceId:   "",
+			taskId:        taskId,
+			expectedCode:  http.StatusBadRequest,
+			expectedError: "Workspace ID and Task ID are required",
+		},
+		{
+			name:          "missing task id",
+			workspaceId:   workspaceId,
+			taskId:        "",
+			expectedCode:  http.StatusBadRequest,
+			expectedError: "Workspace ID and Task ID are required",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(resp)
+			route := fmt.Sprintf("/v1/workspaces/%s/tasks/%s/flows", testCase.workspaceId, testCase.taskId)
+			c.Request = httptest.NewRequest("GET", route, bytes.NewBuffer([]byte{}))
+			c.Params = []gin.Param{
+				{Key: "workspaceId", Value: testCase.workspaceId},
+				{Key: "id", Value: testCase.taskId},
+			}
+			ctrl.GetTaskFlowsHandler(c)
+
+			assert.Equal(t, testCase.expectedCode, resp.Code)
+			if testCase.expectedError != "" {
+				var result map[string]string
+				err := json.Unmarshal(resp.Body.Bytes(), &result)
+				if assert.Nil(t, err) {
+					assert.Equal(t, testCase.expectedError, result["error"])
+				}
+				return
+			}
+
+			var result map[string][]domain.Flow
+			err := json.Unmarshal(resp.Body.Bytes(), &result)
+			require.Nil(t, err)
+			actualFlows := result["flows"]
+			require.NotNil(t, actualFlows)
+			require.Len(t, actualFlows, len(testCase.expectedFlows))
+
+			actualById := map[string]domain.Flow{}
+			for _, actualFlow := range actualFlows {
+				actualById[actualFlow.Id] = actualFlow
+			}
+			for _, expectedFlow := range testCase.expectedFlows {
+				actualFlow, ok := actualById[expectedFlow.Id]
+				require.True(t, ok, "missing flow %s in response", expectedFlow.Id)
+				assert.Equal(t, expectedFlow.WorkspaceId, actualFlow.WorkspaceId)
+				assert.Equal(t, expectedFlow.ParentId, actualFlow.ParentId)
+				assert.Equal(t, expectedFlow.Type, actualFlow.Type)
+				assert.Equal(t, expectedFlow.Status, actualFlow.Status)
+				assert.Equal(t, expectedFlow.Title, actualFlow.Title)
+				assert.Equal(t, expectedFlow.Metadata, actualFlow.Metadata)
+				assert.False(t, actualFlow.Created.IsZero())
+				assert.False(t, actualFlow.Updated.IsZero())
+				assert.Equal(t, time.UTC, actualFlow.Created.Location())
+				assert.Equal(t, time.UTC, actualFlow.Updated.Location())
+			}
+		})
+	}
+}
+
 func TestGetFlowHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
