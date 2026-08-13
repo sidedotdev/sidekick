@@ -247,6 +247,10 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		return *state, nil
 	})
 
+	// The canvas reads auto mode and nudges from the IDD flow record rather
+	// than from workflow state, so seed them as soon as the flow is set up.
+	persistIddFlowMetadata(dCtx, input, state)
+
 	// Background orchestrator setup (persisted chat history, coalescing
 	// trigger channel, drainer coroutine) is version-gated because older
 	// IDD workflow histories were recorded before any of these existed.
@@ -390,7 +394,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			// rather than before the receive returns.
 			var flowId string
 			if workflow.GetVersion(dCtx, "idd-prereserve-subtask", workflow.DefaultVersion, 1) >= 1 {
-				flowId = reservePendingSubtask(dCtx, state, sig.ScopePrompt)
+				flowId = reservePendingSubtask(dCtx, input, state, sig.ScopePrompt)
 			}
 			// Spawn a coroutine so committing and running the sub-task to
 			// completion doesn't block the selector from handling more signals.
@@ -414,7 +418,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			// TODO have the orchestrator attempt to resolve clarifications from
 			// intent itself before falling back to asking the user, and surface
 			// unresolved ones on the canvas.
-			setSubtaskStatus(state, req.OriginWorkflowId, "blocked", workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, req.OriginWorkflowId, "blocked")
 			parent := workflow.GetInfo(dCtx).ParentWorkflowExecution
 			if parent == nil {
 				workflow.GetLogger(dCtx).Error("Cannot forward intent sub-task user request: no parent workflow")
@@ -428,7 +432,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(subtaskUnblockedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var sig flow_action.SubtaskUnblocked
 			c.Receive(dCtx, &sig)
-			setSubtaskStatus(state, sig.FlowId, "in_progress", workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, sig.FlowId, "in_progress")
 		})
 
 		selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
@@ -447,6 +451,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			var sig SetIddAutoModeSignal
 			c.Receive(dCtx, &sig)
 			state.AutoMode = sig.Enabled
+			persistIddFlowMetadata(dCtx, input, state)
 		})
 
 		selector.AddReceive(runOrchestratorCh, func(c workflow.ReceiveChannel, _ bool) {
@@ -462,7 +467,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(workflowClosedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var closure WorkflowClosure
 			c.Receive(dCtx, &closure)
-			setSubtaskStatus(state, closure.FlowId, closure.Reason, workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, closure.FlowId, closure.Reason)
 		})
 
 		selector.Select(dCtx)
@@ -480,13 +485,95 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	}
 }
 
-func setSubtaskStatus(state *IddState, flowId, status string, now time.Time) {
+// setSubtaskStatus records a sub-task status transition in workflow state,
+// returning the updated sub-task when one matched the given flow id.
+func setSubtaskStatus(state *IddState, flowId, status string, now time.Time) (IddSubtask, bool) {
 	for i := range state.Subtasks {
 		if state.Subtasks[i].FlowId == flowId {
 			state.Subtasks[i].Status = status
 			state.Subtasks[i].UpdatedAt = now
-			return
+			return state.Subtasks[i], true
 		}
+	}
+	return IddSubtask{}, false
+}
+
+func subtaskByFlowId(state *IddState, flowId string) (IddSubtask, bool) {
+	for _, subtask := range state.Subtasks {
+		if subtask.FlowId == flowId {
+			return subtask, true
+		}
+	}
+	return IddSubtask{}, false
+}
+
+// updateSubtaskStatus records a sub-task status transition and persists the
+// matching flow record.
+func updateSubtaskStatus(dCtx DevContext, input IddWorkflowInput, state *IddState, flowId, status string) {
+	if subtask, ok := setSubtaskStatus(state, flowId, status, workflow.Now(dCtx)); ok {
+		persistSubtaskFlow(dCtx, input, subtask)
+	}
+}
+
+// persistSubtaskFlow writes the sub-task's flow record so the canvas can list
+// sub-tasks and their statuses without querying workflow state, and so the
+// sub-task's flow view (including any pending user requests it raises when
+// intent is ambiguous) can be opened from the canvas and answered. Records are
+// parented to the IDD task rather than the IDD flow, which lets the existing
+// completion handler block and then unblock that task.
+// FIXME: the IDD flow needs a redesign from scratch rather than further
+// incremental patching. Sub-task state is mirrored across in-memory workflow
+// state, flow records and flow actions, and those mirror writes are issued
+// from several coroutines that each yield mid-write, so statuses can land out
+// of order — a finished sub-task can end up recorded as still running. A
+// simpler design with a single source of truth and a single owner driving the
+// sub-task lifecycle would remove this whole class of races.
+func persistSubtaskFlow(dCtx DevContext, input IddWorkflowInput, subtask IddSubtask) {
+	var ima *DevAgentManagerActivities
+	actCtx := setActivityOptions(dCtx)
+	flow := domain.Flow{
+		WorkspaceId: input.WorkspaceId,
+		Id:          subtask.FlowId,
+		Type:        domain.FlowTypeBasicDev,
+		ParentId:    input.TaskId,
+		Status:      subtask.Status,
+		Title:       subtask.Title,
+		Created:     subtask.CreatedAt,
+		Updated:     subtask.UpdatedAt,
+	}
+	if err := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, flow).Get(actCtx, nil); err != nil {
+		workflow.GetLogger(dCtx).Error("Failed to persist intent sub-task flow record", "Error", err, "FlowId", subtask.FlowId)
+	}
+}
+
+// Keys under which runtime IDD state the canvas polls is stored on the IDD
+// flow record's metadata.
+const (
+	IddMetadataKeyAutoMode = "autoMode"
+	IddMetadataKeyNudges   = "nudges"
+)
+
+// persistIddFlowMetadata mirrors the runtime state the canvas needs — auto
+// mode and nudges — onto the IDD flow's own record.
+func persistIddFlowMetadata(dCtx DevContext, input IddWorkflowInput, state *IddState) {
+	log := workflow.GetLogger(dCtx)
+	var ima *DevAgentManagerActivities
+	actCtx := setActivityOptions(dCtx)
+	flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
+
+	var flow domain.Flow
+	if err := workflow.ExecuteActivity(actCtx, ima.GetWorkflow, input.WorkspaceId, flowId).Get(actCtx, &flow); err != nil {
+		log.Error("Failed to read idd flow record for metadata update", "Error", err)
+		return
+	}
+	if flow.Metadata == nil {
+		flow.Metadata = map[string]any{}
+	}
+	flow.Metadata[IddMetadataKeyAutoMode] = state.AutoMode
+	flow.Metadata[IddMetadataKeyNudges] = state.Nudges
+	flow.Updated = workflow.Now(dCtx)
+	if err := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, flow).Get(actCtx, nil); err != nil {
+		log.Error("Failed to persist idd flow metadata", "Error", err)
 	}
 }
 
@@ -499,13 +586,18 @@ func setSubtaskStatus(state *IddState, flowId, status string, now time.Time) {
 // Without this synchronous reservation the orchestrator could re-decide to
 // dispatch for the same pending intent diff, and len(state.Subtasks) would
 // mis-classify multiple concurrent first-time starts as "initial".
-func reservePendingSubtask(dCtx DevContext, state *IddState, scopePrompt string) string {
+func reservePendingSubtask(dCtx DevContext, input IddWorkflowInput, state *IddState, scopePrompt string) string {
 	flowId := "flow_" + ksuidSideEffect(dCtx)
-	state.Subtasks = append(state.Subtasks, IddSubtask{
+	now := workflow.Now(dCtx)
+	subtask := IddSubtask{
 		FlowId:      flowId,
 		Status:      "pending",
 		ScopePrompt: scopePrompt,
-	})
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	state.Subtasks = append(state.Subtasks, subtask)
+	persistSubtaskFlow(dCtx, input, subtask)
 	return flowId
 }
 
@@ -529,7 +621,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	if err != nil {
 		log.Error("Failed to commit intent for sub-task", "Error", err)
 		if preReserved {
-			setSubtaskStatus(state, flowId, "failed", workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, flowId, "failed")
 		}
 		return
 	}
@@ -552,14 +644,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 
 	if !preReserved {
 		flowId = "flow_" + ksuidSideEffect(dCtx)
-	}
-
-	if workflow.GetVersion(dCtx, "idd-subtask-generated-title", workflow.DefaultVersion, 1) >= 1 {
-		if generatedTitle, titleErr := generateIntentSubtaskTitle(dCtx, reqInfo.Commit, reqInfo.Diff); titleErr != nil {
-			log.Error("Failed to generate intent sub-task title", "Error", titleErr)
-		} else {
-			title = generatedTitle
-		}
 	}
 
 	branch := dCtx.Worktree.Name
@@ -618,7 +702,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	if startErr := childFuture.GetChildWorkflowExecution().Get(childCtx, &we); startErr != nil {
 		log.Error("Intent sub-task failed to start", "Error", startErr)
 		if preReserved {
-			setSubtaskStatus(state, flowId, "failed", workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, flowId, "failed")
 		}
 		return
 	}
@@ -631,7 +715,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 				state.Subtasks[i].Commit = reqInfo.Commit
 				state.Subtasks[i].Status = "in_progress"
 				state.Subtasks[i].DispatchedDiff = reqInfo.Diff
-				state.Subtasks[i].CreatedAt = now
 				state.Subtasks[i].UpdatedAt = now
 				break
 			}
@@ -649,21 +732,8 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		})
 	}
 
-	// Persist a flow record for the sub-task, parented to the IDD task, so its
-	// flow view (and any pending user requests it raises when intent is
-	// ambiguous) can be opened from the canvas and answered. Parenting to the
-	// task lets the existing completion handler block and then unblock that task.
-	var ima *DevAgentManagerActivities
-	actCtx := setActivityOptions(dCtx)
-	subtaskFlow := domain.Flow{
-		WorkspaceId: input.WorkspaceId,
-		Id:          we.ID,
-		Type:        domain.FlowTypeBasicDev,
-		Status:      "in_progress",
-		ParentId:    input.TaskId,
-	}
-	if putErr := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, subtaskFlow).Get(actCtx, nil); putErr != nil {
-		log.Error("Failed to persist intent sub-task flow record", "Error", putErr)
+	if subtask, ok := subtaskByFlowId(state, we.ID); ok {
+		persistSubtaskFlow(dCtx, input, subtask)
 	}
 
 	status := "completed"
@@ -685,7 +755,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			log.Error("Intent sub-task failed", "Error", childErr)
 		}
 	}
-	setSubtaskStatus(state, we.ID, status, workflow.Now(dCtx))
+	updateSubtaskStatus(dCtx, input, state, we.ID, status)
 
 	// Prompt the orchestrator to re-evaluate remaining un-dispatched intent as
 	// soon as a sub-task lands (or fails/cancels) instead of waiting for the
@@ -699,11 +769,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		state.PendingSubtaskNotices = append(state.PendingSubtaskNotices,
 			subtaskTerminalNotice(title, we.ID, status, childResult, childErr))
 		requestOrchestratorTurn()
-	}
-
-	subtaskFlow.Status = status
-	if putErr := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, subtaskFlow).Get(actCtx, nil); putErr != nil {
-		log.Error("Failed to update intent sub-task flow record", "Error", putErr)
 	}
 }
 

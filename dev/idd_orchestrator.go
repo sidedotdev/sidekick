@@ -361,7 +361,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 			// makes `update := len(state.Subtasks) > 0` above classify
 			// concurrent dispatches correctly, and prevents the next turn
 			// from re-deciding to dispatch for the same pending diff.
-			flowId := reservePendingSubtask(dCtx, state, scopePrompt)
+			flowId := reservePendingSubtask(dCtx, input, state, scopePrompt)
 			// runIntentSubtask blocks until the child workflow completes;
 			// running it inline here would freeze the orchestrator drainer
 			// (and all subsequent turns) until the sub-task finishes,
@@ -420,6 +420,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 				continue
 			}
 			state.Nudges = append(state.Nudges, IddNudge{Text: text, AnchorText: strings.TrimSpace(args.AnchorText)})
+			persistIddFlowMetadata(dCtx, input, state)
 			if err := addToolCallResponse(dCtx.ExecContext, chatHistory, llm2.ToolResultBlock{
 				Name:       tc.Name,
 				ToolCallId: tc.Id,

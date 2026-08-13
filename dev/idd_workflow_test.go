@@ -1,7 +1,9 @@
 package dev
 
 import (
+	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -96,11 +98,20 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 		return len(in.Args) > 0 && in.Args[0] == "show"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
+	// The sub-task's flow record must reflect every state the canvas shows:
+	// reserved, running (with its generated title) and terminal.
+	var mu sync.Mutex
+	persistedFlows := map[string]domain.Flow{}
 	s.env.OnActivity(
 		s.ima.PutWorkflow,
 		mock.Anything,
 		mock.AnythingOfType("domain.Flow"),
-	).Return(nil)
+	).Return(func(ctx context.Context, flow domain.Flow) error {
+		mu.Lock()
+		defer mu.Unlock()
+		persistedFlows[flow.Status] = flow
+		return nil
+	})
 
 	s.setupTitleGenerationMocks()
 
@@ -126,17 +137,19 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 			Defaults: []common.ModelConfig{{Provider: "openai"}},
 		})
 		state := &IddState{}
-		flowId := reservePendingSubtask(dCtx, state, "")
-		runIntentSubtask(dCtx, IddWorkflowInput{
+		iddInput := IddWorkflowInput{
 			WorkspaceId: "test-workspace",
 			RepoDir:     "/tmp/repo",
+			TaskId:      "task-1",
 			Title:       "My Intent",
 			IddOptions: IddOptions{
 				EnvType:           env.EnvTypeLocal,
 				RepoMode:          env.RepoModeWorktree,
 				ContextGatherType: ContextGatherTypeExplore,
 			},
-		}, StartIntentSubtaskSignal{Update: false}, state, flowId, nil)
+		}
+		flowId := reservePendingSubtask(dCtx, iddInput, state, "")
+		runIntentSubtask(dCtx, iddInput, StartIntentSubtaskSignal{Update: false}, state, flowId, nil)
 		if len(state.Subtasks) != 1 {
 			return IddState{}, fmt.Errorf("expected 1 subtask, got %d", len(state.Subtasks))
 		}
@@ -154,6 +167,18 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	s.Equal("abc123", state.Subtasks[0].Commit)
 	s.Equal("completed", state.Subtasks[0].Status)
 	s.Equal("Generated Sub-task Title", state.Subtasks[0].Title)
+
+	mu.Lock()
+	defer mu.Unlock()
+	s.Require().Len(persistedFlows, 3)
+	pending := persistedFlows["pending"]
+	s.Equal("task-1", pending.ParentId)
+	s.Equal(domain.FlowTypeBasicDev, pending.Type)
+	s.Equal("test-workspace", pending.WorkspaceId)
+	s.Equal(state.Subtasks[0].FlowId, pending.Id)
+	s.Equal("Generated Sub-task Title", persistedFlows["in_progress"].Title)
+	s.Equal("Generated Sub-task Title", persistedFlows["completed"].Title)
+	s.False(persistedFlows["completed"].Updated.IsZero())
 
 	s.False(capturedInput.DetermineRequirements)
 	s.True(capturedInput.AutoMerge)
@@ -230,17 +255,19 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskTriggersOrchestratorOnTermina
 			Defaults: []common.ModelConfig{{Provider: "openai"}},
 		})
 		state := &IddState{}
-		flowId := reservePendingSubtask(dCtx, state, "")
-		var result triggerResult
-		runIntentSubtask(dCtx, IddWorkflowInput{
+		iddInput := IddWorkflowInput{
 			WorkspaceId: "test-workspace",
 			RepoDir:     "/tmp/repo",
+			TaskId:      "task-1",
 			Title:       "My Intent",
 			IddOptions: IddOptions{
 				EnvType:  env.EnvTypeLocal,
 				RepoMode: env.RepoModeWorktree,
 			},
-		}, StartIntentSubtaskSignal{Update: false}, state, flowId, func() {
+		}
+		flowId := reservePendingSubtask(dCtx, iddInput, state, "")
+		var result triggerResult
+		runIntentSubtask(dCtx, iddInput, StartIntentSubtaskSignal{Update: false}, state, flowId, func() {
 			result.Count++
 			result.StatusAtTrigger = state.Subtasks[0].Status
 			result.Notices = append([]string{}, state.PendingSubtaskNotices...)
@@ -480,15 +507,44 @@ func (s *IddWorkflowTestSuite) TestPendingIntentDiffIncludesUntrackedFiles() {
 }
 
 // TestSetAutoModeSignalTogglesState verifies the auto-mode toggle signal
-// updates IddState.AutoMode so that subsequent orchestrator runs gate on it.
+// updates IddState.AutoMode so that subsequent orchestrator runs gate on it,
+// and that the new value is mirrored onto the IDD flow record's metadata,
+// which is where the canvas reads it from.
 func (s *IddWorkflowTestSuite) TestSetAutoModeSignalTogglesState() {
+	s.env.OnActivity(s.ima.GetWorkflow, mock.Anything, "test-workspace", mock.Anything).Return(
+		domain.Flow{
+			WorkspaceId: "test-workspace",
+			Id:          "flow_idd",
+			Type:        domain.FlowTypeIdd,
+			ParentId:    "task-1",
+			Status:      "in_progress",
+		}, nil).Once()
+
+	s.env.OnActivity(
+		s.ima.PutWorkflow,
+		mock.Anything,
+		mock.MatchedBy(func(flow domain.Flow) bool {
+			nudges, _ := flow.Metadata[IddMetadataKeyNudges].([]any)
+			return flow.Metadata[IddMetadataKeyAutoMode] == true &&
+				flow.Type == domain.FlowTypeIdd && len(nudges) == 1
+		}),
+	).Return(nil).Once()
+
 	miniIdd := func(ctx workflow.Context) (IddState, error) {
 		ctx = utils.NoRetryCtx(ctx)
-		state := &IddState{}
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+			},
+		}
+		input := IddWorkflowInput{WorkspaceId: "test-workspace", TaskId: "task-1"}
+		state := &IddState{Nudges: []IddNudge{{Text: "reconsider the scope"}}}
 		setAutoCh := workflow.GetSignalChannel(ctx, SignalNameSetIddAutoMode)
 		var sig SetIddAutoModeSignal
 		setAutoCh.Receive(ctx, &sig)
 		state.AutoMode = sig.Enabled
+		persistIddFlowMetadata(dCtx, input, state)
 		return *state, nil
 	}
 	s.env.RegisterWorkflow(miniIdd)
@@ -504,6 +560,162 @@ func (s *IddWorkflowTestSuite) TestSetAutoModeSignalTogglesState() {
 	var state IddState
 	s.NoError(s.env.GetWorkflowResult(&state))
 	s.True(state.AutoMode)
+}
+
+// recordPersistedFlows captures every flow record written via PutWorkflow, in
+// the order the writes actually reached storage.
+func (s *IddWorkflowTestSuite) recordPersistedFlows() (*sync.Mutex, *[]domain.Flow) {
+	var mu sync.Mutex
+	persisted := &[]domain.Flow{}
+	s.env.OnActivity(
+		s.ima.PutWorkflow,
+		mock.Anything,
+		mock.AnythingOfType("domain.Flow"),
+	).Return(func(ctx context.Context, flow domain.Flow) error {
+		mu.Lock()
+		defer mu.Unlock()
+		*persisted = append(*persisted, flow)
+		return nil
+	})
+	return &mu, persisted
+}
+
+// TestReservePendingSubtaskPersistsPendingFlow verifies a sub-task shows up as
+// a flow record as soon as it is reserved, before the coroutine that runs it
+// has done any work — the canvas lists pending sub-tasks from those records.
+func (s *IddWorkflowTestSuite) TestReservePendingSubtaskPersistsPendingFlow() {
+	mu, persisted := s.recordPersistedFlows()
+
+	miniIdd := func(ctx workflow.Context) (IddState, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+			},
+		}
+		input := IddWorkflowInput{WorkspaceId: "test-workspace", TaskId: "task-1"}
+		state := &IddState{}
+		reservePendingSubtask(dCtx, input, state, "implement the parser")
+		return *state, nil
+	}
+	s.env.RegisterWorkflow(miniIdd)
+
+	s.env.ExecuteWorkflow(miniIdd)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var state IddState
+	s.NoError(s.env.GetWorkflowResult(&state))
+	s.Require().Len(state.Subtasks, 1)
+
+	mu.Lock()
+	defer mu.Unlock()
+	s.Require().Len(*persisted, 1)
+	pending := (*persisted)[0]
+	s.Equal("pending", pending.Status)
+	s.Equal(state.Subtasks[0].FlowId, pending.Id)
+	s.Equal("task-1", pending.ParentId)
+	s.Equal(domain.FlowTypeBasicDev, pending.Type)
+	s.Equal("test-workspace", pending.WorkspaceId)
+	s.False(pending.Created.IsZero())
+}
+
+// TestSubtaskStatusTransitionsPersistFlowRecords verifies intermediate
+// sub-task status transitions (not just start and terminal ones) are written
+// to the sub-task's flow record, in the order they happened, since the canvas
+// groups and orders sub-tasks from those records.
+func (s *IddWorkflowTestSuite) TestSubtaskStatusTransitionsPersistFlowRecords() {
+	mu, persisted := s.recordPersistedFlows()
+
+	miniIdd := func(ctx workflow.Context) (IddState, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+			},
+		}
+		input := IddWorkflowInput{WorkspaceId: "test-workspace", TaskId: "task-1"}
+		state := &IddState{Subtasks: []IddSubtask{{
+			FlowId: "flow_1",
+			Title:  "Sub-task One",
+			Status: "in_progress",
+		}}}
+		updateSubtaskStatus(dCtx, input, state, "flow_1", "blocked")
+		updateSubtaskStatus(dCtx, input, state, "flow_1", "in_progress")
+		updateSubtaskStatus(dCtx, input, state, "flow_1", "canceled")
+		return *state, nil
+	}
+	s.env.RegisterWorkflow(miniIdd)
+
+	s.env.ExecuteWorkflow(miniIdd)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var state IddState
+	s.NoError(s.env.GetWorkflowResult(&state))
+	s.Require().Len(state.Subtasks, 1)
+	s.Equal("canceled", state.Subtasks[0].Status)
+	s.False(state.Subtasks[0].UpdatedAt.IsZero())
+
+	mu.Lock()
+	defer mu.Unlock()
+	statuses := make([]string, 0, len(*persisted))
+	for _, flow := range *persisted {
+		s.Equal("flow_1", flow.Id)
+		s.Equal("Sub-task One", flow.Title)
+		s.Equal("task-1", flow.ParentId)
+		statuses = append(statuses, flow.Status)
+	}
+	s.Equal([]string{"blocked", "in_progress", "canceled"}, statuses)
+}
+
+// TestNudgesPersistedToFlowMetadata verifies orchestrator nudges reach the IDD
+// flow record's metadata, which is where the canvas reads them from.
+func (s *IddWorkflowTestSuite) TestNudgesPersistedToFlowMetadata() {
+	s.env.OnActivity(s.ima.GetWorkflow, mock.Anything, "test-workspace", mock.Anything).Return(
+		domain.Flow{
+			WorkspaceId: "test-workspace",
+			Id:          "flow_idd",
+			Type:        domain.FlowTypeIdd,
+			ParentId:    "task-1",
+			Status:      "in_progress",
+		}, nil).Twice()
+	mu, persisted := s.recordPersistedFlows()
+
+	miniIdd := func(ctx workflow.Context) error {
+		ctx = utils.NoRetryCtx(ctx)
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+			},
+		}
+		input := IddWorkflowInput{WorkspaceId: "test-workspace", TaskId: "task-1"}
+		state := &IddState{}
+		state.Nudges = append(state.Nudges, IddNudge{Text: "first nudge", AnchorText: "some intent"})
+		persistIddFlowMetadata(dCtx, input, state)
+		state.Nudges = append(state.Nudges, IddNudge{Text: "second nudge"})
+		persistIddFlowMetadata(dCtx, input, state)
+		return nil
+	}
+	s.env.RegisterWorkflow(miniIdd)
+
+	s.env.ExecuteWorkflow(miniIdd)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	mu.Lock()
+	defer mu.Unlock()
+	s.Require().Len(*persisted, 2)
+	firstNudges, _ := (*persisted)[0].Metadata[IddMetadataKeyNudges].([]any)
+	s.Require().Len(firstNudges, 1)
+	firstNudge, _ := firstNudges[0].(map[string]any)
+	s.Equal("first nudge", firstNudge["text"])
+	s.Equal("some intent", firstNudge["anchorText"])
+	secondNudges, _ := (*persisted)[1].Metadata[IddMetadataKeyNudges].([]any)
+	s.Len(secondNudges, 2)
 }
 
 func TestIddWorkflowTestSuite(t *testing.T) {
@@ -648,17 +860,19 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesContextGatherTypeTo
 			Defaults: []common.ModelConfig{{Provider: "openai"}},
 		})
 		state := &IddState{}
-		flowId := reservePendingSubtask(dCtx, state, "")
-		runIntentSubtask(dCtx, IddWorkflowInput{
+		iddInput := IddWorkflowInput{
 			WorkspaceId: "test-workspace",
 			RepoDir:     "/tmp/repo",
+			TaskId:      "task-1",
 			Title:       "My Intent",
 			IddOptions: IddOptions{
 				EnvType:           env.EnvTypeLocal,
 				RepoMode:          env.RepoModeWorktree,
 				ContextGatherType: ContextGatherTypeExplore,
 			},
-		}, StartIntentSubtaskSignal{Planned: true}, state, flowId, nil)
+		}
+		flowId := reservePendingSubtask(dCtx, iddInput, state, "")
+		runIntentSubtask(dCtx, iddInput, StartIntentSubtaskSignal{Planned: true}, state, flowId, nil)
 		if len(state.Subtasks) != 1 {
 			return IddState{}, fmt.Errorf("expected 1 subtask, got %d", len(state.Subtasks))
 		}
