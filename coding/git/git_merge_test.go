@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sidekick/domain"
@@ -807,4 +808,167 @@ func TestGitMergeActivityRefreshesTargetBranchFromLocal(t *testing.T) {
 	mergedCommits := runGitCommandInTestRepo(t, envRepoDir, "rev-list", "main")
 	assert.Contains(t, mergedCommits, hostCommit)
 	assert.Contains(t, mergedCommits, featureCommit)
+}
+
+const (
+	iddBranch      = "side/idd-intent"
+	iddChildBranch = "side/idd-child"
+)
+
+type iddChildMergeFixture struct {
+	hostRepoDir      string
+	hostWorktreeDir  string
+	hostIntentCommit string
+	childRepoDir     string
+}
+
+// setupIddChildMergeFixture builds a host repository with the IDD branch
+// checked out in a worktree, plus an independent child clone holding new
+// commits, mirroring how a remote IDD child merges back into the local IDD
+// branch that the editor, orchestrator and finish flows operate on.
+func setupIddChildMergeFixture(t *testing.T) iddChildMergeFixture {
+	t.Helper()
+
+	hostRepoDir := setupTestGitRepo(t)
+	createCommitWithFile(t, hostRepoDir, "Initial commit", "intent.md", "base intent\n")
+
+	hostWorktreeDir := filepath.Join(t.TempDir(), "idd-worktree")
+	runGitCommandInTestRepo(t, hostRepoDir, "worktree", "add", "-b", iddBranch, hostWorktreeDir, "main")
+	createCommitWithFile(t, hostWorktreeDir, "Authored intent", "intent.md", "authored intent\n")
+
+	childRepoDir := filepath.Join(t.TempDir(), "child")
+	runGitCommandInTestRepo(t, hostRepoDir, "clone", hostRepoDir, childRepoDir)
+	runGitCommandInTestRepo(t, childRepoDir, "checkout", "-b", iddChildBranch, "origin/"+iddBranch)
+	createCommitWithFile(t, childRepoDir, "Child work", "child.txt", "child work\n")
+
+	// The local IDD branch advances after the child branched off, so the child
+	// must merge against the refreshed branch for the host branch to
+	// fast-forward afterwards.
+	createCommitWithFile(t, hostWorktreeDir, "Later intent edit", "intent.md", "updated intent\n")
+
+	return iddChildMergeFixture{
+		hostRepoDir:      hostRepoDir,
+		hostWorktreeDir:  hostWorktreeDir,
+		hostIntentCommit: strings.TrimSpace(runGitCommandInTestRepo(t, hostWorktreeDir, "rev-parse", "HEAD")),
+		childRepoDir:     childRepoDir,
+	}
+}
+
+// hostWorktreePathForBranch returns the path of the worktree that has the given
+// branch checked out, or an empty string when no worktree has it checked out.
+func hostWorktreePathForBranch(t *testing.T, repoDir, branch string) string {
+	t.Helper()
+	output := runGitCommandInTestRepo(t, repoDir, "worktree", "list", "--porcelain")
+	worktreePath := ""
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			worktreePath = strings.TrimPrefix(line, "worktree ")
+		case line == "branch refs/heads/"+branch:
+			return worktreePath
+		}
+	}
+	return ""
+}
+
+// mergeResultSyncerEnv wraps a real env to simulate a remote child environment
+// holding an independent clone of the host repository: the target branch is
+// refreshed from the host before merging, and the merge result is transferred
+// back and fast-forwarded into the host branch, updating its checked-out
+// worktree the same way the SSH-based remote implementations do.
+type mergeResultSyncerEnv struct {
+	env.Env
+	t              *testing.T
+	childRepoDir   string
+	hostRepoDir    string
+	syncErr        error
+	syncedBranches []string
+}
+
+func (e *mergeResultSyncerEnv) SyncBranchToRemote(ctx context.Context, branch string) error {
+	runGitCommandInTestRepo(e.t, e.childRepoDir, "fetch", e.hostRepoDir, "+refs/heads/"+branch+":refs/heads/"+branch)
+	return nil
+}
+
+func (e *mergeResultSyncerEnv) SyncMergeResultToLocal(ctx context.Context, branch string) error {
+	e.syncedBranches = append(e.syncedBranches, branch)
+	if e.syncErr != nil {
+		return e.syncErr
+	}
+	tempRef := "refs/sidekick-sync/" + branch
+	runGitCommandInTestRepo(e.t, e.hostRepoDir, "fetch", e.childRepoDir, "+refs/heads/"+branch+":"+tempRef)
+	if worktreePath := hostWorktreePathForBranch(e.t, e.hostRepoDir, branch); worktreePath != "" {
+		runGitCommandInTestRepo(e.t, worktreePath, "merge", "--ff-only", tempRef)
+		return nil
+	}
+	runGitCommandInTestRepo(e.t, e.hostRepoDir, "update-ref", "refs/heads/"+branch, tempRef)
+	return nil
+}
+
+func TestGitMergeActivitySyncsMergeResultToLocalIddWorktree(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	fixture := setupIddChildMergeFixture(t)
+	childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
+	require.NoError(t, err)
+	syncerEnv := &mergeResultSyncerEnv{
+		Env:          childEnv,
+		t:            t,
+		childRepoDir: fixture.childRepoDir,
+		hostRepoDir:  fixture.hostRepoDir,
+	}
+
+	result, err := GitMergeActivity(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
+		SourceBranch: iddChildBranch,
+		TargetBranch: iddBranch,
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.HasConflicts)
+	assert.Equal(t, []string{iddBranch}, syncerEnv.syncedBranches)
+
+	// By the time the activity returns, the local IDD branch and its
+	// checked-out worktree must already carry the child's commits.
+	childMergeCommit := strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", iddBranch))
+	hostBranchCommit := strings.TrimSpace(runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD"))
+	assert.Equal(t, childMergeCommit, hostBranchCommit)
+
+	childWork, err := os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "child work\n", string(childWork))
+
+	intentContent, err := os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "intent.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "updated intent\n", string(intentContent))
+}
+
+func TestGitMergeActivityPropagatesMergeResultSyncFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	fixture := setupIddChildMergeFixture(t)
+	childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
+	require.NoError(t, err)
+	syncerEnv := &mergeResultSyncerEnv{
+		Env:          childEnv,
+		t:            t,
+		childRepoDir: fixture.childRepoDir,
+		hostRepoDir:  fixture.hostRepoDir,
+		syncErr:      errors.New("ssh connection lost"),
+	}
+
+	result, err := GitMergeActivity(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
+		SourceBranch: iddChildBranch,
+		TargetBranch: iddBranch,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssh connection lost")
+	assert.False(t, result.HasConflicts)
+
+	hostBranchCommit := strings.TrimSpace(runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD"))
+	assert.Equal(t, fixture.hostIntentCommit, hostBranchCommit)
+	assert.NoFileExists(t, filepath.Join(fixture.hostWorktreeDir, "child.txt"))
 }
