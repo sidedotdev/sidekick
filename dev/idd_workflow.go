@@ -207,7 +207,23 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		return *state, nil
 	})
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), string(input.RepoMode), input.StartBranch, input.Title, input.ConfigOverrides)
+	// The top-level IDD worktree is always server-local so intent authoring,
+	// the committed baseline, git operations, finishing and the edit watcher
+	// all act on a path that exists on the sidekick host. The selected
+	// environment applies only to implementation children (see
+	// runIntentSubtask). Explicit values are passed so repo-config/override
+	// defaults can't reintroduce a remote parent. Gated by version because
+	// histories recorded while the parent could be remote provisioned that
+	// sandbox here, and replays must keep their original activity sequence;
+	// such in-flight workflows are deliberately not migrated.
+	parentEnvType := string(input.EnvType)
+	parentRepoMode := string(input.RepoMode)
+	if workflow.GetVersion(ctx, "idd-local-parent", workflow.DefaultVersion, 1) >= 1 {
+		parentEnvType = string(env.EnvTypeLocal)
+		parentRepoMode = string(env.RepoModeWorktree)
+	}
+
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, parentEnvType, parentRepoMode, input.StartBranch, input.Title, input.ConfigOverrides)
 	if err != nil {
 		signalWorkflowFailureOrCancel(ctx)
 		return err
@@ -302,8 +318,10 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	// IDD worktree has been quiet for a short idle window after at least one
 	// intent-file edit. The workflow re-launches it after each return so the
 	// orchestrator gets a steady, server-side trigger that does not depend on
-	// the canvas being open. Only enabled for local env types because remote
-	// containers do not expose the worktree path to the worker's filesystem.
+	// the canvas being open. The parent worktree is local for all new IDD
+	// flows, so this covers every selected child environment; the env type
+	// check only skips legacy histories whose parent was provisioned remotely
+	// and whose worktree path isn't on the worker's filesystem.
 	startEditWatcher := func() {
 		envType := dCtx.EnvContainer.Env.GetType()
 		if envType != env.EnvTypeLocal && envType != env.EnvTypeLocalGitWorktree {

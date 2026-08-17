@@ -4,6 +4,17 @@ intent_links:
     code:
       - dev/idd_workflow.go:IddWorkflow
       - dev/idd_workflow.go:setSubtaskStatus
+  - intent: "#server-local-idd-parent-remote-only-children"
+    code:
+      - dev/idd_workflow.go:IddWorkflow
+      - dev/idd_workflow.go:IddOptions
+      - dev/idd_workflow.go:runIntentSubtask
+      - dev/dev_context.go:setupDevContextAction
+      - dev/idd_watcher_activity.go:IddWatchEditIdleActivity
+      - api/intent_api.go:flowWorktreeDir
+      - coding/git/git_merge.go:GitMergeActivity
+      - env/remote_repo.go:syncMergeResultToLocalOverSSH
+      - env/modal_guard.go:modalIdleSeconds
   - intent: "#clarifications-from-sub-tasks"
     code:
       - dev/idd_workflow.go:IddWorkflow
@@ -83,6 +94,43 @@ intent_links:
 The IDD workflow is long-running: after worktree setup it loops on a selector
 handling signals to start sub-tasks and to record sub-task closures, so a single
 intent worktree can spawn many sub-tasks over its lifetime.
+
+## Server-local IDD parent, remote-only children
+
+Every IDD parent owns a server-local worktree: the workflow sets up its dev
+context with an explicit `local`/`worktree` environment regardless of the
+environment the user selected, so the intent file list/read/write, committed
+baselines, editor autosave, git diff/commit/branch/finish, and the edit watcher
+all operate on a path that exists on the sidekick host. The `idd_state` query is
+the other half of local coordination and touches no filesystem at all: it is
+registered before parent setup and answers purely from workflow state, so
+canvas polling remains available even when setup fails and can never serve as a
+sandbox keepalive. The requested `StartBranch` still seeds that worktree and
+therefore the default finish target; it is not a child execution option.
+
+The selected `EnvType`, `RepoMode`, `ConfigOverrides`, and `ContextGatherType`
+are child-execution options only: they are forwarded unchanged to each
+BasicDev/PlannedDev child, which starts from the current IDD branch, stays
+IDD-marked, and auto-merges back into it. A remote child's clean merge is
+returned to the host by `MergeResultSyncer.SyncMergeResultToLocal` before
+`GitMergeActivity` reports success, fast-forwarding the checked-out local IDD
+branch so the editor, orchestrator, and finish flow observe the child's
+commits. There is deliberately no second intent mirror and no bidirectional
+sync protocol.
+
+Because nothing at the top level touches the sandbox, no watcher, `idd_state`
+query, state poll, or idle heuristic can provision or wake a selected Modal,
+OpenShell, or DevPod environment: it is contacted only while a child performs
+actual work, leaving Modal free to snapshot, hibernate on idle, and restore
+through its existing lifecycle. Editing top-level intent from inside a remote
+sandbox is unsupported and explicitly deferred — direct IDE edits are detected
+only in the server-local worktree.
+
+Forcing the parent local is gated by the `idd-local-parent` workflow version so
+histories recorded when the parent could be remote replay their original
+provisioning sequence. Those already-running remote-parent workflows are not
+migrated or repaired; they retain their prior behavior until they finish or are
+abandoned.
 
 ## Clarifications from sub-tasks
 
@@ -181,14 +229,15 @@ histories keep the original off-by-default semantics and replay
 deterministically); existing flows continue to honour whatever the user
 last toggled.
 
-For local worktree environments the IDD workflow also runs a long-lived
-edit-watcher activity (gated by the `idd-edit-watcher` version) that
-returns when the worktree has been quiet for a short idle window after at
-least one intent-file edit, so the orchestrator gets a steady server-side
-trigger that does not depend on the canvas being open. Remote env types
-still rely on the frontend idle heuristic — closing the parity gap for
-remote envs requires sandbox-side FS watching plumbing that is out of
-scope here. Both trigger paths feed the same capacity-1 buffered channel
+The IDD workflow also runs a long-lived edit-watcher activity (gated by the
+`idd-edit-watcher` version) that returns when the worktree has been quiet
+for a short idle window after at least one intent-file edit, so the
+orchestrator gets a steady server-side trigger that does not depend on the
+canvas being open. Since the parent worktree is always server-local, this
+`fsnotify` watcher is authoritative for every selected child environment and
+also catches direct IDE edits made while the canvas is closed; the frontend
+idle heuristic is merely a redundant trigger, never a keepalive for a remote
+environment. Both trigger paths feed the same capacity-1 buffered channel
 drained by a single coroutine, so concurrent triggers coalesce into at
 most one pending turn and the orchestrator never races itself.
 
