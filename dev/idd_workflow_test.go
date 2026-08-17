@@ -1,8 +1,10 @@
 package dev
 
 import (
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -18,7 +20,9 @@ import (
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/utils"
+	"sidekick/workspace"
 )
 
 // IddWorkflowTestSuite verifies that an intent sub-task commits the current
@@ -29,12 +33,17 @@ type IddWorkflowTestSuite struct {
 	testsuite.WorkflowTestSuite
 	env *testsuite.TestWorkflowEnvironment
 	ima *DevAgentManagerActivities
+	// titleGenerationCalls counts LLM stream calls made by
+	// generateIntentSubtaskTitle so tests can pin how many title generations a
+	// single sub-task dispatch performs.
+	titleGenerationCalls int
 }
 
 func (s *IddWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.ima = nil
+	s.titleGenerationCalls = 0
 }
 
 func (s *IddWorkflowTestSuite) AfterTest(suiteName, testName string) {
@@ -53,7 +62,9 @@ func (s *IddWorkflowTestSuite) setupTitleGenerationMocks() {
 	).Maybe()
 
 	var la *persisted_ai.Llm2Activities
-	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		s.titleGenerationCalls++
+	}).Return(&llm2.MessageResponse{
 		Output: llm2.Message{
 			Role: "assistant",
 			Content: []llm2.ContentBlock{
@@ -70,6 +81,20 @@ func (s *IddWorkflowTestSuite) setupTitleGenerationMocks() {
 // worktree branch with the expected sub-task options.
 func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	const iddBranch = "side/idd-worktree"
+
+	maxIterations := 7
+	mission := "ship the intent"
+	requestedStartBranch := "main"
+	selectedOptions := IddOptions{
+		EnvType:           env.EnvTypeModal,
+		RepoMode:          env.RepoModeInPlace,
+		StartBranch:       &requestedStartBranch,
+		ContextGatherType: ContextGatherTypeExplore,
+		ConfigOverrides: common.ConfigOverrides{
+			MaxIterations: &maxIterations,
+			Mission:       &mission,
+		},
+	}
 
 	var capturedInput BasicDevWorkflowInput
 	s.env.RegisterWorkflowWithOptions(
@@ -131,11 +156,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 			WorkspaceId: "test-workspace",
 			RepoDir:     "/tmp/repo",
 			Title:       "My Intent",
-			IddOptions: IddOptions{
-				EnvType:           env.EnvTypeLocal,
-				RepoMode:          env.RepoModeWorktree,
-				ContextGatherType: ContextGatherTypeExplore,
-			},
+			IddOptions:  selectedOptions,
 		}, StartIntentSubtaskSignal{Update: false}, state, flowId, nil)
 		if len(state.Subtasks) != 1 {
 			return IddState{}, fmt.Errorf("expected 1 subtask, got %d", len(state.Subtasks))
@@ -158,14 +179,23 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	s.False(capturedInput.DetermineRequirements)
 	s.True(capturedInput.AutoMerge)
 	s.True(capturedInput.Idd)
+	s.Equal(env.EnvTypeModal, capturedInput.EnvType)
+	s.Equal(env.RepoModeInPlace, capturedInput.RepoMode)
 	s.Equal(ContextGatherTypeExplore, capturedInput.ContextGatherType)
+	s.Require().NotNil(capturedInput.ConfigOverrides.MaxIterations)
+	s.Equal(maxIterations, *capturedInput.ConfigOverrides.MaxIterations)
+	s.Require().NotNil(capturedInput.ConfigOverrides.Mission)
+	s.Equal(mission, *capturedInput.ConfigOverrides.Mission)
 	s.Equal("test-workspace", capturedInput.WorkspaceId)
 	s.Equal("/tmp/repo", capturedInput.RepoDir)
 	s.Require().NotNil(capturedInput.StartBranch)
-	s.Equal(iddBranch, *capturedInput.StartBranch)
+	s.Equal(iddBranch, *capturedInput.StartBranch,
+		"the child starts from the current IDD branch, not the branch requested for the IDD parent")
+	s.NotEqual(requestedStartBranch, *capturedInput.StartBranch)
 	s.Contains(capturedInput.Requirements, "The following new intent file has already been committed")
 	s.Contains(capturedInput.Requirements, "git show abc123")
 	s.Contains(capturedInput.Requirements, "diff body")
+	s.Equal(1, s.titleGenerationCalls, "a sub-task should generate its title exactly once")
 }
 
 // TestRunIntentSubtaskTriggersOrchestratorOnTerminalStatus verifies that once
@@ -590,8 +620,22 @@ func (s *IddWorkflowTestSuite) TestWorkflowGoContextSupportsCancellation() {
 	s.True(s.env.IsWorkflowCompleted())
 	s.ErrorIs(s.env.GetWorkflowError(), workflow.ErrCanceled)
 }
-func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesContextGatherTypeToPlannedChild() {
+func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesSelectedOptionsToPlannedChild() {
 	const iddBranch = "side/idd-worktree"
+
+	maxIterations := 9
+	mission := "plan the intent"
+	requestedStartBranch := "main"
+	selectedOptions := IddOptions{
+		EnvType:           env.EnvTypeModal,
+		RepoMode:          env.RepoModeInPlace,
+		StartBranch:       &requestedStartBranch,
+		ContextGatherType: ContextGatherTypeExplore,
+		ConfigOverrides: common.ConfigOverrides{
+			MaxIterations: &maxIterations,
+			Mission:       &mission,
+		},
+	}
 
 	var capturedInput PlannedDevInput
 	s.env.RegisterWorkflowWithOptions(
@@ -653,11 +697,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesContextGatherTypeTo
 			WorkspaceId: "test-workspace",
 			RepoDir:     "/tmp/repo",
 			Title:       "My Intent",
-			IddOptions: IddOptions{
-				EnvType:           env.EnvTypeLocal,
-				RepoMode:          env.RepoModeWorktree,
-				ContextGatherType: ContextGatherTypeExplore,
-			},
+			IddOptions:  selectedOptions,
 		}, StartIntentSubtaskSignal{Planned: true}, state, flowId, nil)
 		if len(state.Subtasks) != 1 {
 			return IddState{}, fmt.Errorf("expected 1 subtask, got %d", len(state.Subtasks))
@@ -673,9 +713,251 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesContextGatherTypeTo
 	s.False(capturedInput.DetermineRequirements)
 	s.True(capturedInput.AutoMerge)
 	s.True(capturedInput.Idd)
+	s.Equal(env.EnvTypeModal, capturedInput.EnvType)
+	s.Equal(env.RepoModeInPlace, capturedInput.RepoMode)
 	s.Equal(ContextGatherTypeExplore, capturedInput.ContextGatherType)
+	s.Require().NotNil(capturedInput.ConfigOverrides.MaxIterations)
+	s.Equal(maxIterations, *capturedInput.ConfigOverrides.MaxIterations)
+	s.Require().NotNil(capturedInput.ConfigOverrides.Mission)
+	s.Equal(mission, *capturedInput.ConfigOverrides.Mission)
 	s.Equal("test-workspace", capturedInput.WorkspaceId)
 	s.Equal("/tmp/repo", capturedInput.RepoDir)
 	s.Require().NotNil(capturedInput.StartBranch)
-	s.Equal(iddBranch, *capturedInput.StartBranch)
+	s.Equal(iddBranch, *capturedInput.StartBranch,
+		"the child starts from the current IDD branch, not the branch requested for the IDD parent")
+	s.NotEqual(requestedStartBranch, *capturedInput.StartBranch)
+	s.Equal(1, s.titleGenerationCalls, "a sub-task should generate its title exactly once")
+}
+
+// TestIddParentSetupOptions verifies new IDD workflows always provision their
+// top-level authoring worktree as a server-local git worktree, regardless of
+// the execution environment selected for children, while histories recorded
+// before the local-parent change keep provisioning the selected environment so
+// their replays stay deterministic.
+func (s *IddWorkflowTestSuite) TestIddParentSetupOptions() {
+	type parentSetup struct {
+		EnvType  string
+		RepoMode string
+	}
+	wrapper := func(ctx workflow.Context, options IddOptions) (parentSetup, error) {
+		envType, repoMode := iddParentSetupOptions(ctx, options)
+		return parentSetup{EnvType: envType, RepoMode: repoMode}, nil
+	}
+	remoteSelection := IddOptions{EnvType: env.EnvTypeModal, RepoMode: env.RepoModeInPlace}
+
+	tests := []struct {
+		name     string
+		options  IddOptions
+		legacy   bool
+		expected parentSetup
+	}{
+		{
+			name:     "remote selection still sets up a local parent",
+			options:  remoteSelection,
+			expected: parentSetup{EnvType: "local", RepoMode: "worktree"},
+		},
+		{
+			name:     "unset selection sets up a local parent explicitly",
+			expected: parentSetup{EnvType: "local", RepoMode: "worktree"},
+		},
+		{
+			name:     "pre-existing history keeps its selected parent environment",
+			options:  remoteSelection,
+			legacy:   true,
+			expected: parentSetup{EnvType: "modal", RepoMode: "in_place"},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		s.Run(tt.name, func() {
+			testEnv := s.NewTestWorkflowEnvironment()
+			testEnv.SetWorkerOptions(utils.TestWorkerOptions())
+			testEnv.RegisterWorkflow(wrapper)
+			if tt.legacy {
+				testEnv.OnGetVersion("idd-local-parent", workflow.DefaultVersion, 1).
+					Return(workflow.DefaultVersion)
+			}
+
+			testEnv.ExecuteWorkflow(wrapper, tt.options)
+			s.True(testEnv.IsWorkflowCompleted())
+			s.NoError(testEnv.GetWorkflowError())
+
+			var got parentSetup
+			s.NoError(testEnv.GetWorkflowResult(&got))
+			s.Equal(tt.expected, got)
+		})
+	}
+}
+
+// setupLocalParentMocks stubs the activities SetupDevContext needs to build a
+// server-local IDD worktree, plus the incidental activities IddWorkflow runs
+// once setup succeeds. Remote-environment activities are deliberately left to
+// the caller so tests can assert whether they were reached.
+func (s *IddWorkflowTestSuite) setupLocalParentMocks() {
+	s.env.OnActivity(common.GetLocalConfig).Return(common.LocalPublicConfig{
+		LLM: common.LLMConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
+	}, nil).Maybe()
+
+	var wa *workspace.Activities
+	s.env.OnActivity(wa.GetWorkspaceConfig, mock.Anything).Return(domain.WorkspaceConfig{}, nil).Maybe()
+	s.env.OnActivity(wa.GetWorkspace, mock.Anything).Return(domain.Workspace{ConfigMode: "local"}, nil).Maybe()
+
+	s.env.OnActivity(GetRepoConfigActivityV2, mock.Anything).Return(GetRepoConfigActivityResult{}, nil).Maybe()
+	s.env.OnActivity(GetRepoConfigActivity, mock.Anything).Return(common.RepoConfig{}, nil).Maybe()
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+		Return(env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil).Maybe()
+	s.env.OnActivity(common.BaseCommandPermissionsActivity, mock.Anything, mock.Anything).
+		Return(common.CommandPermissionConfig{}, nil).Maybe()
+	s.env.OnActivity(git.GetGitUserConfigActivity, mock.Anything, mock.Anything).
+		Return(git.GitUserConfig{}, nil).Maybe()
+	s.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+
+	s.setupTitleGenerationMocks()
+}
+
+// remoteActivityRecorder mocks every activity that would provision, sync with,
+// or otherwise reach into a remote sandbox, counting invocations so tests can
+// assert a local IDD parent never wakes the selected remote environment.
+type remoteActivityRecorder struct {
+	calls map[string]int
+}
+
+func (s *IddWorkflowTestSuite) recordRemoteActivities() *remoteActivityRecorder {
+	rec := &remoteActivityRecorder{calls: map[string]int{}}
+	record := func(name string) func(mock.Arguments) {
+		return func(mock.Arguments) { rec.calls[name]++ }
+	}
+	s.env.OnActivity(env.CheckSandboxActivity, mock.Anything, mock.Anything).
+		Run(record("CheckSandboxActivity")).Return(env.CheckSandboxOutput{}, nil).Maybe()
+	s.env.OnActivity(env.CreateSandboxActivity, mock.Anything, mock.Anything).
+		Run(record("CreateSandboxActivity")).Return(env.CreateSandboxOutput{}, nil).Maybe()
+	s.env.OnActivity(env.SyncRepoToRemoteActivity, mock.Anything, mock.Anything).
+		Run(record("SyncRepoToRemoteActivity")).Return(env.SyncRepoToRemoteOutput{}, nil).Maybe()
+	s.env.OnActivity(env.CreateRemoteWorktreeActivity, mock.Anything, mock.Anything).
+		Run(record("CreateRemoteWorktreeActivity")).Return(env.CreateRemoteWorktreeOutput{}, nil).Maybe()
+	s.env.OnActivity(env.DeepenRepoActivity, mock.Anything, mock.Anything).
+		Run(record("DeepenRepoActivity")).Return(env.DeepenRepoOutput{}, nil).Maybe()
+	s.env.OnActivity(env.DevPodUpActivity, mock.Anything, mock.Anything).
+		Run(record("DevPodUpActivity")).Return(nil).Maybe()
+	return rec
+}
+
+// TestIddWorkflowSetsUpLocalParentForRemoteSelection runs IddWorkflow with
+// Modal selected as the execution environment and asserts the top-level flow is
+// entirely server-local: the worktree is created via the local git worktree
+// activity off the requested start branch, its host path is persisted and
+// watched for direct intent edits, idd_state answers without touching the
+// filesystem, and no Modal activity is ever invoked.
+func (s *IddWorkflowTestSuite) TestIddWorkflowSetsUpLocalParentForRemoteSelection() {
+	repoDir := s.T().TempDir()
+	worktreeDir := s.T().TempDir()
+	startBranch := "main"
+
+	s.setupLocalParentMocks()
+	remote := s.recordRemoteActivities()
+
+	var localParams env.LocalEnvParams
+	s.env.OnActivity(env.NewLocalGitWorktreeActivity, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			localParams = args.Get(1).(env.LocalEnvParams)
+		}).
+		Return(env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: worktreeDir}}, nil).Once()
+
+	var persistedWorktree domain.Worktree
+	var srvActivities srv.Activities
+	s.env.OnActivity(srvActivities.PersistWorktree, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			persistedWorktree = args.Get(1).(domain.Worktree)
+		}).Return(nil).Maybe()
+
+	var watchInput IddWatchEditIdleInput
+	// Failing the watcher parks its loop in the retry sleep, so the test can
+	// inspect the input it was launched with without driving orchestrator turns.
+	s.env.OnActivity(IddWatchEditIdleActivity, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			watchInput = args.Get(1).(IddWatchEditIdleInput)
+		}).Return(IddWatchEditIdleResult{}, errors.New("watcher stopped for test")).Maybe()
+
+	var queriedState IddState
+	var queryErr error
+	// The delay is in skipped workflow time, and is long enough that parent
+	// setup, including its retrying LLM branch-name calls, has finished.
+	s.env.RegisterDelayedCallback(func() {
+		encoded, err := s.env.QueryWorkflow(QueryNameIddState)
+		if err != nil {
+			queryErr = err
+		} else {
+			queryErr = encoded.Get(&queriedState)
+		}
+		s.env.CancelWorkflow()
+	}, 2*time.Minute)
+
+	s.env.ExecuteWorkflow(IddWorkflow, IddWorkflowInput{
+		WorkspaceId: "test-workspace",
+		RepoDir:     repoDir,
+		TaskId:      "task_1",
+		Title:       "Remote intent",
+		IddOptions: IddOptions{
+			EnvType:           env.EnvTypeModal,
+			RepoMode:          env.RepoModeInPlace,
+			StartBranch:       &startBranch,
+			ContextGatherType: ContextGatherTypeExplore,
+		},
+	})
+
+	s.True(s.env.IsWorkflowCompleted())
+
+	s.Equal(repoDir, localParams.RepoDir)
+	s.Require().NotNil(localParams.StartBranch)
+	s.Equal(startBranch, *localParams.StartBranch)
+	s.Equal(worktreeDir, persistedWorktree.WorkingDirectory)
+
+	s.NoError(queryErr)
+	s.Equal(startBranch, queriedState.DefaultTargetBranch)
+
+	s.Equal(worktreeDir, watchInput.WorktreeDir)
+	s.Equal("intent", watchInput.WatchSubdir)
+
+	s.Empty(remote.calls, "a local IDD parent must not reach the selected remote environment")
+}
+
+// TestIddWorkflowLegacyHistoryUsesSelectedParentEnv verifies histories recorded
+// before the local-parent change still provision the selected environment for
+// the top-level worktree, so their replays keep the original activity sequence.
+func (s *IddWorkflowTestSuite) TestIddWorkflowLegacyHistoryUsesSelectedParentEnv() {
+	repoDir := s.T().TempDir()
+
+	s.setupLocalParentMocks()
+	s.env.OnGetVersion("idd-local-parent", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+
+	localWorktreeCalls := 0
+	s.env.OnActivity(env.NewLocalGitWorktreeActivity, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { localWorktreeCalls++ }).
+		Return(env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: repoDir}}, nil).Maybe()
+
+	var sandboxInput env.CreateSandboxInput
+	// The sandbox creation failing keeps the legacy path short: reaching it at
+	// all is what distinguishes it from the forced-local parent.
+	s.env.OnActivity(env.CreateSandboxActivity, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			sandboxInput = args.Get(1).(env.CreateSandboxInput)
+		}).Return(env.CreateSandboxOutput{}, errors.New("modal unavailable in test")).Maybe()
+
+	s.env.ExecuteWorkflow(IddWorkflow, IddWorkflowInput{
+		WorkspaceId: "test-workspace",
+		RepoDir:     repoDir,
+		TaskId:      "task_1",
+		Title:       "Remote intent",
+		IddOptions: IddOptions{
+			EnvType:  env.EnvTypeModal,
+			RepoMode: env.RepoModeInPlace,
+		},
+	})
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.Error(s.env.GetWorkflowError())
+	s.Equal(env.EnvTypeModal, sandboxInput.EnvType)
+	s.Equal(0, localWorktreeCalls, "legacy histories must not switch to a local parent worktree")
 }

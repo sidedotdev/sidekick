@@ -170,6 +170,23 @@ type IddState struct {
 	PendingSubtaskNotices []string `json:"-"`
 }
 
+// iddParentSetupOptions returns the env type and repo mode used to provision
+// the top-level IDD worktree. It is always server-local so intent authoring,
+// the committed baseline, git operations, finishing and the edit watcher all
+// act on a path that exists on the sidekick host; the environment selected by
+// the user applies only to implementation children (see runIntentSubtask).
+// Explicit values are returned so repo-config or override defaults can't
+// reintroduce a remote parent. Gated by version because histories recorded
+// while the parent could be remote provisioned that sandbox here, and replays
+// must keep their original activity sequence; such in-flight workflows are
+// deliberately not migrated.
+func iddParentSetupOptions(ctx workflow.Context, selected IddOptions) (envType string, repoMode string) {
+	if workflow.GetVersion(ctx, "idd-local-parent", workflow.DefaultVersion, 1) >= 1 {
+		return string(env.EnvTypeLocal), string(env.RepoModeWorktree)
+	}
+	return string(selected.EnvType), string(selected.RepoMode)
+}
+
 // IddWorkflow drives the Intent Driven Development canvas: it sets up a worktree
 // for editing intent files, then stays alive listening for signals to commit
 // the current intent state and spawn sub-tasks that implement it. Each sub-task
@@ -207,21 +224,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		return *state, nil
 	})
 
-	// The top-level IDD worktree is always server-local so intent authoring,
-	// the committed baseline, git operations, finishing and the edit watcher
-	// all act on a path that exists on the sidekick host. The selected
-	// environment applies only to implementation children (see
-	// runIntentSubtask). Explicit values are passed so repo-config/override
-	// defaults can't reintroduce a remote parent. Gated by version because
-	// histories recorded while the parent could be remote provisioned that
-	// sandbox here, and replays must keep their original activity sequence;
-	// such in-flight workflows are deliberately not migrated.
-	parentEnvType := string(input.EnvType)
-	parentRepoMode := string(input.RepoMode)
-	if workflow.GetVersion(ctx, "idd-local-parent", workflow.DefaultVersion, 1) >= 1 {
-		parentEnvType = string(env.EnvTypeLocal)
-		parentRepoMode = string(env.RepoModeWorktree)
-	}
+	parentEnvType, parentRepoMode := iddParentSetupOptions(ctx, input.IddOptions)
 
 	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, parentEnvType, parentRepoMode, input.StartBranch, input.Title, input.ConfigOverrides)
 	if err != nil {
@@ -572,7 +575,11 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		flowId = "flow_" + ksuidSideEffect(dCtx)
 	}
 
-	if workflow.GetVersion(dCtx, "idd-subtask-generated-title", workflow.DefaultVersion, 1) >= 1 {
+	// A redundant second title generation used to run here. It is retained
+	// only for sub-tasks whose histories already recorded that extra LLM
+	// sequence, since dropping it outright would break their replay.
+	if workflow.GetVersion(dCtx, "idd-subtask-single-title-generation", workflow.DefaultVersion, 1) < 1 &&
+		workflow.GetVersion(dCtx, "idd-subtask-generated-title", workflow.DefaultVersion, 1) >= 1 {
 		if generatedTitle, titleErr := generateIntentSubtaskTitle(dCtx, reqInfo.Commit, reqInfo.Diff); titleErr != nil {
 			log.Error("Failed to generate intent sub-task title", "Error", titleErr)
 		} else {
