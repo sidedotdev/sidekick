@@ -319,6 +319,22 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 		return fmt.Errorf("worktree path is required to finalize merge commit")
 	}
 
+	// A retry that finds no merge in progress means an earlier attempt already
+	// created the merge commit; committing again would produce a spurious
+	// single-parent commit, so only the backup sync is retried.
+	if isActivityRetry(ctx) {
+		inProgress, err := GitMergeInProgressActivity(ctx, envContainer, GitMergeInProgressParams{WorktreePath: dir})
+		if err != nil {
+			return err
+		}
+		if !inProgress {
+			if err := syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
+				return fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
+			}
+			return nil
+		}
+	}
+
 	committerName, committerEmail := params.CommitterName, params.CommitterEmail
 	if committerName == "" || committerEmail == "" {
 		envType := envContainer.Env.GetType()
@@ -363,6 +379,11 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 	if out.ExitStatus != 0 {
 		return fmt.Errorf("git commit for merge finalization failed: %s", strings.TrimSpace(out.Stderr+out.Stdout))
 	}
+
+	if err := syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
+		return fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
+	}
+
 	return nil
 }
 

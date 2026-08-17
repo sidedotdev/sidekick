@@ -55,11 +55,25 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 		return "", fmt.Errorf("failed to git commit: %v", err)
 	}
 	if gitCommitOutput.ExitStatus != 0 {
-		if params.IgnoreNothingToCommit && isNothingToCommitOutput(gitCommitOutput.Stdout, gitCommitOutput.Stderr) {
+		nothingToCommit := isNothingToCommitOutput(gitCommitOutput.Stdout, gitCommitOutput.Stderr)
+		// On a retry there is nothing left to commit precisely because an
+		// earlier attempt already committed, so only the backup remains.
+		if nothingToCommit && isActivityRetry(ctx) {
+			if err := syncFlowBranchBackup(ctx, envContainer, ""); err != nil {
+				return "", fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
+			}
+			return gitCommitOutput.Stdout, nil
+		}
+		if params.IgnoreNothingToCommit && nothingToCommit {
 			return gitCommitOutput.Stdout, nil
 		}
 		return "", fmt.Errorf("git commit failed: %s", gitCommitOutput.Stdout+"\n"+gitCommitOutput.Stderr)
 	}
+
+	if err := syncFlowBranchBackup(ctx, envContainer, ""); err != nil {
+		return "", fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
+	}
+
 	return gitCommitOutput.Stdout, nil
 }
 
