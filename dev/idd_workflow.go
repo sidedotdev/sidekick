@@ -765,11 +765,11 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		}
 	}
 
-	err := workflow.ExecuteActivity(dCtx, git.GitCommitActivity, *dCtx.EnvContainer, git.GitCommitParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitActivity, nil, *dCtx.EnvContainer, git.GitCommitParams{
 		CommitMessage:         commitMessage,
 		CommitAll:             true,
 		IgnoreNothingToCommit: true,
-	}).Get(dCtx, nil)
+	})
 	if err != nil {
 		return IntentRequirementsInfo{}, fmt.Errorf("failed to commit intent: %w", err)
 	}

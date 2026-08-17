@@ -159,12 +159,15 @@ func GitCommit(eCtx flow_action.ExecContext, commitMessage string) error {
 
 	commitParams := GitCommitParams{
 		CommitMessage: commitMessage,
+		// An empty index is an expected outcome here, not a failure worth
+		// prompting the user about via the retry mechanism.
+		IgnoreNothingToCommit: true,
 	}
 	if eCtx.GlobalState != nil {
 		commitParams.CommitterName = eCtx.GlobalState.GetStringValue("committerName")
 		commitParams.CommitterEmail = eCtx.GlobalState.GetStringValue("committerEmail")
 	}
-	commitErr := workflow.ExecuteActivity(eCtx, GitCommitActivity, eCtx.EnvContainer, commitParams).Get(eCtx, nil)
+	commitErr := flow_action.PerformActivityWithUserRetry(eCtx, "git_commit", GitCommitActivity, nil, eCtx.EnvContainer, commitParams)
 	if commitErr != nil {
 		if !strings.Contains(commitErr.Error(), "nothing to commit") {
 			return fmt.Errorf("failed to commit changes: %v", commitErr)

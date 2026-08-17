@@ -1,6 +1,8 @@
 package dev
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -18,6 +20,7 @@ import (
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/utils"
 )
 
@@ -678,4 +681,121 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesContextGatherTypeTo
 	s.Equal("/tmp/repo", capturedInput.RepoDir)
 	s.Require().NotNil(capturedInput.StartBranch)
 	s.Equal(iddBranch, *capturedInput.StartBranch)
+}
+
+// commitIntentWorkflow drives commitIntent directly with a ready DevContext so
+// commit failure handling can be exercised without the full IDD signal loop.
+func (s *IddWorkflowTestSuite) commitIntentWorkflow(disableHumanInTheLoop bool) func(ctx workflow.Context) (IntentRequirementsInfo, error) {
+	return func(ctx workflow.Context) (IntentRequirementsInfo, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				WorkspaceId: "test-workspace",
+				Context:     ctx,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
+				GlobalState: gs,
+				Secrets:     &secret_manager.SecretManagerContainer{SecretManager: &secret_manager.EnvSecretManager{}},
+				EnvContainer: &env.EnvContainer{
+					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
+				},
+				DisableHumanInTheLoop: disableHumanInTheLoop,
+			},
+			Worktree:   &domain.Worktree{Name: "side/idd-worktree"},
+			RepoConfig: common.RepoConfig{},
+		}
+		return commitIntent(dCtx, "My Intent", false)
+	}
+}
+
+// setupCommitIntentUserRetryMocks stubs the persistence activities used when a
+// failed activity prompts the user to retry.
+func (s *IddWorkflowTestSuite) setupCommitIntentUserRetryMocks() {
+	var fa *flow_action.FlowActivities
+	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	var srvActivities srv.Activities
+	s.env.OnActivity(srvActivities.GetFlow, mock.Anything, mock.Anything, mock.Anything).Return(domain.Flow{}, nil).Maybe()
+	s.env.OnActivity(srvActivities.PersistFlow, mock.Anything, mock.Anything).Return(nil).Maybe()
+}
+
+// TestCommitIntentRetriesCommitAfterUserContinue verifies a failing intent
+// commit (e.g. a failed flow-branch backup sync) is surfaced through the
+// user-controlled retry mechanism and re-executed when the user continues,
+// rather than aborting the sub-task outright.
+func (s *IddWorkflowTestSuite) TestCommitIntentRetriesCommitAfterUserContinue() {
+	s.setupCommitIntentUserRetryMocks()
+
+	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
+
+	commitCalls := 0
+	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, envContainer env.EnvContainer, params git.GitCommitParams) (string, error) {
+			commitCalls++
+			if commitCalls == 1 {
+				return "", errors.New("commit succeeded but failed to sync flow branch to local repo")
+			}
+			return "commit-sha", nil
+		},
+	)
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "abc123\n", ExitStatus: 0}, nil).Once()
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 0 && in.Args[0] == "show"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
+
+	child := s.commitIntentWorkflow(false)
+	s.env.RegisterWorkflowWithOptions(child, workflow.RegisterOptions{Name: "commitIntentChild"})
+
+	parent := func(ctx workflow.Context) (IntentRequirementsInfo, error) {
+		signalCh := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			var req flow_action.RequestForUser
+			signalCh.Receive(ctx, &req)
+			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.UserResponseSignalName(req.FlowActionId), flow_action.UserResponse{
+				FlowActionId: req.FlowActionId,
+			}).Get(ctx, nil)
+		})
+
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "commit-intent-child",
+		})
+		var info IntentRequirementsInfo
+		err := workflow.ExecuteChildWorkflow(childCtx, "commitIntentChild").Get(ctx, &info)
+		return info, err
+	}
+	s.env.RegisterWorkflow(parent)
+
+	s.env.ExecuteWorkflow(parent)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var info IntentRequirementsInfo
+	s.NoError(s.env.GetWorkflowResult(&info))
+	s.Equal("abc123", info.Commit)
+	s.Equal(2, commitCalls, "the commit activity should be retried after the user continues")
+}
+
+// TestCommitIntentSurfacesCommitFailureWithoutHumanInTheLoop verifies commit
+// failures are never swallowed: with human-in-the-loop disabled the error
+// propagates instead of prompting for retry.
+func (s *IddWorkflowTestSuite) TestCommitIntentSurfacesCommitFailureWithoutHumanInTheLoop() {
+	s.setupCommitIntentUserRetryMocks()
+
+	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
+	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+		"", errors.New("commit succeeded but failed to sync flow branch to local repo"),
+	).Once()
+
+	wrapper := s.commitIntentWorkflow(true)
+	s.env.RegisterWorkflow(wrapper)
+
+	s.env.ExecuteWorkflow(wrapper)
+	s.True(s.env.IsWorkflowCompleted())
+	s.Require().Error(s.env.GetWorkflowError())
+	s.Contains(s.env.GetWorkflowError().Error(), "failed to sync flow branch to local repo")
 }
