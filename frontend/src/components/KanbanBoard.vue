@@ -29,7 +29,7 @@
       />
       <button class="search-clear" @click="clearSearch" title="Clear search">×</button>
     </div>
-    <div v-if="projects.length > 0" class="board-column-headings">
+    <div class="board-column-headings">
       <h2>
         You
         <button type="button" class="mini-button" title="Draft task" @click="addTask('human')">+</button>
@@ -129,7 +129,7 @@
       v-else
       :tasks="unassignedTasks"
       :new-task-shortcut-label="newTaskShortcutLabel"
-      :show-headings="true"
+      :show-headings="false"
       @add-task="(agentType: AgentType) => addTask(agentType)"
       @archive-finished="confirmArchiveFinished()"
       @refresh="refresh"
