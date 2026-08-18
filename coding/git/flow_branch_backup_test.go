@@ -42,6 +42,9 @@ func runActivityWithRetries(t *testing.T, fn func(ctx context.Context) error) er
 	t.Helper()
 	var suite testsuite.WorkflowTestSuite
 	testEnv := suite.NewTestWorkflowEnvironment()
+	// the activity under test runs real git commands, which can exceed the
+	// default wall-clock test timeout across retries
+	testEnv.SetTestTimeout(time.Minute)
 	testEnv.RegisterActivityWithOptions(fn, activity.RegisterOptions{Name: "activityUnderTest"})
 
 	retryingWorkflow := func(ctx workflow.Context) error {
