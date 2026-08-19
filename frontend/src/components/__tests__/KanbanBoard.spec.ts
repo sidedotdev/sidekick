@@ -265,15 +265,15 @@ describe('KanbanBoard', () => {
       })
     })
 
-    it('shows headings within the columns when there are no projects', async () => {
+    it('shows the column headings at the top when there are no projects', async () => {
       const wrapper = await mountBoard()
 
-      expect(wrapper.find('.board-column-headings').exists()).toBe(false)
-      const columnHeadingTexts = wrapper.findAll('.kanban-column h2').map(h => h.text())
-      expect(columnHeadingTexts.length).toBe(3)
-      expect(columnHeadingTexts[0]).toContain('You')
-      expect(columnHeadingTexts[1]).toContain('AI Sidekick')
-      expect(columnHeadingTexts[2]).toContain('Finished')
+      const headings = wrapper.find('.board-column-headings')
+      expect(headings.exists()).toBe(true)
+      expect(headings.text()).toContain('You')
+      expect(headings.text()).toContain('AI Sidekick')
+      expect(headings.text()).toContain('Finished')
+      expect(wrapper.findAll('.kanban-column h2').length).toBe(0)
     })
 
     it('renders grouped sections without column headings but with visible add-task buttons', async () => {

@@ -1014,6 +1014,19 @@ func (e *ModalEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
 	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
 }
 
+var _ FlowBranchBackupSyncer = (*ModalEnv)(nil)
+
+func (e *ModalEnv) SyncFlowBranchToLocal(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync flow branch to local: ModalEnv has no LocalRepoDir")
+	}
+	sshArgs, err := e.baseSSHArgs(ctx)
+	if err != nil {
+		return err
+	}
+	return syncFlowBranchToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+}
+
 var _ TargetBranchSyncer = (*ModalEnv)(nil)
 
 func (e *ModalEnv) SyncBranchToRemote(ctx context.Context, branch string) error {

@@ -244,12 +244,12 @@ func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) er
 		msg = fmt.Sprintf("Merge branch %s\n\n%s", params.SourceBranchName, msg)
 	}
 
-	return workflow.ExecuteActivity(dCtx, git.GitCommitMergeActivity, *dCtx.EnvContainer, git.GitCommitMergeParams{
+	return flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitMergeActivity, nil, *dCtx.EnvContainer, git.GitCommitMergeParams{
 		WorktreePath:   params.WorktreePath,
 		CommitMessage:  msg,
 		CommitterName:  params.CommitterName,
 		CommitterEmail: params.CommitterEmail,
-	}).Get(dCtx, nil)
+	})
 }
 
 // recreateConflictOnOwnWorktree resets a target-side conflict situation:
