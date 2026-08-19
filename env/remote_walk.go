@@ -317,6 +317,7 @@ func ensureLocalHasCommit(ctx context.Context, sshEnv SSHCapableEnv, localRepo, 
 }
 
 func sshFetchCommitDefault(ctx context.Context, sshEnv SSHCapableEnv, localRepo, sha, remoteRoot string) error {
+	HoldReverseForwards(ctx, sshEnv)
 	sshArgs, err := sshEnv.SSHArgs(ctx)
 	if err != nil {
 		return fmt.Errorf("ssh args: %w", err)

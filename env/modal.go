@@ -417,53 +417,56 @@ func modalSSHControlPath(sandboxName string) string {
 	return filepath.Join(os.TempDir(), "modal-ssh-"+name)
 }
 
-// modalSSHProxyCommandArgs returns ssh options routing the connection through
-// an HTTP CONNECT proxy when the standard proxy environment variables
-// (HTTPS_PROXY/NO_PROXY) apply to the tunnel host. OpenSSH ignores those
-// variables, resolves DNS itself and dials directly, so on proxy-only
-// networks the ephemeral *.modal.host tunnel endpoints are unreachable
-// without this; the CONNECT tunnel also delegates hostname resolution to the
-// proxy.
-func modalSSHProxyCommandArgs(sshHost string, sshPort int) []string {
+// modalHTTPConnectProxy returns the "host:port" of the HTTP CONNECT proxy that
+// should carry the connection, or "" to dial the tunnel host directly. It
+// applies when the standard proxy environment variables (HTTPS_PROXY/NO_PROXY)
+// cover the tunnel host: OpenSSH ignores those variables, resolves DNS itself
+// and dials directly, so on proxy-only networks the ephemeral *.modal.host
+// tunnel endpoints are unreachable without this; the CONNECT tunnel also
+// delegates hostname resolution to the proxy.
+func modalHTTPConnectProxy(sshHost string, sshPort int) string {
 	proxyURL, err := httpproxy.FromEnvironment().ProxyFunc()(&url.URL{
 		Scheme: "https",
 		Host:   net.JoinHostPort(sshHost, strconv.Itoa(sshPort)),
 	})
-	if err != nil || proxyURL == nil || proxyURL.Host == "" {
-		return nil
+	if err != nil || proxyURL == nil {
+		return ""
 	}
-	return []string{"-o", "ProxyCommand=nc -X connect -x " + proxyURL.Host + " %h %p"}
+	return proxyURL.Host
 }
 
-// modalSSHArgs builds ssh CLI args (ending with the destination) for reaching
-// a Modal sandbox's sshd through its Modal tunnel endpoint. Host key checking
-// is disabled because sandbox host keys are generated at boot and the tunnel
-// endpoint is ephemeral; the sandbox is authenticated by possession of the
-// tunnel address and our injected key instead.
-func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string) []string {
-	args := []string{
-		"-o", "ControlMaster=auto",
-		"-S", modalSSHControlPath(sandboxName),
+// modalSSHConnConfig describes how to reach a Modal sandbox's sshd through its
+// Modal tunnel endpoint. Host key checking is disabled because sandbox host
+// keys are generated at boot and the tunnel endpoint is ephemeral; the sandbox
+// is authenticated by possession of the tunnel address and our injected key
+// instead.
+func modalSSHConnConfig(sandboxName, sshHost string, sshPort int, identityFile string) SSHConnConfig {
+	return SSHConnConfig{
+		Host:                 sshHost,
+		Port:                 sshPort,
+		User:                 "root",
+		IdentityFiles:        []string{identityFile},
+		HostKeyPolicy:        SSHHostKeyAcceptAny,
+		BatchMode:            true,
+		LogLevel:             "ERROR",
+		ConnectTimeout:       10 * time.Second,
+		DialAttempts:         1,
+		KeepaliveInterval:    10 * time.Second,
+		KeepaliveMaxFailures: 3,
+		HTTPConnectProxy:     modalHTTPConnectProxy(sshHost, sshPort),
+		ControlPath:          modalSSHControlPath(sandboxName),
 		// A long ControlPersist is safe billing-wise: the in-sandbox idle
 		// watchdog ignores idle control masters (sshd connections with no
 		// session children), so a persisting master doesn't delay idle
 		// detection.
-		"-o", "ControlPersist=3600",
-		"-o", "BatchMode=yes",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "ConnectTimeout=10",
-		"-o", "ConnectionAttempts=1",
-		"-o", "ServerAliveInterval=10",
-		"-o", "ServerAliveCountMax=3",
-		"-o", "LogLevel=ERROR",
+		ControlPersist: time.Hour,
 	}
-	args = append(args, modalSSHProxyCommandArgs(sshHost, sshPort)...)
-	return append(args,
-		"-i", identityFile,
-		"-p", strconv.Itoa(sshPort),
-		"root@"+sshHost,
-	)
+}
+
+// modalSSHArgs builds ssh CLI args (ending with the destination) for the
+// legacy transport.
+func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string) []string {
+	return modalSSHConnConfig(sandboxName, sshHost, sshPort, identityFile).LegacyArgs()
 }
 
 // modalExecCommand runs a shell command inside the named sandbox through
@@ -991,7 +994,7 @@ func (e *ModalEnv) SyncMergeResultToLocal(ctx context.Context, branch string) er
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync merge result to local: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.baseSSHArgs(ctx)
+	sshArgs, err := e.SSHArgs(ctx)
 	if err != nil {
 		return err
 	}
@@ -1004,7 +1007,7 @@ func (e *ModalEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync git ref to local: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.baseSSHArgs(ctx)
+	sshArgs, err := e.SSHArgs(ctx)
 	if err != nil {
 		return err
 	}
@@ -1017,7 +1020,7 @@ func (e *ModalEnv) SyncBranchToRemote(ctx context.Context, branch string) error 
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync branch to remote: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.baseSSHArgs(ctx)
+	sshArgs, err := e.SSHArgs(ctx)
 	if err != nil {
 		return err
 	}

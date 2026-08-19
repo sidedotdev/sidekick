@@ -1265,8 +1265,14 @@ func TestStartDevRun_NoExistingInstanceStartsFresh(t *testing.T) {
 // mockSSHEnv is a minimal SSHCapableEnv used to verify buildDevRunCmd's
 // SSH wrapping behavior without requiring real remote tooling.
 type mockSSHEnv struct {
-	workingDir string
-	sshArgs    []string
+	workingDir      string
+	sshArgs         []string
+	ensuredForwards int
+}
+
+func (m *mockSSHEnv) EnsureReverseForwards(ctx context.Context) error {
+	m.ensuredForwards++
+	return nil
 }
 
 func (m *mockSSHEnv) GetType() env.EnvType { return env.EnvTypeDevPod }
@@ -1293,6 +1299,10 @@ func (m *mockSSHEnv) CreateTemp(ctx context.Context, dir, pattern string) (strin
 	return "", nil
 }
 func (m *mockSSHEnv) SSHArgs(ctx context.Context) ([]string, error) { return m.sshArgs, nil }
+
+func (m *mockSSHEnv) SSHConnConfig(ctx context.Context) (env.SSHConnConfig, error) {
+	return env.SSHConnConfig{Host: "mock-host"}, nil
+}
 
 func TestBuildDevRunCmd_LocalEnv(t *testing.T) {
 	t.Parallel()
@@ -1358,4 +1368,8 @@ func TestBuildDevRunCmd_SSHCapableWrapping(t *testing.T) {
 	assert.Contains(t, joined, "export 'FOO=bar'")
 	assert.Contains(t, joined, "cd '/remote/repo/sub'")
 	assert.Contains(t, joined, "exec sh -c 'echo $FOO'")
+
+	assert.NotContains(t, joined, "-R ", "reverse forwards belong to the transport, not to this invocation")
+	assert.Equal(t, 1, sshEnv.ensuredForwards,
+		"a dev run outlives its ssh invocation, so its forwards must be held by the transport")
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -334,32 +335,44 @@ func (openShellSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteS
 	return openShellDeleteSandbox(ctx, input.SandboxName)
 }
 
-// openShellSSHArgs runs `openshell sandbox ssh-config <name>`, parses the
-// resulting SSH config block, and returns ssh CLI arguments with ControlMaster
-// multiplexing enabled.
-func openShellSSHArgs(ctx context.Context, sandboxName string) ([]string, error) {
+// openShellSSHConnConfig runs `openshell sandbox ssh-config <name>` and parses
+// the resulting SSH config block into a typed connection config.
+func openShellSSHConnConfig(ctx context.Context, sandboxName string) (SSHConnConfig, error) {
 	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: ".",
 		Command:    "openshell",
 		Args:       []string{"sandbox", "ssh-config", sandboxName},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("openshell sandbox ssh-config failed: %w", err)
+		return SSHConnConfig{}, fmt.Errorf("openshell sandbox ssh-config failed: %w", err)
 	}
 	if output.ExitStatus != 0 {
-		return nil, fmt.Errorf("openshell sandbox ssh-config exited with status %d: %s", output.ExitStatus, output.Stderr)
+		return SSHConnConfig{}, fmt.Errorf("openshell sandbox ssh-config exited with status %d: %s", output.ExitStatus, output.Stderr)
 	}
 
-	return parseSSHConfigArgs(output.Stdout, sandboxName)
+	return parseSSHConnConfig(output.Stdout, sandboxName)
 }
 
-// parseSSHConfigArgs parses an OpenSSH config block and returns ssh CLI args
-// that pass all options explicitly via -o flags, so no ~/.ssh/config entry is
-// needed. The Host alias is used as the destination hostname.
-func parseSSHConfigArgs(configOutput string, sandboxName string) ([]string, error) {
-	var host string
-	var user string
-	var opts []string
+// openShellSSHArgs returns ssh CLI arguments for the sandbox, with
+// ControlMaster multiplexing enabled.
+func openShellSSHArgs(ctx context.Context, sandboxName string) ([]string, error) {
+	config, err := openShellSSHConnConfig(ctx, sandboxName)
+	if err != nil {
+		return nil, err
+	}
+	return config.LegacyArgs(), nil
+}
+
+// parseSSHConnConfig parses an OpenSSH config block into a typed connection
+// config. Directives it models become typed fields; the rest are carried
+// verbatim, since passing every option explicitly is what lets us connect
+// without a ~/.ssh/config entry. The Host alias is the destination hostname.
+func parseSSHConnConfig(configOutput string, sandboxName string) (SSHConnConfig, error) {
+	// Multiplexing gives fast reuse of a master connection to the sandbox.
+	config := SSHConnConfig{
+		ControlPath:           "/tmp/ssh-%r@%h:%p",
+		ControlPersistForever: true,
+	}
 
 	scanner := bufio.NewScanner(strings.NewReader(configOutput))
 	for scanner.Scan() {
@@ -375,33 +388,37 @@ func parseSSHConfigArgs(configOutput string, sandboxName string) ([]string, erro
 		key := parts[0]
 		value := strings.TrimSpace(parts[1])
 
-		switch key {
-		case "Host":
-			host = value
-		case "User":
-			user = value
+		// OpenSSH keywords are case-insensitive.
+		switch strings.ToLower(key) {
+		case "host":
+			config.Host = value
+		case "user":
+			config.User = value
+		case "port":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return SSHConnConfig{}, fmt.Errorf("invalid Port %q in ssh-config output for sandbox %s: %w", value, sandboxName, err)
+			}
+			config.Port = port
+		case "identityfile":
+			config.IdentityFiles = append(config.IdentityFiles, value)
 		default:
-			opts = append(opts, "-o", key+"="+value)
+			config.LegacyOptions = append(config.LegacyOptions, SSHOption{Key: key, Value: value})
 		}
 	}
 
-	if host == "" {
-		return nil, fmt.Errorf("no Host directive found in ssh-config output for sandbox %s", sandboxName)
+	if config.Host == "" {
+		return SSHConnConfig{}, fmt.Errorf("no Host directive found in ssh-config output for sandbox %s", sandboxName)
 	}
+	return config, nil
+}
 
-	// enable fast reuse of a master ssh connection to the sandbox
-	args := []string{
-		"-o", "ControlMaster=auto",
-		"-S", "/tmp/ssh-%r@%h:%p",
-		"-o", "ControlPersist=yes",
+// parseSSHConfigArgs renders the parsed connection config as ssh CLI args for
+// the legacy transport.
+func parseSSHConfigArgs(configOutput string, sandboxName string) ([]string, error) {
+	config, err := parseSSHConnConfig(configOutput, sandboxName)
+	if err != nil {
+		return nil, err
 	}
-	args = append(args, opts...)
-
-	dest := host
-	if user != "" {
-		dest = user + "@" + host
-	}
-	args = append(args, dest)
-
-	return args, nil
+	return config.LegacyArgs(), nil
 }

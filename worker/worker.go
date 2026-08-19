@@ -44,6 +44,8 @@ func (w *Worker) Stop() {
 	w.Worker.Stop()
 	env.CloseAllSharedSFTPConns()
 	env.CloseAllSharedAgentExecConns()
+	env.CloseAllReverseForwardHolders()
+	env.CloseAllNativeSSHClients()
 	if w.shutdownTracer != nil {
 		if err := w.shutdownTracer(context.Background()); err != nil {
 			log.Error().Err(err).Msg("Failed to shutdown telemetry tracer")

@@ -227,7 +227,7 @@ func TestModalVolumes(t *testing.T) {
 	}
 }
 
-func TestModalSSHProxyCommandArgs(t *testing.T) {
+func TestModalHTTPConnectProxy(t *testing.T) {
 	// Not parallel: subtests mutate proxy environment variables.
 	clearProxyEnv := func(t *testing.T) {
 		for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
@@ -237,14 +237,13 @@ func TestModalSSHProxyCommandArgs(t *testing.T) {
 
 	t.Run("no proxy configured", func(t *testing.T) {
 		clearProxyEnv(t)
-		assert.Empty(t, modalSSHProxyCommandArgs("tunnel.example.com", 443))
+		assert.Empty(t, modalHTTPConnectProxy("tunnel.example.com", 443))
 	})
 
 	t.Run("https proxy configured", func(t *testing.T) {
 		clearProxyEnv(t)
 		t.Setenv("HTTPS_PROXY", "http://192.0.2.1:8282")
-		args := modalSSHProxyCommandArgs("tunnel.example.com", 443)
-		require.Equal(t, []string{"-o", "ProxyCommand=nc -X connect -x 192.0.2.1:8282 %h %p"}, args)
+		require.Equal(t, "192.0.2.1:8282", modalHTTPConnectProxy("tunnel.example.com", 443))
 
 		// The proxy option must end up in the full ssh args, before the
 		// destination.
@@ -257,28 +256,36 @@ func TestModalSSHProxyCommandArgs(t *testing.T) {
 		clearProxyEnv(t)
 		t.Setenv("HTTPS_PROXY", "http://192.0.2.1:8282")
 		t.Setenv("NO_PROXY", "*.example.com")
-		assert.Empty(t, modalSSHProxyCommandArgs("tunnel.example.com", 443))
+		assert.Empty(t, modalHTTPConnectProxy("tunnel.example.com", 443))
 	})
 }
 
 func TestModalSSHArgs(t *testing.T) {
 	// Not parallel: proxy environment variables affect the generated args.
-	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
 		t.Setenv(name, "")
 	}
 	args := modalSSHArgs("side--myrepo", "tunnel.example.com", 12345, "/keys/id_ed25519")
-	require.NotEmpty(t, args)
-	// The destination must be last so remote commands can be appended directly.
-	assert.Equal(t, "root@tunnel.example.com", args[len(args)-1])
 
-	joined := strings.Join(args, " ")
-	assert.Contains(t, joined, "-p 12345")
-	assert.Contains(t, joined, "-i /keys/id_ed25519")
-	assert.Contains(t, joined, "StrictHostKeyChecking=no")
-	assert.Contains(t, joined, "BatchMode=yes")
-	assert.Contains(t, joined, "ControlMaster=auto")
-	assert.Contains(t, joined, "ConnectTimeout=10")
-	assert.Contains(t, joined, "ConnectionAttempts=1")
+	// Pinned exactly, order included: this argv is the contract the typed
+	// connection config has to reproduce for the legacy transport, and the
+	// destination must stay last so remote commands can be appended directly.
+	assert.Equal(t, []string{
+		"-o", "ControlMaster=auto",
+		"-S", modalSSHControlPath("side--myrepo"),
+		"-o", "ControlPersist=3600",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ConnectTimeout=10",
+		"-o", "ConnectionAttempts=1",
+		"-o", "ServerAliveInterval=10",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "LogLevel=ERROR",
+		"-i", "/keys/id_ed25519",
+		"-p", "12345",
+		"root@tunnel.example.com",
+	}, args)
 }
 
 func TestModalSFTPConnKey(t *testing.T) {

@@ -310,6 +310,7 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 func buildDevRunCmd(ctx context.Context, envContainer env.EnvContainer, command, workingDir string, envVars []string) (*exec.Cmd, error) {
 	if envContainer.Env != nil {
 		if sshEnv, ok := envContainer.Env.(env.SSHCapableEnv); ok {
+			env.HoldReverseForwards(ctx, sshEnv)
 			sshArgs, err := sshEnv.SSHArgs(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get SSH args for env: %w", err)

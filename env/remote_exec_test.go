@@ -115,29 +115,6 @@ func TestGetPooledAgentExecConn_SharesConnByKey(t *testing.T) {
 	c.Close()
 }
 
-func TestAgentExecConnKeyIncludesNormalizedPortForwards(t *testing.T) {
-	t.Parallel()
-
-	base := "modal:test-agent-forward-key"
-	withoutForwards := agentExecConnKey(base, nil)
-	withForwards := agentExecConnKey(base, []common.PortForwardConfig{
-		{HostPort: 8080},
-		{HostPort: 18855, ContainerPort: 28855},
-	})
-	reordered := agentExecConnKey(base, []common.PortForwardConfig{
-		{HostPort: 18855, ContainerPort: 28855},
-		{HostPort: 8080, ContainerPort: 8080},
-	})
-
-	assert.NotEqual(t, withoutForwards, withForwards)
-	assert.Equal(t, withForwards, reordered)
-	withoutConn := getPooledAgentExecConn(withoutForwards)
-	withConn := getPooledAgentExecConn(withForwards)
-	assert.NotSame(t, withoutConn, withConn, "different forwarding configurations need distinct SSH channels")
-	withoutConn.Close()
-	withConn.Close()
-}
-
 func TestAgentExecConn_CloseReapsProcessAndPool(t *testing.T) {
 	t.Parallel()
 	conn := getPooledAgentExecConn("test-agent-close")
@@ -272,27 +249,6 @@ func TestAgentExecOutput(t *testing.T) {
 		assert.NotEqual(t, 0, out.ExitStatus)
 		assert.Contains(t, out.Stderr, "exec: no such file")
 	})
-}
-
-func TestChannelSSHArgs(t *testing.T) {
-	t.Parallel()
-	in := []string{
-		"-o", "ControlMaster=auto",
-		"-S", "/tmp/sock",
-		"-o", "ControlPersist=3600",
-		"-o", "BatchMode=yes",
-		"-R", "127.0.0.1:8855:127.0.0.1:8855",
-		"host",
-	}
-	out := channelSSHArgs(in)
-	assert.Equal(t, []string{
-		"-o", "BatchMode=yes",
-		"-R", "127.0.0.1:8855:127.0.0.1:8855",
-		"host",
-	}, out, "channel args must drop the multiplexing master but keep reverse forwards")
-
-	indep := independentSSHArgs(in)
-	assert.NotContains(t, indep, "-R", "independent args must also drop reverse forwards")
 }
 
 // TestRunAgentExec_ContextCancellation verifies a canceled context returns

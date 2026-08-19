@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"sidekick/common"
-	"strings"
 	"testing"
 
 	"github.com/segmentio/ksuid"
@@ -34,16 +33,20 @@ func TestParseSSHConfigArgs(t *testing.T) {
 			sandboxName: "anointed-smelt",
 			checkArgs: func(t *testing.T, args []string) {
 				t.Helper()
-				joined := strings.Join(args, " ")
-				assert.Contains(t, joined, "-o ControlMaster=auto")
-				assert.Contains(t, joined, "-S /tmp/ssh-%r@%h:%p")
-				assert.Contains(t, joined, "-o ControlPersist=yes")
-				assert.Contains(t, joined, "-o StrictHostKeyChecking=no")
-				assert.Contains(t, joined, "-o UserKnownHostsFile=/dev/null")
-				assert.Contains(t, joined, "-o LogLevel=ERROR")
-				assert.Contains(t, joined, "-o ProxyCommand=")
-				// User is combined with host alias as user@host
-				assert.Contains(t, args, "sandbox@openshell-anointed-smelt")
+				// Pinned exactly, order included: directives are passed through
+				// in the order the provider emitted them, and the destination
+				// (user combined with the host alias) stays last.
+				assert.Equal(t, []string{
+					"-o", "ControlMaster=auto",
+					"-S", "/tmp/ssh-%r@%h:%p",
+					"-o", "ControlPersist=yes",
+					"-o", "StrictHostKeyChecking=no",
+					"-o", "UserKnownHostsFile=/dev/null",
+					"-o", "GlobalKnownHostsFile=/dev/null",
+					"-o", "LogLevel=ERROR",
+					"-o", "ProxyCommand=/Users/user/.local/bin/openshell ssh-proxy --gateway-name openshell --name anointed-smelt",
+					"sandbox@openshell-anointed-smelt",
+				}, args)
 			},
 		},
 		{
@@ -84,6 +87,58 @@ func TestParseSSHConfigArgs(t *testing.T) {
 			tt.checkArgs(t, args)
 		})
 	}
+}
+
+func TestParseSSHConnConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("models what it can and carries the rest", func(t *testing.T) {
+		t.Parallel()
+		config, err := parseSSHConnConfig(`Host openshell-anointed-smelt
+    User sandbox
+    Port 2222
+    IdentityFile /keys/a
+    IdentityFile /keys/b
+    StrictHostKeyChecking no
+    ProxyCommand openshell ssh-proxy --name anointed-smelt`, "anointed-smelt")
+		require.NoError(t, err)
+
+		assert.Equal(t, "openshell-anointed-smelt", config.Host)
+		assert.Equal(t, "sandbox", config.User)
+		assert.Equal(t, 2222, config.Port)
+		assert.Equal(t, []string{"/keys/a", "/keys/b"}, config.IdentityFiles)
+		assert.Equal(t, []SSHOption{
+			{Key: "StrictHostKeyChecking", Value: "no"},
+			{Key: "ProxyCommand", Value: "openshell ssh-proxy --name anointed-smelt"},
+		}, config.LegacyOptions, "unmodeled directives keep their order")
+
+		require.Error(t, config.ValidateNative(), "a carried ProxyCommand must block native dialing")
+	})
+
+	t.Run("directive keywords are case-insensitive", func(t *testing.T) {
+		t.Parallel()
+		config, err := parseSSHConnConfig("host alias\n  user sandbox\n  PORT 2200\n  identityfile /keys/a", "s")
+		require.NoError(t, err)
+
+		assert.Equal(t, "alias", config.Host)
+		assert.Equal(t, "sandbox", config.User)
+		assert.Equal(t, 2200, config.Port)
+		assert.Equal(t, []string{"/keys/a"}, config.IdentityFiles)
+		assert.Empty(t, config.LegacyOptions)
+	})
+
+	t.Run("an unusable port is rejected rather than dropped", func(t *testing.T) {
+		t.Parallel()
+		_, err := parseSSHConnConfig("Host alias\n  Port not-a-number", "s")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Port")
+	})
+
+	t.Run("no host directive", func(t *testing.T) {
+		t.Parallel()
+		_, err := parseSSHConnConfig("User sandbox", "s")
+		require.Error(t, err)
+	})
 }
 
 func TestSandboxAlreadyExists(t *testing.T) {

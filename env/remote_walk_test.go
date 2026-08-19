@@ -168,6 +168,10 @@ func (f *fakeSSHEnv) SSHArgs(ctx context.Context) ([]string, error) {
 	return []string{"-o", "BatchMode=yes", "fake-host", "--"}, nil
 }
 
+func (f *fakeSSHEnv) SSHConnConfig(ctx context.Context) (SSHConnConfig, error) {
+	return SSHConnConfig{Host: "fake-host", BatchMode: true, LegacyCommandSeparator: true}, nil
+}
+
 // FetchCommitForWalk fetches via the file:// transport pointing at the
 // stand-in "remote" repo (which is actually a local checkout). This lets
 // the gitwalk-over-ssh code be exercised end-to-end without a real ssh

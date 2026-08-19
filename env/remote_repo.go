@@ -535,6 +535,7 @@ func SyncRepoToRemoteActivity(ctx context.Context, input SyncRepoToRemoteInput) 
 	if !ok {
 		return SyncRepoToRemoteOutput{}, fmt.Errorf("env type %s does not support SSH-based repo sync", input.EnvContainer.Env.GetType())
 	}
+	HoldReverseForwards(ctx, sshEnv)
 	sshArgs, err := sshEnv.SSHArgs(ctx)
 	if err != nil {
 		return SyncRepoToRemoteOutput{}, fmt.Errorf("failed to get SSH args: %w", err)
@@ -597,6 +598,7 @@ func DeepenRepoActivity(ctx context.Context, input DeepenRepoInput) (DeepenRepoO
 	if !ok {
 		return DeepenRepoOutput{}, fmt.Errorf("env type %s does not support SSH-based repo deepening", input.EnvContainer.Env.GetType())
 	}
+	HoldReverseForwards(ctx, sshEnv)
 	sshArgs, err := sshEnv.SSHArgs(ctx)
 	if err != nil {
 		return DeepenRepoOutput{}, fmt.Errorf("failed to get SSH args: %w", err)

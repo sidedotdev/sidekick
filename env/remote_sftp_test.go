@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -261,6 +262,90 @@ func TestSftpConn_ReconnectAfterStaleFailureReusesReplacement(t *testing.T) {
 	assert.Same(t, replacementClient, sc.client)
 }
 
+// primedSFTPTransport returns a legacy transport whose pooled connection is
+// already backed by an in-process SFTP server, so the operation-scoped path
+// can be exercised end to end without any ssh process chain.
+func primedSFTPTransport(t *testing.T, key string) SSHTransport {
+	t.Helper()
+	conn := getPooledSFTPConn(key)
+	conn.mu.Lock()
+	conn.client = newInMemorySFTPClient(t)
+	conn.mu.Unlock()
+	t.Cleanup(conn.Close)
+	return &legacySSHTransport{key: key}
+}
+
+func TestSFTPHelpersOverTransport(t *testing.T) {
+	t.Parallel()
+
+	transport := primedSFTPTransport(t, "test:sftp-helpers-over-transport")
+	ctx := context.Background()
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "nested", "deep")
+
+	require.NoError(t, sftpMkdirAll(ctx, transport, nested, 0o755))
+	info, err := sftpStat(ctx, transport, nested)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+
+	file := filepath.Join(nested, "a.txt")
+	want := []byte("hello sftp")
+	require.NoError(t, sftpWriteFile(ctx, transport, file, want, 0o640))
+
+	got, err := sftpReadFile(ctx, transport, file)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	info, err = sftpStat(ctx, transport, file)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), info.Mode().Perm(), "write must apply the requested mode")
+
+	entries, err := sftpReadDir(ctx, transport, nested)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "a.txt", entries[0].Name())
+
+	tmp, err := sftpCreateTemp(ctx, transport, dir, "tmp-*.log")
+	require.NoError(t, err)
+	assert.Equal(t, dir, filepath.Dir(tmp))
+	assert.True(t, strings.HasPrefix(filepath.Base(tmp), "tmp-"), "pattern prefix must survive: %s", tmp)
+	assert.True(t, strings.HasSuffix(tmp, ".log"), "pattern suffix must survive: %s", tmp)
+	_, err = sftpStat(ctx, transport, tmp)
+	require.NoError(t, err)
+
+	require.NoError(t, sftpRemove(ctx, transport, file))
+	_, err = sftpStat(ctx, transport, file)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestSFTPFailureWarrantsReconnect(t *testing.T) {
+	t.Parallel()
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		op   SFTPOp
+		want bool
+	}{
+		{"dropped session", context.Background(), errors.New("connection lost"), SFTPOp{Name: "read"}, true},
+		{"missing path", context.Background(), fmt.Errorf("open: %w", os.ErrNotExist), SFTPOp{Name: "read"}, false},
+		{"missing path when creating it is the job", context.Background(), fmt.Errorf("mkdir: %w", os.ErrNotExist), SFTPOp{Name: "mkdirall", RetryOnNotExist: true}, true},
+		{"permission denied", context.Background(), fmt.Errorf("open: %w", os.ErrPermission), SFTPOp{Name: "read"}, false},
+		{"permission denied while creating", context.Background(), fmt.Errorf("mkdir: %w", os.ErrPermission), SFTPOp{Name: "mkdirall", RetryOnNotExist: true}, false},
+		{"canceled context", canceled, errors.New("connection lost"), SFTPOp{Name: "read"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, sftpFailureWarrantsReconnect(tt.ctx, tt.err, tt.op))
+		})
+	}
+}
+
 // pipeRWC combines the two half-duplex pipes backing an in-memory SFTP
 // server into the io.ReadWriteCloser sftp.NewServer requires.
 type pipeRWC struct {
@@ -437,8 +522,15 @@ func TestRemoteAgentInstallCommand(t *testing.T) {
 // (a /bin/sh body). The caller's test must not be parallel.
 func installFakeSSH(t *testing.T, script string) {
 	t.Helper()
+	installFakeCommand(t, "ssh", script)
+}
+
+// installFakeCommand puts a fake command named name on PATH whose behavior is
+// given by script (a /bin/sh body). The caller's test must not be parallel.
+func installFakeCommand(t *testing.T, name, script string) {
+	t.Helper()
 	tempDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "ssh"), []byte("#!/bin/sh\n"+script), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, name), []byte("#!/bin/sh\n"+script), 0700))
 	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
