@@ -1020,7 +1020,7 @@ func (e *ModalEnv) SyncFlowBranchToLocal(ctx context.Context, branch string) err
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync flow branch to local: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.baseSSHArgs(ctx)
+	sshArgs, err := e.SSHArgs(ctx)
 	if err != nil {
 		return err
 	}
