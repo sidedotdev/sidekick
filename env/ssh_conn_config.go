@@ -43,6 +43,12 @@ var nativeIgnorableOptions = map[string]bool{
 	"loglevel":  true,
 }
 
+// knownHostsDisabled reports whether a known-hosts path is OpenSSH's way of
+// saying there are no host keys to consult, rather than a file to read.
+func knownHostsDisabled(path string) bool {
+	return path == "" || path == os.DevNull || strings.EqualFold(path, "none")
+}
+
 // SSHConnConfig describes how to reach a remote environment independently of
 // which transport does the reaching: the legacy transport renders it back to
 // OpenSSH CLI args, while a native client dials it directly. Providers produce
@@ -55,12 +61,23 @@ type SSHConnConfig struct {
 	IdentityFiles []string
 	HostKeyPolicy SSHHostKeyPolicy
 
-	// KnownHostsFile overrides where verified host keys are read and written.
-	KnownHostsFile string
+	// KnownHostsFiles overrides where verified host keys are read and written.
+	// OpenSSH takes a list, and every entry is consulted, so all of them are
+	// kept: dropping one would trust fewer keys than the user configured.
+	KnownHostsFiles []string
+
+	// GlobalKnownHostsFiles overrides the system-wide host key files. A native
+	// transport consults only KnownHostsFiles, so ValidateNative accepts these
+	// only when they name OpenSSH's "no keys here" path.
+	GlobalKnownHostsFiles []string
 
 	// BatchMode and LogLevel steer the ssh binary only: never prompt, and keep
-	// chatter out of the stderr that callers parse.
-	BatchMode bool
+	// chatter out of the stderr that callers parse. A nil BatchMode leaves the
+	// directive out, while false renders the explicit "no" a provider asked
+	// for — which is also OpenSSH's default, so it states no intent an absent
+	// directive would not. Neither form reaches a native client, which is
+	// non-interactive whatever this says.
+	BatchMode *bool
 	LogLevel  string
 
 	// LegacyOptions carries provider directives with no typed field. The
@@ -69,16 +86,20 @@ type SSHConnConfig struct {
 	// key verification or sever reachability. See ValidateNative.
 	LegacyOptions []SSHOption
 
-	ConnectTimeout time.Duration
+	// ConnectTimeout bounds a dial. Nil leaves the transport's own default in
+	// place; an explicit zero is OpenSSH's "no client-side timeout", leaving
+	// only the caller's context to bound the dial.
+	ConnectTimeout *time.Duration
 	// DialAttempts bounds how many times one dial is retried before it is
 	// reported as failed. Zero leaves the transport's own default in place.
 	DialAttempts int
 
 	// KeepaliveInterval and KeepaliveMaxFailures detect a peer that vanished
 	// without closing the connection, which matters most for the long-lived
-	// connections holding reverse forwards.
-	KeepaliveInterval    time.Duration
-	KeepaliveMaxFailures int
+	// connections holding reverse forwards. An explicit zero interval disables
+	// keepalives, as it does in OpenSSH.
+	KeepaliveInterval    *time.Duration
+	KeepaliveMaxFailures *int
 
 	// HTTPConnectProxy is the "host:port" of an HTTP proxy to tunnel through
 	// with CONNECT. On proxy-only networks it is the only route to ephemeral
@@ -121,6 +142,18 @@ func (c SSHConnConfig) ValidateNative() error {
 		return fmt.Errorf("native ssh transport cannot honour ssh_config directives: %s",
 			strings.Join(unsupported, ", "))
 	}
+	for _, path := range c.GlobalKnownHostsFiles {
+		if !knownHostsDisabled(path) {
+			return fmt.Errorf("native ssh transport cannot honour GlobalKnownHostsFile=%s", path)
+		}
+	}
+	// Native keepalives tolerate at least one unanswered probe before closing
+	// the connection, so a threshold of zero would be honoured as something
+	// else. Refusing keeps the directive with ssh itself, which does implement
+	// it. A zero interval makes the threshold moot: nothing probes at all.
+	if c.KeepaliveMaxFailures != nil && *c.KeepaliveMaxFailures == 0 && c.keepaliveInterval() > 0 {
+		return fmt.Errorf("native ssh transport cannot honour ServerAliveCountMax=0")
+	}
 	// Recording a first-seen key means writing the user's known_hosts, which
 	// concurrent dials make unsafe without atomic append. Until that exists,
 	// refusing is the only honest answer: verifying instead would reject hosts
@@ -141,9 +174,51 @@ func (c SSHConnConfig) withResolvedReachability(resolved SSHConnConfig) SSHConnC
 	c.Port = resolved.Port
 	c.IdentityFiles = resolved.IdentityFiles
 	c.HostKeyPolicy = resolved.HostKeyPolicy
-	c.KnownHostsFile = resolved.KnownHostsFile
+	c.KnownHostsFiles = resolved.KnownHostsFiles
 	c.ProxyCommand = resolved.ProxyCommand
 	return c
+}
+
+// connectTimeout reports how long a dial may take and whether any client-side
+// bound applies at all: an explicitly configured ConnectTimeout of zero means
+// OpenSSH imposes none, leaving only the caller's context to bound the dial.
+func (c SSHConnConfig) connectTimeout(fallback time.Duration) (time.Duration, bool) {
+	switch {
+	case c.ConnectTimeout == nil:
+		return fallback, true
+	case *c.ConnectTimeout <= 0:
+		return 0, false
+	default:
+		return *c.ConnectTimeout, true
+	}
+}
+
+// keepaliveInterval reports how often to probe the peer, with an absent
+// directive meaning no probing, exactly as an explicit zero does.
+func (c SSHConnConfig) keepaliveInterval() time.Duration {
+	if c.KeepaliveInterval == nil {
+		return 0
+	}
+	return *c.KeepaliveInterval
+}
+
+// keepaliveMaxFailures reports how many unanswered probes to tolerate before
+// closing a connection. ValidateNative refuses an explicit zero, so the floor
+// of one only ever stands in for an absent directive.
+func (c SSHConnConfig) keepaliveMaxFailures() int {
+	if c.KeepaliveMaxFailures == nil {
+		return 1
+	}
+	return max(*c.KeepaliveMaxFailures, 1)
+}
+
+// optionalDirective renders a pointer field for a connection fingerprint,
+// keeping an absent directive distinct from every value it could hold.
+func optionalDirective[T any](value *T) string {
+	if value == nil {
+		return "unset"
+	}
+	return fmt.Sprint(*value)
 }
 
 // Destination is the positional target OpenSSH expects.
@@ -178,35 +253,38 @@ func (c SSHConnConfig) LegacyArgs() []string {
 	for _, option := range c.LegacyOptions {
 		args = append(args, "-o", option.Key+"="+option.Value)
 	}
-	if c.BatchMode {
-		args = append(args, "-o", "BatchMode=yes")
+	if c.BatchMode != nil {
+		args = append(args, "-o", "BatchMode="+openSSHBool(*c.BatchMode))
 	}
+	knownHostsFiles := strings.Join(c.KnownHostsFiles, " ")
 	switch {
 	case c.HostKeyPolicy == SSHHostKeyAcceptAny:
-		knownHostsFile := c.KnownHostsFile
-		if knownHostsFile == "" {
-			knownHostsFile = os.DevNull
+		if knownHostsFiles == "" {
+			knownHostsFiles = os.DevNull
 		}
-		args = append(args, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile="+knownHostsFile)
+		args = append(args, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile="+knownHostsFiles)
 	case c.HostKeyPolicy == SSHHostKeyAcceptNew:
 		args = append(args, "-o", "StrictHostKeyChecking=accept-new")
-		if c.KnownHostsFile != "" {
-			args = append(args, "-o", "UserKnownHostsFile="+c.KnownHostsFile)
+		if knownHostsFiles != "" {
+			args = append(args, "-o", "UserKnownHostsFile="+knownHostsFiles)
 		}
-	case c.KnownHostsFile != "":
-		args = append(args, "-o", "UserKnownHostsFile="+c.KnownHostsFile)
+	case knownHostsFiles != "":
+		args = append(args, "-o", "UserKnownHostsFile="+knownHostsFiles)
 	}
-	if c.ConnectTimeout > 0 {
-		args = append(args, "-o", "ConnectTimeout="+wholeSeconds(c.ConnectTimeout))
+	if globalKnownHostsFiles := strings.Join(c.GlobalKnownHostsFiles, " "); globalKnownHostsFiles != "" {
+		args = append(args, "-o", "GlobalKnownHostsFile="+globalKnownHostsFiles)
+	}
+	if c.ConnectTimeout != nil {
+		args = append(args, "-o", "ConnectTimeout="+wholeSeconds(*c.ConnectTimeout))
 	}
 	if c.DialAttempts > 0 {
 		args = append(args, "-o", "ConnectionAttempts="+strconv.Itoa(c.DialAttempts))
 	}
-	if c.KeepaliveInterval > 0 {
-		args = append(args, "-o", "ServerAliveInterval="+wholeSeconds(c.KeepaliveInterval))
+	if c.KeepaliveInterval != nil {
+		args = append(args, "-o", "ServerAliveInterval="+wholeSeconds(*c.KeepaliveInterval))
 	}
-	if c.KeepaliveMaxFailures > 0 {
-		args = append(args, "-o", "ServerAliveCountMax="+strconv.Itoa(c.KeepaliveMaxFailures))
+	if c.KeepaliveMaxFailures != nil {
+		args = append(args, "-o", "ServerAliveCountMax="+strconv.Itoa(*c.KeepaliveMaxFailures))
 	}
 	if c.LogLevel != "" {
 		args = append(args, "-o", "LogLevel="+c.LogLevel)
@@ -232,4 +310,12 @@ func (c SSHConnConfig) LegacyArgs() []string {
 // wholeSeconds formats a duration the way OpenSSH options express time.
 func wholeSeconds(d time.Duration) string {
 	return strconv.Itoa(int(d.Round(time.Second).Seconds()))
+}
+
+// openSSHBool renders a boolean directive the way ssh_config spells it.
+func openSSHBool(enabled bool) string {
+	if enabled {
+		return "yes"
+	}
+	return "no"
 }

@@ -12,6 +12,7 @@ import (
 
 	"sidekick/coding/unix"
 	"sidekick/common"
+	"sidekick/utils"
 
 	"github.com/rs/zerolog/log"
 )
@@ -414,16 +415,88 @@ func parseSSHConnConfig(configOutput string, sandboxName string) (SSHConnConfig,
 			}
 			config.Port = port
 		case "identityfile":
-			config.IdentityFiles = append(config.IdentityFiles, value)
+			config.IdentityFiles = append(config.IdentityFiles, expandSSHConfigPath(value))
+		case "stricthostkeychecking":
+			policy, err := hostKeyPolicyFromStrictSetting(value)
+			if err != nil {
+				return SSHConnConfig{}, fmt.Errorf("ssh-config output for sandbox %s: %w", sandboxName, err)
+			}
+			config.HostKeyPolicy = policy
+		case "userknownhostsfile":
+			for _, file := range strings.Fields(value) {
+				config.KnownHostsFiles = append(config.KnownHostsFiles, expandSSHConfigPath(file))
+			}
+		case "globalknownhostsfile":
+			for _, file := range strings.Fields(value) {
+				config.GlobalKnownHostsFiles = append(config.GlobalKnownHostsFiles, expandSSHConfigPath(file))
+			}
+		case "loglevel":
+			config.LogLevel = value
+		case "batchmode":
+			batchMode, err := parseSandboxBool(key, value, sandboxName)
+			if err != nil {
+				return SSHConnConfig{}, err
+			}
+			config.BatchMode = &batchMode
+		case "proxycommand":
+			config.ProxyCommand = value
+		case "connecttimeout":
+			seconds, err := parseSandboxCount(key, value, sandboxName)
+			if err != nil {
+				return SSHConnConfig{}, err
+			}
+			config.ConnectTimeout = utils.Ptr(time.Duration(seconds) * time.Second)
+		case "serveraliveinterval":
+			seconds, err := parseSandboxCount(key, value, sandboxName)
+			if err != nil {
+				return SSHConnConfig{}, err
+			}
+			config.KeepaliveInterval = utils.Ptr(time.Duration(seconds) * time.Second)
+		case "serveralivecountmax":
+			count, err := parseSandboxCount(key, value, sandboxName)
+			if err != nil {
+				return SSHConnConfig{}, err
+			}
+			config.KeepaliveMaxFailures = &count
 		default:
 			config.LegacyOptions = append(config.LegacyOptions, SSHOption{Key: key, Value: value})
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return SSHConnConfig{}, fmt.Errorf("read ssh-config output for sandbox %s: %w", sandboxName, err)
 	}
 
 	if config.Host == "" {
 		return SSHConnConfig{}, fmt.Errorf("no Host directive found in ssh-config output for sandbox %s", sandboxName)
 	}
 	return config, nil
+}
+
+// parseSandboxCount parses a directive whose value OpenSSH expresses as a
+// count of seconds or attempts, naming the directive so a provider change is
+// easy to place. Zero is a meaningful value OpenSSH assigns its own meaning to
+// and is kept; negative values are meaningless and are refused.
+func parseSandboxCount(key, value, sandboxName string) (int, error) {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q in ssh-config output for sandbox %s: %w", key, value, sandboxName, err)
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("invalid %s %q in ssh-config output for sandbox %s: must not be negative", key, value, sandboxName)
+	}
+	return parsed, nil
+}
+
+// parseSandboxBool maps an OpenSSH boolean directive, refusing values it does
+// not recognize so a directive is never quietly read as its opposite.
+func parseSandboxBool(key, value, sandboxName string) (bool, error) {
+	switch strings.ToLower(value) {
+	case "yes", "true":
+		return true, nil
+	case "no", "false":
+		return false, nil
+	}
+	return false, fmt.Errorf("invalid %s %q in ssh-config output for sandbox %s", key, value, sandboxName)
 }
 
 // parseSSHConfigArgs renders the parsed connection config as ssh CLI args for

@@ -18,6 +18,7 @@ import (
 
 	"sidekick/coding/unix"
 	"sidekick/common"
+	"sidekick/utils"
 
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 	modal "github.com/modal-labs/libmodal/modal-go"
@@ -447,12 +448,12 @@ func modalSSHConnConfig(sandboxName, sshHost string, sshPort int, identityFile s
 		User:                 "root",
 		IdentityFiles:        []string{identityFile},
 		HostKeyPolicy:        SSHHostKeyAcceptAny,
-		BatchMode:            true,
+		BatchMode:            utils.Ptr(true),
 		LogLevel:             "ERROR",
-		ConnectTimeout:       10 * time.Second,
+		ConnectTimeout:       utils.Ptr(10 * time.Second),
 		DialAttempts:         1,
-		KeepaliveInterval:    10 * time.Second,
-		KeepaliveMaxFailures: 3,
+		KeepaliveInterval:    utils.Ptr(10 * time.Second),
+		KeepaliveMaxFailures: utils.Ptr(3),
 		HTTPConnectProxy:     modalHTTPConnectProxy(sshHost, sshPort),
 		ControlPath:          modalSSHControlPath(sandboxName),
 		// A long ControlPersist is safe billing-wise: the in-sandbox idle

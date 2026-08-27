@@ -32,8 +32,8 @@ const SSHTransportEnvVar = "SIDE_SSH_TRANSPORT"
 // transport. Providers graduate one at a time, as their own tests pass.
 var nativeSSHTransportDefaults = map[EnvType]bool{
 	EnvTypeModal:     true,
-	EnvTypeOpenShell: false,
-	EnvTypeDevPod:    false,
+	EnvTypeOpenShell: true,
+	EnvTypeDevPod:    true,
 }
 
 // SFTPOp is a single filesystem operation to run over an SFTP client. Name and

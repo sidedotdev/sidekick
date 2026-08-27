@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"sidekick/sideagent"
+	"sidekick/utils"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -74,6 +75,10 @@ type sshTestServerOptions struct {
 	// RejectSessions makes session channels fail, simulating a remote that
 	// accepts connections but cannot run anything.
 	RejectSessions bool
+	// StallGlobalRequests makes the server stop answering global requests such
+	// as keepalives and forward cancellations, reproducing a wedged peer: the
+	// connection stays open, but nothing that waits for a reply ever returns.
+	StallGlobalRequests bool
 }
 
 // harnessWaitTimeout bounds every harness wait, so a protocol mistake fails
@@ -154,13 +159,13 @@ func startSSHTestServer(t *testing.T, opts sshTestServerOptions) *sshTestServer 
 func (s *sshTestServer) connConfig() SSHConnConfig {
 	addr := s.listener.Addr().(*net.TCPAddr)
 	return SSHConnConfig{
-		Host:           "127.0.0.1",
-		Port:           addr.Port,
-		User:           "tester",
-		IdentityFiles:  []string{s.clientKeyPath},
-		HostKeyPolicy:  SSHHostKeyVerify,
-		KnownHostsFile: s.knownHostsPath,
-		BatchMode:      true,
+		Host:            "127.0.0.1",
+		Port:            addr.Port,
+		User:            "tester",
+		IdentityFiles:   []string{s.clientKeyPath},
+		HostKeyPolicy:   SSHHostKeyVerify,
+		KnownHostsFiles: []string{s.knownHostsPath},
+		BatchMode:       utils.Ptr(true),
 	}
 }
 
@@ -420,6 +425,20 @@ func (s *sshTestServer) agentAbsent() bool {
 	return s.opts.AgentAbsent
 }
 
+// setStallGlobalRequests changes whether the server answers global requests, so
+// a test can establish a working connection and only then wedge the peer.
+func (s *sshTestServer) setStallGlobalRequests(stall bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.StallGlobalRequests = stall
+}
+
+func (s *sshTestServer) stallGlobalRequests() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opts.StallGlobalRequests
+}
+
 // hostsAgentCommand reports whether the agent path command invokes is one this
 // server stands in for.
 func (s *sshTestServer) hostsAgentCommand(command string) bool {
@@ -435,6 +454,9 @@ func (s *sshTestServer) sendExitStatus(channel ssh.Channel, status uint32) {
 
 func (s *sshTestServer) handleGlobalRequests(serverConn *ssh.ServerConn, requests <-chan *ssh.Request) {
 	for request := range requests {
+		if s.stallGlobalRequests() {
+			continue
+		}
 		switch request.Type {
 		case "tcpip-forward":
 			var payload struct {

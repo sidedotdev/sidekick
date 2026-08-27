@@ -22,6 +22,7 @@ import (
 
 	"sidekick/common"
 	"sidekick/sideagent"
+	"sidekick/utils"
 
 	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/assert"
@@ -47,12 +48,16 @@ func (e *nativeTestEnv) SSHConnConfig(context.Context) (SSHConnConfig, error) {
 
 // nativeTestTransport returns a native transport aimed at server, with the
 // pool left clean for the next test.
-func nativeTestTransport(t *testing.T, server *sshTestServer, key string) SSHTransport {
+func nativeTestTransport(t *testing.T, server *sshTestServer, key string, mutate ...func(*SSHConnConfig)) SSHTransport {
 	t.Helper()
 	// Deliberately not parallel-safe: transport selection is process-wide.
 	t.Setenv(SSHTransportEnvVar, "native")
 
-	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: server.connConfig()}
+	config := server.connConfig()
+	for _, apply := range mutate {
+		apply(&config)
+	}
+	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: config}
 	transport := sshTransportFor(key, nil, env)
 	require.IsType(t, &nativeSSHTransport{}, transport, "the native transport must be selected")
 	t.Cleanup(transport.Close)
@@ -74,6 +79,37 @@ func TestNativeTransportExecOverVerifiedHostKey(t *testing.T) {
 	assert.Equal(t, 1, server.stats().Connections)
 }
 
+// TestNativeTransportHonoursDisabledConnectTimeout covers the form OpenSSH
+// spells as "no client-side timeout": it must leave the dial bounded only by
+// the caller's context, rather than being read as a deadline of zero.
+func TestNativeTransportHonoursDisabledConnectTimeout(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	transport := nativeTestTransport(t, server, "native-no-timeout", func(config *SSHConnConfig) {
+		config.ConnectTimeout = utils.Ptr(time.Duration(0))
+	})
+
+	resp, err := nativeExecEcho(context.Background(), transport, "no-timeout")
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Stdout), "no-timeout")
+}
+
+// TestNativeTransportVerifiesEveryKnownHostsFile proves a list-valued
+// UserKnownHostsFile is honoured in full: a host trusted only by a later entry
+// still verifies, so no configured file is quietly ignored.
+func TestNativeTransportVerifiesEveryKnownHostsFile(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	empty := filepath.Join(t.TempDir(), "known_hosts")
+	require.NoError(t, os.WriteFile(empty, nil, 0o600))
+
+	transport := nativeTestTransport(t, server, "native-known-hosts-list", func(config *SSHConnConfig) {
+		config.KnownHostsFiles = append([]string{empty}, config.KnownHostsFiles...)
+	})
+
+	resp, err := nativeExecEcho(context.Background(), transport, "second-file-trusts")
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Stdout), "second-file-trusts")
+}
+
 // TestNativeTransportRefusesMismatchedHostKey is the security control: a key
 // that does not match known_hosts must abort the connection, not warn, and the
 // failure must stay a trust failure rather than being reported as an
@@ -93,6 +129,79 @@ func TestNativeTransportRefusesMismatchedHostKey(t *testing.T) {
 		"a refused host key must not be classified as a reachability failure")
 	assert.False(t, isModalSSHTransportFailure(err.Error()),
 		"classifying a trust failure as transport failure would let the Modal API fallback hide it")
+}
+
+// TestNativeSSHPoolKeyDistinguishesConnectionSemantics pins that a connection
+// dialed under one host-verification posture is never reused for a config that
+// would have been dialed under another, while fields that only steer the ssh
+// binary do not fragment the pool: a native dial ignores them entirely.
+func TestNativeSSHPoolKeyDistinguishesConnectionSemantics(t *testing.T) {
+	t.Parallel()
+
+	base := SSHConnConfig{
+		Host:          "example.com",
+		Port:          22,
+		User:          "side",
+		HostKeyPolicy: SSHHostKeyVerify,
+	}
+	baseKey := nativeSSHPoolKey("devpod:box", base, nil)
+
+	cases := []struct {
+		name         string
+		mutate       func(*SSHConnConfig)
+		wantDistinct bool
+	}{
+		{
+			name:         "host key policy",
+			mutate:       func(config *SSHConnConfig) { config.HostKeyPolicy = SSHHostKeyAcceptAny },
+			wantDistinct: true,
+		},
+		{
+			name: "known hosts file",
+			mutate: func(config *SSHConnConfig) {
+				config.KnownHostsFiles = []string{"/tmp/other_known_hosts"}
+			},
+			wantDistinct: true,
+		},
+		{
+			name:         "identity files",
+			mutate:       func(config *SSHConnConfig) { config.IdentityFiles = []string{"/tmp/id_ed25519"} },
+			wantDistinct: true,
+		},
+		{
+			// Only values meaning "no keys here" pass ValidateNative, so every
+			// accepted setting describes the same native dial.
+			name: "global known hosts file",
+			mutate: func(config *SSHConnConfig) {
+				config.GlobalKnownHostsFiles = []string{"/dev/null"}
+			},
+			wantDistinct: false,
+		},
+		{
+			name:         "batch mode",
+			mutate:       func(config *SSHConnConfig) { config.BatchMode = utils.Ptr(true) },
+			wantDistinct: false,
+		},
+		{
+			name:         "log level",
+			mutate:       func(config *SSHConnConfig) { config.LogLevel = "ERROR" },
+			wantDistinct: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			config := base
+			tc.mutate(&config)
+			key := nativeSSHPoolKey("devpod:box", config, nil)
+			if tc.wantDistinct {
+				assert.NotEqual(t, baseKey, key, "a connection dialed under a different policy must not be reused")
+				return
+			}
+			assert.Equal(t, baseKey, key, "settings that do not change the connection must share it")
+		})
+	}
 }
 
 func TestNativeTransportRefusesUnsupportedConfig(t *testing.T) {
@@ -259,6 +368,9 @@ func assertForwardEchoes(t *testing.T, remotePort int, want string) {
 // TestNativeTransportCloseReleasesPooledConnection proves Close is a real
 // release: the next use dials again rather than finding a stale client.
 func TestNativeTransportCloseReleasesPooledConnection(t *testing.T) {
+	// The pool is process-wide, so connections earlier tests pooled and never
+	// closed would count here; start from none.
+	CloseAllNativeSSHClients()
 	server := startSSHTestServer(t, sshTestServerOptions{})
 	transport := nativeTestTransport(t, server, "native-close")
 
@@ -275,6 +387,9 @@ func TestNativeTransportCloseReleasesPooledConnection(t *testing.T) {
 }
 
 func TestCloseAllNativeSSHClients(t *testing.T) {
+	// The pool is process-wide, so connections earlier tests pooled and never
+	// closed would count here; start from none.
+	CloseAllNativeSSHClients()
 	server := startSSHTestServer(t, sshTestServerOptions{})
 	transport := nativeTestTransport(t, server, "native-close-all")
 
@@ -462,7 +577,7 @@ func silentProxyTransport(t *testing.T, key string, connectTimeout time.Duration
 	pidPath := filepath.Join(t.TempDir(), "proxy.pid")
 	config := server.connConfig()
 	config.ProxyCommand = fmt.Sprintf("echo $$ > %s; exec sleep 120", pidPath)
-	config.ConnectTimeout = connectTimeout
+	config.ConnectTimeout = &connectTimeout
 
 	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: config}
 	transport := sshTransportFor(key, nil, env)
@@ -534,6 +649,9 @@ func TestNativeTransportRefusesPassphraseProtectedIdentity(t *testing.T) {
 // rule: transports share a connection, so one closing must not disconnect
 // another that is still using it.
 func TestNativeTransportCloseKeepsOtherHolderAlive(t *testing.T) {
+	// The pool is process-wide, so connections earlier tests pooled and never
+	// closed would count here; start from none.
+	CloseAllNativeSSHClients()
 	server := startSSHTestServer(t, sshTestServerOptions{})
 	first := nativeTestTransport(t, server, "native-shared")
 	second := nativeTestTransport(t, server, "native-shared")
@@ -602,6 +720,48 @@ func TestReverseForwardConnectionSurvivesIdleReaping(t *testing.T) {
 	assert.Equal(t, 1, nativeSSHPoolSize(), "a connection holding reverse forwards must not be reaped")
 	assertForwardEchoes(t, forwards[0].ContainerPortOrDefault(), "still-forwarded")
 	requireNoHarnessErrors(t, echo.Errors)
+}
+
+// TestNativeConnTeardownSurvivesUnansweredGlobalRequests pins that a peer which
+// stops answering cannot freeze the pool. Closing a reverse forward listener
+// sends a global request and waits for the reply, so doing it while holding the
+// pool entry's lock would leave every other caller — the idle reaper included —
+// blocked behind a peer that never answers.
+func TestNativeConnTeardownSurvivesUnansweredGlobalRequests(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	echo := serveTCPEcho(t, "stalled-peer")
+	forwards := forwardsToEcho(t, echo)
+
+	// Deliberately not parallel: transport selection is process-wide.
+	t.Setenv(SSHTransportEnvVar, "native")
+	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: server.connConfig()}
+	transport := sshTransportFor("native-stalled-teardown", forwards, env)
+	t.Cleanup(transport.Close)
+	require.NoError(t, transport.EnsureReverseForwards(context.Background(), forwards))
+
+	server.setStallGlobalRequests(true)
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		transport.Close()
+	}()
+	select {
+	case <-closed:
+	case <-time.After(harnessWaitTimeout):
+		t.Fatal("closing a connection must not wait on a peer that stopped answering")
+	}
+
+	reaped := make(chan struct{})
+	go func() {
+		defer close(reaped)
+		reapIdleNativeSSHConns(time.Now().Add(time.Hour))
+	}()
+	select {
+	case <-reaped:
+	case <-time.After(harnessWaitTimeout):
+		t.Fatal("the idle reaper must not be blocked by a stalled teardown")
+	}
 }
 
 // TestNativeTransportUsableAfterCloseAll checks shutdown leaves no orphan: a

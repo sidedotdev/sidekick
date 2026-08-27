@@ -50,7 +50,10 @@ permitlocalcommand no
 				assert.Equal(t, 2222, config.Port)
 				assert.Equal(t, "root", config.User)
 				assert.Equal(t, []string{filepath.Join(home, ".ssh/id_ed25519")}, config.IdentityFiles)
-				assert.Equal(t, filepath.Join(home, ".ssh/known_hosts"), config.KnownHostsFile)
+				assert.Equal(t, []string{
+					filepath.Join(home, ".ssh/known_hosts"),
+					filepath.Join(home, ".ssh/known_hosts2"),
+				}, config.KnownHostsFiles, "every configured known_hosts file must be consulted")
 				assert.Equal(t, SSHHostKeyVerify, config.HostKeyPolicy,
 					"a background agent cannot answer an 'ask' prompt, so an unknown key must be refused")
 				assert.Empty(t, config.ProxyCommand)
@@ -74,6 +77,21 @@ permitlocalcommand no
 		{
 			name:   "disabled checking is not reported as verification",
 			output: "hostname example.com\nstricthostkeychecking no\n",
+			want: func(t *testing.T, config SSHConnConfig) {
+				assert.Equal(t, SSHHostKeyAcceptAny, config.HostKeyPolicy)
+			},
+		},
+		{
+			// OpenSSH 10 canonicalizes yes/no to true/false in `ssh -G` output.
+			name:   "canonicalized boolean checking is verification",
+			output: "hostname example.com\nstricthostkeychecking true\n",
+			want: func(t *testing.T, config SSHConnConfig) {
+				assert.Equal(t, SSHHostKeyVerify, config.HostKeyPolicy)
+			},
+		},
+		{
+			name:   "canonicalized boolean disabling is not reported as verification",
+			output: "hostname example.com\nstricthostkeychecking false\n",
 			want: func(t *testing.T, config SSHConnConfig) {
 				assert.Equal(t, SSHHostKeyAcceptAny, config.HostKeyPolicy)
 			},

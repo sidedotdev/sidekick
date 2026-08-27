@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"sidekick/coding/unix"
+	"sidekick/utils"
 )
 
 // sshConfigResolveTimeout bounds `ssh -G`, which is a local config expansion
@@ -87,12 +88,14 @@ var sshConfigRiskyDirectives = map[string]sshRiskyDirective{
 // Unrecognized values are an error rather than a guess, since guessing here
 // either breaks connections or weakens verification.
 func hostKeyPolicyFromStrictSetting(value string) (SSHHostKeyPolicy, error) {
+	// OpenSSH 10 canonicalizes the boolean settings to true/false in `ssh -G`
+	// output, while a hand-written ssh_config still says yes/no/off.
 	switch strings.ToLower(value) {
-	case "yes", "ask":
+	case "yes", "true", "ask":
 		return SSHHostKeyVerify, nil
 	case "accept-new":
 		return SSHHostKeyAcceptNew, nil
-	case "no", "off":
+	case "no", "false", "off":
 		return SSHHostKeyAcceptAny, nil
 	}
 	return "", fmt.Errorf("unrecognized StrictHostKeyChecking value %q", value)
@@ -130,7 +133,7 @@ func parseResolvedSSHConfig(resolvedOutput, host string) (SSHConnConfig, error) 
 			config.ProxyCommand = value
 		case "connecttimeout":
 			if seconds, err := strconv.Atoi(value); err == nil {
-				config.ConnectTimeout = time.Duration(seconds) * time.Second
+				config.ConnectTimeout = utils.Ptr(time.Duration(seconds) * time.Second)
 			}
 		case "stricthostkeychecking":
 			policy, err := hostKeyPolicyFromStrictSetting(value)
@@ -139,10 +142,10 @@ func parseResolvedSSHConfig(resolvedOutput, host string) (SSHConnConfig, error) 
 			}
 			config.HostKeyPolicy = policy
 		case "userknownhostsfile":
-			// The directive takes a list; the first entry is where OpenSSH
-			// records a newly accepted key, so it is the one that matters.
-			if first := strings.Fields(value); len(first) > 0 {
-				config.KnownHostsFile = expandSSHConfigPath(first[0])
+			// OpenSSH consults every file in the list, so keeping only the
+			// first would verify against fewer keys than the user configured.
+			for _, file := range strings.Fields(value) {
+				config.KnownHostsFiles = append(config.KnownHostsFiles, expandSSHConfigPath(file))
 			}
 		default:
 			risky, found := sshConfigRiskyDirectives[strings.ToLower(key)]

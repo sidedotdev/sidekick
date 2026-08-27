@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"sidekick/utils"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +32,7 @@ func TestSSHConnConfigLegacyArgs(t *testing.T) {
 			name: "cli-only behaviours are opt-in",
 			config: SSHConnConfig{
 				Host: "example.com", User: "dev",
-				BatchMode: true, LogLevel: "ERROR",
+				BatchMode: utils.Ptr(true), LogLevel: "ERROR",
 			},
 			want: []string{"-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "dev@example.com"},
 		},
@@ -87,17 +89,48 @@ func TestSSHConnConfigLegacyArgs(t *testing.T) {
 			},
 		},
 		{
+			name: "explicitly disabled directives are rendered, not dropped",
+			config: SSHConnConfig{
+				Host: "example.com", User: "dev",
+				BatchMode:            utils.Ptr(false),
+				ConnectTimeout:       utils.Ptr(time.Duration(0)),
+				KeepaliveInterval:    utils.Ptr(15 * time.Second),
+				KeepaliveMaxFailures: utils.Ptr(0),
+			},
+			want: []string{
+				"-o", "BatchMode=no",
+				"-o", "ConnectTimeout=0",
+				"-o", "ServerAliveInterval=15",
+				"-o", "ServerAliveCountMax=0",
+				"dev@example.com",
+			},
+		},
+		{
+			name: "every known hosts path reaches ssh",
+			config: SSHConnConfig{
+				Host: "example.com", User: "dev",
+				HostKeyPolicy:         SSHHostKeyVerify,
+				KnownHostsFiles:       []string{"/tmp/kh", "/tmp/kh2"},
+				GlobalKnownHostsFiles: []string{"/etc/ssh/skh", "/etc/ssh/skh2"},
+			},
+			want: []string{
+				"-o", "UserKnownHostsFile=/tmp/kh /tmp/kh2",
+				"-o", "GlobalKnownHostsFile=/etc/ssh/skh /etc/ssh/skh2",
+				"dev@example.com",
+			},
+		},
+		{
 			name: "multiplexing, timeouts, keepalives and proxy",
 			config: SSHConnConfig{
 				Host: "example.com", User: "root", Port: 443,
 				IdentityFiles:        []string{"/keys/id"},
 				HostKeyPolicy:        SSHHostKeyAcceptAny,
-				BatchMode:            true,
+				BatchMode:            utils.Ptr(true),
 				LogLevel:             "ERROR",
-				ConnectTimeout:       10 * time.Second,
+				ConnectTimeout:       utils.Ptr(10 * time.Second),
 				DialAttempts:         1,
-				KeepaliveInterval:    10 * time.Second,
-				KeepaliveMaxFailures: 3,
+				KeepaliveInterval:    utils.Ptr(10 * time.Second),
+				KeepaliveMaxFailures: utils.Ptr(3),
 				HTTPConnectProxy:     "192.0.2.1:8282",
 				ControlPath:          "/tmp/ctl",
 				ControlPersist:       time.Hour,
@@ -155,6 +188,35 @@ func TestSSHConnConfigValidateNative(t *testing.T) {
 					{Key: "LogLevel", Value: "ERROR"},
 					{Key: "BatchMode", Value: "yes"},
 				},
+			},
+		},
+		{
+			// "no" is OpenSSH's own default, so it says nothing an absent
+			// directive does not; a native client is non-interactive either
+			// way. Refusing it would reject configs identical in meaning to
+			// ones accepted, including every host `ssh -G` describes.
+			name: "an explicitly disabled batch mode is still natively dialable",
+			config: SSHConnConfig{
+				Host:      "example.com",
+				BatchMode: utils.Ptr(false),
+			},
+		},
+		{
+			name: "keepalives with no tolerated failures cannot be honoured",
+			config: SSHConnConfig{
+				Host:                 "example.com",
+				KeepaliveInterval:    utils.Ptr(15 * time.Second),
+				KeepaliveMaxFailures: utils.Ptr(0),
+			},
+			wantErr:   true,
+			wantNamed: []string{"ServerAliveCountMax=0"},
+		},
+		{
+			name: "no tolerated failures is moot while nothing probes",
+			config: SSHConnConfig{
+				Host:                 "example.com",
+				KeepaliveInterval:    utils.Ptr(time.Duration(0)),
+				KeepaliveMaxFailures: utils.Ptr(0),
 			},
 		},
 		{

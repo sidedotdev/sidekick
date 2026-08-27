@@ -19,6 +19,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/sideagent"
+	"sidekick/utils"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
@@ -836,10 +837,10 @@ func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInpu
 func devpodSSHConnConfig(workspaceName string) SSHConnConfig {
 	return SSHConnConfig{
 		Host:                   workspaceName + ".devpod",
-		BatchMode:              true,
+		BatchMode:              utils.Ptr(true),
 		LogLevel:               "ERROR",
-		KeepaliveInterval:      10 * time.Second,
-		KeepaliveMaxFailures:   3,
+		KeepaliveInterval:      utils.Ptr(10 * time.Second),
+		KeepaliveMaxFailures:   utils.Ptr(3),
 		ControlPath:            devpodSSHControlPath(workspaceName),
 		ControlPersist:         time.Hour,
 		LegacyCommandSeparator: true,

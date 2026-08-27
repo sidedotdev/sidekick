@@ -10,6 +10,7 @@ import (
 
 	"sidekick/common"
 	"sidekick/sideagent"
+	"sidekick/utils"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,11 +25,13 @@ func TestResolveSSHTransportKind(t *testing.T) {
 		envType  EnvType
 		want     SSHTransportKind
 	}{
-		{name: "no override defaults to legacy", envType: EnvTypeDevPod, want: SSHTransportLegacy},
-		{name: "override selects native", override: "native", envType: EnvTypeDevPod, want: SSHTransportNative},
+		{name: "no override defaults to native for a graduated provider", envType: EnvTypeDevPod, want: SSHTransportNative},
+		{name: "no override leaves an ungraduated env type on legacy", envType: EnvTypeLocal, want: SSHTransportLegacy},
+		{name: "override selects native", override: "native", envType: EnvTypeLocal, want: SSHTransportNative},
 		{name: "override selects legacy", override: "legacy", envType: EnvTypeModal, want: SSHTransportLegacy},
 		{name: "override is case and space insensitive", override: "  NATIVE ", envType: EnvTypeOpenShell, want: SSHTransportNative},
-		{name: "unrecognized override falls back to the default", override: "quantum", envType: EnvTypeDevPod, want: SSHTransportLegacy},
+		{name: "unrecognized override falls back to the default", override: "quantum", envType: EnvTypeDevPod, want: SSHTransportNative},
+		{name: "unrecognized override falls back to legacy for an ungraduated env type", override: "quantum", envType: EnvTypeLocal, want: SSHTransportLegacy},
 	}
 
 	for _, tc := range cases {
@@ -50,8 +53,8 @@ func TestSSHTransportProviderDefaults(t *testing.T) {
 		want    SSHTransportKind
 	}{
 		{EnvTypeModal, SSHTransportNative},
-		{EnvTypeOpenShell, SSHTransportLegacy},
-		{EnvTypeDevPod, SSHTransportLegacy},
+		{EnvTypeOpenShell, SSHTransportNative},
+		{EnvTypeDevPod, SSHTransportNative},
 	}
 
 	for _, tc := range cases {
@@ -207,7 +210,7 @@ func (r *recordingSSHEnv) SSHArgs(context.Context) ([]string, error) {
 func (r *recordingSSHEnv) SSHConnConfig(context.Context) (SSHConnConfig, error) {
 	return SSHConnConfig{
 		Host:        "remote-host",
-		BatchMode:   true,
+		BatchMode:   utils.Ptr(true),
 		ControlPath: "/tmp/control-socket",
 	}, nil
 }
@@ -224,7 +227,7 @@ func (d *devpodShapedSSHEnv) SSHArgs(context.Context) ([]string, error) {
 }
 
 func (d *devpodShapedSSHEnv) SSHConnConfig(context.Context) (SSHConnConfig, error) {
-	return SSHConnConfig{Host: "workspace.devpod", BatchMode: true, LegacyCommandSeparator: true}, nil
+	return SSHConnConfig{Host: "workspace.devpod", BatchMode: utils.Ptr(true), LegacyCommandSeparator: true}, nil
 }
 
 func TestInsertBeforeSSHDestinationTrailingSeparator(t *testing.T) {
@@ -244,7 +247,7 @@ type forwardingSSHEnv struct {
 func (f *forwardingSSHEnv) SSHConnConfig(context.Context) (SSHConnConfig, error) {
 	return SSHConnConfig{
 		Host:        "remote-host",
-		BatchMode:   true,
+		BatchMode:   utils.Ptr(true),
 		ControlPath: "/tmp/control-socket",
 	}, nil
 }

@@ -141,6 +141,7 @@ func reapIdleNativeSSHConns(cutoff time.Time) {
 	}
 	nativeSSHPool.mu.Unlock()
 
+	var idleResources []nativeConnResources
 	for _, conn := range conns {
 		conn.mu.Lock()
 		idle := conn.client != nil &&
@@ -149,9 +150,13 @@ func reapIdleNativeSSHConns(cutoff time.Time) {
 			len(conn.listeners) == 0
 		if idle {
 			log.Debug().Str("remote", conn.poolKey).Msg("closing idle native ssh connection")
-			conn.closeClientLocked()
+			idleResources = append(idleResources, conn.detachClientLocked())
 		}
 		conn.mu.Unlock()
+	}
+
+	for _, resources := range idleResources {
+		resources.close()
 	}
 }
 
@@ -184,11 +189,16 @@ func CloseAllNativeSSHClients() {
 	nativeSSHPool.conns = map[string]*nativeSSHConn{}
 	nativeSSHPool.mu.Unlock()
 
+	closing := make([]nativeConnResources, 0, len(conns))
 	for _, conn := range conns {
 		conn.mu.Lock()
 		conn.orphaned = true
-		conn.closeClientLocked()
+		closing = append(closing, conn.detachClientLocked())
 		conn.mu.Unlock()
+	}
+
+	for _, resources := range closing {
+		resources.close()
 	}
 }
 
@@ -198,8 +208,9 @@ func (c *nativeSSHConn) release() {
 	c.mu.Lock()
 	c.refs--
 	last := c.refs <= 0
+	var resources nativeConnResources
 	if last {
-		c.closeClientLocked()
+		resources = c.detachClientLocked()
 	}
 	c.mu.Unlock()
 	if !last {
@@ -210,24 +221,42 @@ func (c *nativeSSHConn) release() {
 		delete(nativeSSHPool.conns, c.poolKey)
 	}
 	nativeSSHPool.mu.Unlock()
+	resources.close()
 }
 
-// closeClientLocked tears down the connection and everything hanging off it:
-// the reverse forward listeners, the SSH client, and any ProxyCommand child,
-// whose reaping is this transport's responsibility.
-func (c *nativeSSHConn) closeClientLocked() {
-	for _, listener := range c.listeners {
-		_ = listener.Close()
+// nativeConnResources is what outlives a pool entry's lock during teardown:
+// the SSH client and any ProxyCommand child, whose reaping is this transport's
+// responsibility.
+type nativeConnResources struct {
+	client *ssh.Client
+	proxy  io.Closer
+}
+
+// close tears the connection down. Reverse forward listeners are deliberately
+// not closed one by one: an SSH listener's Close sends cancel-tcpip-forward
+// and waits for the peer to answer, which a peer that stopped answering never
+// does. Closing the client severs the underlying stream instead, which cancels
+// every forward and unblocks their accept loops without asking the peer for
+// anything.
+func (r nativeConnResources) close() {
+	if r.client != nil {
+		_ = r.client.Close()
 	}
+	if r.proxy != nil {
+		_ = r.proxy.Close()
+	}
+}
+
+// detachClientLocked clears the connection's live resources and hands them to
+// the caller, which must close them only after releasing the lock: teardown
+// speaks the SSH protocol, so a silent peer would otherwise hold this entry —
+// and everyone waiting on it — for as long as it stays silent.
+func (c *nativeSSHConn) detachClientLocked() nativeConnResources {
+	resources := nativeConnResources{client: c.client, proxy: c.proxy}
+	c.client = nil
 	c.listeners = nil
-	if c.client != nil {
-		_ = c.client.Close()
-		c.client = nil
-	}
-	if c.proxy != nil {
-		_ = c.proxy.Close()
-		c.proxy = nil
-	}
+	c.proxy = nil
+	return resources
 }
 
 // beginOp checks out a live client for one operation, dialing at most once at a
@@ -285,22 +314,26 @@ func (c *nativeSSHConn) isOrphaned() bool {
 func (c *nativeSSHConn) watchClient(client *ssh.Client) {
 	err := client.Wait()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.client != client {
+		c.mu.Unlock()
 		return
 	}
 	log.Debug().Err(err).Str("remote", c.poolKey).Msg("native ssh connection closed by peer")
-	c.closeClientLocked()
+	resources := c.detachClientLocked()
+	c.mu.Unlock()
+	resources.close()
 }
 
 // invalidate discards client if it is still the pooled one, so a caller that
 // saw a transport-level failure can retry on a fresh connection.
 func (c *nativeSSHConn) invalidate(client *ssh.Client) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	var resources nativeConnResources
 	if c.client == client {
-		c.closeClientLocked()
+		resources = c.detachClientLocked()
 	}
+	c.mu.Unlock()
+	resources.close()
 }
 
 // hold returns the pool entry for the transport's current effective config,
@@ -329,6 +362,28 @@ func (t *nativeSSHTransport) Close() {
 	if held != nil {
 		held.release()
 	}
+}
+
+// dropLiveSession closes the pooled connection this transport's env reaches,
+// keeping the pool entry so the next operation dials afresh. It reports
+// whether a live connection was there to drop. Unlike Close it targets the
+// connection rather than this transport's reference to it, which is what makes
+// it a way to recover from a peer that vanished without closing.
+func (t *nativeSSHTransport) dropLiveSession(ctx context.Context) (bool, error) {
+	config, err := t.sshEnv.SSHConnConfig(ctx)
+	if err != nil {
+		return false, fmt.Errorf("resolve ssh connection config: %w", err)
+	}
+	conn := t.hold(nativeSSHPoolKey(t.key, config, t.forwards))
+	conn.mu.Lock()
+	if conn.client == nil {
+		conn.mu.Unlock()
+		return false, nil
+	}
+	resources := conn.detachClientLocked()
+	conn.mu.Unlock()
+	resources.close()
+	return true, nil
 }
 
 // withClient runs op on a live connection, retrying once on a fresh connection
@@ -424,13 +479,13 @@ func nativeSSHPoolKey(key string, config SSHConnConfig, forwards []common.PortFo
 		config.User,
 		strings.Join(config.IdentityFiles, ","),
 		string(config.HostKeyPolicy),
-		config.KnownHostsFile,
+		strings.Join(config.KnownHostsFiles, ","),
 		config.HTTPConnectProxy,
 		config.ProxyCommand,
-		config.ConnectTimeout.String(),
+		optionalDirective(config.ConnectTimeout),
 		strconv.Itoa(config.DialAttempts),
-		config.KeepaliveInterval.String(),
-		strconv.Itoa(config.KeepaliveMaxFailures),
+		optionalDirective(config.KeepaliveInterval),
+		optionalDirective(config.KeepaliveMaxFailures),
 		strings.Join(options, ","),
 		strings.Join(forwardSpecs, ","),
 	}, "\x00")))
@@ -773,7 +828,7 @@ func dialNativeSSHOnce(ctx context.Context, config SSHConnConfig, clientConfig *
 	// Closing the connection is what bounds the handshake: a ProxyCommand's
 	// stdio has no deadline to set, so a child that starts but never speaks
 	// would otherwise hang here forever.
-	handshakeCtx, cancel := context.WithTimeout(ctx, clientConfig.Timeout)
+	handshakeCtx, cancel := nativeBoundedContext(ctx, clientConfig.Timeout, clientConfig.Timeout > 0)
 	defer cancel()
 	stopWatchdog := context.AfterFunc(handshakeCtx, func() { _ = conn.Close() })
 
@@ -795,8 +850,8 @@ func dialNativeSSHOnce(ctx context.Context, config SSHConnConfig, clientConfig *
 	}
 
 	client := ssh.NewClient(sshConn, channels, requests)
-	if config.KeepaliveInterval > 0 {
-		go keepNativeConnectionAlive(client, config.KeepaliveInterval, max(config.KeepaliveMaxFailures, 1))
+	if interval := config.keepaliveInterval(); interval > 0 {
+		go keepNativeConnectionAlive(client, interval, config.keepaliveMaxFailures())
 	}
 	return client, proxy, nil
 }
@@ -823,14 +878,22 @@ func keepNativeConnectionAlive(client *ssh.Client, interval time.Duration, maxFa
 	}
 }
 
+// nativeBoundedContext derives a context carrying timeout, or one that only
+// inherits the caller's deadline when no client-side bound applies. Deriving
+// with a zero timeout instead would expire immediately, turning "no timeout"
+// into "no time at all".
+func nativeBoundedContext(ctx context.Context, timeout time.Duration, bounded bool) (context.Context, context.CancelFunc) {
+	if !bounded {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // dialNativeUnderlyingConn opens the byte stream the SSH protocol runs over,
 // which may be a socket, a CONNECT tunnel, or a ProxyCommand child's stdio.
 func dialNativeUnderlyingConn(ctx context.Context, config SSHConnConfig) (net.Conn, io.Closer, error) {
-	timeout := config.ConnectTimeout
-	if timeout <= 0 {
-		timeout = nativeDefaultConnectTimeout
-	}
-	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	timeout, bounded := config.connectTimeout(nativeDefaultConnectTimeout)
+	dialCtx, cancel := nativeBoundedContext(ctx, timeout, bounded)
 	defer cancel()
 
 	switch {
@@ -1004,9 +1067,11 @@ func nativeClientConfig(config SSHConnConfig) (*ssh.ClientConfig, *agentConnSet,
 	if err != nil {
 		return nil, nil, err
 	}
-	timeout := config.ConnectTimeout
-	if timeout <= 0 {
-		timeout = nativeDefaultConnectTimeout
+	// A zero Timeout is how x/crypto expresses "no client-imposed bound",
+	// which is what an explicit ConnectTimeout of 0 asks for.
+	timeout, bounded := config.connectTimeout(nativeDefaultConnectTimeout)
+	if !bounded {
+		timeout = 0
 	}
 	remoteUser := config.User
 	if remoteUser == "" {
@@ -1112,17 +1177,17 @@ func nativeHostKeyCallback(config SSHConnConfig) (ssh.HostKeyCallback, error) {
 	case SSHHostKeyAcceptAny:
 		return ssh.InsecureIgnoreHostKey(), nil
 	case SSHHostKeyVerify, "":
-		knownHostsFile := config.KnownHostsFile
-		if knownHostsFile == "" {
+		knownHostsFiles := config.KnownHostsFiles
+		if len(knownHostsFiles) == 0 {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				return nil, fmt.Errorf("locate known_hosts: %w", err)
 			}
-			knownHostsFile = filepath.Join(home, ".ssh", "known_hosts")
+			knownHostsFiles = []string{filepath.Join(home, ".ssh", "known_hosts")}
 		}
-		callback, err := knownhosts.New(knownHostsFile)
+		callback, err := knownhosts.New(knownHostsFiles...)
 		if err != nil {
-			return nil, fmt.Errorf("read known hosts %s: %w", knownHostsFile, err)
+			return nil, fmt.Errorf("read known hosts %s: %w", strings.Join(knownHostsFiles, " "), err)
 		}
 		return callback, nil
 	default:

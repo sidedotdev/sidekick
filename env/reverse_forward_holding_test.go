@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"sidekick/utils"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,7 +23,7 @@ func (f *forwardHoldingSpyEnv) SSHArgs(context.Context) ([]string, error) {
 }
 
 func (f *forwardHoldingSpyEnv) SSHConnConfig(context.Context) (SSHConnConfig, error) {
-	return SSHConnConfig{Host: "spy-host", BatchMode: true, LegacyCommandSeparator: true}, nil
+	return SSHConnConfig{Host: "spy-host", BatchMode: utils.Ptr(true), LegacyCommandSeparator: true}, nil
 }
 
 func (f *forwardHoldingSpyEnv) EnsureReverseForwards(context.Context) error {
