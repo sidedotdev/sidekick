@@ -1,3 +1,20 @@
+---
+intent_links:
+  - intent: "#declaring-profiles"
+    code:
+      - common/profile.go:ProfileConfig
+      - common/profile.go:Profile
+      - common/profile.go:ResolveProfiles
+      - common/local_config.go:LocalConfig
+      - common/local_config_activity.go:LocalPublicConfig
+  - intent: "#llm-and-embedding-providers"
+    code:
+      - common/profile.go:EffectiveProfileIds
+      - common/profile.go:MatchesProfile
+      - common/model_provider_config.go:ModelProviderConfig
+      - common/local_config_activity.go:ModelProviderPublicConfig
+---
+
 # Profiles
 
 A "profile" represents a distinct context, for example "work" and "personal" may

@@ -14,11 +14,18 @@ import (
 
 // LocalConfig represents the local configuration file structure
 type LocalConfig struct {
+	Profiles           []ProfileConfig          `koanf:"profiles,omitempty"`
 	Providers          []ModelProviderConfig    `koanf:"providers,omitempty"`
 	LLM                map[string][]ModelConfig `koanf:"llm,omitempty"`
 	Embedding          map[string][]ModelConfig `koanf:"embedding,omitempty"`
 	CommandPermissions CommandPermissionConfig  `koanf:"command_permissions,omitempty"`
 	OffHours           OffHoursConfig           `koanf:"off_hours,omitempty"`
+}
+
+// ResolveProfiles returns the declared profiles with display names resolved,
+// always including the default profile.
+func (c LocalConfig) ResolveProfiles() []Profile {
+	return ResolveProfiles(c.Profiles)
 }
 
 // getCustomProviderNames returns a slice of custom provider names
@@ -51,10 +58,28 @@ func (c LocalConfig) validateProvider(provider string, allowAnthropicProvider bo
 
 // Validate ensures the LocalConfig is valid
 func (c LocalConfig) Validate() error {
+	declaredProfiles := map[string]bool{DefaultProfileId: true}
+	seenProfiles := map[string]bool{}
+	for _, p := range c.Profiles {
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		if seenProfiles[p.Id] {
+			return fmt.Errorf("duplicate profile id: %s", p.Id)
+		}
+		seenProfiles[p.Id] = true
+		declaredProfiles[p.Id] = true
+	}
+
 	// Validate custom providers
 	for _, p := range c.Providers {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("invalid custom LLM provider %s: %w", p.Name, err)
+		}
+		for _, profileId := range EffectiveProfileIds(p.Profiles) {
+			if !declaredProfiles[profileId] {
+				return fmt.Errorf("invalid provider %s: profile %q is not declared", p.Name, profileId)
+			}
 		}
 	}
 

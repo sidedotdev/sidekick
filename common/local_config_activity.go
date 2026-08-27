@@ -10,6 +10,7 @@ import (
 // LocalPublicConfig represents the local configuration without keys
 type LocalPublicConfig struct {
 	Providers          []ModelProviderPublicConfig `json:"providers,omitempty"`
+	Profiles           []Profile                   `json:"profiles,omitempty"`
 	LLM                LLMConfig                   `json:"llm"`
 	Embedding          EmbeddingConfig             `json:"embedding"`
 	CommandPermissions CommandPermissionConfig     `json:"commandPermissions,omitempty"`
@@ -24,6 +25,21 @@ type ModelProviderPublicConfig struct {
 	SmallLLM      string            `json:"small_llm,omitempty"`
 	AuthType      ProviderAuthType  `json:"auth_type,omitempty"`
 	CustomHeaders map[string]string `json:"custom_headers,omitempty"`
+
+	// Profiles mirrors ModelProviderConfig.Profiles: nil means the default
+	// profile, while an explicitly empty list means no profile at all.
+	Profiles *[]string `json:"profiles,omitempty"`
+}
+
+// EffectiveProfiles returns the profile ids this provider is associated with.
+func (c ModelProviderPublicConfig) EffectiveProfiles() []string {
+	return EffectiveProfileIds(c.Profiles)
+}
+
+// MatchesProfile reports whether this provider is associated with the given
+// profile, where an empty profile id means the default profile.
+func (c ModelProviderPublicConfig) MatchesProfile(profileId string) bool {
+	return MatchesProfile(c.Profiles, profileId)
 }
 
 // GetLocalConfig loads the local configuration and converts it to a format
@@ -43,7 +59,12 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 		return LocalPublicConfig{}, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Strip sensitive data from provider configs
+	return localPublicConfigFrom(config)
+}
+
+// localPublicConfigFrom converts a loaded local config into the public form
+// consumed by workflows and clients, with sensitive data removed.
+func localPublicConfigFrom(config LocalConfig) (LocalPublicConfig, error) {
 	providers := make([]ModelProviderPublicConfig, len(config.Providers))
 	for i, p := range config.Providers {
 		// Create copy without sensitive key
@@ -55,6 +76,7 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 			SmallLLM:      p.SmallLLM,
 			AuthType:      NormalizeProviderAuthType(string(p.AuthType)),
 			CustomHeaders: p.CustomHeaders,
+			Profiles:      p.Profiles,
 		}
 	}
 
@@ -99,6 +121,7 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 
 	return LocalPublicConfig{
 		Providers:          providers,
+		Profiles:           config.ResolveProfiles(),
 		LLM:                llmConfig,
 		Embedding:          embeddingConfig,
 		CommandPermissions: config.CommandPermissions,

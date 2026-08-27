@@ -21,6 +21,22 @@ type ModelProviderConfig struct {
 	SmallLLM      string            `koanf:"small_llm,omitempty" json:"small_llm,omitempty"`
 	AuthType      ProviderAuthType  `koanf:"auth_type,omitempty" json:"auth_type,omitempty"`
 	CustomHeaders map[string]string `koanf:"custom_headers,omitempty" json:"custom_headers,omitempty"`
+
+	// Profiles associates the provider with a set of profiles. A non-configured
+	// (nil) association means the default profile, while an explicitly empty
+	// list associates the provider with no profile at all.
+	Profiles *[]string `koanf:"profiles,omitempty" json:"profiles,omitempty"`
+}
+
+// EffectiveProfiles returns the profile ids this provider is associated with.
+func (c ModelProviderConfig) EffectiveProfiles() []string {
+	return EffectiveProfileIds(c.Profiles)
+}
+
+// MatchesProfile reports whether this provider is associated with the given
+// profile, where an empty profile id means the default profile.
+func (c ModelProviderConfig) MatchesProfile(profileId string) bool {
+	return MatchesProfile(c.Profiles, profileId)
 }
 
 // Validate ensures the CustomProviderConfig is valid
@@ -39,6 +55,13 @@ func (c ModelProviderConfig) Validate() error {
 	}
 	if c.Key == "" && c.AuthType == ProviderAuthTypeAPI {
 		return fmt.Errorf("key is required for auth type %s", c.AuthType)
+	}
+	if c.Profiles != nil {
+		for _, profileId := range *c.Profiles {
+			if profileId == "" {
+				return fmt.Errorf("profile id is required for each associated profile")
+			}
+		}
 	}
 	return nil
 }
