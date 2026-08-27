@@ -23,6 +23,18 @@ intent_links:
       - flow_action/exec_context.go:ExecContext
       - dev/dev_context.go:newTempLocalExecContext
       - dev/dev_context.go:setupDevContextAction
+      - secret_manager/profile.go:ProfileIdOf
+      - cli/auth_profiles.go
+      - cli/auth_command.go:handleManualAPIKeyAuth
+      - cli/auth_command.go:handleAnthropicOAuthSubscription
+      - cli/auth_command.go:handleAnthropicOAuthCreateKey
+      - cli/auth_command.go:saveAnthropicOAuthCredentials
+      - cli/openai_oauth.go:handleOpenAIOAuthSubscription
+      - cli/openai_oauth.go:saveOpenAIOAuthCredentials
+      - cli/init_command.go:getConfiguredBuiltinLLMProviders
+      - cli/init_command.go:getConfiguredBuiltinEmbeddingProviders
+      - openai_oauth/openai_oauth.go:StoreForProfileFn
+      - llm/anthropic_tool_chat.go:storeAnthropicOAuthCredentialsForProfile
 ---
 
 # Profiles

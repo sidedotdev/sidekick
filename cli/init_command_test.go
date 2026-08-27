@@ -86,6 +86,7 @@ func TestGetConfiguredBuiltinLLMProviders(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			stubDefaultProfileOnly(t)
 			orig := keyringGet
 			keyringGet = newMockKeyringGet(tc.secrets)
 			t.Cleanup(func() { keyringGet = orig })
@@ -148,6 +149,7 @@ func TestGetConfiguredBuiltinEmbeddingProviders(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			stubDefaultProfileOnly(t)
 			orig := keyringGet
 			keyringGet = newMockKeyringGet(tc.secrets)
 			t.Cleanup(func() { keyringGet = orig })
@@ -159,6 +161,7 @@ func TestGetConfiguredBuiltinEmbeddingProviders(t *testing.T) {
 }
 
 func TestGetConfiguredBuiltinLLMProviders_NoDuplicates(t *testing.T) {
+	stubDefaultProfileOnly(t)
 
 	orig := keyringGet
 	keyringGet = newMockKeyringGet(map[string]string{

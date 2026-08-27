@@ -14,7 +14,6 @@ import (
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/erikgeiser/promptkit/textinput"
 	"github.com/urfave/cli/v3"
-	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
 )
 
@@ -126,24 +125,18 @@ func handleAnthropicAuth() error {
 }
 
 func handleAnthropicOAuthSubscription() error {
-	existingCreds, err := keyring.Get(keyringService, AnthropicOAuthSecretName)
-	if err != nil && err != keyring.ErrNotFound {
-		return fmt.Errorf("error checking existing OAuth credentials: %w", err)
+	profileIds, err := selectCredentialProfiles("Anthropic")
+	if err != nil {
+		return err
 	}
 
-	if existingCreds != "" {
-		overwriteSelection := selection.New(
-			"Existing Anthropic OAuth credentials found. What would you like to do?",
-			[]string{"Keep existing credentials", "Overwrite with new credentials"},
-		)
-		choice, err := overwriteSelection.RunPrompt()
-		if err != nil {
-			return fmt.Errorf("selection failed: %w", err)
-		}
-		if choice == "Keep existing credentials" {
-			fmt.Println("✔ Keeping existing Anthropic OAuth credentials.")
-			return nil
-		}
+	targetProfileIds, err := resolveTargetProfiles(profileIds, AnthropicOAuthSecretName, "Anthropic OAuth credentials")
+	if err != nil {
+		return err
+	}
+	if len(targetProfileIds) == 0 {
+		fmt.Println("✔ Keeping existing Anthropic OAuth credentials.")
+		return nil
 	}
 
 	tokens, err := performOAuthFlow(claudeProMaxAuthURL)
@@ -161,13 +154,17 @@ func handleAnthropicOAuthSubscription() error {
 		RefreshToken: tokens.RefreshToken,
 		ExpiresAt:    expiresAt,
 	}
+
+	return saveAnthropicOAuthCredentials(creds, targetProfileIds)
+}
+
+func saveAnthropicOAuthCredentials(creds OAuthCredentials, profileIds []string) error {
 	credsJSON, err := json.Marshal(creds)
 	if err != nil {
 		return fmt.Errorf("failed to marshal OAuth credentials: %w", err)
 	}
 
-	err = keyring.Set(keyringService, AnthropicOAuthSecretName, string(credsJSON))
-	if err != nil {
+	if err := storeSecretForProfiles(profileIds, AnthropicOAuthSecretName, string(credsJSON)); err != nil {
 		return fmt.Errorf("error storing OAuth credentials in keyring: %w", err)
 	}
 
@@ -176,24 +173,18 @@ func handleAnthropicOAuthSubscription() error {
 }
 
 func handleAnthropicOAuthCreateKey() error {
-	existingKey, err := keyring.Get(keyringService, llm.AnthropicApiKeySecretName)
-	if err != nil && err != keyring.ErrNotFound {
-		return fmt.Errorf("error checking existing API key: %w", err)
+	profileIds, err := selectCredentialProfiles("Anthropic")
+	if err != nil {
+		return err
 	}
 
-	if existingKey != "" {
-		overwriteSelection := selection.New(
-			"An existing Anthropic API key was found. What would you like to do?",
-			[]string{"Keep existing key", "Overwrite with new key"},
-		)
-		choice, err := overwriteSelection.RunPrompt()
-		if err != nil {
-			return fmt.Errorf("selection failed: %w", err)
-		}
-		if choice == "Keep existing key" {
-			fmt.Println("✔ Keeping existing Anthropic API key.")
-			return nil
-		}
+	targetProfileIds, err := resolveTargetProfiles(profileIds, llm.AnthropicApiKeySecretName, "Anthropic API key")
+	if err != nil {
+		return err
+	}
+	if len(targetProfileIds) == 0 {
+		fmt.Println("✔ Keeping existing Anthropic API key.")
+		return nil
 	}
 
 	tokens, err := performOAuthFlow(consoleAuthURL)
@@ -206,8 +197,7 @@ func handleAnthropicOAuthCreateKey() error {
 		return err
 	}
 
-	err = keyring.Set(keyringService, llm.AnthropicApiKeySecretName, apiKey)
-	if err != nil {
+	if err := storeSecretForProfiles(targetProfileIds, llm.AnthropicApiKeySecretName, apiKey); err != nil {
 		return fmt.Errorf("error storing API key in keyring: %w", err)
 	}
 
@@ -362,30 +352,21 @@ func createAPIKeyWithOAuth(accessToken string) (string, error) {
 }
 
 func handleManualAPIKeyAuth(providerName, secretName string) error {
-	existingKey, err := keyring.Get(keyringService, secretName)
-	if err != nil && err != keyring.ErrNotFound {
-		return fmt.Errorf("error checking existing API key: %w", err)
+	profileIds, err := selectCredentialProfiles(providerName)
+	if err != nil {
+		return err
 	}
 
-	if existingKey != "" {
-		overwriteSelection := selection.New(
-			fmt.Sprintf("An existing %s API key was found. What would you like to do?", providerName),
-			[]string{"Keep existing key", "Overwrite with new key"},
-		)
-		choice, err := overwriteSelection.RunPrompt()
-		if err != nil {
-			return fmt.Errorf("selection failed: %w", err)
-		}
-		if choice == "Keep existing key" {
-			fmt.Printf("✔ Keeping existing %s API key.\n", providerName)
-			return nil
-		}
+	targetProfileIds, err := resolveTargetProfiles(profileIds, secretName, fmt.Sprintf("%s API key", providerName))
+	if err != nil {
+		return err
+	}
+	if len(targetProfileIds) == 0 {
+		fmt.Printf("✔ Keeping existing %s API key.\n", providerName)
+		return nil
 	}
 
-	apiKeyInput := textinput.New(fmt.Sprintf("Enter your %s API Key: ", providerName))
-	apiKeyInput.Hidden = true
-
-	apiKey, err := apiKeyInput.RunPrompt()
+	apiKey, err := promptAPIKey(providerName)
 	if err != nil {
 		return fmt.Errorf("failed to get %s API Key: %w", providerName, err)
 	}
@@ -394,8 +375,7 @@ func handleManualAPIKeyAuth(providerName, secretName string) error {
 		return fmt.Errorf("%s API Key not provided", providerName)
 	}
 
-	err = keyring.Set(keyringService, secretName, apiKey)
-	if err != nil {
+	if err := storeSecretForProfiles(targetProfileIds, secretName, apiKey); err != nil {
 		return fmt.Errorf("error storing API key in keyring: %w", err)
 	}
 

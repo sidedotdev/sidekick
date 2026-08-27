@@ -46,3 +46,48 @@ func isDefaultProfile(profileId string) bool {
 func profileSecretPrefix(profileId string) string {
 	return strings.ToUpper(common.NormalizeProfileId(profileId))
 }
+
+// ProfileScopedSecretManager is implemented by secret managers that resolve
+// secrets under a specific profile.
+type ProfileScopedSecretManager interface {
+	GetProfileId() string
+}
+
+// ProfileIdOf reports the profile a secret source resolves secrets under,
+// falling back to the default profile for sources that aren't profile-aware.
+func ProfileIdOf(source any) string {
+	scoped, ok := source.(ProfileScopedSecretManager)
+	if !ok {
+		return common.DefaultProfileId
+	}
+	return common.NormalizeProfileId(scoped.GetProfileId())
+}
+
+func (k KeyringSecretManager) GetProfileId() string {
+	return k.ProfileId
+}
+
+func (e EnvSecretManager) GetProfileId() string {
+	return e.ProfileId
+}
+
+func (l LocalConfigSecretManager) GetProfileId() string {
+	return l.ProfileId
+}
+
+func (c CompositeSecretManager) GetProfileId() string {
+	for _, manager := range c.managers {
+		scoped, ok := manager.(ProfileScopedSecretManager)
+		if !ok {
+			continue
+		}
+		if profileId := scoped.GetProfileId(); profileId != "" {
+			return profileId
+		}
+	}
+	return ""
+}
+
+func (sc SecretManagerContainer) GetProfileId() string {
+	return ProfileIdOf(sc.SecretManager)
+}

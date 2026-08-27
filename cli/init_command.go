@@ -616,31 +616,17 @@ func getConfiguredBuiltinLLMProviders() []string {
 	var providers []string
 
 	// Check OpenAI (either API key or OAuth)
-	hasOpenAI := false
-	if key, err := keyringGet(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
-		hasOpenAI = true
-	}
-	if creds, err := keyringGet(keyringService, openai_oauth.SecretName); err == nil && creds != "" {
-		hasOpenAI = true
-	}
-	if hasOpenAI {
+	if configuredSecretExists(llm.OpenaiApiKeySecretName) || configuredSecretExists(openai_oauth.SecretName) {
 		providers = append(providers, "openai")
 	}
 
 	// Check Google
-	if key, err := keyringGet(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+	if configuredSecretExists(llm.GoogleApiKeySecretName) {
 		providers = append(providers, "google")
 	}
 
 	// Check Anthropic (either API key or OAuth)
-	hasAnthropicKey := false
-	if key, err := keyringGet(keyringService, llm.AnthropicApiKeySecretName); err == nil && key != "" {
-		hasAnthropicKey = true
-	}
-	if creds, err := keyringGet(keyringService, AnthropicOAuthSecretName); err == nil && creds != "" {
-		hasAnthropicKey = true
-	}
-	if hasAnthropicKey {
+	if configuredSecretExists(llm.AnthropicApiKeySecretName) || configuredSecretExists(AnthropicOAuthSecretName) {
 		providers = append(providers, "anthropic")
 	}
 
@@ -721,12 +707,12 @@ func getConfiguredBuiltinEmbeddingProviders() []string {
 	var providers []string
 
 	// Check OpenAI
-	if key, err := keyringGet(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
+	if configuredSecretExists(llm.OpenaiApiKeySecretName) {
 		providers = append(providers, "openai")
 	}
 
 	// Check Google
-	if key, err := keyringGet(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+	if configuredSecretExists(llm.GoogleApiKeySecretName) {
 		providers = append(providers, "google")
 	}
 
