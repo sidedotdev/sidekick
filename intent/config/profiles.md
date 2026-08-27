@@ -13,6 +13,16 @@ intent_links:
       - common/profile.go:MatchesProfile
       - common/model_provider_config.go:ModelProviderConfig
       - common/local_config_activity.go:ModelProviderPublicConfig
+  - intent: "#secrets"
+    code:
+      - secret_manager/profile.go:ProfileSecretName
+      - secret_manager/profile.go:NewProfileSecretManager
+      - secret_manager/secret_manager.go:KeyringSecretManager
+      - secret_manager/secret_manager.go:EnvSecretManager
+      - secret_manager/secret_manager.go:LocalConfigSecretManager
+      - flow_action/exec_context.go:ExecContext
+      - dev/dev_context.go:newTempLocalExecContext
+      - dev/dev_context.go:setupDevContextAction
 ---
 
 # Profiles

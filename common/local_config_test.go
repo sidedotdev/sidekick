@@ -296,6 +296,39 @@ profiles:
 		assert.Contains(t, err.Error(), "duplicate profile id: work")
 	})
 
+	t.Run("invalid config - profile id with disallowed characters", func(t *testing.T) {
+		invalidIdConfigPath := filepath.Join(tmpDir, "invalid_profile_id.yaml")
+		configYAML := `
+profiles:
+  - id: acme-corp
+`
+		require.NoError(t, os.WriteFile(invalidIdConfigPath, []byte(configYAML), 0644))
+
+		_, err := LoadSidekickConfig(invalidIdConfigPath)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid config")
+		assert.Contains(t, err.Error(), `invalid profile id "acme-corp"`)
+	})
+
+	t.Run("invalid config - provider association with disallowed characters", func(t *testing.T) {
+		invalidAssociationConfigPath := filepath.Join(tmpDir, "invalid_profile_association.yaml")
+		configYAML := `
+profiles:
+  - id: acme_corp
+providers:
+  - type: openai
+    key: abc123
+    profiles:
+      - acme corp
+`
+		require.NoError(t, os.WriteFile(invalidAssociationConfigPath, []byte(configYAML), 0644))
+
+		_, err := LoadSidekickConfig(invalidAssociationConfigPath)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid config")
+		assert.Contains(t, err.Error(), `invalid profile id "acme corp"`)
+	})
+
 	t.Run("invalid config - provider references undeclared profile", func(t *testing.T) {
 		undeclaredConfigPath := filepath.Join(tmpDir, "undeclared_profile.yaml")
 		configYAML := `

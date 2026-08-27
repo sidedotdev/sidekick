@@ -69,9 +69,12 @@ func TestProfileConfigValidate(t *testing.T) {
 		profile ProfileConfig
 		error   string
 	}{
-		{name: "valid", profile: ProfileConfig{Id: "work-1_a", Name: "Work"}},
-		{name: "id with unusual characters", profile: ProfileConfig{Id: "client a/b", Name: "Client A/B"}},
+		{name: "valid", profile: ProfileConfig{Id: "work_1a", Name: "Work"}},
 		{name: "missing id", profile: ProfileConfig{Name: "Work"}, error: "profile id is required"},
+		{name: "id with a slash", profile: ProfileConfig{Id: "client a/b"}, error: "invalid profile id"},
+		{name: "id with a hyphen", profile: ProfileConfig{Id: "acme-corp"}, error: "invalid profile id"},
+		{name: "id with a space", profile: ProfileConfig{Id: "acme corp"}, error: "invalid profile id"},
+		{name: "id with a dot", profile: ProfileConfig{Id: "acme.corp"}, error: "invalid profile id"},
 	}
 
 	for _, tt := range tests {
@@ -158,4 +161,55 @@ func TestProviderProfileAssociation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProfileIdsAreCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	t.Run("declaring the default profile with different casing overrides its name", func(t *testing.T) {
+		t.Parallel()
+		profiles := ResolveProfiles([]ProfileConfig{{Id: "Default", Name: "Personal"}})
+		assert.Equal(t, []Profile{{Id: "Default", Name: "Personal"}}, profiles)
+	})
+
+	t.Run("default profile name falls back regardless of casing", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, Profile{Id: "DEFAULT", Name: DefaultProfileName}, ProfileConfig{Id: "DEFAULT"}.Resolve())
+	})
+
+	t.Run("association matching ignores casing", func(t *testing.T) {
+		t.Parallel()
+		assert.True(t, MatchesProfile(&[]string{"Work"}, "work"))
+		assert.True(t, MatchesProfile(&[]string{"work"}, "WORK"))
+		assert.False(t, MatchesProfile(&[]string{"work"}, "personal"))
+	})
+
+	t.Run("duplicate profile declarations are rejected regardless of casing", func(t *testing.T) {
+		t.Parallel()
+		config := LocalConfig{Profiles: []ProfileConfig{{Id: "work"}, {Id: "Work"}}}
+		assert.ErrorContains(t, config.Validate(), "duplicate profile id")
+	})
+
+	t.Run("provider associations resolve declarations regardless of casing", func(t *testing.T) {
+		t.Parallel()
+		config := LocalConfig{
+			Profiles: []ProfileConfig{{Id: "Work"}},
+			Providers: []ModelProviderConfig{
+				{Name: "openai", Type: "openai", Key: "key", Profiles: &[]string{"work"}},
+			},
+		}
+		assert.NoError(t, config.Validate())
+	})
+}
+
+func TestProviderProfileAssociationValidation(t *testing.T) {
+	t.Parallel()
+
+	config := LocalConfig{
+		Profiles: []ProfileConfig{{Id: "acme_corp"}},
+		Providers: []ModelProviderConfig{
+			{Name: "openai", Type: "openai", Key: "key", Profiles: &[]string{"acme-corp"}},
+		},
+	}
+	assert.ErrorContains(t, config.Validate(), "invalid profile id")
 }

@@ -2,7 +2,9 @@ package common
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
+	"strings"
 )
 
 const (
@@ -23,8 +25,20 @@ type ProfileConfig struct {
 
 // Validate ensures the ProfileConfig is valid
 func (p ProfileConfig) Validate() error {
-	if p.Id == "" {
+	return ValidateProfileId(p.Id)
+}
+
+var validProfileId = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+// ValidateProfileId restricts profile ids to characters that are valid within
+// environment variable names, so that secret keys derived from a profile id can
+// never collide with those of another profile.
+func ValidateProfileId(profileId string) error {
+	if profileId == "" {
 		return fmt.Errorf("profile id is required")
+	}
+	if !validProfileId.MatchString(profileId) {
+		return fmt.Errorf("invalid profile id %q: only letters, digits and underscores are allowed", profileId)
 	}
 	return nil
 }
@@ -33,7 +47,7 @@ func (p ProfileConfig) Validate() error {
 func (p ProfileConfig) Resolve() Profile {
 	name := p.Name
 	if name == "" {
-		if p.Id == DefaultProfileId {
+		if profileIdKey(p.Id) == profileIdKey(DefaultProfileId) {
 			name = DefaultProfileName
 		} else {
 			name = p.Id
@@ -55,7 +69,7 @@ func ResolveProfiles(declarations []ProfileConfig) []Profile {
 	profiles := make([]Profile, 0, len(declarations)+1)
 	hasDefault := false
 	for _, declaration := range declarations {
-		if declaration.Id == DefaultProfileId {
+		if profileIdKey(declaration.Id) == profileIdKey(DefaultProfileId) {
 			hasDefault = true
 		}
 		profiles = append(profiles, declaration.Resolve())
@@ -74,6 +88,12 @@ func NormalizeProfileId(profileId string) string {
 	return profileId
 }
 
+// profileIdKey canonicalizes a profile id for comparison, since profile ids are
+// case-insensitive and a missing id means the default profile.
+func profileIdKey(profileId string) string {
+	return strings.ToLower(NormalizeProfileId(profileId))
+}
+
 // EffectiveProfileIds resolves a nullable profile association: a non-configured
 // (nil) association belongs to the default profile, while a configured list is
 // respected as-is, including when it is explicitly empty.
@@ -85,7 +105,11 @@ func EffectiveProfileIds(profiles *[]string) []string {
 }
 
 // MatchesProfile reports whether a nullable profile association includes the
-// given profile, where an empty profile id means the default profile.
+// given profile, where an empty profile id means the default profile. Profile
+// ids are compared case-insensitively.
 func MatchesProfile(profiles *[]string, profileId string) bool {
-	return slices.Contains(EffectiveProfileIds(profiles), NormalizeProfileId(profileId))
+	key := profileIdKey(profileId)
+	return slices.ContainsFunc(EffectiveProfileIds(profiles), func(candidate string) bool {
+		return profileIdKey(candidate) == key
+	})
 }

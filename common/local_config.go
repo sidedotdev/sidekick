@@ -58,17 +58,17 @@ func (c LocalConfig) validateProvider(provider string, allowAnthropicProvider bo
 
 // Validate ensures the LocalConfig is valid
 func (c LocalConfig) Validate() error {
-	declaredProfiles := map[string]bool{DefaultProfileId: true}
+	declaredProfiles := map[string]bool{profileIdKey(DefaultProfileId): true}
 	seenProfiles := map[string]bool{}
 	for _, p := range c.Profiles {
 		if err := p.Validate(); err != nil {
 			return err
 		}
-		if seenProfiles[p.Id] {
+		if seenProfiles[profileIdKey(p.Id)] {
 			return fmt.Errorf("duplicate profile id: %s", p.Id)
 		}
-		seenProfiles[p.Id] = true
-		declaredProfiles[p.Id] = true
+		seenProfiles[profileIdKey(p.Id)] = true
+		declaredProfiles[profileIdKey(p.Id)] = true
 	}
 
 	// Validate custom providers
@@ -77,7 +77,7 @@ func (c LocalConfig) Validate() error {
 			return fmt.Errorf("invalid custom LLM provider %s: %w", p.Name, err)
 		}
 		for _, profileId := range EffectiveProfileIds(p.Profiles) {
-			if !declaredProfiles[profileId] {
+			if !declaredProfiles[profileIdKey(profileId)] {
 				return fmt.Errorf("invalid provider %s: profile %q is not declared", p.Name, profileId)
 			}
 		}

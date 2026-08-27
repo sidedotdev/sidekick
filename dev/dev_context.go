@@ -160,7 +160,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		if configOverrides.Providers != nil {
 			tempProviders = *configOverrides.Providers
 		}
-		tempLocalExecContext, err = newTempLocalExecContext(ctx, workspaceId, repoDir, tempProviders, llmConfig, embeddingConfig)
+		tempLocalExecContext, err = newTempLocalExecContext(ctx, workspaceId, repoDir, defaultWorkspaceProfileId, tempProviders, llmConfig, embeddingConfig)
 		if err != nil {
 			return DevContext{}, err
 		}
@@ -588,17 +588,15 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		finalProviders = *configOverrides.Providers
 	}
 
+	profileId := defaultWorkspaceProfileId
 	eCtx := flow_action.ExecContext{
 		FlowScope:    &flow_action.FlowScope{},
 		Context:      ctx,
 		WorkspaceId:  workspaceId,
+		ProfileId:    profileId,
 		EnvContainer: &envContainer,
 		Secrets: &secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				secret_manager.KeyringSecretManager{},
-				secret_manager.LocalConfigSecretManager{},
-				secret_manager.EnvSecretManager{},
-			}),
+			SecretManager: secret_manager.NewProfileSecretManager(profileId),
 		},
 		Providers:       finalProviders, // TODO merge with workspace providers
 		EmbeddingConfig: embeddingConfig,
@@ -1033,6 +1031,7 @@ func newTempLocalExecContext(
 	ctx workflow.Context,
 	workspaceId string,
 	repoDir string,
+	profileId string,
 	providers []common.ModelProviderPublicConfig,
 	llmConfig common.LLMConfig,
 	embeddingConfig common.EmbeddingConfig,
@@ -1045,13 +1044,10 @@ func newTempLocalExecContext(
 		FlowScope:    &flow_action.FlowScope{},
 		Context:      ctx,
 		WorkspaceId:  workspaceId,
+		ProfileId:    profileId,
 		EnvContainer: &env.EnvContainer{Env: tempLocalEnv},
 		Secrets: &secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				secret_manager.KeyringSecretManager{},
-				secret_manager.LocalConfigSecretManager{},
-				secret_manager.EnvSecretManager{},
-			}),
+			SecretManager: secret_manager.NewProfileSecretManager(profileId),
 		},
 		Providers:       providers,
 		EmbeddingConfig: embeddingConfig,
@@ -1060,6 +1056,11 @@ func newTempLocalExecContext(
 	eCtx.SetLLMConfig(llmConfig)
 	return eCtx, nil
 }
+
+// defaultWorkspaceProfileId scopes secret resolution and model provider
+// selection for workspace flows.
+// TODO: use the workspace's own profile association once workspaces persist one.
+const defaultWorkspaceProfileId = common.DefaultProfileId
 
 // NewTempLocalExecContext is a workflow-facing wrapper around newTempLocalExecContext
 // that loads local/workspace configs via activities and applies any overrides.
@@ -1083,7 +1084,7 @@ func NewTempLocalExecContext(ctx workflow.Context, workspaceId, repoDir string, 
 	if configOverrides.Providers != nil {
 		providers = *configOverrides.Providers
 	}
-	eCtx, err := newTempLocalExecContext(ctx, workspaceId, repoDir, providers, llmConfig, embeddingConfig)
+	eCtx, err := newTempLocalExecContext(ctx, workspaceId, repoDir, defaultWorkspaceProfileId, providers, llmConfig, embeddingConfig)
 	if err != nil {
 		return flow_action.ExecContext{}, localConfig, workspaceConfig, err
 	}

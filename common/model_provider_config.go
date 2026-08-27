@@ -58,8 +58,8 @@ func (c ModelProviderConfig) Validate() error {
 	}
 	if c.Profiles != nil {
 		for _, profileId := range *c.Profiles {
-			if profileId == "" {
-				return fmt.Errorf("profile id is required for each associated profile")
+			if err := ValidateProfileId(profileId); err != nil {
+				return err
 			}
 		}
 	}
