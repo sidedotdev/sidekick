@@ -107,6 +107,7 @@ import { store, type ModelsData } from '../lib/store'
 const props = withDefaults(defineProps<{
   modelValue?: LLMConfig | null
   overlayBaseZIndex?: number
+  profileId?: string
 }>(), {
   overlayBaseZIndex: 0,
 })
@@ -147,20 +148,38 @@ const providerOptions = ref<string[]>([])
 const providersError = ref(false)
 const reasoningEffortOptions = ['', 'lowest', 'low', 'medium', 'high', 'highest'] as const
 
+const providersUrl = (): string => (
+  props.profileId
+    ? `/api/v1/providers?profileId=${encodeURIComponent(props.profileId)}`
+    : '/api/v1/providers'
+)
+
+// Profile changes can leave earlier requests in flight, so only the most
+// recently issued response is applied.
+let latestProvidersRequestId = 0
+
 const fetchProviders = async () => {
+  const requestId = ++latestProvidersRequestId
   try {
-    const response = await fetch('/api/v1/providers')
+    const response = await fetch(providersUrl())
+    if (requestId !== latestProvidersRequestId) return
     if (response.ok) {
       const data = await response.json()
+      if (requestId !== latestProvidersRequestId) return
       providerOptions.value = data.providers || []
       providersError.value = false
     } else {
       providersError.value = true
     }
   } catch {
+    if (requestId !== latestProvidersRequestId) return
     providersError.value = true
   }
 }
+
+watch(() => props.profileId, () => {
+  fetchProviders()
+})
 
 const modelsData = ref<ModelsData>({})
 const filteredModels = ref<string[]>([])

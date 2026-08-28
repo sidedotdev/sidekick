@@ -9,6 +9,12 @@
       <input id="localRepoDir" v-model="localRepoDir" required placeholder="Path to local repository">
     </div>
     <div>
+      <label for="profileId">Profile</label>
+      <select id="profileId" v-model="selectedProfileId">
+        <option v-for="profile in profileOptions" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+      </select>
+    </div>
+    <div>
       <label>Configuration Mode</label>
       <select v-model="configMode">
         <option value="local">Local only</option>
@@ -18,11 +24,11 @@
     </div>
     <div v-show="configMode !== 'local'">
       <label>LLMs</label>
-      <LlmConfigEditor v-model="llmConfig" />
+      <LlmConfigEditor v-model="llmConfig" :profile-id="effectiveProfileId" />
     </div>
     <div v-show="configMode !== 'local'">
       <label>Embeddings</label>
-      <EmbeddingConfigEditor v-model="embeddingConfig" />
+      <EmbeddingConfigEditor v-model="embeddingConfig" :profile-id="effectiveProfileId" />
     </div>
     <div class="button-container">
       <button type="submit" class="submit-button">{{ isEditing ? 'Update' : 'Create' }} Workspace</button>
@@ -35,6 +41,7 @@ import { ref, computed, onMounted } from 'vue';
 import LlmConfigEditor from '@/components/LlmConfigEditor.vue';
 import EmbeddingConfigEditor from '@/components/EmbeddingConfigEditor.vue';
 import type { Workspace, LLMConfig, EmbeddingConfig } from '@/lib/models';
+import { useProfiles, DEFAULT_PROFILE_ID } from '@/lib/profiles';
 
 const props = defineProps<{
   workspace: Workspace;
@@ -56,6 +63,36 @@ const llmConfig = ref<LLMConfig>({
 const embeddingConfig = ref<EmbeddingConfig>({ 
   defaults: props.workspace.embeddingConfig?.defaults?.length ? [...props.workspace.embeddingConfig.defaults] : [{ provider: '', model: '' }], 
   useCaseConfigs: {}
+});
+
+const { profiles, profileName } = useProfiles();
+
+// Profile ids match case-insensitively, so the declared spelling is used to
+// keep the selection aligned with the listed options. An unset profile means
+// the default profile, so it is never persisted.
+const selectedProfileId = computed({
+  get: () => {
+    const current = profileId.value || DEFAULT_PROFILE_ID;
+    const declared = profiles.value.find(profile => profile.id.toLowerCase() === current.toLowerCase());
+    return declared?.id ?? current;
+  },
+  set: (value: string) => {
+    profileId.value = value === DEFAULT_PROFILE_ID ? undefined : value;
+  }
+});
+
+// Undefined means the default profile, which is never persisted.
+const effectiveProfileId = computed(() => (
+  selectedProfileId.value === DEFAULT_PROFILE_ID ? undefined : selectedProfileId.value
+));
+
+const profileOptions = computed(() => {
+  const options = profiles.value.map(profile => ({ id: profile.id, name: profile.name || profile.id }));
+  const selected = selectedProfileId.value;
+  if (!options.some(option => option.id.toLowerCase() === selected.toLowerCase())) {
+    options.push({ id: selected, name: profileName(selected) });
+  }
+  return options;
 });
 
 const isEditing = computed(() => !!props.workspace.id);
@@ -85,7 +122,7 @@ const submitWorkspace = async () => {
     name: name.value,
     localRepoDir: localRepoDir.value,
     configMode: configMode.value,
-    profileId: profileId.value,
+    profileId: effectiveProfileId.value,
     llmConfig: filterEmptyUseCaseKeys(llmConfig.value),
     embeddingConfig: filterEmptyUseCaseKeys(embeddingConfig.value)
   };

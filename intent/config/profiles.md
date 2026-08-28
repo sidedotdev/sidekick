@@ -81,6 +81,9 @@ intent_links:
       - client/workspace.go:CreateWorkspaceRequest
       - frontend/src/lib/models.ts:Workspace
       - frontend/src/components/WorkspaceForm.vue
+      - frontend/src/components/LlmConfigEditor.vue
+      - frontend/src/components/EmbeddingConfigEditor.vue
+      - frontend/src/components/__tests__/WorkspaceForm.spec.ts
 ---
 
 # Profiles
