@@ -208,3 +208,48 @@ func TestSeedAdvisorRequirementsActivity_NilHistory(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Nil(t, out.Ref)
 }
+
+func TestSummarizeExecutorHistoryActivity_ExcludesSeededInitialInstructions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	storage := sqlite.NewTestSqliteStorage(t, "advisor")
+	const flowId = "flow_without_duplicate_requirements"
+	const workspaceId = "ws_test"
+
+	hydrated := persisted_ai.NewLlm2ChatHistory(flowId, workspaceId)
+	hydrated.Append(common.ChatMessage{
+		Role:        common.ChatMessageRoleUser,
+		Content:     "initial code context that is separately seeded",
+		ContextType: ContextTypeInitialInstructions,
+	})
+	hydrated.Append(common.ChatMessage{
+		Role:    common.ChatMessageRoleAssistant,
+		Content: "executor progress after reading the initial context",
+	})
+	require.NoError(t, hydrated.Persist(ctx, storage, persisted_ai.NewKsuidGenerator()))
+
+	refsOnly := persisted_ai.NewLlm2ChatHistory(flowId, workspaceId)
+	refsOnly.SetRefs(hydrated.Refs())
+	executorHistory := &persisted_ai.ChatHistoryContainer{History: refsOnly}
+
+	a := &AdvisorActivities{Storage: storage}
+	ref, err := a.SummarizeExecutorRecentHistoryActivity(ctx, SummarizeExecutorHistoryInput{
+		ExecutorHistory:   executorHistory,
+		MaxRecentMessages: advisorMaxRecentMessages,
+		FlowId:            flowId,
+		WorkspaceId:       workspaceId,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, ref)
+	require.Len(t, ref.BlockKeys, 1)
+
+	values, err := storage.MGet(ctx, workspaceId, []string{persisted_ai.StorageKey(flowId, ref.BlockKeys[0])})
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	require.NotNil(t, values[0])
+
+	var block llm2.ContentBlock
+	require.NoError(t, json.Unmarshal(values[0], &block))
+	assert.NotContains(t, block.Text, "initial code context that is separately seeded")
+	assert.Contains(t, block.Text, "executor progress after reading the initial context")
+}

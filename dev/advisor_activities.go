@@ -29,12 +29,26 @@ type SummarizeExecutorHistoryInput struct {
 // block, and returns a ref to that block. Hydration happens inside the activity
 // because the in-workflow chat history is refs-only (not hydrated).
 func (a *AdvisorActivities) SummarizeExecutorHistoryActivity(ctx context.Context, input SummarizeExecutorHistoryInput) (*persisted_ai.MessageRef, error) {
+	return a.summarizeExecutorHistory(ctx, input, renderExecutorTranscript)
+}
+
+// SummarizeExecutorRecentHistoryActivity omits initial instructions because
+// they are persisted separately in the advisor history.
+func (a *AdvisorActivities) SummarizeExecutorRecentHistoryActivity(ctx context.Context, input SummarizeExecutorHistoryInput) (*persisted_ai.MessageRef, error) {
+	return a.summarizeExecutorHistory(ctx, input, renderExecutorRecentTranscript)
+}
+
+func (a *AdvisorActivities) summarizeExecutorHistory(
+	ctx context.Context,
+	input SummarizeExecutorHistoryInput,
+	renderTranscript func([]common.Message, int) string,
+) (*persisted_ai.MessageRef, error) {
 	transcript := "(no executor history yet)"
 	if input.ExecutorHistory != nil {
 		if err := input.ExecutorHistory.Hydrate(ctx, a.Storage); err != nil {
 			return nil, fmt.Errorf("failed to hydrate executor history: %w", err)
 		}
-		if rendered := renderExecutorTranscript(input.ExecutorHistory.Messages(), input.MaxRecentMessages); rendered != "" {
+		if rendered := renderTranscript(input.ExecutorHistory.Messages(), input.MaxRecentMessages); rendered != "" {
 			transcript = rendered
 		}
 	}
@@ -59,15 +73,22 @@ func renderExecutorTranscript(msgs []common.Message, maxRecent int) string {
 	}
 	var b strings.Builder
 	for _, m := range msgs[start:] {
-		if message, ok := m.(llm2.Message); ok {
-			for _, block := range message.Content {
-				if block.Reasoning == nil {
-					continue
-				}
-				summary := strings.TrimSpace(block.Reasoning.Summary)
-				if summary != "" {
-					b.WriteString(fmt.Sprintf("[%s] thinking_summary %s\n", m.GetRole(), summary))
-				}
+		var contentBlocks []llm2.ContentBlock
+		switch message := m.(type) {
+		case llm2.Message:
+			contentBlocks = message.Content
+		case *llm2.Message:
+			if message != nil {
+				contentBlocks = message.Content
+			}
+		}
+		for _, block := range contentBlocks {
+			if block.Reasoning == nil {
+				continue
+			}
+			summary := strings.TrimSpace(block.Reasoning.Summary)
+			if summary != "" {
+				b.WriteString(fmt.Sprintf("[%s] thinking_summary %s\n", m.GetRole(), summary))
 			}
 		}
 		content := strings.TrimSpace(m.GetContentString())
@@ -142,4 +163,23 @@ func llm2MessageContextType(msg llm2.Message) string {
 		}
 	}
 	return ""
+}
+
+func renderExecutorRecentTranscript(msgs []common.Message, maxRecent int) string {
+	filtered := make([]common.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		isInitialInstructions := false
+		switch m := msg.(type) {
+		case llm2.Message:
+			isInitialInstructions = llm2MessageContextType(m) == persisted_ai.ContextTypeInitialInstructions
+		case *llm2.Message:
+			isInitialInstructions = m != nil && llm2MessageContextType(*m) == persisted_ai.ContextTypeInitialInstructions
+		case common.ChatMessage:
+			isInitialInstructions = m.ContextType == persisted_ai.ContextTypeInitialInstructions
+		}
+		if !isInitialInstructions {
+			filtered = append(filtered, msg)
+		}
+	}
+	return renderExecutorTranscript(filtered, maxRecent)
 }
