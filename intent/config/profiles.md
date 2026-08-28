@@ -35,6 +35,19 @@ intent_links:
       - cli/init_command.go:getConfiguredBuiltinEmbeddingProviders
       - openai_oauth/openai_oauth.go:StoreForProfileFn
       - llm/anthropic_tool_chat.go:storeAnthropicOAuthCredentialsForProfile
+  - intent: "#workspaces"
+    code:
+      - domain/workspace.go:Workspace
+      - domain/workspace.go:EffectiveProfileId
+      - domain/workspace_test.go
+      - srv/sqlite/migrations/016_add_profile_id_to_workspaces.up.sql
+      - srv/sqlite/migrations/016_add_profile_id_to_workspaces.down.sql
+      - srv/sqlite/workspace.go:PersistWorkspace
+      - srv/sqlite/workspace.go:GetWorkspace
+      - srv/sqlite/workspace.go:GetAllWorkspaces
+      - srv/sqlite/workspace_test.go:TestWorkspaceProfilePersistence
+      - srv/sqlite/migrate_test.go:TestWorkspaceProfileMigrationPreservesExistingWorkspaces
+      - srv/redis/workspace_test.go:TestPersistWorkspaceProfile
 ---
 
 # Profiles
