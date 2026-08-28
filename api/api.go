@@ -106,8 +106,14 @@ type Controller struct {
 	temporalNamespace string
 	temporalTaskQueue string
 	secretManager     secret_manager.SecretManager
-	taskStartTimeout  time.Duration
-	allowedOrigins    *AllowedOrigins
+	// secretManagerForProfile resolves credentials stored under a specific
+	// profile. When nil, only the default-profile secretManager is available.
+	secretManagerForProfile func(profileId string) secret_manager.SecretManager
+	// loadLocalConfig reads the local sidekick config, defaulting to the config
+	// file discovered on disk.
+	loadLocalConfig  func() (common.LocalConfig, error)
+	taskStartTimeout time.Duration
+	allowedOrigins   *AllowedOrigins
 }
 
 type ModelConfigUpdateRequest struct {
@@ -227,6 +233,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	ctrl.allowedOrigins = allowedOrigins
 
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
+	r.GET("/api/v1/profiles", ctrl.GetProfilesHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
 	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)
 	r.POST("/api/v1/open-in-ide", ctrl.OpenInIdeHandler)
@@ -340,26 +347,31 @@ func NewController() (Controller, error) {
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
 		secretManager:     secretManager,
-		taskStartTimeout:  common.GetTaskStartTimeout(),
+		secretManagerForProfile: func(profileId string) secret_manager.SecretManager {
+			return secret_manager.NewProfileSecretManager(profileId)
+		},
+		taskStartTimeout: common.GetTaskStartTimeout(),
 	}, nil
 }
 
 func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
+	profileId := common.NormalizeProfileId(c.Query("profileId"))
 	providers := []string{}
 	seen := make(map[string]bool)
 
-	config, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+	config, err := ctrl.localConfig()
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to load sidekick config")
 	} else {
 		for _, p := range config.Providers {
-			if p.Name != "" && !seen[p.Name] {
+			if p.Name != "" && !seen[p.Name] && p.MatchesProfile(profileId) {
 				providers = append(providers, p.Name)
 				seen[p.Name] = true
 			}
 		}
 	}
 
+	secretManager := ctrl.profileSecretManager(profileId)
 	for _, builtinProvider := range common.BuiltinProviders {
 		if seen[builtinProvider] {
 			continue
@@ -376,7 +388,7 @@ func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 		}
 
 		for _, secretName := range secretNames {
-			if _, err := ctrl.secretManager.GetSecret(secretName); err == nil {
+			if _, err := secretManager.GetSecret(secretName); err == nil {
 				if !slices.Contains(providers, builtinProvider) {
 					providers = append(providers, builtinProvider)
 				}
@@ -386,6 +398,37 @@ func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"providers": providers})
+}
+
+// GetProfilesHandler returns the declared profiles, always including the
+// default profile, so clients can display profile names derived from ids.
+func (ctrl *Controller) GetProfilesHandler(c *gin.Context) {
+	var declarations []common.ProfileConfig
+
+	config, err := ctrl.localConfig()
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to load sidekick config")
+	} else {
+		declarations = config.Profiles
+	}
+
+	c.JSON(http.StatusOK, gin.H{"profiles": common.ResolveProfiles(declarations)})
+}
+
+func (ctrl *Controller) localConfig() (common.LocalConfig, error) {
+	if ctrl.loadLocalConfig != nil {
+		return ctrl.loadLocalConfig()
+	}
+	return common.LoadSidekickConfig(common.GetSidekickConfigPath())
+}
+
+// profileSecretManager resolves credentials for the given profile, falling back
+// to the default-profile secret manager when no profile factory is configured.
+func (ctrl *Controller) profileSecretManager(profileId string) secret_manager.SecretManager {
+	if ctrl.secretManagerForProfile == nil {
+		return ctrl.secretManager
+	}
+	return ctrl.secretManagerForProfile(profileId)
 }
 
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {

@@ -7,12 +7,24 @@ intent_links:
       - common/profile.go:ResolveProfiles
       - common/local_config.go:LocalConfig
       - common/local_config_activity.go:LocalPublicConfig
+  - intent: "#editing--deleting-profiles"
+    code:
+      - api/api.go:GetProfilesHandler
+      - api/profiles_api_test.go:TestGetProfilesHandler
+      - frontend/src/lib/models.ts:Profile
+      - frontend/src/lib/profiles.ts
+      - frontend/src/lib/store.ts:store
+      - frontend/src/lib/__tests__/profiles.spec.ts
   - intent: "#llm-and-embedding-providers"
     code:
       - common/profile.go:EffectiveProfileIds
       - common/profile.go:MatchesProfile
       - common/model_provider_config.go:ModelProviderConfig
       - common/local_config_activity.go:ModelProviderPublicConfig
+      - api/api.go:GetProvidersHandler
+      - api/api.go:profileSecretManager
+      - api/profiles_api_test.go:TestGetProvidersHandlerFiltersByProfile
+      - api/profiles_api_test.go:TestGetProvidersHandlerBuiltinCredentialsAreProfileScoped
   - intent: "#secrets"
     code:
       - secret_manager/profile.go:ProfileSecretName
