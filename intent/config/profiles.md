@@ -37,6 +37,16 @@ intent_links:
       - llm/anthropic_tool_chat.go:storeAnthropicOAuthCredentialsForProfile
   - intent: "#workspaces"
     code:
+      - common/profile_filter.go
+      - dev/dev_context.go:resolvedConfigs
+      - dev/dev_context.go:getConfigs
+      - dev/dev_context.go:applyProfileFilter
+      - dev/dev_context.go:applyConfigOverrides
+      - dev/dev_context.go:profileScopedConfig
+      - dev/dev_context.go:setupDevContextAction
+      - dev/dev_context.go:NewTempLocalExecContext
+      - dev/dev_context_profile_filter_test.go
+      - common/profile_filter_test.go
       - domain/workspace.go:Workspace
       - domain/workspace.go:EffectiveProfileId
       - domain/workspace_test.go
