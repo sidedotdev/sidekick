@@ -15,7 +15,7 @@ const mockModelsData = {
 };
 
 const createMockFetch = (workspaceResponse: object) => {
-  return vi.fn((url: string) => {
+  return vi.fn((url: string, options?: RequestInit) => {
     if (url === '/api/v1/providers') {
       return Promise.resolve({
         ok: true,
@@ -172,6 +172,45 @@ describe('WorkspaceForm.vue', () => {
     //if (wrapper.emitted('updated')) {
     //  expect(wrapper.emitted('updated')[0]).toEqual([{ id: '456', name: 'Updated Workspace', localRepoDir: '/updated/repo/dir', config: { llm: { defaultConfig: { provider: 'openai', model: 'gpt-4' } }, embedding: { defaultConfig: { provider: 'openai', model: 'text-embedding-ada-002' } } } }]);
     //}
+  });
+
+  it('preserves the existing workspace profile when updating', async () => {
+    const mockFetch = createMockFetch({ workspace: { id: '999' } });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const existingWorkspace: Workspace = {
+      id: '999',
+      name: 'Work Workspace',
+      localRepoDir: '/work/repo/dir',
+      configMode: 'merge',
+      profileId: 'work',
+      llmConfig: {
+        defaults: [{ provider: 'anthropic', model: '' }],
+        useCaseConfigs: {}
+      },
+      embeddingConfig: {
+        defaults: [{ provider: 'openai', model: '' }],
+        useCaseConfigs: {}
+      }
+    };
+
+    const wrapper = mount(WorkspaceForm, {
+      props: { workspace: existingWorkspace }
+    });
+
+    await vi.waitFor(() => {
+      const llmEditor = wrapper.findComponent(LlmConfigEditor);
+      const options = llmEditor.find('.provider-select').findAll('option');
+      expect(options.length).toBeGreaterThan(1);
+    });
+
+    await wrapper.find('form').trigger('submit.prevent');
+
+    const updateCall = mockFetch.mock.calls.find(([url]) => url === '/api/v1/workspaces/999');
+    expect(updateCall).toBeDefined();
+    const requestBody = updateCall?.[1]?.body;
+    expect(typeof requestBody).toBe('string');
+    expect(JSON.parse(requestBody as string).profileId).toBe('work');
   });
 
   it('populates form fields with existing workspace data when editing', async () => {

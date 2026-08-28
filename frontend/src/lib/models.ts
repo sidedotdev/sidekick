@@ -39,6 +39,7 @@ export interface Workspace {
   name: string
   localRepoDir: string
   configMode?: string
+  profileId?: string
   llmConfig?: LLMConfig | null
   embeddingConfig?: EmbeddingConfig | null
 }

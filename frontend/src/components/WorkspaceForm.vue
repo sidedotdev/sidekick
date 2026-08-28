@@ -48,6 +48,7 @@ const emit = defineEmits<{
 const name = ref('');
 const localRepoDir = ref('');
 const configMode = ref('merge');
+const profileId = ref<string | undefined>(undefined);
 const llmConfig = ref<LLMConfig>({ 
   defaults: props.workspace.llmConfig?.defaults?.length ? [...props.workspace.llmConfig.defaults] : [{ provider: '', model: '' }], 
   useCaseConfigs: props.workspace.llmConfig?.useCaseConfigs ? { ...props.workspace.llmConfig.useCaseConfigs } : {}
@@ -64,6 +65,7 @@ onMounted(() => {
     name.value = props.workspace.name;
     localRepoDir.value = props.workspace.localRepoDir;
     configMode.value = props.workspace.configMode || 'merge';
+    profileId.value = props.workspace.profileId;
   }
 });
 
@@ -83,6 +85,7 @@ const submitWorkspace = async () => {
     name: name.value,
     localRepoDir: localRepoDir.value,
     configMode: configMode.value,
+    profileId: profileId.value,
     llmConfig: filterEmptyUseCaseKeys(llmConfig.value),
     embeddingConfig: filterEmptyUseCaseKeys(embeddingConfig.value)
   };

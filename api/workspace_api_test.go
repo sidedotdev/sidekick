@@ -1079,3 +1079,174 @@ func TestCreateWorkspaceBranchHandler(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, resp.Code)
 	})
 }
+
+func TestWorkspaceHandlersProfileId(t *testing.T) {
+	t.Parallel()
+
+	createWorkspace := func(t *testing.T, ctrl Controller, req WorkspaceRequest) (*httptest.ResponseRecorder, WorkspaceResponse) {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		jsonData, err := json.Marshal(req)
+		require.NoError(t, err)
+		c.Request = httptest.NewRequest("POST", "/v1/workspaces", bytes.NewBuffer(jsonData))
+		ctrl.CreateWorkspaceHandler(c)
+
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		if resp.Code == http.StatusOK {
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		}
+		return resp, responseBody.Workspace
+	}
+
+	updateWorkspace := func(t *testing.T, ctrl Controller, workspaceId string, req WorkspaceRequest) (*httptest.ResponseRecorder, WorkspaceResponse) {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		jsonData, err := json.Marshal(req)
+		require.NoError(t, err)
+		c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspaceId, bytes.NewBuffer(jsonData))
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspaceId}}
+		ctrl.UpdateWorkspaceHandler(c)
+
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		if resp.Code == http.StatusOK {
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		}
+		return resp, responseBody.Workspace
+	}
+
+	t.Run("create persists and returns the requested profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, created := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Work Workspace",
+			LocalRepoDir: "/path/to/work/repo",
+			ProfileId:    "work",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "work", created.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), created.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "work", persisted.ProfileId)
+		assert.Equal(t, "work", persisted.EffectiveProfileId())
+	})
+
+	t.Run("create without a profile leaves the workspace on the default profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, created := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Unassigned Workspace",
+			LocalRepoDir: "/path/to/repo",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Empty(t, created.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), created.Id)
+		require.NoError(t, err)
+		assert.Empty(t, persisted.ProfileId)
+		assert.Equal(t, common.DefaultProfileId, persisted.EffectiveProfileId())
+	})
+
+	t.Run("create rejects an invalid profile id", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, _ := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Bad Profile Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ProfileId:    "not a profile",
+		})
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "invalid profile id")
+	})
+
+	t.Run("get returns the persisted profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_get",
+			Name:         "Personal Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+			ProfileId:    "personal",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+workspace.Id, nil)
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspace.Id}}
+		ctrl.GetWorkspaceHandler(c)
+
+		require.Equal(t, http.StatusOK, resp.Code)
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		assert.Equal(t, "personal", responseBody.Workspace.ProfileId)
+	})
+
+	t.Run("update sets and clears the profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_update",
+			Name:         "Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp, updated := updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+			ProfileId:    "work",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "work", updated.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), workspace.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "work", persisted.ProfileId)
+
+		resp, updated = updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Empty(t, updated.ProfileId)
+
+		persisted, err = ctrl.service.GetWorkspace(context.Background(), workspace.Id)
+		require.NoError(t, err)
+		assert.Empty(t, persisted.ProfileId)
+		assert.Equal(t, common.DefaultProfileId, persisted.EffectiveProfileId())
+	})
+
+	t.Run("update rejects an invalid profile id", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_update_invalid",
+			Name:         "Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp, _ := updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+			ProfileId:    "not a profile",
+		})
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "invalid profile id")
+	})
+}

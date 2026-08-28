@@ -48,6 +48,17 @@ intent_links:
       - srv/sqlite/workspace_test.go:TestWorkspaceProfilePersistence
       - srv/sqlite/migrate_test.go:TestWorkspaceProfileMigrationPreservesExistingWorkspaces
       - srv/redis/workspace_test.go:TestPersistWorkspaceProfile
+      - api/workspace_api.go:WorkspaceRequest
+      - api/workspace_api.go:WorkspaceResponse
+      - api/workspace_api.go:validateRequestedProfileId
+      - api/workspace_api.go:CreateWorkspaceHandler
+      - api/workspace_api.go:GetWorkspaceHandler
+      - api/workspace_api.go:UpdateWorkspaceHandler
+      - api/workspace_api_test.go:TestWorkspaceHandlersProfileId
+      - client/workspace.go:workspaceResponse
+      - client/workspace.go:CreateWorkspaceRequest
+      - frontend/src/lib/models.ts:Workspace
+      - frontend/src/components/WorkspaceForm.vue
 ---
 
 # Profiles
