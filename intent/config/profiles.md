@@ -146,10 +146,7 @@ prefix for backwards compatibility reasons.
 When a secret is stored, and any profiles exist beyond "default", then the
 secret must be stored under each individual key. This entails that the side
 auth/init subcommands support selecting profiles when saving a secret, if any
-are declared beyond the default. The default profile is preselected in that
-prompt, so accepting it unchanged stores the secret exactly as it would be
-stored when no profiles are declared, and submitting an empty selection is
-rejected in-prompt rather than aborting the command.
+are declared beyond the default.
 
 When secrets are derived from local config, the profile is instead used to
 filter the array of configurations to relevant ones only. Thus, secret
