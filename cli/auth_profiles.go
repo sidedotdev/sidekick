@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
-	"github.com/erikgeiser/promptkit/selection"
-	"github.com/erikgeiser/promptkit/textinput"
 	"github.com/zalando/go-keyring"
 )
 
@@ -80,11 +78,10 @@ func validateProfileSelection(credentialName string, profileIds []string) error 
 var confirmOverwriteExisting = func(subject string, profileIds []string) (bool, error) {
 	describedSubject := describeCredentialForProfiles(subject, profileIds)
 	keepChoice := fmt.Sprintf("Keep existing %s", subject)
-	overwriteSelection := selection.New(
+	choice, err := selectOption(
 		fmt.Sprintf("An existing %s was found. What would you like to do?", describedSubject),
 		[]string{keepChoice, fmt.Sprintf("Overwrite with new %s", subject)},
 	)
-	choice, err := overwriteSelection.RunPrompt()
 	if err != nil {
 		return false, fmt.Errorf("selection failed: %w", err)
 	}
@@ -100,9 +97,15 @@ func describeCredentialForProfiles(subject string, profileIds []string) string {
 
 // promptAPIKey reads an API key from the user. Overridable in tests.
 var promptAPIKey = func(providerName string) (string, error) {
-	apiKeyInput := textinput.New(fmt.Sprintf("Enter your %s API Key: ", providerName))
-	apiKeyInput.Hidden = true
-	return apiKeyInput.RunPrompt()
+	var apiKey string
+	err := runPrompt(huh.NewInput().
+		Title(fmt.Sprintf("Enter your %s API Key", providerName)).
+		EchoMode(huh.EchoModePassword).
+		Value(&apiKey))
+	if err != nil {
+		return "", err
+	}
+	return apiKey, nil
 }
 
 // selectCredentialProfiles determines the profiles a credential should be
