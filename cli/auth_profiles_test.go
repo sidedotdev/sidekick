@@ -63,8 +63,6 @@ func stubDefaultProfileOnly(t *testing.T) {
 	}
 }
 
-// submitProfileSelectionPrompt runs the real profile prompt, feeding it the
-// given keystrokes, and returns the profiles it yields.
 func submitProfileSelectionPrompt(t *testing.T, profiles []common.Profile, keystrokes string) ([]string, error) {
 	t.Helper()
 

@@ -36,10 +36,9 @@ var promptProfileSelection = func(credentialName string, profiles []common.Profi
 	return selected, nil
 }
 
-// profileSelectionForm builds the profile prompt, binding its selection to the
-// given slice. The default profile starts out checked, since the multi-select
-// only highlights the option under the cursor: without a starting selection,
-// submitting the prompt untouched would yield no profiles at all.
+// profileSelectionForm builds the profile prompt with the default profile
+// checked, since the multi-select only highlights the option under the cursor
+// and would otherwise submit nothing.
 func profileSelectionForm(credentialName string, profiles []common.Profile, selected *[]string) *huh.Form {
 	options := make([]huh.Option[string], 0, len(profiles))
 	for _, profile := range profiles {
@@ -58,10 +57,8 @@ func profileSelectionForm(credentialName string, profiles []common.Profile, sele
 	))
 }
 
-// profileSelectionDefaults returns the initially checked profile ids. The id is
-// taken from the declaration rather than the default profile constant, so that
-// it matches the corresponding option value even when the default profile is
-// declared with different casing.
+// profileSelectionDefaults returns the initially checked profile ids, taken
+// from the declarations so they match their option values regardless of casing.
 func profileSelectionDefaults(profiles []common.Profile) []string {
 	for _, profile := range profiles {
 		if strings.EqualFold(common.NormalizeProfileId(profile.Id), common.DefaultProfileId) {
