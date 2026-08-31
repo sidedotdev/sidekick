@@ -29,24 +29,53 @@ var loadDeclaredProfiles = func() ([]common.Profile, error) {
 // promptProfileSelection asks which profiles a credential applies to.
 // Overridable in tests.
 var promptProfileSelection = func(credentialName string, profiles []common.Profile) ([]string, error) {
+	var selected []string
+	if err := profileSelectionForm(credentialName, profiles, &selected).Run(); err != nil {
+		return nil, fmt.Errorf("profile selection failed: %w", err)
+	}
+	return selected, nil
+}
+
+// profileSelectionForm builds the profile prompt, binding its selection to the
+// given slice. The default profile starts out checked, since the multi-select
+// only highlights the option under the cursor: without a starting selection,
+// submitting the prompt untouched would yield no profiles at all.
+func profileSelectionForm(credentialName string, profiles []common.Profile, selected *[]string) *huh.Form {
 	options := make([]huh.Option[string], 0, len(profiles))
 	for _, profile := range profiles {
 		options = append(options, huh.NewOption(profile.Name, profile.Id))
 	}
+	*selected = profileSelectionDefaults(profiles)
 
-	var selected []string
-	err := huh.NewMultiSelect[string]().
-		Title(fmt.Sprintf("Which profiles should these %s credentials apply to?", credentialName)).
-		Options(options...).
-		Value(&selected).
-		Run()
-	if err != nil {
-		return nil, fmt.Errorf("profile selection failed: %w", err)
+	return huh.NewForm(huh.NewGroup(
+		huh.NewMultiSelect[string]().
+			Title(fmt.Sprintf("Which profiles should these %s credentials apply to?", credentialName)).
+			Options(options...).
+			Validate(func(selection []string) error {
+				return validateProfileSelection(credentialName, selection)
+			}).
+			Value(selected),
+	))
+}
+
+// profileSelectionDefaults returns the initially checked profile ids. The id is
+// taken from the declaration rather than the default profile constant, so that
+// it matches the corresponding option value even when the default profile is
+// declared with different casing.
+func profileSelectionDefaults(profiles []common.Profile) []string {
+	for _, profile := range profiles {
+		if strings.EqualFold(common.NormalizeProfileId(profile.Id), common.DefaultProfileId) {
+			return []string{profile.Id}
+		}
 	}
-	if len(selected) == 0 {
-		return nil, fmt.Errorf("no profile selected for %s credentials", credentialName)
+	return nil
+}
+
+func validateProfileSelection(credentialName string, profileIds []string) error {
+	if len(profileIds) == 0 {
+		return fmt.Errorf("no profile selected for %s credentials", credentialName)
 	}
-	return selected, nil
+	return nil
 }
 
 // confirmOverwriteExisting asks whether credentials already stored for the
