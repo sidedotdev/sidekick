@@ -45,6 +45,7 @@ agent_config:
 command_permissions:
   auto_approve:
     - pattern: "gotestreport"
+    - pattern: "go run ./cmd/gotestreport"
     - pattern: "go run ./scripts/affected_tests"
     - pattern: "docker build"
     - pattern: "docker logs"
@@ -58,7 +59,9 @@ command_permissions:
     - pattern: "bun test:unit.*--run"
     - pattern: "go run ./worker/replay"
     - pattern: "go run ./scripts/run_activity"
+    - pattern: "go run ./scripts/dump*"
     - pattern: "go run ./scripts/lint_.*"
+    - pattern: "go run ./scripts/modal_sandbox_status"
     - pattern: "playwright-cli"
 
 openshell:
