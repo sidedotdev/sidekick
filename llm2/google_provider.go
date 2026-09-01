@@ -443,7 +443,7 @@ func googleGroundingToEvents(gm *genai.GroundingMetadata, state *googleStreamSta
 			Type:  EventBlockStarted,
 			Index: resultIdx,
 			ContentBlock: &ContentBlock{
-				Type:             ContentBlockTypeBuiltinToolResult,
+				Type:              ContentBlockTypeBuiltinToolResult,
 				BuiltinToolResult: result,
 			},
 		},

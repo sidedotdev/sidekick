@@ -10,6 +10,7 @@
         </span>
       </p>
       <p class="auth-type" v-if="authType">Auth type: {{ authType }}</p>
+      <p class="profile" v-if="resolvedProfileName">Profile: {{ resolvedProfileName }}</p>
       <p class="model-usage" v-if="parsedActionResult && !completionParseFailure && flowAction.actionStatus !== 'pending' && flowAction.actionStatus !== 'started' && usage && (usage.inputTokens || usage.outputTokens)">
         <span v-if="usage.inputTokens">{{ formatTokens(usage.inputTokens) }} in</span><span v-if="usage.inputTokens && (usage.cacheReadInputTokens || usage.cacheWriteInputTokens)"> (<span v-if="usage.cacheReadInputTokens">{{ formatTokens(usage.cacheReadInputTokens) }} cached</span><span v-if="usage.cacheReadInputTokens && usage.cacheWriteInputTokens">, </span><span v-if="usage.cacheWriteInputTokens">{{ formatTokens(usage.cacheWriteInputTokens) }} written</span>)</span><span v-if="usage.inputTokens && usage.outputTokens"> · </span><span v-if="usage.outputTokens">{{ formatTokens(usage.outputTokens) }} out</span>
       </p>
@@ -205,6 +206,7 @@
 <script setup lang="ts">
 import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage, StreamingData, Llm2Message, Llm2ContentBlock, ChatHistoryParamPayload } from '../lib/models';
 import { isLlm2ChatHistoryWrapper } from '../lib/models';
+import { useProfiles } from '../lib/profiles';
 import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
 import ImagePreview from './ImagePreview.vue'
@@ -344,6 +346,14 @@ const effectiveModel = computed(() => props.flowAction.actionParams.model || par
 const effectiveProvider = computed(() => props.flowAction.actionParams.provider || parsedActionResult.value?.provider || completion.value?.provider || '')
 const effectiveReasoningEffort = computed(() => parsedActionResult.value?.reasoningEffort || props.flowAction.actionParams.reasoningEffort || '')
 const authType = computed(() => parsedActionResult.value?.authType || '')
+
+const { profiles, profileName } = useProfiles()
+// The profile is only worth calling out when more than one is configured.
+const resolvedProfileName = computed(() => {
+  const profileId = parsedActionResult.value?.profileId
+  if (!profileId || profiles.value.length <= 1) return ''
+  return profileName(profileId)
+})
 
 const usage = computed<Usage | null>(() => parsedActionResult.value?.usage || completion.value?.usage || null)
 

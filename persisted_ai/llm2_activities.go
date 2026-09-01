@@ -324,7 +324,7 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 				DefaultModel:  providerConfig.DefaultLLM,
 				AuthType:      authType,
 				CustomHeaders: providerConfig.CustomHeaders,
-				BuiltinTools:   providerConfig.BuiltinTools,
+				BuiltinTools:  providerConfig.BuiltinTools,
 			}, nil
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
@@ -349,7 +349,7 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 					AuthType:            p.AuthType,
 					AnthropicCompatible: true,
 					CustomHeaders:       p.CustomHeaders,
-					BuiltinTools:         p.BuiltinTools,
+					BuiltinTools:        p.BuiltinTools,
 				}, nil
 			}
 		}

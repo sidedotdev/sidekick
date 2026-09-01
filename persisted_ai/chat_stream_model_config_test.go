@@ -29,6 +29,7 @@ type streamModelConfigTestInput struct {
 type streamModelConfigTestResult struct {
 	ResponseID             string
 	NonStreamCancellations int
+	ProfileId              string
 }
 
 func requireWorkflowSuccess(t *testing.T, err error) {
@@ -115,10 +116,17 @@ func streamModelConfigTestWorkflow(ctx workflow.Context, input streamModelConfig
 		}, err
 	}
 
-	return streamModelConfigTestResult{
+	result := streamModelConfigTestResult{
 		ResponseID:             response.GetId(),
 		NonStreamCancellations: nonStreamCancellations,
-	}, nil
+	}
+	switch streamResponse := response.(type) {
+	case *StreamResponse:
+		result.ProfileId = streamResponse.ProfileId
+	case *LegacyStreamResponse:
+		result.ProfileId = streamResponse.ProfileId
+	}
+	return result, nil
 }
 
 func TestExecuteChatStreamRetriesCurrentStreamWithLatestModel(t *testing.T) {
@@ -207,6 +215,7 @@ func TestExecuteChatStreamRetriesLegacyStreamWithLatestModel(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&result))
 	require.Equal(t, "complete", result.ResponseID)
 	require.Zero(t, result.NonStreamCancellations)
+	require.Equal(t, common.DefaultProfileId, result.ProfileId)
 	env.AssertExpectations(t)
 }
 
@@ -368,4 +377,30 @@ func TestShouldRetryStreamAfterGenerationChange(t *testing.T) {
 			)
 		})
 	}
+}
+
+func TestExecuteChatStreamStampsResolvedProfileOnResult(t *testing.T) {
+	t.Parallel()
+
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
+	env.RegisterWorkflow(streamModelConfigTestWorkflow)
+
+	var activities *Llm2Activities
+	env.OnActivity(activities.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
+		Id: "with-profile",
+		Output: llm2.Message{
+			Role: llm2.RoleAssistant,
+		},
+	}, nil).Once()
+
+	env.ExecuteWorkflow(streamModelConfigTestWorkflow, streamModelConfigTestInput{})
+
+	requireWorkflowSuccess(t, env.GetWorkflowError())
+	var result streamModelConfigTestResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "with-profile", result.ResponseID)
+	require.Equal(t, common.DefaultProfileId, result.ProfileId)
+	env.AssertExpectations(t)
 }
