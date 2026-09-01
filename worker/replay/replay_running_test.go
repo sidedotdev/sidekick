@@ -161,14 +161,6 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	clientOptions.Logger = logur.LoggerToKV(zerologadapter.New(log.Logger))
 	c, err := client.Dial(clientOptions)
 	if err != nil {
-		// TODO(temporal-upgrade): remove this skip once the read-only Temporal
-		// proxy is reliably reachable in sandbox/CI. The forwarded read-only
-		// port can currently resolve to a non-Temporal endpoint, so a Dial
-		// connectivity failure means the backing server is unavailable here
-		// rather than a genuine replay regression.
-		if strings.Contains(err.Error(), "failed reaching server") {
-			t.Skipf("Skipping: Temporal server unreachable at %s: %v", temporalHostPort, err)
-		}
 		t.Fatalf("Failed to create Temporal client: %v", err)
 	}
 	defer c.Close()
