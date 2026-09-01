@@ -15,10 +15,12 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +33,9 @@ import (
 	"sidekick/dev"
 	"sidekick/env"
 	"sidekick/sideagent"
+
+	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 )
 
 func must(err error, what string) {
@@ -204,6 +209,39 @@ git diff --cached --quiet || git commit -qm main
 	sshArgs, err := e.SSHArgs(ctx)
 	must(err, "ssh args")
 	fmt.Println("\ndiagnostic phases (excluded from TOTAL):")
+	// Network-level controls, separated by layer. These probes dial the
+	// tunnel endpoint directly and are skipped when it is unreachable (e.g.
+	// proxy-only networks); when a CONNECT proxy carries the real transport,
+	// they measure a different route and serve only as a control. TCP connect
+	// completion is DNS plus one network round trip with no remote process
+	// scheduling; the keepalive is an RTT proxy that additionally includes
+	// sshd request processing.
+	tunnelAddr := net.JoinHostPort(created.SSHHost, strconv.Itoa(created.SSHPort))
+	if proxy := cmp.Or(os.Getenv("HTTPS_PROXY"), os.Getenv("https_proxy")); proxy != "" {
+		fmt.Printf("note: HTTPS_PROXY=%s configured; direct probes may take a different route than the transport\n", proxy)
+	}
+	if probeConn, probeErr := net.DialTimeout("tcp", tunnelAddr, 10*time.Second); probeErr != nil {
+		fmt.Printf("direct network probes unavailable (proxy-only network?): %v\n", probeErr)
+	} else {
+		_ = probeConn.Close()
+		runPhase("tcp connect to tunnel endpoint (DNS + TCP handshake)", func(int) error {
+			conn, err := net.DialTimeout("tcp", tunnelAddr, 10*time.Second)
+			if err != nil {
+				return err
+			}
+			return conn.Close()
+		})
+		if rttClient, handshakeDur, err := dialRTTProbe(tunnelAddr); err != nil {
+			fmt.Printf("ssh rtt probe unavailable: %v\n", err)
+		} else {
+			fmt.Printf("%-55s %19s\n", "ssh handshake (on fresh tcp conn)", handshakeDur.Round(time.Millisecond))
+			runPhase("ssh keepalive on established conn (RTT proxy)", func(int) error {
+				_, _, err := rttClient.SendRequest("keepalive@openssh.com", true, nil)
+				return err
+			})
+			_ = rttClient.Close()
+		}
+	}
 	runPhase("raw ssh exec: true (per-exec session setup)", func(int) error {
 		if out, err := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), "true")...).CombinedOutput(); err != nil {
 			return fmt.Errorf("raw ssh: %w: %s", err, out)
@@ -268,6 +306,42 @@ git diff --cached --quiet || git commit -qm main
 	}
 	fmt.Println("agent exec channel: shell-hostile argv round-tripped verbatim")
 	agent.close()
+
+	// Decompose one SFTP read into protocol stages to attribute per-read
+	// cost: channel setup (exec request + remote process spawn + SFTP init
+	// handshake) versus the read itself (open + data/EOF + close). A
+	// transport that handshakes per operation pays the setup stage on every
+	// read; a pooled channel pays it once.
+	sftpDiagStart := time.Now()
+	sftpCmd := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), agentPath+" sftp")...)
+	sftpStdin, err := sftpCmd.StdinPipe()
+	must(err, "sftp diag stdin")
+	sftpStdout, err := sftpCmd.StdoutPipe()
+	must(err, "sftp diag stdout")
+	sftpCmd.Stderr = os.Stderr
+	must(sftpCmd.Start(), "sftp diag start")
+	sftpDiagClient, err := sftp.NewClientPipe(sftpStdout, sftpStdin)
+	must(err, "sftp diag handshake")
+	fmt.Printf("sftp channel setup (exec+spawn+init handshake)          %9s\n",
+		time.Since(sftpDiagStart).Round(time.Millisecond))
+	for i := 0; i < 2; i++ {
+		p := fmt.Sprintf("%s/pkg/alpha/file%d.go", repoDir, i+1)
+		stageStart := time.Now()
+		f, err := sftpDiagClient.Open(p)
+		must(err, "sftp diag open")
+		openDur := time.Since(stageStart)
+		stageStart = time.Now()
+		_, err = io.ReadAll(f)
+		must(err, "sftp diag read")
+		readDur := time.Since(stageStart)
+		stageStart = time.Now()
+		must(f.Close(), "sftp diag close")
+		fmt.Printf("sftp read %d on warm channel: open %s  read+eof %s  close %s\n",
+			i+1, openDur.Round(time.Millisecond), readDur.Round(time.Millisecond),
+			time.Since(stageStart).Round(time.Millisecond))
+	}
+	_ = sftpDiagClient.Close()
+	_ = sftpCmd.Wait()
 
 	fmt.Printf("\nbenchmark phases (%d ops each):\n", *ops)
 	var results []phaseResult
@@ -477,4 +551,42 @@ func startAgentChannel(ctx context.Context, sshArgs []string, remotePath string)
 func (a *agentChannel) close() {
 	a.stdin.Close()
 	a.cmd.Wait()
+}
+
+// dialRTTProbe opens a dedicated SSH connection to addr with the modal key,
+// returning the client and the handshake duration. A keepalive request on the
+// established connection is a close protocol-level proxy for network RTT:
+// unlike the exec or SFTP phases it involves no remote process scheduling,
+// though it still includes sshd's handling of the request.
+func dialRTTProbe(addr string) (*ssh.Client, time.Duration, error) {
+	dataHome, err := common.GetSidekickDataHome()
+	if err != nil {
+		return nil, 0, err
+	}
+	keyBytes, err := os.ReadFile(filepath.Join(dataHome, "modal", "id_ed25519"))
+	if err != nil {
+		return nil, 0, err
+	}
+	signer, err := ssh.ParsePrivateKey(keyBytes)
+	if err != nil {
+		return nil, 0, err
+	}
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return nil, 0, err
+	}
+	handshakeStart := time.Now()
+	sshConn, channels, requests, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
+		User: "root",
+		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		// The endpoint is authenticated by possession of the ephemeral tunnel
+		// address and our injected key, matching the transport's own policy.
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         15 * time.Second,
+	})
+	if err != nil {
+		_ = conn.Close()
+		return nil, 0, err
+	}
+	return ssh.NewClient(sshConn, channels, requests), time.Since(handshakeStart), nil
 }

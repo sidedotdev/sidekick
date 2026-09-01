@@ -1533,6 +1533,112 @@ func TestBulkGetSymbolDefinitionsMissingFullFileNoRepoScan(t *testing.T) {
 	assert.Equal(t, []string{"Kanban.vue"}, recordingEnv.readPaths)
 }
 
+// Remote envs pay several network round trips per ReadFile, so all phases of
+// a BulkGetSymbolDefinitions call (symbol lookup, header retrieval, LSP
+// fallback, failure hints) must share a single read per file.
+func TestBulkGetSymbolDefinitionsReadsEachFileOnce(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"), []byte("package main\n\nfunc Alpha() int { return 1 }\n"), 0644))
+
+	t.Run("found symbol shares read with header retrieval", func(t *testing.T) {
+		t.Parallel()
+		recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+		ca := &CodingActivities{}
+		result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{Env: recordingEnv},
+			Requests: []FileSymDefRequest{
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, result.SymbolDefinitions, "func Alpha")
+
+		recordingEnv.mu.Lock()
+		defer recordingEnv.mu.Unlock()
+		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
+	})
+
+	t.Run("concurrent duplicate requests for one file coalesce to a single read", func(t *testing.T) {
+		t.Parallel()
+		recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+		ca := &CodingActivities{}
+		result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{Env: recordingEnv},
+			Requests: []FileSymDefRequest{
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}}},
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, result.SymbolDefinitions, "func Alpha")
+
+		recordingEnv.mu.Lock()
+		defer recordingEnv.mu.Unlock()
+		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
+	})
+
+	t.Run("related symbols and LSP fallback reuse the single read", func(t *testing.T) {
+		t.Parallel()
+		recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+		mockClient := lsp.MockLSPClient{
+			InitializeFunc: func(ctx context.Context, params lsp.InitializeParams) (lsp.InitializeResponse, error) {
+				return lsp.InitializeResponse{}, nil
+			},
+			// A reference pointing at Alpha's own declaration, so RelatedSymbols
+			// resolves symbols/signatures for the subject file itself.
+			TextDocumentReferencesFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+				return []lsp.Location{{
+					URI: "file://" + filepath.Join(testDir, "main.go"),
+					Range: lsp.Range{
+						Start: lsp.Position{Line: 2, Character: 5},
+						End:   lsp.Position{Line: 2, Character: 10},
+					},
+				}}, nil
+			},
+			TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+				return nil, nil
+			},
+		}
+		ca := &CodingActivities{
+			LSPActivities: lsp.NewLSPActivities(func(language string) lsp.LSPClient { return mockClient }),
+		}
+		result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+			EnvContainer:          env.EnvContainer{Env: recordingEnv},
+			IncludeRelatedSymbols: true,
+			Requests: []FileSymDefRequest{
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}, {Name: "Missing"}}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, result.SymbolDefinitions, "func Alpha")
+		assert.Contains(t, result.Failures, "Missing")
+
+		recordingEnv.mu.Lock()
+		defer recordingEnv.mu.Unlock()
+		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
+	})
+
+	t.Run("missing symbol shares read with failure hint probe", func(t *testing.T) {
+		t.Parallel()
+		recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+		ca := &CodingActivities{}
+		result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{Env: recordingEnv},
+			Requests: []FileSymDefRequest{
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Missing"}}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, result.Failures, "Missing")
+
+		recordingEnv.mu.Lock()
+		defer recordingEnv.mu.Unlock()
+		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
+	})
+}
+
 type cancellationRecordingEnv struct {
 	env.Env
 	started     chan struct{}

@@ -2,6 +2,7 @@ package env
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -259,4 +260,47 @@ func TestSyncRefspecs(t *testing.T) {
 	assert.Equal(t,
 		[]string{"+refs/heads/main:refs/heads/main", "+refs/heads/develop:refs/heads/develop"},
 		syncRefspecs("refs/heads/main", []string{"develop", "main", "refs/heads/develop"}))
+}
+
+// TestRemoteUnpackFailed pins the classification that starts push recovery
+// (self-contained-pack retry, then fsck-gated re-seed): only remote-side
+// unpack failures qualify, and only via their specific signatures.
+func TestRemoteUnpackFailed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{
+			name: "unresolved deltas from unpack-objects",
+			err: fmt.Errorf("git push to /root/sidekick: exit status 1: " +
+				"remote: fatal: unresolved deltas left after unpacking\n" +
+				"error: remote unpack failed: unpack-objects abnormal exit\n" +
+				"! [remote rejected]   devpod -> devpod (unpacker error)"),
+			want: true,
+		},
+		{
+			name: "non-fast-forward rejection",
+			err:  fmt.Errorf("git push: ! [rejected] main -> main (non-fast-forward)"),
+			want: false,
+		},
+		{
+			name: "unpacker error alone is too broad to classify",
+			err:  fmt.Errorf("git push: ! [remote rejected] main -> main (unpacker error)"),
+			want: false,
+		},
+		{
+			name: "ssh transport failure",
+			err:  fmt.Errorf("git push: ssh: connect to host example.com port 22: Connection refused"),
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, remoteUnpackFailed(tc.err))
+		})
+	}
 }
