@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2456,4 +2457,35 @@ func TestApplyEditBlocks_BatchByFile_SingleBlockPerFile_NoFallback(t *testing.T)
 	content, err := os.ReadFile(filepath.Join(tmpDir, "single.md"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "Updated Content")
+}
+
+// wrappedStatErrEnv mimics remote envs (e.g. ModalEnv) whose transports wrap
+// not-exist errors in chains that os.IsNotExist cannot traverse.
+type wrappedStatErrEnv struct {
+	*env.LocalEnv
+}
+
+func (e *wrappedStatErrEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	info, err := e.LocalEnv.Stat(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", p, err)
+	}
+	return info, nil
+}
+
+func TestApplyCreateEditBlock_WrappedNotExistStatError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	envContainer := env.EnvContainer{
+		Env: &wrappedStatErrEnv{&env.LocalEnv{WorkingDirectory: tmpDir}},
+	}
+	block := EditBlock{EditType: "create", FilePath: "newfile.txt", NewLines: []string{"content"}}
+
+	report, err := ApplyCreateEditBlock(context.Background(), envContainer, block, tmpDir)
+	require.NoError(t, err)
+	require.Empty(t, report.Error)
+
+	content, err := os.ReadFile(filepath.Join(tmpDir, "newfile.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "content", string(content))
 }
