@@ -75,6 +75,87 @@ token_secret = "as-only"
 	assert.Equal(t, "as-only", secret)
 }
 
+// TestModalGuardSnapshotStateIsDurable pins the guard's durability contract: a
+// snapshot record must outlive the sandbox it describes by an unbounded
+// margin, since flows regularly idle for weeks before needing a restore.
+// Modal Dict entries expire after a week and snapshot images default to a
+// 30-day TTL, so neither may be relied on for that record.
+func TestModalGuardSnapshotStateIsDurable(t *testing.T) {
+	t.Parallel()
+
+	assert.NotContains(t, modalGuardAppSource, "modal.Dict",
+		"snapshot records must not live in a Dict: entries expire after a week")
+	assert.Contains(t, modalGuardAppSource, "modal.Volume.from_name(SNAPSHOT_VOLUME_NAME, create_if_missing=True)")
+	assert.Contains(t, modalGuardAppSource, "volumes={SNAPSHOT_DIR: snapshots}")
+	assert.Contains(t, modalGuardAppSource, "sb.snapshot_filesystem(ttl=None)",
+		"snapshot images must be retained indefinitely; the 30-day default expires while flows idle")
+	assert.Contains(t, modalGuardAppSource, "snapshots.commit()")
+	assert.Contains(t, modalGuardAppSource, "snapshots.reload()")
+	assert.NotContains(t, modalGuardAppSource, "except (FileNotFoundError, OSError, ValueError):",
+		"only absence may read as no record; storage failures must surface so the host retries")
+}
+
+// TestModalGuardDiscardsSnapshotsOnDelete pins the other half of indefinite
+// retention: images that are never reclaimed would accumulate forever, so
+// deleting a sandbox must delete every image its record references, and an
+// image ID may only leave durable tracking once its deletion is confirmed.
+func TestModalGuardDiscardsSnapshotsOnDelete(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, modalGuardAppSource, "def delete_snapshot(name: str) -> str:")
+	assert.Contains(t, modalGuardAppSource, "modal.experimental.image_delete(image_id)")
+	assert.Contains(t, modalGuardAppSource, "os.remove(_record_path(name))")
+	assert.Contains(t, modalGuardAppSource, "_write_record(name, SnapshotRecord(pendingDelete=failed))",
+		"failed deletions must stay durably tracked, or their images leak forever")
+	assert.Contains(t, modalGuardAppSource, "except modal.exception.NotFoundError:",
+		"an already-deleted image must count as confirmed so retries converge")
+	assert.Contains(t, modalGuardAppSource, "stale = previous.pendingDelete + history[:-2]",
+		"the rolling keep-2 GC must retry previously failed deletions")
+}
+
+// TestModalGuardNamespaceIsolation covers the failure that let one checkout
+// redeploy its guard over another's: the app and its volume are workspace-wide
+// singletons, so a namespaced checkout must address a wholly separate
+// deployment while production keeps the stable names.
+func TestModalGuardNamespaceIsolation(t *testing.T) {
+	t.Setenv("SIDE_E2E_TEST", "")
+	t.Setenv(modalGuardNamespaceEnvVar, "")
+	assert.Equal(t, "sidekick-guard", modalGuardAppName(), "production must keep the stable app name")
+	assert.Contains(t, renderModalGuardSource(), `NAMESPACE = ""`)
+	assert.Equal(t, "side-e2e-modal-dev", E2ESandboxName("side-e2e-modal-dev"))
+
+	t.Setenv(modalGuardNamespaceEnvVar, "Side/Fix-SSH")
+	assert.True(t, strings.HasPrefix(modalGuardAppName(), "sidekick-guard-side-fix-ssh-"),
+		"got %q", modalGuardAppName())
+
+	rendered := renderModalGuardSource()
+	assert.Contains(t, rendered, `NAMESPACE = "`+modalGuardNamespaceSuffix()+`"`)
+	assert.NotContains(t, rendered, `NAMESPACE = ""`,
+		"an unstamped namespace would silently share the production volume")
+	assert.Contains(t, rendered, `SOURCE_HASH = "`+modalGuardScriptHash()+`"`,
+		"the deployed guard must report the hash the host compares against")
+}
+
+// TestModalNamespaceTag covers the properties isolation depends on: one
+// checkout must keep a stable namespace across test processes, different
+// checkouts must never share one, and folding unsafe characters must not
+// merge distinct inputs.
+func TestModalNamespaceTag(t *testing.T) {
+	t.Parallel()
+
+	root := "/Users/dev/src/sidekick"
+	assert.Equal(t, modalNamespaceTag("sidekick", root), modalNamespaceTag("sidekick", root),
+		"a checkout's namespace must be stable so fixture sandboxes are reused")
+	assert.NotEqual(t, modalNamespaceTag("sidekick", root), modalNamespaceTag("sidekick", root+"-worktree"),
+		"parallel worktrees must not share a guard deployment")
+	assert.NotEqual(t, modalNamespaceTag("a/b", "a/b"), modalNamespaceTag("a-b", "a-b"),
+		"folding unsafe characters must not collide distinct namespaces")
+
+	tag := modalNamespaceTag(strings.Repeat("long-branch-name", 8), root)
+	assert.LessOrEqual(t, len(tag), 33, "Modal names are length bound: %q", tag)
+	assert.Regexp(t, `^[a-z0-9-]+$`, tag)
+}
+
 func TestModalGuardEmbeds(t *testing.T) {
 	t.Parallel()
 	// The watchdog, snapshot client, and guard app ride into sandboxes and
@@ -89,7 +170,7 @@ func TestModalGuardEmbeds(t *testing.T) {
 	assert.Contains(t, modalWatchdogScript, `/usr/local/bin/sidekick-snapshot "$phase"`)
 	assert.Contains(t, modalSSHDCommand, `"$SIDE_SNAPSHOT"`)
 	assert.Contains(t, modalSSHDCommand, `/usr/local/bin/sidekick-snapshot`)
-	assert.Contains(t, modalGuardAppSource, `modal.App("sidekick-guard")`)
+	assert.Contains(t, modalGuardAppSource, "app = modal.App(APP_NAME)")
 	assert.True(t, strings.Contains(modalGuardAppSource, `SANDBOX_APP_NAME = "`+modalAppName+`"`),
 		"guard app must target the sidekick sandbox app")
 	assert.True(t, strings.Contains(modalGuardAppSource, `GUARD_TOKEN_TAG = "`+modalGuardTokenTagKey+`"`),
@@ -145,18 +226,7 @@ func TestModalActiveSnapshotSeconds(t *testing.T) {
 }
 
 func TestModalWatchdogEnv_ActiveSnapshotSeconds(t *testing.T) {
-	// A pre-seeded guard state file matching the embedded script hash lets
-	// ensureModalGuard return its cached URL, so modalWatchdogEnv completes
-	// without a Modal client or network access.
-	dataHome := t.TempDir()
-	t.Setenv("SIDE_DATA_HOME", dataHome)
-	state, err := json.Marshal(modalGuardState{
-		ScriptHash:   modalGuardScriptHash(),
-		HibernateURL: "https://guard.example/hibernate",
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Join(dataHome, "modal"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dataHome, "modal", "guard_state.json"), state, 0o600))
+	t.Parallel()
 
 	tests := []struct {
 		name   string
@@ -169,16 +239,40 @@ func TestModalWatchdogEnv_ActiveSnapshotSeconds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			sandboxName := "side--watchdog-env-" + tt.name
-			watchdogEnv, tokenHash, err := modalWatchdogEnv(context.Background(), nil, sandboxName, tt.config)
+			idleSeconds, err := modalIdleSeconds(tt.config)
 			require.NoError(t, err)
-			assert.NotEmpty(t, tokenHash)
+			watchdogEnv := modalWatchdogEnvVars("https://guard.example/hibernate", "token", sandboxName, idleSeconds, tt.config)
 			assert.Equal(t, tt.want, watchdogEnv["SIDE_ACTIVE_SNAPSHOT_SECONDS"])
 			assert.Equal(t, "https://guard.example/hibernate", watchdogEnv["SIDE_GUARD_URL"])
 			assert.Equal(t, sandboxName, watchdogEnv["SIDE_SANDBOX_NAME"])
 			assert.Equal(t, "30", watchdogEnv["SIDE_IDLE_SECONDS"])
 		})
 	}
+}
+
+// TestModalWatchdogEnv_RequiresClient pins that a sandbox never launches with
+// an unverified guard: cached local state cannot stand in for the live
+// deployment, so a missing client is an error rather than a silent pass.
+func TestModalWatchdogEnv_RequiresClient(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("SIDE_DATA_HOME", dataHome)
+	state, err := json.Marshal(modalGuardState{
+		ScriptHash:   modalGuardScriptHash(),
+		HibernateURL: "https://guard.example/hibernate",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(dataHome, "modal"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dataHome, "modal", "guard_state.json"), state, 0o600))
+
+	_, _, err = modalWatchdogEnv(context.Background(), nil, "side--watchdog-env-nil-client", common.ModalEnvConfig{})
+	require.Error(t, err, "matching cached state must not excuse an unverifiable guard")
+	assert.Contains(t, err.Error(), "without a modal client")
+
+	_, err = modalGuardIdentityFor(context.Background(), nil)
+	require.Error(t, err, "identifying the guard without a client must fail, not panic")
+	assert.Contains(t, err.Error(), "no modal client")
 }
 func TestModalSnapshotScript(t *testing.T) {
 	t.Parallel()

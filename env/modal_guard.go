@@ -34,12 +34,15 @@ var modalWatchdogScript string
 var modalSnapshotScript string
 
 const (
-	// modalGuardAppName is the Modal app hosting the sidekick guard: a tiny
-	// serverless (scale-to-zero) app that lets a sandbox holding a
+	// modalGuardAppBaseName is the Modal app hosting the sidekick guard: a
+	// tiny serverless (scale-to-zero) app that lets a sandbox holding a
 	// per-sandbox random token snapshot and terminate only itself. Modal
 	// account tokens therefore never enter untrusted task sandboxes, while
 	// idle sandboxes still stop billing when the sidekick host is offline.
-	modalGuardAppName = "sidekick-guard"
+	modalGuardAppBaseName = "sidekick-guard"
+	// modalGuardNamespaceEnvVar isolates a guard deployment from other
+	// sidekick checkouts sharing one Modal workspace.
+	modalGuardNamespaceEnvVar = "SIDE_MODAL_GUARD_NAMESPACE"
 	// modalGuardTokenTagKey is the sandbox tag holding the hash of that
 	// sandbox's guard token. Tags require workspace credentials to write,
 	// which sandboxes never hold, so the tag is a tamper-proof auth record
@@ -106,9 +109,142 @@ func modalHostTokens() (string, string, error) {
 	return "", "", errors.New("no active modal profile with credentials found in ~/.modal.toml")
 }
 
+// modalGuardNamespaceSuffix isolates the guard app and its snapshot volume
+// per checkout, empty in production. Both are workspace-wide singletons whose
+// deployment is decided from local state, so two worktrees would otherwise
+// take turns redeploying over each other while each believes its own version
+// is live — and a guard reading the wrong store reports no snapshot record,
+// which makes a sandbox look unrestorable.
+func modalGuardNamespaceSuffix() string {
+	if namespace := strings.TrimSpace(os.Getenv(modalGuardNamespaceEnvVar)); namespace != "" {
+		return "-" + modalNamespaceTag(namespace, namespace)
+	}
+	if tag := modalTestNamespace(); tag != "" {
+		return "-" + tag
+	}
+	return ""
+}
+
+// modalNamespaceTag renders a Modal-safe, length-bounded name fragment.
+// Characters Modal disallows fold to dashes, so the tag carries a hash of the
+// original to keep otherwise-colliding inputs (say "a/b" and "a-b") apart.
+func modalNamespaceTag(label, unique string) string {
+	folded := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		default:
+			return '-'
+		}
+	}, label)
+	const maxLabelLen = 24
+	if len(folded) > maxLabelLen {
+		folded = folded[:maxLabelLen]
+	}
+	folded = strings.Trim(folded, "-")
+	sum := sha256.Sum256([]byte(unique))
+	digest := hex.EncodeToString(sum[:4])
+	if folded == "" {
+		return digest
+	}
+	return folded + "-" + digest
+}
+
+// modalTestNamespace isolates e2e runs per checkout without any setup, since
+// parallel worktrees on one machine otherwise take turns redeploying the
+// shared guard over each other. Test processes within a checkout share it
+// deliberately, so reusable fixture sandboxes still get reused. Empty outside
+// e2e runs: production keeps the stable names.
+func modalTestNamespace() string {
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		return ""
+	}
+	root, err := modalWorktreeRoot()
+	if err != nil {
+		return ""
+	}
+	return modalNamespaceTag(filepath.Base(root), root)
+}
+
+// modalWorktreeRoot finds the checkout root (the directory holding go.mod) so
+// that every package's tests in one worktree agree on a namespace.
+func modalWorktreeRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", errors.New("no go.mod found above the working directory")
+		}
+		dir = parent
+	}
+}
+
+// E2ESandboxName namespaces a reusable e2e sandbox name per checkout, so
+// parallel worktrees do not restore and terminate each other's fixtures.
+func E2ESandboxName(base string) string {
+	return base + modalGuardNamespaceSuffix()
+}
+
+// modalGuardAppName is the deployed guard app for this checkout.
+func modalGuardAppName() string {
+	return modalGuardAppBaseName + modalGuardNamespaceSuffix()
+}
+
+// renderModalGuardSource stamps the namespace into the guard source so that
+// the deployed app name and the volume it mounts agree at deploy and run time.
+func renderModalGuardSource() string {
+	rendered := strings.Replace(modalGuardAppSource, `NAMESPACE = ""`,
+		fmt.Sprintf("NAMESPACE = %q", modalGuardNamespaceSuffix()), 1)
+	return strings.Replace(rendered, `SOURCE_HASH = ""`,
+		fmt.Sprintf("SOURCE_HASH = %q", modalGuardScriptHash()), 1)
+}
+
+// modalGuardIdentity describes the guard deployment actually answering under
+// this checkout's app name.
+type modalGuardIdentity struct {
+	AppName    string `json:"appName"`
+	VolumeName string `json:"volumeName"`
+	Namespace  string `json:"namespace"`
+	SourceHash string `json:"sourceHash"`
+}
+
+// modalGuardIdentityFor asks the deployed guard who it is. A missing
+// guard_identity function means a guard predating this check is deployed,
+// which is itself a mismatch worth redeploying over.
+func modalGuardIdentityFor(ctx context.Context, client *modal.Client) (modalGuardIdentity, error) {
+	if client == nil {
+		return modalGuardIdentity{}, errors.New("no modal client available to identify the guard")
+	}
+	fn, err := client.Functions.FromName(ctx, modalGuardAppName(), "guard_identity", nil)
+	if err != nil {
+		return modalGuardIdentity{}, fmt.Errorf("failed to look up modal guard identity: %w", err)
+	}
+	result, err := fn.Remote(ctx, []any{}, nil)
+	if err != nil {
+		return modalGuardIdentity{}, fmt.Errorf("failed to call modal guard identity: %w", err)
+	}
+	encoded, _ := result.(string)
+	var identity modalGuardIdentity
+	if err := json.Unmarshal([]byte(encoded), &identity); err != nil {
+		return modalGuardIdentity{}, fmt.Errorf("invalid modal guard identity %q: %w", encoded, err)
+	}
+	return identity, nil
+}
+
 type modalGuardState struct {
 	ScriptHash   string `json:"scriptHash"`
 	HibernateURL string `json:"hibernateUrl"`
+	// Namespace records which guard deployment the URL belongs to, so
+	// switching checkouts redeploys instead of reusing another's guard.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 func modalGuardStatePath() (string, error) {
@@ -128,6 +264,9 @@ func modalGuardScriptHash() string {
 // deploying the guard app (or redeploying it when the embedded source
 // changed) if needed.
 func ensureModalGuard(ctx context.Context, client *modal.Client) (string, error) {
+	if client == nil {
+		return "", errors.New("cannot ensure modal guard without a modal client")
+	}
 	modalGuardMu.Lock()
 	defer modalGuardMu.Unlock()
 
@@ -136,10 +275,22 @@ func ensureModalGuard(ctx context.Context, client *modal.Client) (string, error)
 		return "", err
 	}
 	wantHash := modalGuardScriptHash()
+	namespace := modalGuardNamespaceSuffix()
 	if data, err := os.ReadFile(statePath); err == nil {
 		var state modalGuardState
-		if json.Unmarshal(data, &state) == nil && state.ScriptHash == wantHash && state.HibernateURL != "" {
-			return state.HibernateURL, nil
+		if json.Unmarshal(data, &state) == nil && state.ScriptHash == wantHash &&
+			state.Namespace == namespace && state.HibernateURL != "" {
+			// Local state only records what this host deployed, not what is
+			// live: anything else deploying under the same app name replaces
+			// it silently, and a mismatched guard reads a store this host
+			// never writes, making sandboxes look unrestorable.
+			identity, err := modalGuardIdentityFor(ctx, client)
+			if err == nil && identity.SourceHash == wantHash {
+				return state.HibernateURL, nil
+			}
+			log.Info().Str("app", modalGuardAppName()).Str("wantSourceHash", wantHash).
+				Str("deployedSourceHash", identity.SourceHash).Err(err).
+				Msg("deployed modal guard does not match this checkout; redeploying")
 		}
 	}
 
@@ -152,7 +303,7 @@ func ensureModalGuard(ctx context.Context, client *modal.Client) (string, error)
 		return "", err
 	}
 
-	data, err := json.Marshal(modalGuardState{ScriptHash: wantHash, HibernateURL: url})
+	data, err := json.Marshal(modalGuardState{ScriptHash: wantHash, HibernateURL: url, Namespace: namespace})
 	if err != nil {
 		return "", err
 	}
@@ -195,13 +346,13 @@ func deployModalGuard(ctx context.Context, client *modal.Client, tokenID, tokenS
 		}
 	}()
 
-	if err := modalExecWithStdin(ctx, sb, "cat > /root/guard_app.py", modalGuardAppSource); err != nil {
+	if err := modalExecWithStdin(ctx, sb, "cat > /root/guard_app.py", renderModalGuardSource()); err != nil {
 		return "", fmt.Errorf("failed to upload guard app source: %w", err)
 	}
 
 	deployScript := `set -e
 modal deploy /root/guard_app.py
-python -c "import modal; f = modal.Function.from_name('` + modalGuardAppName + `', 'hibernate'); print(getattr(f, 'get_web_url', lambda: f.web_url)())"`
+python -c "import modal; f = modal.Function.from_name('` + modalGuardAppName() + `', 'hibernate'); print(getattr(f, 'get_web_url', lambda: f.web_url)())"`
 	stdout, stderr, exitCode, err := modalExecCapture(ctx, sb, deployScript)
 	if err != nil {
 		return "", fmt.Errorf("failed to deploy modal guard app: %w", err)
@@ -271,12 +422,53 @@ type modalSnapshotRecord struct {
 	ImageId      string          `json:"imageId"`
 	ImageVersion int             `json:"imageVersion,omitempty"`
 	Meta         json.RawMessage `json:"meta,omitempty"`
+	// History holds the recent images kept by the guard's own GC, which are
+	// otherwise unreachable once superseded.
+	History []string `json:"history,omitempty"`
+}
+
+// modalSnapshotDeletion reports what a delete_snapshot call reclaimed.
+type modalSnapshotDeletion struct {
+	DeletedImages int  `json:"deletedImages"`
+	RecordDeleted bool `json:"recordDeleted"`
+	// FailedImages are IDs whose deletion failed; the guard keeps them
+	// durably tracked so a retry can finish the job.
+	FailedImages []string `json:"failedImages,omitempty"`
+}
+
+// modalDeleteSnapshots drops a sandbox's snapshot record and the images it
+// references. Snapshot images are retained indefinitely so that a long-idle
+// flow stays restorable, which makes deleting them at end of life the only
+// thing that keeps them from accumulating. Callers must be sure nothing will
+// be restored from the sandbox again.
+func modalDeleteSnapshots(ctx context.Context, client *modal.Client, sandboxName string) (modalSnapshotDeletion, error) {
+	fn, err := client.Functions.FromName(ctx, modalGuardAppName(), "delete_snapshot", nil)
+	if err != nil {
+		var notFound modal.NotFoundError
+		if errors.As(err, &notFound) {
+			return modalSnapshotDeletion{}, nil
+		}
+		return modalSnapshotDeletion{}, fmt.Errorf("failed to look up modal guard: %w", err)
+	}
+	result, err := fn.Remote(ctx, []any{sandboxName}, nil)
+	if err != nil {
+		return modalSnapshotDeletion{}, fmt.Errorf("failed to delete snapshots for sandbox %s: %w", sandboxName, err)
+	}
+	encoded, _ := result.(string)
+	if strings.TrimSpace(encoded) == "" {
+		return modalSnapshotDeletion{}, nil
+	}
+	var deletion modalSnapshotDeletion
+	if err := json.Unmarshal([]byte(encoded), &deletion); err != nil {
+		return modalSnapshotDeletion{}, fmt.Errorf("invalid snapshot deletion result for sandbox %s: %w", sandboxName, err)
+	}
+	return deletion, nil
 }
 
 // modalLatestSnapshot returns the most recent watchdog snapshot record for a
 // sandbox name, or nil when the guard is not deployed or has no record.
 func modalLatestSnapshot(ctx context.Context, client *modal.Client, sandboxName string) (*modalSnapshotRecord, error) {
-	fn, err := client.Functions.FromName(ctx, modalGuardAppName, "latest_snapshot", nil)
+	fn, err := client.Functions.FromName(ctx, modalGuardAppName(), "latest_snapshot", nil)
 	if err != nil {
 		var notFound modal.NotFoundError
 		if errors.As(err, &notFound) {
@@ -349,6 +541,12 @@ func modalWatchdogEnv(ctx context.Context, client *modal.Client, sandboxName str
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to generate modal guard token: %w", err)
 	}
+	return modalWatchdogEnvVars(guardURL, token, sandboxName, idleSeconds, config), tokenHash, nil
+}
+
+// modalWatchdogEnvVars renders the watchdog's contract with the sandbox from
+// already-resolved inputs.
+func modalWatchdogEnvVars(guardURL, token, sandboxName string, idleSeconds int, config common.ModalEnvConfig) map[string]string {
 	meta, err := json.Marshal(config)
 	if err != nil {
 		meta = []byte("{}")
@@ -363,5 +561,5 @@ func modalWatchdogEnv(ctx context.Context, client *modal.Client, sandboxName str
 		"SIDE_ACTIVE_SNAPSHOT_SECONDS": strconv.Itoa(modalActiveSnapshotSeconds(config)),
 		"SIDE_SNAPSHOT":                modalSnapshotScript,
 		"SIDE_WATCHDOG":                modalWatchdogScript,
-	}, tokenHash, nil
+	}
 }

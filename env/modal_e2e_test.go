@@ -343,6 +343,14 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 	sb, err := findModalSandbox(ctx, client, sandboxName)
 	require.NoError(t, err)
 	assert.NotNil(t, sb, "sandbox must remain alive after an active snapshot")
+
+	// Snapshots are retained indefinitely, so deleting the sandbox is the only
+	// thing that ever reclaims them.
+	_, err = DeleteSandboxActivity(ctx, DeleteSandboxInput{EnvType: EnvTypeModal, SandboxName: sandboxName})
+	require.NoError(t, err)
+	discarded, err := modalLatestSnapshot(ctx, client, sandboxName)
+	require.NoError(t, err)
+	assert.Nil(t, discarded, "deleting a sandbox must discard its snapshot record")
 }
 
 // TestModalSnapshotVolumeRestoreIntegration covers adding a volume mount to a

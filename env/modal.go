@@ -921,8 +921,11 @@ func modalCheckSandbox(ctx context.Context, sandboxName string) (ModalCheckSandb
 	return ModalCheckSandboxOutput{Alive: true, SSHHost: sshHost, SSHPort: sshPort}, nil
 }
 
-// modalDeleteSandbox terminates a Modal sandbox. Terminating a sandbox that
-// no longer exists is a no-op.
+// modalDeleteSandbox terminates a Modal sandbox and discards its snapshots.
+// Deletion (as opposed to stopping) means the sandbox will never be resumed,
+// so its indefinitely retained snapshot images are pure waste from here on.
+// Terminating a sandbox that no longer exists is a no-op, but its snapshots
+// are still reclaimed.
 func modalDeleteSandbox(ctx context.Context, sandboxName string) error {
 	client, err := getModalClient()
 	if err != nil {
@@ -932,11 +935,25 @@ func modalDeleteSandbox(ctx context.Context, sandboxName string) error {
 	if err != nil {
 		return err
 	}
-	if sb == nil {
-		return nil
+	if sb != nil {
+		if _, err := sb.Terminate(ctx, nil); err != nil {
+			return fmt.Errorf("failed to terminate modal sandbox %s: %w", sandboxName, err)
+		}
 	}
-	if _, err := sb.Terminate(ctx, nil); err != nil {
-		return fmt.Errorf("failed to terminate modal sandbox %s: %w", sandboxName, err)
+	// Snapshot cleanup failures are returned so the activity retries:
+	// termination and record deletion are both idempotent, and with images
+	// retained indefinitely a swallowed failure would leak them forever.
+	deletion, err := modalDeleteSnapshots(ctx, client, sandboxName)
+	if err != nil {
+		return fmt.Errorf("modal sandbox %s deleted but snapshot cleanup failed: %w", sandboxName, err)
+	}
+	if len(deletion.FailedImages) > 0 {
+		return fmt.Errorf("modal sandbox %s deleted but %d snapshot image(s) could not be deleted; they stay tracked for retry",
+			sandboxName, len(deletion.FailedImages))
+	}
+	if deletion.RecordDeleted || deletion.DeletedImages > 0 {
+		log.Info().Str("sandbox", sandboxName).Int("deletedImages", deletion.DeletedImages).
+			Msg("discarded modal snapshots for deleted sandbox")
 	}
 	return nil
 }

@@ -1210,7 +1210,10 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	apiOutput, apiErr := runAPICommand(ctx, input)
 	if apiErr != nil {
 		log.Warn().Err(apiErr).Str("sandbox", e.SandboxName).Msg("failed to run command via modal API after SSH transport failure")
-		return output, err
+		// The command never started, so returning its synthetic 255 exit would
+		// masquerade as the command itself failing and send callers chasing
+		// output that no command produced.
+		return output, fmt.Errorf("modal sandbox %s is unreachable: modal API fallback after SSH transport failure: %w: ssh diagnostics: %s", e.SandboxName, apiErr, diagnostics)
 	}
 	log.Info().Str("sandbox", e.SandboxName).Msg("ran command via modal API after SSH transport failure")
 	return apiOutput, nil
@@ -1324,17 +1327,34 @@ func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput
 	// sole owner instead of nesting a second refresh inside every attempt.
 	resp, err := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, nonRecoveringSSHEnv{e}, req)
 	if err != nil {
-		var establishedFailure *agentExecTransportError
-		if errors.As(err, &establishedFailure) {
-			return EnvRunCommandOutput{}, establishedFailure.Diagnostics(), err
-		}
-		var dialFailure *sshDialTransportError
-		if ctx.Err() == nil && (errors.As(err, &dialFailure) || isModalSSHTransportFailure(err.Error())) {
-			return EnvRunCommandOutput{ExitStatus: 255}, err.Error(), nil
-		}
-		return EnvRunCommandOutput{}, "", err
+		return classifyModalExecFailure(ctx, err)
 	}
 	return agentExecOutput(resp), "", nil
+}
+
+// classifyModalExecFailure maps a side-agent exec error onto RunCommand's
+// recovery contract: failures that provably preceded sending the command
+// surface as a synthetic 255 exit with diagnostics (and a nil error) so
+// RunCommand refreshes the tunnel endpoint and retries, while
+// established-channel failures stay hard errors because the command may have
+// already run. The typed dial wrapper takes precedence over any wrapped
+// channel-bootstrap error: the channel never existed, so nothing was sent.
+// The diagnostic-string fallback is checked only after the typed
+// established-channel error, so an established failure whose diagnostics
+// merely resemble a dial failure is never retried.
+func classifyModalExecFailure(ctx context.Context, err error) (EnvRunCommandOutput, string, error) {
+	var dialFailure *sshDialTransportError
+	if ctx.Err() == nil && errors.As(err, &dialFailure) {
+		return EnvRunCommandOutput{ExitStatus: 255}, err.Error(), nil
+	}
+	var establishedFailure *agentExecTransportError
+	if errors.As(err, &establishedFailure) {
+		return EnvRunCommandOutput{}, establishedFailure.Diagnostics(), err
+	}
+	if ctx.Err() == nil && isModalSSHTransportFailure(err.Error()) {
+		return EnvRunCommandOutput{ExitStatus: 255}, err.Error(), nil
+	}
+	return EnvRunCommandOutput{}, "", err
 }
 
 // runAPICommandInner runs the command through Modal's API rather than SSH.

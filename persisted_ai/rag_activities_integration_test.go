@@ -64,6 +64,20 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 	return workspaceId, workspaceRepoDir
 }
 
+// noRerankSecretManager hides the reranker credential from a test: a network
+// reranker's ordering across identical requests is not guaranteed stable, so
+// tests asserting byte-identical repeat results must not exercise it.
+type noRerankSecretManager struct {
+	secret_manager.SecretManager
+}
+
+func (m noRerankSecretManager) GetSecret(name string) (string, error) {
+	if name == cohereAPIKeyEnvironmentVariable {
+		return "", secret_manager.ErrSecretNotFound
+	}
+	return m.SecretManager.GetSecret(name)
+}
+
 // setupRagService creates and configures the RagActivities service with necessary dependencies
 func setupRagService(t *testing.T, ctx context.Context, repoRoot string) *RagActivities {
 	storage, err := sqlite.NewStorage()
@@ -341,7 +355,7 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 	// idle watchdog snapshots and terminates it after the test so it stops
 	// billing, and the next run restores it — with the synced repo intact,
 	// making the sync incremental — instead of recreating from scratch.
-	const sandboxName = "side-e2e-modal-rag"
+	sandboxName := env.E2ESandboxName("side-e2e-modal-rag")
 
 	// Missing Modal credentials only surface on the first RPC, so probe with a
 	// real lookup before creating anything.
@@ -378,11 +392,14 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 	}
 	ec := env.EnvContainer{Env: modalEnv}
 
-	secretsManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+	secretsManager := noRerankSecretManager{SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
 		secret_manager.EnvSecretManager{},
 		secret_manager.KeyringSecretManager{},
 		secret_manager.LocalConfigSecretManager{},
-	})
+	})}
+	reranker, err := GetReranker(secretsManager)
+	require.NoError(t, err)
+	require.Nil(t, reranker, "byte-equality assertions below require reranking to be disabled")
 
 	options := RankedDirSignatureOutlineOptions{
 		RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
