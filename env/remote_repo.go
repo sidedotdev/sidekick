@@ -427,10 +427,12 @@ func syncMergeResultToLocalOverSSH(ctx context.Context, sshArgs []string, workin
 	// branch is passed as a positional argument ($1) rather than
 	// interpolated into the script so that arbitrary branch names cannot
 	// alter the shell command.
+	// Worktree paths can contain spaces, so the porcelain line is parsed by
+	// stripping its "worktree " prefix rather than by whitespace field.
 	applyScript := `set -e
 branch="$1"
 tempref="refs/sidekick-sync/$branch"
-wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p; exit}')
+wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '$1=="worktree"{p=substr($0,10)} $0==("branch " b){print p; exit}')
 if [ -n "$wt" ]; then git -C "$wt" merge --ff-only "$tempref"; else git update-ref "refs/heads/$branch" "$tempref"; fi
 git update-ref -d "$tempref"`
 	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
@@ -545,7 +547,7 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 	// The push only moved the ref, so realign any remote worktree that has the
 	// branch checked out.
 	applyScript := fmt.Sprintf(
-		`cd %s && wt=$(git worktree list --porcelain | awk -v b=refs/heads/%s '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p; exit}') && `+
+		`cd %s && wt=$(git worktree list --porcelain | awk -v b=refs/heads/%s '$1=="worktree"{p=substr($0,10)} $0==("branch " b){print p; exit}') && `+
 			`if [ -n "$wt" ]; then git -C "$wt" reset --hard refs/heads/%s; fi`,
 		shellQuote(workingDirectory), shellQuote(branch), shellQuote(branch),
 	)
@@ -603,7 +605,7 @@ func clearStaleRemoteWorktree(ctx context.Context, envContainer EnvContainer, re
 	quotedPath := shellQuote(worktreePath)
 	script := fmt.Sprintf(
 		`cd %s && git worktree prune && `+
-			`git worktree list --porcelain | awk -v b=%s '$1=="worktree"{p=$2} $1=="branch"&&$2==b{print p}' | `+
+			`git worktree list --porcelain | awk -v b=%s '$1=="worktree"{p=substr($0,10)} $0==("branch " b){print p}' | `+
 			`while IFS= read -r wt; do git worktree unlock "$wt" >/dev/null 2>&1; git worktree remove --force "$wt" >/dev/null 2>&1; done; `+
 			`git worktree unlock %s >/dev/null 2>&1; git worktree remove --force %s >/dev/null 2>&1; `+
 			`rm -rf %s; git worktree prune`,

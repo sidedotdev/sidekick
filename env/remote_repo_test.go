@@ -252,6 +252,91 @@ exec sh -c "$cmd"
 	assert.FileExists(t, filepath.Join(localRepoDir, "local.txt"))
 }
 
+// TestSyncMergeResultToLocalOverSSHWorktreePathWithSpaces pins that the local
+// worktree holding the target branch is located even when its path contains
+// spaces, which whitespace-field parsing of porcelain output truncates. It
+// must not be parallel: PATH is set.
+func TestSyncMergeResultToLocalOverSSHWorktreePathWithSpaces(t *testing.T) {
+	ctx := context.Background()
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+
+	gitRun := func(t *testing.T, repoDir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), string(out))
+		return strings.TrimSpace(string(out))
+	}
+
+	localRepoDir := setupTestGitRepo(t)
+	branchName := "target-branch"
+	gitRun(t, localRepoDir, "branch", branchName)
+
+	worktreePath := filepath.Join(t.TempDir(), "Application Support", "target wt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(worktreePath), 0755))
+	gitRun(t, localRepoDir, "worktree", "add", worktreePath, branchName)
+
+	remoteRepoDir := filepath.Join(t.TempDir(), "remote")
+	cloneOut, err := exec.Command("git", "clone", "--branch", branchName, localRepoDir, remoteRepoDir).CombinedOutput()
+	require.NoError(t, err, "git clone failed: %s", string(cloneOut))
+	gitRun(t, remoteRepoDir, "config", "user.name", "Test User")
+	gitRun(t, remoteRepoDir, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(remoteRepoDir, "merged.txt"), []byte("merged content"), 0644))
+	gitRun(t, remoteRepoDir, "add", "merged.txt")
+	gitRun(t, remoteRepoDir, "commit", "-m", "merge result")
+	remoteTip := gitRun(t, remoteRepoDir, "rev-parse", branchName)
+
+	err = syncMergeResultToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, branchName)
+	require.NoError(t, err)
+
+	assert.Equal(t, remoteTip, gitRun(t, localRepoDir, "rev-parse", branchName))
+	assert.FileExists(t, filepath.Join(worktreePath, "merged.txt"))
+}
+
+// TestSyncBranchToRemoteOverSSHWorktreePathWithSpaces covers the same
+// porcelain parsing on the remote side, where the realigned worktree path may
+// likewise contain spaces. It must not be parallel: PATH is set.
+func TestSyncBranchToRemoteOverSSHWorktreePathWithSpaces(t *testing.T) {
+	ctx := context.Background()
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+
+	gitRun := func(t *testing.T, repoDir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), string(out))
+		return strings.TrimSpace(string(out))
+	}
+
+	remoteRepoDir := setupTestGitRepo(t)
+	branchName := "side/remote-branch"
+	gitRun(t, remoteRepoDir, "branch", branchName)
+
+	remoteWorktreePath := filepath.Join(t.TempDir(), "Application Support", "remote wt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(remoteWorktreePath), 0755))
+	gitRun(t, remoteRepoDir, "worktree", "add", remoteWorktreePath, branchName)
+
+	localRepoDir := filepath.Join(t.TempDir(), "local")
+	cloneOut, err := exec.Command("git", "clone", "--branch", branchName, remoteRepoDir, localRepoDir).CombinedOutput()
+	require.NoError(t, err, "git clone failed: %s", string(cloneOut))
+	gitRun(t, localRepoDir, "config", "user.name", "Test User")
+	gitRun(t, localRepoDir, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(localRepoDir, "local.txt"), []byte("local content"), 0644))
+	gitRun(t, localRepoDir, "add", "local.txt")
+	gitRun(t, localRepoDir, "commit", "-m", "local commit")
+	localTip := gitRun(t, localRepoDir, "rev-parse", branchName)
+
+	err = syncBranchToRemoteOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, branchName)
+	require.NoError(t, err)
+
+	assert.Equal(t, localTip, gitRun(t, remoteRepoDir, "rev-parse", branchName))
+	assert.FileExists(t, filepath.Join(remoteWorktreePath, "local.txt"))
+}
+
 func TestSyncRefspecs(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t,
