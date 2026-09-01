@@ -538,6 +538,93 @@ func getValue() int {
 	}
 }
 
+// TestApplyEditBlocks_StagesAppliedEditsWithoutChecks guards the review diffs,
+// which are computed from staged changes: every applied edit must be staged
+// even when edit checks are disabled, whether or not the file already existed.
+func TestApplyEditBlocks_StagesAppliedEditsWithoutChecks(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	existingPath := filepath.Join(tmpDir, "existing.txt")
+	require.NoError(t, os.WriteFile(existingPath, []byte("original\n"), 0644))
+
+	for _, args := range [][]string{
+		{"init"},
+		{"add", "."},
+		{"-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "initial commit"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tmpDir
+		require.NoError(t, cmd.Run(), "git %v", args)
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{WorkingDirectory: tmpDir},
+	}
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	// one block per file, so each goes through the sequential (non-batch) path
+	editBlocks := []EditBlock{
+		{
+			EditType: "create",
+			FilePath: "created.txt",
+			NewLines: []string{"created content\n"},
+		},
+		{
+			EditType: "update",
+			FilePath: "existing.txt",
+			OldLines: []string{"original\n"},
+			NewLines: []string{"updated\n"},
+		},
+	}
+
+	reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+		EnvContainer: envContainer,
+		EditBlocks:   editBlocks,
+		EnabledFlags: []string{},
+	})
+	require.NoError(t, err)
+	require.Len(t, reports, 2)
+	for _, report := range reports {
+		assert.Empty(t, report.Error)
+		assert.True(t, report.DidApply)
+	}
+
+	stagedCmd := exec.Command("git", "diff", "--cached", "--name-only")
+	stagedCmd.Dir = tmpDir
+	stagedOut, err := stagedCmd.Output()
+	require.NoError(t, err)
+	staged := strings.Fields(string(stagedOut))
+	assert.Contains(t, staged, "created.txt")
+	assert.Contains(t, staged, "existing.txt")
+
+	t.Run("outside a git repository", func(t *testing.T) {
+		t.Parallel()
+		nonRepoDir := t.TempDir()
+
+		reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+			EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: nonRepoDir}},
+			EditBlocks: []EditBlock{{
+				EditType: "create",
+				FilePath: "created.txt",
+				NewLines: []string{"created content\n"},
+			}},
+			EnabledFlags: []string{},
+		})
+		require.NoError(t, err)
+		require.Len(t, reports, 1)
+		assert.Empty(t, reports[0].Error, "editing outside a git repository must still work")
+		assert.True(t, reports[0].DidApply)
+	})
+}
+
 func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
