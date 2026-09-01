@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sidekick/common"
+	"sidekick/secret_manager"
 	"strings"
 	"time"
 
@@ -26,10 +27,13 @@ const AnthropicOAuthSecretName = "ANTHROPIC_OAUTH"
 
 const (
 	anthropicOAuthBetaHeaders = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
-	anthropicTokenEndpoint    = "https://console.anthropic.com/v1/oauth/token"
 	anthropicClientID         = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 	keyringService            = "sidekick"
 )
+
+// anthropicTokenEndpoint is a variable to allow tests to point token refresh at
+// a local server.
+var anthropicTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 
 type OAuthCredentials struct {
 	AccessToken  string `json:"access_token"`
@@ -383,7 +387,8 @@ func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (st
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to refresh OAuth token: %w", err)
 		}
-		if storeErr := StoreAnthropicOAuthCredentials(newCreds); storeErr != nil {
+		profileId := secret_manager.ProfileIdOf(secretManager)
+		if storeErr := storeAnthropicOAuthCredentialsForProfile(profileId, newCreds); storeErr != nil {
 			log.Warn().Err(storeErr).Msg("Failed to store refreshed OAuth credentials")
 		}
 		return newCreds, true, nil
@@ -450,10 +455,19 @@ func RefreshAnthropicOAuthToken(refreshToken string) (*OAuthCredentials, error) 
 	}, nil
 }
 
+// StoreAnthropicOAuthCredentials persists credentials for the default profile.
 func StoreAnthropicOAuthCredentials(creds *OAuthCredentials) error {
+	return storeAnthropicOAuthCredentialsForProfile(common.DefaultProfileId, creds)
+}
+
+// storeAnthropicOAuthCredentialsForProfile persists credentials under the
+// given profile's derived secret key, so refreshed tokens stay within their
+// profile.
+func storeAnthropicOAuthCredentialsForProfile(profileId string, creds *OAuthCredentials) error {
 	credsJSON, err := json.Marshal(creds)
 	if err != nil {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
-	return keyring.Set(keyringService, AnthropicOAuthSecretName, string(credsJSON))
+	secretName := secret_manager.ProfileSecretName(profileId, AnthropicOAuthSecretName)
+	return keyring.Set(keyringService, secretName, string(credsJSON))
 }

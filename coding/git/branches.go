@@ -3,11 +3,19 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"sidekick/env"
 	"strings"
+)
+
+var (
+	// ErrBranchExists indicates a branch with the requested name already exists.
+	ErrBranchExists = errors.New("branch already exists")
+	// ErrInvalidRefName indicates a branch name or base ref is not usable as a git ref argument.
+	ErrInvalidRefName = errors.New("invalid ref name")
 )
 
 // GitWorktree holds information about a Git worktree.
@@ -61,6 +69,43 @@ func runGitCommand(ctx context.Context, repoDir string, args ...string) (stdout,
 
 	// Success (exit code 0)
 	return stdout, stderr, 0, nil
+}
+
+// validateRefArg rejects values that git would interpret as flags or that are
+// otherwise unusable as a ref argument. Remaining validity is left to git.
+func validateRefArg(label, value string) error {
+	if value == "" {
+		return fmt.Errorf("%w: %s must not be empty", ErrInvalidRefName, label)
+	}
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("%w: %s must not start with '-'", ErrInvalidRefName, label)
+	}
+	if strings.ContainsAny(value, " \t\n") {
+		return fmt.Errorf("%w: %s must not contain whitespace", ErrInvalidRefName, label)
+	}
+	return nil
+}
+
+// CreateBranch creates a branch named branchName pointing at baseRef, without
+// checking it out. It returns ErrBranchExists if the branch already exists and
+// ErrInvalidRefName if either name is unusable.
+func CreateBranch(ctx context.Context, repoDir, branchName, baseRef string) error {
+	if err := validateRefArg("branch name", branchName); err != nil {
+		return err
+	}
+	if err := validateRefArg("base ref", baseRef); err != nil {
+		return err
+	}
+
+	_, stderr, _, err := runGitCommand(ctx, repoDir, "branch", branchName, baseRef)
+	if err != nil {
+		if strings.Contains(stderr, "already exists") {
+			return fmt.Errorf("%w: %s", ErrBranchExists, branchName)
+		}
+		return fmt.Errorf("failed to create branch %s from %s in %s: %w", branchName, baseRef, repoDir, err)
+	}
+
+	return nil
 }
 
 // BranchState represents the current branch state of a Git repository.

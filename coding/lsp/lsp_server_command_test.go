@@ -39,10 +39,20 @@ func (f *fakeEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
 // inside the environment over SSH.
 type fakeSSHEnv struct {
 	*fakeEnv
-	sshArgs []string
+	sshArgs         []string
+	ensuredForwards int
 }
 
 func (f *fakeSSHEnv) SSHArgs(ctx context.Context) ([]string, error) { return f.sshArgs, nil }
+
+func (f *fakeSSHEnv) SSHConnConfig(ctx context.Context) (env.SSHConnConfig, error) {
+	return env.SSHConnConfig{Host: "fake-host"}, nil
+}
+
+func (f *fakeSSHEnv) EnsureReverseForwards(ctx context.Context) error {
+	f.ensuredForwards++
+	return nil
+}
 
 // goplsPresent simulates an environment where gopls is already on PATH.
 func goplsPresent(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
@@ -69,6 +79,9 @@ func TestLSPServerCommand_SSHCapableEnvRunsGoplsOverSSH(t *testing.T) {
 	assert.True(t, strings.HasPrefix(remoteCmd, "'gopls'"),
 		"remote command should launch gopls, got %q", remoteCmd)
 	assert.Contains(t, remoteCmd, "-remote=auto")
+
+	assert.Equal(t, 1, sshEnv.ensuredForwards,
+		"this invocation carries no -R, so the env's forwards must be held by the transport")
 }
 
 func TestLSPServerCommand_LocalEnvRunsGoplsDirectly(t *testing.T) {

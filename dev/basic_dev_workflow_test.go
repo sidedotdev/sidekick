@@ -1,8 +1,10 @@
 package dev
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/testsuite"
@@ -189,4 +191,71 @@ func (s *AutoMergeApprovalTestSuite) TestAutoMergeMergesIntoConfiguredBranch() {
 
 func TestAutoMergeApprovalTestSuite(t *testing.T) {
 	suite.Run(t, new(AutoMergeApprovalTestSuite))
+}
+
+func TestCommitMessageForMerge(t *testing.T) {
+	t.Parallel()
+
+	longTitle := strings.Repeat("a", 105)
+
+	cases := []struct {
+		name     string
+		params   MergeWithReviewParams
+		expected string
+	}{
+		{
+			name:     "title preferred over requirements",
+			params:   MergeWithReviewParams{Title: "Add retry to merge", Requirements: "Some very long requirements\nwith details"},
+			expected: "Add retry to merge",
+		},
+		{
+			name:     "blank title falls back to requirements",
+			params:   MergeWithReviewParams{Title: "   ", Requirements: "Some very long requirements\nwith details"},
+			expected: "Some very long requirements",
+		},
+		{
+			name:     "empty title falls back to requirements overview",
+			params:   MergeWithReviewParams{Requirements: "Preamble\n\nOverview:\nImplement the thing\nmore detail"},
+			expected: "Implement the thing",
+		},
+		{
+			name:     "multi-line title keeps only the subject line",
+			params:   MergeWithReviewParams{Title: "Subject line\nbody line", Requirements: "requirements"},
+			expected: "Subject line",
+		},
+		{
+			name:     "over-long title overflows into the commit body",
+			params:   MergeWithReviewParams{Title: longTitle},
+			expected: longTitle[:100] + "...\n\n..." + longTitle[100:],
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.expected, commitMessageForMerge(tc.params))
+		})
+	}
+}
+
+func TestCommitTitleForTask(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		title       string
+		description string
+		expected    string
+	}{
+		{name: "distinct title is used", title: "Fix flaky test", description: "The test fails sometimes", expected: "Fix flaky test"},
+		{name: "title copied from description is dropped", title: "The test fails sometimes", description: "The test fails sometimes ", expected: ""},
+		{name: "missing title", title: "", description: "The test fails sometimes", expected: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.expected, commitTitleForTask(tc.title, tc.description))
+		})
+	}
 }

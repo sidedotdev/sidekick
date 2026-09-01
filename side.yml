@@ -65,7 +65,10 @@ openshell:
   from: "Dockerfile.openshell"
 
 modal:
-  vm: true
+  # VM memory is statically provisioned from the request and cannot burst to
+  # memory_limit. The container runtime lets normal workloads keep a low billing
+  # floor while accommodating concurrent test commands.
+  vm: false
   dockerfile_path: "Dockerfile.modal"
   # Requests are billing floors; usage bursts freely up to the limits (CPU is
   # left unlimited at Modal's minimum 0.125-core request). Memory measured via
@@ -75,6 +78,13 @@ modal:
   cpu: 0.125
   memory: 1024
   memory_limit: 8192
+  # Sandbox filesystem snapshots only follow a single sandbox lineage, so a
+  # replacement sandbox starts with a cold affected-test cache and recompiles
+  # and reruns every Go package. Keeping the cache on a volume lets any sandbox
+  # skip packages whose inputs are unchanged.
+  volumes:
+    - name: "sidekick-cache"
+      mount_path: "/root/.cache/sidekick"
 
 # Reverse-forward the host's read-only Temporal proxy (exposed by dev builds
 # of `side start`) into devpod/openshell containers so integration tests that

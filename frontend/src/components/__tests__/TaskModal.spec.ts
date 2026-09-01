@@ -495,6 +495,17 @@ describe('TaskModal localStorage behavior', () => {
   })
 
   describe('branch selection persistence', () => {
+    it('allows creating a branch from the start branch selector', async () => {
+      const wrapper = mountModal()
+
+      ;(wrapper.vm as any).repoMode = 'worktree'
+      await wrapper.vm.$nextTick()
+
+      const branchSelector = wrapper.findComponent({ name: 'BranchSelector' })
+      expect(branchSelector.exists()).toBe(true)
+      expect(branchSelector.props('allowCreate')).toBe(true)
+    })
+
     it('loads last selected branch from localStorage for new task', () => {
       const branchKey = `lastSelectedBranch_${testWorkspaceId}`
       localStorage.setItem(branchKey, 'feature-1')

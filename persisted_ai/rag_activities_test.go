@@ -19,6 +19,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRankedDirSignatureOutline_NoEmbeddingModelConfigured(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dbAccessor := sqlite.NewTestSqliteStorage(t, "test-ranked-outline-no-embedding-model")
+	ra := RagActivities{DatabaseAccessor: dbAccessor}
+
+	localEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: t.TempDir()})
+	require.NoError(t, err)
+
+	output, err := ra.RankedDirSignatureOutline(ctx, RankedDirSignatureOutlineOptions{
+		RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
+			WorkspaceId:  "test-workspace",
+			EnvContainer: env.EnvContainer{Env: localEnv},
+			RankQuery:    "some query",
+			Secrets: secret_manager.SecretManagerContainer{
+				SecretManager: secret_manager.MockSecretManager{},
+			},
+		},
+		CharLimit: 1000,
+	})
+	require.NoError(t, err)
+	require.Empty(t, output)
+}
+
 func TestRankedSubkeys(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")

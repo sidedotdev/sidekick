@@ -18,6 +18,8 @@ import (
 	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/sideagent"
+	"sidekick/utils"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
@@ -135,12 +137,48 @@ type SSHCapableEnv interface {
 	Env
 	// SSHArgs returns SSH CLI arguments for connecting to this environment.
 	// The returned args end with the destination; a remote command string
-	// can be appended directly.
+	// can be appended directly. Reverse port forwards are not included:
+	// they are owned by the transport, not by any one invocation.
 	SSHArgs(ctx context.Context) ([]string, error)
+	// SSHConnConfig describes the same connection in typed form, for
+	// transports that dial without the ssh binary. Implementations resolve
+	// whatever the ssh binary would have resolved for them, so the config is
+	// dialable on its own.
+	SSHConnConfig(ctx context.Context) (SSHConnConfig, error)
 }
 
 type sshTransportRecoverer interface {
 	recoverSSHTransport(ctx context.Context, cause error) (bool, error)
+}
+
+// RunWithSSHTransportRecovery retries an operation once when an environment can
+// identify and recover the underlying SSH transport failure. It is intended for
+// operations that must bypass Env.RunCommand and are safe to replay.
+func RunWithSSHTransportRecovery(ctx context.Context, e Env, operation func() error) error {
+	err := operation()
+	if err == nil {
+		return nil
+	}
+
+	recoverer, ok := e.(sshTransportRecoverer)
+	if !ok {
+		return err
+	}
+	recovered, recoveryErr := recoverer.recoverSSHTransport(ctx, err)
+	if recoveryErr != nil {
+		return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+	}
+	if !recovered {
+		return err
+	}
+	return operation()
+}
+
+// nonRecoveringSSHEnv hides an env's sshTransportRecoverer implementation, for
+// callers that own transport recovery themselves and must not have a second
+// recovery nested inside each dial attempt.
+type nonRecoveringSSHEnv struct {
+	SSHCapableEnv
 }
 
 // MergeResultSyncer is implemented by environments whose repository is an
@@ -162,6 +200,17 @@ type GitRefSyncer interface {
 	// SyncGitRefToLocal transfers the given fully-qualified ref (e.g.
 	// "refs/tags/archive/foo") from the environment to the host repository.
 	SyncGitRefToLocal(ctx context.Context, ref string) error
+}
+
+// FlowBranchBackupSyncer is implemented by environments whose repository is an
+// independent clone rather than a bind mount of the host checkout. It backs up
+// a flow branch's commits to the host repository, which is the durable home
+// for work in progress even while the environment is alive.
+type FlowBranchBackupSyncer interface {
+	// SyncFlowBranchToLocal force-updates the same-name branch ref in the host
+	// repository from the environment's branch. The branch is never checked
+	// out locally, so no host working tree is touched.
+	SyncFlowBranchToLocal(ctx context.Context, branch string) error
 }
 
 // TargetBranchSyncer is implemented by environments whose repository is an
@@ -327,6 +376,7 @@ type ModalEnv struct {
 	Hibernated   bool                       `json:"hibernated,omitempty"`
 
 	runModalCommand      func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error)
+	runModalAPICommand   func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error)
 	refreshModalEndpoint func(context.Context, string) (string, int, error)
 }
 
@@ -677,35 +727,50 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 	return e.WorkingDirectory
 }
 
-// buildRemoteShellCommand builds a single POSIX shell command line that runs
-// input's command inside workDir over SSH. It exports the requested environment
-// variables, changes into workDir, and only then runs the command. A failed cd
-// (e.g. the directory does not exist in the remote container) aborts with a
-// non-zero exit and a clear message on stderr, so callers get an explicit error
-// instead of empty output from a command that silently ran in the SSH session's
-// default directory.
-func buildRemoteShellCommand(workDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) string {
-	allEnvVars := append(input.EnvVars, envVarsToInject(envType, portForwards)...)
-	shellParts := make([]string, 0, len(allEnvVars)+3)
-
-	// Detach stdin from the SSH channel so remote commands behave like local
-	// ones, which get /dev/null as stdin. Otherwise tools like ripgrep read
-	// from the (empty) SSH stream instead of recursing the working directory.
-	shellParts = append(shellParts, "exec 0</dev/null")
-
-	for _, envVar := range allEnvVars {
-		shellParts = append(shellParts, "export "+shellQuote(envVar))
+// agentExecRequest maps an EnvRunCommandInput onto a structured side-agent
+// exec request: argv, cwd and env cross the channel verbatim, so no shell
+// command line is ever assembled from user-controlled input.
+func agentExecRequest(workingDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) sideagent.ExecRequest {
+	return sideagent.ExecRequest{
+		Dir:  filepath.Join(workingDir, input.RelativeWorkingDir),
+		Argv: append([]string{input.Command}, input.Args...),
+		Env:  append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards)...),
 	}
-	cdFailure := shellQuote("cd: " + workDir + ": No such file or directory")
-	shellParts = append(shellParts, "cd "+shellQuote(workDir)+" || { echo "+cdFailure+" >&2; exit 1; }")
+}
 
-	cmdStr := shellQuote(input.Command)
-	for _, arg := range input.Args {
-		cmdStr += " " + shellQuote(arg)
+// withRemoteReadLock makes req run under the per-worktree shared hibernation
+// read lock, bailing before execution when the worktree is hibernated so the
+// Go side can wake it and retry.
+func withRemoteReadLock(req sideagent.ExecRequest, workDir string) sideagent.ExecRequest {
+	req.ReadLockFile = hibernationLockFile(workDir)
+	req.HibernationSentinel = workDir + "/" + HibernationMetadataFile
+	return req
+}
+
+// agentExecOutput maps a structured agent response onto command output.
+// Hibernation preemption keeps its sentinel exit code, and failures to start
+// the command at all (e.g. missing executable or working directory) surface
+// like a failed command: non-zero exit with the reason on stderr.
+func agentExecOutput(resp sideagent.ExecResponse) EnvRunCommandOutput {
+	output := EnvRunCommandOutput{
+		Stdout:     string(resp.Stdout),
+		Stderr:     string(resp.Stderr),
+		ExitStatus: resp.ExitStatus,
 	}
-	shellParts = append(shellParts, cmdStr)
-
-	return strings.Join(shellParts, " && ")
+	if resp.Hibernated {
+		output.ExitStatus = hibernatedRemoteExitCode
+		return output
+	}
+	if resp.Error != "" {
+		if output.Stderr != "" && !strings.HasSuffix(output.Stderr, "\n") {
+			output.Stderr += "\n"
+		}
+		output.Stderr += resp.Error + "\n"
+		if output.ExitStatus == 0 {
+			output.ExitStatus = -1
+		}
+	}
+	return output
 }
 
 // reverseForwardArgs returns ssh -R flags exposing the configured host ports
@@ -724,15 +789,22 @@ func reverseForwardArgs(forwards []common.PortForwardConfig) []string {
 }
 
 // insertBeforeSSHDestination inserts extra ssh option args before the
-// destination, which must be the last element of sshArgs.
+// destination. Options placed after the destination are parsed by ssh as the
+// remote command, so the destination is located rather than assumed to be
+// last: some envs terminate their args with a "--" separator that lets callers
+// append a remote command directly.
 func insertBeforeSSHDestination(sshArgs []string, extra []string) []string {
 	if len(extra) == 0 {
 		return sshArgs
 	}
+	destination := len(sshArgs) - 1
+	if destination > 0 && sshArgs[destination] == "--" {
+		destination--
+	}
 	out := make([]string, 0, len(sshArgs)+len(extra))
-	out = append(out, sshArgs[:len(sshArgs)-1]...)
+	out = append(out, sshArgs[:destination]...)
 	out = append(out, extra...)
-	out = append(out, sshArgs[len(sshArgs)-1])
+	out = append(out, sshArgs[destination:]...)
 	return out
 }
 
@@ -757,39 +829,22 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 }
 
 func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
 	if !input.SkipWaking {
-		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
+		req = withRemoteReadLock(req, e.WorkingDirectory)
 	}
 
-	controlPath := devpodSSHControlPath(e.WorkspaceName)
-	sshHost := e.WorkspaceName + ".devpod"
-	sshArgs := []string{
-		"-o", "ControlMaster=auto",
-		"-S", controlPath,
-		"-o", "ControlPersist=3600",
-		"-o", "BatchMode=yes",
-		"-o", "ServerAliveInterval=10",
-		"-o", "ServerAliveCountMax=3",
-		"-o", "LogLevel=ERROR",
-	}
-	sshArgs = append(sshArgs, reverseForwardArgs(e.PortForwards)...)
-	sshArgs = append(sshArgs, sshHost, "--", fullCommand)
-
-	runCommandInput := unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       sshArgs,
-	}
 	// Commands run over SSH into the container ultimately depend on the docker
 	// engine; a hung engine makes them block forever. Guard so such a hang is
 	// detected and the engine restarted instead of stalling the activity.
 	var output EnvRunCommandOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
-		var runErr error
-		output, runErr = unix.RunCommandActivity(ctx, runCommandInput)
-		return runErr
+		resp, execErr := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, req)
+		if execErr != nil {
+			return execErr
+		}
+		output = agentExecOutput(resp)
+		return nil
 	})
 	if err != nil {
 		return output, err
@@ -799,20 +854,36 @@ func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInpu
 	return output, nil
 }
 
-func (e *DevPodEnv) SSHArgs(ctx context.Context) ([]string, error) {
-	controlPath := devpodSSHControlPath(e.WorkspaceName)
-	sshHost := e.WorkspaceName + ".devpod"
-	sshArgs := []string{
-		"-o", "ControlMaster=auto",
-		"-S", controlPath,
-		"-o", "ControlPersist=3600",
-		"-o", "BatchMode=yes",
-		"-o", "ServerAliveInterval=10",
-		"-o", "ServerAliveCountMax=3",
-		"-o", "LogLevel=ERROR",
+// devpodSSHConnConfig describes the connection as DevPod's own ssh_config
+// entry leaves it: the host is an alias, so reachability (real hostname, port,
+// identity, any ProxyCommand) is resolved by OpenSSH rather than stated here.
+func devpodSSHConnConfig(workspaceName string) SSHConnConfig {
+	return SSHConnConfig{
+		Host:                   workspaceName + ".devpod",
+		BatchMode:              utils.Ptr(true),
+		LogLevel:               "ERROR",
+		KeepaliveInterval:      utils.Ptr(10 * time.Second),
+		KeepaliveMaxFailures:   utils.Ptr(3),
+		ControlPath:            devpodSSHControlPath(workspaceName),
+		ControlPersist:         time.Hour,
+		LegacyCommandSeparator: true,
 	}
-	sshArgs = append(sshArgs, reverseForwardArgs(e.PortForwards)...)
-	return append(sshArgs, sshHost, "--"), nil
+}
+
+func (e *DevPodEnv) SSHArgs(ctx context.Context) ([]string, error) {
+	return devpodSSHConnConfig(e.WorkspaceName).LegacyArgs(), nil
+}
+
+// SSHConnConfig resolves the workspace's host alias through OpenSSH, since a
+// transport that does not run the ssh binary cannot rely on it to expand the
+// entry DevPod wrote.
+func (e *DevPodEnv) SSHConnConfig(ctx context.Context) (SSHConnConfig, error) {
+	config := devpodSSHConnConfig(e.WorkspaceName)
+	resolved, err := resolveSSHConnConfig(ctx, config.Host)
+	if err != nil {
+		return SSHConnConfig{}, err
+	}
+	return config.withResolvedReachability(resolved), nil
 }
 
 // sharedSFTP returns the process-wide SFTP connection for this workspace, so
@@ -827,6 +898,18 @@ func (e *DevPodEnv) sftpConnKey() string {
 	return "devpod:" + e.WorkspaceName
 }
 
+// transport returns the SSH transport for this env's remote identity.
+func (e *DevPodEnv) transport() SSHTransport {
+	return sshTransportFor(e.sftpConnKey(), e.PortForwards, e)
+}
+
+// EnsureReverseForwards holds this env's forwards on a connection that outlives
+// ctx, so a caller spawning its own ssh gets the same routes home that commands
+// run through the transport get.
+func (e *DevPodEnv) EnsureReverseForwards(ctx context.Context) error {
+	return e.transport().EnsureReverseForwards(ctx, e.PortForwards)
+}
+
 func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
 		return nil, wakeErr
@@ -834,7 +917,7 @@ func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpReadFile(ctx, e.transport(), p)
 }
 
 func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -844,7 +927,7 @@ func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpReadDir(ctx, e.transport(), p)
 }
 
 func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -854,7 +937,7 @@ func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm f
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
+	return sftpWriteFile(ctx, e.transport(), p, data, perm)
 }
 
 func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -864,7 +947,7 @@ func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) er
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
+	return sftpMkdirAll(ctx, e.transport(), p, perm)
 }
 
 func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -874,7 +957,7 @@ func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpStat(ctx, e.transport(), p)
 }
 
 func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
@@ -884,7 +967,7 @@ func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpRemove(ctx, e.transport(), p)
 }
 
 func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -896,7 +979,7 @@ func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string
 	} else if !strings.HasPrefix(dir, "/") {
 		dir = path.Join(e.WorkingDirectory, dir)
 	}
-	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
+	return sftpCreateTemp(ctx, e.transport(), dir, pattern)
 }
 
 func (e *OpenShellEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
@@ -931,33 +1014,23 @@ func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput)
 }
 
 func (e *OpenShellEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
+	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
 	if !input.SkipWaking {
-		fullCommand = wrapRemoteReadLock(e.WorkingDirectory, fullCommand)
+		req = withRemoteReadLock(req, e.WorkingDirectory)
 	}
-
-	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	resp, err := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, req)
 	if err != nil {
-		return EnvRunCommandOutput{}, fmt.Errorf("failed to get SSH config for sandbox %s: %w", e.SandboxName, err)
+		return EnvRunCommandOutput{}, err
 	}
-	sshArgs = insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards))
-	sshArgs = append(sshArgs, fullCommand)
-
-	runCommandInput := unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       sshArgs,
-	}
-	return unix.RunCommandActivity(ctx, runCommandInput)
+	return agentExecOutput(resp), nil
 }
 
 func (e *OpenShellEnv) SSHArgs(ctx context.Context) ([]string, error) {
-	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
-	if err != nil {
-		return nil, err
-	}
-	return insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards)), nil
+	return openShellSSHArgs(ctx, e.SandboxName)
+}
+
+func (e *OpenShellEnv) SSHConnConfig(ctx context.Context) (SSHConnConfig, error) {
+	return openShellSSHConnConfig(ctx, e.SandboxName)
 }
 
 // sharedSFTP returns the process-wide SFTP connection for this sandbox, so
@@ -972,6 +1045,15 @@ func (e *OpenShellEnv) sftpConnKey() string {
 	return "openshell:" + e.SandboxName
 }
 
+// transport returns the SSH transport for this env's remote identity.
+func (e *OpenShellEnv) transport() SSHTransport {
+	return sshTransportFor(e.sftpConnKey(), e.PortForwards, e)
+}
+
+func (e *OpenShellEnv) EnsureReverseForwards(ctx context.Context) error {
+	return e.transport().EnsureReverseForwards(ctx, e.PortForwards)
+}
+
 func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if wakeErr := wakeIfHibernatedRemote(ctx, e); wakeErr != nil {
 		return nil, wakeErr
@@ -979,7 +1061,7 @@ func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpReadFile(ctx, e.transport(), p)
 }
 
 func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -989,7 +1071,7 @@ func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, er
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpReadDir(ctx, e.transport(), p)
 }
 
 func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -999,7 +1081,7 @@ func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, per
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
+	return sftpWriteFile(ctx, e.transport(), p, data, perm)
 }
 
 func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -1009,7 +1091,7 @@ func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode)
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
+	return sftpMkdirAll(ctx, e.transport(), p, perm)
 }
 
 func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -1019,7 +1101,7 @@ func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) 
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpStat(ctx, e.transport(), p)
 }
 
 func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
@@ -1029,7 +1111,7 @@ func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpRemove(ctx, e.transport(), p)
 }
 
 func (e *OpenShellEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -1041,7 +1123,7 @@ func (e *OpenShellEnv) CreateTemp(ctx context.Context, dir, pattern string) (str
 	} else if !strings.HasPrefix(dir, "/") {
 		dir = path.Join(e.WorkingDirectory, dir)
 	}
-	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
+	return sftpCreateTemp(ctx, e.transport(), dir, pattern)
 }
 
 // SetLatency injects artificial latency into each SFTP read for benchmarking.
@@ -1076,6 +1158,10 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	if e.runModalCommand != nil {
 		runCommand = e.runModalCommand
 	}
+	runAPICommand := e.runAPICommandInner
+	if e.runModalAPICommand != nil {
+		runAPICommand = e.runModalAPICommand
+	}
 	refreshEndpoint := refreshModalEndpoint
 	if e.refreshModalEndpoint != nil {
 		refreshEndpoint = e.refreshModalEndpoint
@@ -1093,21 +1179,44 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	}
 	appendDiagnostics()
 
+	// Only SSH client diagnostics kept separate from remote output can prove
+	// the command never started, which is what makes re-running it safe.
+	transportFailed := func() bool {
+		return err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
+	}
+	if !transportFailed() {
+		return output, err
+	}
+
 	// The stored tunnel endpoint may be stale because the idle watchdog
-	// snapshotted and terminated the sandbox. Only SSH client diagnostics
-	// kept separate from remote output can prove the command never started.
-	if err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics) {
-		host, port, refreshErr := refreshEndpoint(ctx, e.SandboxName)
-		if refreshErr != nil {
-			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
-		} else {
-			e.SSHHost, e.SSHPort = host, port
-			output, diagnostics, err = runCommand(ctx, input)
-			appendDiagnostics()
+	// snapshotted and terminated the sandbox; refreshing restores it.
+	host, port, refreshErr := refreshEndpoint(ctx, e.SandboxName)
+	if refreshErr != nil {
+		log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
+	} else {
+		e.SSHHost, e.SSHPort = host, port
+		output, diagnostics, err = runCommand(ctx, input)
+		appendDiagnostics()
+		if !transportFailed() {
+			return output, err
 		}
 	}
 
-	return output, err
+	// SSH is preferred for its multiplexed connection, but the tunnel endpoint
+	// is only reachable by dialing an ephemeral high port, which some networks
+	// forbid (e.g. HTTP proxies that only allow CONNECT to 443). Modal's API
+	// stays usable there, at the cost of losing the reverse port forwards that
+	// only SSH can provide.
+	apiOutput, apiErr := runAPICommand(ctx, input)
+	if apiErr != nil {
+		log.Warn().Err(apiErr).Str("sandbox", e.SandboxName).Msg("failed to run command via modal API after SSH transport failure")
+		// The command never started, so returning its synthetic 255 exit would
+		// masquerade as the command itself failing and send callers chasing
+		// output that no command produced.
+		return output, fmt.Errorf("modal sandbox %s is unreachable: modal API fallback after SSH transport failure: %w: ssh diagnostics: %s", e.SandboxName, apiErr, diagnostics)
+	}
+	log.Info().Str("sandbox", e.SandboxName).Msg("ran command via modal API after SSH transport failure")
+	return apiOutput, nil
 }
 
 func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
@@ -1132,6 +1241,13 @@ func (e *ModalEnv) recoverSSHTransport(ctx context.Context, cause error) (bool, 
 	return true, nil
 }
 
+// isModalSSHTransportFailure reports whether ssh client diagnostics describe a
+// failure that happened before the remote command could start. Callers retry
+// on it, so every fragment must denote either a dial that never succeeded or a
+// connection that died during the pre-authentication identification and banner
+// exchange. Connections made through a ProxyCommand only ever produce the
+// latter kind: the dial failure happens inside the proxy helper, and ssh sees
+// nothing but a closed pipe.
 func isModalSSHTransportFailure(diagnostics string) bool {
 	diagnostics = strings.ToLower(diagnostics)
 	for _, fragment := range []string{
@@ -1139,6 +1255,11 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 		"connect to host",
 		"could not resolve hostname",
 		"no route to host",
+		"exchange_identification",
+		"banner exchange",
+		// Marker emitted by sshDialTransportError: the ssh client exited 255
+		// before the agent protocol answered, sometimes with no stderr at all.
+		"transport failure before agent channel established",
 	} {
 		if strings.Contains(diagnostics, fragment) {
 			return true
@@ -1147,71 +1268,124 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 	return false
 }
 
-func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+// buildRemoteShellCommand builds a single POSIX shell command line that runs
+// input's command inside workDir. It exports the requested environment
+// variables, changes into workDir, and only then runs the command. A failed cd
+// (e.g. the directory does not exist in the remote container) aborts with a
+// non-zero exit and a clear message on stderr, so callers get an explicit error
+// instead of empty output from a command that silently ran in the session's
+// default directory. Only the Modal API fallback path needs shell
+// serialization; SSH-reachable environments run commands as verbatim argv over
+// the side-agent exec channel instead.
+func buildRemoteShellCommand(workDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) string {
+	allEnvVars := append(input.EnvVars, envVarsToInject(envType, portForwards)...)
+	shellParts := make([]string, 0, len(allEnvVars)+3)
+
+	// Detach stdin so remote commands behave like local ones, which get
+	// /dev/null as stdin. Otherwise tools like ripgrep read from the (empty)
+	// session stream instead of recursing the working directory.
+	shellParts = append(shellParts, "exec 0</dev/null")
+
+	for _, envVar := range allEnvVars {
+		shellParts = append(shellParts, "export "+shellQuote(envVar))
+	}
+	cdFailure := shellQuote("cd: " + workDir + ": No such file or directory")
+	shellParts = append(shellParts, "cd "+shellQuote(workDir)+" || { echo "+cdFailure+" >&2; exit 1; }")
+
+	cmdStr := shellQuote(input.Command)
+	for _, arg := range input.Args {
+		cmdStr += " " + shellQuote(arg)
+	}
+	shellParts = append(shellParts, cmdStr)
+
+	return strings.Join(shellParts, " && ")
+}
+
+// remoteCommand returns the shell command to run inside the sandbox, prefixed
+// with a refresh of the idle-watchdog activity marker.
+func (e *ModalEnv) remoteCommand(input EnvRunCommandInput) string {
 	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
-	fullCommand := buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
-	fullCommand = modalLoginShellCommand(fullCommand)
-	// Refresh the idle-watchdog activity marker with every command.
-	fullCommand = "touch " + remoteActivityMarker + " 2>/dev/null; " + fullCommand
-
-	sshArgs, err := e.SSHArgs(ctx)
-	if err != nil {
-		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to get SSH args for modal sandbox %s: %w", e.SandboxName, err)
-	}
-	diagnosticsFile, err := os.CreateTemp("", "sidekick-modal-ssh-*.log")
-	if err != nil {
-		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to create modal SSH diagnostics file: %w", err)
-	}
-	diagnosticsPath := diagnosticsFile.Name()
-	if err := diagnosticsFile.Close(); err != nil {
-		os.Remove(diagnosticsPath)
-		return EnvRunCommandOutput{}, "", fmt.Errorf("failed to close modal SSH diagnostics file: %w", err)
-	}
-	defer os.Remove(diagnosticsPath)
-
-	sshArgs = insertBeforeSSHDestination(sshArgs, []string{"-v", "-E", diagnosticsPath})
-	sshArgs = append(sshArgs, fullCommand)
-
-	runCommandInput := unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       sshArgs,
-	}
-	output, err := unix.RunCommandActivity(ctx, runCommandInput)
-	if err != nil || output.ExitStatus != 255 {
-		return output, "", err
-	}
-	diagnostics, readErr := os.ReadFile(diagnosticsPath)
-	if readErr != nil {
-		log.Warn().Err(readErr).Str("sandbox", e.SandboxName).Msg("failed to read modal SSH diagnostics")
-		return output, "", nil
-	}
-	return output, string(diagnostics), nil
+	return "touch " + remoteActivityMarker + " 2>/dev/null; " +
+		buildRemoteShellCommand(workDir, e.GetType(), e.PortForwards, input)
 }
 
-func modalLoginShellCommand(command string) string {
-	return "bash -lc " + shellQuote(command)
+// runCommandInner executes input over the pooled side-agent exec channel.
+// Channel-level SSH transport failures never reached the remote command; they
+// are returned as diagnostics with a 255 exit status (matching a failed ssh
+// exec) so RunCommand can refresh a stale tunnel endpoint and retry. Remote
+// commands that themselves exit 255 arrive as structured responses and are
+// therefore never mistaken for transport failures.
+func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
+	// Commands run under the login environment (sandbox toolchains land on
+	// PATH via profile scripts) and refresh the idle-watchdog activity marker.
+	req.LoginEnv = true
+	req.TouchPath = remoteActivityMarker
+
+	// RunCommand owns endpoint refresh, retry, and the Modal API fallback for
+	// the command path; hiding recoverSSHTransport from the dial keeps it the
+	// sole owner instead of nesting a second refresh inside every attempt.
+	resp, err := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, nonRecoveringSSHEnv{e}, req)
+	if err != nil {
+		return classifyModalExecFailure(ctx, err)
+	}
+	return agentExecOutput(resp), "", nil
 }
 
-// baseSSHArgs returns ssh args (ending with the destination) for reaching the
-// sandbox's sshd through its Modal tunnel endpoint, without reverse forwards.
-func (e *ModalEnv) baseSSHArgs(ctx context.Context) ([]string, error) {
+// classifyModalExecFailure maps a side-agent exec error onto RunCommand's
+// recovery contract: failures that provably preceded sending the command
+// surface as a synthetic 255 exit with diagnostics (and a nil error) so
+// RunCommand refreshes the tunnel endpoint and retries, while
+// established-channel failures stay hard errors because the command may have
+// already run. The typed dial wrapper takes precedence over any wrapped
+// channel-bootstrap error: the channel never existed, so nothing was sent.
+// The diagnostic-string fallback is checked only after the typed
+// established-channel error, so an established failure whose diagnostics
+// merely resemble a dial failure is never retried.
+func classifyModalExecFailure(ctx context.Context, err error) (EnvRunCommandOutput, string, error) {
+	var dialFailure *sshDialTransportError
+	if ctx.Err() == nil && errors.As(err, &dialFailure) {
+		return EnvRunCommandOutput{ExitStatus: 255}, err.Error(), nil
+	}
+	var establishedFailure *agentExecTransportError
+	if errors.As(err, &establishedFailure) {
+		return EnvRunCommandOutput{}, establishedFailure.Diagnostics(), err
+	}
+	if ctx.Err() == nil && isModalSSHTransportFailure(err.Error()) {
+		return EnvRunCommandOutput{ExitStatus: 255}, err.Error(), nil
+	}
+	return EnvRunCommandOutput{}, "", err
+}
+
+// runAPICommandInner runs the command through Modal's API rather than SSH.
+// Reverse port forwards are an SSH-only feature, so host services stay
+// unreachable from commands run this way.
+func (e *ModalEnv) runAPICommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	return modalExecCommand(ctx, e.SandboxName, e.remoteCommand(input))
+}
+
+// SSHConnConfig describes how to reach the sandbox's sshd through its Modal
+// tunnel endpoint. Nothing is resolved from a user's ssh_config: the endpoint
+// and the key are both ours.
+func (e *ModalEnv) SSHConnConfig(ctx context.Context) (SSHConnConfig, error) {
 	if e.SSHHost == "" || e.SSHPort == 0 {
-		return nil, fmt.Errorf("modal env for sandbox %s has no SSH endpoint", e.SandboxName)
+		return SSHConnConfig{}, fmt.Errorf("modal env for sandbox %s has no SSH endpoint", e.SandboxName)
 	}
 	keyPath, _, err := ensureModalSSHKey(ctx)
 	if err != nil {
-		return nil, err
+		return SSHConnConfig{}, err
 	}
-	return modalSSHArgs(e.SandboxName, e.SSHHost, e.SSHPort, keyPath), nil
+	return modalSSHConnConfig(e.SandboxName, e.SSHHost, e.SSHPort, keyPath), nil
 }
 
+// SSHArgs returns ssh args (ending with the destination) for reaching the
+// sandbox's sshd through its Modal tunnel endpoint.
 func (e *ModalEnv) SSHArgs(ctx context.Context) ([]string, error) {
-	sshArgs, err := e.baseSSHArgs(ctx)
+	config, err := e.SSHConnConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return insertBeforeSSHDestination(sshArgs, reverseForwardArgs(e.PortForwards)), nil
+	return config.LegacyArgs(), nil
 }
 
 // sftpConnKey returns the stable per-sandbox identity used to share a pooled
@@ -1222,46 +1396,55 @@ func (e *ModalEnv) sftpConnKey() string {
 	return "modal:" + e.SandboxName
 }
 
+// transport returns the SSH transport for this env's remote identity.
+func (e *ModalEnv) transport() SSHTransport {
+	return sshTransportFor(e.sftpConnKey(), e.PortForwards, e)
+}
+
+func (e *ModalEnv) EnsureReverseForwards(ctx context.Context) error {
+	return e.transport().EnsureReverseForwards(ctx, e.PortForwards)
+}
+
 func (e *ModalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpReadFile(ctx, e.transport(), p)
 }
 
 func (e *ModalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpReadDir(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpReadDir(ctx, e.transport(), p)
 }
 
 func (e *ModalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpWriteFile(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, data, perm)
+	return sftpWriteFile(ctx, e.transport(), p, data, perm)
 }
 
 func (e *ModalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpMkdirAll(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p, perm)
+	return sftpMkdirAll(ctx, e.transport(), p, perm)
 }
 
 func (e *ModalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpStat(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpStat(ctx, e.transport(), p)
 }
 
 func (e *ModalEnv) Remove(ctx context.Context, p string) error {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(e.WorkingDirectory, p)
 	}
-	return sftpRemove(ctx, getPooledSFTPConn(e.sftpConnKey()), e, p)
+	return sftpRemove(ctx, e.transport(), p)
 }
 
 func (e *ModalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -1270,7 +1453,7 @@ func (e *ModalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string,
 	} else if !strings.HasPrefix(dir, "/") {
 		dir = path.Join(e.WorkingDirectory, dir)
 	}
-	return sftpCreateTemp(ctx, getPooledSFTPConn(e.sftpConnKey()), e, dir, pattern)
+	return sftpCreateTemp(ctx, e.transport(), dir, pattern)
 }
 
 // shellQuote wraps a string in single quotes, escaping any embedded single quotes.

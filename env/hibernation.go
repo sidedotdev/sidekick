@@ -217,17 +217,6 @@ func runExclusiveScript(ctx context.Context, e Env, script string) (EnvRunComman
 	return runSkipWake(ctx, e, EnvRunCommandInput{Command: "flock", Args: []string{"-x", lock, "sh", "-c", script}})
 }
 
-// wrapRemoteReadLock wraps a remote command so it runs under a per-worktree
-// shared flock and bails with hibernatedRemoteExitCode when the worktree is
-// hibernated, letting the Go side wake and retry. workDir must be the worktree
-// root (where the hibernation sentinel lives), not a relative subdirectory.
-func wrapRemoteReadLock(workDir, inner string) string {
-	lock := hibernationLockFile(workDir)
-	meta := workDir + "/" + HibernationMetadataFile
-	body := fmt.Sprintf("test -f %s && exit %d; %s", shellQuote(meta), hibernatedRemoteExitCode, inner)
-	return fmt.Sprintf("flock -s %s sh -c %s", shellQuote(lock), shellQuote(body))
-}
-
 // isHibernatedExitError reports whether err is a command that exited with
 // hibernatedRemoteExitCode.
 func isHibernatedExitError(err error) bool {
@@ -675,8 +664,14 @@ func (e *OpenShellEnv) WakeIfHibernated(ctx context.Context) error {
 	return wakeIfHibernatedRemote(ctx, e)
 }
 
+// Hibernate is a no-op: worktree hibernation reclaims local disk for
+// environments whose filesystem outlives idleness, whereas an idle Modal
+// sandbox is snapshotted and terminated wholesale by its watchdog.
+//
+// TODO: stop scheduling HibernateWorktreeActivity for Modal environments
+// instead of no-opping the work here.
 func (e *ModalEnv) Hibernate(ctx context.Context, branchName string) (HibernationMetadata, error) {
-	return HibernateEnv(ctx, e, branchName)
+	return HibernationMetadata{}, nil
 }
 
 // WakeIfHibernated is a no-op: worktree hibernation is not used on Modal, so

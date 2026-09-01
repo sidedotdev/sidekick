@@ -10,9 +10,33 @@ export interface LLMConfig {
   useCaseConfigs: { [key: string]: ModelConfig[] }
 }
 
+export interface ModalVolumeMount {
+  name: string
+  mountPath: string
+  readOnly?: boolean
+}
+
+export interface ModalEnvConfig {
+  vm?: boolean
+  image?: string
+  dockerfilePath?: string
+  cpu?: number
+  cpuLimit?: number
+  memory?: number
+  memoryLimit?: number
+  idleSeconds?: number
+  activeSnapshotSeconds?: number
+  volumes?: ModalVolumeMount[]
+}
+
 export interface EmbeddingConfig {
   defaults: ModelConfig[]
   useCaseConfigs: { [key: string]: ModelConfig[] }
+}
+
+export interface Profile {
+  id: string
+  name: string
 }
 
 export interface Workspace {
@@ -20,6 +44,7 @@ export interface Workspace {
   name: string
   localRepoDir: string
   configMode?: string
+  profileId?: string
   llmConfig?: LLMConfig | null
   embeddingConfig?: EmbeddingConfig | null
 }
@@ -315,4 +340,37 @@ export interface Project {
   rank?: string
   created: string
   updated: string
+}
+
+// Command-permission evaluation metadata, mirroring the camelCase JSON of the
+// Go types in common/command_permission_evaluation.go.
+export type PermissionResult = 'auto_approve' | 'require_approval' | 'deny'
+
+export interface PermissionMatchedRule {
+  action: PermissionResult
+  pattern: string
+  message?: string
+  source?: string
+}
+
+export interface PermissionFactor {
+  kind: string
+  outcome?: PermissionResult
+  message?: string
+  paths?: string[]
+}
+
+export interface CommandPermissionEvaluation {
+  command: string
+  outcome: PermissionResult
+  matchedRules?: PermissionMatchedRule[]
+  factors?: PermissionFactor[]
+  decidedBy: 'rule' | 'factor'
+  decidedByIndex: number
+}
+
+export interface ScriptPermissionEvaluation {
+  outcome: PermissionResult
+  commands?: CommandPermissionEvaluation[]
+  factors?: PermissionFactor[]
 }

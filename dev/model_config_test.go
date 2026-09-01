@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,10 @@ type modelConfigUpdateCallbacks struct {
 	result    interface{}
 	err       error
 	completed bool
+
+	// onComplete lets a test sequence work off the update actually landing,
+	// rather than guessing a delay by which it should have landed.
+	onComplete func()
 }
 
 type modelConfigWorkflowResult struct {
@@ -134,27 +139,21 @@ func TestModelConfigQueryAndRepeatedUpdates(t *testing.T) {
 	var initialQuery common.LLMConfig
 	var firstUpdateQuery common.LLMConfig
 	var secondUpdateQuery common.LLMConfig
-	env.RegisterDelayedCallback(func() {
-		value, err := env.QueryWorkflow(QueryNameModelConfig)
-		require.NoError(t, err)
-		require.NoError(t, value.Get(&initialQuery))
-	}, 5*time.Millisecond)
-	env.RegisterDelayedCallback(func() {
+
+	// Each step is chained off the previous one landing, so the queries observe
+	// exactly the revision they are meant to: initial config, then the config
+	// after the first update, then after the second.
+	secondCallbacks.onComplete = func() {
+		queryWhenHandlerReady(t, env, QueryNameModelConfig, &secondUpdateQuery, nil)
+	}
+	firstCallbacks.onComplete = func() {
+		queryWhenHandlerReady(t, env, QueryNameModelConfig, &firstUpdateQuery, func() {
+			env.UpdateWorkflow(UpdateNameModelConfig, "second-model-config-update", secondCallbacks, secondUpdate)
+		})
+	}
+	queryWhenHandlerReady(t, env, QueryNameModelConfig, &initialQuery, func() {
 		env.UpdateWorkflow(UpdateNameModelConfig, "first-model-config-update", firstCallbacks, firstUpdate)
-	}, 10*time.Millisecond)
-	env.RegisterDelayedCallback(func() {
-		value, err := env.QueryWorkflow(QueryNameModelConfig)
-		require.NoError(t, err)
-		require.NoError(t, value.Get(&firstUpdateQuery))
-	}, 15*time.Millisecond)
-	env.RegisterDelayedCallback(func() {
-		env.UpdateWorkflow(UpdateNameModelConfig, "second-model-config-update", secondCallbacks, secondUpdate)
-	}, 20*time.Millisecond)
-	env.RegisterDelayedCallback(func() {
-		value, err := env.QueryWorkflow(QueryNameModelConfig)
-		require.NoError(t, err)
-		require.NoError(t, value.Get(&secondUpdateQuery))
-	}, 25*time.Millisecond)
+	})
 
 	env.ExecuteWorkflow(modelConfigTestWorkflow, initial, 2)
 
@@ -288,6 +287,45 @@ func (c *modelConfigUpdateCallbacks) Complete(result interface{}, err error) {
 	c.result = result
 	c.err = err
 	c.completed = true
+	if c.onComplete != nil {
+		c.onComplete()
+	}
+}
+
+// queryWhenHandlerReady decodes a query into dest as soon as the workflow has
+// registered that query handler, then runs then. A workflow registers its
+// handlers on its first workflow task, so any fixed delay is a guess about how
+// far the workflow got: under load the query can land first and fail with an
+// unknown query type. Retrying in virtual time waits for the handler itself.
+func queryWhenHandlerReady(
+	t *testing.T,
+	wfEnv *testsuite.TestWorkflowEnvironment,
+	queryType string,
+	dest any,
+	then func(),
+) {
+	t.Helper()
+
+	const maxAttempts = 100
+	attempts := 0
+	var attempt func()
+	attempt = func() {
+		attempts++
+		value, err := wfEnv.QueryWorkflow(queryType)
+		if err != nil {
+			if attempts < maxAttempts && strings.Contains(err.Error(), "unknown queryType") {
+				wfEnv.RegisterDelayedCallback(attempt, time.Millisecond)
+				return
+			}
+			require.NoErrorf(t, err, "query %s failed after %d attempt(s)", queryType, attempts)
+			return
+		}
+		require.NoError(t, value.Get(dest))
+		if then != nil {
+			then()
+		}
+	}
+	wfEnv.RegisterDelayedCallback(attempt, time.Millisecond)
 }
 
 type codingModelConfigWorkflowResult struct {
@@ -432,4 +470,50 @@ func TestCodingStreamRestartsWithoutCancelingConcurrentActivity(t *testing.T) {
 	require.Equal(t, "complete", result.ResponseID)
 	require.Equal(t, "completed", result.NonStreamResult)
 	env.AssertExpectations(t)
+}
+
+// lateModelConfigHandlerWorkflow registers its query handler only after doing
+// other work first, which is what a caller sees whenever a workflow's setup
+// precedes its handlers.
+func lateModelConfigHandlerWorkflow(ctx workflow.Context, config common.LLMConfig) error {
+	if err := workflow.Sleep(ctx, 50*time.Millisecond); err != nil {
+		return err
+	}
+	globalState := &flow_action.GlobalState{}
+	globalState.InitValues()
+	dCtx := DevContext{
+		ExecContext: flow_action.ExecContext{
+			Context:     ctx,
+			GlobalState: globalState,
+		},
+	}
+	dCtx.SetLLMConfig(config)
+	if err := SetupModelConfigHandlers(dCtx); err != nil {
+		return err
+	}
+	return workflow.Sleep(ctx, 10*time.Millisecond)
+}
+
+// TestQueryWhenHandlerReadyWaitsForLateHandler pins the retry that keeps the
+// config queries in this file independent of how far a workflow has run by the
+// time they are issued.
+func TestQueryWhenHandlerReadyWaitsForLateHandler(t *testing.T) {
+	t.Parallel()
+
+	var workflowSuite testsuite.WorkflowTestSuite
+	wfEnv := workflowSuite.NewTestWorkflowEnvironment()
+	wfEnv.SetWorkerOptions(utils.TestWorkerOptions())
+	defer wfEnv.AssertExpectations(t)
+
+	expected := common.LLMConfig{
+		Defaults: []common.ModelConfig{{Provider: "openai", Model: "late-handler"}},
+	}
+	var queried common.LLMConfig
+	queryWhenHandlerReady(t, wfEnv, QueryNameModelConfig, &queried, nil)
+
+	wfEnv.ExecuteWorkflow(lateModelConfigHandlerWorkflow, expected)
+
+	require.True(t, wfEnv.IsWorkflowCompleted())
+	require.NoError(t, wfEnv.GetWorkflowError())
+	require.Equal(t, expected, queried)
 }

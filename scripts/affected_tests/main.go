@@ -268,12 +268,18 @@ type goListPackage struct {
 	XTestImports    []string
 	Deps            []string
 	ForTest         string
+	DefaultGODEBUG  string
 	Error           *goListError
 }
 
 type goListModule struct {
-	Path string
-	Main bool
+	Path      string
+	Version   string
+	Main      bool
+	GoVersion string
+	Sum       string
+	GoModSum  string
+	Replace   *goListModule
 }
 
 type goListError struct {
@@ -358,23 +364,23 @@ func readModulePath() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func commonHashBase(profileSig string) ([]byte, error) {
+// hashFormatVersion is folded into every package hash so that changing what a
+// hash covers retires the passes recorded under the previous meaning instead
+// of letting them match.
+const hashFormatVersion = 2
+
+// commonHashBase covers the inputs shared by every package: the test profile
+// and the toolchain. The dependency manifest is deliberately absent, because
+// manifest churn only changes the build of packages importing the affected
+// module, which every package hash already covers through the resolved module
+// identity of its dependencies. Hashing go.mod and go.sum wholesale instead
+// invalidates every cached package on any dependency edit.
+func commonHashBase(profileSig string) []byte {
 	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "FORMAT %d\n", hashFormatVersion)
 	fmt.Fprintf(&buf, "PROFILE %s\n", profileSig)
 	fmt.Fprintf(&buf, "GOVERSION %s\n", runtime.Version())
-	for _, f := range []string{"go.mod", "go.sum"} {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) && f == "go.sum" {
-				fmt.Fprintf(&buf, "%s MISSING\n", f)
-				continue
-			}
-			return nil, fmt.Errorf("read %s: %w", f, err)
-		}
-		sum := sha256.Sum256(data)
-		fmt.Fprintf(&buf, "%s %s\n", f, hex.EncodeToString(sum[:]))
-	}
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
 // packageClosure returns the set of import paths whose source file changes are
@@ -405,6 +411,13 @@ func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, e
 	h := sha256.New()
 	h.Write(base)
 
+	// godebug settings (go.mod directives, //go:debug lines, the language
+	// version defaults) change how the test binary behaves at runtime without
+	// changing any source file, and go list resolves them for us.
+	if tb := listing.testBinaries[pkg]; tb != nil && tb.DefaultGODEBUG != "" {
+		fmt.Fprintf(h, "GODEBUG %s\n", tb.DefaultGODEBUG)
+	}
+
 	closure := packageClosure(pkg, listing)
 
 	sorted := make([]string, 0, len(closure))
@@ -427,6 +440,7 @@ func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, e
 			// already mixed into the base hash; skip per-file hashing for speed.
 			continue
 		}
+		hashModuleIdentity(h, dp.Module)
 		if err := hashPackageFiles(h, dp, dep == pkg); err != nil {
 			return "", err
 		}
@@ -452,6 +466,16 @@ func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, e
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashModuleIdentity mixes the resolved module of a dependency into h,
+// following replacements to the module actually built. Version, language
+// version and go.sum checksums decide which source the build consumes, so they
+// must be inputs even when the files we hashed are byte-identical.
+func hashModuleIdentity(h hash.Hash, m *goListModule) {
+	for ; m != nil; m = m.Replace {
+		fmt.Fprintf(h, "MOD %s@%s go=%s sum=%s gomodsum=%s\n", m.Path, m.Version, m.GoVersion, m.Sum, m.GoModSum)
+	}
 }
 
 // hashPackageFiles mixes the content hashes of a package's source/embed files
@@ -510,10 +534,7 @@ func computeHashes(flags, patterns []string) (string, map[string]string, []strin
 		return "", nil, nil, err
 	}
 
-	base, err := commonHashBase(profileSig)
-	if err != nil {
-		return "", nil, nil, err
-	}
+	base := commonHashBase(profileSig)
 
 	hashes := make(map[string]string, len(selected))
 	for _, p := range selected {

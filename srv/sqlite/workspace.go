@@ -13,8 +13,8 @@ import (
 
 func (s *Storage) PersistWorkspace(ctx context.Context, workspace domain.Workspace) error {
 	query := `
-		INSERT OR REPLACE INTO workspaces (id, name, local_repo_dir, config_mode, created, updated)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO workspaces (id, name, local_repo_dir, config_mode, profile_id, created, updated)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
@@ -22,6 +22,7 @@ func (s *Storage) PersistWorkspace(ctx context.Context, workspace domain.Workspa
 		workspace.Name,
 		workspace.LocalRepoDir,
 		workspace.ConfigMode,
+		sql.NullString{String: workspace.ProfileId, Valid: workspace.ProfileId != ""},
 		workspace.Created.UTC(),
 		workspace.Updated.UTC(),
 	)
@@ -42,7 +43,7 @@ func (s *Storage) PersistWorkspace(ctx context.Context, workspace domain.Workspa
 
 func (s *Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.Workspace, error) {
 	query := `
-		SELECT id, name, local_repo_dir, config_mode, created, updated
+		SELECT id, name, local_repo_dir, config_mode, COALESCE(profile_id, ''), created, updated
 		FROM workspaces
 		WHERE id = ?
 	`
@@ -53,6 +54,7 @@ func (s *Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.
 		&workspace.Name,
 		&workspace.LocalRepoDir,
 		&workspace.ConfigMode,
+		&workspace.ProfileId,
 		&workspace.Created,
 		&workspace.Updated,
 	)
@@ -72,7 +74,7 @@ func (s *Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.
 
 func (s *Storage) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
 	query := `
-		SELECT id, name, local_repo_dir, config_mode, created, updated
+		SELECT id, name, local_repo_dir, config_mode, COALESCE(profile_id, ''), created, updated
 		FROM workspaces
 		ORDER BY name
 	`
@@ -92,6 +94,7 @@ func (s *Storage) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, err
 			&workspace.Name,
 			&workspace.LocalRepoDir,
 			&workspace.ConfigMode,
+			&workspace.ProfileId,
 			&workspace.Created,
 			&workspace.Updated,
 		)

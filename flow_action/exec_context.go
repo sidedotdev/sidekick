@@ -43,7 +43,10 @@ func (eCtx *ExecContext) getModelMetadata(provider, model string) common.ModelMe
 // around.
 type ExecContext struct {
 	workflow.Context
-	WorkspaceId           string
+	WorkspaceId string
+	// ProfileId scopes secret resolution and model provider selection. An empty
+	// value means the default profile.
+	ProfileId             string
 	EnvContainer          *env.EnvContainer
 	Secrets               *secret_manager.SecretManagerContainer
 	FlowScope             *FlowScope

@@ -36,6 +36,9 @@ type BasicDevWorkflowInput struct {
 	WorkspaceId  string
 	RepoDir      string
 	Requirements string
+	// Title, when set, is a concise summary of the work used for commit and
+	// merge messages in place of the verbose requirements text.
+	Title string
 	BasicDevOptions
 }
 
@@ -56,7 +59,10 @@ type BasicDevOptions struct {
 }
 
 type MergeWithReviewParams struct {
-	Requirements   string
+	Requirements string
+	// Title, when set, is used as the commit and merge message instead of
+	// deriving one from the requirements text.
+	Title          string
 	StartBranch    *string
 	CommitRequired bool
 	AutoMerge      bool
@@ -278,6 +284,9 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return "", err
 	}
+	if err = SetupModalConfigHandlers(dCtx); err != nil {
+		return "", err
+	}
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
@@ -332,6 +341,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		params := MergeWithReviewParams{
 			CommitRequired: true,
 			Requirements:   requirements,
+			Title:          input.Title,
 			StartBranch:    input.StartBranch,
 			AutoMerge:      input.AutoMerge,
 		}
@@ -897,6 +907,30 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 	})
 }
 
+// commitMessageForMerge prefers the task title, which summarizes the work
+// concisely, over the requirements text it was derived from.
+func commitMessageForMerge(params MergeWithReviewParams) string {
+	if title := strings.TrimSpace(params.Title); title != "" {
+		return shortenCommitMessage(title)
+	}
+
+	requirements := strings.TrimSpace(params.Requirements)
+	if strings.Contains(requirements, "Overview:\n") {
+		requirements = strings.TrimSpace(strings.Split(requirements, "Overview:\n")[1])
+	}
+	return shortenCommitMessage(requirements)
+}
+
+// shortenCommitMessage keeps only the first line as the commit subject, moving
+// any overflow beyond the subject line's length limit into the commit body.
+func shortenCommitMessage(message string) string {
+	message = strings.Split(message, "\n")[0]
+	if len(message) > 100 {
+		message = message[:100] + "...\n\n..." + message[100:]
+	}
+	return message
+}
+
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string) (string, MergeApprovalResponse, string, error) {
 	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 	case 2:
@@ -963,15 +997,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 	// handling review feedback in the review and resolve flow, and related to
 	// the overall requirements in the initial basic dev flow.
 
-	commitMessage := strings.TrimSpace(params.Requirements)
-	if strings.Contains(commitMessage, "Overview:\n") {
-		commitMessage = strings.Split(commitMessage, "Overview:\n")[1]
-		commitMessage = strings.TrimSpace(commitMessage)
-	}
-	commitMessage = strings.Split(commitMessage, "\n")[0]
-	if len(commitMessage) > 100 {
-		commitMessage = commitMessage[:100] + "...\n\n..." + commitMessage[100:]
-	}
+	commitMessage := commitMessageForMerge(params)
 
 	committerName := dCtx.GlobalState.GetStringValue("committerName")
 	committerEmail := dCtx.GlobalState.GetStringValue("committerEmail")

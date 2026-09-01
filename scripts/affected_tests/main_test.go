@@ -881,3 +881,373 @@ func TestCacheWriterWarnsOnFlushFailure(t *testing.T) {
 		t.Errorf("expected warn callback with flush error, got %v", warned)
 	}
 }
+
+// writeModuleManifest writes the dependency manifest of a throwaway module so
+// hash inputs can be exercised without touching the repo's own manifest.
+func writeModuleManifest(t *testing.T, dir, goMod, goSum string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if goSum == "" {
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.sum"), []byte(goSum), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const manifestGoMod = `module example.com/m
+
+go 1.24
+
+require example.com/used v1.0.0
+`
+
+const manifestGoSum = `example.com/used v1.0.0 h1:aaa=
+example.com/used v1.0.0/go.mod h1:bbb=
+`
+
+// TestCommonHashBaseIsManifestIndependent pins the invalidation granularity of
+// the shared hash base. Dependency manifest churn (added or bumped requires,
+// // indirect markers, checksums, replacements of modules nobody imports) must
+// only invalidate the packages consuming the changed module, which their own
+// dependency sources and resolved module identity already cover. Hashing the
+// manifest wholesale invalidates every cached package on any dependency edit.
+func TestCommonHashBaseIsManifestIndependent(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeModuleManifest(t, dir, manifestGoMod, manifestGoSum)
+	before := string(commonHashBase("prof"))
+
+	writeModuleManifest(t, dir, `module example.com/m
+
+go 1.24
+
+require (
+	example.com/other v1.2.3 // indirect
+	example.com/used v1.0.0
+)
+
+replace example.com/unimported => example.com/forked v1.0.0
+`, manifestGoSum+`example.com/other v1.2.3 h1:ccc=
+example.com/other v1.2.3/go.mod h1:ddd=
+`)
+
+	if after := string(commonHashBase("prof")); after != before {
+		t.Errorf("hash base changed with the dependency manifest:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if other := string(commonHashBase("other-profile")); other == before {
+		t.Error("hash base must still separate profiles")
+	}
+}
+
+// TestComputePackageHashTracksDependencyModuleIdentity is the safety half of
+// per-package dependency hashing: since the manifest is no longer folded into
+// every hash wholesale, the resolved identity of each dependency module must
+// be an input, so a version, language version or checksum change is never
+// masked by byte-identical sources.
+func TestComputePackageHashTracksDependencyModuleIdentity(t *testing.T) {
+	t.Parallel()
+
+	mainDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mainDir, "p.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	depDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(depDir, "dep.go"), []byte("package dep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const pkg = "example.com/m/p"
+	const depPkg = "example.com/dep"
+	listingFor := func(depModule goListModule) *pkgListing {
+		return &pkgListing{
+			byPath: map[string]*goListPackage{
+				pkg: {
+					Dir:        mainDir,
+					ImportPath: pkg,
+					GoFiles:    []string{"p.go"},
+					Deps:       []string{depPkg},
+					Module:     &goListModule{Path: "example.com/m", Main: true, GoVersion: "1.24"},
+				},
+				depPkg: {
+					Dir:        depDir,
+					ImportPath: depPkg,
+					GoFiles:    []string{"dep.go"},
+					Module:     &depModule,
+				},
+			},
+			testBinaries: map[string]*goListPackage{},
+			testVariants: map[string][]*goListPackage{},
+		}
+	}
+
+	resolved := goListModule{
+		Path:      depPkg,
+		Version:   "v1.0.0",
+		GoVersion: "1.21",
+		Sum:       "h1:aaa=",
+		GoModSum:  "h1:bbb=",
+	}
+	reference, err := computePackageHash(pkg, listingFor(resolved), []byte("base"))
+	if err != nil {
+		t.Fatalf("computePackageHash: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(m *goListModule)
+	}{
+		{name: "version bump", mutate: func(m *goListModule) { m.Version = "v1.0.1" }},
+		{name: "module language version", mutate: func(m *goListModule) { m.GoVersion = "1.22" }},
+		{name: "module checksum", mutate: func(m *goListModule) { m.Sum = "h1:ccc=" }},
+		{name: "go.mod checksum", mutate: func(m *goListModule) { m.GoModSum = "h1:ddd=" }},
+		{name: "replacement", mutate: func(m *goListModule) {
+			m.Replace = &goListModule{Path: "example.com/fork", Version: "v0.0.1"}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mutated := resolved
+			tc.mutate(&mutated)
+			got, err := computePackageHash(pkg, listingFor(mutated), []byte("base"))
+			if err != nil {
+				t.Fatalf("computePackageHash: %v", err)
+			}
+			if got == reference {
+				t.Errorf("hash unchanged after %s: dependency module identity is not hashed", tc.name)
+			}
+		})
+	}
+}
+
+// TestComputePackageHashTracksTestBinaryGODEBUG covers godebug settings, which
+// change how a test binary behaves at runtime without touching any source
+// file. go list resolves them onto the package's test binary entry.
+func TestComputePackageHashTracksTestBinaryGODEBUG(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const pkg = "example.com/m/p"
+	listingFor := func(godebug string) *pkgListing {
+		return &pkgListing{
+			byPath: map[string]*goListPackage{
+				pkg: {
+					Dir:        dir,
+					ImportPath: pkg,
+					GoFiles:    []string{"p.go"},
+					Module:     &goListModule{Path: "example.com/m", Main: true, GoVersion: "1.24"},
+				},
+			},
+			testBinaries: map[string]*goListPackage{
+				pkg: {
+					ImportPath:     pkg + ".test",
+					Deps:           []string{pkg},
+					DefaultGODEBUG: godebug,
+				},
+			},
+			testVariants: map[string][]*goListPackage{},
+		}
+	}
+
+	before, err := computePackageHash(pkg, listingFor("asynctimerchan=1"), []byte("base"))
+	if err != nil {
+		t.Fatalf("computePackageHash: %v", err)
+	}
+	after, err := computePackageHash(pkg, listingFor("asynctimerchan=0"), []byte("base"))
+	if err != nil {
+		t.Fatalf("computePackageHash: %v", err)
+	}
+	if before == after {
+		t.Error("hash unchanged after the test binary's default GODEBUG changed")
+	}
+}
+
+// TestMergedDependencyEditsStillHitCache reproduces the post-merge symptom: a
+// branch merged into the base adds a module (with its requires, checksums and
+// a replacement) that this package does not import, and the pass recorded
+// before the merge must still apply instead of re-running the suite.
+func TestMergedDependencyEditsStillHitCache(t *testing.T) {
+	pkgDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pkgDir, "p.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	depDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(depDir, "dep.go"), []byte("package dep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unrelatedDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(unrelatedDir, "u.go"), []byte("package u\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const pkg = "example.com/m/p"
+	const depPkg = "example.com/dep"
+	const unrelatedPkg = "example.com/unrelated"
+	listingWith := func(extra ...*goListPackage) *pkgListing {
+		listing := &pkgListing{
+			byPath: map[string]*goListPackage{
+				pkg: {
+					Dir:        pkgDir,
+					ImportPath: pkg,
+					GoFiles:    []string{"p.go"},
+					Deps:       []string{depPkg},
+					Module:     &goListModule{Path: "example.com/m", Main: true, GoVersion: "1.24"},
+				},
+				depPkg: {
+					Dir:        depDir,
+					ImportPath: depPkg,
+					GoFiles:    []string{"dep.go"},
+					Module: &goListModule{
+						Path:     depPkg,
+						Version:  "v1.0.0",
+						Sum:      "h1:aaa=",
+						GoModSum: "h1:bbb=",
+					},
+				},
+			},
+			testBinaries: map[string]*goListPackage{},
+			testVariants: map[string][]*goListPackage{},
+		}
+		for _, p := range extra {
+			listing.byPath[p.ImportPath] = p
+		}
+		return listing
+	}
+
+	// Each state is hashed from inside its own module checkout, so the
+	// manifest of the merged state is as visible to hashing as it is in a real
+	// run on the base branch after the merge.
+	hashAt := func(goMod, goSum string, extra ...*goListPackage) string {
+		t.Helper()
+		moduleDir := t.TempDir()
+		writeModuleManifest(t, moduleDir, goMod, goSum)
+		t.Chdir(moduleDir)
+		h, err := computePackageHash(pkg, listingWith(extra...), commonHashBase("prof"))
+		if err != nil {
+			t.Fatalf("computePackageHash: %v", err)
+		}
+		return h
+	}
+
+	branchHash := hashAt(`module example.com/m
+
+go 1.24
+
+require example.com/dep v1.0.0
+`, `example.com/dep v1.0.0 h1:aaa=
+example.com/dep v1.0.0/go.mod h1:bbb=
+`)
+
+	mergedHash := hashAt(`module example.com/m
+
+go 1.24
+
+require (
+	example.com/dep v1.0.0
+	example.com/unrelated v2.0.0
+)
+
+replace example.com/unrelated => example.com/forked v2.0.1
+`, `example.com/dep v1.0.0 h1:aaa=
+example.com/dep v1.0.0/go.mod h1:bbb=
+example.com/forked v2.0.1 h1:ccc=
+example.com/forked v2.0.1/go.mod h1:ddd=
+`, &goListPackage{
+		Dir:        unrelatedDir,
+		ImportPath: unrelatedPkg,
+		GoFiles:    []string{"u.go"},
+		Module: &goListModule{
+			Path:     unrelatedPkg,
+			Version:  "v2.0.0",
+			Sum:      "h1:ccc=",
+			GoModSum: "h1:ddd=",
+			Replace:  &goListModule{Path: "example.com/forked", Version: "v2.0.1"},
+		},
+	})
+
+	cache := &cacheFile{Profiles: map[string]*profileEntry{}}
+	applyPasses(cache, "prof", "go test ./...", []string{pkg}, map[string]string{pkg: branchHash}, time.Now())
+	if !cache.Profiles["prof"].Packages[pkg].hasHash(mergedHash) {
+		t.Errorf("package %s lost its cached pass after an unrelated dependency was merged", pkg)
+	}
+}
+
+// TestGoListDepsTestDecodesModuleMetadata proves the module identity fields
+// hashing depends on are really the ones go list emits: a JSON shape mismatch
+// would silently drop dependency version and checksum changes from every hash.
+func TestGoListDepsTestDecodesModuleMetadata(t *testing.T) {
+	t.Parallel()
+	const pkg = "sidekick/coding/tree_sitter"
+	listing, err := goListDepsTest([]string{pkg})
+	if err != nil {
+		t.Fatalf("goListDepsTest(%q): %v", pkg, err)
+	}
+
+	var identityDecoded, replacementDecoded, replacementPresent bool
+	for _, p := range listing.byPath {
+		m := p.Module
+		if m == nil || m.Main {
+			continue
+		}
+		if m.Version != "" && m.Sum != "" && m.GoModSum != "" && m.GoVersion != "" {
+			identityDecoded = true
+		}
+		if m.Replace == nil {
+			continue
+		}
+		replacementPresent = true
+		if m.Replace.Path != "" && m.Replace.Version != "" && m.Replace.Sum != "" && m.Replace.GoModSum != "" {
+			replacementDecoded = true
+		}
+	}
+	if !identityDecoded {
+		t.Errorf("no dependency of %s decoded a module version with checksums and language version", pkg)
+	}
+	if !replacementPresent {
+		t.Errorf("no replaced module in the closure of %s; point this test at a package consuming a replace directive", pkg)
+	} else if !replacementDecoded {
+		t.Errorf("replacement module metadata did not decode for any dependency of %s", pkg)
+	}
+}
+
+// TestGoListDepsTestDecodesTestBinaryGODEBUG proves the same for the test
+// binary's effective godebug settings, which change test behaviour without
+// changing any source file.
+func TestGoListDepsTestDecodesTestBinaryGODEBUG(t *testing.T) {
+	dir := t.TempDir()
+	writeModuleManifest(t, dir, `module example.com/gd
+
+go 1.24
+
+godebug default=go1.21
+`, "")
+	pkgDir := filepath.Join(dir, "a")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "a.go"), []byte("package a\n\nfunc F() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "a_test.go"), []byte("package a\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { _ = F() }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	listing, err := goListDepsTest([]string{"./..."})
+	if err != nil {
+		t.Fatalf("goListDepsTest: %v", err)
+	}
+	tb := listing.testBinaries["example.com/gd/a"]
+	if tb == nil {
+		t.Fatal("no test binary entry listed for example.com/gd/a")
+	}
+	if tb.DefaultGODEBUG == "" {
+		t.Error("test binary DefaultGODEBUG did not decode despite a godebug directive in go.mod")
+	}
+}

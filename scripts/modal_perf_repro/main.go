@@ -21,13 +21,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"sidekick/coding/lsp"
+	"sidekick/common"
 	"sidekick/dev"
 	"sidekick/env"
+	"sidekick/sideagent"
 )
 
 func must(err error, what string) {
@@ -189,11 +192,14 @@ git diff --cached --quiet || git commit -qm main
 	// raw ssh exec measures per-command *session* cost: channel open, exec
 	// request, and data/exit/close each take a network round trip even on the
 	// reused transport, which is why pooling more SSH connections would not
-	// help. RunCommand("true") layers sidekick's command wrapping on the same
-	// transport — the difference between the two is sidekick's per-command
-	// overhead. The persistent shell channel prototypes a long-lived remote
-	// runner that avoids per-command session setup entirely (~1 round trip
-	// per command), demonstrating the raw-exec cost is not a hard floor. The
+	// help. RunCommand rides the pooled side-agent exec channel, so the gap
+	// between it and raw ssh shows the savings of avoiding per-command
+	// session setup. The persistent shell channel is the original prototype
+	// of that idea (~1 round trip per command) but inherits every shell
+	// quoting hazard; the direct side-agent exec channel keeps the 1-RTT
+	// shape while sending argv verbatim over a framed protocol to our own
+	// remote binary — no shell, no quoting (see https://ruuda.nl/2026/deptool)
+	// — and isolates the channel from RunCommand's env-layer overhead. The
 	// Stat phase below measures the floor of a single SFTP round trip.
 	sshArgs, err := e.SSHArgs(ctx)
 	must(err, "ssh args")
@@ -204,7 +210,7 @@ git diff --cached --quiet || git commit -qm main
 		}
 		return nil
 	})
-	runPhase("RunCommand: true (adds sidekick wrapping)", func(int) error {
+	runPhase("RunCommand: true (pooled side-agent channel)", func(int) error {
 		return checkRun("true")
 	})
 	shell, err := startPersistentShell(ctx, sshArgs)
@@ -222,6 +228,46 @@ git diff --cached --quiet || git commit -qm main
 		return nil
 	})
 	shell.close()
+
+	agentPath, err := ensureRemoteAgent(ctx, e, sshArgs)
+	must(err, "ensure remote side-agent")
+	agent, err := startAgentChannel(ctx, sshArgs, agentPath)
+	must(err, "start agent exec channel")
+	agentRun := func(dir string, argv ...string) error {
+		resp, err := agent.client.Exec(ctx, sideagent.ExecRequest{Dir: dir, Argv: argv})
+		if err != nil {
+			return err
+		}
+		if resp.Error != "" {
+			return fmt.Errorf("agent exec: %s", resp.Error)
+		}
+		if resp.ExitStatus != 0 {
+			return fmt.Errorf("exit %d: %s%s", resp.ExitStatus, resp.Stdout, resp.Stderr)
+		}
+		return nil
+	}
+	must(agentRun("", "true"), "warm agent exec channel")
+	runPhase("agent exec channel: true (no-shell 1-RTT prototype)", func(int) error {
+		return agentRun("", "true")
+	})
+	runPhase("agent exec channel: git status --porcelain", func(int) error {
+		return agentRun(repoDir, "git", "status", "--porcelain")
+	})
+
+	// Argv travels verbatim over the framed protocol, so arguments that are
+	// impossible to quote portably across shells must arrive intact. printf
+	// repeats its format per argument; \x01 is an unambiguous separator since
+	// argv strings cannot contain NUL.
+	trickyArgs := []string{"a b", "it's", `she said "hi"`, "line1\nline2", "$HOME", "`id`", "\\", "*", "; rm -rf /tmp/nope"}
+	trickyResp, err := agent.client.Exec(ctx, sideagent.ExecRequest{
+		Argv: append([]string{"printf", "\x01%s"}, trickyArgs...),
+	})
+	must(err, "agent quoting check")
+	if want := "\x01" + strings.Join(trickyArgs, "\x01"); trickyResp.ExitStatus != 0 || string(trickyResp.Stdout) != want {
+		must(fmt.Errorf("exit %d, stdout %q, want %q", trickyResp.ExitStatus, trickyResp.Stdout, want), "agent quoting check")
+	}
+	fmt.Println("agent exec channel: shell-hostile argv round-tripped verbatim")
+	agent.close()
 
 	fmt.Printf("\nbenchmark phases (%d ops each):\n", *ops)
 	var results []phaseResult
@@ -361,4 +407,74 @@ func (p *persistentShell) run(command string) (int, error) {
 func (p *persistentShell) close() {
 	p.stdin.Close()
 	p.cmd.Wait()
+}
+
+// ensureRemoteAgent resolves the cached side-agent binary for the sandbox's
+// OS/arch (building from source when needed) and uploads it to its
+// content-addressed remote path, skipping the upload when already present.
+// This bootstrap is the only step that passes a command line through a shell;
+// afterwards every command travels as verbatim argv over the framed protocol.
+func ensureRemoteAgent(ctx context.Context, e *env.ModalEnv, sshArgs []string) (string, error) {
+	out, err := e.RunCommand(ctx, env.EnvRunCommandInput{Command: "uname", Args: []string{"-sm"}})
+	if err != nil {
+		return "", fmt.Errorf("uname: %w", err)
+	}
+	parts := strings.Fields(strings.TrimSpace(out.Stdout))
+	if len(parts) < 2 {
+		return "", fmt.Errorf("unexpected uname output: %q", out.Stdout)
+	}
+
+	localPath, err := common.GetAgentBinaryPath(parts[0], parts[1])
+	if err != nil {
+		return "", fmt.Errorf("get agent binary: %w", err)
+	}
+	remotePath := "/tmp/side-agent-" + filepath.Base(localPath)
+
+	check := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), "test -x "+remotePath)...)
+	if check.Run() == nil {
+		return remotePath, nil
+	}
+	localFile, err := os.Open(localPath)
+	if err != nil {
+		return "", err
+	}
+	defer localFile.Close()
+	upload := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), "cat > "+remotePath+" && chmod +x "+remotePath)...)
+	upload.Stdin = localFile
+	if uploadOut, err := upload.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("upload side-agent: %w: %s", err, uploadOut)
+	}
+	return remotePath, nil
+}
+
+// agentChannel is one SSH session hosting the side-agent exec server. Like
+// the persistent shell it costs a single network round trip per command, but
+// argv is framed rather than spliced into a shell line, so it has none of the
+// shell's quoting or output-separation problems.
+type agentChannel struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	client *sideagent.Client
+}
+
+func startAgentChannel(ctx context.Context, sshArgs []string, remotePath string) (*agentChannel, error) {
+	cmd := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), remotePath+" exec")...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &agentChannel{cmd: cmd, stdin: stdin, client: sideagent.NewClient(stdout, stdin)}, nil
+}
+
+func (a *agentChannel) close() {
+	a.stdin.Close()
+	a.cmd.Wait()
 }

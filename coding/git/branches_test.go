@@ -4,12 +4,104 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCreateBranch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("Creates Branch From Base Without Checking It Out", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit")
+
+		require.NoError(t, CreateBranch(ctx, repoDir, "feature/new", "main"))
+
+		branches, err := ListLocalBranches(ctx, repoDir)
+		require.NoError(t, err)
+		assert.Contains(t, branches, "feature/new")
+
+		state, err := GetCurrentBranch(ctx, repoDir)
+		require.NoError(t, err)
+		assert.Equal(t, "main", state.Name, "base branch should remain checked out")
+	})
+
+	t.Run("Base Ref Determines Starting Commit", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		baseCommit := createCommit(t, repoDir, "Initial commit")
+		runGitCommandInTestRepo(t, repoDir, "branch", "base")
+		createCommit(t, repoDir, "Second commit")
+
+		require.NoError(t, CreateBranch(ctx, repoDir, "from-base", "base"))
+
+		stdout, _, _, err := runGitCommand(ctx, repoDir, "rev-parse", "from-base")
+		require.NoError(t, err)
+		assert.Equal(t, baseCommit, strings.TrimSpace(stdout))
+	})
+
+	t.Run("Existing Branch", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit")
+
+		require.NoError(t, CreateBranch(ctx, repoDir, "dup", "main"))
+		err := CreateBranch(ctx, repoDir, "dup", "main")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrBranchExists)
+	})
+
+	t.Run("Unknown Base Ref", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit")
+
+		err := CreateBranch(ctx, repoDir, "orphan", "does-not-exist")
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrBranchExists)
+	})
+
+	t.Run("Invalid Names", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit")
+
+		cases := []struct {
+			name       string
+			branchName string
+			baseRef    string
+		}{
+			{name: "empty branch name", branchName: "", baseRef: "main"},
+			{name: "empty base ref", branchName: "valid", baseRef: ""},
+			{name: "branch name looks like a flag", branchName: "--delete", baseRef: "main"},
+			{name: "base ref looks like a flag", branchName: "valid", baseRef: "-D"},
+			{name: "branch name with whitespace", branchName: "has space", baseRef: "main"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				err := CreateBranch(ctx, repoDir, tc.branchName, tc.baseRef)
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrInvalidRefName)
+			})
+		}
+	})
+
+	t.Run("Rejects Invalid Git Ref Name", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit")
+
+		err := CreateBranch(ctx, repoDir, "bad..name", "main")
+		require.Error(t, err)
+	})
+}
 
 func TestGetCurrentBranch(t *testing.T) {
 	t.Parallel()

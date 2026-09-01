@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import UserRequest from '../UserRequest.vue'
 import type { FlowAction } from '../../lib/models'
@@ -318,6 +318,112 @@ describe('UserRequest', () => {
           body: JSON.stringify({ actionType: 'dev_run_stop' })
         })
       )
+    })
+  })
+
+  describe('permission evaluation details', () => {
+    const permissionEvaluation = {
+      outcome: 'require_approval',
+      commands: [
+        {
+          command: 'go test ./...',
+          outcome: 'auto_approve',
+          matchedRules: [
+            { action: 'auto_approve', pattern: '^go test\\b', source: 'base' }
+          ],
+          decidedBy: 'rule',
+          decidedByIndex: 0
+        },
+        {
+          command: 'rm -rf /data',
+          outcome: 'require_approval',
+          matchedRules: [
+            { action: 'require_approval', pattern: '^rm\\b', source: 'repo_config', message: 'rm is risky' }
+          ],
+          factors: [
+            { kind: 'absolute_path_escalation', outcome: 'require_approval', paths: ['/data'] }
+          ],
+          decidedBy: 'rule',
+          decidedByIndex: 0
+        }
+      ],
+      factors: [
+        { kind: 'temp_path_advisory', message: 'Prefer .side/tmp over /tmp' }
+      ]
+    }
+
+    const createCommandApprovalFlowAction = (overrides = {}): FlowAction => createMockFlowAction({
+      actionParams: {
+        requestKind: 'approval',
+        requestContent: 'Allow running the following command?',
+        command: 'go test ./... && rm -rf /data',
+        workingDir: '/repo',
+        permissionEvaluation
+      },
+      ...overrides
+    })
+
+    beforeEach(() => {
+      vi.stubEnv('MODE', 'development')
+    })
+
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('renders the summary in the pending form in dev mode', () => {
+      mountComponent(createCommandApprovalFlowAction())
+
+      const evalBlock = wrapper.find('.permission-evaluation')
+      expect(evalBlock.exists()).toBe(true)
+      expect(evalBlock.text()).toContain('require_approval')
+      expect(evalBlock.text()).toContain('auto_approve')
+      expect(evalBlock.text()).toContain('go test ./...')
+      expect(evalBlock.text()).toContain('rule ^rm\\b (repo config)')
+      // Full details hidden until expanded
+      expect(evalBlock.text()).not.toContain('rm is risky')
+      expect(evalBlock.text()).not.toContain('Script factors')
+    })
+
+    it('reveals full details on expand', async () => {
+      mountComponent(createCommandApprovalFlowAction())
+
+      await wrapper.find('.permission-evaluation .perm-toggle').trigger('click')
+
+      const evalBlock = wrapper.find('.permission-evaluation')
+      expect(evalBlock.text()).toContain('Matched rules')
+      expect(evalBlock.text()).toContain('rm is risky')
+      expect(evalBlock.text()).toContain('^go test\\b')
+      expect(evalBlock.text()).toContain('absolute path escalation')
+      expect(evalBlock.text()).toContain('/data')
+      expect(evalBlock.text()).toContain('Script factors')
+      expect(evalBlock.text()).toContain('Prefer .side/tmp over /tmp')
+    })
+
+    it('renders the summary in the expanded non-pending state in dev mode', () => {
+      mountComponent(createCommandApprovalFlowAction({
+        actionStatus: 'complete',
+        actionResult: JSON.stringify({ Approved: false, Content: 'no thanks' })
+      }))
+
+      const evalBlock = wrapper.find('.permission-evaluation')
+      expect(evalBlock.exists()).toBe(true)
+      expect(evalBlock.text()).toContain('go test ./...')
+    })
+
+    it('renders nothing when permissionEvaluation is absent', () => {
+      const flowAction = createCommandApprovalFlowAction()
+      delete flowAction.actionParams.permissionEvaluation
+      mountComponent(flowAction)
+
+      expect(wrapper.find('.permission-evaluation').exists()).toBe(false)
+    })
+
+    it('renders nothing outside dev mode', () => {
+      vi.stubEnv('MODE', 'production')
+      mountComponent(createCommandApprovalFlowAction())
+
+      expect(wrapper.find('.permission-evaluation').exists()).toBe(false)
     })
   })
 })

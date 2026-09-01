@@ -20,6 +20,9 @@ type PlannedDevInput struct {
 	RepoDir      string
 	Requirements string
 	WorkspaceId  string
+	// Title, when set, is a concise summary of the work used for commit and
+	// merge messages in place of the verbose requirements text.
+	Title string
 	PlannedDevOptions
 }
 type PlannedDevOptions struct {
@@ -88,6 +91,9 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return DevPlanExecution{}, err
 	}
+	if err = SetupModalConfigHandlers(dCtx); err != nil {
+		return DevPlanExecution{}, err
+	}
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
@@ -147,6 +153,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 Here is the plan for meeting the requirements, along with updates per step:
 
 ` + devPlan.String(),
+			Title:       input.Title,
 			StartBranch: input.StartBranch,
 			AutoMerge:   input.AutoMerge,
 		})

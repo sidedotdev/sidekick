@@ -2,6 +2,7 @@ package env
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"sidekick/common"
 
+	modal "github.com/modal-labs/libmodal/modal-go"
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -97,6 +99,52 @@ func TestModalIntegration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 0, output.ExitStatus, "stderr: %s", output.Stderr)
 		assert.Contains(t, output.Stdout, "ripgrep")
+	})
+
+	t.Run("api fallback when the ssh endpoint is unusable", func(t *testing.T) {
+		// Injecting a dead endpoint that survives refresh forces the real
+		// libmodal fallback, which otherwise only happens on networks that
+		// cannot reach the tunnel port.
+		deadListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		deadPort := deadListener.Addr().(*net.TCPAddr).Port
+		require.NoError(t, deadListener.Close())
+
+		fallbackEnv := &ModalEnv{
+			SandboxName:      sandboxName,
+			SSHHost:          "127.0.0.1",
+			SSHPort:          deadPort,
+			WorkingDirectory: syncOutput.RemoteRepoDir,
+			refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+				return "127.0.0.1", deadPort, nil
+			},
+		}
+		output, err := fallbackEnv.RunCommand(ctx, EnvRunCommandInput{
+			Command: "sh",
+			Args:    []string{"-c", "echo hello-from-api; exit 5"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "hello-from-api\n", output.Stdout)
+		assert.Equal(t, 5, output.ExitStatus, "the fallback must report the command's exit status")
+	})
+
+	t.Run("api command matches ssh output", func(t *testing.T) {
+		input := EnvRunCommandInput{
+			Command: "sh",
+			Args:    []string{"-c", "echo to-stdout; echo term-is-${TERM+set}; echo to-stderr >&2; exit 7"},
+		}
+		sshOutput, err := modalEnv.RunCommand(ctx, input)
+		require.NoError(t, err)
+		apiOutput, err := modalEnv.runAPICommandInner(ctx, input)
+		require.NoError(t, err)
+
+		assert.Equal(t, "to-stdout\nterm-is-\n", apiOutput.Stdout)
+		assert.Equal(t, sshOutput.Stdout, apiOutput.Stdout)
+		assert.Equal(t, sshOutput.ExitStatus, apiOutput.ExitStatus)
+		assert.Equal(t, 7, apiOutput.ExitStatus)
+		assert.Contains(t, apiOutput.Stderr, "to-stderr")
+		assert.NotContains(t, apiOutput.Stdout, "\x1b", "output must not carry terminal escape sequences")
+		assert.NotContains(t, apiOutput.Stderr, "\x1b", "output must not carry terminal escape sequences")
 	})
 
 	t.Run("file operations", func(t *testing.T) {
@@ -256,13 +304,19 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 		SSHPort:          createOutput.SSHPort,
 		WorkingDirectory: "/root",
 	}
-	// A long-running command holds an ssh session open, keeping is_busy true
-	// across watchdog polls while the guard record is polled below.
+	// A long-running command keeps the activity heartbeat fresh across
+	// watchdog polls while the guard record is polled below.
+	commandDone := make(chan error, 1)
 	go func() {
-		_, _ = modalEnv.RunCommand(ctx, EnvRunCommandInput{
+		output, runErr := modalEnv.RunCommand(ctx, EnvRunCommandInput{
 			Command: "sleep",
 			Args:    []string{"120"},
 		})
+		if runErr != nil {
+			commandDone <- fmt.Errorf("run long-lived command: %w", runErr)
+			return
+		}
+		commandDone <- fmt.Errorf("long-lived command ended unexpectedly with exit %d: %s", output.ExitStatus, output.Stderr)
 	}()
 
 	// The watchdog polls every 15s and snapshots on the first busy poll once
@@ -271,6 +325,11 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 	pollDeadline := time.Now().Add(25 * time.Second)
 	var record *modalSnapshotRecord
 	for time.Now().Before(pollDeadline) {
+		select {
+		case commandErr := <-commandDone:
+			require.NoError(t, commandErr)
+		default:
+		}
 		record, err = modalLatestSnapshot(ctx, client, sandboxName)
 		require.NoError(t, err)
 		if record != nil {
@@ -284,4 +343,135 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 	sb, err := findModalSandbox(ctx, client, sandboxName)
 	require.NoError(t, err)
 	assert.NotNil(t, sb, "sandbox must remain alive after an active snapshot")
+
+	// Snapshots are retained indefinitely, so deleting the sandbox is the only
+	// thing that ever reclaims them.
+	_, err = DeleteSandboxActivity(ctx, DeleteSandboxInput{EnvType: EnvTypeModal, SandboxName: sandboxName})
+	require.NoError(t, err)
+	discarded, err := modalLatestSnapshot(ctx, client, sandboxName)
+	require.NoError(t, err)
+	assert.Nil(t, discarded, "deleting a sandbox must discard its snapshot record")
+}
+
+// TestModalSnapshotVolumeRestoreIntegration covers adding a volume mount to a
+// repository whose sandbox already has filesystem snapshots. Snapshots taken
+// before the volume existed hold a populated directory at the mount path and
+// Modal refuses to mount a volume over it, so such a snapshot must be skipped
+// in favour of a clean image. Recreating the sandbox the moment its
+// termination begins is part of the same sequence, covering the window where
+// a dying sandbox still polls as running. It requires Modal credentials and
+// consumes Modal compute, so it is gated behind SIDE_E2E_TEST.
+func TestModalSnapshotVolumeRestoreIntegration(t *testing.T) {
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		t.Skip("skipping Modal e2e test; SIDE_E2E_TEST not set to true")
+	}
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("skipping Modal e2e test; credentials are unavailable in non-local sidekick environments")
+	}
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
+		defer cancel()
+	}
+
+	client, err := getModalClient()
+	if err != nil {
+		t.Skip("modal client unavailable: " + err.Error())
+	}
+	if _, err := findModalSandbox(ctx, client, "side-e2e-credential-probe"); err != nil {
+		t.Skipf("modal credentials not configured or Modal unreachable: %v", err)
+	}
+
+	suffix := strings.ToLower(ksuid.New().String()[:10])
+	sandboxName := "side-e2e-snap-" + suffix
+	volumeName := "side-e2e-snap-vol-" + suffix
+	const mountPath = "/root/sidekick-e2e-cache"
+	// Minimal image and sizing keep this billed sandbox cheap; a high idle
+	// timeout keeps the watchdog out of the way so the shutdown below is the
+	// only one in play.
+	config := common.ModalEnvConfig{
+		Image:       "debian:bookworm-slim",
+		CPU:         0.25,
+		Memory:      512,
+		IdleSeconds: 3600,
+	}
+	createOutput, err := modalCreateSandbox(ctx, ModalCreateSandboxInput{Name: sandboxName, Config: config})
+	require.NoError(t, err, "initial modalCreateSandbox failed")
+	t.Cleanup(func() {
+		_, _ = DeleteSandboxActivity(context.Background(), DeleteSandboxInput{EnvType: EnvTypeModal, SandboxName: sandboxName})
+		// Modal only releases a volume once the sandbox mounting it is gone,
+		// so deletion has to wait out the sandbox's teardown.
+		var err error
+		for attempt := 0; attempt < 10; attempt++ {
+			err = client.Volumes.Delete(context.Background(), volumeName, nil)
+			var notFound modal.NotFoundError
+			if err == nil || errors.As(err, &notFound) {
+				return
+			}
+			time.Sleep(3 * time.Second)
+		}
+		t.Logf("failed to delete test volume %s: %v", volumeName, err)
+	})
+
+	modalEnv := &ModalEnv{
+		SandboxName:      sandboxName,
+		SSHHost:          createOutput.SSHHost,
+		SSHPort:          createOutput.SSHPort,
+		WorkingDirectory: "/root",
+	}
+	// Without a volume the future mount path is an ordinary directory, and
+	// its contents land in the snapshot.
+	writeOutput, err := modalEnv.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", "mkdir -p " + mountPath + " && printf legacy > " + mountPath + "/value"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, writeOutput.ExitStatus, "stderr: %s", writeOutput.Stderr)
+
+	// The guard's configuration lives in the sandbox process environment, which
+	// only Modal exec inherits, so request the snapshot the way the in-sandbox
+	// watchdog does rather than over SSH.
+	sb, err := findModalSandbox(ctx, client, sandboxName)
+	require.NoError(t, err)
+	require.NotNil(t, sb)
+	snapshotStdout, snapshotStderr, snapshotExit, err := modalExecCapture(ctx, sb, "/usr/local/bin/sidekick-snapshot snapshot")
+	require.NoError(t, err)
+	require.Equal(t, 0, snapshotExit, "guard snapshot failed: %s%s", snapshotStdout, snapshotStderr)
+
+	var record *modalSnapshotRecord
+	snapshotDeadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(snapshotDeadline) {
+		record, err = modalLatestSnapshot(ctx, client, sandboxName)
+		require.NoError(t, err)
+		if record != nil {
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	require.NotNil(t, record, "the guard must record a snapshot, otherwise the restore path is never exercised")
+	require.Equal(t, modalSnapshotImageVersion, record.ImageVersion)
+
+	// Terminate without waiting, like the guard's terminate phase, then
+	// immediately recreate. During this window the old sandbox can still poll
+	// as running while refusing exec with FailedPrecondition.
+	_, err = sb.Terminate(ctx, nil)
+	require.NoError(t, err)
+
+	config.Volumes = []common.ModalVolumeMount{{Name: volumeName, MountPath: mountPath}}
+
+	createOutput, err = modalCreateSandbox(ctx, ModalCreateSandboxInput{Name: sandboxName, Config: config})
+	require.NoError(t, err, "modalCreateSandbox must recover when the newest snapshot predates the volume")
+	require.NotEmpty(t, createOutput.SSHHost)
+	require.NotZero(t, createOutput.SSHPort)
+
+	modalEnv.SSHHost = createOutput.SSHHost
+	modalEnv.SSHPort = createOutput.SSHPort
+	runOutput, err := modalEnv.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", "printf fresh > " + mountPath + "/value && cat " + mountPath + "/value"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, runOutput.ExitStatus, "stderr: %s", runOutput.Stderr)
+	assert.Equal(t, "fresh", strings.TrimSpace(runOutput.Stdout))
 }

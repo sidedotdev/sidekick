@@ -993,3 +993,260 @@ func TestGetTaskConfigHandler(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateWorkspaceBranchHandler(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("SIDE_DATA_HOME", tempHome)
+
+	ctrl := NewMockController(t)
+	repoDir := t.TempDir()
+
+	workspace := domain.Workspace{
+		Id:           "ws-create-branch-test",
+		Name:         "Create Branch Test Workspace",
+		LocalRepoDir: repoDir,
+		Created:      time.Now(),
+		Updated:      time.Now(),
+	}
+	require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+	runGitCommand(t, repoDir, "init", "-b", "main")
+	runGitCommand(t, repoDir, "config", "user.email", "test@example.com")
+	runGitCommand(t, repoDir, "config", "user.name", "Test User")
+	createCommit(t, repoDir, "Initial commit")
+
+	postBranch := func(t *testing.T, workspaceId string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		jsonData, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/workspaces/"+workspaceId+"/branches", bytes.NewBuffer(jsonData))
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspaceId}}
+		ctrl.CreateWorkspaceBranchHandler(c)
+		return resp
+	}
+
+	t.Run("success - creates branch from base without checking it out", func(t *testing.T) {
+		resp := postBranch(t, workspace.Id, CreateBranchRequest{Name: "feature/created", BaseBranch: "main"})
+		require.Equal(t, http.StatusCreated, resp.Code)
+
+		var result struct {
+			Branch BranchInfo `json:"branch"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
+		assert.Equal(t, "feature/created", result.Branch.Name)
+		assert.False(t, result.Branch.IsCurrent)
+
+		branchState, err := git.GetCurrentBranch(context.Background(), repoDir)
+		require.NoError(t, err)
+		assert.Equal(t, "main", branchState.Name)
+
+		branches, err := git.ListLocalBranches(context.Background(), repoDir)
+		require.NoError(t, err)
+		assert.Contains(t, branches, "feature/created")
+	})
+
+	t.Run("conflict - branch already exists", func(t *testing.T) {
+		resp := postBranch(t, workspace.Id, CreateBranchRequest{Name: "already-there", BaseBranch: "main"})
+		require.Equal(t, http.StatusCreated, resp.Code)
+
+		resp = postBranch(t, workspace.Id, CreateBranchRequest{Name: "already-there", BaseBranch: "main"})
+		assert.Equal(t, http.StatusConflict, resp.Code)
+	})
+
+	t.Run("bad request - missing name or base branch", func(t *testing.T) {
+		resp := postBranch(t, workspace.Id, CreateBranchRequest{Name: "  ", BaseBranch: "main"})
+		assert.Equal(t, http.StatusBadRequest, resp.Code)
+
+		resp = postBranch(t, workspace.Id, CreateBranchRequest{Name: "some-branch", BaseBranch: ""})
+		assert.Equal(t, http.StatusBadRequest, resp.Code)
+	})
+
+	t.Run("bad request - branch name looks like a flag", func(t *testing.T) {
+		resp := postBranch(t, workspace.Id, CreateBranchRequest{Name: "-D", BaseBranch: "main"})
+		assert.Equal(t, http.StatusBadRequest, resp.Code)
+	})
+
+	t.Run("error - unknown base branch", func(t *testing.T) {
+		resp := postBranch(t, workspace.Id, CreateBranchRequest{Name: "orphan", BaseBranch: "no-such-branch"})
+		assert.Equal(t, http.StatusInternalServerError, resp.Code)
+	})
+
+	t.Run("not found - unknown workspace", func(t *testing.T) {
+		resp := postBranch(t, "ws-does-not-exist", CreateBranchRequest{Name: "whatever", BaseBranch: "main"})
+		assert.Equal(t, http.StatusNotFound, resp.Code)
+	})
+}
+
+func TestWorkspaceHandlersProfileId(t *testing.T) {
+	t.Parallel()
+
+	createWorkspace := func(t *testing.T, ctrl Controller, req WorkspaceRequest) (*httptest.ResponseRecorder, WorkspaceResponse) {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		jsonData, err := json.Marshal(req)
+		require.NoError(t, err)
+		c.Request = httptest.NewRequest("POST", "/v1/workspaces", bytes.NewBuffer(jsonData))
+		ctrl.CreateWorkspaceHandler(c)
+
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		if resp.Code == http.StatusOK {
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		}
+		return resp, responseBody.Workspace
+	}
+
+	updateWorkspace := func(t *testing.T, ctrl Controller, workspaceId string, req WorkspaceRequest) (*httptest.ResponseRecorder, WorkspaceResponse) {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		jsonData, err := json.Marshal(req)
+		require.NoError(t, err)
+		c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspaceId, bytes.NewBuffer(jsonData))
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspaceId}}
+		ctrl.UpdateWorkspaceHandler(c)
+
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		if resp.Code == http.StatusOK {
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		}
+		return resp, responseBody.Workspace
+	}
+
+	t.Run("create persists and returns the requested profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, created := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Work Workspace",
+			LocalRepoDir: "/path/to/work/repo",
+			ProfileId:    "work",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "work", created.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), created.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "work", persisted.ProfileId)
+		assert.Equal(t, "work", persisted.EffectiveProfileId())
+	})
+
+	t.Run("create without a profile leaves the workspace on the default profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, created := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Unassigned Workspace",
+			LocalRepoDir: "/path/to/repo",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Empty(t, created.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), created.Id)
+		require.NoError(t, err)
+		assert.Empty(t, persisted.ProfileId)
+		assert.Equal(t, common.DefaultProfileId, persisted.EffectiveProfileId())
+	})
+
+	t.Run("create rejects an invalid profile id", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, _ := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Bad Profile Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ProfileId:    "not a profile",
+		})
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "invalid profile id")
+	})
+
+	t.Run("get returns the persisted profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_get",
+			Name:         "Personal Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+			ProfileId:    "personal",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+workspace.Id, nil)
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspace.Id}}
+		ctrl.GetWorkspaceHandler(c)
+
+		require.Equal(t, http.StatusOK, resp.Code)
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		assert.Equal(t, "personal", responseBody.Workspace.ProfileId)
+	})
+
+	t.Run("update sets and clears the profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_update",
+			Name:         "Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp, updated := updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+			ProfileId:    "work",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "work", updated.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), workspace.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "work", persisted.ProfileId)
+
+		resp, updated = updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Empty(t, updated.ProfileId)
+
+		persisted, err = ctrl.service.GetWorkspace(context.Background(), workspace.Id)
+		require.NoError(t, err)
+		assert.Empty(t, persisted.ProfileId)
+		assert.Equal(t, common.DefaultProfileId, persisted.EffectiveProfileId())
+	})
+
+	t.Run("update rejects an invalid profile id", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_update_invalid",
+			Name:         "Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp, _ := updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+			ProfileId:    "not a profile",
+		})
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "invalid profile id")
+	})
+}

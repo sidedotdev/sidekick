@@ -25,6 +25,22 @@ type ModelProviderConfig struct {
 	// provider-native tools, e.g. "web_search". First-party providers support
 	// their native tools without this.
 	BuiltinTools []string `koanf:"builtin_tools,omitempty" json:"builtin_tools,omitempty"`
+
+	// Profiles associates the provider with a set of profiles. A non-configured
+	// (nil) association means the default profile, while an explicitly empty
+	// list associates the provider with no profile at all.
+	Profiles *[]string `koanf:"profiles,omitempty" json:"profiles,omitempty"`
+}
+
+// EffectiveProfiles returns the profile ids this provider is associated with.
+func (c ModelProviderConfig) EffectiveProfiles() []string {
+	return EffectiveProfileIds(c.Profiles)
+}
+
+// MatchesProfile reports whether this provider is associated with the given
+// profile, where an empty profile id means the default profile.
+func (c ModelProviderConfig) MatchesProfile(profileId string) bool {
+	return MatchesProfile(c.Profiles, profileId)
 }
 
 // Validate ensures the CustomProviderConfig is valid
@@ -43,6 +59,13 @@ func (c ModelProviderConfig) Validate() error {
 	}
 	if c.Key == "" && c.AuthType == ProviderAuthTypeAPI {
 		return fmt.Errorf("key is required for auth type %s", c.AuthType)
+	}
+	if c.Profiles != nil {
+		for _, profileId := range *c.Profiles {
+			if err := ValidateProfileId(profileId); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

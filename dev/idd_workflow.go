@@ -170,6 +170,23 @@ type IddState struct {
 	PendingSubtaskNotices []string `json:"-"`
 }
 
+// iddParentSetupOptions returns the env type and repo mode used to provision
+// the top-level IDD worktree. It is always server-local so intent authoring,
+// the committed baseline, git operations, finishing and the edit watcher all
+// act on a path that exists on the sidekick host; the environment selected by
+// the user applies only to implementation children (see runIntentSubtask).
+// Explicit values are returned so repo-config or override defaults can't
+// reintroduce a remote parent. Gated by version because histories recorded
+// while the parent could be remote provisioned that sandbox here, and replays
+// must keep their original activity sequence; such in-flight workflows are
+// deliberately not migrated.
+func iddParentSetupOptions(ctx workflow.Context, selected IddOptions) (envType string, repoMode string) {
+	if workflow.GetVersion(ctx, "idd-local-parent", workflow.DefaultVersion, 1) >= 1 {
+		return string(env.EnvTypeLocal), string(env.RepoModeWorktree)
+	}
+	return string(selected.EnvType), string(selected.RepoMode)
+}
+
 // IddWorkflow drives the Intent Driven Development canvas: it sets up a worktree
 // for editing intent files, then stays alive listening for signals to commit
 // the current intent state and spawn sub-tasks that implement it. Each sub-task
@@ -207,7 +224,9 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		return *state, nil
 	})
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), string(input.RepoMode), input.StartBranch, input.Title, input.ConfigOverrides)
+	parentEnvType, parentRepoMode := iddParentSetupOptions(ctx, input.IddOptions)
+
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, parentEnvType, parentRepoMode, input.StartBranch, input.Title, input.ConfigOverrides)
 	if err != nil {
 		signalWorkflowFailureOrCancel(ctx)
 		return err
@@ -227,6 +246,9 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	SetupDevRunConfigQuery(dCtx)
 	SetupDevRunStateQuery(dCtx)
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
+		return err
+	}
+	if err = SetupModalConfigHandlers(dCtx); err != nil {
 		return err
 	}
 
@@ -299,8 +321,10 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	// IDD worktree has been quiet for a short idle window after at least one
 	// intent-file edit. The workflow re-launches it after each return so the
 	// orchestrator gets a steady, server-side trigger that does not depend on
-	// the canvas being open. Only enabled for local env types because remote
-	// containers do not expose the worktree path to the worker's filesystem.
+	// the canvas being open. The parent worktree is local for all new IDD
+	// flows, so this covers every selected child environment; the env type
+	// check only skips legacy histories whose parent was provisioned remotely
+	// and whose worktree path isn't on the worker's filesystem.
 	startEditWatcher := func() {
 		envType := dCtx.EnvContainer.Env.GetType()
 		if envType != env.EnvTypeLocal && envType != env.EnvTypeLocalGitWorktree {
@@ -551,7 +575,11 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		flowId = "flow_" + ksuidSideEffect(dCtx)
 	}
 
-	if workflow.GetVersion(dCtx, "idd-subtask-generated-title", workflow.DefaultVersion, 1) >= 1 {
+	// A redundant second title generation used to run here. It is retained
+	// only for sub-tasks whose histories already recorded that extra LLM
+	// sequence, since dropping it outright would break their replay.
+	if workflow.GetVersion(dCtx, "idd-subtask-single-title-generation", workflow.DefaultVersion, 1) < 1 &&
+		workflow.GetVersion(dCtx, "idd-subtask-generated-title", workflow.DefaultVersion, 1) >= 1 {
 		if generatedTitle, titleErr := generateIntentSubtaskTitle(dCtx, reqInfo.Commit, reqInfo.Diff); titleErr != nil {
 			log.Error("Failed to generate intent sub-task title", "Error", titleErr)
 		} else {
@@ -579,6 +607,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		childFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
 			WorkspaceId:  input.WorkspaceId,
 			Requirements: requirements,
+			Title:        title,
 			RepoDir:      input.RepoDir,
 			PlannedDevOptions: PlannedDevOptions{
 				DetermineRequirements: false,
@@ -595,6 +624,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		childFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
 			WorkspaceId:  input.WorkspaceId,
 			Requirements: requirements,
+			Title:        title,
 			RepoDir:      input.RepoDir,
 			BasicDevOptions: BasicDevOptions{
 				DetermineRequirements: false,
@@ -760,11 +790,11 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		}
 	}
 
-	err := workflow.ExecuteActivity(dCtx, git.GitCommitActivity, *dCtx.EnvContainer, git.GitCommitParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitActivity, nil, *dCtx.EnvContainer, git.GitCommitParams{
 		CommitMessage:         commitMessage,
 		CommitAll:             true,
 		IgnoreNothingToCommit: true,
-	}).Get(dCtx, nil)
+	})
 	if err != nil {
 		return IntentRequirementsInfo{}, fmt.Errorf("failed to commit intent: %w", err)
 	}

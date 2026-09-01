@@ -1,9 +1,11 @@
 package env
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,14 +25,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const remoteSFTPPrefix = "/tmp/side-sftp-"
+// remoteAgentPrefix is where installed side-agent binaries live on remote
+// hosts; the sftp and exec channels run the same identity-addressed binary.
+const remoteAgentPrefix = "/tmp/side-agent-"
+
+// agentRemotePath returns the remote filesystem path of the side-agent
+// binary for the current agent identity. The name is platform-independent,
+// so both the channel command and the install megacommand are constructible
+// before the remote platform is known: a warm dial costs zero helper
+// sessions, and the cold path learns uname inside the install session.
+func agentRemotePath() (string, error) {
+	identity, err := common.GetAgentRemoteIdentity()
+	if err != nil {
+		return "", fmt.Errorf("get agent identity: %w", err)
+	}
+	return remoteAgentPrefix + identity, nil
+}
 
 // remoteActivityMarker is the file whose mtime the in-sandbox idle watchdog
 // reads as "last client activity" (see env/modal_watchdog.sh).
 const remoteActivityMarker = "/tmp/.sidekick-activity"
 
 // sftpIdleTimeout bounds how long an idle pooled connection (and its remote
-// side-sftp/ssh process chain) is kept alive before being reaped. It is set
+// agent sftp/ssh process chain) is kept alive before being reaped. It is set
 // long so the re-dial startup cost is rarely paid during active use, while
 // still guaranteeing eventual cleanup of connections that fall idle. It is a
 // var only so tests can shorten it to exercise the eviction path.
@@ -44,6 +60,11 @@ var sftpIdleTimeout = 1 * time.Hour
 // the race tears down the connection so the next attempt re-dials. It is a
 // var only so tests can shorten it.
 var sftpOpTimeout = 60 * time.Second
+
+// remoteBinaryOpTimeout bounds the single streamed SSH session used to
+// install the side-agent binary on a remote host before a persistent
+// protocol channel can be established.
+var remoteBinaryOpTimeout = 60 * time.Second
 
 // sftpConn manages a persistent SFTP client connection over SSH.
 // It is safe for concurrent use; the underlying sftp.Client multiplexes requests.
@@ -62,8 +83,8 @@ type sftpConn struct {
 }
 
 // sftpPool holds one shared sftpConn per remote identity so that all envs
-// pointing at the same remote reuse a single running side-sftp server instead
-// of each dialing (and leaking) its own ssh+side-sftp process chain. Pooling
+// pointing at the same remote reuse a single running agent sftp server
+// instead of each dialing (and leaking) its own ssh+agent process chain. Pooling
 // is required because envs are frequently serialized and deserialized, which
 // drops the per-struct conn and would otherwise force a fresh dial on every op.
 var sftpPool = struct {
@@ -99,7 +120,7 @@ func startSFTPReaper() {
 
 // getPooledSFTPConn returns the shared sftpConn for key, creating one if none
 // exists yet. It also ensures the background idle reaper is running so pooled
-// connections (and their remote side-sftp/ssh process chains) are eventually
+// connections (and their remote agent sftp/ssh process chains) are eventually
 // reaped even if a per-conn idle timer is never armed.
 func getPooledSFTPConn(key string) *sftpConn {
 	startSFTPReaper()
@@ -220,7 +241,7 @@ func (sc *sftpConn) touchActivityLocked() {
 }
 
 // Close tears down the connection and its remote process chain, reaping the
-// ssh child and the side-sftp server it runs, then de-registers it from the
+// ssh child and the agent sftp server it runs, then de-registers it from the
 // pool so the next op re-dials a fresh connection.
 func (sc *sftpConn) Close() {
 	sc.mu.Lock()
@@ -307,47 +328,55 @@ func teardownSFTPTransport(client *sftp.Client, cmd *exec.Cmd) {
 	}
 }
 
+// dialLocked implements the connect-attempt-as-check bootstrap: start the
+// remote sftp server at the identity-addressed path directly, and only when
+// the failure says the agent binary is missing, install it over a single
+// streamed session and redial.
 func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.Client, error) {
-	envInfo, err := getRemoteEnvInfo(ctx, sshEnv)
-	if err != nil {
-		return nil, fmt.Errorf("detect remote environment: %w", err)
-	}
-
-	targetOS := common.NormalizeOS(envInfo.OS)
-	targetArch := common.NormalizeArch(envInfo.Arch)
-
-	localBinaryPath, err := common.GetSFTPBinaryPath(targetOS, targetArch)
-	if err != nil {
-		return nil, fmt.Errorf("get sftp binary: %w", err)
-	}
-
 	sshArgs, err := sshEnv.SSHArgs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get SSH args: %w", err)
 	}
-
-	remotePath := remoteSFTPPrefix + filepath.Base(localBinaryPath)
-	if err := ensureRemoteBinary(ctx, sshArgs, localBinaryPath, remotePath); err != nil {
-		return nil, fmt.Errorf("upload sftp binary: %w", err)
+	remotePath, err := agentRemotePath()
+	if err != nil {
+		return nil, err
 	}
 
-	remoteCmd := shellQuote(remotePath)
-	runArgs := append(independentSSHArgs(sshArgs), remoteCmd)
+	client, absent, err := sc.tryDialLocked(ctx, sshArgs, remotePath)
+	if err == nil {
+		return client, nil
+	}
+	if !absent {
+		return nil, err
+	}
+	if installErr := installRemoteAgent(ctx, sshArgs, remotePath); installErr != nil {
+		return nil, fmt.Errorf("install agent binary: %w", installErr)
+	}
+	client, _, err = sc.tryDialLocked(ctx, sshArgs, remotePath)
+	return client, err
+}
+
+// tryDialLocked starts the remote sftp server and performs the protocol
+// handshake. On failure it reports whether the remote agent binary appears
+// to be absent (login shell "command not found"), which dialLocked resolves
+// by installing and redialing.
+func (sc *sftpConn) tryDialLocked(ctx context.Context, sshArgs []string, remotePath string) (*sftp.Client, bool, error) {
+	runArgs := append(independentSSHArgs(sshArgs), remotePath+" sftp")
 
 	cmd := exec.Command("ssh", runArgs...)
 	var sshDiagnostics bytes.Buffer
 	cmd.Stderr = &sshDiagnostics
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("create stdin pipe: %w", err)
+		return nil, false, fmt.Errorf("create stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("create stdout pipe: %w", err)
+		return nil, false, fmt.Errorf("create stdout pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start remote sftp server: %w", err)
+		return nil, false, fmt.Errorf("start remote sftp server: %w", err)
 	}
 
 	var reader io.Reader = stdout
@@ -383,8 +412,7 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 		err = fmt.Errorf("sftp handshake timed out after %s", sftpOpTimeout)
 	}
 	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		reapWithGrace(cmd)
 		if !handshakeDone {
 			// Reap the abandoned handshake's client if it still produces one
 			// after the kill unblocks it.
@@ -394,11 +422,12 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 				}
 			}()
 		}
+		absent := remoteCommandNotFound(cmd)
 		diagnostics := strings.TrimSpace(sshDiagnostics.String())
 		if diagnostics != "" {
-			return nil, fmt.Errorf("create sftp client: %w: ssh diagnostics: %s", err, diagnostics)
+			return nil, absent, fmt.Errorf("create sftp client: %w: ssh diagnostics: %s", err, diagnostics)
 		}
-		return nil, fmt.Errorf("create sftp client: %w", err)
+		return nil, absent, fmt.Errorf("create sftp client: %w", err)
 	}
 
 	log.Debug().Str("remotePath", remotePath).Msg("started remote SFTP server")
@@ -406,13 +435,13 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 	sc.cmd = cmd
 	sc.resetIdleTimerLocked()
 	// GC safety net: if this conn is dropped without Close (eg pool eviction
-	// races), still reap the ssh child that runs the remote side-sftp server.
+	// races), still reap the ssh child that runs the remote agent sftp server.
 	runtime.SetFinalizer(sc, func(sc *sftpConn) {
 		if sc.cmd != nil && sc.cmd.Process != nil {
 			_ = sc.cmd.Process.Kill()
 		}
 	})
-	return client, nil
+	return client, false, nil
 }
 
 // boundedSFTPOp runs op, bounding it by ctx and sftpOpTimeout. pkg/sftp calls
@@ -446,63 +475,72 @@ func boundedSFTPOp[T any](ctx context.Context, conn *sftpConn, client *sftp.Clie
 	}
 }
 
-// boundedSFTPErrOp is boundedSFTPOp for operations that only return an error.
-func boundedSFTPErrOp(ctx context.Context, conn *sftpConn, client *sftp.Client, opName, path string, op func() error) error {
-	_, err := boundedSFTPOp(ctx, conn, client, opName, path, func() (struct{}, error) {
-		return struct{}{}, op()
+// withSFTPRetry runs op over the pooled SFTP connection, bounded by ctx and
+// sftpOpTimeout, retrying once on a fresh connection when the failure looks
+// like a dropped session.
+func withSFTPRetry(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, op SFTPOp) (any, error) {
+	client, err := conn.getOrDial(ctx, sshEnv)
+	if err != nil {
+		return nil, err
+	}
+
+	value, err := boundedSFTPOp(ctx, conn, client, op.Name, op.Path, func() (any, error) {
+		return op.Run(client)
 	})
+	if err == nil || !sftpFailureWarrantsReconnect(ctx, err, op) {
+		return value, err
+	}
+
+	retryClient, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
+	if retryErr != nil {
+		return nil, fmt.Errorf("%s %s: %w (reconnect: %v)", op.Name, op.Path, err, retryErr)
+	}
+	return boundedSFTPOp(ctx, conn, retryClient, op.Name, op.Path, func() (any, error) {
+		return op.Run(retryClient)
+	})
+}
+
+// sftpFailureWarrantsReconnect separates a dead session from an answer about
+// the remote path, which reconnecting cannot change.
+func sftpFailureWarrantsReconnect(ctx context.Context, err error, op SFTPOp) bool {
+	if ctx.Err() != nil || errors.Is(err, os.ErrPermission) {
+		return false
+	}
+	return op.RetryOnNotExist || !errors.Is(err, os.ErrNotExist)
+}
+
+// sftpValue runs a value-producing op and restores its static type.
+func sftpValue[T any](ctx context.Context, transport SSHTransport, op SFTPOp) (T, error) {
+	var zero T
+	value, err := transport.WithSFTP(ctx, op)
+	if err != nil {
+		return zero, err
+	}
+	typed, ok := value.(T)
+	if !ok {
+		return zero, fmt.Errorf("sftp %s %s: unexpected result of type %T", op.Name, op.Path, value)
+	}
+	return typed, nil
+}
+
+// sftpErrOp runs an op whose only outcome is success or failure.
+func sftpErrOp(ctx context.Context, transport SSHTransport, op SFTPOp) error {
+	_, err := transport.WithSFTP(ctx, op)
 	return err
 }
 
-// sftpReadFile reads a file via the SFTP connection, reconnecting once on failure.
-func sftpReadFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, path string) ([]byte, error) {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := boundedSFTPOp(ctx, conn, client, "read", path, func() ([]byte, error) {
+// sftpReadFile reads a file via the transport's SFTP channel.
+func sftpReadFile(ctx context.Context, transport SSHTransport, path string) ([]byte, error) {
+	return sftpValue[[]byte](ctx, transport, SFTPOp{Name: "read", Path: path, Run: func(client *sftp.Client) (any, error) {
 		return doSFTPRead(client, path)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return nil, err
-		}
-		// Connection may have dropped; retry once with a fresh connection.
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return nil, fmt.Errorf("read %s: %w (reconnect: %v)", path, err, retryErr)
-		}
-		return boundedSFTPOp(ctx, conn, client, "read", path, func() ([]byte, error) {
-			return doSFTPRead(client, path)
-		})
-	}
-	return data, nil
+	}})
 }
 
-// sftpReadDir lists a directory via the SFTP connection, reconnecting once on failure.
-func sftpReadDir(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, path string) ([]fs.DirEntry, error) {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return nil, err
-	}
-
-	entries, err := boundedSFTPOp(ctx, conn, client, "readdir", path, func() ([]fs.DirEntry, error) {
+// sftpReadDir lists a directory via the transport's SFTP channel.
+func sftpReadDir(ctx context.Context, transport SSHTransport, path string) ([]fs.DirEntry, error) {
+	return sftpValue[[]fs.DirEntry](ctx, transport, SFTPOp{Name: "readdir", Path: path, Run: func(client *sftp.Client) (any, error) {
 		return doSFTPReadDir(client, path)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return nil, err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return nil, fmt.Errorf("readdir %s: %w (reconnect: %v)", path, err, retryErr)
-		}
-		return boundedSFTPOp(ctx, conn, client, "readdir", path, func() ([]fs.DirEntry, error) {
-			return doSFTPReadDir(client, path)
-		})
-	}
-	return entries, nil
+	}})
 }
 
 func doSFTPReadDir(client *sftp.Client, path string) ([]fs.DirEntry, error) {
@@ -526,137 +564,48 @@ func doSFTPRead(client *sftp.Client, path string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-// sftpWriteFile writes data to a file via SFTP, reconnecting once on failure.
-func sftpWriteFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string, data []byte, perm fs.FileMode) error {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return err
-	}
-
-	err = boundedSFTPErrOp(ctx, conn, client, "write", p, func() error {
-		return doSFTPWrite(client, p, data, perm)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return fmt.Errorf("write %s: %w (reconnect: %v)", p, err, retryErr)
-		}
-		return boundedSFTPErrOp(ctx, conn, client, "write", p, func() error {
-			return doSFTPWrite(client, p, data, perm)
-		})
-	}
-	return nil
+// sftpWriteFile writes data to a file via the transport's SFTP channel.
+func sftpWriteFile(ctx context.Context, transport SSHTransport, p string, data []byte, perm fs.FileMode) error {
+	return sftpErrOp(ctx, transport, SFTPOp{Name: "write", Path: p, Run: func(client *sftp.Client) (any, error) {
+		return nil, doSFTPWrite(client, p, data, perm)
+	}})
 }
 
-// sftpMkdirAll creates directories via SFTP, reconnecting once on failure.
-func sftpMkdirAll(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string, perm fs.FileMode) error {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return err
-	}
-
-	err = boundedSFTPErrOp(ctx, conn, client, "mkdirall", p, func() error {
-		return doSFTPMkdirAll(client, p, perm)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return fmt.Errorf("mkdirall %s: %w (reconnect: %v)", p, err, retryErr)
-		}
-		return boundedSFTPErrOp(ctx, conn, client, "mkdirall", p, func() error {
-			return doSFTPMkdirAll(client, p, perm)
-		})
-	}
-	return nil
+// sftpMkdirAll creates directories via the transport's SFTP channel. Missing
+// paths are what it exists to create, so they never end the retry.
+func sftpMkdirAll(ctx context.Context, transport SSHTransport, p string, perm fs.FileMode) error {
+	return sftpErrOp(ctx, transport, SFTPOp{Name: "mkdirall", Path: p, RetryOnNotExist: true, Run: func(client *sftp.Client) (any, error) {
+		return nil, doSFTPMkdirAll(client, p, perm)
+	}})
 }
 
-// sftpStat stats a path via SFTP, reconnecting once on failure.
-func sftpStat(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string) (fs.FileInfo, error) {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return nil, err
-	}
-
-	info, err := boundedSFTPOp(ctx, conn, client, "stat", p, func() (fs.FileInfo, error) {
+// sftpStat stats a path via the transport's SFTP channel.
+func sftpStat(ctx context.Context, transport SSHTransport, p string) (fs.FileInfo, error) {
+	return sftpValue[fs.FileInfo](ctx, transport, SFTPOp{Name: "stat", Path: p, Run: func(client *sftp.Client) (any, error) {
 		return client.Stat(p)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return nil, err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return nil, fmt.Errorf("stat %s: %w (reconnect: %v)", p, err, retryErr)
-		}
-		return boundedSFTPOp(ctx, conn, client, "stat", p, func() (fs.FileInfo, error) {
-			return client.Stat(p)
-		})
-	}
-	return info, nil
+	}})
 }
 
-// sftpRemove deletes a file or empty directory via SFTP, reconnecting once on failure.
-func sftpRemove(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string) error {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return err
-	}
-
-	err = boundedSFTPErrOp(ctx, conn, client, "remove", p, func() error {
-		return client.Remove(p)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return fmt.Errorf("remove %s: %w (reconnect: %v)", p, err, retryErr)
-		}
-		return boundedSFTPErrOp(ctx, conn, client, "remove", p, func() error {
-			return client.Remove(p)
-		})
-	}
-	return nil
+// sftpRemove deletes a file or empty directory via the transport's SFTP channel.
+func sftpRemove(ctx context.Context, transport SSHTransport, p string) error {
+	return sftpErrOp(ctx, transport, SFTPOp{Name: "remove", Path: p, Run: func(client *sftp.Client) (any, error) {
+		return nil, client.Remove(p)
+	}})
 }
 
 // sftpCreateTemp creates a uniquely-named file under dir via SFTP, returning
 // its full path. The pattern follows os.CreateTemp semantics: the last "*" in
 // pattern is replaced with a random string (or appended if absent). The dir
 // must be absolute; the caller is responsible for resolving relative dirs.
-func sftpCreateTemp(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, dir, pattern string) (string, error) {
+func sftpCreateTemp(ctx context.Context, transport SSHTransport, dir, pattern string) (string, error) {
 	prefix, suffix := pattern, ""
 	if i := strings.LastIndex(pattern, "*"); i >= 0 {
 		prefix, suffix = pattern[:i], pattern[i+1:]
 	}
 
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return "", err
-	}
-
-	name, err := boundedSFTPOp(ctx, conn, client, "createtemp", dir, func() (string, error) {
+	return sftpValue[string](ctx, transport, SFTPOp{Name: "createtemp", Path: dir, Run: func(client *sftp.Client) (any, error) {
 		return doSFTPCreateTemp(client, dir, prefix, suffix)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return "", err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return "", fmt.Errorf("createtemp %s/%s: %w (reconnect: %v)", dir, pattern, err, retryErr)
-		}
-		return boundedSFTPOp(ctx, conn, client, "createtemp", dir, func() (string, error) {
-			return doSFTPCreateTemp(client, dir, prefix, suffix)
-		})
-	}
-	return name, nil
+	}})
 }
 
 func doSFTPWrite(client *sftp.Client, p string, data []byte, perm fs.FileMode) error {
@@ -728,6 +677,14 @@ func cloneArgs(args []string) []string {
 // read from master failed: Broken pipe") and leave a stale socket behind
 // ("ControlSocket ... already exists, disabling multiplexing").
 func independentSSHArgs(sshArgs []string) []string {
+	return filterSSHArgs(sshArgs, true)
+}
+
+// filterSSHArgs strips multiplexing-master options from sshArgs, optionally
+// also stripping reverse port forwards (which belong to connections that stay
+// up while remote commands run; short-lived independent connections must not
+// compete for them).
+func filterSSHArgs(sshArgs []string, stripReverseForwards bool) []string {
 	out := make([]string, 0, len(sshArgs))
 	for i := 0; i < len(sshArgs); i++ {
 		a := sshArgs[i]
@@ -735,9 +692,7 @@ func independentSSHArgs(sshArgs []string) []string {
 			i++ // skip the control socket path value
 			continue
 		}
-		if a == "-R" {
-			// Reverse port forwards belong to the shared master connection;
-			// short-lived independent connections must not compete for them.
+		if a == "-R" && stripReverseForwards {
 			i++ // skip the forward spec value
 			continue
 		}
@@ -755,48 +710,204 @@ func independentSSHArgs(sshArgs []string) []string {
 	return out
 }
 
-// getRemoteEnvInfo runs `uname -sm` over ssh to detect the remote OS/arch so
-// the matching prebuilt helper binary (the sftp server) can be uploaded.
-func getRemoteEnvInfo(ctx context.Context, sshEnv SSHCapableEnv) (GetEnvironmentInfoOutput, error) {
-	out, err := sshEnv.RunCommand(ctx, EnvRunCommandInput{
-		Command: "uname",
-		Args:    []string{"-sm"},
-	})
-	if err != nil {
-		return GetEnvironmentInfoOutput{}, fmt.Errorf("uname failed: %w", err)
-	}
-	info := strings.TrimSpace(out.Stdout)
-	parts := strings.Fields(info)
-	if len(parts) < 2 {
-		return GetEnvironmentInfoOutput{}, fmt.Errorf("unexpected uname output: %s", info)
-	}
-	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
+// remoteCommandNotFound reports whether a finished ssh process indicates the
+// remote login shell could not find the requested command — the "agent not
+// installed" signal in the connect-attempt-as-check bootstrap. POSIX shells
+// (and fish/csh) exit 127 for a missing command, and ssh propagates the
+// remote exit status while reserving 255 for its own transport failures.
+// Unlike deptool we never wrap the agent in sudo (whose missing-command
+// failures can surface as exit 1), so 127 is the only absence signal;
+// treating other statuses as absence would trigger spurious installs on
+// genuine agent failures.
+func remoteCommandNotFound(cmd *exec.Cmd) bool {
+	return cmd != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 127
 }
 
-// ensureRemoteBinary checks whether the binary exists on the remote host and
-// uploads it via stdin pipe if it does not.
-func ensureRemoteBinary(ctx context.Context, sshArgs []string, localPath, remotePath string) error {
-	checkCmd := exec.CommandContext(ctx, "ssh", append(cloneArgs(sshArgs), "test -x "+shellQuote(remotePath))...)
-	if err := checkCmd.Run(); err == nil {
-		return nil
+// reapWithGrace reaps a failed dial's ssh child, giving it a moment to exit
+// on its own so its natural exit status (needed by remoteCommandNotFound)
+// isn't clobbered by a kill; a kill is still delivered if the process is
+// actually wedged rather than exiting.
+func reapWithGrace(cmd *exec.Cmd) {
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+	}
+}
+
+// agentBinaryForPlatform resolves the local binary streamed during install;
+// a var so tests can avoid building real agent binaries.
+var agentBinaryForPlatform = common.GetAgentBinaryPath
+
+// remoteAgentInstallCommand builds the single shell command that installs the
+// side-agent binary streamed over the ssh session's stdin, following
+// deptool's design (https://ruuda.nl/2026/deptool). Only plain words chained
+// with && / || (plus one quoted find pattern) are used, so any remote login
+// shell behaves identically. uname runs before dd needs the binary on stdin,
+// letting the client pick the matching local binary; mv keeps concurrent
+// installs atomic. Precedence: the chain parses as
+// (steps && marker && sha256sum) || shasum, so a failed step falls through
+// to the checksum fallback (shasum covers hosts without coreutils, e.g.
+// macOS); the completion marker echoed between the steps and the checksum
+// lets the client distinguish that fallthrough from a genuine post-install
+// read-back. The gc step runs the freshly installed binary's own GC mode
+// (sideagent.CleanupStaleSiblings), so stale-binary cleanup happens only on
+// installs, portably in Go — and doubles as proof that the binary executes
+// on the remote platform before the marker is echoed.
+func remoteAgentInstallCommand(remotePath, tempSuffix string) string {
+	tempPath := remotePath + ".tmp-" + tempSuffix
+	return strings.Join([]string{
+		"uname -sm",
+		"dd of=" + tempPath,
+		"chmod +x " + tempPath,
+		"mv -f " + tempPath + " " + remotePath,
+		remotePath + " gc",
+		"echo " + remoteInstallCompleteMarker,
+		"sha256sum " + remotePath + " || shasum -a 256 " + remotePath,
+	}, " && ")
+}
+
+// remoteInstallCompleteMarker proves every install step ran: without it, the
+// || checksum fallback would also run when an earlier step fails, and a
+// pre-existing final binary could then be hashed and mistaken for a
+// completed install.
+const remoteInstallCompleteMarker = "side-agent-install-complete"
+
+// installRemoteAgent installs the side-agent binary matching the remote
+// platform at remotePath over a single streamed ssh session: read the
+// megacommand's uname output, stream the matching local binary into dd, then
+// compare the remote checksum read-back against the sha256 of the bytes
+// sent. Verification failures are hard errors; a non-zero session exit after
+// a verified checksum (the trailing GC failing) is not.
+func installRemoteAgent(ctx context.Context, sshArgs []string, remotePath string) error {
+	return installRemoteAgentOverSession(ctx, remotePath, func(installCtx context.Context, command string) (remoteInstallSession, error) {
+		cmd := exec.CommandContext(installCtx, "ssh", append(independentSSHArgs(sshArgs), command)...)
+		stderr := &bytes.Buffer{}
+		cmd.Stderr = stderr
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return remoteInstallSession{}, fmt.Errorf("create stdin pipe: %w", err)
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return remoteInstallSession{}, fmt.Errorf("create stdout pipe: %w", err)
+		}
+		if err := cmd.Start(); err != nil {
+			return remoteInstallSession{}, fmt.Errorf("start install session: %w", err)
+		}
+		return remoteInstallSession{
+			Stdin:  stdin,
+			Stdout: stdout,
+			Wait:   cmd.Wait,
+			Abort: func() {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			},
+			Diagnostics: stderr.String,
+		}, nil
+	})
+}
+
+// remoteInstallSession is one remote shell command and its streams, so the
+// install protocol is written once regardless of which transport carries it.
+type remoteInstallSession struct {
+	Stdin  io.WriteCloser
+	Stdout io.Reader
+	// Wait reports the command's exit status once its output is consumed.
+	Wait func() error
+	// Abort tears the session down after a protocol failure.
+	Abort func()
+	// Diagnostics returns whatever the transport captured on stderr.
+	Diagnostics func() string
+}
+
+// installRemoteAgentOverSession drives the install protocol over a session
+// opened by openSession: read the megacommand's uname output, stream the
+// matching local binary into dd, then compare the remote checksum read-back
+// against the sha256 of the bytes sent.
+func installRemoteAgentOverSession(ctx context.Context, remotePath string, openSession func(ctx context.Context, command string) (remoteInstallSession, error)) error {
+	installCtx, cancel := context.WithTimeout(ctx, remoteBinaryOpTimeout)
+	defer cancel()
+
+	command := remoteAgentInstallCommand(remotePath, randomTempSuffix())
+	session, err := openSession(installCtx, command)
+	if err != nil {
+		return err
+	}
+	stdin, stdout := session.Stdin, session.Stdout
+
+	fail := func(err error) error {
+		session.Abort()
+		if errors.Is(installCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			err = fmt.Errorf("install timed out after %s: %w", remoteBinaryOpTimeout, err)
+		}
+		if diagnostics := strings.TrimSpace(session.Diagnostics()); diagnostics != "" {
+			return fmt.Errorf("%w: ssh diagnostics: %s", err, diagnostics)
+		}
+		return err
 	}
 
+	br := bufio.NewReader(stdout)
+	unameLine, err := br.ReadString('\n')
+	if err != nil {
+		return fail(fmt.Errorf("read remote platform: %w", err))
+	}
+	parts := strings.Fields(unameLine)
+	if len(parts) < 2 {
+		return fail(fmt.Errorf("unexpected uname output: %q", strings.TrimSpace(unameLine)))
+	}
+	localPath, err := agentBinaryForPlatform(common.NormalizeOS(parts[0]), common.NormalizeArch(parts[1]))
+	if err != nil {
+		return fail(fmt.Errorf("get agent binary: %w", err))
+	}
 	localFile, err := os.Open(localPath)
 	if err != nil {
-		return fmt.Errorf("open local binary: %w", err)
+		return fail(fmt.Errorf("open local binary: %w", err))
 	}
-	defer localFile.Close()
-
-	uploadScript := fmt.Sprintf("cat > %s && chmod +x %s",
-		shellQuote(remotePath),
-		shellQuote(remotePath),
-	)
-	cmd := exec.CommandContext(ctx, "ssh", append(cloneArgs(sshArgs), uploadScript)...)
-	cmd.Stdin = localFile
-
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("upload failed: %w: %s", err, string(out))
+	hash := sha256.New()
+	_, copyErr := io.Copy(io.MultiWriter(stdin, hash), localFile)
+	localFile.Close()
+	if closeErr := stdin.Close(); copyErr == nil {
+		copyErr = closeErr
 	}
+	if copyErr != nil {
+		return fail(fmt.Errorf("stream agent binary: %w", copyErr))
+	}
+	expectedHash := fmt.Sprintf("%x", hash.Sum(nil))
+
+	markerLine, err := br.ReadString('\n')
+	if err != nil {
+		return fail(fmt.Errorf("read install marker: %w", err))
+	}
+	if strings.TrimSpace(markerLine) != remoteInstallCompleteMarker {
+		return fail(fmt.Errorf("install steps failed: expected completion marker, got %q", strings.TrimSpace(markerLine)))
+	}
+
+	checksumLine, err := br.ReadString('\n')
+	if err != nil {
+		return fail(fmt.Errorf("read remote checksum: %w", err))
+	}
+	remoteHash := strings.Fields(checksumLine)
+	if len(remoteHash) == 0 || remoteHash[0] != expectedHash {
+		return fail(fmt.Errorf("checksum mismatch after install: remote reported %q, expected %s", strings.TrimSpace(checksumLine), expectedHash))
+	}
+	// The chain has no tolerated trailing steps after the checksum
+	// read-back, so a non-zero session exit still indicates a genuine
+	// install/session failure and must not be accepted.
+	_, _ = io.Copy(io.Discard, br)
+	if waitErr := session.Wait(); waitErr != nil {
+		if diagnostics := strings.TrimSpace(session.Diagnostics()); diagnostics != "" {
+			return fmt.Errorf("install session failed after checksum verification: %w: ssh diagnostics: %s", waitErr, diagnostics)
+		}
+		return fmt.Errorf("install session failed after checksum verification: %w", waitErr)
+	}
+	log.Debug().Str("remotePath", remotePath).Msg("installed side-agent binary")
 	return nil
 }
 

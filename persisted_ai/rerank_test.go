@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"sidekick/common"
 	"sidekick/secret_manager"
 )
 
@@ -259,6 +260,11 @@ func TestCohereReranker_Live(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set to true")
 	}
+	// TODO: instead of skipping, use some TBD mechanism to run this test on
+	// the host, where API keys are available.
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("Skipping integration test; API keys are unavailable in non-local sidekick environments")
+	}
 
 	secrets := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
 		secret_manager.EnvSecretManager{},
@@ -266,7 +272,10 @@ func TestCohereReranker_Live(t *testing.T) {
 		secret_manager.LocalConfigSecretManager{},
 	})
 	apiKey, err := secrets.GetSecret(cohereAPIKeyEnvironmentVariable)
-	require.NoError(t, err, "SIDE_INTEGRATION_TEST=true requires COHERE_API_KEY in the environment, keyring, or local config")
+	if errors.Is(err, secret_manager.ErrSecretNotFound) {
+		t.Skipf("Skipping integration test; %s is not configured", cohereAPIKeyEnvironmentVariable)
+	}
+	require.NoError(t, err)
 
 	reranker := NewCohereReranker(apiKey)
 	documents := []string{

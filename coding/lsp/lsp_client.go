@@ -108,6 +108,7 @@ func lspServerCommand(ctx context.Context, languageName string, envContainer *en
 	}
 
 	if sshEnv, ok := sshCapableEnv(envContainer); ok {
+		env.HoldReverseForwards(ctx, sshEnv)
 		sshArgs, err := sshEnv.SSHArgs(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get SSH args for env: %w", err)

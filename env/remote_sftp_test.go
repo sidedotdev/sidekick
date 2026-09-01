@@ -2,10 +2,14 @@ package env
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -17,7 +21,7 @@ import (
 )
 
 // startSleepProcess launches a cheap long-running local process (standing in
-// for the remote ssh+side-sftp chain) whose reaping can be observed in tests.
+// for the remote ssh+agent chain) whose reaping can be observed in tests.
 func startSleepProcess(t *testing.T) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command("sleep", "60")
@@ -258,6 +262,90 @@ func TestSftpConn_ReconnectAfterStaleFailureReusesReplacement(t *testing.T) {
 	assert.Same(t, replacementClient, sc.client)
 }
 
+// primedSFTPTransport returns a legacy transport whose pooled connection is
+// already backed by an in-process SFTP server, so the operation-scoped path
+// can be exercised end to end without any ssh process chain.
+func primedSFTPTransport(t *testing.T, key string) SSHTransport {
+	t.Helper()
+	conn := getPooledSFTPConn(key)
+	conn.mu.Lock()
+	conn.client = newInMemorySFTPClient(t)
+	conn.mu.Unlock()
+	t.Cleanup(conn.Close)
+	return &legacySSHTransport{key: key}
+}
+
+func TestSFTPHelpersOverTransport(t *testing.T) {
+	t.Parallel()
+
+	transport := primedSFTPTransport(t, "test:sftp-helpers-over-transport")
+	ctx := context.Background()
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "nested", "deep")
+
+	require.NoError(t, sftpMkdirAll(ctx, transport, nested, 0o755))
+	info, err := sftpStat(ctx, transport, nested)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+
+	file := filepath.Join(nested, "a.txt")
+	want := []byte("hello sftp")
+	require.NoError(t, sftpWriteFile(ctx, transport, file, want, 0o640))
+
+	got, err := sftpReadFile(ctx, transport, file)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	info, err = sftpStat(ctx, transport, file)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), info.Mode().Perm(), "write must apply the requested mode")
+
+	entries, err := sftpReadDir(ctx, transport, nested)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "a.txt", entries[0].Name())
+
+	tmp, err := sftpCreateTemp(ctx, transport, dir, "tmp-*.log")
+	require.NoError(t, err)
+	assert.Equal(t, dir, filepath.Dir(tmp))
+	assert.True(t, strings.HasPrefix(filepath.Base(tmp), "tmp-"), "pattern prefix must survive: %s", tmp)
+	assert.True(t, strings.HasSuffix(tmp, ".log"), "pattern suffix must survive: %s", tmp)
+	_, err = sftpStat(ctx, transport, tmp)
+	require.NoError(t, err)
+
+	require.NoError(t, sftpRemove(ctx, transport, file))
+	_, err = sftpStat(ctx, transport, file)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestSFTPFailureWarrantsReconnect(t *testing.T) {
+	t.Parallel()
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		op   SFTPOp
+		want bool
+	}{
+		{"dropped session", context.Background(), errors.New("connection lost"), SFTPOp{Name: "read"}, true},
+		{"missing path", context.Background(), fmt.Errorf("open: %w", os.ErrNotExist), SFTPOp{Name: "read"}, false},
+		{"missing path when creating it is the job", context.Background(), fmt.Errorf("mkdir: %w", os.ErrNotExist), SFTPOp{Name: "mkdirall", RetryOnNotExist: true}, true},
+		{"permission denied", context.Background(), fmt.Errorf("open: %w", os.ErrPermission), SFTPOp{Name: "read"}, false},
+		{"permission denied while creating", context.Background(), fmt.Errorf("mkdir: %w", os.ErrPermission), SFTPOp{Name: "mkdirall", RetryOnNotExist: true}, false},
+		{"canceled context", canceled, errors.New("connection lost"), SFTPOp{Name: "read"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, sftpFailureWarrantsReconnect(tt.ctx, tt.err, tt.op))
+		})
+	}
+}
+
 // pipeRWC combines the two half-duplex pipes backing an in-memory SFTP
 // server into the io.ReadWriteCloser sftp.NewServer requires.
 type pipeRWC struct {
@@ -385,4 +473,184 @@ func TestBoundedSFTPOp(t *testing.T) {
 		assert.Same(t, replacement, sc.client,
 			"a timeout from an obsolete client must not tear down the current connection")
 	})
+}
+
+// TestRemoteAgentInstallCommand runs the install megacommand under a real
+// shell, standing in for the remote login shell: the streamed stdin must land
+// installed and executable at the final path, its gc mode must be invoked
+// (install-scoped stale-binary cleanup), and the checksum of the streamed
+// bytes must be read back after the completion marker.
+func TestRemoteAgentInstallCommand(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	remotePath := filepath.Join(dir, "side-agent-currentidentity")
+
+	// The streamed "binary" is a script that records how it was invoked,
+	// making the chain's gc step (run against the just-installed binary)
+	// observable.
+	invokedLog := filepath.Join(dir, "invoked")
+	content := "#!/bin/sh\necho \"$1\" > " + shellQuote(invokedLog) + "\n"
+	cmd := exec.Command("sh", "-c", remoteAgentInstallCommand(remotePath, "fixed"))
+	cmd.Stdin = strings.NewReader(content)
+	out, err := cmd.Output()
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	require.GreaterOrEqual(t, len(lines), 3, string(out))
+	assert.Len(t, strings.Fields(lines[0]), 2, "first output line must be uname -sm")
+	assert.Equal(t, remoteInstallCompleteMarker, lines[len(lines)-2])
+	checksumFields := strings.Fields(lines[len(lines)-1])
+	require.NotEmpty(t, checksumFields)
+	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))), checksumFields[0])
+
+	data, err := os.ReadFile(remotePath)
+	require.NoError(t, err)
+	assert.Equal(t, content, string(data))
+	info, err := os.Stat(remotePath)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode().Perm()&0111)
+	_, err = os.Stat(remotePath + ".tmp-fixed")
+	assert.ErrorIs(t, err, os.ErrNotExist)
+
+	invokedWith, err := os.ReadFile(invokedLog)
+	require.NoError(t, err, "install chain must invoke the installed binary's gc mode")
+	assert.Equal(t, "gc", strings.TrimSpace(string(invokedWith)))
+}
+
+// installFakeSSH puts a fake ssh on PATH whose behavior is given by script
+// (a /bin/sh body). The caller's test must not be parallel.
+func installFakeSSH(t *testing.T, script string) {
+	t.Helper()
+	installFakeCommand(t, "ssh", script)
+}
+
+// installFakeCommand puts a fake command named name on PATH whose behavior is
+// given by script (a /bin/sh body). The caller's test must not be parallel.
+func installFakeCommand(t *testing.T, name, script string) {
+	t.Helper()
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, name), []byte("#!/bin/sh\n"+script), 0700))
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// stubAgentBinary points agentBinaryForPlatform at a fixed local file,
+// recording the requested platform, so install tests need no real agent
+// build. The caller's test must not be parallel.
+func stubAgentBinary(t *testing.T, content string) (gotPlatform *string) {
+	t.Helper()
+	localPath := filepath.Join(t.TempDir(), "agent-binary")
+	require.NoError(t, os.WriteFile(localPath, []byte(content), 0700))
+	var platform string
+	original := agentBinaryForPlatform
+	agentBinaryForPlatform = func(targetOS, targetArch string) (string, error) {
+		platform = targetOS + "/" + targetArch
+		return localPath, nil
+	}
+	t.Cleanup(func() { agentBinaryForPlatform = original })
+	return &platform
+}
+
+func TestInstallRemoteAgentVerifiesChecksum(t *testing.T) {
+	// Deliberately not parallel: overrides PATH and a package hook.
+	uploadedPath := filepath.Join(t.TempDir(), "uploaded")
+	installFakeSSH(t, fmt.Sprintf(`echo "Linux x86_64"
+cat > %s
+echo side-agent-install-complete
+sha256sum %s 2>/dev/null || shasum -a 256 %s
+`, shellQuote(uploadedPath), shellQuote(uploadedPath), shellQuote(uploadedPath)))
+	platform := stubAgentBinary(t, "streamed agent bytes")
+
+	err := installRemoteAgent(context.Background(), []string{"remote-host"}, "/tmp/side-agent-testidentity")
+	require.NoError(t, err)
+	assert.Equal(t, "linux/amd64", *platform)
+
+	uploaded, err := os.ReadFile(uploadedPath)
+	require.NoError(t, err)
+	assert.Equal(t, "streamed agent bytes", string(uploaded))
+}
+
+func TestInstallRemoteAgentChecksumMismatch(t *testing.T) {
+	// Deliberately not parallel: overrides PATH and a package hook.
+	installFakeSSH(t, `echo "Linux x86_64"
+cat > /dev/null
+echo side-agent-install-complete
+echo "deadbeef  /tmp/side-agent-testidentity"
+`)
+	stubAgentBinary(t, "streamed agent bytes")
+
+	err := installRemoteAgent(context.Background(), []string{"remote-host"}, "/tmp/side-agent-testidentity")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checksum mismatch")
+}
+
+// TestInstallRemoteAgentSessionExitFailure ensures a session that emits a
+// valid marker and matching checksum but exits non-zero is still treated as
+// a failed install: the chain has no tolerated trailing steps, so a
+// non-zero exit indicates a genuine session failure.
+func TestInstallRemoteAgentSessionExitFailure(t *testing.T) {
+	// Deliberately not parallel: overrides PATH and a package hook.
+	uploadedPath := filepath.Join(t.TempDir(), "uploaded")
+	installFakeSSH(t, fmt.Sprintf(`echo "Linux x86_64"
+cat > %s
+echo side-agent-install-complete
+sha256sum %s 2>/dev/null || shasum -a 256 %s
+exit 3
+`, shellQuote(uploadedPath), shellQuote(uploadedPath), shellQuote(uploadedPath)))
+	stubAgentBinary(t, "streamed agent bytes")
+
+	err := installRemoteAgent(context.Background(), []string{"remote-host"}, "/tmp/side-agent-testidentity")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "after checksum verification")
+}
+
+// TestInstallRemoteAgentRequiresCompletionMarker covers the megacommand's ||
+// fallthrough: when an install step fails, the checksum fallback may still
+// hash a pre-existing final binary correctly, so a matching checksum without
+// the completion marker must not be accepted as a successful install.
+func TestInstallRemoteAgentRequiresCompletionMarker(t *testing.T) {
+	// Deliberately not parallel: overrides PATH and a package hook.
+	uploadedPath := filepath.Join(t.TempDir(), "uploaded")
+	installFakeSSH(t, fmt.Sprintf(`echo "Linux x86_64"
+cat > %s
+sha256sum %s 2>/dev/null || shasum -a 256 %s
+`, shellQuote(uploadedPath), shellQuote(uploadedPath), shellQuote(uploadedPath)))
+	stubAgentBinary(t, "streamed agent bytes")
+
+	err := installRemoteAgent(context.Background(), []string{"remote-host"}, "/tmp/side-agent-testidentity")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "completion marker")
+}
+
+func TestInstallRemoteAgentTimeout(t *testing.T) {
+	// Deliberately not parallel: overrides PATH and a package timeout.
+	installFakeSSH(t, "exec sleep 60\n")
+
+	originalTimeout := remoteBinaryOpTimeout
+	remoteBinaryOpTimeout = 500 * time.Millisecond
+	t.Cleanup(func() {
+		remoteBinaryOpTimeout = originalTimeout
+	})
+
+	started := time.Now()
+	err := installRemoteAgent(context.Background(), []string{"remote-host"}, "/tmp/side-agent-testidentity")
+	elapsed := time.Since(started)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "install timed out")
+	assert.Less(t, elapsed, 2*time.Second)
+}
+
+func TestRemoteCommandNotFound(t *testing.T) {
+	t.Parallel()
+
+	notFound := exec.Command("sh", "-c", "exit 127")
+	_ = notFound.Run()
+	assert.True(t, remoteCommandNotFound(notFound))
+
+	otherFailure := exec.Command("sh", "-c", "exit 1")
+	_ = otherFailure.Run()
+	assert.False(t, remoteCommandNotFound(otherFailure))
+
+	assert.False(t, remoteCommandNotFound(exec.Command("sh")), "unstarted command has no exit status")
 }

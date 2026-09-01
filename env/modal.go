@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,10 +18,15 @@ import (
 
 	"sidekick/coding/unix"
 	"sidekick/common"
+	"sidekick/utils"
 
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 	modal "github.com/modal-labs/libmodal/modal-go"
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/temporal"
+	"golang.org/x/net/http/httpproxy"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // modalAppName is the Modal app under which all sidekick-managed sandboxes
@@ -122,6 +130,52 @@ func findModalSandbox(ctx context.Context, client *modal.Client, name string) (*
 	return sb, nil
 }
 
+// isModalSandboxTerminatingOrTerminated reports whether err indicates an
+// operation hit a sandbox that was terminated (e.g. by the idle watchdog's
+// guard) while still polling as running. Depending on how far the shutdown
+// has progressed, exec and similar RPCs fail either with a gRPC
+// FailedPrecondition "shutting down" or with libmodal's plain "has already
+// completed" error carrying a TERMINATED task result.
+func isModalSandboxTerminatingOrTerminated(err error) bool {
+	if err == nil {
+		return false
+	}
+	if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition &&
+		strings.Contains(strings.ToLower(st.Message()), "shutting down") {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "has already completed") && strings.Contains(msg, "GENERIC_STATUS_TERMINATED")
+}
+
+// waitForModalSandboxGone blocks until the named sandbox's name no longer
+// resolves at all. "Not running" (a completed poll result) is not enough: the
+// dying sandbox keeps its deterministic name reserved — and lookups can even
+// flap back to "running" — until Modal fully releases it, so only NotFound
+// guarantees a follow-up create with the same name gets a fresh sandbox.
+func waitForModalSandboxGone(ctx context.Context, client *modal.Client, name string) error {
+	const timeout = 2 * time.Minute
+	deadline := time.Now().Add(timeout)
+	for {
+		_, err := client.Sandboxes.FromName(ctx, modalAppName, name, nil)
+		var notFound modal.NotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to look up modal sandbox %s: %w", name, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("modal sandbox %s is still shutting down after %s", name, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // modalTunnelEndpoint returns the public host/port of the sandbox's SSH
 // tunnel. The port is exposed unencrypted at the tunnel level because SSH
 // provides its own encryption.
@@ -167,8 +221,62 @@ func modalSandboxSetupCommands() []string {
 	}
 }
 
-func modalSnapshotCompatible(record *modalSnapshotRecord) bool {
-	return record != nil && record.ImageVersion == modalSnapshotImageVersion
+// modalVolumeMountSetupCommands ensures Modal can attach each configured
+// volume: Modal refuses to mount a volume over a path that is not empty in
+// the image, which a base image or a repository's Dockerfile can easily
+// populate (e.g. a cache directory warmed at build time).
+func modalVolumeMountSetupCommands(config common.ModalEnvConfig) ([]string, error) {
+	mounts, err := config.NormalizedVolumeMounts()
+	if err != nil {
+		return nil, err
+	}
+	if len(mounts) == 0 {
+		return nil, nil
+	}
+	commands := make([]string, 0, len(mounts))
+	for _, mount := range mounts {
+		path := shellQuote(mount.MountPath)
+		commands = append(commands, "RUN rm -rf -- "+path+" && mkdir -p -- "+path)
+	}
+	return commands, nil
+}
+
+// modalSnapshotCompatible reports whether a snapshot can seed a sandbox
+// running the given configuration. Every configured volume mount path must
+// also have been a volume mount when the snapshot was taken: Modal excludes
+// mounted volumes from filesystem snapshots, so only then is that path empty
+// in the snapshot and therefore mountable. A snapshot predating the volume
+// instead holds an ordinary populated directory that Modal refuses to mount
+// over, leaving the sandbox unable to start.
+func modalSnapshotCompatible(record *modalSnapshotRecord, config common.ModalEnvConfig) bool {
+	if record == nil || record.ImageVersion != modalSnapshotImageVersion {
+		return false
+	}
+	mounts, err := config.NormalizedVolumeMounts()
+	if err != nil {
+		return false
+	}
+	if len(mounts) == 0 {
+		return true
+	}
+	var snapshotConfig common.ModalEnvConfig
+	if len(record.Meta) == 0 || json.Unmarshal(record.Meta, &snapshotConfig) != nil {
+		return false
+	}
+	snapshotMounts, err := snapshotConfig.NormalizedVolumeMounts()
+	if err != nil {
+		return false
+	}
+	snapshotPaths := make(map[string]bool, len(snapshotMounts))
+	for _, mount := range snapshotMounts {
+		snapshotPaths[mount.MountPath] = true
+	}
+	for _, mount := range mounts {
+		if !snapshotPaths[mount.MountPath] {
+			return false
+		}
+	}
+	return true
 }
 
 // modalSandboxImage layers Sidekick's remote-access dependencies onto the
@@ -190,6 +298,11 @@ func modalSandboxImage(client *modal.Client, config common.ModalEnvConfig, repoD
 		imageRef = modalDefaultImage
 	}
 	commands = append(commands, modalSandboxSetupCommands()...)
+	volumeCommands, err := modalVolumeMountSetupCommands(config)
+	if err != nil {
+		return nil, err
+	}
+	commands = append(commands, volumeCommands...)
 	return client.Images.FromRegistry(imageRef, nil).DockerfileCommands(commands, nil), nil
 }
 
@@ -305,32 +418,114 @@ func modalSSHControlPath(sandboxName string) string {
 	return filepath.Join(os.TempDir(), "modal-ssh-"+name)
 }
 
-// modalSSHArgs builds ssh CLI args (ending with the destination) for reaching
-// a Modal sandbox's sshd through its Modal tunnel endpoint. Host key checking
-// is disabled because sandbox host keys are generated at boot and the tunnel
-// endpoint is ephemeral; the sandbox is authenticated by possession of the
-// tunnel address and our injected key instead.
-func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string) []string {
-	return []string{
-		"-o", "ControlMaster=auto",
-		"-S", modalSSHControlPath(sandboxName),
+// modalHTTPConnectProxy returns the "host:port" of the HTTP CONNECT proxy that
+// should carry the connection, or "" to dial the tunnel host directly. It
+// applies when the standard proxy environment variables (HTTPS_PROXY/NO_PROXY)
+// cover the tunnel host: OpenSSH ignores those variables, resolves DNS itself
+// and dials directly, so on proxy-only networks the ephemeral *.modal.host
+// tunnel endpoints are unreachable without this; the CONNECT tunnel also
+// delegates hostname resolution to the proxy.
+func modalHTTPConnectProxy(sshHost string, sshPort int) string {
+	proxyURL, err := httpproxy.FromEnvironment().ProxyFunc()(&url.URL{
+		Scheme: "https",
+		Host:   net.JoinHostPort(sshHost, strconv.Itoa(sshPort)),
+	})
+	if err != nil || proxyURL == nil {
+		return ""
+	}
+	return proxyURL.Host
+}
+
+// modalSSHConnConfig describes how to reach a Modal sandbox's sshd through its
+// Modal tunnel endpoint. Host key checking is disabled because sandbox host
+// keys are generated at boot and the tunnel endpoint is ephemeral; the sandbox
+// is authenticated by possession of the tunnel address and our injected key
+// instead.
+func modalSSHConnConfig(sandboxName, sshHost string, sshPort int, identityFile string) SSHConnConfig {
+	return SSHConnConfig{
+		Host:                 sshHost,
+		Port:                 sshPort,
+		User:                 "root",
+		IdentityFiles:        []string{identityFile},
+		HostKeyPolicy:        SSHHostKeyAcceptAny,
+		BatchMode:            utils.Ptr(true),
+		LogLevel:             "ERROR",
+		ConnectTimeout:       utils.Ptr(10 * time.Second),
+		DialAttempts:         1,
+		KeepaliveInterval:    utils.Ptr(10 * time.Second),
+		KeepaliveMaxFailures: utils.Ptr(3),
+		HTTPConnectProxy:     modalHTTPConnectProxy(sshHost, sshPort),
+		ControlPath:          modalSSHControlPath(sandboxName),
 		// A long ControlPersist is safe billing-wise: the in-sandbox idle
 		// watchdog ignores idle control masters (sshd connections with no
 		// session children), so a persisting master doesn't delay idle
 		// detection.
-		"-o", "ControlPersist=3600",
-		"-o", "BatchMode=yes",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "ConnectTimeout=10",
-		"-o", "ConnectionAttempts=1",
-		"-o", "ServerAliveInterval=10",
-		"-o", "ServerAliveCountMax=3",
-		"-o", "LogLevel=ERROR",
-		"-i", identityFile,
-		"-p", strconv.Itoa(sshPort),
-		"root@" + sshHost,
+		ControlPersist: time.Hour,
 	}
+}
+
+// modalSSHArgs builds ssh CLI args (ending with the destination) for the
+// legacy transport.
+func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string) []string {
+	return modalSSHConnConfig(sandboxName, sshHost, sshPort, identityFile).LegacyArgs()
+}
+
+// modalExecCommand runs a shell command inside the named sandbox through
+// Modal's API. The API is reached over HTTPS on port 443 and honors the
+// standard proxy environment variables, so it remains usable on networks
+// where the sandbox's ephemeral tunnel port cannot be dialed.
+func modalExecCommand(ctx context.Context, sandboxName, command string) (EnvRunCommandOutput, error) {
+	client, err := getModalClient()
+	if err != nil {
+		return EnvRunCommandOutput{}, err
+	}
+	sb, err := findModalSandbox(ctx, client, sandboxName)
+	if err != nil {
+		return EnvRunCommandOutput{}, err
+	}
+	if sb == nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("modal sandbox %s is not running", sandboxName)
+	}
+	// Modal's login shell integration installs a DEBUG trap that decorates
+	// stdout with terminal title escape sequences whenever TERM names a
+	// terminal, which the API sets but a tty-less ssh session does not.
+	// Unsetting it rather than emptying it, which is all the exec params can
+	// express, keeps both the output bytes and the environment the command
+	// observes identical to the ssh path.
+	argv := []string{"env", "-u", "TERM", "bash", "-lc", command}
+	process, err := sb.Exec(ctx, argv, nil)
+	if err != nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("failed to exec in modal sandbox %s: %w", sandboxName, err)
+	}
+
+	// Both streams are drained concurrently: either one filling up while the
+	// other is being read would stall the command.
+	var stdout, stderr []byte
+	var stdoutErr, stderrErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		stdout, stdoutErr = io.ReadAll(process.Stdout)
+	}()
+	go func() {
+		defer wg.Done()
+		stderr, stderrErr = io.ReadAll(process.Stderr)
+	}()
+	wg.Wait()
+	if readErr := errors.Join(stdoutErr, stderrErr); readErr != nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("failed to read output of command in modal sandbox %s: %w", sandboxName, readErr)
+	}
+
+	exitCode, err := process.Wait(ctx)
+	if err != nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("failed to wait for command in modal sandbox %s: %w", sandboxName, err)
+	}
+	return EnvRunCommandOutput{
+		Stdout:     string(stdout),
+		Stderr:     string(stderr),
+		ExitStatus: exitCode,
+	}, nil
 }
 
 // enableModalPerfCounters opens up kernel perf counters so profiling tools
@@ -366,6 +561,86 @@ type ModalCreateSandboxOutput struct {
 	Reused      bool   `json:"reused"`
 }
 
+type ModalRecreateSandboxInput struct {
+	EnvContainer EnvContainer          `json:"envContainer"`
+	Config       common.ModalEnvConfig `json:"config"`
+}
+
+type ModalRecreateSandboxOutput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+}
+
+// modalRecreate* are seams so tests can drive the destructive
+// snapshot/delete/create sequence without a Modal client.
+var (
+	modalRecreateCheckSandbox = modalCheckSandbox
+	modalRecreateSnapshot     = func(ctx context.Context, modalEnv *ModalEnv) error {
+		_, err := modalEnv.Snapshot(ctx)
+		return err
+	}
+	modalRecreateDeleteSandbox = func(ctx context.Context, sandboxName string) error {
+		_, err := DeleteSandboxActivity(ctx, DeleteSandboxInput{
+			EnvType:     EnvTypeModal,
+			SandboxName: sandboxName,
+		})
+		return err
+	}
+	modalRecreateCreateSandbox = CreateSandboxActivity
+)
+
+// ModalRecreateSandboxActivity checkpoints a sandbox before replacing it with
+// one using new resource settings. The replacement keeps the same name so the
+// filesystem snapshot selected by modalCreateSandbox contains the current
+// repository and worktrees. The configuration is fully validated before the
+// old sandbox is touched, and the snapshot/delete steps only run while it is
+// still alive, so a retry after a failed creation resumes from the snapshot
+// instead of failing on the already-deleted sandbox.
+func ModalRecreateSandboxActivity(ctx context.Context, input ModalRecreateSandboxInput) (ModalRecreateSandboxOutput, error) {
+	modalEnv, ok := input.EnvContainer.Env.(*ModalEnv)
+	if !ok {
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("environment is not Modal")
+	}
+	if err := input.Config.Validate(); err != nil {
+		return ModalRecreateSandboxOutput{}, temporal.NewNonRetryableApplicationError(
+			"invalid Modal configuration", "InvalidModalEnvConfig", err)
+	}
+	configJSON, err := json.Marshal(input.Config)
+	if err != nil {
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to marshal Modal configuration: %w", err)
+	}
+	check, err := modalRecreateCheckSandbox(ctx, modalEnv.SandboxName)
+	if err != nil {
+		return ModalRecreateSandboxOutput{}, err
+	}
+	if check.Alive {
+		if err := modalRecreateSnapshot(ctx, modalEnv); err != nil {
+			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to snapshot Modal sandbox %s: %w", modalEnv.SandboxName, err)
+		}
+		if err := modalRecreateDeleteSandbox(ctx, modalEnv.SandboxName); err != nil {
+			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to delete Modal sandbox %s: %w", modalEnv.SandboxName, err)
+		}
+	}
+	createOutput, err := modalRecreateCreateSandbox(ctx, CreateSandboxInput{
+		EnvType: EnvTypeModal,
+		Name:    modalEnv.SandboxName,
+		RepoDir: modalEnv.LocalRepoDir,
+		Config:  configJSON,
+	})
+	if err != nil {
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to recreate Modal sandbox %s: %w", modalEnv.SandboxName, err)
+	}
+	return ModalRecreateSandboxOutput{
+		EnvContainer: EnvContainer{Env: &ModalEnv{
+			WorkingDirectory: modalEnv.WorkingDirectory,
+			SandboxName:      createOutput.SandboxName,
+			SSHHost:          createOutput.SSHHost,
+			SSHPort:          createOutput.SSHPort,
+			LocalRepoDir:     modalEnv.LocalRepoDir,
+			PortForwards:     modalEnv.PortForwards,
+		}},
+	}, nil
+}
+
 // modalSandboxCreateParams builds the sandbox creation parameters for the
 // given config, selecting between the default gVisor runtime and Modal's
 // alpha VM runtime (real Linux kernel). extraEnv entries (e.g. the idle
@@ -382,11 +657,11 @@ func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey stri
 	// workloads, and on the VM runtime memory is statically provisioned).
 	cpuRequest := config.CPU
 	if cpuRequest == 0 {
-		cpuRequest = 0.125
+		cpuRequest = common.ModalDefaultCPU
 	}
 	memoryRequestMiB := config.Memory
 	if memoryRequestMiB == 0 {
-		memoryRequestMiB = 1024
+		memoryRequestMiB = common.ModalDefaultMemoryMiB
 	}
 	params := &modal.SandboxCreateParams{
 		Name:             name,
@@ -406,6 +681,31 @@ func modalSandboxCreateParams(config common.ModalEnvConfig, name, publicKey stri
 	return params
 }
 
+// modalVolumes resolves the configured volume mounts, creating any volume that
+// does not exist yet. Volumes are named, account-level resources: sandboxes
+// come and go, but a volume's contents persist until it is explicitly deleted.
+func modalVolumes(ctx context.Context, client *modal.Client, config common.ModalEnvConfig) (map[string]*modal.Volume, error) {
+	mounts, err := config.NormalizedVolumeMounts()
+	if err != nil {
+		return nil, err
+	}
+	if len(mounts) == 0 {
+		return nil, nil
+	}
+	volumes := make(map[string]*modal.Volume, len(mounts))
+	for _, mount := range mounts {
+		volume, err := client.Volumes.FromName(ctx, mount.Name, &modal.VolumeFromNameParams{CreateIfMissing: true})
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve modal volume %s: %w", mount.Name, err)
+		}
+		if mount.ReadOnly {
+			volume = volume.ReadOnly()
+		}
+		volumes[mount.MountPath] = volume
+	}
+	return volumes, nil
+}
+
 // refreshModalEndpoint re-resolves a sandbox's SSH tunnel endpoint after a
 // connection failure. If the sandbox no longer exists but the guard holds a
 // filesystem snapshot of it (taken by the idle watchdog), the sandbox is
@@ -420,10 +720,18 @@ func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int,
 		return "", 0, err
 	}
 	if sb != nil {
-		if err := waitForModalSSHD(ctx, sb); err != nil {
+		err := waitForModalSSHD(ctx, sb)
+		if err == nil {
+			return modalTunnelEndpoint(ctx, sb)
+		}
+		if !isModalSandboxTerminatingOrTerminated(err) {
 			return "", 0, err
 		}
-		return modalTunnelEndpoint(ctx, sb)
+		// The sandbox is mid-shutdown (idle watchdog terminate): wait it out,
+		// then fall through to restore from its snapshot as if already gone.
+		if waitErr := waitForModalSandboxGone(ctx, client, sandboxName); waitErr != nil {
+			return "", 0, waitErr
+		}
 	}
 	record, err := modalLatestSnapshot(ctx, client, sandboxName)
 	if err != nil {
@@ -449,7 +757,28 @@ func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int,
 // tunnel, or reuses the live sandbox with the same name. Both the default
 // gVisor runtime and the alpha VM runtime (real kernel) are supported via
 // Config.VM.
+//
+// A sandbox that polls as running may actually be mid-shutdown (the idle
+// watchdog's guard-initiated terminate leaves such a window). When reuse
+// trips over it, wait for the shutdown to finish and create afresh, which
+// restores from the snapshot the watchdog took just before terminating.
 func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
+	output, err := modalCreateSandboxOnce(ctx, input)
+	if err == nil || !isModalSandboxTerminatingOrTerminated(err) {
+		return output, err
+	}
+	log.Info().Str("sandbox", input.Name).Msg("modal sandbox is shutting down; waiting before recreating it")
+	client, clientErr := getModalClient()
+	if clientErr != nil {
+		return ModalCreateSandboxOutput{}, clientErr
+	}
+	if waitErr := waitForModalSandboxGone(ctx, client, input.Name); waitErr != nil {
+		return ModalCreateSandboxOutput{}, waitErr
+	}
+	return modalCreateSandboxOnce(ctx, input)
+}
+
+func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
 	_, publicKey, err := ensureModalSSHKey(ctx)
 	if err != nil {
 		return ModalCreateSandboxOutput{}, err
@@ -485,7 +814,7 @@ func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (Mod
 			if record == nil {
 				continue
 			}
-			if !modalSnapshotCompatible(record) {
+			if !modalSnapshotCompatible(record, input.Config) {
 				log.Info().
 					Str("sandbox", snapName).
 					Int("snapshotImageVersion", record.ImageVersion).
@@ -512,7 +841,12 @@ func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (Mod
 		if wdErr != nil {
 			return ModalCreateSandboxOutput{}, wdErr
 		}
+		volumes, volErr := modalVolumes(ctx, client, input.Config)
+		if volErr != nil {
+			return ModalCreateSandboxOutput{}, volErr
+		}
 		params := modalSandboxCreateParams(input.Config, input.Name, publicKey, watchdogEnv)
+		params.Volumes = volumes
 		sb, err = client.Sandboxes.Create(ctx, app, image, params)
 		if err != nil {
 			// Concurrent creates for the same deterministic name race: one
@@ -587,8 +921,11 @@ func modalCheckSandbox(ctx context.Context, sandboxName string) (ModalCheckSandb
 	return ModalCheckSandboxOutput{Alive: true, SSHHost: sshHost, SSHPort: sshPort}, nil
 }
 
-// modalDeleteSandbox terminates a Modal sandbox. Terminating a sandbox that
-// no longer exists is a no-op.
+// modalDeleteSandbox terminates a Modal sandbox and discards its snapshots.
+// Deletion (as opposed to stopping) means the sandbox will never be resumed,
+// so its indefinitely retained snapshot images are pure waste from here on.
+// Terminating a sandbox that no longer exists is a no-op, but its snapshots
+// are still reclaimed.
 func modalDeleteSandbox(ctx context.Context, sandboxName string) error {
 	client, err := getModalClient()
 	if err != nil {
@@ -598,11 +935,25 @@ func modalDeleteSandbox(ctx context.Context, sandboxName string) error {
 	if err != nil {
 		return err
 	}
-	if sb == nil {
-		return nil
+	if sb != nil {
+		if _, err := sb.Terminate(ctx, nil); err != nil {
+			return fmt.Errorf("failed to terminate modal sandbox %s: %w", sandboxName, err)
+		}
 	}
-	if _, err := sb.Terminate(ctx, nil); err != nil {
-		return fmt.Errorf("failed to terminate modal sandbox %s: %w", sandboxName, err)
+	// Snapshot cleanup failures are returned so the activity retries:
+	// termination and record deletion are both idempotent, and with images
+	// retained indefinitely a swallowed failure would leak them forever.
+	deletion, err := modalDeleteSnapshots(ctx, client, sandboxName)
+	if err != nil {
+		return fmt.Errorf("modal sandbox %s deleted but snapshot cleanup failed: %w", sandboxName, err)
+	}
+	if len(deletion.FailedImages) > 0 {
+		return fmt.Errorf("modal sandbox %s deleted but %d snapshot image(s) could not be deleted; they stay tracked for retry",
+			sandboxName, len(deletion.FailedImages))
+	}
+	if deletion.RecordDeleted || deletion.DeletedImages > 0 {
+		log.Info().Str("sandbox", sandboxName).Int("deletedImages", deletion.DeletedImages).
+			Msg("discarded modal snapshots for deleted sandbox")
 	}
 	return nil
 }
@@ -652,6 +1003,10 @@ func (modalSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteSandb
 	return modalDeleteSandbox(ctx, input.SandboxName)
 }
 
+func (e *ModalEnv) runWithSSHTransportRecovery(ctx context.Context, operation func() error) error {
+	return RunWithSSHTransportRecovery(ctx, e, operation)
+}
+
 // SyncMergeResultToLocal transfers the given branch from the Modal sandbox
 // back to the local host repository, since the sandbox holds an independent
 // clone of the repo rather than a bind mount.
@@ -661,11 +1016,13 @@ func (e *ModalEnv) SyncMergeResultToLocal(ctx context.Context, branch string) er
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync merge result to local: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.baseSSHArgs(ctx)
-	if err != nil {
-		return err
-	}
-	return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	return e.runWithSSHTransportRecovery(ctx, func() error {
+		sshArgs, err := e.SSHArgs(ctx)
+		if err != nil {
+			return err
+		}
+		return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	})
 }
 
 var _ GitRefSyncer = (*ModalEnv)(nil)
@@ -674,11 +1031,28 @@ func (e *ModalEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync git ref to local: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.baseSSHArgs(ctx)
-	if err != nil {
-		return err
+	return e.runWithSSHTransportRecovery(ctx, func() error {
+		sshArgs, err := e.SSHArgs(ctx)
+		if err != nil {
+			return err
+		}
+		return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
+	})
+}
+
+var _ FlowBranchBackupSyncer = (*ModalEnv)(nil)
+
+func (e *ModalEnv) SyncFlowBranchToLocal(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync flow branch to local: ModalEnv has no LocalRepoDir")
 	}
-	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
+	return e.runWithSSHTransportRecovery(ctx, func() error {
+		sshArgs, err := e.SSHArgs(ctx)
+		if err != nil {
+			return err
+		}
+		return syncFlowBranchToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	})
 }
 
 var _ TargetBranchSyncer = (*ModalEnv)(nil)
@@ -687,9 +1061,11 @@ func (e *ModalEnv) SyncBranchToRemote(ctx context.Context, branch string) error 
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync branch to remote: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.baseSSHArgs(ctx)
-	if err != nil {
-		return err
-	}
-	return syncBranchToRemoteOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	return e.runWithSSHTransportRecovery(ctx, func() error {
+		sshArgs, err := e.SSHArgs(ctx)
+		if err != nil {
+			return err
+		}
+		return syncBranchToRemoteOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	})
 }

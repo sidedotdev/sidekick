@@ -44,6 +44,22 @@ func setupIntentTestFlow(t *testing.T, ctrl Controller, worktreeDir string) (str
 	return workspaceId, flowId
 }
 
+// runIntentGit runs a git command in dir with a deterministic identity so
+// commits made by tests don't depend on the machine's git config.
+func runIntentGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, string(out))
+}
+
 func TestListIntentFilesHandler(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
@@ -135,16 +151,7 @@ func TestReadIntentFileHandler_CommittedContent(t *testing.T) {
 
 	runGit := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = worktreeDir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test",
-			"GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=Test",
-			"GIT_COMMITTER_EMAIL=test@example.com",
-		)
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %v: %s", args, string(out))
+		runIntentGit(t, worktreeDir, args...)
 	}
 
 	runGit("init", "-b", "main")
@@ -235,8 +242,15 @@ func TestIntentHandlers_WaitsForWorktree(t *testing.T) {
 	require.NoError(t, ctrl.service.PersistWorkspace(ctx, domain.Workspace{Id: workspaceId}))
 	require.NoError(t, ctrl.service.PersistFlow(ctx, domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
 
-	worktreeDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(worktreeDir, "intent"), 0o755))
+	worktreeDir := filepath.Join(t.TempDir(), "materializing-worktree")
+	require.NoError(t, ctrl.service.PersistWorktree(ctx, domain.Worktree{
+		Id:               "wt_" + ksuid.New().String(),
+		FlowId:           flowId,
+		WorkspaceId:      workspaceId,
+		Name:             "side/intent-test",
+		Created:          time.Now(),
+		WorkingDirectory: worktreeDir,
+	}))
 
 	prevTimeout := flowWorktreeWaitTimeout
 	prevInterval := flowWorktreePollInterval
@@ -249,25 +263,18 @@ func TestIntentHandlers_WaitsForWorktree(t *testing.T) {
 		flowWorktreePollInterval = prevInterval
 	})
 
-	// Persist the worktree after a short delay to simulate the IDD workflow
-	// creating it just after the canvas issues its first request.
+	materialized := make(chan error, 1)
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		_ = ctrl.service.PersistWorktree(context.Background(), domain.Worktree{
-			Id:               "wt_" + ksuid.New().String(),
-			FlowId:           flowId,
-			WorkspaceId:      workspaceId,
-			Name:             "side/intent-test",
-			Created:          time.Now(),
-			WorkingDirectory: worktreeDir,
-		})
+		materialized <- os.MkdirAll(filepath.Join(worktreeDir, "intent"), 0o755)
 	}()
 
 	listURL := fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/intent/files", workspaceId, flowId)
 	req, _ := http.NewRequest(http.MethodGet, listURL, nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
-	assert.Equal(t, http.StatusOK, rr.Code)
+	require.NoError(t, <-materialized)
+	assert.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 }
 
 func TestIntentHandlers_NoWorktree(t *testing.T) {
@@ -354,4 +361,64 @@ func TestStartIntentSubtaskHandler_FlowNotFound(t *testing.T) {
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+// TestIntentHandlers_UsePersistedLocalWorktree asserts listing, reading
+// (including the committed baseline) and autosave writes all resolve against
+// the worktree path persisted for the flow, on the sidekick host's filesystem.
+func TestIntentHandlers_UsePersistedLocalWorktree(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	ctrl := NewMockController(t)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
+	worktreeDir := t.TempDir()
+	workspaceId, flowId := setupIntentTestFlow(t, ctrl, worktreeDir)
+
+	runIntentGit(t, worktreeDir, "init", "-b", "main")
+	require.NoError(t, os.MkdirAll(filepath.Join(worktreeDir, "intent"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "intent", "mission.md"), []byte("# Mission\ncommitted\n"), 0o644))
+	runIntentGit(t, worktreeDir, "add", ".")
+	runIntentGit(t, worktreeDir, "commit", "-m", "initial intent")
+
+	listURL := fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/intent/files", workspaceId, flowId)
+	req, _ := http.NewRequest(http.MethodGet, listURL, nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var listResp struct {
+		Files []IntentFileEntry `json:"files"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &listResp))
+	listedPaths := make([]string, 0, len(listResp.Files))
+	for _, f := range listResp.Files {
+		listedPaths = append(listedPaths, f.Path)
+	}
+	assert.Contains(t, listedPaths, "intent/mission.md")
+
+	fileURL := fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/intent/file", workspaceId, flowId)
+	body, _ := json.Marshal(WriteIntentFileRequest{Path: "intent/mission.md", Content: "# Mission\nedited on the canvas\n"})
+	req, _ = http.NewRequest(http.MethodPut, fileURL, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	saved, err := os.ReadFile(filepath.Join(worktreeDir, "intent", "mission.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "# Mission\nedited on the canvas\n", string(saved))
+
+	req, _ = http.NewRequest(http.MethodGet, fileURL+"?path=intent/mission.md", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var readResp struct {
+		Content          string `json:"content"`
+		CommittedContent string `json:"committedContent"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &readResp))
+	assert.Equal(t, "# Mission\nedited on the canvas\n", readResp.Content)
+	assert.Equal(t, "# Mission\ncommitted\n", readResp.CommittedContent)
 }

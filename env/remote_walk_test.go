@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"sidekick/common"
+	"sidekick/utils"
 
 	"github.com/stretchr/testify/require"
 )
@@ -166,6 +167,10 @@ type fakeSSHEnv struct {
 
 func (f *fakeSSHEnv) SSHArgs(ctx context.Context) ([]string, error) {
 	return []string{"-o", "BatchMode=yes", "fake-host", "--"}, nil
+}
+
+func (f *fakeSSHEnv) SSHConnConfig(ctx context.Context) (SSHConnConfig, error) {
+	return SSHConnConfig{Host: "fake-host", BatchMode: utils.Ptr(true), LegacyCommandSeparator: true}, nil
 }
 
 // FetchCommitForWalk fetches via the file:// transport pointing at the
