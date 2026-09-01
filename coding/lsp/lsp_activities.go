@@ -41,6 +41,11 @@ type LSPDefinitionLocationsRequest struct {
 	// When unset, every occurrence of each symbol is resolved and the
 	// resulting definition locations are de-duplicated.
 	ReferenceLine string `json:"reference_line,omitempty"`
+
+	// PreloadedFileContent, when non-nil, is used as FilePath's content
+	// instead of reading it from the environment. It is intentionally not
+	// serialized: activity invocations always read from the env.
+	PreloadedFileContent []byte `json:"-"`
 }
 
 type SymbolDefinitionLocation struct {
@@ -67,9 +72,13 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 	if request.EnvContainer == nil {
 		return nil, fmt.Errorf("EnvContainer is required in LSPDefinitionLocationsRequest")
 	}
-	fileBytes, readErr := request.EnvContainer.Env.ReadFile(ctx, request.FilePath)
-	if readErr != nil {
-		return []SymbolDefinitionLocation{}, readErr
+	fileBytes := request.PreloadedFileContent
+	if fileBytes == nil {
+		var readErr error
+		fileBytes, readErr = request.EnvContainer.Env.ReadFile(ctx, request.FilePath)
+		if readErr != nil {
+			return []SymbolDefinitionLocation{}, readErr
+		}
 	}
 
 	var lineRange *Range

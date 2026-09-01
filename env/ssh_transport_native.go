@@ -88,6 +88,21 @@ type nativeSSHConn struct {
 	client   *ssh.Client
 	proxy    io.Closer
 	lastUsed time.Time
+	// sftpClient is the pooled SFTP channel riding client. Each SFTP channel
+	// costs a session open, a remote process spawn and an init handshake —
+	// several network round trips — so per-op channels would dominate every
+	// file read on a high-latency link. sftpSession carries it and is closed
+	// with it. sftpDialMu serializes channel creation so a burst of file
+	// operations shares one handshake.
+	sftpClient  *sftp.Client
+	sftpSession io.Closer
+	sftpDialMu  sync.Mutex
+	// execChannel is the pooled agent exec channel riding client, kept for
+	// the same reason as the SFTP channel: the protocol multiplexes commands
+	// by ID, so pooled commands cost one round trip each instead of a session
+	// open, a remote process spawn and a liveness ping per command.
+	execChannel *nativeExecChannel
+	execDialMu  sync.Mutex
 	// listeners are the reverse forwards held for this connection's lifetime,
 	// keyed by their forward spec.
 	listeners map[string]net.Listener
@@ -226,10 +241,13 @@ func (c *nativeSSHConn) release() {
 
 // nativeConnResources is what outlives a pool entry's lock during teardown:
 // the SSH client and any ProxyCommand child, whose reaping is this transport's
-// responsibility.
+// responsibility, plus the pooled SFTP channel riding the client.
 type nativeConnResources struct {
-	client *ssh.Client
-	proxy  io.Closer
+	client      *ssh.Client
+	proxy       io.Closer
+	sftpClient  *sftp.Client
+	sftpSession io.Closer
+	execChannel *nativeExecChannel
 }
 
 // close tears the connection down. Reverse forward listeners are deliberately
@@ -237,10 +255,20 @@ type nativeConnResources struct {
 // and waits for the peer to answer, which a peer that stopped answering never
 // does. Closing the client severs the underlying stream instead, which cancels
 // every forward and unblocks their accept loops without asking the peer for
-// anything.
+// anything. The SFTP channel rode that stream, so once it is severed its own
+// Close cannot block on a silent peer.
 func (r nativeConnResources) close() {
 	if r.client != nil {
 		_ = r.client.Close()
+	}
+	if r.sftpSession != nil {
+		_ = r.sftpSession.Close()
+	}
+	if r.sftpClient != nil {
+		_ = r.sftpClient.Close()
+	}
+	if r.execChannel != nil {
+		r.execChannel.close()
 	}
 	if r.proxy != nil {
 		_ = r.proxy.Close()
@@ -252,10 +280,19 @@ func (r nativeConnResources) close() {
 // speaks the SSH protocol, so a silent peer would otherwise hold this entry —
 // and everyone waiting on it — for as long as it stays silent.
 func (c *nativeSSHConn) detachClientLocked() nativeConnResources {
-	resources := nativeConnResources{client: c.client, proxy: c.proxy}
+	resources := nativeConnResources{
+		client:      c.client,
+		proxy:       c.proxy,
+		sftpClient:  c.sftpClient,
+		sftpSession: c.sftpSession,
+		execChannel: c.execChannel,
+	}
 	c.client = nil
 	c.listeners = nil
 	c.proxy = nil
+	c.sftpClient = nil
+	c.sftpSession = nil
+	c.execChannel = nil
 	return resources
 }
 
@@ -499,10 +536,10 @@ func (t *nativeSSHTransport) Exec(ctx context.Context, req sideagent.ExecRequest
 	}
 
 	var resp sideagent.ExecResponse
-	err = t.withClient(ctx, func(_ *nativeSSHConn, client *ssh.Client) error {
+	err = t.withClient(ctx, func(conn *nativeSSHConn, client *ssh.Client) error {
 		return withAgentBootstrap(ctx, client, remotePath, func() error {
 			var execErr error
-			resp, execErr = nativeAgentExec(ctx, client, remotePath, req)
+			resp, execErr = conn.runPooledAgentExec(ctx, client, remotePath, req)
 			return execErr
 		})
 	})
@@ -526,49 +563,164 @@ func withAgentBootstrap(ctx context.Context, client *ssh.Client, remotePath stri
 	return op()
 }
 
-// nativeAgentExec runs one request over its own session channel. A session per
-// operation costs a channel open rather than a process start, so there is no
-// pooled channel to leave poisoned by a cancelled command.
-func nativeAgentExec(ctx context.Context, client *ssh.Client, remotePath string, req sideagent.ExecRequest) (sideagent.ExecResponse, error) {
+// nativeExecChannel is a pooled agent exec channel: one SSH session running
+// the remote agent exec server, with a client that multiplexes commands over
+// it by ID.
+type nativeExecChannel struct {
+	client      *sideagent.Client
+	session     io.Closer
+	diagnostics *synchronizedBuffer
+}
+
+func (ch *nativeExecChannel) close() {
+	_ = ch.session.Close()
+	ch.client.Close()
+}
+
+// execFailure enriches a command failure with whatever the remote wrote to the
+// session's stderr, which is where the agent reports pre-protocol problems.
+func (ch *nativeExecChannel) execFailure(execErr error) error {
+	if details := strings.TrimSpace(ch.diagnostics.String()); details != "" {
+		return fmt.Errorf("%w: remote diagnostics: %s", execErr, details)
+	}
+	return execErr
+}
+
+// runPooledAgentExec runs req over the connection's pooled exec channel,
+// dialing one on first use. Mirroring the legacy pooled channel, a request is
+// retried on a fresh channel only when it provably never reached the server
+// (ErrNotSent); failures after send invalidate the channel but are returned
+// as-is, since the command may have run. Cancellation rides the protocol's
+// cancel message, so a cancelled command leaves the channel usable.
+func (c *nativeSSHConn) runPooledAgentExec(ctx context.Context, client *ssh.Client, remotePath string, req sideagent.ExecRequest) (sideagent.ExecResponse, error) {
+	channel, err := c.execChannelFor(ctx, client, remotePath)
+	if err != nil {
+		return sideagent.ExecResponse{}, err
+	}
+	resp, execErr := channel.client.Exec(ctx, req)
+	if execErr == nil {
+		return resp, nil
+	}
+	if ctx.Err() != nil {
+		// The channel is healthy; only this command was abandoned.
+		return sideagent.ExecResponse{}, execErr
+	}
+	if !errors.Is(execErr, sideagent.ErrNotSent) {
+		c.invalidateExecChannel(channel)
+		return sideagent.ExecResponse{}, channel.execFailure(execErr)
+	}
+
+	c.invalidateExecChannel(channel)
+	channel, err = c.execChannelFor(ctx, client, remotePath)
+	if err != nil {
+		return sideagent.ExecResponse{}, fmt.Errorf("%w (reconnect: %v)", execErr, err)
+	}
+	resp, retryErr := channel.client.Exec(ctx, req)
+	if retryErr != nil && ctx.Err() == nil {
+		c.invalidateExecChannel(channel)
+		return sideagent.ExecResponse{}, channel.execFailure(retryErr)
+	}
+	return resp, retryErr
+}
+
+// execChannelFor returns the pooled exec channel for client, dialing one on
+// first use. Creation is serialized so a burst of commands shares a single
+// channel setup instead of racing to create several.
+func (c *nativeSSHConn) execChannelFor(ctx context.Context, client *ssh.Client, remotePath string) (*nativeExecChannel, error) {
+	c.execDialMu.Lock()
+	defer c.execDialMu.Unlock()
+
+	c.mu.Lock()
+	if c.client == client && c.execChannel != nil {
+		pooled := c.execChannel
+		c.mu.Unlock()
+		return pooled, nil
+	}
+	c.mu.Unlock()
+
+	channel, err := dialNativeExecChannel(ctx, client, remotePath)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	if c.client != client {
+		// The connection was invalidated while dialing; a channel on the dead
+		// client would fail every command until the next reconnect.
+		c.mu.Unlock()
+		channel.close()
+		return nil, fmt.Errorf("ssh connection replaced during exec channel setup")
+	}
+	c.execChannel = channel
+	c.mu.Unlock()
+	return channel, nil
+}
+
+// invalidateExecChannel discards the pooled exec channel if failed is still
+// it, so the next command dials a fresh channel while the SSH connection
+// carrying it stays up.
+func (c *nativeSSHConn) invalidateExecChannel(failed *nativeExecChannel) {
+	c.mu.Lock()
+	var channel *nativeExecChannel
+	if c.execChannel == failed {
+		channel = c.execChannel
+		c.execChannel = nil
+	}
+	c.mu.Unlock()
+	if channel != nil {
+		channel.close()
+	}
+}
+
+// dialNativeExecChannel starts the remote agent exec server on its own session
+// and proves it answers with a liveness ping, which also surfaces
+// command-not-found as the absence signal bootstrap keys on.
+func dialNativeExecChannel(ctx context.Context, client *ssh.Client, remotePath string) (*nativeExecChannel, error) {
 	session, err := client.NewSession()
 	if err != nil {
-		return sideagent.ExecResponse{}, fmt.Errorf("open agent exec session: %w", err)
+		return nil, fmt.Errorf("open agent exec session: %w", err)
 	}
-	defer session.Close()
 
 	stdin, err := session.StdinPipe()
 	if err != nil {
-		return sideagent.ExecResponse{}, fmt.Errorf("create agent stdin: %w", err)
+		_ = session.Close()
+		return nil, fmt.Errorf("create agent stdin: %w", err)
 	}
 	stdout, err := session.StdoutPipe()
 	if err != nil {
-		return sideagent.ExecResponse{}, fmt.Errorf("create agent stdout: %w", err)
+		_ = session.Close()
+		return nil, fmt.Errorf("create agent stdout: %w", err)
 	}
 	diagnostics := &synchronizedBuffer{}
 	session.Stderr = diagnostics
 
 	if err := session.Start(remotePath + " exec"); err != nil {
-		return sideagent.ExecResponse{}, fmt.Errorf("start remote agent exec server: %w", err)
+		_ = session.Close()
+		return nil, fmt.Errorf("start remote agent exec server: %w", err)
 	}
-	// Closing the session is what unblocks an in-flight request: the agent
-	// protocol has no cancel message, and the reads it is parked on only end
-	// when the channel does.
-	stopOnCancel := context.AfterFunc(ctx, func() { _ = session.Close() })
-	defer stopOnCancel()
 
 	agentClient := sideagent.NewClient(stdout, stdin)
-	resp, execErr := agentClient.Exec(ctx, req)
-	agentClient.Close()
-	if execErr == nil {
-		return resp, nil
+	pingCtx, cancel := context.WithTimeout(ctx, agentExecDialTimeout)
+	defer cancel()
+	resp, pingErr := agentClient.Exec(pingCtx, sideagent.ExecRequest{Argv: []string{"true"}})
+	if pingErr == nil && resp.Error != "" {
+		pingErr = errors.New(resp.Error)
 	}
-	if nativeAgentMissing(session.Wait()) {
-		return sideagent.ExecResponse{}, errNativeAgentAbsent
+	if pingErr != nil {
+		agentClient.Close()
+		// Closing the session bounds Wait: a wedged remote would otherwise
+		// hold this dial forever, while an already-exited one (the
+		// command-not-found case) has its status recorded before the close.
+		_ = session.Close()
+		if nativeAgentMissing(session.Wait()) {
+			return nil, errNativeAgentAbsent
+		}
+		if details := strings.TrimSpace(diagnostics.String()); details != "" {
+			return nil, fmt.Errorf("start agent exec channel: %w: remote diagnostics: %s", pingErr, details)
+		}
+		return nil, fmt.Errorf("start agent exec channel: %w", pingErr)
 	}
-	if details := strings.TrimSpace(diagnostics.String()); details != "" {
-		return sideagent.ExecResponse{}, fmt.Errorf("%w: remote diagnostics: %s", execErr, details)
-	}
-	return sideagent.ExecResponse{}, execErr
+	return &nativeExecChannel{client: agentClient, session: session, diagnostics: diagnostics}, nil
 }
 
 // nativeAgentMissing reports the login shell's command-not-found status, the
@@ -629,16 +781,16 @@ func (t *nativeSSHTransport) WithSFTP(ctx context.Context, op SFTPOp) (any, erro
 	}
 
 	var value any
-	err = t.withClient(ctx, func(_ *nativeSSHConn, client *ssh.Client) error {
+	err = t.withClient(ctx, func(conn *nativeSSHConn, client *ssh.Client) error {
 		return withAgentBootstrap(ctx, client, remotePath, func() error {
 			var opErr error
-			value, opErr = nativeSFTPOp(ctx, client, remotePath, op)
+			value, opErr = conn.runPooledSFTPOp(ctx, client, remotePath, op)
 			if opErr == nil || !sftpFailureWarrantsReconnect(ctx, opErr, op) {
 				return opErr
 			}
 			// A dead SFTP channel says nothing about the connection carrying
-			// it, so retry the operation on a new channel before giving up.
-			value, opErr = nativeSFTPOp(ctx, client, remotePath, op)
+			// it, so retry the operation on a fresh channel before giving up.
+			value, opErr = conn.runPooledSFTPOp(ctx, client, remotePath, op)
 			return opErr
 		})
 	})
@@ -648,46 +800,141 @@ func (t *nativeSSHTransport) WithSFTP(ctx context.Context, op SFTPOp) (any, erro
 	return value, nil
 }
 
-// nativeSFTPOp runs op over a session dedicated to it, so the client's lifetime
-// is exactly the operation's and no caller can hold one across a reconnect.
-func nativeSFTPOp(ctx context.Context, client *ssh.Client, remotePath string, op SFTPOp) (any, error) {
+// runPooledSFTPOp runs op on the connection's pooled SFTP channel, bounded by
+// ctx and sftpOpTimeout. pkg/sftp calls cannot be cancelled, so a deadline
+// overrun is resolved by severing the channel, which both unblocks the
+// stranded call and keeps the channel from being reused. A failure that
+// warrants reconnecting likewise discards the channel, so the caller's retry
+// handshakes afresh instead of reusing one that may be dead.
+func (c *nativeSSHConn) runPooledSFTPOp(ctx context.Context, client *ssh.Client, remotePath string, op SFTPOp) (any, error) {
+	sftpClient, err := c.sftpClientFor(ctx, client, remotePath)
+	if err != nil {
+		return nil, err
+	}
+
 	opCtx, cancel := context.WithTimeout(ctx, sftpOpTimeout)
+	defer cancel()
+	type opResult struct {
+		value any
+		err   error
+	}
+	resultCh := make(chan opResult, 1)
+	go func() {
+		value, err := op.Run(sftpClient)
+		resultCh <- opResult{value, err}
+	}()
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			if sftpFailureWarrantsReconnect(ctx, result.err, op) {
+				c.invalidateSFTPClient(sftpClient)
+			}
+			return nil, fmt.Errorf("%s %s: %w", op.Name, op.Path, result.err)
+		}
+		return result.value, nil
+	case <-opCtx.Done():
+		c.invalidateSFTPClient(sftpClient)
+		return nil, fmt.Errorf("%s %s: %w", op.Name, op.Path, opCtx.Err())
+	}
+}
+
+// sftpClientFor returns the pooled SFTP channel for client, handshaking one on
+// first use. Creation is serialized so concurrent file operations share a
+// single handshake, while the fast path stays a map-free field read.
+func (c *nativeSSHConn) sftpClientFor(ctx context.Context, client *ssh.Client, remotePath string) (*sftp.Client, error) {
+	c.sftpDialMu.Lock()
+	defer c.sftpDialMu.Unlock()
+
+	c.mu.Lock()
+	if c.client == client && c.sftpClient != nil {
+		pooled := c.sftpClient
+		c.mu.Unlock()
+		return pooled, nil
+	}
+	c.mu.Unlock()
+
+	sftpClient, session, err := dialNativeSFTPChannel(ctx, client, remotePath)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	if c.client != client {
+		// The connection was invalidated while handshaking; a channel on the
+		// dead client would fail every operation until the next reconnect.
+		c.mu.Unlock()
+		_ = session.Close()
+		_ = sftpClient.Close()
+		return nil, fmt.Errorf("ssh connection replaced during sftp channel setup")
+	}
+	c.sftpClient = sftpClient
+	c.sftpSession = session
+	c.mu.Unlock()
+	return sftpClient, nil
+}
+
+// invalidateSFTPClient discards the pooled SFTP channel if failed is still it,
+// so the next file operation handshakes a fresh channel while the SSH
+// connection carrying it stays up. Closing the session severs the channel,
+// which is what unblocks a pkg/sftp call stranded on it.
+func (c *nativeSSHConn) invalidateSFTPClient(failed *sftp.Client) {
+	c.mu.Lock()
+	var client *sftp.Client
+	var session io.Closer
+	if c.sftpClient == failed {
+		client, session = c.sftpClient, c.sftpSession
+		c.sftpClient, c.sftpSession = nil, nil
+	}
+	c.mu.Unlock()
+	if session != nil {
+		_ = session.Close()
+	}
+	if client != nil {
+		_ = client.Close()
+	}
+}
+
+// dialNativeSFTPChannel starts the remote sftp server on its own session and
+// completes the SFTP handshake. The setup costs several network round trips
+// plus a remote process spawn, which is exactly why the resulting channel is
+// pooled rather than dedicated to one operation.
+func dialNativeSFTPChannel(ctx context.Context, client *ssh.Client, remotePath string) (*sftp.Client, io.Closer, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, sftpOpTimeout)
 	defer cancel()
 
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("open sftp session: %w", err)
+		return nil, nil, fmt.Errorf("open sftp session: %w", err)
 	}
-	defer session.Close()
 
 	stdin, err := session.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("create sftp stdin: %w", err)
+		_ = session.Close()
+		return nil, nil, fmt.Errorf("create sftp stdin: %w", err)
 	}
 	stdout, err := session.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("create sftp stdout: %w", err)
+		_ = session.Close()
+		return nil, nil, fmt.Errorf("create sftp stdout: %w", err)
 	}
 	if err := session.Start(remotePath + " sftp"); err != nil {
-		return nil, fmt.Errorf("start remote sftp server: %w", err)
+		_ = session.Close()
+		return nil, nil, fmt.Errorf("start remote sftp server: %w", err)
 	}
-	stopOnCancel := context.AfterFunc(opCtx, func() { _ = session.Close() })
+	// Closing the session is what bounds the handshake: NewClientPipe only
+	// returns once the pipes speak or die.
+	stopOnCancel := context.AfterFunc(dialCtx, func() { _ = session.Close() })
 	defer stopOnCancel()
 
 	sftpClient, err := sftp.NewClientPipe(stdout, stdin)
 	if err != nil {
+		defer session.Close()
 		if nativeAgentMissing(session.Wait()) {
-			return nil, errNativeAgentAbsent
+			return nil, nil, errNativeAgentAbsent
 		}
-		return nil, fmt.Errorf("start sftp client: %w", err)
+		return nil, nil, fmt.Errorf("start sftp client: %w", err)
 	}
-	defer sftpClient.Close()
-
-	value, err := op.Run(sftpClient)
-	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", op.Name, op.Path, err)
-	}
-	return value, nil
+	return sftpClient, session, nil
 }
 
 func (t *nativeSSHTransport) EnsureReverseForwards(ctx context.Context, forwards []common.PortForwardConfig) error {

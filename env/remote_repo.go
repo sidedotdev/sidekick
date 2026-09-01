@@ -69,10 +69,114 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 		}
 	}
 
-	if err := pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs); err != nil {
+	pushErr := pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, false)
+	if pushErr == nil {
+		return containerRepoDir, nil
+	}
+	if !remoteUnpackFailed(pushErr) {
+		return "", pushErr
+	}
+	// An unpack failure proves only that the remote could not resolve this
+	// pack: the cause may be a thin-pack delta base it lacks, a truncated
+	// transfer, or a genuinely broken object store. A self-contained pack
+	// sidesteps delta bases entirely and doubles as a transient-failure
+	// retry, so try that before suspecting the repo itself.
+	log.Warn().Err(pushErr).Str("remoteRepoDir", containerRepoDir).
+		Msg("remote could not unpack pushed pack; retrying with a self-contained pack")
+	pushErr = pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, true)
+	if pushErr == nil {
+		return containerRepoDir, nil
+	}
+	if !remoteUnpackFailed(pushErr) {
+		return "", pushErr
+	}
+	// Replace the repo only when its object store is provably broken;
+	// anything else deserves the error rather than discarded remote state.
+	corrupted, fsckErr := remoteRepoCorrupted(ctx, sshArgs, containerRepoDir)
+	if fsckErr != nil {
+		return "", fmt.Errorf("%w (fsck: %v)", pushErr, fsckErr)
+	}
+	if !corrupted {
+		return "", pushErr
+	}
+	log.Warn().Err(pushErr).Str("remoteRepoDir", containerRepoDir).
+		Msg("remote repo failed fsck; quarantining and re-seeding")
+	if qErr := quarantineRemoteRepo(ctx, sshArgs, containerRepoDir); qErr != nil {
+		return "", fmt.Errorf("%w (quarantine: %v)", pushErr, qErr)
+	}
+	if seedErr := seedRepoOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, extraBranches); seedErr != nil {
+		// The push below seeds the repo too (with the full history of the
+		// synced branches): slower, but it needs no reverse tunnel.
+		log.Warn().Err(seedErr).Str("remoteRepoDir", containerRepoDir).
+			Msg("shallow repo seed failed; falling back to seeding via push")
+	}
+	if err := pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, false); err != nil {
 		return "", err
 	}
 	return containerRepoDir, nil
+}
+
+// remoteUnpackFailed reports whether a push failed because the remote side
+// could not unpack the received pack. This alone does not prove the remote
+// repo is broken — the pack may have been thin against bases it lacks or
+// truncated in transit — so callers escalate through cheaper recoveries
+// before considering the repo corrupt.
+func remoteUnpackFailed(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "remote unpack failed") ||
+		strings.Contains(msg, "unresolved deltas")
+}
+
+// remoteRepoCorrupted reports whether the remote repo's object store fails
+// git fsck, distinguishing a persistently broken repo from a push failure
+// with some other cause.
+func remoteRepoCorrupted(ctx context.Context, sshArgs []string, containerRepoDir string) (bool, error) {
+	script := fmt.Sprintf("git -C %s fsck --full --no-progress", shellQuote(containerRepoDir))
+	fsckArgs := make([]string, len(sshArgs))
+	copy(fsckArgs, sshArgs)
+	fsckArgs = append(fsckArgs, script)
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       fsckArgs,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to fsck remote repo: %w", err)
+	}
+	if output.ExitStatus != 0 {
+		log.Warn().Str("remoteRepoDir", containerRepoDir).
+			Str("fsck", strings.TrimSpace(output.Stdout+"\n"+output.Stderr)).
+			Msg("remote repo failed fsck")
+		return true, nil
+	}
+	return false, nil
+}
+
+// quarantineRemoteRepo moves a broken remote repo aside rather than deleting
+// it, preserving any uncommitted work it may hold for manual recovery.
+func quarantineRemoteRepo(ctx context.Context, sshArgs []string, containerRepoDir string) error {
+	quarantineDir := containerRepoDir + ".corrupt." + time.Now().UTC().Format("20060102T150405Z")
+	script := fmt.Sprintf("mv %s %s", shellQuote(containerRepoDir), shellQuote(quarantineDir))
+	moveArgs := make([]string, len(sshArgs))
+	copy(moveArgs, sshArgs)
+	moveArgs = append(moveArgs, script)
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       moveArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to quarantine remote repo: %w", err)
+	}
+	if output.ExitStatus != 0 {
+		return fmt.Errorf("quarantining remote repo failed (exit %d): %s", output.ExitStatus, output.Stderr)
+	}
+	log.Warn().Str("remoteRepoDir", containerRepoDir).Str("quarantineDir", quarantineDir).
+		Msg("quarantined corrupted remote repo")
+	return nil
 }
 
 // syncRefspecs returns forced refspecs for the HEAD branch plus any extra
@@ -197,8 +301,10 @@ func tunneledRepoScriptOverSSH(ctx context.Context, sshArgs []string, localRepoD
 // push` over the same ssh transport: git execs git-receive-pack through the
 // existing sshd channel, so no daemon or extra remote service is required,
 // only git itself. Native negotiation provides incrementality and backward
-// moves in one connection.
-func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir, headRef string, refspecs []string) error {
+// moves in one connection. noThin sends a self-contained pack, trading
+// transfer size for independence from delta bases the remote may not be able
+// to resolve.
+func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir, headRef string, refspecs []string, noThin bool) error {
 	dest, opts := splitSSHDestination(sshArgs)
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
@@ -237,7 +343,12 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 	prepDur := time.Since(prepStart)
 
 	pushStart := time.Now()
-	pushArgs := append([]string{"-C", localRepoDir, "push", "--quiet", dest + ":" + containerRepoDir}, refspecs...)
+	pushArgs := []string{"-C", localRepoDir, "push", "--quiet"}
+	if noThin {
+		pushArgs = append(pushArgs, "--no-thin")
+	}
+	pushArgs = append(pushArgs, dest+":"+containerRepoDir)
+	pushArgs = append(pushArgs, refspecs...)
 	cmd := exec.CommandContext(ctx, "git", pushArgs...)
 	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
 	if out, err := cmd.CombinedOutput(); err != nil {

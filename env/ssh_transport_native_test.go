@@ -266,7 +266,7 @@ func TestNativeTransportSharesOneConnection(t *testing.T) {
 
 	stats := server.stats()
 	assert.Equal(t, 1, stats.Connections, "concurrent operations must multiplex over one connection")
-	assert.GreaterOrEqual(t, stats.Sessions, execCount, "each operation gets its own session")
+	assert.Equal(t, 2, stats.Sessions, "operations must share one pooled exec channel and one pooled sftp channel")
 }
 
 func TestNativeTransportRedialsAfterConnectionDrop(t *testing.T) {
@@ -285,25 +285,50 @@ func TestNativeTransportRedialsAfterConnectionDrop(t *testing.T) {
 	assert.Equal(t, 2, server.stats().Connections)
 }
 
-// TestNativeTransportCancelledExecClosesSession guards against a cancelled
-// command leaving its channel open, which would leak channels until the
-// connection is torn down.
-func TestNativeTransportCancelledExecClosesSession(t *testing.T) {
+// TestNativeTransportPoolsExecChannel pins that repeated commands reuse one
+// exec channel: a session per command pays a channel open, a remote process
+// spawn and protocol setup — several network round trips — on every command,
+// which dominates RunCommand on high-latency links.
+func TestNativeTransportPoolsExecChannel(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	transport := nativeTestTransport(t, server, "native-exec-pooling")
+
+	for i := 0; i < 3; i++ {
+		resp, err := nativeExecEcho(context.Background(), transport, fmt.Sprintf("pooled-%d", i))
+		require.NoError(t, err)
+		require.Equal(t, 0, resp.ExitStatus)
+	}
+
+	stats := server.stats()
+	assert.Equal(t, 1, stats.Connections)
+	assert.Equal(t, 1, stats.Sessions,
+		"commands must share one exec channel instead of opening a session per command")
+}
+
+// TestNativeTransportCancelledExecKeepsChannelUsable pins the pooled-channel
+// cancellation contract: a cancelled command returns promptly via the
+// protocol's cancel message, and the channel stays usable for later commands
+// rather than being torn down and re-handshaked.
+func TestNativeTransportCancelledExecKeepsChannelUsable(t *testing.T) {
 	server := startSSHTestServer(t, sshTestServerOptions{})
 	transport := nativeTestTransport(t, server, "native-cancel")
 
 	_, err := nativeExecEcho(context.Background(), transport, "warm-up")
 	require.NoError(t, err)
 
-	server.awaitActiveSessions(t, 0)
-
 	ctx, cancel := context.WithCancel(context.Background())
+	// The test agent executes argv on this machine, so a marker file is
+	// deterministic proof the command reached the server before cancellation.
+	marker := filepath.Join(t.TempDir(), "started")
 	done := make(chan error, 1)
 	go func() {
-		_, err := transport.Exec(ctx, sideagent.ExecRequest{Argv: []string{"sleep", "30"}})
+		_, err := transport.Exec(ctx, sideagent.ExecRequest{Argv: []string{"sh", "-c", "touch " + marker + " && sleep 30"}})
 		done <- err
 	}()
-	server.awaitActiveSessions(t, 1)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}, harnessWaitTimeout, 5*time.Millisecond, "command must reach the server before cancellation")
 	cancel()
 
 	select {
@@ -312,12 +337,13 @@ func TestNativeTransportCancelledExecClosesSession(t *testing.T) {
 	case <-time.After(harnessWaitTimeout):
 		t.Fatal("cancelled exec did not return promptly")
 	}
-	server.awaitActiveSessions(t, 0)
 
 	resp, err := nativeExecEcho(context.Background(), transport, "after-cancel")
-	require.NoError(t, err, "cancellation must not poison the pooled connection")
+	require.NoError(t, err, "cancellation must not poison the pooled channel")
 	assert.Contains(t, string(resp.Stdout), "after-cancel")
 	assert.Equal(t, 1, server.stats().Connections)
+	assert.Equal(t, 1, server.stats().Sessions,
+		"a cancelled command must not cost a channel re-handshake")
 }
 
 func TestNativeTransportReverseForwardDeliversBytes(t *testing.T) {
@@ -411,6 +437,32 @@ func TestNativeTransportInstallsAbsentAgentForExec(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(resp.Stdout), "after-install")
 	assertAgentInstalled(t, server, remotePath)
+}
+
+// TestNativeTransportPoolsSFTPChannel pins that repeated file operations reuse
+// one SFTP channel: a channel per operation would pay a session open, a remote
+// process spawn and an init handshake — several network round trips — on every
+// file read, which dominates on high-latency links.
+func TestNativeTransportPoolsSFTPChannel(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	transport := nativeTestTransport(t, server, "native-sftp-pooling")
+
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		value, err := transport.WithSFTP(context.Background(), SFTPOp{
+			Name: "stat",
+			Path: dir,
+			Run: func(client *sftp.Client) (any, error) {
+				return client.Stat(dir)
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, value)
+	}
+
+	stats := server.stats()
+	assert.Equal(t, 1, stats.Sessions,
+		"file operations must share one SFTP channel instead of handshaking per operation")
 }
 
 // TestNativeTransportInstallsAbsentAgentForSFTP covers the same bootstrap when
@@ -681,18 +733,22 @@ func TestReapIdleNativeSSHConns(t *testing.T) {
 
 	_, err := nativeExecEcho(context.Background(), idle, "idle")
 	require.NoError(t, err)
-	// The finished session must be gone before the next one is awaited, or the
-	// wait below could match this one and reap while nothing is in flight.
-	server.awaitActiveSessions(t, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// The test agent executes argv on this machine, so a marker file is
+	// deterministic proof the command is in flight; session counts no longer
+	// distinguish idle from busy now that exec channels are pooled.
+	marker := filepath.Join(t.TempDir(), "started")
 	inFlight := make(chan error, 1)
 	go func() {
-		_, err := busy.Exec(ctx, sideagent.ExecRequest{Argv: []string{"sleep", "30"}})
+		_, err := busy.Exec(ctx, sideagent.ExecRequest{Argv: []string{"sh", "-c", "touch " + marker + " && sleep 30"}})
 		inFlight <- err
 	}()
-	server.awaitActiveSessions(t, 1)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}, harnessWaitTimeout, 5*time.Millisecond, "command must be in flight before reaping")
 
 	reapIdleNativeSSHConns(time.Now().Add(time.Hour))
 

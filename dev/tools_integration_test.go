@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"sidekick/coding"
+	"sidekick/coding/lsp"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -54,12 +56,35 @@ func runHandleToolCallToolSubtests(t *testing.T, ctx context.Context, envContain
 	knownContent := "first line\nsecond line " + knownMarker + " trailing\nthird line\n"
 	require.NoError(t, envContainer.Env.WriteFile(ctx, knownFileName, []byte(knownContent), 0644))
 
+	const symbolFileName = "tools_integration_symbols.go"
+	symbolFileContent := "package toolsintegration\n\nfunc SymbolDefKnown() string {\n\treturn \"" + knownMarker + "\"\n}\n"
+	require.NoError(t, envContainer.Env.WriteFile(ctx, symbolFileName, []byte(symbolFileContent), 0644))
+
+	// Populate a realistically sized checkout so failure hints (which may
+	// index the whole repo) are exercised at representative cost.
+	genScript := strings.Join([]string{
+		"for i in $(seq 1 150); do printf 'package toolsintegration\\n\\nfunc GenFunc%d() int { return %d }\\n' \"$i\" \"$i\" > gen_file$i.go; done",
+		"git add -A",
+		"git -c user.email=t@t -c user.name=t commit -qm gen || true",
+	}, " && ")
+	genOut, genErr := envContainer.Env.RunCommand(ctx, env.EnvRunCommandInput{Command: "sh", Args: []string{"-c", genScript}})
+	require.NoError(t, genErr)
+	require.Equal(t, 0, genOut.ExitStatus, "repo file generation failed: %s", genOut.Stderr)
+
 	// The search tool shells out to ripgrep inside the environment, so ensure it
 	// is installed before exercising bulk_search_repository.
 	rgAvailable := ensureRipgrep(ctx, envContainer.Env)
 
 	storage := sqlite.NewTestSqliteStorage(t, "dev_tools_integration")
 	const workspaceId = "tools-integration-workspace"
+
+	// Shared across subtest invocations so the LSP client cache persists,
+	// mirroring the long-lived worker's CodingActivities.
+	codingActivities := &coding.CodingActivities{
+		LSPActivities: lsp.NewLSPActivities(func(lang string) lsp.LSPClient {
+			return &lsp.Jsonrpc2LSPClient{LanguageName: lang}
+		}),
+	}
 
 	runTool := func(t *testing.T, toolCall llm.ToolCall) (ToolCallOutput, string) {
 		th := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{AddSource: false, Level: slog.LevelWarn})
@@ -76,6 +101,7 @@ func runHandleToolCallToolSubtests(t *testing.T, ctx context.Context, envContain
 		tenv.RegisterActivity(BulkSearchRepositoryActivity)
 		tenv.RegisterActivity(CheckCommandPermissionActivity)
 		tenv.RegisterActivity(ReadFileActivity)
+		tenv.RegisterActivity(codingActivities.BulkGetSymbolDefinitions)
 		bra := &BulkReadFileActivities{Storage: storage}
 		tenv.RegisterActivity(bra.BulkReadFileActivityV2)
 
@@ -167,6 +193,64 @@ func runHandleToolCallToolSubtests(t *testing.T, ctx context.Context, envContain
 			combined = contentText(output.Content)
 		}
 		assert.Contains(t, combined, knownMarker)
+	})
+
+	t.Run("get_symbol_definitions", func(t *testing.T) {
+		t.Parallel()
+		args := mustJSON(RequiredCodeContext{
+			Analysis: "retrieve the known symbol",
+			Requests: []coding.FileSymDefRequest{
+				{FilePath: symbolFileName, Symbols: []coding.RequestedSymbol{{Name: "SymbolDefKnown"}}},
+			},
+		})
+		// Run twice: the first call pays any one-time setup (e.g. LSP
+		// startup), the second measures the steady-state cost that must stay
+		// low even on remote envs.
+		for _, run := range []string{"cold", "warm"} {
+			start := time.Now()
+			output, _ := runTool(t, llm.ToolCall{
+				Id:        "tc-symbols-" + run,
+				Name:      currentGetSymbolDefinitionsTool().Name,
+				Arguments: args,
+			})
+			t.Logf("get_symbol_definitions %s run took %s", run, time.Since(start))
+			require.False(t, output.IsError)
+			assert.Contains(t, contentText(output.Content), "SymbolDefKnown")
+		}
+
+		// Missing named symbol in an existing file: exercises the LSP
+		// fallback and the repo-wide failure-hint index.
+		missingSymbolArgs := mustJSON(RequiredCodeContext{
+			Analysis: "retrieve a symbol that does not exist",
+			Requests: []coding.FileSymDefRequest{
+				{FilePath: symbolFileName, Symbols: []coding.RequestedSymbol{{Name: "NoSuchSymbolAnywhere"}}},
+			},
+		})
+		start := time.Now()
+		output, _ := runTool(t, llm.ToolCall{
+			Id:        "tc-symbols-missing-symbol",
+			Name:      currentGetSymbolDefinitionsTool().Name,
+			Arguments: missingSymbolArgs,
+		})
+		t.Logf("get_symbol_definitions missing-symbol run took %s", time.Since(start))
+		assert.Contains(t, contentText(output.Content), "NoSuchSymbolAnywhere")
+
+		// Nonexistent file with a wildcard: a symbolless failure that must
+		// not trigger a repo-wide scan.
+		missingFileArgs := mustJSON(RequiredCodeContext{
+			Analysis: "retrieve a file that does not exist",
+			Requests: []coding.FileSymDefRequest{
+				{FilePath: "no_such_file.go", Symbols: []coding.RequestedSymbol{{Name: "*"}}},
+			},
+		})
+		start = time.Now()
+		output, _ = runTool(t, llm.ToolCall{
+			Id:        "tc-symbols-missing-file",
+			Name:      currentGetSymbolDefinitionsTool().Name,
+			Arguments: missingFileArgs,
+		})
+		t.Logf("get_symbol_definitions missing-file run took %s", time.Since(start))
+		assert.Contains(t, contentText(output.Content), "no_such_file.go")
 	})
 
 	t.Run("bulk_search_repository", func(t *testing.T) {

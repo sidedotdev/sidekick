@@ -18,6 +18,11 @@ type RelatedSymbolsActivityInput struct {
 	EnvContainer     env.EnvContainer
 	RelativeFilePath string
 	SymbolRange      *lsp.Range
+
+	// PreloadedFileContent, when non-nil, is used as RelativeFilePath's
+	// content instead of reading it from the environment. It is intentionally
+	// not serialized: activity invocations always read from the env.
+	PreloadedFileContent []byte `json:"-"`
 }
 
 type RelatedSymbol struct {
@@ -36,10 +41,11 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 	}
 
 	lspInput := lsp.FindReferencesActivityInput{
-		EnvContainer:     input.EnvContainer,
-		RelativeFilePath: input.RelativeFilePath,
-		SymbolText:       input.SymbolText,
-		Range:            input.SymbolRange,
+		EnvContainer:         input.EnvContainer,
+		RelativeFilePath:     input.RelativeFilePath,
+		SymbolText:           input.SymbolText,
+		Range:                input.SymbolRange,
+		PreloadedFileContent: input.PreloadedFileContent,
 	}
 	references, err := ca.LSPActivities.FindReferencesActivity(ctx, lspInput)
 	if err != nil {
@@ -54,6 +60,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 
 	var relatedSymbols []RelatedSymbol
 	rootUri := input.EnvContainer.Env.GetWorkingDirectory()
+	subjectAbsPath := env.EnvClean(input.EnvContainer.Env, rootUri+env.EnvSeparator(input.EnvContainer.Env)+input.RelativeFilePath)
 
 	for _, reference := range references {
 		// Convert URI to absolute file path
@@ -65,9 +72,13 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 
 		// Memoize file symbols and signatures
 		if _, ok := memoMap[filePath]; !ok {
-			fileBytes, readErr := input.EnvContainer.Env.ReadFile(ctx, filePath)
-			if readErr != nil {
-				return nil, fmt.Errorf("failed to read file %s: %w", filePath, readErr)
+			fileBytes := input.PreloadedFileContent
+			if fileBytes == nil || filePath != subjectAbsPath {
+				var readErr error
+				fileBytes, readErr = input.EnvContainer.Env.ReadFile(ctx, filePath)
+				if readErr != nil {
+					return nil, fmt.Errorf("failed to read file %s: %w", filePath, readErr)
+				}
 			}
 			langName := utils.InferLanguageNameFromFilePath(filePath)
 
