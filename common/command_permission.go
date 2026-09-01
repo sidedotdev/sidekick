@@ -213,6 +213,16 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "wait"},
 			{Pattern: "seq"},
 			{Pattern: "printf"},
+			{Pattern: "set"},
+			// low-risk fs write commands (note: paths outside of repo are protected with another mechanism)
+			{Pattern: "touch"},
+			{Pattern: "rmdir"},
+			{Pattern: "cp -n"},
+			{Pattern: "mv -n"},
+			{Pattern: "git mv -n"},
+			{Pattern: "git rm"},
+			{Pattern: "perl -pi -e"}, // NOTE: ideally would limit to tracked file paths
+			{Pattern: "perl -0pi -e"}, // NOTE: ideally would limit to tracked file paths
 			// Shell syntax check: -n (noexec) parses the script without
 			// executing it. Beyond -n, only whitelisted argument-less short
 			// options (v, x, c) may appear, alone or clustered: options that
@@ -243,6 +253,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "git shortlog"},
 			{Pattern: "git stash list"},
 			{Pattern: "git add"},
+			{Pattern: "git commit"},
 			{Pattern: "git rm"},
 			// Go commands
 			{Pattern: "go test"},
@@ -261,6 +272,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "gofmt"},
 			{Pattern: "golint"},
 			{Pattern: "golangci-lint"},
+			{Pattern: "goimports"},
 			{Pattern: "staticcheck"},
 			// Node.js/npm commands
 			{Pattern: "npm test"},
@@ -506,6 +518,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `cd /home/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 			{Pattern: `cd /Users/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 			{Pattern: `cd /repo`, Message: "cd not needed, the command will already be run in the correct working directory"},
+			// cp or mv without `-n` might overwrite a file, and thus act like deletion by mistake
+			{Pattern: `^mv [/."'a-zA-Z0-9]`, Message: "use mv -n to ensure you don't overwrite by mistake"},
+			{Pattern: `^cp [/."'a-zA-Z0-9]`, Message: "use cp -n to ensure you don't overwrite by mistake"},
 		},
 	}
 }
