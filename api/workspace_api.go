@@ -45,6 +45,7 @@ type WorkspaceRequest struct {
 	Name            string                 `json:"name"`
 	LocalRepoDir    string                 `json:"localRepoDir"`
 	ConfigMode      string                 `json:"configMode,omitempty"`
+	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
 }
@@ -56,6 +57,7 @@ type WorkspaceResponse struct {
 	Name            string                 `json:"name"`
 	LocalRepoDir    string                 `json:"localRepoDir"`
 	ConfigMode      string                 `json:"configMode"`
+	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
 }
@@ -71,6 +73,15 @@ func (w WorkspaceResponse) MarshalJSON() ([]byte, error) {
 		Created: w.Created.UTC(),
 		Updated: w.Updated.UTC(),
 	})
+}
+
+// validateRequestedProfileId allows an unset profile id, which means the
+// workspace belongs to the default profile.
+func validateRequestedProfileId(profileId string) error {
+	if profileId == "" {
+		return nil
+	}
+	return common.ValidateProfileId(profileId)
 }
 
 // isValidConfigMode validates that the configMode is one of the allowed values
@@ -248,11 +259,17 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	if err := validateRequestedProfileId(workspaceReq.ProfileId); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	workspace := domain.Workspace{
 		Id:           "ws_" + ksuid.New().String(),
 		Name:         workspaceReq.Name,
 		LocalRepoDir: workspaceReq.LocalRepoDir,
 		ConfigMode:   configMode,
+		ProfileId:    workspaceReq.ProfileId,
 		Created:      time.Now().UTC(),
 		Updated:      time.Now().UTC(),
 	}
@@ -285,6 +302,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		Name:            workspace.Name,
 		LocalRepoDir:    workspace.LocalRepoDir,
 		ConfigMode:      workspace.ConfigMode,
+		ProfileId:       workspace.ProfileId,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
 	}
@@ -350,6 +368,7 @@ func (ctrl *Controller) GetWorkspaceHandler(c *gin.Context) {
 		Name:         workspace.Name,
 		LocalRepoDir: workspace.LocalRepoDir,
 		ConfigMode:   workspace.ConfigMode,
+		ProfileId:    workspace.ProfileId,
 	}
 
 	config, err := ctrl.service.GetWorkspaceConfig(c, workspaceId)
@@ -403,6 +422,11 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	if err := validateRequestedProfileId(workspaceReq.ProfileId); err != nil {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
+		return
+	}
+
 	workspaceConfig, err := ctrl.service.GetWorkspaceConfig(c, workspaceId)
 	if err != nil {
 		if !errors.Is(err, srv.ErrNotFound) {
@@ -416,6 +440,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	workspace.Name = workspaceReq.Name
 	workspace.LocalRepoDir = workspaceReq.LocalRepoDir
 	workspace.ConfigMode = configMode
+	workspace.ProfileId = workspaceReq.ProfileId
 	workspaceConfig.LLM = workspaceReq.LLMConfig
 	workspaceConfig.Embedding = workspaceReq.EmbeddingConfig
 	workspace.Updated = time.Now().UTC()
@@ -437,6 +462,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		Name:            workspace.Name,
 		LocalRepoDir:    workspace.LocalRepoDir,
 		ConfigMode:      workspace.ConfigMode,
+		ProfileId:       workspace.ProfileId,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
 	}

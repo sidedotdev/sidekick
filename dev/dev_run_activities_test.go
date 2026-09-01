@@ -1268,6 +1268,8 @@ type mockSSHEnv struct {
 	workingDir      string
 	sshArgs         []string
 	ensuredForwards int
+	runInputs       []env.EnvRunCommandInput
+	runCommand      func(env.EnvRunCommandInput) (env.EnvRunCommandOutput, error)
 }
 
 func (m *mockSSHEnv) EnsureReverseForwards(ctx context.Context) error {
@@ -1282,6 +1284,10 @@ func (m *mockSSHEnv) Hibernate(ctx context.Context, branchName string) (env.Hibe
 func (m *mockSSHEnv) WakeIfHibernated(ctx context.Context) error { return nil }
 func (m *mockSSHEnv) GetWorkingDirectory() string                { return m.workingDir }
 func (m *mockSSHEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
+	m.runInputs = append(m.runInputs, input)
+	if m.runCommand != nil {
+		return m.runCommand(input)
+	}
 	return env.EnvRunCommandOutput{}, nil
 }
 func (m *mockSSHEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
@@ -1347,7 +1353,11 @@ func TestBuildDevRunCmd_SSHCapableWrapping(t *testing.T) {
 
 	sshEnv := &mockSSHEnv{
 		workingDir: "/remote/repo",
-		sshArgs:    []string{"-o", "BatchMode=yes", "user@host", "--"},
+		sshArgs:    []string{"-o", "BatchMode=yes", "stale@host", "--"},
+	}
+	sshEnv.runCommand = func(input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
+		sshEnv.sshArgs = []string{"-o", "BatchMode=yes", "refreshed@host", "--"}
+		return env.EnvRunCommandOutput{}, nil
 	}
 
 	cmd, err := buildDevRunCmd(context.Background(),
@@ -1358,13 +1368,16 @@ func TestBuildDevRunCmd_SSHCapableWrapping(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	require.Len(t, sshEnv.runInputs, 1)
+	assert.Equal(t, "true", sshEnv.runInputs[0].Command)
 	require.GreaterOrEqual(t, len(cmd.Args), 2)
 	assert.Equal(t, "ssh", filepath.Base(cmd.Args[0]))
 	// -tt must come before SSH args so a PTY is allocated for SIGHUP propagation
 	assert.Equal(t, "-tt", cmd.Args[1])
 
 	joined := strings.Join(cmd.Args, " ")
-	assert.Contains(t, joined, "user@host")
+	assert.Contains(t, joined, "refreshed@host")
+	assert.NotContains(t, joined, "stale@host")
 	assert.Contains(t, joined, "export 'FOO=bar'")
 	assert.Contains(t, joined, "cd '/remote/repo/sub'")
 	assert.Contains(t, joined, "exec sh -c 'echo $FOO'")

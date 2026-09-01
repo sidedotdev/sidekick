@@ -202,3 +202,56 @@ func TestModalEnvRunCommandKeepsSSHResultWhenFallbackFails(t *testing.T) {
 	assert.Empty(t, output.Stdout)
 	assert.NotEmpty(t, output.Stderr, "ssh diagnostics must be reported to the caller")
 }
+func TestRunWithSSHTransportRecovery(t *testing.T) {
+	t.Parallel()
+
+	const liveHost, livePort = "live.modal.test", 43210
+	modalEnv := &ModalEnv{
+		SandboxName: "side--git-sync-refresh",
+		SSHHost:     "dead.modal.test",
+		SSHPort:     12345,
+		refreshModalEndpoint: func(ctx context.Context, sandboxName string) (string, int, error) {
+			return liveHost, livePort, nil
+		},
+	}
+
+	var attemptedEndpoints []string
+	err := RunWithSSHTransportRecovery(context.Background(), modalEnv, func() error {
+		attemptedEndpoints = append(attemptedEndpoints, net.JoinHostPort(modalEnv.SSHHost, strconv.Itoa(modalEnv.SSHPort)))
+		if modalEnv.SSHHost != liveHost {
+			return errors.New("ssh: connect to host dead.modal.test port 12345: Connection refused")
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		net.JoinHostPort("dead.modal.test", "12345"),
+		net.JoinHostPort(liveHost, strconv.Itoa(livePort)),
+	}, attemptedEndpoints)
+}
+func TestRunDeepenWithSSHTransportRecoveryPreservesShallowObservation(t *testing.T) {
+	t.Parallel()
+
+	modalEnv := &ModalEnv{
+		SandboxName: "side--deepen-refresh",
+		SSHHost:     "dead.modal.test",
+		SSHPort:     12345,
+		refreshModalEndpoint: func(ctx context.Context, sandboxName string) (string, int, error) {
+			return "live.modal.test", 43210, nil
+		},
+	}
+
+	attempts := 0
+	deepened, err := runDeepenWithSSHTransportRecovery(context.Background(), modalEnv, func() (bool, error) {
+		attempts++
+		if attempts == 1 {
+			return true, errors.New("ssh: connect to host dead.modal.test port 12345: Connection refused")
+		}
+		return false, nil
+	})
+
+	require.NoError(t, err)
+	assert.True(t, deepened)
+	assert.Equal(t, 2, attempts)
+}

@@ -34,11 +34,17 @@ export interface EmbeddingConfig {
   useCaseConfigs: { [key: string]: ModelConfig[] }
 }
 
+export interface Profile {
+  id: string
+  name: string
+}
+
 export interface Workspace {
   id?: string
   name: string
   localRepoDir: string
   configMode?: string
+  profileId?: string
   llmConfig?: LLMConfig | null
   embeddingConfig?: EmbeddingConfig | null
 }

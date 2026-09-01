@@ -20,6 +20,7 @@ type workspaceResponse struct {
 	Updated         time.Time              `json:"updated"`
 	Name            string                 `json:"name"`
 	LocalRepoDir    string                 `json:"localRepoDir"`
+	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
 }
@@ -28,6 +29,7 @@ type workspaceResponse struct {
 type CreateWorkspaceRequest struct {
 	Name         string `json:"name"`
 	LocalRepoDir string `json:"localRepoDir"`
+	ProfileId    string `json:"profileId,omitempty"`
 }
 
 type createWorkspaceResponseWrapper struct {
@@ -67,6 +69,7 @@ func (c *clientImpl) CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Works
 		Id:           response.Workspace.Id,
 		Name:         response.Workspace.Name,
 		LocalRepoDir: response.Workspace.LocalRepoDir,
+		ProfileId:    response.Workspace.ProfileId,
 		Created:      response.Workspace.Created,
 		Updated:      response.Workspace.Updated,
 	}

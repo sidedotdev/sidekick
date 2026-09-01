@@ -98,9 +98,11 @@ func NewMockController(t *testing.T) Controller {
 
 	service := NewTestService(t)
 	return Controller{
-		temporalClient:   mockTemporalClient,
-		service:          service,
-		secretManager:    secret_manager.MockSecretManager{},
+		temporalClient: mockTemporalClient,
+		service:        service,
+		secretManager:  secret_manager.MockSecretManager{},
+		// isolate handlers from whatever local config exists on the machine
+		loadLocalConfig:  func() (common.LocalConfig, error) { return common.LocalConfig{}, nil },
 		taskStartTimeout: 5 * time.Second,
 	}
 }

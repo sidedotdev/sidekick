@@ -161,6 +161,30 @@ func TestGitCommitActivityFlowBranchBackup(t *testing.T) {
 		assert.Equal(t, "work in progress", runGitCommandInTestRepo(t, repoDir, "log", "-1", "--pretty=%s"))
 	})
 
+	t.Run("direct rerun after sync failure completes the backup", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupFlowBranchBackupRepo(t)
+		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "side/direct-retry")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		backupEnv := &flowBranchBackupEnv{Env: devEnv, remainingFailures: 1}
+		envContainer := env.EnvContainer{Env: backupEnv}
+		params := GitCommitParams{
+			CommitMessage:         "work in progress",
+			IgnoreNothingToCommit: true,
+		}
+
+		_, err = GitCommitActivity(ctx, envContainer, params)
+		require.ErrorContains(t, err, "failed to sync flow branch to local repo")
+
+		_, err = GitCommitActivity(ctx, envContainer, params)
+		require.NoError(t, err, "a direct rerun should complete the previously failed backup")
+
+		assert.Equal(t, []string{"side/direct-retry", "side/direct-retry"}, backupEnv.syncedBranches)
+		assert.Equal(t, "work in progress", runGitCommandInTestRepo(t, repoDir, "log", "-1", "--pretty=%s"))
+	})
+
 	t.Run("env without backup capability runs no extra commands", func(t *testing.T) {
 		t.Parallel()
 		repoDir := setupFlowBranchBackupRepo(t)

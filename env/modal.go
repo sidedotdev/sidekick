@@ -986,6 +986,10 @@ func (modalSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteSandb
 	return modalDeleteSandbox(ctx, input.SandboxName)
 }
 
+func (e *ModalEnv) runWithSSHTransportRecovery(ctx context.Context, operation func() error) error {
+	return RunWithSSHTransportRecovery(ctx, e, operation)
+}
+
 // SyncMergeResultToLocal transfers the given branch from the Modal sandbox
 // back to the local host repository, since the sandbox holds an independent
 // clone of the repo rather than a bind mount.
@@ -995,11 +999,13 @@ func (e *ModalEnv) SyncMergeResultToLocal(ctx context.Context, branch string) er
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync merge result to local: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.SSHArgs(ctx)
-	if err != nil {
-		return err
-	}
-	return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	return e.runWithSSHTransportRecovery(ctx, func() error {
+		sshArgs, err := e.SSHArgs(ctx)
+		if err != nil {
+			return err
+		}
+		return syncMergeResultToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	})
 }
 
 var _ GitRefSyncer = (*ModalEnv)(nil)
@@ -1008,11 +1014,13 @@ func (e *ModalEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync git ref to local: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.SSHArgs(ctx)
-	if err != nil {
-		return err
-	}
-	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
+	return e.runWithSSHTransportRecovery(ctx, func() error {
+		sshArgs, err := e.SSHArgs(ctx)
+		if err != nil {
+			return err
+		}
+		return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
+	})
 }
 
 var _ FlowBranchBackupSyncer = (*ModalEnv)(nil)
@@ -1021,11 +1029,13 @@ func (e *ModalEnv) SyncFlowBranchToLocal(ctx context.Context, branch string) err
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync flow branch to local: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.SSHArgs(ctx)
-	if err != nil {
-		return err
-	}
-	return syncFlowBranchToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	return e.runWithSSHTransportRecovery(ctx, func() error {
+		sshArgs, err := e.SSHArgs(ctx)
+		if err != nil {
+			return err
+		}
+		return syncFlowBranchToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	})
 }
 
 var _ TargetBranchSyncer = (*ModalEnv)(nil)
@@ -1034,9 +1044,11 @@ func (e *ModalEnv) SyncBranchToRemote(ctx context.Context, branch string) error 
 	if e.LocalRepoDir == "" {
 		return fmt.Errorf("cannot sync branch to remote: ModalEnv has no LocalRepoDir")
 	}
-	sshArgs, err := e.SSHArgs(ctx)
-	if err != nil {
-		return err
-	}
-	return syncBranchToRemoteOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	return e.runWithSSHTransportRecovery(ctx, func() error {
+		sshArgs, err := e.SSHArgs(ctx)
+		if err != nil {
+			return err
+		}
+		return syncBranchToRemoteOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+	})
 }
