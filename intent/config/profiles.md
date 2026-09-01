@@ -84,12 +84,6 @@ intent_links:
       - frontend/src/components/LlmConfigEditor.vue
       - frontend/src/components/EmbeddingConfigEditor.vue
       - frontend/src/components/__tests__/WorkspaceForm.spec.ts
-      - cli/workspace_profile.go:resolveWorkspaceProfileId
-      - cli/workspace_profile.go:promptWorkspaceProfileSelection
-      - cli/workspace_profile_test.go
-      - cli/init_command.go:handleInitCommand
-      - cli/init_command.go:findOrCreateWorkspace
-      - cli/cli_test.go:TestFindOrCreateWorkspaceProfile
 ---
 
 # Profiles
@@ -176,9 +170,14 @@ When creating a workspace via the cli, if multiple profile are configured, then
 the user is asked which profile should be set for that workspace (alternatively,
 `--profile` can be set to the profile id).
 
+### Flows
+
+Flows use the latest workspace-configured profile for all actions that the
+profile may affect, LLM/embedding model inference in particular.
+
 When a workspace's profile is updated, all its in-progress flows recieve a
-signal about this fact. This supports resolving the currently active profile
+signal about this fact. This is required to resolve the currently active profile
 without an additional synchronous query. To enable this, profile resolution
-within flows only use the global state, populated at setup time and on update
-signals,
-the same way LLM model configuration is managed and live-updated.
+within flows only use the global state, populated at setup time and on profile
+change signals, the same way LLM model configuration is managed and live-updated
+in flows.
