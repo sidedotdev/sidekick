@@ -394,8 +394,9 @@ func TestOpenShellToolsIntegration(t *testing.T) {
 }
 
 // modalFixtureSandboxName is the sandbox shared by the dev-package Modal e2e
-// tests, within and across runs.
-const modalFixtureSandboxName = "side-e2e-modal-dev"
+// tests, within and across runs of one checkout. It is namespaced per checkout
+// so parallel worktrees do not restore and terminate each other's fixture.
+var modalFixtureSandboxName = env.E2ESandboxName("side-e2e-modal-dev")
 
 // setupModalSandbox creates or reuses a Modal sandbox for e2e tests, skipping
 // the test when Modal credentials are unavailable. The sandbox is
