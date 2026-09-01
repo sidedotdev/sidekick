@@ -78,29 +78,32 @@ func submitProfileSelectionPrompt(t *testing.T, profiles []common.Profile, keyst
 	return selected, nil
 }
 
-func TestProfileSelectionPromptAcceptsDefaultProfileOnSubmit(t *testing.T) {
+func TestProfileSelectionPromptRequiresExplicitSelection(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		profiles []common.Profile
-		expected []string
+		name       string
+		profiles   []common.Profile
+		keystrokes string
+		expected   []string
 	}{
 		{
-			name: "renamed default profile is selected without toggling",
+			name: "submitting without toggling keeps the prompt open",
 			profiles: []common.Profile{
 				{Id: common.DefaultProfileId, Name: "Personal"},
 				{Id: "work", Name: "Work"},
 			},
-			expected: []string{common.DefaultProfileId},
+			keystrokes: "\r\x1b[Bx\r",
+			expected:   []string{"work"},
 		},
 		{
-			name: "default profile declared with different casing is selected",
+			name: "toggled profile is selected on submit",
 			profiles: []common.Profile{
 				{Id: "Default", Name: "Personal"},
 				{Id: "work", Name: "Work"},
 			},
-			expected: []string{"Default"},
+			keystrokes: "x\r",
+			expected:   []string{"Default"},
 		},
 	}
 
@@ -109,7 +112,7 @@ func TestProfileSelectionPromptAcceptsDefaultProfileOnSubmit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			selected, err := submitProfileSelectionPrompt(t, tc.profiles, "\r")
+			selected, err := submitProfileSelectionPrompt(t, tc.profiles, tc.keystrokes)
 			require.NoError(t, err)
 			assert.Equal(t, tc.expected, selected)
 		})
