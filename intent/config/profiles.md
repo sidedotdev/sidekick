@@ -84,6 +84,12 @@ intent_links:
       - frontend/src/components/LlmConfigEditor.vue
       - frontend/src/components/EmbeddingConfigEditor.vue
       - frontend/src/components/__tests__/WorkspaceForm.spec.ts
+      - cli/workspace_profile.go:resolveWorkspaceProfileId
+      - cli/workspace_profile.go:promptWorkspaceProfileSelection
+      - cli/workspace_profile_test.go
+      - cli/init_command.go:handleInitCommand
+      - cli/init_command.go:findOrCreateWorkspace
+      - cli/cli_test.go:TestFindOrCreateWorkspaceProfile
 ---
 
 # Profiles

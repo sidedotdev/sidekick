@@ -121,13 +121,16 @@ func setupAndRunInteractiveCli(args []string) error {
 			{
 				Name:  "init",
 				Usage: "Initialize Sidekick in the current directory. Must be a root directory or subdirectory within a git repository.",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "profile", Usage: "Profile id to associate the workspace with"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					service, err := sidekick.GetService()
 					if err != nil {
 						return cli.Exit(fmt.Sprintf("Failed to initialize service: %v", err), 1)
 					}
 					handler := NewInitCommandHandler(service)
-					if err := handler.handleInitCommand(); err != nil {
+					if err := handler.handleInitCommand(cmd.String("profile")); err != nil {
 						return cli.Exit(fmt.Sprintf("Initialization failed: %v", err), 1)
 					}
 					fmt.Println("Sidekick initialized successfully.")

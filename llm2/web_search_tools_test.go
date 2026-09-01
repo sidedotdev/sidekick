@@ -56,7 +56,7 @@ func TestAnthropicProviderWebSearchToolEnabled(t *testing.T) {
 	assert.False(t, AnthropicProvider{AnthropicCompatible: true}.webSearchToolEnabled())
 	assert.True(t, AnthropicProvider{
 		AnthropicCompatible: true,
-		BuiltinTools:         []string{"web_search"},
+		BuiltinTools:        []string{"web_search"},
 	}.webSearchToolEnabled())
 }
 
@@ -87,7 +87,7 @@ func TestOpenAIResponsesProviderWebSearchToolEnabled(t *testing.T) {
 	assert.True(t, OpenAIResponsesProvider{}.webSearchToolEnabled())
 	assert.False(t, OpenAIResponsesProvider{BaseURL: "https://proxy.example.com"}.webSearchToolEnabled())
 	assert.True(t, OpenAIResponsesProvider{
-		BaseURL:     "https://proxy.example.com",
+		BaseURL:      "https://proxy.example.com",
 		BuiltinTools: []string{"web_search"},
 	}.webSearchToolEnabled())
 }
@@ -257,11 +257,11 @@ func TestReorderSyntheticGroundingBlocks(t *testing.T) {
 	t.Parallel()
 
 	serverUse := ContentBlock{
-		Type:          ContentBlockTypeBuiltinToolUse,
+		Type:           ContentBlockTypeBuiltinToolUse,
 		BuiltinToolUse: &BuiltinToolUseBlock{Id: "google_ws_1", Name: "web_search"},
 	}
 	serverResult := ContentBlock{
-		Type:             ContentBlockTypeBuiltinToolResult,
+		Type:              ContentBlockTypeBuiltinToolResult,
 		BuiltinToolResult: &BuiltinToolResultBlock{ToolCallId: "google_ws_1", Name: "web_search"},
 	}
 	reasoning := ContentBlock{Type: ContentBlockTypeReasoning, Reasoning: &ReasoningBlock{Text: "thinking"}}

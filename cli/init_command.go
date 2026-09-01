@@ -51,7 +51,7 @@ func NewInitCommandHandler(storage srv.Storage) *InitCommandHandler {
 	}
 }
 
-func (h *InitCommandHandler) handleInitCommand() error {
+func (h *InitCommandHandler) handleInitCommand(requestedProfileId string) error {
 	fmt.Println("Initializing new workspace...")
 
 	baseDir, err := getGitBaseDirectory()
@@ -133,6 +133,20 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	if err != nil {
 		return fmt.Errorf("error retrieving existing workspace: %w", err)
 	}
+
+	// The profile only applies when creating a workspace; existing workspaces
+	// keep their stored profile.
+	profileId := ""
+	if existingWorkspace == nil {
+		profileId, err = resolveWorkspaceProfileId(requestedProfileId)
+		if err != nil {
+			return fmt.Errorf("error resolving workspace profile: %w", err)
+		}
+		if !strings.EqualFold(profileId, common.DefaultProfileId) {
+			fmt.Printf("✔ Workspace profile: %s\n", profileId)
+		}
+	}
+
 	dirName := filepath.Base(baseDir)
 	workspaceName := dirName
 	repoName, err := getRepoName(baseDir)
@@ -144,7 +158,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		workspaceName = selectedWorkspaceName
 	}
 
-	workspace, err := h.findOrCreateWorkspace(ctx, workspaceName, baseDir)
+	workspace, err := h.findOrCreateWorkspace(ctx, workspaceName, baseDir, profileId)
 	if err != nil {
 		return fmt.Errorf("error finding or creating workspace: %w", err)
 	}
@@ -282,7 +296,7 @@ func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspac
 // FIXME make a call to an API instead of directly using a database. this may
 // require running the server locally as a daemon if not already running or
 // configured to be remote
-func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir string) (*domain.Workspace, error) {
+func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir, profileId string) (*domain.Workspace, error) {
 	existingWorkspace, err := h.getWorkspaceByRepoDir(ctx, repoDir)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving workspace by repo dir: %w", err)
@@ -291,10 +305,17 @@ func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspac
 		return existingWorkspace, err
 	}
 
+	// An empty ProfileId already means the default profile, so store the
+	// default that way for consistency with workspaces created elsewhere.
+	if strings.EqualFold(profileId, common.DefaultProfileId) {
+		profileId = ""
+	}
+
 	workspace := domain.Workspace{
 		Name:         workspaceName,
 		Id:           "ws_" + ksuid.New().String(),
 		LocalRepoDir: repoDir,
+		ProfileId:    profileId,
 		Created:      time.Now(),
 		Updated:      time.Now(),
 	}
