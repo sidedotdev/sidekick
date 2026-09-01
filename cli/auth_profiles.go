@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
-	"github.com/erikgeiser/promptkit/selection"
-	"github.com/erikgeiser/promptkit/textinput"
 	"github.com/zalando/go-keyring"
 )
 
@@ -29,24 +27,50 @@ var loadDeclaredProfiles = func() ([]common.Profile, error) {
 // promptProfileSelection asks which profiles a credential applies to.
 // Overridable in tests.
 var promptProfileSelection = func(credentialName string, profiles []common.Profile) ([]string, error) {
+	var selected []string
+	if err := profileSelectionForm(credentialName, profiles, &selected).Run(); err != nil {
+		return nil, fmt.Errorf("profile selection failed: %w", err)
+	}
+	return selected, nil
+}
+
+// profileSelectionForm builds the profile prompt with the default profile
+// checked, since the multi-select only highlights the option under the cursor
+// and would otherwise submit nothing.
+func profileSelectionForm(credentialName string, profiles []common.Profile, selected *[]string) *huh.Form {
 	options := make([]huh.Option[string], 0, len(profiles))
 	for _, profile := range profiles {
 		options = append(options, huh.NewOption(profile.Name, profile.Id))
 	}
+	*selected = profileSelectionDefaults(profiles)
 
-	var selected []string
-	err := huh.NewMultiSelect[string]().
-		Title(fmt.Sprintf("Which profiles should these %s credentials apply to?", credentialName)).
-		Options(options...).
-		Value(&selected).
-		Run()
-	if err != nil {
-		return nil, fmt.Errorf("profile selection failed: %w", err)
+	return huh.NewForm(huh.NewGroup(
+		huh.NewMultiSelect[string]().
+			Title(fmt.Sprintf("Which profiles should these %s credentials apply to?", credentialName)).
+			Options(options...).
+			Validate(func(selection []string) error {
+				return validateProfileSelection(credentialName, selection)
+			}).
+			Value(selected),
+	))
+}
+
+// profileSelectionDefaults returns the initially checked profile ids, taken
+// from the declarations so they match their option values regardless of casing.
+func profileSelectionDefaults(profiles []common.Profile) []string {
+	for _, profile := range profiles {
+		if strings.EqualFold(common.NormalizeProfileId(profile.Id), common.DefaultProfileId) {
+			return []string{profile.Id}
+		}
 	}
-	if len(selected) == 0 {
-		return nil, fmt.Errorf("no profile selected for %s credentials", credentialName)
+	return nil
+}
+
+func validateProfileSelection(credentialName string, profileIds []string) error {
+	if len(profileIds) == 0 {
+		return fmt.Errorf("no profile selected for %s credentials", credentialName)
 	}
-	return selected, nil
+	return nil
 }
 
 // confirmOverwriteExisting asks whether credentials already stored for the
@@ -54,11 +78,10 @@ var promptProfileSelection = func(credentialName string, profiles []common.Profi
 var confirmOverwriteExisting = func(subject string, profileIds []string) (bool, error) {
 	describedSubject := describeCredentialForProfiles(subject, profileIds)
 	keepChoice := fmt.Sprintf("Keep existing %s", subject)
-	overwriteSelection := selection.New(
+	choice, err := selectOption(
 		fmt.Sprintf("An existing %s was found. What would you like to do?", describedSubject),
 		[]string{keepChoice, fmt.Sprintf("Overwrite with new %s", subject)},
 	)
-	choice, err := overwriteSelection.RunPrompt()
 	if err != nil {
 		return false, fmt.Errorf("selection failed: %w", err)
 	}
@@ -74,9 +97,15 @@ func describeCredentialForProfiles(subject string, profileIds []string) string {
 
 // promptAPIKey reads an API key from the user. Overridable in tests.
 var promptAPIKey = func(providerName string) (string, error) {
-	apiKeyInput := textinput.New(fmt.Sprintf("Enter your %s API Key: ", providerName))
-	apiKeyInput.Hidden = true
-	return apiKeyInput.RunPrompt()
+	var apiKey string
+	err := runPrompt(huh.NewInput().
+		Title(fmt.Sprintf("Enter your %s API Key", providerName)).
+		EchoMode(huh.EchoModePassword).
+		Value(&apiKey))
+	if err != nil {
+		return "", err
+	}
+	return apiKey, nil
 }
 
 // selectCredentialProfiles determines the profiles a credential should be

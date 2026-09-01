@@ -26,7 +26,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/huh"
-	"github.com/erikgeiser/promptkit/selection"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
@@ -138,8 +137,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	workspaceName := dirName
 	repoName, err := getRepoName(baseDir)
 	if err == nil && repoName != dirName && existingWorkspace == nil {
-		workspaceNameSelection := selection.New("Which workspace name do you prefer?", []string{dirName, repoName})
-		selectedWorkspaceName, err := workspaceNameSelection.RunPrompt()
+		selectedWorkspaceName, err := selectOption("Which workspace name do you prefer?", []string{dirName, repoName})
 		if err != nil {
 			return fmt.Errorf("workspace name selection failed: %w", err)
 		}
@@ -169,12 +167,11 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		fmt.Println("ℹ Sidekick server is not running")
 
 		startServer := true // default to "Yes"
-		err := huh.NewConfirm().
+		err := runPrompt(huh.NewConfirm().
 			Title("Would you like to start the server now?").
 			Value(&startServer).
 			Affirmative("Yes").
-			Negative("No").
-			Run()
+			Negative("No"))
 
 		if err != nil {
 			return fmt.Errorf("error prompting to start server: %w", err)
@@ -637,12 +634,11 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	// Check if LLM is already configured
 	if len(localConfig.LLM) > 0 {
 		useExisting := true
-		err := huh.NewConfirm().
+		err := runPrompt(huh.NewConfirm().
 			Title("Found existing LLM configuration. Use existing?").
 			Value(&useExisting).
 			Affirmative("Use existing").
-			Negative("Customize").
-			Run()
+			Negative("Customize"))
 		if err != nil {
 			return "", fmt.Errorf("error prompting for LLM configuration: %w", err)
 		}
@@ -682,8 +678,7 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	// Add "Add new provider" option
 	options = append(options, "Add new provider")
 
-	providerSelection := selection.New("Select your LLM provider", options)
-	selected, err := providerSelection.RunPrompt()
+	selected, err := selectOption("Select your LLM provider", options)
 	if err != nil {
 		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
@@ -723,12 +718,11 @@ func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
 	// Check if embedding is already configured
 	if len(localConfig.Embedding) > 0 {
 		useExisting := true
-		err := huh.NewConfirm().
+		err := runPrompt(huh.NewConfirm().
 			Title("Found existing embedding configuration. Use existing?").
 			Value(&useExisting).
 			Affirmative("Use existing").
-			Negative("Customize").
-			Run()
+			Negative("Customize"))
 		if err != nil {
 			return "", fmt.Errorf("error prompting for embedding configuration: %w", err)
 		}
@@ -762,8 +756,7 @@ func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
 	// Add "Add new provider" option
 	options = append(options, "Add new provider")
 
-	providerSelection := selection.New("Select your embedding provider", options)
-	selected, err := providerSelection.RunPrompt()
+	selected, err := selectOption("Select your embedding provider", options)
 	if err != nil {
 		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
@@ -777,8 +770,7 @@ func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
 
 func selectAndAuthEmbeddingProvider() (string, error) {
 	embeddingOptions := []string{"OpenAI", "Google"}
-	providerSelection := selection.New("Select embedding provider to configure", embeddingOptions)
-	selected, err := providerSelection.RunPrompt()
+	selected, err := selectOption("Select embedding provider to configure", embeddingOptions)
 	if err != nil {
 		return "", fmt.Errorf("provider selection failed: %w", err)
 	}

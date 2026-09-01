@@ -3,10 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"sidekick/common"
 	"sidekick/llm"
 	"sidekick/openai_oauth"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +61,65 @@ func stubDefaultProfileOnly(t *testing.T) {
 	loadDeclaredProfiles = func() ([]common.Profile, error) {
 		return []common.Profile{{Id: common.DefaultProfileId, Name: common.DefaultProfileName}}, nil
 	}
+}
+
+func submitProfileSelectionPrompt(t *testing.T, profiles []common.Profile, keystrokes string) ([]string, error) {
+	t.Helper()
+
+	var selected []string
+	err := profileSelectionForm("Anthropic", profiles, &selected).
+		WithInput(strings.NewReader(keystrokes)).
+		WithOutput(io.Discard).
+		WithTimeout(5 * time.Second).
+		Run()
+	if err != nil {
+		return nil, err
+	}
+	return selected, nil
+}
+
+func TestProfileSelectionPromptAcceptsDefaultProfileOnSubmit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		profiles []common.Profile
+		expected []string
+	}{
+		{
+			name: "renamed default profile is selected without toggling",
+			profiles: []common.Profile{
+				{Id: common.DefaultProfileId, Name: "Personal"},
+				{Id: "work", Name: "Work"},
+			},
+			expected: []string{common.DefaultProfileId},
+		},
+		{
+			name: "default profile declared with different casing is selected",
+			profiles: []common.Profile{
+				{Id: "Default", Name: "Personal"},
+				{Id: "work", Name: "Work"},
+			},
+			expected: []string{"Default"},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			selected, err := submitProfileSelectionPrompt(t, tc.profiles, "\r")
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, selected)
+		})
+	}
+}
+
+func TestProfileSelectionPromptRejectsEmptySelection(t *testing.T) {
+	t.Parallel()
+
+	assert.ErrorContains(t, validateProfileSelection("Anthropic", nil), "no profile selected for Anthropic credentials")
 }
 
 func TestHandleManualAPIKeyAuthStoresKeyPerSelectedProfile(t *testing.T) {

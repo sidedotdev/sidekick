@@ -11,8 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/erikgeiser/promptkit/selection"
-	"github.com/erikgeiser/promptkit/textinput"
+	"github.com/charmbracelet/huh"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/oauth2"
 )
@@ -59,8 +58,7 @@ func NewAuthCommand() *cli.Command {
 }
 
 func handleAuthCommand() error {
-	providerSelection := selection.New("Select your LLM API provider", []string{"OpenAI", "Google", "Anthropic"})
-	provider, err := providerSelection.RunPrompt()
+	provider, err := selectOption("Select your LLM API provider", []string{"OpenAI", "Google", "Anthropic"})
 	if err != nil {
 		return fmt.Errorf("provider selection failed: %w", err)
 	}
@@ -78,11 +76,10 @@ func handleAuthCommand() error {
 }
 
 func handleOpenAIAuth() error {
-	methodSelection := selection.New("Select authentication method", []string{
+	method, err := selectOption("Select authentication method", []string{
 		"ChatGPT/Codex subscription (OAuth)",
 		"Manually enter API Key",
 	})
-	method, err := methodSelection.RunPrompt()
 	if err != nil {
 		return fmt.Errorf("authentication method selection failed: %w", err)
 	}
@@ -102,12 +99,11 @@ func handleGoogleAuth() error {
 }
 
 func handleAnthropicAuth() error {
-	methodSelection := selection.New("Select authentication method", []string{
+	method, err := selectOption("Select authentication method", []string{
 		"Claude Pro/Max (OAuth subscription)",
 		"Create an API Key (OAuth)",
 		"Manually enter API Key",
 	})
-	method, err := methodSelection.RunPrompt()
 	if err != nil {
 		return fmt.Errorf("authentication method selection failed: %w", err)
 	}
@@ -219,9 +215,10 @@ func performOAuthFlow(authBaseURL string) (*oauthTokenResponse, error) {
 		fmt.Printf("Warning: Could not open browser automatically: %v\n", err)
 	}
 
-	codeInput := textinput.New("Paste the authorization code from the callback page: ")
-	codeWithState, err := codeInput.RunPrompt()
-	if err != nil {
+	var codeWithState string
+	if err := runPrompt(huh.NewInput().
+		Title("Paste the authorization code from the callback page").
+		Value(&codeWithState)); err != nil {
 		return nil, fmt.Errorf("failed to get authorization code: %w", err)
 	}
 
