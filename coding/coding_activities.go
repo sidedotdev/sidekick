@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	tree_sitter_lib "github.com/tree-sitter/go-tree-sitter"
 )
@@ -1044,27 +1045,21 @@ func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, e
 			continue
 		}
 
+		// Nothing may be inlined unless the language server pointed at the
+		// requested symbol itself: a location naming another token, or a range
+		// too broad to name anything, resolves to something the caller did not
+		// ask for.
+		if !lspRangeNamesSymbol(defBytes, loc.Location.Range, resolvedSymbolName) {
+			continue
+		}
+
 		resolvedLang := utils.InferLanguageNameFromFilePath(absPath)
 		blocks, _ := tree_sitter.GetSymbolDefinitionsFromBytes(resolvedLang, defBytes, resolvedSymbolName, numContextLines)
 		if len(blocks) == 0 && resolvedSymbolName != symbol {
 			blocks, _ = tree_sitter.GetSymbolDefinitionsFromBytes(resolvedLang, defBytes, symbol, numContextLines)
 		}
-		// When the resolved file contains multiple same-named definitions
-		// (e.g. a free function and a method with the same selector), keep
-		// only blocks whose range contains the LSP-pointed definition row.
-		if len(blocks) > 1 {
-			locStartRow := uint(loc.Location.Range.Start.Line)
-			locEndRow := uint(loc.Location.Range.End.Line)
-			filtered := blocks[:0]
-			for _, b := range blocks {
-				if b.Range.StartPoint.Row <= locStartRow && b.Range.EndPoint.Row >= locEndRow {
-					filtered = append(filtered, b)
-				}
-			}
-			if len(filtered) > 0 {
-				blocks = filtered
-			}
-		}
+		blocks = blocksDefiningLSPSymbol(blocks, defBytes, loc.Location.Range)
+
 		if len(blocks) == 0 {
 			blocks = tree_sitter.ExpandContextLines(
 				[]tree_sitter.SourceBlock{sourceBlockFromLSPRange(defBytes, loc.Location.Range)},
@@ -1089,6 +1084,94 @@ func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, e
 		}
 	}
 	return out
+}
+
+// blocksDefiningLSPSymbol keeps only the blocks whose defined name is the very
+// token a language server pointed at. Row overlap alone is not enough: an
+// unrelated token sharing a line, or nested within a same-named definition,
+// must not authorize inlining that definition.
+func blocksDefiningLSPSymbol(blocks []tree_sitter.SourceBlock, source []byte, r lsp.Range) []tree_sitter.SourceBlock {
+	startByte, endByte, ok := lspRangeByteSpan(source, r)
+	if !ok {
+		return nil
+	}
+
+	var matching []tree_sitter.SourceBlock
+	for _, block := range blocks {
+		nameStartByte, nameEndByte, hasName := blockNameSpan(block)
+		if !hasName {
+			continue
+		}
+		if startByte < nameEndByte && endByte > nameStartByte {
+			matching = append(matching, block)
+		}
+	}
+	return matching
+}
+
+func blockNameSpan(block tree_sitter.SourceBlock) (startByte, endByte uint, ok bool) {
+	if block.NameRange == nil || block.NameRange.EndByte <= block.NameRange.StartByte {
+		return 0, 0, false
+	}
+	return block.NameRange.StartByte, block.NameRange.EndByte, true
+}
+
+// lspRangeNamesSymbol reports whether the exact source text an LSP location
+// covers is the requested symbol name, rather than merely sharing a line with
+// it.
+func lspRangeNamesSymbol(source []byte, r lsp.Range, symbolName string) bool {
+	startByte, endByte, ok := lspRangeByteSpan(source, r)
+	if !ok || startByte == endByte {
+		return false
+	}
+	return strings.TrimSpace(string(source[startByte:endByte])) == symbolName
+}
+
+func lspRangeByteSpan(source []byte, r lsp.Range) (startByte, endByte uint, ok bool) {
+	startByte, ok = lspPositionByteOffset(source, r.Start)
+	if !ok {
+		return 0, 0, false
+	}
+	endByte, ok = lspPositionByteOffset(source, r.End)
+	if !ok || endByte < startByte {
+		return 0, 0, false
+	}
+	return startByte, endByte, true
+}
+
+// lspPositionByteOffset converts an LSP position, whose character offset is
+// counted in UTF-16 code units, into a byte offset within source.
+func lspPositionByteOffset(source []byte, position lsp.Position) (uint, bool) {
+	if position.Line < 0 || position.Character < 0 {
+		return 0, false
+	}
+
+	lineStart := 0
+	for line := 0; line < position.Line; line++ {
+		newlineIndex := bytes.IndexByte(source[lineStart:], '\n')
+		if newlineIndex < 0 {
+			return 0, false
+		}
+		lineStart += newlineIndex + 1
+	}
+	lineEnd := len(source)
+	if newlineIndex := bytes.IndexByte(source[lineStart:], '\n'); newlineIndex >= 0 {
+		lineEnd = lineStart + newlineIndex
+	}
+
+	units := 0
+	for offset := lineStart; offset < lineEnd; {
+		if units >= position.Character {
+			return uint(offset), true
+		}
+		r, size := utf8.DecodeRune(source[offset:lineEnd])
+		units++
+		if r > 0xFFFF {
+			units++
+		}
+		offset += size
+	}
+	return uint(lineEnd), true
 }
 
 // sourceBlockFromLSPRange builds a SourceBlock spanning the line range of an

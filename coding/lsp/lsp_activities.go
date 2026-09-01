@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sidekick/coding/tree_sitter"
 	"sidekick/env"
 	"sidekick/utils"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // TODO /gen create an integration test for all methods of LSPActivities, using
@@ -95,7 +97,7 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 
 	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
 	for _, symbol := range request.Symbols {
-		positions := findAllSymbolPositions(fileBytes, lineRange, symbol)
+		positions := findSymbolOccurrencePositions(fileBytes, lineRange, symbol, langName)
 		if len(positions) == 0 {
 			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
 				Symbol: symbol,
@@ -134,6 +136,58 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 	}
 
 	return symbolDefinitions, nil
+}
+
+// findSymbolOccurrencePositions returns the positions to use for
+// go-to-definition requests for symbolText within data. Where the language has
+// a grammar, only whole syntax tokens naming the symbol are returned: a
+// language server resolves the entire token enclosing the requested position,
+// so a substring match (eg "run" inside "runtime", or inside a comment or
+// string literal) would otherwise yield definitions of an unrelated symbol.
+// Languages without a grammar fall back to a plain text scan.
+func findSymbolOccurrencePositions(data []byte, fileRange *Range, symbolText, langName string) []Position {
+	occurrences, err := tree_sitter.FindSymbolOccurrences(langName, data, symbolText)
+	if err != nil {
+		return findAllSymbolPositions(data, fileRange, symbolText)
+	}
+
+	var positions []Position
+	for _, occurrence := range occurrences {
+		line := int(occurrence.EndPoint.Row)
+		if fileRange != nil && (line < fileRange.Start.Line || line > fileRange.End.Line) {
+			continue
+		}
+		positions = append(positions, Position{
+			Line:      line,
+			Character: lastCharacterOffset(data, occurrence),
+		})
+	}
+	return positions
+}
+
+// lastCharacterOffset returns the LSP character offset of the final character
+// of an occurrence, ie its offset in UTF-16 code units from the line start.
+func lastCharacterOffset(data []byte, occurrence tree_sitter.SymbolOccurrence) int {
+	lineStartByte := occurrence.EndByte - uint(occurrence.EndPoint.Column)
+	_, lastRuneSize := utf8.DecodeLastRune(data[occurrence.StartByte:occurrence.EndByte])
+	lastCharByte := occurrence.EndByte - uint(lastRuneSize)
+	if lastCharByte < lineStartByte {
+		lastCharByte = lineStartByte
+	}
+	return utf16Len(data[lineStartByte:lastCharByte])
+}
+
+// utf16Len returns the number of UTF-16 code units encoding data, which is the
+// character offset unit used by LSP positions.
+func utf16Len(data []byte) int {
+	count := 0
+	for _, r := range string(data) {
+		count++
+		if r > 0xFFFF {
+			count++
+		}
+	}
+	return count
 }
 
 // findAllSymbolPositions returns the position of every occurrence of
