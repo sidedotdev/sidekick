@@ -33,14 +33,14 @@ type Usage struct {
 type ContentBlockType string
 
 const (
-	ContentBlockTypeText             ContentBlockType = "text"
-	ContentBlockTypeImage            ContentBlockType = "image"
-	ContentBlockTypeFile             ContentBlockType = "file"
-	ContentBlockTypeToolUse          ContentBlockType = "tool_use"
-	ContentBlockTypeToolResult       ContentBlockType = "tool_result"
-	ContentBlockTypeRefusal          ContentBlockType = "refusal"
-	ContentBlockTypeReasoning        ContentBlockType = "reasoning"
-	ContentBlockTypeMcpCall          ContentBlockType = "mcp_call"
+	ContentBlockTypeText              ContentBlockType = "text"
+	ContentBlockTypeImage             ContentBlockType = "image"
+	ContentBlockTypeFile              ContentBlockType = "file"
+	ContentBlockTypeToolUse           ContentBlockType = "tool_use"
+	ContentBlockTypeToolResult        ContentBlockType = "tool_result"
+	ContentBlockTypeRefusal           ContentBlockType = "refusal"
+	ContentBlockTypeReasoning         ContentBlockType = "reasoning"
+	ContentBlockTypeMcpCall           ContentBlockType = "mcp_call"
 	ContentBlockTypeBuiltinToolUse    ContentBlockType = "builtin_tool_use"
 	ContentBlockTypeBuiltinToolResult ContentBlockType = "builtin_tool_result"
 )
@@ -141,19 +141,19 @@ func TextContentBlocks(text string) []ContentBlock {
 
 // A single content block within a message turn.
 type ContentBlock struct {
-	Id           string           `json:"id"`
-	Type         ContentBlockType `json:"type"`
-	Text         string           `json:"text,omitempty"`
-	Image        *ImageRef        `json:"image,omitempty"`
-	File         *FileRef         `json:"file,omitempty"`
-	ToolUse          *ToolUseBlock          `json:"toolUse,omitempty"`
-	ToolResult       *ToolResultBlock       `json:"toolResult,omitempty"`
-	Refusal          *RefusalBlock          `json:"refusal,omitempty"`
-	Reasoning        *ReasoningBlock        `json:"reasoning,omitempty"`
-	McpCall          *McpCallBlock          `json:"mcpCall,omitempty"`
+	Id                string                  `json:"id"`
+	Type              ContentBlockType        `json:"type"`
+	Text              string                  `json:"text,omitempty"`
+	Image             *ImageRef               `json:"image,omitempty"`
+	File              *FileRef                `json:"file,omitempty"`
+	ToolUse           *ToolUseBlock           `json:"toolUse,omitempty"`
+	ToolResult        *ToolResultBlock        `json:"toolResult,omitempty"`
+	Refusal           *RefusalBlock           `json:"refusal,omitempty"`
+	Reasoning         *ReasoningBlock         `json:"reasoning,omitempty"`
+	McpCall           *McpCallBlock           `json:"mcpCall,omitempty"`
 	BuiltinToolUse    *BuiltinToolUseBlock    `json:"builtinToolUse,omitempty"`
 	BuiltinToolResult *BuiltinToolResultBlock `json:"builtinToolResult,omitempty"`
-	CacheControl     string                 `json:"cacheControl,omitempty"`
+	CacheControl      string                  `json:"cacheControl,omitempty"`
 	// Signature is a provider-specific opaque token (e.g., Google's ThoughtSignature)
 	// that must be preserved and returned verbatim in subsequent turns.
 	Signature []byte `json:"signature,omitempty"`

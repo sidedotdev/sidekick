@@ -11,8 +11,8 @@ import (
 // different provider (cross-provider conversion).
 const (
 	anthropicBuiltinToolIdPrefix = "srvtoolu_"
-	openaiWebSearchCallIdPrefix = "ws_"
-	googleWebSearchCallIdPrefix = "google_ws_"
+	openaiWebSearchCallIdPrefix  = "ws_"
+	googleWebSearchCallIdPrefix  = "google_ws_"
 )
 
 // webSearchToolName is the normalized builtin tool name used across providers.

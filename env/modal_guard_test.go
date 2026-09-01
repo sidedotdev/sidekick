@@ -87,7 +87,7 @@ func TestModalGuardSnapshotStateIsDurable(t *testing.T) {
 		"snapshot records must not live in a Dict: entries expire after a week")
 	assert.Contains(t, modalGuardAppSource, "modal.Volume.from_name(SNAPSHOT_VOLUME_NAME, create_if_missing=True)")
 	assert.Contains(t, modalGuardAppSource, "volumes={SNAPSHOT_DIR: snapshots}")
-	assert.Contains(t, modalGuardAppSource, "sb.snapshot_filesystem(ttl=None)",
+	assert.Contains(t, modalGuardAppSource, "sb.snapshot_filesystem(SNAPSHOT_TIMEOUT_SECONDS, ttl=None)",
 		"snapshot images must be retained indefinitely; the 30-day default expires while flows idle")
 	assert.Contains(t, modalGuardAppSource, "snapshots.commit()")
 	assert.Contains(t, modalGuardAppSource, "snapshots.reload()")
@@ -187,9 +187,9 @@ func TestModalGuardEmbeds(t *testing.T) {
 	assert.Contains(t, modalWatchdogScript, `snapshot_failures=0`)
 	assert.NotContains(t, modalWatchdogScript, "if guard_post snapshot; then\n        failures=0")
 	assert.Contains(t, modalWatchdogScript, `terminate_failures=$((terminate_failures + 1))`)
-	assert.Contains(t, modalWatchdogScript, `guard $phase request starting (attempt $attempt of 20)`)
-	assert.Contains(t, modalWatchdogScript, `guard $phase request succeeded (attempt $attempt of 20)`)
-	assert.Contains(t, modalWatchdogScript, `guard $phase request failed (attempt $attempt of 20)`)
+	assert.Contains(t, modalWatchdogScript, `guard $phase request starting (attempt $attempt)`)
+	assert.Contains(t, modalWatchdogScript, `guard $phase request succeeded (attempt $attempt)`)
+	assert.Contains(t, modalWatchdogScript, `guard $phase request failed (attempt $attempt)`)
 	// Active snapshots: periodic busy-time checkpoints go through the guard's
 	// snapshot phase only (never terminate), gated on the shared
 	// last-snapshot timestamp and the minimum gap between guard attempts, and
@@ -201,6 +201,38 @@ func TestModalGuardEmbeds(t *testing.T) {
 	assert.Contains(t, modalWatchdogScript, `-> active snapshot`)
 	assert.Contains(t, modalWatchdogScript, "if guard_post snapshot; then\n        last_snapshot=$(date +%s)\n    else")
 	assert.Contains(t, modalWatchdogScript, `active snapshot failed; retrying on a later poll`)
+}
+
+// TestModalGuardSnapshotTimeoutContract pins the snapshot deadline chain.
+// Filesystem snapshots of populated sandboxes routinely exceed the Modal SDK's
+// default 55s RPC deadline, which made every snapshot attempt fail and the
+// watchdog eventually kill such sandboxes without a restorable record. The
+// guard must pass an explicit longer deadline (bounded by Modal's ~150s web
+// endpoint request cap), and the sandbox-side curl must outlive the endpoint
+// so a slow-but-succeeding snapshot is never abandoned mid-flight.
+func TestModalGuardSnapshotTimeoutContract(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, modalGuardAppSource, "SNAPSHOT_TIMEOUT_SECONDS = 140")
+	assert.Contains(t, modalGuardAppSource, "sb.snapshot_filesystem(SNAPSHOT_TIMEOUT_SECONDS, ttl=None)",
+		"the snapshot RPC must get the explicit deadline, not the SDK's 55s default")
+	assert.Contains(t, modalSnapshotScript, `snapshot) curl_timeout=170 ;;`,
+		"the sandbox-side curl cutoff must exceed the guard's snapshot deadline")
+	assert.Contains(t, modalSnapshotScript, `curl -sS -m "$curl_timeout"`)
+}
+
+// TestModalWatchdogNeverKillsUnsnapshotted pins the escalation policy: the
+// watchdog may end the sandbox itself only in the terminate phase, when this
+// cycle's snapshot has already succeeded. Persistent snapshot failures must
+// keep retrying (at a slower cadence) instead, because terminating without a
+// fresh snapshot permanently loses any work since the last one.
+func TestModalWatchdogNeverKillsUnsnapshotted(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 1, strings.Count(modalWatchdogScript, "kill 1"),
+		"self-termination must exist only in the terminate-phase escalation")
+	assert.Contains(t, modalWatchdogScript, "guard terminate unreachable after $failures attempts: terminating sandbox")
+	assert.Contains(t, modalWatchdogScript, "guard snapshot still failing after $failures attempts; retrying at a slower cadence")
 }
 
 func TestModalIdleSeconds(t *testing.T) {

@@ -344,7 +344,7 @@ require (
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/net v0.55.0
 	golang.org/x/oauth2 v0.34.0
-	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/text v0.38.0

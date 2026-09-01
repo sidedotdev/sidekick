@@ -912,8 +912,10 @@ type envReadCache struct {
 	entries map[string]*envReadCacheEntry
 }
 
+// envReadCacheEntry represents one in-flight or completed read; done is closed
+// once fileBytes/err are set.
 type envReadCacheEntry struct {
-	once      sync.Once
+	done      chan struct{}
 	fileBytes []byte
 	err       error
 }
@@ -924,17 +926,46 @@ func newEnvReadCache(e env.Env) *envReadCache {
 
 func (c *envReadCache) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	key := c.cacheKey(path)
-	c.mu.Lock()
-	entry, ok := c.entries[key]
-	if !ok {
-		entry = &envReadCacheEntry{}
-		c.entries[key] = entry
+	for {
+		c.mu.Lock()
+		entry, ok := c.entries[key]
+		if !ok {
+			entry = &envReadCacheEntry{done: make(chan struct{})}
+			c.entries[key] = entry
+			c.mu.Unlock()
+
+			fileBytes, err := c.Env.ReadFile(ctx, path)
+			if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				// A canceled read answers nothing about the file; drop the
+				// entry before publishing so a caller with a live context
+				// retries instead of inheriting this failure.
+				c.mu.Lock()
+				delete(c.entries, key)
+				c.mu.Unlock()
+				entry.err = err
+				close(entry.done)
+				return nil, err
+			}
+			entry.fileBytes, entry.err = fileBytes, err
+			close(entry.done)
+			return fileBytes, err
+		}
+		c.mu.Unlock()
+
+		select {
+		case <-entry.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		c.mu.Lock()
+		authoritative := c.entries[key] == entry
+		c.mu.Unlock()
+		if authoritative {
+			return entry.fileBytes, entry.err
+		}
+		// The owning read was canceled; retry under our own context.
 	}
-	c.mu.Unlock()
-	entry.once.Do(func() {
-		entry.fileBytes, entry.err = c.Env.ReadFile(ctx, path)
-	})
-	return entry.fileBytes, entry.err
 }
 
 // cacheKey resolves relative paths against the working directory so relative
@@ -1010,6 +1041,7 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(ctx context.Context, envCo
 					EnvContainer:         envContainer,
 					SymbolRange:          &symbolNameRange,
 					PreloadedFileContent: fileBytes,
+					ReadFile:             readCache.ReadFile,
 				})
 				if relatedErr == nil {
 					result.RelatedSymbols = related

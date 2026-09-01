@@ -9,8 +9,10 @@ import (
 	"sidekick/env"
 	"sidekick/utils"
 	"slices"
+	"sync"
 
 	tree_sitter_lib "github.com/tree-sitter/go-tree-sitter"
+	"golang.org/x/sync/errgroup"
 )
 
 type RelatedSymbolsActivityInput struct {
@@ -23,6 +25,12 @@ type RelatedSymbolsActivityInput struct {
 	// content instead of reading it from the environment. It is intentionally
 	// not serialized: activity invocations always read from the env.
 	PreloadedFileContent []byte `json:"-"`
+
+	// ReadFile, when non-nil, replaces EnvContainer.Env.ReadFile for loading
+	// files that reference the symbol, so callers can coalesce duplicate reads
+	// across lookups. It is intentionally not serialized: activity invocations
+	// always read from the env.
+	ReadFile func(ctx context.Context, path string) ([]byte, error) `json:"-"`
 }
 
 type RelatedSymbol struct {
@@ -52,54 +60,12 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 		return nil, fmt.Errorf("failed to find references: %w", err)
 	}
 
-	// Memoization map for file symbols and signatures
-	memoMap := make(map[string]struct {
-		symbols    []tree_sitter.Symbol
-		signatures []tree_sitter.Signature
-	})
-
 	var relatedSymbols []RelatedSymbol
 	rootUri := input.EnvContainer.Env.GetWorkingDirectory()
-	subjectAbsPath := env.EnvClean(input.EnvContainer.Env, rootUri+env.EnvSeparator(input.EnvContainer.Env)+input.RelativeFilePath)
 
-	for _, reference := range references {
-		// Convert URI to absolute file path
-		parsedUrl, err := url.Parse(reference.URI)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse reference URI %s: %w", reference.URI, err)
-		}
-		filePath := parsedUrl.Path
-
-		// Memoize file symbols and signatures
-		if _, ok := memoMap[filePath]; !ok {
-			fileBytes := input.PreloadedFileContent
-			if fileBytes == nil || filePath != subjectAbsPath {
-				var readErr error
-				fileBytes, readErr = input.EnvContainer.Env.ReadFile(ctx, filePath)
-				if readErr != nil {
-					return nil, fmt.Errorf("failed to read file %s: %w", filePath, readErr)
-				}
-			}
-			langName := utils.InferLanguageNameFromFilePath(filePath)
-
-			symbols, err := tree_sitter.GetFileSymbolsFromBytes(filePath, langName, fileBytes)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get file symbols for %s: %w", filePath, err)
-			}
-
-			signatures, err := tree_sitter.GetFileSignaturesFromBytes(langName, fileBytes)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get file signatures for %s: %w", filePath, err)
-			}
-
-			memoMap[filePath] = struct {
-				symbols    []tree_sitter.Symbol
-				signatures []tree_sitter.Signature
-			}{
-				symbols:    symbols,
-				signatures: signatures,
-			}
-		}
+	parsedFiles, err := loadReferencingFiles(ctx, input, references)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, reference := range references {
@@ -109,7 +75,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 		}
 		filePath := parsedUrl.Path
 
-		symbols := memoMap[filePath].symbols
+		symbols := parsedFiles[filePath].symbols
 		for _, symbol := range symbols {
 			symbolRange := tree_sitter_lib.Range{
 				StartPoint: symbol.Declaration.StartPoint,
@@ -129,7 +95,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 			if RangesOverlap(symbolRange, referenceRange) {
 				var signature tree_sitter.Signature
 				var signatureRange tree_sitter_lib.Range
-				for _, sig := range memoMap[filePath].signatures {
+				for _, sig := range parsedFiles[filePath].signatures {
 					sigRange := tree_sitter_lib.Range{
 						StartPoint: sig.StartPoint,
 						EndPoint:   sig.EndPoint,
@@ -166,6 +132,84 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 	}
 
 	return relatedSymbols, nil
+}
+
+// parsedReferenceFile holds the tree-sitter view of one file that references
+// the subject symbol.
+type parsedReferenceFile struct {
+	symbols    []tree_sitter.Symbol
+	signatures []tree_sitter.Signature
+}
+
+// maxConcurrentReferenceFileLoads bounds parallel reads of files referencing a
+// symbol: widely used symbols are referenced from dozens of files, and remote
+// envs pay several network round trips per read, so loading serially is
+// prohibitively slow.
+const maxConcurrentReferenceFileLoads = 15
+
+// loadReferencingFiles reads and parses each distinct file the references
+// point into, concurrently up to maxConcurrentReferenceFileLoads, keyed by
+// absolute file path. The first failure cancels the remaining loads.
+func loadReferencingFiles(ctx context.Context, input RelatedSymbolsActivityInput, references []lsp.Location) (map[string]parsedReferenceFile, error) {
+	readFile := input.ReadFile
+	if readFile == nil {
+		readFile = input.EnvContainer.Env.ReadFile
+	}
+	rootUri := input.EnvContainer.Env.GetWorkingDirectory()
+	subjectAbsPath := env.EnvClean(input.EnvContainer.Env, rootUri+env.EnvSeparator(input.EnvContainer.Env)+input.RelativeFilePath)
+
+	seen := make(map[string]bool, len(references))
+	var uniquePaths []string
+	for _, reference := range references {
+		parsedUrl, err := url.Parse(reference.URI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse reference URI %s: %w", reference.URI, err)
+		}
+		if filePath := parsedUrl.Path; !seen[filePath] {
+			seen[filePath] = true
+			uniquePaths = append(uniquePaths, filePath)
+		}
+	}
+
+	parsedFiles := make(map[string]parsedReferenceFile, len(uniquePaths))
+	var mu sync.Mutex
+	g, groupCtx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentReferenceFileLoads)
+	for _, filePath := range uniquePaths {
+		g.Go(func() error {
+			if err := groupCtx.Err(); err != nil {
+				return err
+			}
+			fileBytes := input.PreloadedFileContent
+			if fileBytes == nil || filePath != subjectAbsPath {
+				var readErr error
+				fileBytes, readErr = readFile(groupCtx, filePath)
+				if readErr != nil {
+					return fmt.Errorf("failed to read file %s: %w", filePath, readErr)
+				}
+			}
+			langName := utils.InferLanguageNameFromFilePath(filePath)
+
+			symbols, err := tree_sitter.GetFileSymbolsFromBytes(filePath, langName, fileBytes)
+			if err != nil {
+				return fmt.Errorf("failed to get file symbols for %s: %w", filePath, err)
+			}
+
+			signatures, err := tree_sitter.GetFileSignaturesFromBytes(langName, fileBytes)
+			if err != nil {
+				return fmt.Errorf("failed to get file signatures for %s: %w", filePath, err)
+			}
+
+			mu.Lock()
+			parsedFiles[filePath] = parsedReferenceFile{symbols: symbols, signatures: signatures}
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return parsedFiles, nil
 }
 
 func RangesOverlap(r1, r2 tree_sitter_lib.Range) bool {

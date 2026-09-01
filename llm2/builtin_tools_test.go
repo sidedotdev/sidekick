@@ -143,7 +143,7 @@ func TestConvertForeignBuiltinToolBlocks(t *testing.T) {
 			Role: RoleAssistant,
 			Content: []ContentBlock{
 				{
-					Type:          ContentBlockTypeBuiltinToolUse,
+					Type:           ContentBlockTypeBuiltinToolUse,
 					BuiltinToolUse: &BuiltinToolUseBlock{Id: "srvtoolu_err", Name: "web_search"},
 				},
 				{
@@ -199,19 +199,19 @@ func TestIsNativeBuiltinToolBlockPredicates(t *testing.T) {
 	t.Parallel()
 
 	anthropicUse := ContentBlock{
-		Type:          ContentBlockTypeBuiltinToolUse,
+		Type:           ContentBlockTypeBuiltinToolUse,
 		BuiltinToolUse: &BuiltinToolUseBlock{Id: "srvtoolu_1"},
 	}
 	openaiUse := ContentBlock{
-		Type:          ContentBlockTypeBuiltinToolUse,
+		Type:           ContentBlockTypeBuiltinToolUse,
 		BuiltinToolUse: &BuiltinToolUseBlock{Id: "ws_1"},
 	}
 	googleUse := ContentBlock{
-		Type:          ContentBlockTypeBuiltinToolUse,
+		Type:           ContentBlockTypeBuiltinToolUse,
 		BuiltinToolUse: &BuiltinToolUseBlock{Id: "google_ws_1"},
 	}
 	anthropicResult := ContentBlock{
-		Type:             ContentBlockTypeBuiltinToolResult,
+		Type:              ContentBlockTypeBuiltinToolResult,
 		BuiltinToolResult: &BuiltinToolResultBlock{ToolCallId: "srvtoolu_1"},
 	}
 
