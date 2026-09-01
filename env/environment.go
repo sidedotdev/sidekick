@@ -144,6 +144,29 @@ type sshTransportRecoverer interface {
 	recoverSSHTransport(ctx context.Context, cause error) (bool, error)
 }
 
+// RunWithSSHTransportRecovery retries an operation once when an environment can
+// identify and recover the underlying SSH transport failure. It is intended for
+// operations that must bypass Env.RunCommand and are safe to replay.
+func RunWithSSHTransportRecovery(ctx context.Context, e Env, operation func() error) error {
+	err := operation()
+	if err == nil {
+		return nil
+	}
+
+	recoverer, ok := e.(sshTransportRecoverer)
+	if !ok {
+		return err
+	}
+	recovered, recoveryErr := recoverer.recoverSSHTransport(ctx, err)
+	if recoveryErr != nil {
+		return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+	}
+	if !recovered {
+		return err
+	}
+	return operation()
+}
+
 // nonRecoveringSSHEnv hides an env's sshTransportRecoverer implementation, for
 // callers that own transport recovery themselves and must not have a second
 // recovery nested inside each dial attempt.

@@ -615,11 +615,16 @@ func SyncRepoToRemoteActivity(ctx context.Context, input SyncRepoToRemoteInput) 
 	if !ok {
 		return SyncRepoToRemoteOutput{}, fmt.Errorf("env type %s does not support SSH-based repo sync", input.EnvContainer.Env.GetType())
 	}
-	sshArgs, err := sshEnv.SSHArgs(ctx)
-	if err != nil {
-		return SyncRepoToRemoteOutput{}, fmt.Errorf("failed to get SSH args: %w", err)
-	}
-	remoteRepoDir, err := syncRepoOverSSH(ctx, sshArgs, input.LocalRepoDir, input.RemoteRepoDir, input.Branches)
+
+	var remoteRepoDir string
+	err := RunWithSSHTransportRecovery(ctx, input.EnvContainer.Env, func() error {
+		sshArgs, err := sshEnv.SSHArgs(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get SSH args: %w", err)
+		}
+		remoteRepoDir, err = syncRepoOverSSH(ctx, sshArgs, input.LocalRepoDir, input.RemoteRepoDir, input.Branches)
+		return err
+	})
 	if err != nil {
 		return SyncRepoToRemoteOutput{}, err
 	}
@@ -668,6 +673,20 @@ type DeepenRepoOutput struct {
 	Deepened bool `json:"deepened"`
 }
 
+func runDeepenWithSSHTransportRecovery(
+	ctx context.Context,
+	e Env,
+	operation func() (wasShallow bool, err error),
+) (bool, error) {
+	observedShallow := false
+	err := RunWithSSHTransportRecovery(ctx, e, func() error {
+		wasShallow, err := operation()
+		observedShallow = observedShallow || wasShallow
+		return err
+	})
+	return observedShallow, err
+}
+
 // DeepenRepoActivity backfills complete history into a shallow-seeded
 // remote repo, meant to run in the background once a task is already
 // underway. The fetch adds objects and lifts the shallow boundary but
@@ -680,62 +699,68 @@ func DeepenRepoActivity(ctx context.Context, input DeepenRepoInput) (DeepenRepoO
 	if !ok {
 		return DeepenRepoOutput{}, fmt.Errorf("env type %s does not support SSH-based repo deepening", input.EnvContainer.Env.GetType())
 	}
-	sshArgs, err := sshEnv.SSHArgs(ctx)
-	if err != nil {
-		return DeepenRepoOutput{}, fmt.Errorf("failed to get SSH args: %w", err)
-	}
 
-	quotedRepo := shellQuote(input.RemoteRepoDir)
-	checkArgs := make([]string, len(sshArgs))
-	copy(checkArgs, sshArgs)
-	checkArgs = append(checkArgs, fmt.Sprintf("if [ -f %s/.git/shallow ]; then echo SHALLOW; else echo COMPLETE; fi", quotedRepo))
-	checkOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       checkArgs,
+	deepened, err := runDeepenWithSSHTransportRecovery(ctx, input.EnvContainer.Env, func() (bool, error) {
+		sshArgs, err := sshEnv.SSHArgs(ctx)
+		if err != nil {
+			return false, fmt.Errorf("failed to get SSH args: %w", err)
+		}
+
+		quotedRepo := shellQuote(input.RemoteRepoDir)
+		checkArgs := make([]string, len(sshArgs))
+		copy(checkArgs, sshArgs)
+		checkArgs = append(checkArgs, fmt.Sprintf("if [ -f %s/.git/shallow ]; then echo SHALLOW; else echo COMPLETE; fi", quotedRepo))
+		checkOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+			WorkingDir: os.TempDir(),
+			Command:    "ssh",
+			Args:       checkArgs,
+		})
+		if err != nil {
+			return false, fmt.Errorf("failed to check for shallow remote repo: %w", err)
+		}
+		if checkOutput.ExitStatus != 0 {
+			return false, fmt.Errorf("checking for shallow remote repo failed (exit %d): %s", checkOutput.ExitStatus, checkOutput.Stderr)
+		}
+		if !strings.Contains(checkOutput.Stdout, "SHALLOW") {
+			return false, nil
+		}
+
+		headRef, err := localHeadRef(ctx, input.LocalRepoDir)
+		if err != nil {
+			return true, err
+		}
+		refs := []string{headRef}
+		for _, branch := range input.Branches {
+			ref := branch
+			if !strings.HasPrefix(ref, "refs/") {
+				ref = "refs/heads/" + ref
+			}
+			if !slices.Contains(refs, ref) {
+				refs = append(refs, ref)
+			}
+		}
+
+		deepenStart := time.Now()
+		err = tunneledRepoScriptOverSSH(ctx, sshArgs, input.LocalRepoDir, func(url string) string {
+			fetch := fmt.Sprintf("git -C %s fetch --unshallow --no-tags %s", quotedRepo, url)
+			for _, ref := range refs {
+				fetch += " " + shellQuote(ref)
+			}
+			return fetch
+		})
+		if err != nil {
+			return true, fmt.Errorf("deepening remote repo failed: %w", err)
+		}
+		log.Debug().
+			Str("remoteRepoDir", input.RemoteRepoDir).
+			Dur("deepenDur", time.Since(deepenStart)).
+			Msg("deepened remote repo history")
+		return true, nil
 	})
-	if err != nil {
-		return DeepenRepoOutput{}, fmt.Errorf("failed to check for shallow remote repo: %w", err)
-	}
-	if checkOutput.ExitStatus != 0 {
-		return DeepenRepoOutput{}, fmt.Errorf("checking for shallow remote repo failed (exit %d): %s", checkOutput.ExitStatus, checkOutput.Stderr)
-	}
-	if !strings.Contains(checkOutput.Stdout, "SHALLOW") {
-		return DeepenRepoOutput{}, nil
-	}
-
-	headRef, err := localHeadRef(ctx, input.LocalRepoDir)
 	if err != nil {
 		return DeepenRepoOutput{}, err
 	}
-	refs := []string{headRef}
-	for _, branch := range input.Branches {
-		ref := branch
-		if !strings.HasPrefix(ref, "refs/") {
-			ref = "refs/heads/" + ref
-		}
-		if !slices.Contains(refs, ref) {
-			refs = append(refs, ref)
-		}
-	}
-
-	deepenStart := time.Now()
-	err = tunneledRepoScriptOverSSH(ctx, sshArgs, input.LocalRepoDir, func(url string) string {
-		fetch := fmt.Sprintf("git -C %s fetch --unshallow --no-tags %s", quotedRepo, url)
-		for _, ref := range refs {
-			fetch += " " + shellQuote(ref)
-		}
-		return fetch
-	})
-	if err != nil {
-		return DeepenRepoOutput{}, fmt.Errorf("deepening remote repo failed: %w", err)
-	}
-	log.Debug().
-		Str("remoteRepoDir", input.RemoteRepoDir).
-		Dur("deepenDur", time.Since(deepenStart)).
-		Msg("deepened remote repo history")
-
-	return DeepenRepoOutput{Deepened: true}, nil
+	return DeepenRepoOutput{Deepened: deepened}, nil
 }
 
 type SnapshotEnvironmentInput struct {

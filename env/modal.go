@@ -983,19 +983,7 @@ func (modalSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteSandb
 }
 
 func (e *ModalEnv) runWithSSHTransportRecovery(ctx context.Context, operation func() error) error {
-	err := operation()
-	if err == nil {
-		return nil
-	}
-
-	recovered, recoveryErr := e.recoverSSHTransport(ctx, err)
-	if !recovered {
-		return err
-	}
-	if recoveryErr != nil {
-		return fmt.Errorf("%w; failed to recover modal SSH transport: %v", err, recoveryErr)
-	}
-	return operation()
+	return RunWithSSHTransportRecovery(ctx, e, operation)
 }
 
 // SyncMergeResultToLocal transfers the given branch from the Modal sandbox
