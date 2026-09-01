@@ -221,7 +221,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "mv -n"},
 			{Pattern: "git mv -n"},
 			{Pattern: "git rm"},
-			{Pattern: "perl -pi -e"}, // NOTE: ideally would limit to tracked file paths
+			{Pattern: "perl -pi -e"},  // NOTE: ideally would limit to tracked file paths
 			{Pattern: "perl -0pi -e"}, // NOTE: ideally would limit to tracked file paths
 			// Shell syntax check: -n (noexec) parses the script without
 			// executing it. Beyond -n, only whitelisted argument-less short
@@ -418,6 +418,32 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "xxd"},
 			{Pattern: "od"},
 			{Pattern: "["},
+			// Hashing / checksum utilities (both GNU *sum and BSD/macOS names)
+			{Pattern: "sha1"},
+			{Pattern: "sha224"},
+			{Pattern: "sha256"},
+			{Pattern: "sha384"},
+			{Pattern: "sha512"},
+			{Pattern: "sha1sum"},
+			{Pattern: "sha224sum"},
+			{Pattern: "sha256sum"},
+			{Pattern: "sha384sum"},
+			{Pattern: "sha512sum"},
+			{Pattern: "shasum"},
+			{Pattern: "md5"},
+			{Pattern: "md5sum"},
+			{Pattern: "b2sum"},
+			{Pattern: "cksum"},
+			{Pattern: "sum"},
+			{Pattern: "crc32"},
+			{Pattern: "openssl dgst"},
+			// Encoding / decoding utilities
+			{Pattern: "base64"},
+			{Pattern: "base32"},
+			{Pattern: "basenc"},
+			{Pattern: "openssl base64"},
+			{Pattern: "uuencode"},
+			{Pattern: "uudecode"},
 		},
 		RequireApproval: []CommandPattern{
 			// Commands that can expose secrets
