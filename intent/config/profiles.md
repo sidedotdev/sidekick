@@ -165,3 +165,7 @@ configuration and the workspace itself (i.e. tasks modal etc).
 
 The workspace profile is a dropdown selector in the workspace configuration
 page.
+
+When creating a workspace via the cli, if multiple profile are configured, then
+the user is asked which profile should be set for that workspace (alternatively,
+`--profile` can be set to the profile id).
