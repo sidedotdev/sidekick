@@ -44,6 +44,12 @@ image = modal.Image.debian_slim().pip_install("fastapi[standard]")
 # their terminated sandbox restored from the recorded snapshot.
 snapshots = modal.Volume.from_name(SNAPSHOT_VOLUME_NAME, create_if_missing=True)
 SNAPSHOT_DIR = "/snapshots"
+# Deadline for Sandbox.snapshot_filesystem. Populated dev sandboxes routinely
+# take longer than the SDK's 55s default, and a snapshot that can never finish
+# leaves the sandbox with no restorable record. hibernate holds its HTTP
+# request open for the whole snapshot, so this must stay below Modal's web
+# endpoint request timeout (documented as 150s).
+SNAPSHOT_TIMEOUT_SECONDS = 140
 
 
 @dataclass
@@ -189,7 +195,7 @@ def hibernate(req: dict):
     # Retained indefinitely (the default is 30 days): a flow can sit idle for
     # months and must still be restorable from its last snapshot. Retention is
     # therefore bounded only by the keep-latest-2 GC below.
-    snapshot = sb.snapshot_filesystem(ttl=None)
+    snapshot = sb.snapshot_filesystem(SNAPSHOT_TIMEOUT_SECONDS, ttl=None)
     previous = _read_record(name) or SnapshotRecord()
     # Keep-latest-2 GC: snapshots are per-cycle diff-from-base images and,
     # being retained indefinitely, are deleted here or never. An ID leaves the

@@ -561,7 +561,15 @@ func doSFTPRead(client *sftp.Client, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return io.ReadAll(f)
+	// io.Copy dispatches to *sftp.File.WriteTo, which sizes the file once and
+	// pipelines concurrent chunk requests, keeping round trips per read
+	// constant. io.ReadAll would instead pay one synchronous round trip per
+	// growing buffer chunk, making read latency scale with file size.
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, f); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // sftpWriteFile writes data to a file via the transport's SFTP channel.

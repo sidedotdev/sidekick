@@ -2,11 +2,15 @@ package coding
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sidekick/env"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
@@ -244,4 +248,76 @@ hello()
 	result, err := ca.RelatedSymbolsActivity(context.Background(), input)
 	assert.NoError(t, err)
 	assert.Nil(t, result)
+}
+
+// barrierReadEnv fails any ReadFile that is not in flight together with
+// `needed` reads in total, so a serial reader errors out while a concurrent
+// one proceeds.
+type barrierReadEnv struct {
+	env.Env
+	needed      int32
+	arrived     atomic.Int32
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func (e *barrierReadEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	if e.arrived.Add(1) >= e.needed {
+		e.releaseOnce.Do(func() { close(e.release) })
+	}
+	select {
+	case <-e.release:
+		return e.Env.ReadFile(ctx, path)
+	case <-time.After(2 * time.Second):
+		return nil, fmt.Errorf("ReadFile(%s) waited alone: referencing files must be loaded concurrently", path)
+	}
+}
+
+// Widely used symbols are referenced from dozens of files, and remote envs pay
+// several network round trips per read, so referencing files must be loaded
+// concurrently rather than one at a time.
+func TestRelatedSymbolsActivityLoadsReferencingFilesConcurrently(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	subject := "package main\n\nfunc Alpha() int { return 1 }\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "subject.go"), []byte(subject), 0644))
+
+	const numRefFiles = 3
+	var refLocations []lsp.Location
+	for i := 0; i < numRefFiles; i++ {
+		name := fmt.Sprintf("ref%d.go", i)
+		content := fmt.Sprintf("package main\n\nfunc Use%d() int { return Alpha() }\n", i)
+		require.NoError(t, os.WriteFile(filepath.Join(tempDir, name), []byte(content), 0644))
+		refLocations = append(refLocations, lsp.Location{
+			URI: "file://" + filepath.Join(tempDir, name),
+			Range: lsp.Range{
+				Start: lsp.Position{Line: 2, Character: 5},
+				End:   lsp.Position{Line: 2, Character: 9},
+			},
+		})
+	}
+
+	barrierEnv := &barrierReadEnv{
+		Env:     &env.LocalEnv{WorkingDirectory: tempDir},
+		needed:  numRefFiles,
+		release: make(chan struct{}),
+	}
+	mockClient := lsp.MockLSPClient{
+		TextDocumentReferencesFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+			return refLocations, nil
+		},
+	}
+	ca := &CodingActivities{
+		LSPActivities: lsp.NewLSPActivities(func(language string) lsp.LSPClient { return mockClient }),
+	}
+
+	related, err := ca.RelatedSymbolsActivity(context.Background(), RelatedSymbolsActivityInput{
+		EnvContainer:         env.EnvContainer{Env: barrierEnv},
+		RelativeFilePath:     "subject.go",
+		SymbolText:           "Alpha",
+		PreloadedFileContent: []byte(subject),
+	})
+	require.NoError(t, err)
+	assert.Len(t, related, numRefFiles)
 }

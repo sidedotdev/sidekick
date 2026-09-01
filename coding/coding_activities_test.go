@@ -11,6 +11,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1854,6 +1855,156 @@ func TestBulkGetSymbolDefinitionsReadsEachFileOnce(t *testing.T) {
 		defer recordingEnv.mu.Unlock()
 		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
 	})
+}
+
+// Related-symbol lookups for different symbols often share referencing files;
+// those reads must coalesce through the bulk invocation's shared read cache
+// instead of being repeated per symbol.
+func TestBulkGetSymbolDefinitionsRelatedSymbolsShareReads(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"),
+		[]byte("package main\n\nfunc Alpha() int { return 1 }\n\nfunc Beta() int { return 2 }\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "other.go"),
+		[]byte("package main\n\nfunc UseBoth() int { return Alpha() + Beta() }\n"), 0644))
+
+	recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+	mockClient := lsp.MockLSPClient{
+		// Both symbols are referenced from the same file, so its read must be
+		// shared between the two related-symbol lookups.
+		TextDocumentReferencesFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+			return []lsp.Location{{
+				URI: "file://" + filepath.Join(testDir, "other.go"),
+				Range: lsp.Range{
+					Start: lsp.Position{Line: 2, Character: 5},
+					End:   lsp.Position{Line: 2, Character: 12},
+				},
+			}}, nil
+		},
+	}
+	ca := &CodingActivities{
+		LSPActivities: lsp.NewLSPActivities(func(language string) lsp.LSPClient { return mockClient }),
+	}
+	result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+		EnvContainer:          env.EnvContainer{Env: recordingEnv},
+		IncludeRelatedSymbols: true,
+		Requests: []FileSymDefRequest{
+			{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}, {Name: "Beta"}}},
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result.SymbolDefinitions, "UseBoth")
+
+	recordingEnv.mu.Lock()
+	defer recordingEnv.mu.Unlock()
+	assert.ElementsMatch(t, []string{"main.go", filepath.Join(testDir, "other.go")}, recordingEnv.readPaths)
+}
+
+// ctxAwareReadEnv fails reads once its context is canceled, like remote envs do.
+type ctxAwareReadEnv struct {
+	env.Env
+}
+
+func (e *ctxAwareReadEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.Env.ReadFile(ctx, path)
+}
+
+// retryProvingEnv blocks its first read until that read's context is canceled
+// and serves later reads normally.
+type retryProvingEnv struct {
+	env.Env
+	calls    atomic.Int32
+	inFlight chan struct{}
+}
+
+func (e *retryProvingEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	if e.calls.Add(1) == 1 {
+		close(e.inFlight)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return e.Env.ReadFile(ctx, path)
+}
+
+// While one caller's read is in flight, a waiter whose own context is canceled
+// must return promptly, and a live waiter must transparently retry when the
+// owning read is canceled rather than inheriting its failure.
+func TestEnvReadCacheWaitersDuringCanceledRead(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"), []byte("package main\n"), 0644))
+
+	readEnv := &retryProvingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}, inFlight: make(chan struct{})}
+	readCache := newEnvReadCache(readEnv)
+
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	defer cancelOwner()
+	ownerDone := make(chan error, 1)
+	go func() {
+		_, err := readCache.ReadFile(ownerCtx, "main.go")
+		ownerDone <- err
+	}()
+	<-readEnv.inFlight
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	canceledWaiterDone := make(chan error, 1)
+	go func() {
+		_, err := readCache.ReadFile(canceledCtx, "main.go")
+		canceledWaiterDone <- err
+	}()
+	select {
+	case err := <-canceledWaiterDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled waiter blocked behind an in-flight read")
+	}
+
+	liveWaiterDone := make(chan struct{})
+	var liveBytes []byte
+	var liveErr error
+	go func() {
+		defer close(liveWaiterDone)
+		liveBytes, liveErr = readCache.ReadFile(context.Background(), "main.go")
+	}()
+	// Let the live waiter join the in-flight read before canceling it.
+	time.Sleep(50 * time.Millisecond)
+	cancelOwner()
+
+	require.Error(t, <-ownerDone)
+	select {
+	case <-liveWaiterDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("live waiter did not retry after the owning read was canceled")
+	}
+	require.NoError(t, liveErr)
+	assert.Equal(t, "package main\n", string(liveBytes))
+}
+
+// A read canceled mid-flight answers nothing about the file, so it must not
+// poison the cache for later callers whose context is still live: one
+// related-symbols lookup failing (which cancels its sibling loads) must not
+// break another lookup sharing the cache.
+func TestEnvReadCacheRetriesAfterCanceledRead(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"), []byte("package main\n"), 0644))
+
+	readCache := newEnvReadCache(&ctxAwareReadEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}})
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := readCache.ReadFile(canceledCtx, "main.go")
+	require.Error(t, err)
+
+	fileBytes, err := readCache.ReadFile(context.Background(), "main.go")
+	require.NoError(t, err)
+	assert.Equal(t, "package main\n", string(fileBytes))
 }
 
 type cancellationRecordingEnv struct {
