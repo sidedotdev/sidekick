@@ -324,6 +324,50 @@ describe('ChatCompletionFlowAction', () => {
       expect(wrapper.find('.auth-type').text()).toBe('Auth type: api')
     })
 
+    describe('resolved profile display', () => {
+      const cacheProfiles = (profiles: { id: string; name: string }[]) => {
+        sessionStorage.setItem('profiles_cache', JSON.stringify({ data: profiles, timestamp: Date.now() }))
+      }
+
+      const profileActionResult = (profileId: string) => JSON.stringify({
+        model: 'gpt-5',
+        provider: 'openai',
+        profileId,
+        output: {
+          role: 'assistant',
+          content: [{ id: 'b1', type: 'text', text: 'Hello' }]
+        },
+        stopReason: 'stop',
+        usage: { inputTokens: 100, outputTokens: 50 }
+      })
+
+      afterEach(() => {
+        sessionStorage.clear()
+      })
+
+      it('shows the resolved profile name when multiple profiles are configured', async () => {
+        cacheProfiles([{ id: 'default', name: 'Default' }, { id: 'work', name: 'Work' }])
+        const wrapper = mount(ChatCompletionFlowAction, {
+          props: { flowAction: { ...flowAction, actionResult: profileActionResult('work') }, expand: true }
+        })
+
+        await wrapper.vm.$nextTick()
+
+        expect(wrapper.find('.profile').text()).toBe('Profile: Work')
+      })
+
+      it('does not show the profile when only one profile is configured', async () => {
+        cacheProfiles([{ id: 'default', name: 'Default' }])
+        const wrapper = mount(ChatCompletionFlowAction, {
+          props: { flowAction: { ...flowAction, actionResult: profileActionResult('default') }, expand: true }
+        })
+
+        await wrapper.vm.$nextTick()
+
+        expect(wrapper.find('.profile').exists()).toBe(false)
+      })
+    })
+
     it('renders llm2 response with tool_use content blocks', async () => {
       const actionResult = JSON.stringify({
         id: 'resp-2',
