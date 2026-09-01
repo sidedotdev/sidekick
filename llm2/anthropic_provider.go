@@ -347,7 +347,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			case "web_search_tool_result":
 				resultBlock := evt.ContentBlock.AsWebSearchToolResult()
 				contentBlock = ContentBlock{
-					Type:             ContentBlockTypeBuiltinToolResult,
+					Type:              ContentBlockTypeBuiltinToolResult,
 					BuiltinToolResult: anthropicWebSearchResultToBlock(resultBlock),
 				}
 			default:

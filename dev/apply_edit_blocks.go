@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"sidekick/common"
@@ -903,7 +903,7 @@ func ApplyCreateEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 	if _, err := envContainer.Env.Stat(ctx, block.FilePath); err == nil {
 		report.Error = fmt.Sprintf("file already exists: %s", absoluteFilePath)
 		return report, errors.New(report.Error)
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		report.Error = fmt.Sprintf("failed to check if file exists %s: %v", absoluteFilePath, err)
 		return report, errors.New(report.Error)
 	}
@@ -1287,7 +1287,7 @@ func singleAcceptableMatch(lines []string, originalLines []string) bool {
 func ApplyDeleteEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	originalContents, err := envContainer.Env.ReadFile(ctx, block.FilePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return ApplyEditBlockReport{
 				OriginalEditBlocks: []EditBlock{block},
 				Error:              fmt.Sprintf("File does not exist: %s", block.FilePath),
