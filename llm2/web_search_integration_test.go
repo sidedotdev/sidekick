@@ -126,7 +126,7 @@ func TestOpenAIResponsesProvider_WebSearchIntegration(t *testing.T) {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
 
-	provider := OpenAIResponsesProvider{}
+	provider := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI}
 	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
 
 	request := StreamRequest{
@@ -137,11 +137,9 @@ func TestOpenAIResponsesProvider_WebSearchIntegration(t *testing.T) {
 		Options: Options{
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
-				// A codex model verifies web search works alongside codex
-				// reasoning settings (the retired gpt-5-codex rejected
-				// reasoning summaries when web search was enabled; newer
-				// codex models accept the combination).
-				Model:           "gpt-5.3-codex",
+				// ChatGPT (OAuth) accounts only support a subset of models on
+				// the codex backend; gpt-5.4-mini works with both auth paths.
+				Model:           "gpt-5.4-mini",
 				ReasoningEffort: "low",
 			},
 			Tools:      []*common.Tool{{Type: common.ToolTypeWebSearch}},
@@ -250,13 +248,13 @@ func TestWebSearchCrossProviderIntegration(t *testing.T) {
 		},
 	}
 
-	provider := OpenAIResponsesProvider{}
+	provider := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI}
 	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
 
 	request := StreamRequest{
 		Messages: anthropicHistory,
 		Options: Options{
-			ModelConfig: common.ModelConfig{Provider: "openai", Model: "gpt-5-mini"},
+			ModelConfig: common.ModelConfig{Provider: "openai", Model: "gpt-5.4-mini"},
 			Tools:       []*common.Tool{{Type: common.ToolTypeWebSearch}},
 			ToolChoice:  common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 		},

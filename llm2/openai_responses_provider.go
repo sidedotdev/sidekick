@@ -3,6 +3,7 @@ package llm2
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sidekick/common"
@@ -371,6 +372,34 @@ loop:
 						Reasoning: &ReasoningBlock{
 							Text:    reasoningTextFromOpenaiContent(item.Content),
 							Summary: reasoningSummaryFromOpenaiContent(item.Summary),
+						},
+					},
+				}
+				eventChan <- evt
+				events = append(events, evt)
+			}
+
+		case responses.ResponseOutputItemDoneEvent:
+			openaiEvent := data.AsResponseOutputItemDone()
+			switch openaiEvent.Item.AsAny().(type) {
+			case responses.ResponseFunctionWebSearch:
+				// The web search action only becomes available once the item
+				// is done. It is also captured from the final output on
+				// response.completed, but the ChatGPT codex backend sends an
+				// empty output array there, so this event is the only source
+				// of the action when using subscription (OAuth) auth.
+				item := openaiEvent.Item.AsWebSearchCall()
+				evt := Event{
+					Type:  EventBlockDone,
+					Index: int(openaiEvent.OutputIndex),
+					ContentBlock: &ContentBlock{
+						Id:   item.ID,
+						Type: ContentBlockTypeBuiltinToolUse,
+						BuiltinToolUse: &BuiltinToolUseBlock{
+							Id:        item.ID,
+							Name:      webSearchToolName,
+							Arguments: item.Action.RawJSON(),
+							Status:    string(item.Status),
 						},
 					},
 				}
