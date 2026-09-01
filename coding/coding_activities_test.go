@@ -507,6 +507,30 @@ The symbol 'ExistsElsewhere' is defined in the following files:
 			},
 		},
 		{
+			name: "Symbol only present as a substring of other identifiers is not resolved via LSP",
+			code: `package cools
+
+import "runtime"
+
+const runActivityTaskQueue = "run-activity-script"
+
+func WontExistHere() {
+	runtime.Gosched()
+	println(runActivityTaskQueue)
+}`,
+			input: []FileSymDefRequest{
+				{
+					Symbols: []RequestedSymbol{{Name: "run"}},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'run'. However, it does contain the following symbols: runActivityTaskQueue, WontExistHere
+The symbol 'run' is not defined in any repo files.`,
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'run'. However, it does contain the following symbols: runActivityTaskQueue, WontExistHere
+The symbol 'run' is not defined in any repo files.`,
+			},
+		},
+		{
 			name:          "Symbol in different file - unsupported language degrades to name-search hint",
 			fileExtension: "py",
 			code: `def use():
@@ -826,6 +850,199 @@ func SecondFunc() {
 			} else if strings.TrimSpace(output.Failures) != strings.TrimSpace(tc.expectedOutput.Failures) {
 				t.Errorf("Expected failures %s, got %s", utils.PanicJSON(tc.expectedOutput.Failures), utils.PanicJSON(output.Failures))
 			}
+		})
+	}
+}
+
+// Reproduces the originally reported failure, where requesting symbols absent
+// from scripts/run_activity/main.go inlined Go toolchain runtime sources.
+func TestBulkGetSymbolDefinitionsRunActivityScriptRegression(t *testing.T) {
+	t.Parallel()
+
+	fixture, err := os.ReadFile(filepath.Join("test_files", "run_activity_main.go.txt"))
+	require.NoError(t, err)
+
+	testDir := t.TempDir()
+	_, err = utils.WriteTestFile(t, testDir, "main.go", string(fixture))
+	require.NoError(t, err)
+
+	ca := &CodingActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(language string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{LanguageName: language}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+	}
+
+	numLines := 0
+	output, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: testDir}},
+		Requests: []FileSymDefRequest{{
+			FilePath: "main.go",
+			Symbols:  []RequestedSymbol{{Name: "run"}, {Name: "findActivityEvent"}},
+		}},
+		NumContextLines: &numLines,
+	})
+	require.NoError(t, err)
+
+	assert.NotContains(t, output.SymbolDefinitions, "```go", "no definition should have been inlined for symbols absent from the file")
+	assert.Contains(t, output.Failures, "does not contain the symbol 'run'")
+	assert.Contains(t, output.Failures, "does not contain the symbol 'findActivityEvent'")
+}
+
+func TestBulkGetSymbolDefinitionsIgnoresUnrelatedLSPDefinition(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	_, err := utils.WriteTestFile(t, testDir, "file0.go", `package cools
+
+func WontExistHere() {
+	run()
+}`)
+	require.NoError(t, err)
+	otherFilePath, err := utils.WriteTestFile(t, testDir, "other_file.go", `package cools
+
+func unrelated() {
+	println("unrelated")
+}`)
+	require.NoError(t, err)
+
+	ca := &CodingActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(language string) lsp.LSPClient {
+				return lsp.MockLSPClient{
+					// mimics a language server resolving a position to a
+					// package clause rather than the requested symbol
+					TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+						return []lsp.Location{{
+							URI: "file://" + otherFilePath,
+							Range: lsp.Range{
+								Start: lsp.Position{Line: 0, Character: 8},
+								End:   lsp.Position{Line: 0, Character: 13},
+							},
+						}}, nil
+					},
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+	}
+
+	numLines := 0
+	output, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: testDir}},
+		Requests: []FileSymDefRequest{{
+			FilePath: "file0.go",
+			Symbols:  []RequestedSymbol{{Name: "run"}},
+		}},
+		NumContextLines: &numLines,
+	})
+	require.NoError(t, err)
+
+	assert.NotContains(t, output.SymbolDefinitions, "package cools")
+	assert.NotContains(t, output.SymbolDefinitions, "other_file.go")
+	assert.Contains(t, output.Failures, "does not contain the symbol 'run'")
+}
+
+func TestBulkGetSymbolDefinitionsRejectsLSPDefinitionOfDifferentToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		otherCode     string
+		definedRange  lsp.Range
+		unwantedInOut string
+	}{
+		{
+			name: "unrelated token sharing a line with the requested symbol's definition",
+			otherCode: `package cools
+
+func run() { runActivity() }
+
+func runActivity() {}`,
+			definedRange: lsp.Range{
+				Start: lsp.Position{Line: 2, Character: 13},
+				End:   lsp.Position{Line: 2, Character: 24},
+			},
+			unwantedInOut: "func run() {",
+		},
+		{
+			name: "unrelated token nested inside the same-named definition",
+			otherCode: `package cools
+
+func run() {
+	runCount := 1
+	println(runCount)
+}`,
+			definedRange: lsp.Range{
+				Start: lsp.Position{Line: 3, Character: 1},
+				End:   lsp.Position{Line: 3, Character: 9},
+			},
+			unwantedInOut: "func run()",
+		},
+		{
+			name: "range too broad to name the requested symbol",
+			otherCode: `package cools
+
+func run() {
+	println("run")
+}`,
+			definedRange: lsp.Range{
+				Start: lsp.Position{Line: 2, Character: 0},
+				End:   lsp.Position{Line: 4, Character: 1},
+			},
+			unwantedInOut: "func run()",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			testDir := t.TempDir()
+			_, err := utils.WriteTestFile(t, testDir, "file0.go", `package cools
+
+func WontExistHere() {
+	run()
+}`)
+			require.NoError(t, err)
+			otherFilePath, err := utils.WriteTestFile(t, testDir, "other_file.go", tc.otherCode)
+			require.NoError(t, err)
+
+			ca := &CodingActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(language string) lsp.LSPClient {
+						return lsp.MockLSPClient{
+							TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+								return []lsp.Location{{
+									URI:   "file://" + otherFilePath,
+									Range: tc.definedRange,
+								}}, nil
+							},
+						}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+				TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+			}
+
+			numLines := 0
+			output, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
+				EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: testDir}},
+				Requests: []FileSymDefRequest{{
+					FilePath: "file0.go",
+					Symbols:  []RequestedSymbol{{Name: "run"}},
+				}},
+				NumContextLines: &numLines,
+			})
+			require.NoError(t, err)
+
+			assert.NotContains(t, output.SymbolDefinitions, tc.unwantedInOut)
+			assert.Contains(t, output.Failures, "does not contain the symbol 'run'")
 		})
 	}
 }

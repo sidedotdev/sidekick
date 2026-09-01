@@ -57,10 +57,17 @@ if [ ! -f "$USEARCH_LIB" ]; then
     rm -rf "$USEARCH_TMP"
     git clone --depth 1 --recurse-submodules https://github.com/unum-cloud/usearch.git "$USEARCH_TMP"
     cd "$USEARCH_TMP"
+    # Upstream hardcodes -march=native, which bakes this host's ISA into the
+    # artifact and makes it crash with SIGILL on any machine with a smaller
+    # instruction set. Dropping it and using SimSIMD's dynamic dispatch keeps
+    # SIMD acceleration while kernels are chosen from CPU features at runtime.
+    sed -i '/-march=native/d' CMakeLists.txt
     cmake -B build_release \
         -DUSEARCH_BUILD_LIB_C=1 \
         -DUSEARCH_BUILD_TEST_CPP=0 \
         -DUSEARCH_BUILD_BENCH_CPP=0 \
+        -DUSEARCH_USE_SIMSIMD=1 \
+        -DCMAKE_CXX_FLAGS=-DSIMSIMD_DYNAMIC_DISPATCH=1 \
         -DCMAKE_BUILD_TYPE=Release
     cmake --build build_release --config Release
     sudo cp build_release/libusearch_c.so /usr/local/lib/

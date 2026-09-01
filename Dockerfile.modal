@@ -10,12 +10,18 @@ RUN ARCH=$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') \
     && curl -fsSL "https://nodejs.org/dist/v20.16.0/node-v20.16.0-linux-${ARCH}.tar.xz" \
     | tar -xJ --strip-components=1 -C /usr/local
 
+# Upstream hardcodes -march=native, which bakes the build host's ISA into the
+# artifact and makes it crash with SIGILL on any machine with a smaller
+# instruction set. Dropping it and using SimSIMD's dynamic dispatch keeps SIMD
+# acceleration while kernels are chosen from CPU features at runtime.
 RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git /tmp/usearch \
     && cd /tmp/usearch \
+    && sed -i '/-march=native/d' CMakeLists.txt \
     && cmake -D CMAKE_BUILD_TYPE=Release \
+             -D CMAKE_CXX_FLAGS=-DSIMSIMD_DYNAMIC_DISPATCH=1 \
              -D USEARCH_USE_FP16LIB=1 \
              -D USEARCH_USE_OPENMP=0 \
-             -D USEARCH_USE_SIMSIMD=0 \
+             -D USEARCH_USE_SIMSIMD=1 \
              -D USEARCH_USE_JEMALLOC=0 \
              -D USEARCH_BUILD_TEST_CPP=0 \
              -D USEARCH_BUILD_BENCH_CPP=0 \

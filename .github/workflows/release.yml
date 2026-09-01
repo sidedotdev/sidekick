@@ -49,7 +49,13 @@ jobs:
           git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git
           cd usearch
           export CMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=${{ matrix.usearch_jemalloc }} -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
+          # Upstream hardcodes -march=native, which bakes the runner's ISA into
+          # released binaries and makes them crash with SIGILL on any machine
+          # with a smaller instruction set. Dropping it and using SimSIMD's
+          # dynamic dispatch keeps SIMD acceleration while kernels are chosen
+          # from CPU features at runtime.
+          sed -i '/-march=native/d' CMakeLists.txt
+          cmake -D CMAKE_BUILD_TYPE=Release -D CMAKE_CXX_FLAGS=-DSIMSIMD_DYNAMIC_DISPATCH=1 -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=1 -D USEARCH_USE_JEMALLOC=${{ matrix.usearch_jemalloc }} -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
           cmake --build build_release --config Release
           ./build_release/test_cpp
           ./build_release/test_c
