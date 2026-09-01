@@ -169,3 +169,10 @@ page.
 When creating a workspace via the cli, if multiple profile are configured, then
 the user is asked which profile should be set for that workspace (alternatively,
 `--profile` can be set to the profile id).
+
+When a workspace's profile is updated, all its in-progress flows recieve a
+signal about this fact. This supports resolving the currently active profile
+without an additional synchronous query. To enable this, profile resolution
+within flows only use the global state, populated at setup time and on update
+signals,
+the same way LLM model configuration is managed and live-updated.
