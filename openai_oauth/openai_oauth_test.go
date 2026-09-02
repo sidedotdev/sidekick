@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sidekick/common"
 	"sidekick/secret_manager"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 )
 
 func makeJWT(claims map[string]any) string {
@@ -457,6 +459,111 @@ func TestGetAndMaybeRefresh(t *testing.T) {
 		assert.Nil(t, creds)
 	})
 }
+func TestRefreshedCredentialsStayWithinTheirProfile(t *testing.T) {
+	keyring.MockInit()
+	validAccessToken := makeJWT(validJWTClaims("acct-work"))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  validAccessToken,
+			"refresh_token": "refreshed-rt",
+			"expires_in":    7200,
+		})
+	}))
+	defer server.Close()
+
+	origEndpoint := TokenEndpoint
+	origClient := HTTPClient
+	TokenEndpoint = server.URL
+	HTTPClient = server.Client()
+	t.Cleanup(func() {
+		TokenEndpoint = origEndpoint
+		HTTPClient = origClient
+	})
+
+	expired, err := json.Marshal(Credentials{
+		AccessToken:  "at-expired",
+		RefreshToken: "rt-old",
+		ExpiresAt:    time.Now().Unix() - 60,
+		AccountID:    "acct-work",
+	})
+	require.NoError(t, err)
+	require.NoError(t, keyring.Set(keyringService, "WORK-"+SecretName, string(expired)))
+
+	creds, ok, err := GetAndMaybeRefresh(context.Background(), secret_manager.KeyringSecretManager{ProfileId: "work"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, validAccessToken, creds.AccessToken)
+
+	storedForWork, err := keyring.Get(keyringService, "WORK-"+SecretName)
+	require.NoError(t, err)
+	assert.Contains(t, storedForWork, "refreshed-rt")
+
+	_, err = keyring.Get(keyringService, SecretName)
+	assert.ErrorIs(t, err, keyring.ErrNotFound, "refreshing a work-profile token must not overwrite default-profile credentials")
+}
+
+func TestRefreshPassesSourceProfileToStore(t *testing.T) {
+	validAccessToken := makeJWT(validJWTClaims("acct-work"))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  validAccessToken,
+			"refresh_token": "refreshed-rt",
+			"expires_in":    7200,
+		})
+	}))
+	defer server.Close()
+
+	origEndpoint := TokenEndpoint
+	origClient := HTTPClient
+	origStore := StoreForProfileFn
+	TokenEndpoint = server.URL
+	HTTPClient = server.Client()
+	t.Cleanup(func() {
+		TokenEndpoint = origEndpoint
+		HTTPClient = origClient
+		StoreForProfileFn = origStore
+	})
+
+	storedProfileId := ""
+	StoreForProfileFn = func(profileId string, creds *Credentials) error {
+		storedProfileId = profileId
+		return nil
+	}
+
+	expired, err := json.Marshal(Credentials{
+		AccessToken:  "at-expired",
+		RefreshToken: "rt-old",
+		ExpiresAt:    time.Now().Unix() - 60,
+		AccountID:    "acct-work",
+	})
+	require.NoError(t, err)
+
+	profileAware := &profileScopedMockSecretManager{
+		mockSecretManager: mockSecretManager{secrets: map[string]string{SecretName: string(expired)}},
+		profileId:         "work",
+	}
+	_, _, err = GetAndMaybeRefresh(context.Background(), profileAware)
+	require.NoError(t, err)
+	assert.Equal(t, "work", storedProfileId)
+
+	storedProfileId = ""
+	unaware := &mockSecretManager{secrets: map[string]string{SecretName: string(expired)}}
+	_, _, err = GetAndMaybeRefresh(context.Background(), unaware)
+	require.NoError(t, err)
+	assert.Equal(t, common.DefaultProfileId, storedProfileId)
+}
+
+type profileScopedMockSecretManager struct {
+	mockSecretManager
+	profileId string
+}
+
+func (m *profileScopedMockSecretManager) GetProfileId() string {
+	return m.profileId
+}
+
 func TestCredentialsMarshalCamelCase(t *testing.T) {
 	t.Parallel()
 

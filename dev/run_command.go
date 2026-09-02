@@ -34,8 +34,9 @@ type CheckCommandPermissionInput struct {
 }
 
 type CheckCommandPermissionOutput struct {
-	Result  common.PermissionResult
-	Message string
+	Result     common.PermissionResult
+	Message    string
+	Evaluation *common.ScriptPermissionEvaluation `json:"evaluation,omitempty"`
 }
 
 func CheckCommandPermissionActivity(ctx context.Context, input CheckCommandPermissionInput) (CheckCommandPermissionOutput, error) {
@@ -45,10 +46,12 @@ func CheckCommandPermissionActivity(ctx context.Context, input CheckCommandPermi
 		SkipAbsolutePathEscalation:        input.SkipAbsolutePathEscalation,
 		HeredocFileWriteWarnInsteadOfDeny: input.HeredocFileWriteWarnInsteadOfDeny,
 	}
-	result, message := common.EvaluateScriptPermissionWithOptions(input.CommandPermissions, input.Command, opts)
+	evaluation := common.EvaluateScriptPermissionDetailed(input.CommandPermissions, input.Command, opts)
+	result, message := common.ScriptPermissionResultMessage(evaluation)
 	return CheckCommandPermissionOutput{
-		Result:  result,
-		Message: message,
+		Result:     result,
+		Message:    message,
+		Evaluation: &evaluation,
 	}, nil
 }
 
@@ -70,6 +73,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		}
 	}
 
+	var permEvaluation *common.ScriptPermissionEvaluation
 	if enableCommandPermissions {
 		var permResult common.PermissionResult
 		var permMessage string
@@ -89,6 +93,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 			}
 			permResult = output.Result
 			permMessage = output.Message
+			permEvaluation = output.Evaluation
 		} else {
 			opts := common.EvaluatePermissionOptions{
 				StripEnvVarPrefix:                 stripEnvVarPrefix,
@@ -119,10 +124,14 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 
 	// Request user approval (legacy behavior or when permission requires approval)
 	approvalPrompt := "Allow running the following command?"
-	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, map[string]any{
+	approvalParams := map[string]any{
 		"command":    command,
 		"workingDir": workingDir,
-	})
+	}
+	if permEvaluation != nil {
+		approvalParams["permissionEvaluation"] = permEvaluation
+	}
+	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, approvalParams)
 	if err != nil {
 		return false, "", "", fmt.Errorf("failed to get user approval: %v", err)
 	}

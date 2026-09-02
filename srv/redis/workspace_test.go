@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPersistWorkspace(t *testing.T) {
@@ -65,6 +66,34 @@ func TestPersistWorkspace(t *testing.T) {
 	if workspaces[0].ConfigMode != workspace.ConfigMode {
 		t.Errorf("expected workspace configMode %s, got %s", workspace.ConfigMode, workspaces[0].ConfigMode)
 	}
+}
+
+func TestPersistWorkspaceProfile(t *testing.T) {
+	ctx := context.Background()
+	db := newTestRedisStorage(t)
+
+	withProfile := domain.Workspace{Id: "ws-profile", Name: "Profile Workspace", ConfigMode: "merge", ProfileId: "work"}
+	require.NoError(t, db.PersistWorkspace(ctx, withProfile))
+	withoutProfile := domain.Workspace{Id: "ws-no-profile", Name: "Default Workspace", ConfigMode: "merge"}
+	require.NoError(t, db.PersistWorkspace(ctx, withoutProfile))
+
+	retrieved, err := db.GetWorkspace(ctx, withProfile.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "work", retrieved.ProfileId)
+	assert.Equal(t, "work", retrieved.EffectiveProfileId())
+
+	retrievedWithoutProfile, err := db.GetWorkspace(ctx, withoutProfile.Id)
+	require.NoError(t, err)
+	assert.Empty(t, retrievedWithoutProfile.ProfileId)
+	assert.Equal(t, common.DefaultProfileId, retrievedWithoutProfile.EffectiveProfileId())
+
+	all, err := db.GetAllWorkspaces(ctx)
+	require.NoError(t, err)
+	profileIdsByWorkspaceId := map[string]string{}
+	for _, workspace := range all {
+		profileIdsByWorkspaceId[workspace.Id] = workspace.ProfileId
+	}
+	assert.Equal(t, map[string]string{withProfile.Id: "work", withoutProfile.Id: ""}, profileIdsByWorkspaceId)
 }
 
 func TestPersistWorkspaceConfig(t *testing.T) {

@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"sidekick/common"
@@ -78,22 +79,49 @@ sampler=$!
 		if c.workingDir != "" {
 			dir = c.workingDir
 		}
-		script += fmt.Sprintf("( cd %q && %s ) > /tmp/side_mem_cmd_%d.log 2>&1 &\npid_%d=$!\n", dir, c.command, i, i)
+		script += fmt.Sprintf("( start=$(date +%%s); cd %q && %s; status=$?; echo $(($(date +%%s)-start)) > /tmp/side_mem_cmd_%d.elapsed; exit $status ) > /tmp/side_mem_cmd_%d.log 2>&1 &\npid_%d=$!\n", dir, c.command, i, i, i)
 	}
 	script += "fail=0\n"
 	for i := range cmds {
-		script += fmt.Sprintf("wait $pid_%d; st_%d=$?; [ $st_%d -eq 0 ] || fail=1\n", i, i, i)
+		script += fmt.Sprintf("wait $pid_%d; st_%d=$?; elapsed_%d=$(cat /tmp/side_mem_cmd_%d.elapsed); [ $st_%d -eq 0 ] || fail=1\n", i, i, i, i, i)
 	}
 	script += `kill $sampler 2>/dev/null || true
 echo "SAMPLED_PEAK_BYTES=$(sort -n "$samples" | tail -1)"
 if [ -r /sys/fs/cgroup/memory.peak ]; then echo "CGROUP_PEAK_BYTES=$(cat /sys/fs/cgroup/memory.peak)"; fi
 `
 	for i, c := range cmds {
-		script += fmt.Sprintf("echo \"CMD_%d exit=$st_%d: %s\"\n", i, i, c.command)
+		script += fmt.Sprintf("echo \"CMD_%d elapsed=${elapsed_%d}s exit=$st_%d: %s\"\n", i, i, i, c.command)
 		script += fmt.Sprintf("if [ $st_%d -ne 0 ]; then echo '--- log tail ---'; tail -40 /tmp/side_mem_cmd_%d.log; fi\n", i, i)
 	}
 	script += "exit $fail\n"
 	return script
+}
+
+func parseVolumeMounts(spec string) ([]common.ModalVolumeMount, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
+	}
+	var mounts []common.ModalVolumeMount
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, mountPath, found := strings.Cut(entry, ":")
+		if !found {
+			return nil, fmt.Errorf("volume %q must be given as name:/absolute/mount/path", entry)
+		}
+		mount := common.ModalVolumeMount{
+			Name:      strings.TrimSpace(name),
+			MountPath: strings.TrimSpace(mountPath),
+		}
+		if err := mount.Validate(); err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, mount)
+	}
+	return mounts, nil
 }
 
 func main() {
@@ -102,7 +130,16 @@ func main() {
 	adhoc := flag.String("run", "", "instead of a phase, run this shell command in the sandbox repo dir (for debugging)")
 	skipSetup := flag.Bool("skip-setup", false, "skip repo sync and frontend/module setup (for reruns against a warm sandbox)")
 	keep := flag.Bool("keep", false, "keep the sandbox alive after the run")
+	vm := flag.Bool("vm", false, "use Modal's VM runtime")
+	cpu := flag.Float64("cpu", 0, "CPU request; zero uses the Modal environment default")
+	cpuLimit := flag.Float64("cpu-limit", 0, "CPU limit; zero leaves burst CPU unlimited")
+	memory := flag.Int("memory", 0, "memory request in MiB; zero uses the Modal environment default")
+	memoryLimit := flag.Int("memory-limit", 0, "memory limit in MiB; zero leaves burst memory unlimited")
+	volumes := flag.String("volumes", "", "comma-separated persistent volume mounts, each as name:/absolute/mount/path")
 	flag.Parse()
+
+	volumeMounts, err := parseVolumeMounts(*volumes)
+	must(err, "parse volumes")
 
 	cmds, ok := phases[*phase]
 	if !ok && *adhoc == "" {
@@ -120,9 +157,15 @@ func main() {
 	// true peak; a long idle timeout and disabled active snapshots keep the
 	// watchdog from interfering with (or adding overhead to) the run.
 	cfgJSON, err := json.Marshal(common.ModalEnvConfig{
+		VM:                    *vm,
 		DockerfilePath:        "Dockerfile.modal",
+		CPU:                   *cpu,
+		CPULimit:              *cpuLimit,
+		Memory:                *memory,
+		MemoryLimit:           *memoryLimit,
 		IdleSeconds:           7200,
 		ActiveSnapshotSeconds: -1,
+		Volumes:               volumeMounts,
 	})
 	must(err, "marshal config")
 
@@ -135,7 +178,8 @@ func main() {
 		Config:  cfgJSON,
 	})
 	must(err, "create sandbox")
-	fmt.Printf("sandbox ready in %s (reused=%v)\n", time.Since(start).Round(time.Second), created.Reused)
+	fmt.Printf("sandbox ready in %s (reused=%v, ssh=%s:%d)\n",
+		time.Since(start).Round(time.Second), created.Reused, created.SSHHost, created.SSHPort)
 	if !*keep {
 		defer func() {
 			_, _ = env.DeleteSandboxActivity(context.Background(), env.DeleteSandboxInput{

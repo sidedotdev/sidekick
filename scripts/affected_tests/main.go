@@ -106,24 +106,23 @@ func run(args []string, stdout, stderr io.Writer) (int, error) {
 	}
 
 	tracker := newPackageTracker()
+	// Persist passes incrementally while go test runs, so a killed run (CI
+	// timeout, Ctrl-C) still caches the packages that already passed. Only
+	// eligible when hashing succeeded, mirroring the pre-existing end-of-run
+	// caching condition.
+	var writer *cacheWriter
+	if profileSig != "" && len(pkgHashes) > 0 {
+		writer = newCacheWriter(profileSig, describeProfile(flags), pkgHashes, nil, updateCachePasses, func(err error) {
+			fmt.Fprintf(stderr, "affected-tests: failed to update cache: %v\n", err)
+		})
+		tracker.onPass = writer.enqueue
+	}
 	exitCode, err := runGoTest(flags, toRun, stdout, stderr, tracker)
+	if writer != nil {
+		writer.close()
+	}
 	if err != nil {
 		return exitCode, err
-	}
-
-	if profileSig != "" && len(pkgHashes) > 0 {
-		passed := tracker.passed()
-		toCache := make([]string, 0, len(passed))
-		for _, p := range passed {
-			if _, ok := pkgHashes[p]; ok {
-				toCache = append(toCache, p)
-			}
-		}
-		if len(toCache) > 0 {
-			if err := updateCachePasses(profileSig, describeProfile(flags), toCache, pkgHashes); err != nil {
-				fmt.Fprintf(stderr, "affected-tests: failed to update cache: %v\n", err)
-			}
-		}
 	}
 
 	return exitCode, nil
@@ -269,12 +268,18 @@ type goListPackage struct {
 	XTestImports    []string
 	Deps            []string
 	ForTest         string
+	DefaultGODEBUG  string
 	Error           *goListError
 }
 
 type goListModule struct {
-	Path string
-	Main bool
+	Path      string
+	Version   string
+	Main      bool
+	GoVersion string
+	Sum       string
+	GoModSum  string
+	Replace   *goListModule
 }
 
 type goListError struct {
@@ -359,23 +364,23 @@ func readModulePath() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func commonHashBase(profileSig string) ([]byte, error) {
+// hashFormatVersion is folded into every package hash so that changing what a
+// hash covers retires the passes recorded under the previous meaning instead
+// of letting them match.
+const hashFormatVersion = 2
+
+// commonHashBase covers the inputs shared by every package: the test profile
+// and the toolchain. The dependency manifest is deliberately absent, because
+// manifest churn only changes the build of packages importing the affected
+// module, which every package hash already covers through the resolved module
+// identity of its dependencies. Hashing go.mod and go.sum wholesale instead
+// invalidates every cached package on any dependency edit.
+func commonHashBase(profileSig string) []byte {
 	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "FORMAT %d\n", hashFormatVersion)
 	fmt.Fprintf(&buf, "PROFILE %s\n", profileSig)
 	fmt.Fprintf(&buf, "GOVERSION %s\n", runtime.Version())
-	for _, f := range []string{"go.mod", "go.sum"} {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) && f == "go.sum" {
-				fmt.Fprintf(&buf, "%s MISSING\n", f)
-				continue
-			}
-			return nil, fmt.Errorf("read %s: %w", f, err)
-		}
-		sum := sha256.Sum256(data)
-		fmt.Fprintf(&buf, "%s %s\n", f, hex.EncodeToString(sum[:]))
-	}
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
 // packageClosure returns the set of import paths whose source file changes are
@@ -406,6 +411,13 @@ func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, e
 	h := sha256.New()
 	h.Write(base)
 
+	// godebug settings (go.mod directives, //go:debug lines, the language
+	// version defaults) change how the test binary behaves at runtime without
+	// changing any source file, and go list resolves them for us.
+	if tb := listing.testBinaries[pkg]; tb != nil && tb.DefaultGODEBUG != "" {
+		fmt.Fprintf(h, "GODEBUG %s\n", tb.DefaultGODEBUG)
+	}
+
 	closure := packageClosure(pkg, listing)
 
 	sorted := make([]string, 0, len(closure))
@@ -428,6 +440,7 @@ func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, e
 			// already mixed into the base hash; skip per-file hashing for speed.
 			continue
 		}
+		hashModuleIdentity(h, dp.Module)
 		if err := hashPackageFiles(h, dp, dep == pkg); err != nil {
 			return "", err
 		}
@@ -453,6 +466,16 @@ func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, e
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashModuleIdentity mixes the resolved module of a dependency into h,
+// following replacements to the module actually built. Version, language
+// version and go.sum checksums decide which source the build consumes, so they
+// must be inputs even when the files we hashed are byte-identical.
+func hashModuleIdentity(h hash.Hash, m *goListModule) {
+	for ; m != nil; m = m.Replace {
+		fmt.Fprintf(h, "MOD %s@%s go=%s sum=%s gomodsum=%s\n", m.Path, m.Version, m.GoVersion, m.Sum, m.GoModSum)
+	}
 }
 
 // hashPackageFiles mixes the content hashes of a package's source/embed files
@@ -511,10 +534,7 @@ func computeHashes(flags, patterns []string) (string, map[string]string, []strin
 		return "", nil, nil, err
 	}
 
-	base, err := commonHashBase(profileSig)
-	if err != nil {
-		return "", nil, nil, err
-	}
+	base := commonHashBase(profileSig)
 
 	hashes := make(map[string]string, len(selected))
 	for _, p := range selected {
@@ -797,6 +817,9 @@ func applyPasses(c *cacheFile, profileSig, description string, passed []string, 
 type packageTracker struct {
 	mu      sync.Mutex
 	results map[string]string // package -> "pass" | "fail" | "skip"
+	// onPass, when set, is invoked (from the output-streaming goroutine) for
+	// each package-level pass/skip event; it must be cheap and non-blocking.
+	onPass func(pkg string)
 }
 
 func newPackageTracker() *packageTracker {
@@ -823,6 +846,9 @@ func (t *packageTracker) observeLine(line []byte) {
 		t.mu.Lock()
 		t.results[ev.Package] = ev.Action
 		t.mu.Unlock()
+		if t.onPass != nil && ev.Action != "fail" {
+			t.onPass(ev.Package)
+		}
 	}
 }
 
@@ -843,6 +869,106 @@ func (t *packageTracker) passed() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// cacheFlushInterval bounds how often mid-run pass results are written to the
+// affected-tests cache: each write re-reads and re-marshals the whole cache
+// file, so batching amortizes that cost across package completions.
+const cacheFlushInterval = 2 * time.Second
+
+// cacheWriter persists package pass results to the affected-tests cache
+// incrementally on a dedicated goroutine, so a run killed mid-way still
+// benefits future runs. enqueue is cheap and never blocks on flock
+// acquisition or disk I/O, keeping the go test output-streaming path
+// unstalled.
+type cacheWriter struct {
+	profileSig  string
+	description string
+	hashes      map[string]string
+	flushFn     func(profileSig, description string, passed []string, hashes map[string]string) error
+	warn        func(error)
+
+	mu       sync.Mutex
+	pending  []string
+	enqueued map[string]bool
+
+	stop chan struct{}
+	done chan struct{}
+}
+
+// newCacheWriter starts the flush goroutine, which writes pending passes at
+// most once per tick. tick may be injected by tests; when nil, a ticker at
+// cacheFlushInterval is used. close must be called to stop the goroutine and
+// persist any remaining pending passes.
+func newCacheWriter(profileSig, description string, hashes map[string]string, tick <-chan time.Time, flushFn func(string, string, []string, map[string]string) error, warn func(error)) *cacheWriter {
+	w := &cacheWriter{
+		profileSig:  profileSig,
+		description: description,
+		hashes:      hashes,
+		flushFn:     flushFn,
+		warn:        warn,
+		enqueued:    map[string]bool{},
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
+	}
+	go func() {
+		defer close(w.done)
+		if tick == nil {
+			t := time.NewTicker(cacheFlushInterval)
+			defer t.Stop()
+			tick = t.C
+		}
+		for {
+			select {
+			case <-tick:
+				w.flushPending()
+			case <-w.stop:
+				w.flushPending()
+				return
+			}
+		}
+	}()
+	return w
+}
+
+// enqueue records a package pass for eventual persistence. Packages without a
+// computed hash are ignored (same eligibility filter as the end-of-run logic)
+// and each package is persisted at most once.
+func (w *cacheWriter) enqueue(pkg string) {
+	if _, ok := w.hashes[pkg]; !ok {
+		return
+	}
+	w.mu.Lock()
+	if !w.enqueued[pkg] {
+		w.enqueued[pkg] = true
+		w.pending = append(w.pending, pkg)
+	}
+	w.mu.Unlock()
+}
+
+func (w *cacheWriter) flushPending() {
+	w.mu.Lock()
+	batch := w.pending
+	w.pending = nil
+	w.mu.Unlock()
+	if len(batch) == 0 {
+		return
+	}
+	if err := w.flushFn(w.profileSig, w.description, batch, w.hashes); err != nil {
+		w.warn(err)
+		// Requeue so a later tick or the final flush retries the batch,
+		// merging with anything enqueued while the write was in flight.
+		w.mu.Lock()
+		w.pending = append(batch, w.pending...)
+		w.mu.Unlock()
+	}
+}
+
+// close signals the flush goroutine to perform a final flush of anything
+// still pending and waits for it to finish, so no observed pass is lost.
+func (w *cacheWriter) close() {
+	close(w.stop)
+	<-w.done
 }
 
 func runGoTest(flags, pkgs []string, stdout, stderr io.Writer, tracker *packageTracker) (int, error) {

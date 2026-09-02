@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
-	"github.com/erikgeiser/promptkit/selection"
-	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
 )
 
@@ -150,24 +148,18 @@ func exchangeOpenAICode(code, verifier, redirectURI string) (*openai_oauth.Crede
 }
 
 func handleOpenAIOAuthSubscription() error {
-	existingCreds, err := keyring.Get(keyringService, openai_oauth.SecretName)
-	if err != nil && err != keyring.ErrNotFound {
-		return fmt.Errorf("error checking existing OAuth credentials: %w", err)
+	profileIds, err := selectCredentialProfiles("OpenAI")
+	if err != nil {
+		return err
 	}
 
-	if existingCreds != "" {
-		overwriteSelection := selection.New(
-			"Existing OpenAI OAuth credentials found. What would you like to do?",
-			[]string{"Keep existing credentials", "Overwrite with new credentials"},
-		)
-		choice, err := overwriteSelection.RunPrompt()
-		if err != nil {
-			return fmt.Errorf("selection failed: %w", err)
-		}
-		if choice == "Keep existing credentials" {
-			fmt.Println("✔ Keeping existing OpenAI OAuth credentials.")
-			return nil
-		}
+	targetProfileIds, err := resolveTargetProfiles(profileIds, openai_oauth.SecretName, "OpenAI OAuth credentials")
+	if err != nil {
+		return err
+	}
+	if len(targetProfileIds) == 0 {
+		fmt.Println("✔ Keeping existing OpenAI OAuth credentials.")
+		return nil
 	}
 
 	if isOpenAIOAuthHeadlessEnvironment() {
@@ -176,7 +168,7 @@ func handleOpenAIOAuthSubscription() error {
 		if err != nil {
 			return err
 		}
-		return saveOpenAIOAuthCredentials(creds)
+		return saveOpenAIOAuthCredentials(creds, targetProfileIds)
 	}
 
 	verifier := oauth2.GenerateVerifier()
@@ -193,7 +185,7 @@ func handleOpenAIOAuthSubscription() error {
 		if deviceErr != nil {
 			return deviceErr
 		}
-		return saveOpenAIOAuthCredentials(creds)
+		return saveOpenAIOAuthCredentials(creds, targetProfileIds)
 	}
 	defer callbackServer.Close()
 
@@ -214,7 +206,7 @@ func handleOpenAIOAuthSubscription() error {
 		if deviceErr != nil {
 			return deviceErr
 		}
-		return saveOpenAIOAuthCredentials(creds)
+		return saveOpenAIOAuthCredentials(creds, targetProfileIds)
 	}
 
 	callback, err := waitForOpenAIOAuthCallback(callbackResults)
@@ -236,16 +228,16 @@ func handleOpenAIOAuthSubscription() error {
 		return fmt.Errorf("failed to exchange authorization code: %w", err)
 	}
 
-	return saveOpenAIOAuthCredentials(creds)
+	return saveOpenAIOAuthCredentials(creds, targetProfileIds)
 }
 
-func saveOpenAIOAuthCredentials(creds *openai_oauth.Credentials) error {
+func saveOpenAIOAuthCredentials(creds *openai_oauth.Credentials, profileIds []string) error {
 	credsJSON, err := json.Marshal(creds)
 	if err != nil {
 		return fmt.Errorf("failed to marshal OAuth credentials: %w", err)
 	}
 
-	if err := keyring.Set(keyringService, openai_oauth.SecretName, string(credsJSON)); err != nil {
+	if err := storeSecretForProfiles(profileIds, openai_oauth.SecretName, string(credsJSON)); err != nil {
 		return fmt.Errorf("error storing OAuth credentials in keyring: %w", err)
 	}
 

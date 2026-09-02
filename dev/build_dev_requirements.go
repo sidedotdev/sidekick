@@ -486,6 +486,7 @@ func devRequirementsTools(dCtx DevContext, hasExistingRequirements bool) []*llm.
 func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingRequirements bool) (common.MessageResponse, error) {
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	tools := devRequirementsTools(dCtx, hasExistingRequirements)
+	tools = appendWebSearchToolIfNonLocal(dCtx, tools)
 
 	// random order of tools to avoid bias in the LLM's use of the tools
 	// NOTE: disabled shuffling as it can mess with cache hit rate
@@ -522,7 +523,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 		Secrets:     *dCtx.Secrets,
 		ChatHistory: chatHistory,
 		WorkspaceId: dCtx.WorkspaceId,
-		Providers:   dCtx.Providers,
+		Providers:   dCtx.GetProviders(),
 	}
 
 	actionCtx := dCtx.NewActionContext("generate." + actionType)

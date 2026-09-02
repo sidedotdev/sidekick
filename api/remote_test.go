@@ -37,7 +37,6 @@ func TestDeviceAuthMiddleware(t *testing.T) {
 	}
 	require.NoError(t, service.CreateRemoteDevice(context.Background(), device))
 
-	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(DeviceAuthMiddleware(service))
 	router.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
@@ -57,6 +56,7 @@ func TestDeviceAuthMiddleware(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
 			req := httptest.NewRequest(http.MethodGet, "/ping", nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)

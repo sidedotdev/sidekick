@@ -11,6 +11,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -507,6 +508,30 @@ The symbol 'ExistsElsewhere' is defined in the following files:
 			},
 		},
 		{
+			name: "Symbol only present as a substring of other identifiers is not resolved via LSP",
+			code: `package cools
+
+import "runtime"
+
+const runActivityTaskQueue = "run-activity-script"
+
+func WontExistHere() {
+	runtime.Gosched()
+	println(runActivityTaskQueue)
+}`,
+			input: []FileSymDefRequest{
+				{
+					Symbols: []RequestedSymbol{{Name: "run"}},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'run'. However, it does contain the following symbols: runActivityTaskQueue, WontExistHere
+The symbol 'run' is not defined in any repo files.`,
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'run'. However, it does contain the following symbols: runActivityTaskQueue, WontExistHere
+The symbol 'run' is not defined in any repo files.`,
+			},
+		},
+		{
 			name:          "Symbol in different file - unsupported language degrades to name-search hint",
 			fileExtension: "py",
 			code: `def use():
@@ -826,6 +851,199 @@ func SecondFunc() {
 			} else if strings.TrimSpace(output.Failures) != strings.TrimSpace(tc.expectedOutput.Failures) {
 				t.Errorf("Expected failures %s, got %s", utils.PanicJSON(tc.expectedOutput.Failures), utils.PanicJSON(output.Failures))
 			}
+		})
+	}
+}
+
+// Reproduces the originally reported failure, where requesting symbols absent
+// from scripts/run_activity/main.go inlined Go toolchain runtime sources.
+func TestBulkGetSymbolDefinitionsRunActivityScriptRegression(t *testing.T) {
+	t.Parallel()
+
+	fixture, err := os.ReadFile(filepath.Join("test_files", "run_activity_main.go.txt"))
+	require.NoError(t, err)
+
+	testDir := t.TempDir()
+	_, err = utils.WriteTestFile(t, testDir, "main.go", string(fixture))
+	require.NoError(t, err)
+
+	ca := &CodingActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(language string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{LanguageName: language}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+	}
+
+	numLines := 0
+	output, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: testDir}},
+		Requests: []FileSymDefRequest{{
+			FilePath: "main.go",
+			Symbols:  []RequestedSymbol{{Name: "run"}, {Name: "findActivityEvent"}},
+		}},
+		NumContextLines: &numLines,
+	})
+	require.NoError(t, err)
+
+	assert.NotContains(t, output.SymbolDefinitions, "```go", "no definition should have been inlined for symbols absent from the file")
+	assert.Contains(t, output.Failures, "does not contain the symbol 'run'")
+	assert.Contains(t, output.Failures, "does not contain the symbol 'findActivityEvent'")
+}
+
+func TestBulkGetSymbolDefinitionsIgnoresUnrelatedLSPDefinition(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	_, err := utils.WriteTestFile(t, testDir, "file0.go", `package cools
+
+func WontExistHere() {
+	run()
+}`)
+	require.NoError(t, err)
+	otherFilePath, err := utils.WriteTestFile(t, testDir, "other_file.go", `package cools
+
+func unrelated() {
+	println("unrelated")
+}`)
+	require.NoError(t, err)
+
+	ca := &CodingActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(language string) lsp.LSPClient {
+				return lsp.MockLSPClient{
+					// mimics a language server resolving a position to a
+					// package clause rather than the requested symbol
+					TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+						return []lsp.Location{{
+							URI: "file://" + otherFilePath,
+							Range: lsp.Range{
+								Start: lsp.Position{Line: 0, Character: 8},
+								End:   lsp.Position{Line: 0, Character: 13},
+							},
+						}}, nil
+					},
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+	}
+
+	numLines := 0
+	output, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: testDir}},
+		Requests: []FileSymDefRequest{{
+			FilePath: "file0.go",
+			Symbols:  []RequestedSymbol{{Name: "run"}},
+		}},
+		NumContextLines: &numLines,
+	})
+	require.NoError(t, err)
+
+	assert.NotContains(t, output.SymbolDefinitions, "package cools")
+	assert.NotContains(t, output.SymbolDefinitions, "other_file.go")
+	assert.Contains(t, output.Failures, "does not contain the symbol 'run'")
+}
+
+func TestBulkGetSymbolDefinitionsRejectsLSPDefinitionOfDifferentToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		otherCode     string
+		definedRange  lsp.Range
+		unwantedInOut string
+	}{
+		{
+			name: "unrelated token sharing a line with the requested symbol's definition",
+			otherCode: `package cools
+
+func run() { runActivity() }
+
+func runActivity() {}`,
+			definedRange: lsp.Range{
+				Start: lsp.Position{Line: 2, Character: 13},
+				End:   lsp.Position{Line: 2, Character: 24},
+			},
+			unwantedInOut: "func run() {",
+		},
+		{
+			name: "unrelated token nested inside the same-named definition",
+			otherCode: `package cools
+
+func run() {
+	runCount := 1
+	println(runCount)
+}`,
+			definedRange: lsp.Range{
+				Start: lsp.Position{Line: 3, Character: 1},
+				End:   lsp.Position{Line: 3, Character: 9},
+			},
+			unwantedInOut: "func run()",
+		},
+		{
+			name: "range too broad to name the requested symbol",
+			otherCode: `package cools
+
+func run() {
+	println("run")
+}`,
+			definedRange: lsp.Range{
+				Start: lsp.Position{Line: 2, Character: 0},
+				End:   lsp.Position{Line: 4, Character: 1},
+			},
+			unwantedInOut: "func run()",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			testDir := t.TempDir()
+			_, err := utils.WriteTestFile(t, testDir, "file0.go", `package cools
+
+func WontExistHere() {
+	run()
+}`)
+			require.NoError(t, err)
+			otherFilePath, err := utils.WriteTestFile(t, testDir, "other_file.go", tc.otherCode)
+			require.NoError(t, err)
+
+			ca := &CodingActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(language string) lsp.LSPClient {
+						return lsp.MockLSPClient{
+							TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+								return []lsp.Location{{
+									URI:   "file://" + otherFilePath,
+									Range: tc.definedRange,
+								}}, nil
+							},
+						}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+				TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+			}
+
+			numLines := 0
+			output, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
+				EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: testDir}},
+				Requests: []FileSymDefRequest{{
+					FilePath: "file0.go",
+					Symbols:  []RequestedSymbol{{Name: "run"}},
+				}},
+				NumContextLines: &numLines,
+			})
+			require.NoError(t, err)
+
+			assert.NotContains(t, output.SymbolDefinitions, tc.unwantedInOut)
+			assert.Contains(t, output.Failures, "does not contain the symbol 'run'")
 		})
 	}
 }
@@ -1531,6 +1749,262 @@ func TestBulkGetSymbolDefinitionsMissingFullFileNoRepoScan(t *testing.T) {
 	recordingEnv.mu.Lock()
 	defer recordingEnv.mu.Unlock()
 	assert.Equal(t, []string{"Kanban.vue"}, recordingEnv.readPaths)
+}
+
+// Remote envs pay several network round trips per ReadFile, so all phases of
+// a BulkGetSymbolDefinitions call (symbol lookup, header retrieval, LSP
+// fallback, failure hints) must share a single read per file.
+func TestBulkGetSymbolDefinitionsReadsEachFileOnce(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"), []byte("package main\n\nfunc Alpha() int { return 1 }\n"), 0644))
+
+	t.Run("found symbol shares read with header retrieval", func(t *testing.T) {
+		t.Parallel()
+		recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+		ca := &CodingActivities{}
+		result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{Env: recordingEnv},
+			Requests: []FileSymDefRequest{
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, result.SymbolDefinitions, "func Alpha")
+
+		recordingEnv.mu.Lock()
+		defer recordingEnv.mu.Unlock()
+		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
+	})
+
+	t.Run("concurrent duplicate requests for one file coalesce to a single read", func(t *testing.T) {
+		t.Parallel()
+		recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+		ca := &CodingActivities{}
+		result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{Env: recordingEnv},
+			Requests: []FileSymDefRequest{
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}}},
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, result.SymbolDefinitions, "func Alpha")
+
+		recordingEnv.mu.Lock()
+		defer recordingEnv.mu.Unlock()
+		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
+	})
+
+	t.Run("related symbols and LSP fallback reuse the single read", func(t *testing.T) {
+		t.Parallel()
+		recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+		mockClient := lsp.MockLSPClient{
+			InitializeFunc: func(ctx context.Context, params lsp.InitializeParams) (lsp.InitializeResponse, error) {
+				return lsp.InitializeResponse{}, nil
+			},
+			// A reference pointing at Alpha's own declaration, so RelatedSymbols
+			// resolves symbols/signatures for the subject file itself.
+			TextDocumentReferencesFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+				return []lsp.Location{{
+					URI: "file://" + filepath.Join(testDir, "main.go"),
+					Range: lsp.Range{
+						Start: lsp.Position{Line: 2, Character: 5},
+						End:   lsp.Position{Line: 2, Character: 10},
+					},
+				}}, nil
+			},
+			TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+				return nil, nil
+			},
+		}
+		ca := &CodingActivities{
+			LSPActivities: lsp.NewLSPActivities(func(language string) lsp.LSPClient { return mockClient }),
+		}
+		result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+			EnvContainer:          env.EnvContainer{Env: recordingEnv},
+			IncludeRelatedSymbols: true,
+			Requests: []FileSymDefRequest{
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}, {Name: "Missing"}}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, result.SymbolDefinitions, "func Alpha")
+		assert.Contains(t, result.Failures, "Missing")
+
+		recordingEnv.mu.Lock()
+		defer recordingEnv.mu.Unlock()
+		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
+	})
+
+	t.Run("missing symbol shares read with failure hint probe", func(t *testing.T) {
+		t.Parallel()
+		recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+		ca := &CodingActivities{}
+		result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{Env: recordingEnv},
+			Requests: []FileSymDefRequest{
+				{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Missing"}}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, result.Failures, "Missing")
+
+		recordingEnv.mu.Lock()
+		defer recordingEnv.mu.Unlock()
+		assert.Equal(t, []string{"main.go"}, recordingEnv.readPaths)
+	})
+}
+
+// Related-symbol lookups for different symbols often share referencing files;
+// those reads must coalesce through the bulk invocation's shared read cache
+// instead of being repeated per symbol.
+func TestBulkGetSymbolDefinitionsRelatedSymbolsShareReads(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"),
+		[]byte("package main\n\nfunc Alpha() int { return 1 }\n\nfunc Beta() int { return 2 }\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "other.go"),
+		[]byte("package main\n\nfunc UseBoth() int { return Alpha() + Beta() }\n"), 0644))
+
+	recordingEnv := &readRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+	mockClient := lsp.MockLSPClient{
+		// Both symbols are referenced from the same file, so its read must be
+		// shared between the two related-symbol lookups.
+		TextDocumentReferencesFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
+			return []lsp.Location{{
+				URI: "file://" + filepath.Join(testDir, "other.go"),
+				Range: lsp.Range{
+					Start: lsp.Position{Line: 2, Character: 5},
+					End:   lsp.Position{Line: 2, Character: 12},
+				},
+			}}, nil
+		},
+	}
+	ca := &CodingActivities{
+		LSPActivities: lsp.NewLSPActivities(func(language string) lsp.LSPClient { return mockClient }),
+	}
+	result, err := ca.BulkGetSymbolDefinitions(context.Background(), DirectorySymDefRequest{
+		EnvContainer:          env.EnvContainer{Env: recordingEnv},
+		IncludeRelatedSymbols: true,
+		Requests: []FileSymDefRequest{
+			{FilePath: "main.go", Symbols: []RequestedSymbol{{Name: "Alpha"}, {Name: "Beta"}}},
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result.SymbolDefinitions, "UseBoth")
+
+	recordingEnv.mu.Lock()
+	defer recordingEnv.mu.Unlock()
+	assert.ElementsMatch(t, []string{"main.go", filepath.Join(testDir, "other.go")}, recordingEnv.readPaths)
+}
+
+// ctxAwareReadEnv fails reads once its context is canceled, like remote envs do.
+type ctxAwareReadEnv struct {
+	env.Env
+}
+
+func (e *ctxAwareReadEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.Env.ReadFile(ctx, path)
+}
+
+// retryProvingEnv blocks its first read until that read's context is canceled
+// and serves later reads normally.
+type retryProvingEnv struct {
+	env.Env
+	calls    atomic.Int32
+	inFlight chan struct{}
+}
+
+func (e *retryProvingEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	if e.calls.Add(1) == 1 {
+		close(e.inFlight)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return e.Env.ReadFile(ctx, path)
+}
+
+// While one caller's read is in flight, a waiter whose own context is canceled
+// must return promptly, and a live waiter must transparently retry when the
+// owning read is canceled rather than inheriting its failure.
+func TestEnvReadCacheWaitersDuringCanceledRead(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"), []byte("package main\n"), 0644))
+
+	readEnv := &retryProvingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}, inFlight: make(chan struct{})}
+	readCache := newEnvReadCache(readEnv)
+
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	defer cancelOwner()
+	ownerDone := make(chan error, 1)
+	go func() {
+		_, err := readCache.ReadFile(ownerCtx, "main.go")
+		ownerDone <- err
+	}()
+	<-readEnv.inFlight
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	canceledWaiterDone := make(chan error, 1)
+	go func() {
+		_, err := readCache.ReadFile(canceledCtx, "main.go")
+		canceledWaiterDone <- err
+	}()
+	select {
+	case err := <-canceledWaiterDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled waiter blocked behind an in-flight read")
+	}
+
+	liveWaiterDone := make(chan struct{})
+	var liveBytes []byte
+	var liveErr error
+	go func() {
+		defer close(liveWaiterDone)
+		liveBytes, liveErr = readCache.ReadFile(context.Background(), "main.go")
+	}()
+	// Let the live waiter join the in-flight read before canceling it.
+	time.Sleep(50 * time.Millisecond)
+	cancelOwner()
+
+	require.Error(t, <-ownerDone)
+	select {
+	case <-liveWaiterDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("live waiter did not retry after the owning read was canceled")
+	}
+	require.NoError(t, liveErr)
+	assert.Equal(t, "package main\n", string(liveBytes))
+}
+
+// A read canceled mid-flight answers nothing about the file, so it must not
+// poison the cache for later callers whose context is still live: one
+// related-symbols lookup failing (which cancels its sibling loads) must not
+// break another lookup sharing the cache.
+func TestEnvReadCacheRetriesAfterCanceledRead(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "main.go"), []byte("package main\n"), 0644))
+
+	readCache := newEnvReadCache(&ctxAwareReadEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}})
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := readCache.ReadFile(canceledCtx, "main.go")
+	require.Error(t, err)
+
+	fileBytes, err := readCache.ReadFile(context.Background(), "main.go")
+	require.NoError(t, err)
+	assert.Equal(t, "package main\n", string(fileBytes))
 }
 
 type cancellationRecordingEnv struct {

@@ -10,6 +10,7 @@ import (
 	"sidekick/llm"
 	"sidekick/llm2"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -231,7 +232,21 @@ func isHeartbeatError(err error) bool {
 	return timeoutErr.TimeoutType() == enumspb.TIMEOUT_TYPE_HEARTBEAT
 }
 
+// testCommandStartToCloseTimeout bounds a single test command activity. A
+// command like affected_tests over ./... aggregates many package test
+// binaries, so its wall time can far exceed any per-binary -test.timeout flag
+// and the ambient 5m activity default.
+const testCommandStartToCloseTimeout = 15 * time.Minute
+
 func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir string, fullCommand string, envContainer env.EnvContainer, resultsCh workflow.Channel) {
+	// Failed commands surface for user-initiated retry, so no automatic
+	// retries here.
+	if workflow.GetVersion(actionCtx, "long-test-command-timeout", workflow.DefaultVersion, 1) >= 1 {
+		actionCtx.Context = workflow.WithActivityOptions(actionCtx.Context, workflow.ActivityOptions{
+			StartToCloseTimeout: testCommandStartToCloseTimeout,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+		})
+	}
 	runTestInput := env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",

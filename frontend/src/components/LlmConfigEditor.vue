@@ -18,7 +18,8 @@
         class="model-input-wrapper"
         inputClass="model-input-inner"
         :suggestions="filteredModels"
-        :base-z-index="overlayBaseZIndex"
+        :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
+        :overlay-style="overlayStyle"
         @complete="(e) => searchModels(e, defaultConfig.provider)"
         @item-select="emitUpdate"
         @change="emitUpdate"
@@ -67,7 +68,8 @@
           inputClass="model-input-inner"
           :disabled="!useCaseStates[useCase].enabled"
           :suggestions="filteredModels"
-          :base-z-index="overlayBaseZIndex"
+          :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
+          :overlay-style="overlayStyle"
           @complete="(e) => searchModels(e, useCaseStates[useCase].config.provider)"
           @item-select="emitUpdate"
           @change="emitUpdate"
@@ -97,7 +99,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted } from 'vue'
+import { computed, ref, reactive, watch, onMounted } from 'vue'
 import AutoComplete from 'primevue/autocomplete'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
@@ -105,9 +107,16 @@ import { store, type ModelsData } from '../lib/store'
 const props = withDefaults(defineProps<{
   modelValue?: LLMConfig | null
   overlayBaseZIndex?: number
+  profileId?: string
 }>(), {
   overlayBaseZIndex: 0,
 })
+
+const overlayStyle = computed(() => (
+  props.overlayBaseZIndex > 0
+    ? { '--model-config-editor-overlay-z-index': props.overlayBaseZIndex }
+    : undefined
+))
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: LLMConfig): void
@@ -139,20 +148,38 @@ const providerOptions = ref<string[]>([])
 const providersError = ref(false)
 const reasoningEffortOptions = ['', 'lowest', 'low', 'medium', 'high', 'highest'] as const
 
+const providersUrl = (): string => (
+  props.profileId
+    ? `/api/v1/providers?profileId=${encodeURIComponent(props.profileId)}`
+    : '/api/v1/providers'
+)
+
+// Profile changes can leave earlier requests in flight, so only the most
+// recently issued response is applied.
+let latestProvidersRequestId = 0
+
 const fetchProviders = async () => {
+  const requestId = ++latestProvidersRequestId
   try {
-    const response = await fetch('/api/v1/providers')
+    const response = await fetch(providersUrl())
+    if (requestId !== latestProvidersRequestId) return
     if (response.ok) {
       const data = await response.json()
+      if (requestId !== latestProvidersRequestId) return
       providerOptions.value = data.providers || []
       providersError.value = false
     } else {
       providersError.value = true
     }
   } catch {
+    if (requestId !== latestProvidersRequestId) return
     providersError.value = true
   }
 }
+
+watch(() => props.profileId, () => {
+  fetchProviders()
+})
 
 const modelsData = ref<ModelsData>({})
 const filteredModels = ref<string[]>([])
@@ -292,6 +319,10 @@ watch(() => props.modelValue, (newValue) => {
 </script>
 
 <style scoped>
+:global(.model-config-editor-overlay) {
+  z-index: var(--model-config-editor-overlay-z-index) !important;
+}
+
 :disabled, :deep(.p-disabled), :deep(:disabled) {
   opacity: 0.5;
   cursor: not-allowed;

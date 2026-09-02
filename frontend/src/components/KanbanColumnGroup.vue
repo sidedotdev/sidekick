@@ -110,6 +110,9 @@ const groupedTasks = computed(() => {
 }
 
 h2 {
+  position: sticky;
+  top: 0;
+  z-index: 13;
   /* lines up with the task card padding */
   padding-left: calc(var(--task-pad) / 2);
   display: flex;
@@ -118,6 +121,7 @@ h2 {
   justify-content: space-between;
   font-weight: 400;
   font-size: 1.2rem;
+  background-color: var(--color-background);
 }
 
 .new-task {

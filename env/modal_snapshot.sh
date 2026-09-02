@@ -44,8 +44,15 @@ trap 'rm -f "$response_file" "$error_file"' EXIT HUP INT TERM
 meta="${SIDE_SANDBOX_META:-}"
 [ -n "$meta" ] || meta='{}'
 payload="{\"name\":\"$SIDE_SANDBOX_NAME\",\"token\":\"$SIDE_GUARD_TOKEN\",\"phase\":\"$phase\",\"imageVersion\":${SIDE_IMAGE_VERSION:-0},\"meta\":$meta}"
+# The guard holds the HTTP request open while the snapshot runs, so the curl
+# cutoff must outlive the guard's SNAPSHOT_TIMEOUT_SECONDS deadline (see
+# modal_guard_app.py); terminate responds quickly.
+case "$phase" in
+    snapshot) curl_timeout=170 ;;
+    *) curl_timeout=60 ;;
+esac
 log "guard $phase request dispatched"
-status=$(curl -sS -m 60 -o "$response_file" -w '%{http_code}' \
+status=$(curl -sS -m "$curl_timeout" -o "$response_file" -w '%{http_code}' \
     -X POST "$SIDE_GUARD_URL" \
     -H 'Content-Type: application/json' \
     -d "$payload" 2>"$error_file")

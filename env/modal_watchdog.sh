@@ -92,12 +92,12 @@ guard_post() {
         terminate) attempt=$((terminate_failures + 1)) ;;
     esac
     last_attempt=$(date +%s)
-    log "guard $phase request starting (attempt $attempt of 20)"
+    log "guard $phase request starting (attempt $attempt)"
     if /usr/local/bin/sidekick-snapshot "$phase"; then
-        log "guard $phase request succeeded (attempt $attempt of 20)"
+        log "guard $phase request succeeded (attempt $attempt)"
         return 0
     fi
-    log "guard $phase request failed (attempt $attempt of 20); see /var/log/sidekick-watchdog.log for response details"
+    log "guard $phase request failed (attempt $attempt); see /var/log/sidekick-watchdog.log for response details"
     return 1
 }
 
@@ -173,12 +173,22 @@ while :; do
             failures=$terminate_failures
             ;;
     esac
-    log "guard $failed_phase retry scheduled after failure $failures of 20"
+    log "guard $failed_phase retry scheduled after failure $failures"
     if [ "$failures" -ge 20 ]; then
-        # guard unreachable: stop the bleeding by ending pid 1, which
-        # terminates the sandbox (without a new snapshot)
-        log "guard $failed_phase unreachable after $failures attempts: terminating sandbox"
-        kill 1
+        case "$failed_phase" in
+            terminate)
+                # this cycle's snapshot succeeded, so nothing is lost: stop
+                # the bleeding by ending pid 1, which terminates the sandbox
+                log "guard terminate unreachable after $failures attempts: terminating sandbox"
+                kill 1
+                ;;
+            snapshot)
+                # never self-terminate without a fresh snapshot: work since
+                # the last successful one would be lost permanently
+                log "guard snapshot still failing after $failures attempts; retrying at a slower cadence"
+                sleep 570
+                ;;
+        esac
     fi
     # keep at least 30s between guard attempts; a slow failure (curl timeout)
     # plus the loop's own poll sleep may already cover it

@@ -46,6 +46,7 @@
             id="startBranch"
             v-model="selectedBranch"
             :workspaceId="workspaceId"
+            allow-create
           />
         </div>
       </div>
@@ -351,13 +352,17 @@ const redo = () => {
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
 const shortcutLabel = computed(() => isMac ? '⌘↵' : 'Ctrl+↵')
 
+const handleGlobalEscape = (event: KeyboardEvent) => {
+  if (event.key !== 'Escape') return
+
+  event.preventDefault()
+  close()
+}
+
 const handleKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
   
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    close()
-  } else if (modKey && event.key === 'Enter') {
+  if (modKey && event.key === 'Enter') {
     event.preventDefault()
     startTask()
   } else if (modKey && event.key === 'z' && !event.shiftKey) {
@@ -706,6 +711,8 @@ const close = async () => {
 }
 
 onMounted(() => {
+  document.addEventListener('keydown', handleGlobalEscape)
+
   // Initialize history with current state
   pushHistory()
   if (isIdd.value) {
@@ -718,6 +725,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('keydown', handleGlobalEscape)
+
   if (saveDebounceTimer.value) {
     clearTimeout(saveDebounceTimer.value)
   }

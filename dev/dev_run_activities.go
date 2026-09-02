@@ -310,6 +310,17 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 func buildDevRunCmd(ctx context.Context, envContainer env.EnvContainer, command, workingDir string, envVars []string) (*exec.Cmd, error) {
 	if envContainer.Env != nil {
 		if sshEnv, ok := envContainer.Env.(env.SSHCapableEnv); ok {
+			probeOutput, err := envContainer.Env.RunCommand(ctx, env.EnvRunCommandInput{
+				Command: "true",
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to prepare SSH transport for dev run: %w", err)
+			}
+			if probeOutput.ExitStatus != 0 {
+				return nil, fmt.Errorf("failed to prepare SSH transport for dev run: exit %d: %s", probeOutput.ExitStatus, probeOutput.Stderr)
+			}
+			env.HoldReverseForwards(ctx, sshEnv)
+
 			sshArgs, err := sshEnv.SSHArgs(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get SSH args for env: %w", err)

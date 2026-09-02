@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	tree_sitter_lib "github.com/tree-sitter/go-tree-sitter"
 )
@@ -215,6 +216,14 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 		}, nil
 	}
 
+	// Coalesce repeated reads of the same file across this invocation's
+	// phases (symbol lookup, header retrieval, LSP fallback, related symbols,
+	// failure hints): each read costs several network round trips on remote
+	// envs. Subsystems that type-assert on the concrete env type (entry
+	// walks, LSP clients) still receive the original container.
+	readCache := newEnvReadCache(dirSymDefRequest.EnvContainer.Env)
+	cachedEnvContainer := env.EnvContainer{Env: readCache}
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var results []SymbolRetrievalResult
@@ -230,7 +239,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 			symbolNames[i] = s.Name
 		}
 		if shouldRetrieveFullFile(symbolNames, req.FilePath) {
-			result := getWildcardRetrievalResult(ctx, dirSymDefRequest.EnvContainer, symbolNames, req.FilePath)
+			result := getWildcardRetrievalResult(ctx, cachedEnvContainer, symbolNames, req.FilePath)
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
@@ -245,7 +254,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 		request := req
 		go func(req FileSymDefRequest) {
 			defer wg.Done()
-			symbolResults := ca.retrieveSymbolDefinitions(ctx, dirSymDefRequest.EnvContainer, req, numContextLines, dirSymDefRequest.IncludeRelatedSymbols)
+			symbolResults := ca.retrieveSymbolDefinitions(ctx, dirSymDefRequest.EnvContainer, readCache, req, numContextLines, dirSymDefRequest.IncludeRelatedSymbols)
 
 			// The file's headers (e.g. package/imports) are only useful when at
 			// least one symbol was actually found in the requested file. When
@@ -259,7 +268,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 				}
 			}
 			if hasInFileResult {
-				result := getHeaderRetrievalResult(ctx, dirSymDefRequest.EnvContainer.Env, req.FilePath, numContextLines)
+				result := getHeaderRetrievalResult(ctx, readCache, req.FilePath, numContextLines)
 				mu.Lock()
 				results = append(results, result)
 				mu.Unlock()
@@ -316,7 +325,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 					relativeFilePathsBySymbolName = filePaths
 				}
 
-				hint := getHintForSymbolDefResultFailure(ctx, dirSymDefRequest.EnvContainer, result.Error, result.RelativePath, result.SymbolName, &relativeFilePathsBySymbolName)
+				hint := getHintForSymbolDefResultFailure(ctx, cachedEnvContainer, result.Error, result.RelativePath, result.SymbolName, &relativeFilePathsBySymbolName)
 				fileContentBuilder.WriteString(hint)
 				fileContentBuilder.WriteString("\n")
 				fileFailureBuilder.WriteString(hint)
@@ -891,14 +900,96 @@ func shouldRetrieveFullFile(symbols []string, absolutePath string) bool {
 	return isWildcard
 }
 
-func (ca *CodingActivities) retrieveSymbolDefinitions(ctx context.Context, envContainer env.EnvContainer, symDefRequest FileSymDefRequest, numContextLines int, includeRelatedSymbols bool) []SymbolRetrievalResult {
+// envReadCache coalesces and caches Env.ReadFile calls for the duration of a
+// single BulkGetSymbolDefinitions invocation, where multiple phases would
+// otherwise re-read the same files at a cost of several network round trips
+// per read on remote envs. Instances must not outlive one invocation since
+// files may change in between. Relative and absolute forms of a path share
+// one entry.
+type envReadCache struct {
+	env.Env
+	mu      sync.Mutex
+	entries map[string]*envReadCacheEntry
+}
+
+// envReadCacheEntry represents one in-flight or completed read; done is closed
+// once fileBytes/err are set.
+type envReadCacheEntry struct {
+	done      chan struct{}
+	fileBytes []byte
+	err       error
+}
+
+func newEnvReadCache(e env.Env) *envReadCache {
+	return &envReadCache{Env: e, entries: make(map[string]*envReadCacheEntry)}
+}
+
+func (c *envReadCache) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	key := c.cacheKey(path)
+	for {
+		c.mu.Lock()
+		entry, ok := c.entries[key]
+		if !ok {
+			entry = &envReadCacheEntry{done: make(chan struct{})}
+			c.entries[key] = entry
+			c.mu.Unlock()
+
+			fileBytes, err := c.Env.ReadFile(ctx, path)
+			if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				// A canceled read answers nothing about the file; drop the
+				// entry before publishing so a caller with a live context
+				// retries instead of inheriting this failure.
+				c.mu.Lock()
+				delete(c.entries, key)
+				c.mu.Unlock()
+				entry.err = err
+				close(entry.done)
+				return nil, err
+			}
+			entry.fileBytes, entry.err = fileBytes, err
+			close(entry.done)
+			return fileBytes, err
+		}
+		c.mu.Unlock()
+
+		select {
+		case <-entry.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		c.mu.Lock()
+		authoritative := c.entries[key] == entry
+		c.mu.Unlock()
+		if authoritative {
+			return entry.fileBytes, entry.err
+		}
+		// The owning read was canceled; retry under our own context.
+	}
+}
+
+// cacheKey resolves relative paths against the working directory so relative
+// and absolute references to the same file share one entry.
+func (c *envReadCache) cacheKey(p string) string {
+	sep := env.EnvSeparator(c.Env)
+	isAbs := strings.HasPrefix(p, sep)
+	if sep == string(filepath.Separator) {
+		isAbs = filepath.IsAbs(p)
+	}
+	if !isAbs {
+		p = c.GetWorkingDirectory() + sep + p
+	}
+	return env.EnvClean(c.Env, p)
+}
+
+func (ca *CodingActivities) retrieveSymbolDefinitions(ctx context.Context, envContainer env.EnvContainer, readCache *envReadCache, symDefRequest FileSymDefRequest, numContextLines int, includeRelatedSymbols bool) []SymbolRetrievalResult {
 	results := make([]SymbolRetrievalResult, len(symDefRequest.Symbols))
 	var extras []SymbolRetrievalResult
 	var extrasMu sync.Mutex
 	var wg sync.WaitGroup
 
 	// Read the file once for all symbol lookups.
-	fileBytes, readErr := envContainer.Env.ReadFile(ctx, symDefRequest.FilePath)
+	fileBytes, readErr := readCache.ReadFile(ctx, symDefRequest.FilePath)
 	langName := utils.InferLanguageNameFromFilePath(symDefRequest.FilePath)
 
 	for i, sym := range symDefRequest.Symbols {
@@ -945,10 +1036,12 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(ctx context.Context, envCo
 			if err == nil && includeRelatedSymbols && len(sourceBlocks) > 0 && sourceBlocks[0].NameRange != nil {
 				symbolNameRange := sitterToLspRange(*sourceBlocks[0].NameRange)
 				related, relatedErr := ca.RelatedSymbolsActivity(ctx, RelatedSymbolsActivityInput{
-					RelativeFilePath: symDefRequest.FilePath,
-					SymbolText:       symbol,
-					EnvContainer:     envContainer,
-					SymbolRange:      &symbolNameRange,
+					RelativeFilePath:     symDefRequest.FilePath,
+					SymbolText:           symbol,
+					EnvContainer:         envContainer,
+					SymbolRange:          &symbolNameRange,
+					PreloadedFileContent: fileBytes,
+					ReadFile:             readCache.ReadFile,
 				})
 				if relatedErr == nil {
 					result.RelatedSymbols = related
@@ -967,7 +1060,7 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(ctx context.Context, envCo
 				return
 			}
 
-			resolved := ca.resolveSymbolDefinitionViaLSP(ctx, envContainer, symDefRequest.FilePath, symbol, referenceLine, numContextLines)
+			resolved := ca.resolveSymbolDefinitionViaLSP(ctx, envContainer, readCache, fileBytes, symDefRequest.FilePath, symbol, referenceLine, numContextLines)
 			if len(resolved) == 0 {
 				return
 			}
@@ -1007,15 +1100,16 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(ctx context.Context, envCo
 // possibly from another repo file or a third-party library. Returns one
 // SymbolRetrievalResult per resolved location. Returns nil when LSP resolves
 // nothing or errors so callers can fall back to the existing name-search hint.
-func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, envContainer env.EnvContainer, filePath, symbol, referenceLine string, numContextLines int) []SymbolRetrievalResult {
+func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, envContainer env.EnvContainer, readCache *envReadCache, fileBytes []byte, filePath, symbol, referenceLine string, numContextLines int) []SymbolRetrievalResult {
 	if ca.LSPActivities == nil || ca.LSPActivities.LSPClientProvider == nil {
 		return nil
 	}
 	locations, err := ca.LSPActivities.GetSingleFileDefinitions(ctx, lsp.LSPDefinitionLocationsRequest{
-		FilePath:      filePath,
-		EnvContainer:  &envContainer,
-		Symbols:       []string{symbol},
-		ReferenceLine: referenceLine,
+		FilePath:             filePath,
+		EnvContainer:         &envContainer,
+		Symbols:              []string{symbol},
+		ReferenceLine:        referenceLine,
+		PreloadedFileContent: fileBytes,
 	})
 	if err != nil {
 		return nil
@@ -1039,8 +1133,16 @@ func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, e
 			continue
 		}
 		absPath := parsedURL.Path
-		defBytes, readErr := envContainer.Env.ReadFile(ctx, absPath)
+		defBytes, readErr := readCache.ReadFile(ctx, absPath)
 		if readErr != nil {
+			continue
+		}
+
+		// Nothing may be inlined unless the language server pointed at the
+		// requested symbol itself: a location naming another token, or a range
+		// too broad to name anything, resolves to something the caller did not
+		// ask for.
+		if !lspRangeNamesSymbol(defBytes, loc.Location.Range, resolvedSymbolName) {
 			continue
 		}
 
@@ -1049,22 +1151,8 @@ func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, e
 		if len(blocks) == 0 && resolvedSymbolName != symbol {
 			blocks, _ = tree_sitter.GetSymbolDefinitionsFromBytes(resolvedLang, defBytes, symbol, numContextLines)
 		}
-		// When the resolved file contains multiple same-named definitions
-		// (e.g. a free function and a method with the same selector), keep
-		// only blocks whose range contains the LSP-pointed definition row.
-		if len(blocks) > 1 {
-			locStartRow := uint(loc.Location.Range.Start.Line)
-			locEndRow := uint(loc.Location.Range.End.Line)
-			filtered := blocks[:0]
-			for _, b := range blocks {
-				if b.Range.StartPoint.Row <= locStartRow && b.Range.EndPoint.Row >= locEndRow {
-					filtered = append(filtered, b)
-				}
-			}
-			if len(filtered) > 0 {
-				blocks = filtered
-			}
-		}
+		blocks = blocksDefiningLSPSymbol(blocks, defBytes, loc.Location.Range)
+
 		if len(blocks) == 0 {
 			blocks = tree_sitter.ExpandContextLines(
 				[]tree_sitter.SourceBlock{sourceBlockFromLSPRange(defBytes, loc.Location.Range)},
@@ -1089,6 +1177,94 @@ func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, e
 		}
 	}
 	return out
+}
+
+// blocksDefiningLSPSymbol keeps only the blocks whose defined name is the very
+// token a language server pointed at. Row overlap alone is not enough: an
+// unrelated token sharing a line, or nested within a same-named definition,
+// must not authorize inlining that definition.
+func blocksDefiningLSPSymbol(blocks []tree_sitter.SourceBlock, source []byte, r lsp.Range) []tree_sitter.SourceBlock {
+	startByte, endByte, ok := lspRangeByteSpan(source, r)
+	if !ok {
+		return nil
+	}
+
+	var matching []tree_sitter.SourceBlock
+	for _, block := range blocks {
+		nameStartByte, nameEndByte, hasName := blockNameSpan(block)
+		if !hasName {
+			continue
+		}
+		if startByte < nameEndByte && endByte > nameStartByte {
+			matching = append(matching, block)
+		}
+	}
+	return matching
+}
+
+func blockNameSpan(block tree_sitter.SourceBlock) (startByte, endByte uint, ok bool) {
+	if block.NameRange == nil || block.NameRange.EndByte <= block.NameRange.StartByte {
+		return 0, 0, false
+	}
+	return block.NameRange.StartByte, block.NameRange.EndByte, true
+}
+
+// lspRangeNamesSymbol reports whether the exact source text an LSP location
+// covers is the requested symbol name, rather than merely sharing a line with
+// it.
+func lspRangeNamesSymbol(source []byte, r lsp.Range, symbolName string) bool {
+	startByte, endByte, ok := lspRangeByteSpan(source, r)
+	if !ok || startByte == endByte {
+		return false
+	}
+	return strings.TrimSpace(string(source[startByte:endByte])) == symbolName
+}
+
+func lspRangeByteSpan(source []byte, r lsp.Range) (startByte, endByte uint, ok bool) {
+	startByte, ok = lspPositionByteOffset(source, r.Start)
+	if !ok {
+		return 0, 0, false
+	}
+	endByte, ok = lspPositionByteOffset(source, r.End)
+	if !ok || endByte < startByte {
+		return 0, 0, false
+	}
+	return startByte, endByte, true
+}
+
+// lspPositionByteOffset converts an LSP position, whose character offset is
+// counted in UTF-16 code units, into a byte offset within source.
+func lspPositionByteOffset(source []byte, position lsp.Position) (uint, bool) {
+	if position.Line < 0 || position.Character < 0 {
+		return 0, false
+	}
+
+	lineStart := 0
+	for line := 0; line < position.Line; line++ {
+		newlineIndex := bytes.IndexByte(source[lineStart:], '\n')
+		if newlineIndex < 0 {
+			return 0, false
+		}
+		lineStart += newlineIndex + 1
+	}
+	lineEnd := len(source)
+	if newlineIndex := bytes.IndexByte(source[lineStart:], '\n'); newlineIndex >= 0 {
+		lineEnd = lineStart + newlineIndex
+	}
+
+	units := 0
+	for offset := lineStart; offset < lineEnd; {
+		if units >= position.Character {
+			return uint(offset), true
+		}
+		r, size := utf8.DecodeRune(source[offset:lineEnd])
+		units++
+		if r > 0xFFFF {
+			units++
+		}
+		offset += size
+	}
+	return uint(lineEnd), true
 }
 
 // sourceBlockFromLSPRange builds a SourceBlock spanning the line range of an

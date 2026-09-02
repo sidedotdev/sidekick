@@ -206,3 +206,121 @@ func TestShouldIgnorePath(t *testing.T) {
 		})
 	}
 }
+
+// saveViaRename mimics how editors and IDEs persist a file: write a temp file
+// outside the target directory, then rename it into place.
+func saveViaRename(t *testing.T, dest, contents string) {
+	t.Helper()
+	tmp := writeFile(t, filepath.Join(t.TempDir(), "editor-save-tmp"), contents)
+	require.NoError(t, os.Rename(tmp, dest))
+}
+
+// TestIddWatchEditIdleActivity_DetectsNestedDirectIdeEdits covers direct edits
+// made outside the canvas: an IDE saving intent via rename into a nested
+// intent subdirectory of the server-local IDD worktree.
+func TestIddWatchEditIdleActivity_DetectsNestedDirectIdeEdits(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	nestedDir := filepath.Join(worktree, "intent", "idd")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	type result struct {
+		out IddWatchEditIdleResult
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		out, err := IddWatchEditIdleActivity(ctx, IddWatchEditIdleInput{
+			WorktreeDir:  worktree,
+			WatchSubdir:  "intent",
+			IdleDuration: 150 * time.Millisecond,
+			MaxWait:      10 * time.Second,
+		})
+		resCh <- result{out, err}
+	}()
+
+	// Give the watcher a moment to install its inotify hooks before writing.
+	time.Sleep(50 * time.Millisecond)
+	save := func() {
+		saveViaRename(t, filepath.Join(nestedDir, "idd.md"), "# idd intent\n")
+	}
+	save()
+
+	// Hook installation can lag past the initial sleep on a loaded machine, so
+	// the save is repeated until a settled batch is reported.
+	retryTicker := time.NewTicker(500 * time.Millisecond)
+	defer retryTicker.Stop()
+	deadline := time.After(12 * time.Second)
+	for {
+		select {
+		case r := <-resCh:
+			require.NoError(t, r.err)
+			assert.False(t, r.out.TimedOut)
+			assert.Equal(t, []string{"intent/idd/idd.md"}, r.out.ChangedPaths)
+			return
+		case <-retryTicker.C:
+			save()
+		case <-deadline:
+			t.Fatal("watcher did not report the nested intent edit")
+		}
+	}
+}
+
+// TestIddWatchEditIdleActivity_DetectsEditsInDirectoryCreatedAfterStart covers
+// a new intent subdirectory appearing while the watcher runs: its contents must
+// be watched too, otherwise whole new intent areas would go unnoticed.
+func TestIddWatchEditIdleActivity_DetectsEditsInDirectoryCreatedAfterStart(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	intentDir := filepath.Join(worktree, "intent")
+	require.NoError(t, os.MkdirAll(intentDir, 0o755))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	type result struct {
+		out IddWatchEditIdleResult
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		out, err := IddWatchEditIdleActivity(ctx, IddWatchEditIdleInput{
+			WorktreeDir:  worktree,
+			WatchSubdir:  "intent",
+			IdleDuration: 150 * time.Millisecond,
+			MaxWait:      10 * time.Second,
+		})
+		resCh <- result{out, err}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	newSubtree := filepath.Join(intentDir, "subsystems")
+	// Both the directory registration and the write may need retrying: the
+	// watcher only observes writes once it has hooked the new directory.
+	createAndSave := func() {
+		require.NoError(t, os.MkdirAll(newSubtree, 0o755))
+		time.Sleep(100 * time.Millisecond)
+		writeFile(t, filepath.Join(newSubtree, "api.md"), "# api intent\n")
+	}
+	createAndSave()
+
+	retryTicker := time.NewTicker(500 * time.Millisecond)
+	defer retryTicker.Stop()
+	deadline := time.After(12 * time.Second)
+	for {
+		select {
+		case r := <-resCh:
+			require.NoError(t, r.err)
+			assert.False(t, r.out.TimedOut)
+			assert.Equal(t, []string{"intent/subsystems/api.md"}, r.out.ChangedPaths)
+			return
+		case <-retryTicker.C:
+			createAndSave()
+		case <-deadline:
+			t.Fatal("watcher did not report the edit in the newly created intent subdirectory")
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package check
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,97 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
+
+// readCountingEnv counts per-file reads, which stand in for network round
+// trips on remote environments.
+type readCountingEnv struct {
+	env.Env
+	readFileCalls int
+}
+
+func (e *readCountingEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	e.readFileCalls++
+	return e.Env.ReadFile(ctx, path)
+}
+
+// commandRecordingEnv records commands run through the environment.
+type commandRecordingEnv struct {
+	env.Env
+	commands []env.EnvRunCommandInput
+}
+
+func (e *commandRecordingEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
+	e.commands = append(e.commands, input)
+	return e.Env.RunCommand(ctx, input)
+}
+
+func countGoCommands(cmds []env.EnvRunCommandInput) int {
+	n := 0
+	for _, c := range cmds {
+		if c.Command == "go" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestCheckFileValidity_GoBuildCheckOffByDefault(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	assert.NoError(t, writeNamedTempFile(t, testDir, "main.go", "package main\n\nfunc main() {}\n"))
+
+	recEnv := &commandRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+	passed, errStr, err := CheckFileValidity(t.Context(), env.EnvContainer{Env: recEnv}, "main.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+	assert.Zero(t, countGoCommands(recEnv.commands), "go build check must be off by default")
+}
+
+func TestCheckFileValidity_GoBuildCheckEnabledViaOptions(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	assert.NoError(t, writeNamedTempFile(t, testDir, "main.go", "package main\n\nfunc main() {}\n"))
+
+	recEnv := &commandRecordingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+	passed, errStr, err := CheckFileValidityWithOptions(t.Context(), env.EnvContainer{Env: recEnv}, "main.go",
+		CheckFileValidityOptions{EnableGoBuildCheck: true})
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+	assert.Equal(t, 1, countGoCommands(recEnv.commands), "go build check should run when enabled")
+}
+
+func TestCheckViaGoBuild_NoPerFileReadsForBuildTagFiltering(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+	numFiles := 30
+	for i := 0; i < numFiles; i++ {
+		var code string
+		switch i % 3 {
+		case 0:
+			code = fmt.Sprintf("//go:build linux || darwin\n\npackage main\n\nconst posixConst%d = %d\n", i, i)
+		case 1:
+			code = fmt.Sprintf("//go:build windows\n\npackage main\n\nconst windowsConst%d = %d\n", i, i)
+		default:
+			code = fmt.Sprintf("package main\n\nconst plainConst%d = %d\n", i, i)
+		}
+		assert.NoError(t, writeNamedTempFile(t, testDir, fmt.Sprintf("file%02d.go", i), code))
+	}
+	mainCode := "//go:build linux || darwin\n\npackage main\n\nfunc main() {}\n"
+	assert.NoError(t, writeNamedTempFile(t, testDir, "main.go", mainCode))
+
+	countingEnv := &readCountingEnv{Env: &env.LocalEnv{WorkingDirectory: testDir}}
+	envContainer := env.EnvContainer{Env: countingEnv}
+
+	passed, errStr, err := CheckViaGoBuild(t.Context(), envContainer, "main.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+
+	assert.Zero(t, countingEnv.readFileCalls,
+		"build-tag filtering should gather constraint headers in a single command round trip, not one read per file")
+}
 
 func writeTempFile(t *testing.T, extension, code string) (string, string, error) {
 	testDir := t.TempDir()

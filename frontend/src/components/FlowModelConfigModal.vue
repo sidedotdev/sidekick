@@ -34,6 +34,31 @@
           always-show-editor
         />
 
+        <fieldset v-if="modalConfig" class="modal-environment">
+          <legend>Modal environment</legend>
+          <p>Applying these settings snapshots and recreates the current sandbox.</p>
+          <label>
+            <input v-model="modalConfig.vm" type="checkbox" />
+            VM runtime
+          </label>
+          <label>
+            CPU request
+            <input v-model.number="modalConfig.cpu" type="number" min="0.125" step="0.125" />
+          </label>
+          <label>
+            CPU limit
+            <input v-model.number="modalConfig.cpuLimit" type="number" min="0" step="0.125" />
+          </label>
+          <label>
+            Memory request (MiB)
+            <input v-model.number="modalConfig.memory" type="number" min="128" step="128" />
+          </label>
+          <label>
+            Memory limit (MiB)
+            <input v-model.number="modalConfig.memoryLimit" type="number" min="0" step="128" />
+          </label>
+        </fieldset>
+
         <div v-if="applyError" class="error-state" role="alert">
           {{ applyError }}
         </div>
@@ -63,7 +88,7 @@ import {
   type ModelConfigPresetEditorState,
 } from '../composables/useModelConfigPresets'
 import { llmConfigsEqual } from '../lib/llmPresetStorage'
-import type { LLMConfig } from '../lib/models'
+import type { LLMConfig, ModalEnvConfig } from '../lib/models'
 
 const props = defineProps<{
   workspaceId: string
@@ -79,6 +104,8 @@ const POLL_INTERVAL_MS = 250
 const MAX_POLL_ATTEMPTS = 20
 
 const editor = shallowRef<ModelConfigPresetEditorState | null>(null)
+const modalConfig = ref<ModalEnvConfig | null>(null)
+const initialModalConfig = ref<ModalEnvConfig | null>(null)
 const isLoading = ref(true)
 const isApplying = ref(false)
 const loadError = ref('')
@@ -124,12 +151,29 @@ const loadConfiguration = async () => {
 
   try {
     const config = await queryConfiguration()
+    let loadedModalConfig: ModalEnvConfig | null = null
+    const modalResponse = await fetch(
+      `/api/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/query`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: 'modal_config' }),
+      },
+    )
+    if (modalResponse.ok) {
+      const body = await modalResponse.json()
+      loadedModalConfig = body.result ?? null
+    }
     if (!disposed) {
       editor.value = useModelConfigPresets(config, {
         initiallyCustom: true,
         useDefaultWhenMissing: false,
         workspaceId: props.workspaceId,
       })
+      modalConfig.value = loadedModalConfig
+      initialModalConfig.value = loadedModalConfig
+        ? JSON.parse(JSON.stringify(loadedModalConfig))
+        : null
     }
   } catch (error) {
     if (!disposed) {
@@ -184,6 +228,23 @@ const applyConfiguration = async () => {
       throw new Error(await getErrorMessage(response))
     }
 
+    if (
+      modalConfig.value &&
+      JSON.stringify(modalConfig.value) !== JSON.stringify(initialModalConfig.value)
+    ) {
+      const modalResponse = await fetch(
+        `/api/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/modal_config`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config: modalConfig.value }),
+        },
+      )
+      if (!modalResponse.ok) {
+        throw new Error(await getErrorMessage(modalResponse))
+      }
+    }
+
     const applied = await pollUntilApplied(submittedConfig)
     if (!applied) {
       applyError.value = 'The workflow accepted the update but did not apply it in time. Retry to check or submit again.'
@@ -219,6 +280,23 @@ onBeforeUnmount(() => {
   z-index: 1100;
   background: var(--vt-c-black);
   opacity: 0.7;
+}
+
+.modal-environment {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.modal-environment label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.modal-environment input[type='number'] {
+  width: 8rem;
 }
 
 .model-config-modal {

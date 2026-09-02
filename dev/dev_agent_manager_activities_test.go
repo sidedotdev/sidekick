@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/mocks"
 	"sidekick/srv/sqlite"
@@ -251,4 +252,51 @@ func TestCleanupStaleWorktrees_DeletesBranch(t *testing.T) {
 	// The branch should have been deleted from the repository.
 	branchListAfter := run("git", "--git-dir", mainGitDir, "branch", "--list", branchName)
 	assert.Empty(t, branchListAfter, "branch should be deleted after cleanup")
+}
+
+func TestFindHibernationCandidates_SkipsAlreadyHibernated(t *testing.T) {
+	t.Parallel()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
+	ctx := context.Background()
+	workspaceId := "ws_hibcandidates"
+
+	persistTaskFlowWorktree := func(suffix, dir string) {
+		taskId := "task_" + suffix
+		flowId := "flow_" + suffix
+		require.NoError(t, storage.PersistTask(ctx, domain.Task{
+			WorkspaceId: workspaceId,
+			Id:          taskId,
+			Status:      domain.TaskStatusBlocked,
+		}))
+		require.NoError(t, storage.PersistFlow(ctx, domain.Flow{
+			WorkspaceId: workspaceId,
+			Id:          flowId,
+			ParentId:    taskId,
+			Status:      "paused",
+		}))
+		require.NoError(t, storage.PersistWorktree(ctx, domain.Worktree{
+			Id:               "wt_" + suffix,
+			FlowId:           flowId,
+			Name:             "side/" + suffix,
+			WorkspaceId:      workspaceId,
+			WorkingDirectory: dir,
+		}))
+	}
+
+	hibernatedDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(hibernatedDir, env.HibernationMetadataFile), []byte("{}"), 0644))
+	persistTaskFlowWorktree("hibernated", hibernatedDir)
+
+	activeDir := t.TempDir()
+	persistTaskFlowWorktree("active", activeDir)
+
+	output, err := ima.FindHibernationCandidates(ctx, HibernationCandidatesInput{
+		WorkspaceId:       workspaceId,
+		InactivityTimeout: 0,
+	})
+	require.NoError(t, err)
+	require.Len(t, output.Candidates, 1)
+	assert.Equal(t, "flow_active", output.Candidates[0].FlowId)
+	assert.Equal(t, activeDir, output.Candidates[0].WorktreePath)
 }

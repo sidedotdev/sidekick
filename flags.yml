@@ -4,6 +4,12 @@ check-edits:
     c: false
   defaultRule:
     variation: t1
+check-go-build:
+  variations:
+    t1: true
+    c: false
+  defaultRule:
+    variation: c
 info-needs:
   variations:
     t1: true

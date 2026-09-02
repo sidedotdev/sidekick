@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPersistAndGetWorkspace(t *testing.T) {
@@ -47,6 +48,114 @@ func TestPersistAndGetWorkspace(t *testing.T) {
 	retrievedUpdatedWorkspace, err := storage.GetWorkspace(ctx, updatedWorkspace.Id)
 	assert.NoError(t, err)
 	assert.Equal(t, updatedWorkspace, retrievedUpdatedWorkspace)
+}
+
+func TestWorkspaceProfilePersistence(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("persists an assigned profile", func(t *testing.T) {
+		storage := NewTestSqliteStorage(t, "workspace_profile_test")
+		workspace := domain.Workspace{
+			Id:           "ws-profile",
+			Name:         "Profile Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+			ProfileId:    "work",
+			Created:      time.Now().UTC(),
+			Updated:      time.Now().UTC(),
+		}
+
+		require.NoError(t, storage.PersistWorkspace(ctx, workspace))
+
+		retrieved, err := storage.GetWorkspace(ctx, workspace.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "work", retrieved.ProfileId)
+		assert.Equal(t, "work", retrieved.EffectiveProfileId())
+
+		all, err := storage.GetAllWorkspaces(ctx)
+		require.NoError(t, err)
+		require.Len(t, all, 1)
+		assert.Equal(t, "work", all[0].ProfileId)
+	})
+
+	t.Run("persists an unset profile as null and reads it as the default profile", func(t *testing.T) {
+		storage := NewTestSqliteStorage(t, "workspace_profile_test")
+		workspace := domain.Workspace{
+			Id:           "ws-no-profile",
+			Name:         "No Profile Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+			Created:      time.Now().UTC(),
+			Updated:      time.Now().UTC(),
+		}
+
+		require.NoError(t, storage.PersistWorkspace(ctx, workspace))
+		assert.True(t, storedProfileIdIsNull(t, storage, workspace.Id))
+
+		retrieved, err := storage.GetWorkspace(ctx, workspace.Id)
+		require.NoError(t, err)
+		assert.Empty(t, retrieved.ProfileId)
+		assert.Equal(t, common.DefaultProfileId, retrieved.EffectiveProfileId())
+
+		all, err := storage.GetAllWorkspaces(ctx)
+		require.NoError(t, err)
+		require.Len(t, all, 1)
+		assert.Empty(t, all[0].ProfileId)
+		assert.Equal(t, common.DefaultProfileId, all[0].EffectiveProfileId())
+	})
+
+	t.Run("clears a previously assigned profile", func(t *testing.T) {
+		storage := NewTestSqliteStorage(t, "workspace_profile_test")
+		workspace := domain.Workspace{
+			Id:           "ws-cleared-profile",
+			Name:         "Cleared Profile Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+			ProfileId:    "work",
+			Created:      time.Now().UTC(),
+			Updated:      time.Now().UTC(),
+		}
+		require.NoError(t, storage.PersistWorkspace(ctx, workspace))
+
+		workspace.ProfileId = ""
+		require.NoError(t, storage.PersistWorkspace(ctx, workspace))
+		assert.True(t, storedProfileIdIsNull(t, storage, workspace.Id))
+
+		retrieved, err := storage.GetWorkspace(ctx, workspace.Id)
+		require.NoError(t, err)
+		assert.Empty(t, retrieved.ProfileId)
+	})
+
+	t.Run("reads records written before profiles existed", func(t *testing.T) {
+		storage := NewTestSqliteStorage(t, "workspace_profile_test")
+		now := time.Now().UTC()
+		_, err := storage.db.ExecContext(ctx, `
+			INSERT INTO workspaces (id, name, local_repo_dir, config_mode, created, updated)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, "ws-legacy", "Legacy Workspace", "/path/to/repo", "merge", now, now)
+		require.NoError(t, err)
+		assert.True(t, storedProfileIdIsNull(t, storage, "ws-legacy"))
+
+		retrieved, err := storage.GetWorkspace(ctx, "ws-legacy")
+		require.NoError(t, err)
+		assert.Empty(t, retrieved.ProfileId)
+		assert.Equal(t, common.DefaultProfileId, retrieved.EffectiveProfileId())
+
+		all, err := storage.GetAllWorkspaces(ctx)
+		require.NoError(t, err)
+		require.Len(t, all, 1)
+		assert.Empty(t, all[0].ProfileId)
+		assert.Equal(t, common.DefaultProfileId, all[0].EffectiveProfileId())
+	})
+}
+
+func storedProfileIdIsNull(t *testing.T, storage *Storage, workspaceId string) bool {
+	t.Helper()
+	var isNull bool
+	err := storage.db.QueryRowContext(context.Background(),
+		"SELECT profile_id IS NULL FROM workspaces WHERE id = ?", workspaceId).Scan(&isNull)
+	require.NoError(t, err)
+	return isNull
 }
 
 func TestGetAllWorkspaces(t *testing.T) {

@@ -350,6 +350,7 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 		childWorkflowFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
 			WorkspaceId:     workspaceId,
 			Requirements:    workRequest.Input,
+			Title:           commitTitleForTask(workRequest.Title, workRequest.Input),
 			RepoDir:         repoDir,
 			BasicDevOptions: options,
 		})
@@ -359,6 +360,7 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 		childWorkflowFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
 			WorkspaceId:       workspaceId,
 			Requirements:      workRequest.Input,
+			Title:             commitTitleForTask(workRequest.Title, workRequest.Input),
 			RepoDir:           repoDir,
 			PlannedDevOptions: options,
 		})

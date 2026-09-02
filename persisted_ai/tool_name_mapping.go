@@ -109,6 +109,10 @@ func mapTool(tool *common.Tool, config *ToolNameMappingConfig) *common.Tool {
 	if tool == nil {
 		return nil
 	}
+	if !tool.IsFunction() {
+		// Provider-native tools keep their builtin identity.
+		return tool
+	}
 
 	mappedTool := *tool
 	mappedTool.Name = mapToolName(tool.Name, config, false)

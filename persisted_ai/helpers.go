@@ -103,7 +103,7 @@ func forceToolCallV2(
 		ChatHistory: chatHistory,
 		WorkspaceId: actionCtx.WorkspaceId,
 		FlowId:      workflow.GetInfo(actionCtx).WorkflowExecution.ID,
-		Providers:   actionCtx.Providers,
+		Providers:   actionCtx.GetProviders(),
 	}
 
 	for k, v := range streamInput.ActionParams() {

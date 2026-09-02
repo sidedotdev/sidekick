@@ -2,8 +2,66 @@ package common
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestModalVolumeMount_Validate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		mount ModalVolumeMount
+		error string
+	}{
+		{
+			name:  "valid mount",
+			mount: ModalVolumeMount{Name: "cache", MountPath: "/root/.cache/example"},
+		},
+		{
+			name:  "valid read-only mount",
+			mount: ModalVolumeMount{Name: "cache", MountPath: "/opt/data", ReadOnly: true},
+		},
+		{
+			name:  "blank name",
+			mount: ModalVolumeMount{Name: "  ", MountPath: "/root/.cache/example"},
+			error: "requires a name",
+		},
+		{
+			name:  "relative mount path",
+			mount: ModalVolumeMount{Name: "cache", MountPath: "root/.cache/example"},
+			error: "requires an absolute mount_path",
+		},
+		{
+			name:  "empty mount path",
+			mount: ModalVolumeMount{Name: "cache"},
+			error: "requires an absolute mount_path",
+		},
+		{
+			name:  "filesystem root",
+			mount: ModalVolumeMount{Name: "cache", MountPath: "/"},
+			error: "filesystem root",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := test.mount.Validate()
+			if test.error == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", test.error)
+			}
+			if !strings.Contains(err.Error(), test.error) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), test.error)
+			}
+		})
+	}
+}
 
 func TestDevRunCommandConfig_UnmarshalJSON_CamelCase(t *testing.T) {
 	t.Parallel()
@@ -115,5 +173,116 @@ func TestDevRunConfig_UnmarshalJSON_LegacyFormat(t *testing.T) {
 	}
 	if cmd.StopTimeoutSeconds != 5 {
 		t.Errorf("StopTimeoutSeconds = %d, want %d", cmd.StopTimeoutSeconds, 5)
+	}
+}
+
+func TestModalEnvConfig_Validate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		config ModalEnvConfig
+		error  string
+	}{
+		{
+			name: "empty config",
+		},
+		{
+			name: "valid full config",
+			config: ModalEnvConfig{
+				VM:          true,
+				Image:       "ubuntu:24.04",
+				CPU:         0.5,
+				CPULimit:    4,
+				Memory:      2048,
+				MemoryLimit: 8192,
+				IdleSeconds: 60,
+				Volumes: []ModalVolumeMount{
+					{Name: "a", MountPath: "/a"},
+					{Name: "b", MountPath: "/b", ReadOnly: true},
+				},
+			},
+		},
+		{
+			name:   "image and dockerfile conflict",
+			config: ModalEnvConfig{Image: "ubuntu:24.04", DockerfilePath: "Dockerfile.modal"},
+			error:  "cannot both be set",
+		},
+		{
+			name:   "negative cpu",
+			config: ModalEnvConfig{CPU: -1},
+			error:  "cpu must not be negative",
+		},
+		{
+			name:   "negative cpu limit",
+			config: ModalEnvConfig{CPULimit: -1},
+			error:  "cpu_limit must not be negative",
+		},
+		{
+			name:   "cpu limit below default request",
+			config: ModalEnvConfig{CPULimit: 0.1},
+			error:  "cpu_limit",
+		},
+		{
+			name:   "cpu limit below request",
+			config: ModalEnvConfig{CPU: 2, CPULimit: 1},
+			error:  "cpu_limit",
+		},
+		{
+			name:   "negative memory",
+			config: ModalEnvConfig{Memory: -1},
+			error:  "memory must not be negative",
+		},
+		{
+			name:   "negative memory limit",
+			config: ModalEnvConfig{MemoryLimit: -1},
+			error:  "memory_limit must not be negative",
+		},
+		{
+			name:   "memory limit below default request",
+			config: ModalEnvConfig{MemoryLimit: 512},
+			error:  "memory_limit",
+		},
+		{
+			name:   "memory limit below request",
+			config: ModalEnvConfig{Memory: 4096, MemoryLimit: 2048},
+			error:  "memory_limit",
+		},
+		{
+			name:   "negative idle seconds",
+			config: ModalEnvConfig{IdleSeconds: -1},
+			error:  "idle_seconds",
+		},
+		{
+			name:   "invalid volume mount",
+			config: ModalEnvConfig{Volumes: []ModalVolumeMount{{MountPath: "/cache"}}},
+			error:  "requires a name",
+		},
+		{
+			name: "duplicate normalized mount paths",
+			config: ModalEnvConfig{Volumes: []ModalVolumeMount{
+				{Name: "a", MountPath: "/cache"},
+				{Name: "b", MountPath: "/cache/"},
+			}},
+			error: "configured more than once",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := test.config.Validate()
+			if test.error == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", test.error)
+			}
+			if !strings.Contains(err.Error(), test.error) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), test.error)
+			}
+		})
 	}
 }

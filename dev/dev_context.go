@@ -143,6 +143,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	var workspaceConfig domain.WorkspaceConfig
 	var llmConfig common.LLMConfig
 	var embeddingConfig common.EmbeddingConfig
+	var unscopedProviders []common.ModelProviderPublicConfig
+	var unscopedLLMConfig common.LLMConfig
+	var unscopedEmbeddingConfig common.EmbeddingConfig
 
 	enableBranchNameGeneration := workflow.GetVersion(ctx, "branch-name-generation", workflow.DefaultVersion, 1) >= 1
 
@@ -154,13 +157,13 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			return DevContext{}, err
 		}
 		llmConfig = tempLocalExecContext.GetLLMConfig()
-		embeddingConfig = tempLocalExecContext.EmbeddingConfig
+		embeddingConfig = tempLocalExecContext.GetEmbeddingConfig()
 	} else {
 		tempProviders := localConfig.Providers
 		if configOverrides.Providers != nil {
 			tempProviders = *configOverrides.Providers
 		}
-		tempLocalExecContext, err = newTempLocalExecContext(ctx, workspaceId, repoDir, tempProviders, llmConfig, embeddingConfig)
+		tempLocalExecContext, err = newTempLocalExecContext(ctx, workspaceId, repoDir, defaultWorkspaceProfileId, tempProviders, llmConfig, embeddingConfig)
 		if err != nil {
 			return DevContext{}, err
 		}
@@ -459,6 +462,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 					BranchName:   wt.Name,
 					StartBranch:  startBranchStr,
 					WorkspaceId:  workspaceId,
+					LocalRepoDir: repoDir,
 				}).Get(ctx, &wtOutput)
 				if err != nil {
 					return "", err
@@ -548,6 +552,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 					BranchName:   wt.Name,
 					StartBranch:  startBranchStr,
 					WorkspaceId:  workspaceId,
+					LocalRepoDir: repoDir,
 				}).Get(ctx, &wtOutput)
 				if err != nil {
 					return "", err
@@ -567,23 +572,18 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	// for workflow backcompat/replay, we have to do this later
+	profileId := tempLocalExecContext.GetProfileId()
+	finalProviders := tempLocalExecContext.Providers
 	if !enableBranchNameGeneration {
-		localConfig, workspaceConfig, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
-		if err != nil {
-			return DevContext{}, err
+		resolved, configErr := getConfigs(ctx, workspaceId)
+		if configErr != nil {
+			return DevContext{}, configErr
 		}
-
-		if configOverrides.LLM != nil {
-			llmConfig = *configOverrides.LLM
-		}
-		if configOverrides.Embedding != nil {
-			embeddingConfig = *configOverrides.Embedding
-		}
-	}
-
-	finalProviders := localConfig.Providers
-	if configOverrides.Providers != nil {
-		finalProviders = *configOverrides.Providers
+		localConfig = resolved.LocalConfig
+		workspaceConfig = resolved.WorkspaceConfig
+		profileId = resolved.ProfileId
+		finalProviders, llmConfig, embeddingConfig = applyConfigOverrides(resolved, configOverrides)
+		unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig = unscopedOverriddenConfigs(resolved, configOverrides)
 	}
 
 	eCtx := flow_action.ExecContext{
@@ -592,17 +592,21 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		WorkspaceId:  workspaceId,
 		EnvContainer: &envContainer,
 		Secrets: &secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				secret_manager.KeyringSecretManager{},
-				secret_manager.LocalConfigSecretManager{},
-				secret_manager.EnvSecretManager{},
-			}),
+			SecretManager: secret_manager.NewProfileSecretManager(profileId),
 		},
 		Providers:       finalProviders, // TODO merge with workspace providers
 		EmbeddingConfig: embeddingConfig,
 		GlobalState:     &flow_action.GlobalState{},
 	}
+	eCtx.SetProfileId(profileId)
 	eCtx.SetLLMConfig(llmConfig)
+	eCtx.SetProviders(finalProviders)
+	eCtx.SetEmbeddingConfig(embeddingConfig)
+	if enableBranchNameGeneration {
+		copyUnscopedConfigs(tempLocalExecContext, eCtx)
+	} else {
+		persistUnscopedConfigs(eCtx, unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig)
+	}
 
 	// NOTE: it's important to do this *after* the eCtx has been created, since
 	// that ensures we get the correct repo config for the given start branch
@@ -623,10 +627,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	// Merge command permissions from all config sources: base → local → repo → workspace
 	var baseCommandPermissions common.CommandPermissionConfig
+	baseSource := common.CommandPatternSourceBase
 	if v := workflow.GetVersion(ctx, "base-command-permissions-activity", workflow.DefaultVersion, 1); v >= 1 {
 		var input common.BaseCommandPermissionsInput
 		if sv := workflow.GetVersion(ctx, "sandbox-command-permissions", workflow.DefaultVersion, 1); sv >= 1 {
 			input.EnvType = envType
+		}
+		if common.IsolatedSandboxEnvTypes[input.EnvType] {
+			baseSource = common.CommandPatternSourceBaseIsolatedSandbox
 		}
 		err = workflow.ExecuteActivity(ctx, common.BaseCommandPermissionsActivity, input).Get(ctx, &baseCommandPermissions)
 		if err != nil {
@@ -636,10 +644,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		baseCommandPermissions = common.BaseCommandPermissions()
 	}
 	repoConfig.CommandPermissions = common.MergeCommandPermissions(
-		baseCommandPermissions,
-		localConfig.CommandPermissions,
-		repoConfig.CommandPermissions,
-		workspaceConfig.CommandPermissions,
+		common.TagCommandPatternSources(baseCommandPermissions, baseSource),
+		common.TagCommandPatternSources(localConfig.CommandPermissions, common.CommandPatternSourceLocalConfig),
+		common.TagCommandPatternSources(repoConfig.CommandPermissions, common.CommandPatternSourceRepoConfig),
+		common.TagCommandPatternSources(workspaceConfig.CommandPermissions, common.CommandPatternSourceWorkspaceConfig),
 	)
 
 	// Execute worktree setup script if configured and using worktree mode
@@ -856,32 +864,59 @@ func handleFlowCancel(dCtx DevContext) {
 	}
 }
 
-func getConfigs(ctx workflow.Context, workspaceId string) (common.LocalPublicConfig, domain.WorkspaceConfig, common.LLMConfig, common.EmbeddingConfig, error) {
+// resolvedConfigs holds the configuration resolved for a workspace flow, with
+// providers and model selectors restricted to the workspace's profile.
+type resolvedConfigs struct {
+	LocalConfig     common.LocalPublicConfig
+	WorkspaceConfig domain.WorkspaceConfig
+	LLMConfig       common.LLMConfig
+	EmbeddingConfig common.EmbeddingConfig
+	ProfileId       string
+
+	// declaredProviders is the provider catalog before profile filtering, which
+	// tells providers excluded by the profile apart from undeclared built-in
+	// ones when configs are filtered again after per-flow overrides.
+	declaredProviders []common.ModelProviderPublicConfig
+
+	// unscopedLLMConfig/unscopedEmbeddingConfig retain the pre-profile-filter
+	// model selectors so a mid-flow profile change can re-derive
+	// profile-scoped configs from them.
+	unscopedLLMConfig       common.LLMConfig
+	unscopedEmbeddingConfig common.EmbeddingConfig
+
+	profileFilterEnabled bool
+}
+
+func getConfigs(ctx workflow.Context, workspaceId string) (resolvedConfigs, error) {
 	var wa *workspace.Activities
-	var localConfig common.LocalPublicConfig
-	var workspaceConfig domain.WorkspaceConfig
 	logger := workflow.GetLogger(ctx)
 
 	enableConfigMode := workflow.GetVersion(ctx, "workspace-config-mode", workflow.DefaultVersion, 1) >= 1
+	// gated so that replays of workflows started before profiles existed keep
+	// their original configs and activity inputs
+	enableProfileFiltering := workflow.GetVersion(ctx, "workspace-profile-config-filtering", workflow.DefaultVersion, 1) >= 1
 
-	var finalLLMConfig common.LLMConfig
-	var finalEmbeddingConfig common.EmbeddingConfig
+	resolved := resolvedConfigs{ProfileId: defaultWorkspaceProfileId, profileFilterEnabled: enableProfileFiltering}
 
-	localConfigErr := workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
+	localConfigErr := workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &resolved.LocalConfig)
+	resolved.declaredProviders = resolved.LocalConfig.Providers
 
-	err := workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
+	err := workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &resolved.WorkspaceConfig)
 	if err != nil {
-		return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace config: %v", err)
+		return resolved, fmt.Errorf("failed to get workspace config: %v", err)
 	}
 
-	var workspace domain.Workspace
 	var configMode string
 	if enableConfigMode {
-		err = workflow.ExecuteActivity(ctx, wa.GetWorkspace, workspaceId).Get(ctx, &workspace)
+		var ws domain.Workspace
+		err = workflow.ExecuteActivity(ctx, wa.GetWorkspace, workspaceId).Get(ctx, &ws)
 		if err != nil {
-			return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace: %v", err)
+			return resolved, fmt.Errorf("failed to get workspace: %v", err)
 		}
-		configMode = workspace.ConfigMode
+		configMode = ws.ConfigMode
+		if enableProfileFiltering {
+			resolved.ProfileId = ws.EffectiveProfileId()
+		}
 	} else {
 		configMode = "merge"
 	}
@@ -892,40 +927,113 @@ func getConfigs(ctx workflow.Context, workspaceId string) (common.LocalPublicCon
 			switch appErr.Type() {
 			case "LocalConfigNotFound":
 				if configMode == "local" {
-					return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+					return resolved, fmt.Errorf("failed to get local config: %v", localConfigErr)
 				}
 				logger.Info("Local config not found; proceeding with workspace config (mode=" + configMode + ").")
 			case "LocalConfigNoDefaults":
 				if configMode == "local" {
-					return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+					return resolved, fmt.Errorf("failed to get local config: %v", localConfigErr)
 				}
-				workspaceHasDefaults := len(workspaceConfig.LLM.Defaults) > 0 || len(workspaceConfig.Embedding.Defaults) > 0
+				workspaceHasDefaults := len(resolved.WorkspaceConfig.LLM.Defaults) > 0 || len(resolved.WorkspaceConfig.Embedding.Defaults) > 0
 				if !workspaceHasDefaults {
-					return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("no default models configured in local and workspace configs; configure defaults in one source or switch config mode")
+					return resolved, fmt.Errorf("no default models configured in local and workspace configs; configure defaults in one source or switch config mode")
 				}
 				logger.Info("Local config lacks defaults; proceeding with workspace defaults (mode=" + configMode + ").")
 			default:
-				return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+				return resolved, fmt.Errorf("failed to get local config: %v", localConfigErr)
 			}
 		} else {
-			return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+			return resolved, fmt.Errorf("failed to get local config: %v", localConfigErr)
 		}
 	}
 
 	switch configMode {
 	case "local":
-		finalLLMConfig = localConfig.LLM
-		finalEmbeddingConfig = localConfig.Embedding
+		resolved.LLMConfig = resolved.LocalConfig.LLM
+		resolved.EmbeddingConfig = resolved.LocalConfig.Embedding
 	case "workspace":
-		finalLLMConfig = workspaceConfig.LLM
-		finalEmbeddingConfig = workspaceConfig.Embedding
-	case "merge":
-		finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+		resolved.LLMConfig = resolved.WorkspaceConfig.LLM
+		resolved.EmbeddingConfig = resolved.WorkspaceConfig.Embedding
 	default:
-		finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+		resolved.LLMConfig, resolved.EmbeddingConfig = mergeConfigs(resolved.LocalConfig.LLM, resolved.LocalConfig.Embedding, resolved.WorkspaceConfig.LLM, resolved.WorkspaceConfig.Embedding)
 	}
 
-	return localConfig, workspaceConfig, finalLLMConfig, finalEmbeddingConfig, nil
+	resolved.unscopedLLMConfig = resolved.LLMConfig
+	resolved.unscopedEmbeddingConfig = resolved.EmbeddingConfig
+
+	if !resolved.profileFilterEnabled {
+		return resolved, nil
+	}
+
+	return applyProfileFilter(resolved)
+}
+
+// applyProfileFilter restricts providers and model selectors to those available
+// within the workspace's profile.
+func applyProfileFilter(resolved resolvedConfigs) (resolvedConfigs, error) {
+	providers, llmConfig, embeddingConfig := profileScopedConfig(resolved.ProfileId, resolved.declaredProviders, resolved.LLMConfig, resolved.EmbeddingConfig)
+	if len(resolved.LLMConfig.Defaults) > 0 && len(llmConfig.Defaults) == 0 {
+		return resolved, fmt.Errorf("no default LLM models are available for profile %q; associate a provider with that profile or change the workspace profile", resolved.ProfileId)
+	}
+
+	resolved.LocalConfig.Providers = providers
+	resolved.LLMConfig = llmConfig
+	resolved.EmbeddingConfig = embeddingConfig
+
+	return resolved, nil
+}
+
+// applyConfigOverrides applies per-flow config overrides on top of the resolved
+// configuration, then restricts the result to the workspace profile again so
+// that overrides cannot reintroduce providers or models from other profiles.
+func applyConfigOverrides(resolved resolvedConfigs, configOverrides common.ConfigOverrides) ([]common.ModelProviderPublicConfig, common.LLMConfig, common.EmbeddingConfig) {
+	providers := resolved.declaredProviders
+	if configOverrides.Providers != nil {
+		providers = *configOverrides.Providers
+	}
+	llmConfig := resolved.LLMConfig
+	if configOverrides.LLM != nil {
+		llmConfig = *configOverrides.LLM
+	}
+	embeddingConfig := resolved.EmbeddingConfig
+	if configOverrides.Embedding != nil {
+		embeddingConfig = *configOverrides.Embedding
+	}
+
+	if !resolved.profileFilterEnabled {
+		return providers, llmConfig, embeddingConfig
+	}
+
+	return profileScopedConfig(resolved.ProfileId, providers, llmConfig, embeddingConfig)
+}
+
+// unscopedOverriddenConfigs applies per-flow config overrides to the
+// pre-profile-filter configuration, yielding the inputs from which a mid-flow
+// profile change re-derives profile-scoped configs.
+func unscopedOverriddenConfigs(resolved resolvedConfigs, configOverrides common.ConfigOverrides) ([]common.ModelProviderPublicConfig, common.LLMConfig, common.EmbeddingConfig) {
+	providers := resolved.declaredProviders
+	if configOverrides.Providers != nil {
+		providers = *configOverrides.Providers
+	}
+	llmConfig := resolved.unscopedLLMConfig
+	if configOverrides.LLM != nil {
+		llmConfig = *configOverrides.LLM
+	}
+	embeddingConfig := resolved.unscopedEmbeddingConfig
+	if configOverrides.Embedding != nil {
+		embeddingConfig = *configOverrides.Embedding
+	}
+	return providers, llmConfig, embeddingConfig
+}
+
+// profileScopedConfig restricts providers and model selectors to the given
+// profile. The providers given must be the full declared catalog: model
+// selectors referencing a provider missing from it are kept, since built-in
+// providers carry no profile association and remain available in every profile.
+func profileScopedConfig(profileId string, providers []common.ModelProviderPublicConfig, llmConfig common.LLMConfig, embeddingConfig common.EmbeddingConfig) ([]common.ModelProviderPublicConfig, common.LLMConfig, common.EmbeddingConfig) {
+	return common.ProvidersForProfile(providers, profileId),
+		common.LLMConfigForProfile(llmConfig, providers, profileId),
+		common.EmbeddingConfigForProfile(embeddingConfig, providers, profileId)
 }
 
 // mergeConfigs merges local and workspace configurations with workspace config overriding local config
@@ -1027,6 +1135,7 @@ func newTempLocalExecContext(
 	ctx workflow.Context,
 	workspaceId string,
 	repoDir string,
+	profileId string,
 	providers []common.ModelProviderPublicConfig,
 	llmConfig common.LLMConfig,
 	embeddingConfig common.EmbeddingConfig,
@@ -1041,19 +1150,22 @@ func newTempLocalExecContext(
 		WorkspaceId:  workspaceId,
 		EnvContainer: &env.EnvContainer{Env: tempLocalEnv},
 		Secrets: &secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				secret_manager.KeyringSecretManager{},
-				secret_manager.LocalConfigSecretManager{},
-				secret_manager.EnvSecretManager{},
-			}),
+			SecretManager: secret_manager.NewProfileSecretManager(profileId),
 		},
 		Providers:       providers,
 		EmbeddingConfig: embeddingConfig,
 		GlobalState:     &flow_action.GlobalState{},
 	}
+	eCtx.SetProfileId(profileId)
 	eCtx.SetLLMConfig(llmConfig)
+	eCtx.SetProviders(providers)
+	eCtx.SetEmbeddingConfig(embeddingConfig)
 	return eCtx, nil
 }
+
+// defaultWorkspaceProfileId scopes secret resolution and model provider
+// selection until the workspace's own profile association has been loaded.
+const defaultWorkspaceProfileId = common.DefaultProfileId
 
 // NewTempLocalExecContext is a workflow-facing wrapper around newTempLocalExecContext
 // that loads local/workspace configs via activities and applies any overrides.
@@ -1063,23 +1175,17 @@ func newTempLocalExecContext(
 // need them downstream (e.g. for command permission merging) can avoid repeating
 // the same activity calls.
 func NewTempLocalExecContext(ctx workflow.Context, workspaceId, repoDir string, configOverrides common.ConfigOverrides) (flow_action.ExecContext, common.LocalPublicConfig, domain.WorkspaceConfig, error) {
-	localConfig, workspaceConfig, llmConfig, embeddingConfig, err := getConfigs(ctx, workspaceId)
+	resolved, err := getConfigs(ctx, workspaceId)
 	if err != nil {
-		return flow_action.ExecContext{}, localConfig, workspaceConfig, err
+		return flow_action.ExecContext{}, resolved.LocalConfig, resolved.WorkspaceConfig, err
 	}
-	if configOverrides.LLM != nil {
-		llmConfig = *configOverrides.LLM
-	}
-	if configOverrides.Embedding != nil {
-		embeddingConfig = *configOverrides.Embedding
-	}
-	providers := localConfig.Providers
-	if configOverrides.Providers != nil {
-		providers = *configOverrides.Providers
-	}
-	eCtx, err := newTempLocalExecContext(ctx, workspaceId, repoDir, providers, llmConfig, embeddingConfig)
+	providers, llmConfig, embeddingConfig := applyConfigOverrides(resolved, configOverrides)
+
+	eCtx, err := newTempLocalExecContext(ctx, workspaceId, repoDir, resolved.ProfileId, providers, llmConfig, embeddingConfig)
 	if err != nil {
-		return flow_action.ExecContext{}, localConfig, workspaceConfig, err
+		return flow_action.ExecContext{}, resolved.LocalConfig, resolved.WorkspaceConfig, err
 	}
-	return eCtx, localConfig, workspaceConfig, nil
+	unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig := unscopedOverriddenConfigs(resolved, configOverrides)
+	persistUnscopedConfigs(eCtx, unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig)
+	return eCtx, resolved.LocalConfig, resolved.WorkspaceConfig, nil
 }

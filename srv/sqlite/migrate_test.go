@@ -1,8 +1,11 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
+	"sidekick/common"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite"
@@ -10,6 +13,55 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// workspaceProfileMigrationVersion is the migration that adds the workspace
+// profile association.
+const workspaceProfileMigrationVersion = 16
+
+func TestWorkspaceProfileMigrationPreservesExistingWorkspaces(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := sql.Open("sqlite", testMemoryDsn)
+	require.NoError(t, err)
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	driver, err := sqlite.WithInstance(db, &sqlite.Config{})
+	require.NoError(t, err)
+	migrationsSource, err := iofs.New(migrationsFs, "migrations")
+	require.NoError(t, err)
+	m, err := migrate.NewWithInstance("iofs", migrationsSource, "test_workspace_profile_migration", driver)
+	require.NoError(t, err)
+
+	require.NoError(t, m.Migrate(workspaceProfileMigrationVersion-1))
+
+	now := time.Now().UTC()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO workspaces (id, name, local_repo_dir, config_mode, created, updated)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "ws-pre-profile", "Pre Profile Workspace", "/path/to/repo", "merge", now, now)
+	require.NoError(t, err)
+
+	require.NoError(t, m.Migrate(workspaceProfileMigrationVersion))
+
+	storage := &Storage{
+		db:                    &trackedDB{DB: db, name: "main", tracker: newBusyTracker()},
+		deletePrefixBatchSize: defaultDeletePrefixBatchSize,
+	}
+	assert.True(t, storedProfileIdIsNull(t, storage, "ws-pre-profile"))
+
+	retrieved, err := storage.GetWorkspace(ctx, "ws-pre-profile")
+	require.NoError(t, err)
+	assert.Empty(t, retrieved.ProfileId)
+	assert.Equal(t, common.DefaultProfileId, retrieved.EffectiveProfileId())
+
+	all, err := storage.GetAllWorkspaces(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	assert.Empty(t, all[0].ProfileId)
+	assert.Equal(t, common.DefaultProfileId, all[0].EffectiveProfileId())
+}
 
 func TestMigrateUp(t *testing.T) {
 	t.Parallel()

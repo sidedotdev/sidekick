@@ -1,4 +1,5 @@
 import { reactive } from 'vue';
+import type { Profile } from './models';
 
 export interface BranchInfo {
   name: string;
@@ -21,6 +22,11 @@ interface ModelsCache {
   timestamp: number;
 }
 
+interface ProfilesCache {
+  data: Profile[];
+  timestamp: number;
+}
+
 interface TaskConfigCache {
   data: TaskConfigData;
   timestamp: number;
@@ -38,6 +44,9 @@ export interface TaskConfigData {
 const MODELS_CACHE_KEY = 'models_cache';
 const MODELS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+const PROFILES_CACHE_KEY = 'profiles_cache';
+const PROFILES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export const store = reactive<{
   workspaceId: string | null;
   selectWorkspaceId(workspaceId: string): void;
@@ -46,6 +55,9 @@ export const store = reactive<{
   getModelsCache(): ModelsCache | null;
   setModelsCache(data: ModelsData): void;
   isModelsCacheStale(): boolean;
+  getProfilesCache(): ProfilesCache | null;
+  setProfilesCache(profiles: Profile[]): void;
+  isProfilesCacheStale(): boolean;
   getTaskConfigCache(workspaceId: string): TaskConfigCache | null;
   setTaskConfigCache(workspaceId: string, data: TaskConfigData): void;
 }>({
@@ -74,6 +86,19 @@ export const store = reactive<{
     const cache = this.getModelsCache();
     if (!cache) return true;
     return Date.now() - cache.timestamp > MODELS_CACHE_TTL_MS;
+  },
+  getProfilesCache(): ProfilesCache | null {
+    const cached = sessionStorage.getItem(PROFILES_CACHE_KEY);
+    return cached ? JSON.parse(cached) : null;
+  },
+  setProfilesCache(profiles: Profile[]) {
+    const cache: ProfilesCache = { data: profiles, timestamp: Date.now() };
+    sessionStorage.setItem(PROFILES_CACHE_KEY, JSON.stringify(cache));
+  },
+  isProfilesCacheStale(): boolean {
+    const cache = this.getProfilesCache();
+    if (!cache) return true;
+    return Date.now() - cache.timestamp > PROFILES_CACHE_TTL_MS;
   },
   getTaskConfigCache(workspaceId: string): TaskConfigCache | null {
     if (!workspaceId) return null;

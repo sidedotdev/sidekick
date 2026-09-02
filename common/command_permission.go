@@ -21,6 +21,11 @@ const (
 type CommandPattern struct {
 	Pattern string `toml:"pattern" json:"pattern" koanf:"pattern"`
 	Message string `toml:"message,omitempty" json:"message,omitempty" koanf:"message,omitempty"`
+	// Source attributes the pattern to a merged config layer (see
+	// CommandPatternSource* constants). It is populated programmatically at
+	// merge time for evaluation metadata, never by users, so it is excluded
+	// from config file serialization.
+	Source string `toml:"-" json:"source,omitempty" koanf:"-"`
 }
 
 // CommandPermissionConfig defines permission rules for shell commands
@@ -208,6 +213,16 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "wait"},
 			{Pattern: "seq"},
 			{Pattern: "printf"},
+			{Pattern: "set"},
+			// low-risk fs write commands (note: paths outside of repo are protected with another mechanism)
+			{Pattern: "touch"},
+			{Pattern: "rmdir"},
+			{Pattern: "cp -n"},
+			{Pattern: "mv -n"},
+			{Pattern: "git mv -n"},
+			{Pattern: "git rm"},
+			{Pattern: "perl -pi -e"},  // NOTE: ideally would limit to tracked file paths
+			{Pattern: "perl -0pi -e"}, // NOTE: ideally would limit to tracked file paths
 			// Shell syntax check: -n (noexec) parses the script without
 			// executing it. Beyond -n, only whitelisted argument-less short
 			// options (v, x, c) may appear, alone or clustered: options that
@@ -238,6 +253,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "git shortlog"},
 			{Pattern: "git stash list"},
 			{Pattern: "git add"},
+			{Pattern: "git commit"},
 			{Pattern: "git rm"},
 			// Go commands
 			{Pattern: "go test"},
@@ -256,6 +272,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "gofmt"},
 			{Pattern: "golint"},
 			{Pattern: "golangci-lint"},
+			{Pattern: "goimports"},
 			{Pattern: "staticcheck"},
 			// Node.js/npm commands
 			{Pattern: "npm test"},
@@ -401,6 +418,32 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "xxd"},
 			{Pattern: "od"},
 			{Pattern: "["},
+			// Hashing / checksum utilities (both GNU *sum and BSD/macOS names)
+			{Pattern: "sha1"},
+			{Pattern: "sha224"},
+			{Pattern: "sha256"},
+			{Pattern: "sha384"},
+			{Pattern: "sha512"},
+			{Pattern: "sha1sum"},
+			{Pattern: "sha224sum"},
+			{Pattern: "sha256sum"},
+			{Pattern: "sha384sum"},
+			{Pattern: "sha512sum"},
+			{Pattern: "shasum"},
+			{Pattern: "md5"},
+			{Pattern: "md5sum"},
+			{Pattern: "b2sum"},
+			{Pattern: "cksum"},
+			{Pattern: "sum"},
+			{Pattern: "crc32"},
+			{Pattern: "openssl dgst"},
+			// Encoding / decoding utilities
+			{Pattern: "base64"},
+			{Pattern: "base32"},
+			{Pattern: "basenc"},
+			{Pattern: "openssl base64"},
+			{Pattern: "uuencode"},
+			{Pattern: "uudecode"},
 		},
 		RequireApproval: []CommandPattern{
 			// Commands that can expose secrets
@@ -501,6 +544,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `cd /home/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 			{Pattern: `cd /Users/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 			{Pattern: `cd /repo`, Message: "cd not needed, the command will already be run in the correct working directory"},
+			// cp or mv without `-n` might overwrite a file, and thus act like deletion by mistake
+			{Pattern: `^mv [/."'a-zA-Z0-9]`, Message: "use mv -n to ensure you don't overwrite by mistake"},
+			{Pattern: `^cp [/."'a-zA-Z0-9]`, Message: "use cp -n to ensure you don't overwrite by mistake"},
 		},
 	}
 }
@@ -751,6 +797,12 @@ func isPerlExpression(s string) bool {
 
 // containsAbsolutePathInPart checks if a single command part contains an absolute path.
 func containsAbsolutePathInPart(part string) bool {
+	return len(unsafeAbsolutePathsInPart(part)) > 0
+}
+
+// unsafeAbsolutePathsInPart returns the absolute paths within a single command
+// part that are neither known-safe paths nor code-like strings.
+func unsafeAbsolutePathsInPart(part string) []string {
 	// Common safe absolute paths that don't require extra approval
 	safePaths := []string{
 		"/dev/null",
@@ -760,6 +812,7 @@ func containsAbsolutePathInPart(part string) bool {
 	}
 
 	// Find all potential absolute paths in the part (handles --flag=/path cases)
+	var unsafePaths []string
 	paths := extractAbsolutePaths(part)
 	for _, path := range paths {
 		// Skip if it looks like code (awk programs, etc.) rather than a path
@@ -776,10 +829,10 @@ func containsAbsolutePathInPart(part string) bool {
 			}
 		}
 		if !isSafe {
-			return true
+			unsafePaths = append(unsafePaths, path)
 		}
 	}
-	return false
+	return unsafePaths
 }
 
 // extractAbsolutePaths finds all absolute paths within a string.
@@ -1037,66 +1090,19 @@ func EvaluateCommandPermission(config CommandPermissionConfig, command string) (
 }
 
 // EvaluateCommandPermissionWithOptions evaluates a single command against the permission config
-// with configurable options.
+// with configurable options. Deny messages come from the first matching deny
+// rule, auto-approve messages from the first matching auto-approve rule, and
+// require-approval results carry no message.
 func EvaluateCommandPermissionWithOptions(config CommandPermissionConfig, command string, opts EvaluatePermissionOptions) (PermissionResult, string) {
-	strippedCommand := command
-	if opts.StripEnvVarPrefix {
-		strippedCommand = stripEnvVarPrefix(command)
-	}
-
-	// Check deny patterns first
-	for _, p := range config.Deny {
-		// Use original command if pattern contains env vars, otherwise use stripped
-		cmdToMatch := command
-		if !patternContainsEnvVar(p.Pattern) {
-			cmdToMatch = strippedCommand
-		}
-		if matched, matches := matchPattern(p.Pattern, cmdToMatch); matched {
-			msg := p.Message
-			if msg != "" && len(matches) > 0 {
-				msg = interpolateMessage(msg, matches)
-			}
-			return PermissionDeny, msg
+	eval := EvaluateCommandPermissionDetailed(config, command, opts)
+	msg := ""
+	if eval.DecidedBy == DecidedByRule {
+		rule := eval.MatchedRules[eval.DecidedByIndex]
+		if rule.Action == PermissionDeny || rule.Action == PermissionAutoApprove {
+			msg = rule.Message
 		}
 	}
-
-	// Check require-approval patterns
-	for _, p := range config.RequireApproval {
-		// Use original command if pattern contains env vars, otherwise use stripped
-		cmdToMatch := command
-		if !patternContainsEnvVar(p.Pattern) {
-			cmdToMatch = strippedCommand
-		}
-		if matched, _ := matchPattern(p.Pattern, cmdToMatch); matched {
-			return PermissionRequireApproval, ""
-		}
-	}
-
-	// Check auto-approve patterns
-	for _, p := range config.AutoApprove {
-		// Use original command if pattern contains env vars, otherwise use stripped
-		cmdToMatch := command
-		if !patternContainsEnvVar(p.Pattern) {
-			cmdToMatch = strippedCommand
-		}
-		if matched, matches := matchPattern(p.Pattern, cmdToMatch); matched {
-			// Even if auto-approved, require approval for commands with absolute paths
-			if !opts.SkipAbsolutePathEscalation && containsAbsolutePath(command) {
-				return PermissionRequireApproval, ""
-			}
-			msg := p.Message
-			if msg != "" && len(matches) > 0 {
-				msg = interpolateMessage(msg, matches)
-			}
-			return PermissionAutoApprove, msg
-		}
-	}
-
-	if opts.DefaultAutoApprove {
-		return PermissionAutoApprove, ""
-	}
-	// Default to require approval
-	return PermissionRequireApproval, ""
+	return eval.Outcome, msg
 }
 
 // EvaluateScriptPermission evaluates a shell script by extracting all commands
@@ -1138,71 +1144,52 @@ const tempPathAdvisory = "This command references a system temp path like `/tmp`
 // sandbox mode), separated by blank lines, so callers can surface them to the
 // user/agent without blocking execution.
 func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script string, opts EvaluatePermissionOptions) (PermissionResult, string) {
-	heredocWrites := permission.DetectHeredocFileWrites(script)
-	usesTempPath := tempPathPattern.MatchString(script)
-	var advisories []string
-	if usesTempPath {
-		advisories = append(advisories, tempPathAdvisory)
-	}
-	if opts.HeredocFileWriteWarnInsteadOfDeny {
-		if len(heredocWrites) > 0 {
-			advisories = append(advisories, SandboxHeredocFileWriteAdvisory)
-		}
-	} else {
-		for _, hw := range heredocWrites {
-			if !hw.UsesEscapeHatch() {
-				denyMsg := heredocFileWriteDenyMessage
-				if usesTempPath {
-					denyMsg += "\n\n" + tempPathAdvisory
+	eval := EvaluateScriptPermissionDetailed(config, script, opts)
+	return ScriptPermissionResultMessage(eval)
+}
+
+// ScriptPermissionResultMessage derives the classic (result, message) pair
+// from a detailed script evaluation: deny messages come from heredoc denial
+// (plus any temp-path advisory) or the first denying command,
+// require-approval results carry no message, and auto-approval aggregates
+// advisory messages.
+func ScriptPermissionResultMessage(eval ScriptPermissionEvaluation) (PermissionResult, string) {
+	switch eval.Outcome {
+	case PermissionDeny:
+		for _, f := range eval.Factors {
+			if f.Kind == PermissionFactorHeredocFileWriteDeny {
+				msg := f.Message
+				for _, tf := range eval.Factors {
+					if tf.Kind == PermissionFactorTempPathAdvisory {
+						msg += "\n\n" + tf.Message
+					}
 				}
-				return PermissionDeny, denyMsg
+				return PermissionDeny, msg
 			}
 		}
-	}
-
-	var commands []string
-	if opts.UseLegacyCommandExtraction {
-		commands = permission.ExtractCommandsLegacy(script)
-	} else {
-		commands = permission.ExtractCommands(script)
-	}
-
-	if len(commands) == 0 {
-		if opts.DefaultAutoApprove {
-			return PermissionAutoApprove, joinAdvisories(advisories)
+		for _, c := range eval.Commands {
+			if c.Outcome == PermissionDeny {
+				return PermissionDeny, commandDecisionMessage(c)
+			}
 		}
+		return PermissionDeny, ""
+	case PermissionRequireApproval:
 		return PermissionRequireApproval, ""
 	}
 
-	hasRequireApproval := false
-
-	for _, cmd := range commands {
-		// Commands using the documented heredoc escape-hatch delimiter
-		// bypass the heredoc deny patterns and are forced through approval
-		// so a human can vet them. In sandbox mode the escape hatch is
-		// irrelevant (heredoc writes are allowed outright) so we skip this.
-		if !opts.HeredocFileWriteWarnInsteadOfDeny && commandUsesHeredocEscapeHatch(cmd) {
-			hasRequireApproval = true
-			continue
-		}
-
-		result, msg := EvaluateCommandPermissionWithOptions(config, cmd, opts)
-		switch result {
-		case PermissionDeny:
-			return PermissionDeny, msg
-		case PermissionRequireApproval:
-			hasRequireApproval = true
-		case PermissionAutoApprove:
-			if msg != "" {
-				advisories = append(advisories, msg)
-			}
+	// All commands auto-approved: aggregate advisory messages from script-level
+	// advisory factors (those with no outcome) and matched auto-approve rules.
+	var advisories []string
+	for _, f := range eval.Factors {
+		if f.Outcome == "" && f.Message != "" {
+			advisories = append(advisories, f.Message)
 		}
 	}
-
-	if hasRequireApproval {
-		return PermissionRequireApproval, ""
+	for _, c := range eval.Commands {
+		if msg := commandDecisionMessage(c); msg != "" {
+			advisories = append(advisories, msg)
+		}
 	}
-
 	return PermissionAutoApprove, joinAdvisories(advisories)
 }
 

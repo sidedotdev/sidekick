@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sidekick/common"
 	"strings"
-	"time"
 
 	"github.com/kelindar/binary"
 	"github.com/rs/zerolog/log"
@@ -17,18 +16,29 @@ import (
 
 const defaultDeletePrefixBatchSize = 500
 
+const (
+	coreDatabaseFileName = "sidekick.core.db"
+
+	// KVDatabaseFileName is the key-value database file, relative to the
+	// Sidekick data home.
+	KVDatabaseFileName = "sidekick.kv.db"
+)
+
 type Storage struct {
 	db                    *trackedDB
 	kvDb                  *trackedDB
 	deletePrefixBatchSize int
+
+	stopMaintenance context.CancelFunc
+	maintenanceDone chan struct{}
 }
 
 func NewStorage() (*Storage, error) {
-	mainDbPath, err := GetSqliteUri("sidekick.core.db")
+	mainDbPath, err := GetSqliteUri(coreDatabaseFileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get main database path: %w", err)
 	}
-	kvDbPath, err := GetSqliteUri("sidekick.kv.db")
+	kvDbPath, err := GetSqliteUri(KVDatabaseFileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get key-value database path: %w", err)
 	}
@@ -57,44 +67,47 @@ func NewStorage() (*Storage, error) {
 		if sideAppEnv == "development" {
 			log.Warn().Msgf("Failed to migrate up sqlite storage: %v", err)
 		} else {
+			storage.closeDatabases()
 			return nil, fmt.Errorf("failed to migrate up sqlite storage: %w", err)
 		}
 	}
 
-	// Run PRAGMA optimize periodically
-	go storage.runPeriodicOptimization()
-
 	err = storage.CheckConnection(context.Background())
 	if err != nil {
+		storage.closeDatabases()
 		return nil, fmt.Errorf("failed to connect to sqlite storage: %w", err)
 	}
+
+	// Background work starts only once initialization can no longer fail, so
+	// that a failed NewStorage leaves nothing running.
+	storage.startMaintenance()
 
 	return storage, nil
 }
 
-func (s *Storage) runPeriodicOptimization() {
-	ticker := time.NewTicker(4 * time.Hour)
-	for range ticker.C {
-		_, _ = s.db.Exec("PRAGMA optimize")
-		_, _ = s.kvDb.Exec("PRAGMA optimize")
-	}
-}
-
 func GetSqliteUri(filePath string) (string, error) {
-	const (
-		busyTimeoutMs = 5000
-		cacheSizeKB   = 64000
-	)
-
 	// Use XDG data home for the database path
 	dbDir, err := common.GetSidekickDataHome()
 	if err != nil {
 		return "", fmt.Errorf("failed to get Sidekick data home: %w", err)
 	}
-	dbPath := filepath.Join(dbDir, filePath)
+
+	return sqliteUri(filepath.Join(dbDir, filePath)), nil
+}
+
+// sqliteUri builds a connection string applying our standard pragmas. The
+// auto_vacuum pragma must come first: it only takes effect while the database
+// is still empty, and pragmas such as journal_mode already write the file
+// header, after which the mode can only be changed by a full VACUUM.
+func sqliteUri(dbPath string) string {
+	const (
+		busyTimeoutMs = 5000
+		cacheSizeKB   = 64000
+	)
 
 	// Build our SQLite preferences as a series of URL encoded values
 	prefs := make(url.Values)
+	prefs.Add("_pragma", "auto_vacuum(INCREMENTAL)")
 	prefs.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMs))
 	prefs.Add("_pragma", "journal_mode(WAL)")
 	prefs.Add("_pragma", "temp_store(MEMORY)")
@@ -103,7 +116,26 @@ func GetSqliteUri(filePath string) (string, error) {
 	prefs.Add("_pragma", "optimize(0x10002)")
 
 	// Construct the final SQLite address string
-	return fmt.Sprintf("file:%s?%s", dbPath, prefs.Encode()), nil
+	return fmt.Sprintf("file:%s?%s", dbPath, prefs.Encode())
+}
+
+// Close stops background maintenance and closes both databases.
+func (s *Storage) Close() error {
+	if s.stopMaintenance != nil {
+		s.stopMaintenance()
+		<-s.maintenanceDone
+	}
+
+	return s.closeDatabases()
+}
+
+func (s *Storage) closeDatabases() error {
+	err := s.kvDb.Close()
+	if mainErr := s.db.Close(); err == nil {
+		err = mainErr
+	}
+
+	return err
 }
 
 // CheckConnection verifies that both the main database and the key-value database are accessible.

@@ -14,6 +14,7 @@ const SignalNameWorkflowClosed = "workflowClosed"
 const SignalNamePause = "pause"
 const SignalNameUserAction = "userAction"
 const SignalNameHibernate = "hibernate"
+const SignalNameProfileChange = "profileChange"
 
 type WorkflowClosure struct {
 	FlowId string

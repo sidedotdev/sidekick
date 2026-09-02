@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/srv"
 	"strings"
@@ -576,6 +577,13 @@ func (ima *DevAgentManagerActivities) FindHibernationCandidates(ctx context.Cont
 	for _, wt := range worktrees {
 		workingDir := strings.TrimSpace(wt.WorkingDirectory)
 		if workingDir == "" || strings.TrimSpace(wt.FlowId) == "" {
+			continue
+		}
+
+		// An already-hibernated worktree keeps its task in blocked/in_review
+		// with a stale Updated timestamp indefinitely, so without this check
+		// it would be re-signaled on every scheduled run.
+		if env.IsHibernated(workingDir) {
 			continue
 		}
 

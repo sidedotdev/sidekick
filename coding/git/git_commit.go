@@ -55,11 +55,22 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 		return "", fmt.Errorf("failed to git commit: %v", err)
 	}
 	if gitCommitOutput.ExitStatus != 0 {
-		if params.IgnoreNothingToCommit && isNothingToCommitOutput(gitCommitOutput.Stdout, gitCommitOutput.Stderr) {
+		nothingToCommit := isNothingToCommitOutput(gitCommitOutput.Stdout, gitCommitOutput.Stderr)
+		// On a rerun there may be nothing left to commit because an earlier
+		// attempt committed successfully but could not complete the backup.
+		if nothingToCommit && (params.IgnoreNothingToCommit || isActivityRetry(ctx)) {
+			if err := syncFlowBranchBackup(ctx, envContainer, ""); err != nil {
+				return "", fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
+			}
 			return gitCommitOutput.Stdout, nil
 		}
 		return "", fmt.Errorf("git commit failed: %s", gitCommitOutput.Stdout+"\n"+gitCommitOutput.Stderr)
 	}
+
+	if err := syncFlowBranchBackup(ctx, envContainer, ""); err != nil {
+		return "", fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
+	}
+
 	return gitCommitOutput.Stdout, nil
 }
 
@@ -145,12 +156,15 @@ func GitCommit(eCtx flow_action.ExecContext, commitMessage string) error {
 
 	commitParams := GitCommitParams{
 		CommitMessage: commitMessage,
+		// An empty index is an expected outcome here, not a failure worth
+		// prompting the user about via the retry mechanism.
+		IgnoreNothingToCommit: true,
 	}
 	if eCtx.GlobalState != nil {
 		commitParams.CommitterName = eCtx.GlobalState.GetStringValue("committerName")
 		commitParams.CommitterEmail = eCtx.GlobalState.GetStringValue("committerEmail")
 	}
-	commitErr := workflow.ExecuteActivity(eCtx, GitCommitActivity, eCtx.EnvContainer, commitParams).Get(eCtx, nil)
+	commitErr := flow_action.PerformActivityWithUserRetry(eCtx, "git_commit", GitCommitActivity, nil, eCtx.EnvContainer, commitParams)
 	if commitErr != nil {
 		if !strings.Contains(commitErr.Error(), "nothing to commit") {
 			return fmt.Errorf("failed to commit changes: %v", commitErr)

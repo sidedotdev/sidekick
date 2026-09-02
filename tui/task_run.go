@@ -23,7 +23,7 @@ import (
 	"sidekick/utils"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/erikgeiser/promptkit/selection"
+	"github.com/charmbracelet/huh"
 )
 
 func kanbanLink(workspaceId string) string {
@@ -184,9 +184,13 @@ func ensureWorkspace(ctx context.Context, dir string, p teaSendable, c client.Cl
 		workspaceMap[wsString] = ws
 	}
 
-	prompt := selection.New("Please select a workspace", workspaceStrings)
-
-	selectedWorkspaceString, err := prompt.RunPrompt()
+	var selectedWorkspaceString string
+	err = huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Please select a workspace").
+			Options(huh.NewOptions(workspaceStrings...)...).
+			Value(&selectedWorkspaceString),
+	)).Run()
 	if err != nil {
 		return nil, fmt.Errorf("workspace selection failed: %w", err)
 	}

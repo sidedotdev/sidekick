@@ -108,7 +108,8 @@ Rules:
 - Be terse. Only act when intent is genuinely ready.
 - Do not ask the human for answers; nudges are prompts to think, not requests for replies.
 - Do not re-dispatch the same chunk of intent you already dispatched in earlier turns. The history of prior start_intent_subtask calls is preserved verbatim above, and the existing-sub-tasks list reflects current in-flight slices.
-- Do not nudge about the same concern more than once.`
+- Do not nudge about the same concern more than once.
+- Never nudge about human-intent vs generated-intent conflicts for newly written human intent; human intent wins — nudge only if human intent self-contradicts. It is fine to nudge if pre-existing human and generated intent are in conflict and it relates somehow to the new content being written.`
 
 const iddOrchestratorTurnPromptTemplate = `Intent edits have settled. Current state:
 

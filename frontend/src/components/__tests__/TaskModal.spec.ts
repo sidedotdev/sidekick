@@ -298,6 +298,35 @@ describe('TaskModal', () => {
     expect(wrapper.emitted('close')).toBeTruthy()
   })
 
+  it('closes globally on Escape and removes the handler when unmounted', async () => {
+    mountComponent()
+    const outsideInput = document.createElement('input')
+    document.body.appendChild(outsideInput)
+    outsideInput.focus()
+
+    const escapeEvent = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    })
+    outsideInput.dispatchEvent(escapeEvent)
+    await wrapper.vm.$nextTick()
+
+    expect(escapeEvent.defaultPrevented).toBe(true)
+    const closeEvents = wrapper.emitted('close')
+    expect(closeEvents).toHaveLength(1)
+
+    wrapper.unmount()
+    outsideInput.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    }))
+
+    expect(closeEvents).toHaveLength(1)
+    outsideInput.remove()
+  })
+
   it('has Start Task button as primary action', async () => {
     mountComponent()
     const startButton = wrapper.find('.p-button-primary')
@@ -466,6 +495,17 @@ describe('TaskModal localStorage behavior', () => {
   })
 
   describe('branch selection persistence', () => {
+    it('allows creating a branch from the start branch selector', async () => {
+      const wrapper = mountModal()
+
+      ;(wrapper.vm as any).repoMode = 'worktree'
+      await wrapper.vm.$nextTick()
+
+      const branchSelector = wrapper.findComponent({ name: 'BranchSelector' })
+      expect(branchSelector.exists()).toBe(true)
+      expect(branchSelector.props('allowCreate')).toBe(true)
+    })
+
     it('loads last selected branch from localStorage for new task', () => {
       const branchKey = `lastSelectedBranch_${testWorkspaceId}`
       localStorage.setItem(branchKey, 'feature-1')

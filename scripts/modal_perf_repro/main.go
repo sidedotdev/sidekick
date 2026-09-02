@@ -15,19 +15,27 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"sidekick/coding/lsp"
+	"sidekick/common"
 	"sidekick/dev"
 	"sidekick/env"
+	"sidekick/sideagent"
+
+	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 )
 
 func must(err error, what string) {
@@ -189,22 +197,58 @@ git diff --cached --quiet || git commit -qm main
 	// raw ssh exec measures per-command *session* cost: channel open, exec
 	// request, and data/exit/close each take a network round trip even on the
 	// reused transport, which is why pooling more SSH connections would not
-	// help. RunCommand("true") layers sidekick's command wrapping on the same
-	// transport — the difference between the two is sidekick's per-command
-	// overhead. The persistent shell channel prototypes a long-lived remote
-	// runner that avoids per-command session setup entirely (~1 round trip
-	// per command), demonstrating the raw-exec cost is not a hard floor. The
+	// help. RunCommand rides the pooled side-agent exec channel, so the gap
+	// between it and raw ssh shows the savings of avoiding per-command
+	// session setup. The persistent shell channel is the original prototype
+	// of that idea (~1 round trip per command) but inherits every shell
+	// quoting hazard; the direct side-agent exec channel keeps the 1-RTT
+	// shape while sending argv verbatim over a framed protocol to our own
+	// remote binary — no shell, no quoting (see https://ruuda.nl/2026/deptool)
+	// — and isolates the channel from RunCommand's env-layer overhead. The
 	// Stat phase below measures the floor of a single SFTP round trip.
 	sshArgs, err := e.SSHArgs(ctx)
 	must(err, "ssh args")
 	fmt.Println("\ndiagnostic phases (excluded from TOTAL):")
+	// Network-level controls, separated by layer. These probes dial the
+	// tunnel endpoint directly and are skipped when it is unreachable (e.g.
+	// proxy-only networks); when a CONNECT proxy carries the real transport,
+	// they measure a different route and serve only as a control. TCP connect
+	// completion is DNS plus one network round trip with no remote process
+	// scheduling; the keepalive is an RTT proxy that additionally includes
+	// sshd request processing.
+	tunnelAddr := net.JoinHostPort(created.SSHHost, strconv.Itoa(created.SSHPort))
+	if proxy := cmp.Or(os.Getenv("HTTPS_PROXY"), os.Getenv("https_proxy")); proxy != "" {
+		fmt.Printf("note: HTTPS_PROXY=%s configured; direct probes may take a different route than the transport\n", proxy)
+	}
+	if probeConn, probeErr := net.DialTimeout("tcp", tunnelAddr, 10*time.Second); probeErr != nil {
+		fmt.Printf("direct network probes unavailable (proxy-only network?): %v\n", probeErr)
+	} else {
+		_ = probeConn.Close()
+		runPhase("tcp connect to tunnel endpoint (DNS + TCP handshake)", func(int) error {
+			conn, err := net.DialTimeout("tcp", tunnelAddr, 10*time.Second)
+			if err != nil {
+				return err
+			}
+			return conn.Close()
+		})
+		if rttClient, handshakeDur, err := dialRTTProbe(tunnelAddr); err != nil {
+			fmt.Printf("ssh rtt probe unavailable: %v\n", err)
+		} else {
+			fmt.Printf("%-55s %19s\n", "ssh handshake (on fresh tcp conn)", handshakeDur.Round(time.Millisecond))
+			runPhase("ssh keepalive on established conn (RTT proxy)", func(int) error {
+				_, _, err := rttClient.SendRequest("keepalive@openssh.com", true, nil)
+				return err
+			})
+			_ = rttClient.Close()
+		}
+	}
 	runPhase("raw ssh exec: true (per-exec session setup)", func(int) error {
 		if out, err := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), "true")...).CombinedOutput(); err != nil {
 			return fmt.Errorf("raw ssh: %w: %s", err, out)
 		}
 		return nil
 	})
-	runPhase("RunCommand: true (adds sidekick wrapping)", func(int) error {
+	runPhase("RunCommand: true (pooled side-agent channel)", func(int) error {
 		return checkRun("true")
 	})
 	shell, err := startPersistentShell(ctx, sshArgs)
@@ -222,6 +266,82 @@ git diff --cached --quiet || git commit -qm main
 		return nil
 	})
 	shell.close()
+
+	agentPath, err := ensureRemoteAgent(ctx, e, sshArgs)
+	must(err, "ensure remote side-agent")
+	agent, err := startAgentChannel(ctx, sshArgs, agentPath)
+	must(err, "start agent exec channel")
+	agentRun := func(dir string, argv ...string) error {
+		resp, err := agent.client.Exec(ctx, sideagent.ExecRequest{Dir: dir, Argv: argv})
+		if err != nil {
+			return err
+		}
+		if resp.Error != "" {
+			return fmt.Errorf("agent exec: %s", resp.Error)
+		}
+		if resp.ExitStatus != 0 {
+			return fmt.Errorf("exit %d: %s%s", resp.ExitStatus, resp.Stdout, resp.Stderr)
+		}
+		return nil
+	}
+	must(agentRun("", "true"), "warm agent exec channel")
+	runPhase("agent exec channel: true (no-shell 1-RTT prototype)", func(int) error {
+		return agentRun("", "true")
+	})
+	runPhase("agent exec channel: git status --porcelain", func(int) error {
+		return agentRun(repoDir, "git", "status", "--porcelain")
+	})
+
+	// Argv travels verbatim over the framed protocol, so arguments that are
+	// impossible to quote portably across shells must arrive intact. printf
+	// repeats its format per argument; \x01 is an unambiguous separator since
+	// argv strings cannot contain NUL.
+	trickyArgs := []string{"a b", "it's", `she said "hi"`, "line1\nline2", "$HOME", "`id`", "\\", "*", "; rm -rf /tmp/nope"}
+	trickyResp, err := agent.client.Exec(ctx, sideagent.ExecRequest{
+		Argv: append([]string{"printf", "\x01%s"}, trickyArgs...),
+	})
+	must(err, "agent quoting check")
+	if want := "\x01" + strings.Join(trickyArgs, "\x01"); trickyResp.ExitStatus != 0 || string(trickyResp.Stdout) != want {
+		must(fmt.Errorf("exit %d, stdout %q, want %q", trickyResp.ExitStatus, trickyResp.Stdout, want), "agent quoting check")
+	}
+	fmt.Println("agent exec channel: shell-hostile argv round-tripped verbatim")
+	agent.close()
+
+	// Decompose one SFTP read into protocol stages to attribute per-read
+	// cost: channel setup (exec request + remote process spawn + SFTP init
+	// handshake) versus the read itself (open + data/EOF + close). A
+	// transport that handshakes per operation pays the setup stage on every
+	// read; a pooled channel pays it once.
+	sftpDiagStart := time.Now()
+	sftpCmd := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), agentPath+" sftp")...)
+	sftpStdin, err := sftpCmd.StdinPipe()
+	must(err, "sftp diag stdin")
+	sftpStdout, err := sftpCmd.StdoutPipe()
+	must(err, "sftp diag stdout")
+	sftpCmd.Stderr = os.Stderr
+	must(sftpCmd.Start(), "sftp diag start")
+	sftpDiagClient, err := sftp.NewClientPipe(sftpStdout, sftpStdin)
+	must(err, "sftp diag handshake")
+	fmt.Printf("sftp channel setup (exec+spawn+init handshake)          %9s\n",
+		time.Since(sftpDiagStart).Round(time.Millisecond))
+	for i := 0; i < 2; i++ {
+		p := fmt.Sprintf("%s/pkg/alpha/file%d.go", repoDir, i+1)
+		stageStart := time.Now()
+		f, err := sftpDiagClient.Open(p)
+		must(err, "sftp diag open")
+		openDur := time.Since(stageStart)
+		stageStart = time.Now()
+		_, err = io.ReadAll(f)
+		must(err, "sftp diag read")
+		readDur := time.Since(stageStart)
+		stageStart = time.Now()
+		must(f.Close(), "sftp diag close")
+		fmt.Printf("sftp read %d on warm channel: open %s  read+eof %s  close %s\n",
+			i+1, openDur.Round(time.Millisecond), readDur.Round(time.Millisecond),
+			time.Since(stageStart).Round(time.Millisecond))
+	}
+	_ = sftpDiagClient.Close()
+	_ = sftpCmd.Wait()
 
 	fmt.Printf("\nbenchmark phases (%d ops each):\n", *ops)
 	var results []phaseResult
@@ -361,4 +481,112 @@ func (p *persistentShell) run(command string) (int, error) {
 func (p *persistentShell) close() {
 	p.stdin.Close()
 	p.cmd.Wait()
+}
+
+// ensureRemoteAgent resolves the cached side-agent binary for the sandbox's
+// OS/arch (building from source when needed) and uploads it to its
+// content-addressed remote path, skipping the upload when already present.
+// This bootstrap is the only step that passes a command line through a shell;
+// afterwards every command travels as verbatim argv over the framed protocol.
+func ensureRemoteAgent(ctx context.Context, e *env.ModalEnv, sshArgs []string) (string, error) {
+	out, err := e.RunCommand(ctx, env.EnvRunCommandInput{Command: "uname", Args: []string{"-sm"}})
+	if err != nil {
+		return "", fmt.Errorf("uname: %w", err)
+	}
+	parts := strings.Fields(strings.TrimSpace(out.Stdout))
+	if len(parts) < 2 {
+		return "", fmt.Errorf("unexpected uname output: %q", out.Stdout)
+	}
+
+	localPath, err := common.GetAgentBinaryPath(parts[0], parts[1])
+	if err != nil {
+		return "", fmt.Errorf("get agent binary: %w", err)
+	}
+	remotePath := "/tmp/side-agent-" + filepath.Base(localPath)
+
+	check := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), "test -x "+remotePath)...)
+	if check.Run() == nil {
+		return remotePath, nil
+	}
+	localFile, err := os.Open(localPath)
+	if err != nil {
+		return "", err
+	}
+	defer localFile.Close()
+	upload := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), "cat > "+remotePath+" && chmod +x "+remotePath)...)
+	upload.Stdin = localFile
+	if uploadOut, err := upload.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("upload side-agent: %w: %s", err, uploadOut)
+	}
+	return remotePath, nil
+}
+
+// agentChannel is one SSH session hosting the side-agent exec server. Like
+// the persistent shell it costs a single network round trip per command, but
+// argv is framed rather than spliced into a shell line, so it has none of the
+// shell's quoting or output-separation problems.
+type agentChannel struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	client *sideagent.Client
+}
+
+func startAgentChannel(ctx context.Context, sshArgs []string, remotePath string) (*agentChannel, error) {
+	cmd := exec.CommandContext(ctx, "ssh", append(append([]string{}, sshArgs...), remotePath+" exec")...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &agentChannel{cmd: cmd, stdin: stdin, client: sideagent.NewClient(stdout, stdin)}, nil
+}
+
+func (a *agentChannel) close() {
+	a.stdin.Close()
+	a.cmd.Wait()
+}
+
+// dialRTTProbe opens a dedicated SSH connection to addr with the modal key,
+// returning the client and the handshake duration. A keepalive request on the
+// established connection is a close protocol-level proxy for network RTT:
+// unlike the exec or SFTP phases it involves no remote process scheduling,
+// though it still includes sshd's handling of the request.
+func dialRTTProbe(addr string) (*ssh.Client, time.Duration, error) {
+	dataHome, err := common.GetSidekickDataHome()
+	if err != nil {
+		return nil, 0, err
+	}
+	keyBytes, err := os.ReadFile(filepath.Join(dataHome, "modal", "id_ed25519"))
+	if err != nil {
+		return nil, 0, err
+	}
+	signer, err := ssh.ParsePrivateKey(keyBytes)
+	if err != nil {
+		return nil, 0, err
+	}
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return nil, 0, err
+	}
+	handshakeStart := time.Now()
+	sshConn, channels, requests, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
+		User: "root",
+		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		// The endpoint is authenticated by possession of the ephemeral tunnel
+		// address and our injected key, matching the transport's own policy.
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         15 * time.Second,
+	})
+	if err != nil {
+		_ = conn.Close()
+		return nil, 0, err
+	}
+	return ssh.NewClient(sshConn, channels, requests), time.Since(handshakeStart), nil
 }

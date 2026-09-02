@@ -64,6 +64,13 @@ func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
 
 // RankedDirSignatureOutline generates a ranked outline of the directory structure based on the query.
 func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options RankedDirSignatureOutlineOptions) (string, error) {
+	// Embedding models are optional: without one there is nothing to rank by,
+	// so the outline is skipped rather than failing the calling flow.
+	if options.ModelConfig.Provider == "" && options.ModelConfig.Model == "" {
+		log.Debug().Msg("no embedding model configured, skipping ranked dir signature outline")
+		return "", nil
+	}
+
 	// FIXME put tree sitter activities inside rag activities struct
 	t := tree_sitter.TreeSitterActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
@@ -156,6 +163,12 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 		return []string{}, errors.New("Attempted to perform RAG with an empty query")
 	}
 
+	stepStart := time.Now()
+	logStep := func(step string) {
+		log.Debug().Str("step", step).Str("contentType", options.ContentType).Dur("duration", time.Since(stepStart)).Msg("ranked subkeys step")
+		stepStart = time.Now()
+	}
+
 	ea := EmbedActivities{Storage: ra.DatabaseAccessor}
 	err := ea.CachedEmbedActivity(ctx, CachedEmbedActivityOptions{
 		Secrets:     options.Secrets,
@@ -167,6 +180,7 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	if err != nil {
 		return []string{}, err
 	}
+	logStep("cached embed subkeys")
 
 	va := VectorActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
@@ -212,15 +226,17 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	// type internally in the embedder implementation
 	taskType := embedding.TaskTypeRetrievalQuery
 
-	// Embed all chunks
-	// TODO /gen/basic cache query vectors in memory, for when the same query is rerun twice
-	queryVectors, err := BatchEmbed(ctx, options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
+	// Embed all chunks, memoized in-process: embedding providers are not
+	// bit-deterministic across requests, and near-tied rankings must not
+	// flip when the same query is rerun.
+	queryVectors, err := cachedBatchEmbedQueries(ctx, options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
 	}
 	if len(queryVectors) == 0 {
 		return []string{}, nil
 	}
+	logStep("embed query chunks")
 
 	// get closest results, one result set for each query chunk
 	resultSets, err := va.MultiVectorSearch(MultiVectorSearchOptions{
@@ -235,12 +251,14 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	if err != nil {
 		return []string{}, fmt.Errorf("failed multi-vector search: %w", err)
 	}
+	logStep("multi vector search")
 
 	rankings := make([]WeightedRanking, len(resultSets))
 	for i, set := range resultSets {
 		rankings[i] = WeightedRanking{Items: set, Weight: chunkWeights[i]}
 	}
 	rankings = append(rankings, ra.bm25WeightedRankings(ctx, options.WorkspaceId, options.ContentType, options.Subkeys, weightedQueries)...)
+	logStep("bm25 rankings")
 
 	reranker, err := GetReranker(options.Secrets.SecretManager)
 	if err != nil {
@@ -248,7 +266,7 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	}
 
 	fusedSubkeys := FuseResults(rankings)
-	return ra.rerankSubkeys(
+	result, err := ra.rerankSubkeys(
 		ctx,
 		options.WorkspaceId,
 		options.ContentType,
@@ -256,6 +274,8 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 		fusedSubkeys,
 		reranker,
 	)
+	logStep("rerank")
+	return result, err
 }
 
 // bm25WeightedRankings hydrates the documents behind the given subkeys and

@@ -38,6 +38,17 @@ type TaskWorkflowInput struct {
 	ExistingFlowId string
 }
 
+// commitTitleForTask returns the title to forward to a flow for use in commit
+// messages. Tasks whose title is just a copy of the description carry no extra
+// information, so those fall back to the description-derived message instead.
+func commitTitleForTask(title, description string) string {
+	title = strings.TrimSpace(title)
+	if title == strings.TrimSpace(description) {
+		return ""
+	}
+	return title
+}
+
 func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 	log := workflow.GetLogger(ctx)
 	ctx = setActivityOptions(ctx)
@@ -89,6 +100,7 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 			childFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
 				WorkspaceId:     input.WorkspaceId,
 				Requirements:    input.Description,
+				Title:           commitTitleForTask(input.Title, input.Description),
 				RepoDir:         workspace.LocalRepoDir,
 				BasicDevOptions: options,
 			})
@@ -99,6 +111,7 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 			childFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
 				WorkspaceId:       input.WorkspaceId,
 				Requirements:      input.Description,
+				Title:             commitTitleForTask(input.Title, input.Description),
 				RepoDir:           workspace.LocalRepoDir,
 				PlannedDevOptions: options,
 			})

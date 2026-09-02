@@ -16,10 +16,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/activity"
 	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -149,6 +151,30 @@ func (s *RunTestsTestSuite) TestRunTestsWithPassingTests() {
 	s.Contains(result.Output, "Test Command: not a real command")
 	s.Contains(result.Output, "Test Result: Passed")
 	s.NotContains(result.Output, "xyz pass") // we don't include test output when it passes
+}
+
+func (s *RunTestsTestSuite) TestRunTestsUsesLongTestCommandTimeout() {
+	// The wrapper workflow enters via utils.NoRetryCtx (5m StartToClose);
+	// test commands must override it, since a cold affected_tests run over
+	// ./... regularly exceeds 5 minutes.
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{WorkingDir: ".", Command: "long running test command"},
+		},
+	}
+
+	var startToClose time.Duration
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			startToClose = activity.GetInfo(ctx).StartToCloseTimeout
+			return env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil
+		},
+	).Times(1)
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal(testCommandStartToCloseTimeout, startToClose)
 }
 
 func (s *RunTestsTestSuite) TestRunTestsWithFailingTests() {

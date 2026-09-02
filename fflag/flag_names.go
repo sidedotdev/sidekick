@@ -11,6 +11,12 @@ Note: when CheckEdits is disabled, staging of changes is also disabled, these go
 hand-in-hand.
 */
 const CheckEdits = "check-edits"
+
+// CheckGoBuild enables the go compile check (`go test -c`) when validating Go
+// files after edits. It is expensive, especially on remote environments where
+// it runs over the network, so it defaults to off.
+const CheckGoBuild = "check-go-build"
+
 const InfoNeeds = "info-needs"
 const DisableContextCodeVisibilityCheck = "disable-context-code-visibility-check"
 const InitialRepoSummary = "initial-repo-summary"

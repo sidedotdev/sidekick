@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"sidekick/coding/unix"
 	"sidekick/common"
+	"sidekick/utils"
 
 	"github.com/rs/zerolog/log"
 )
@@ -240,6 +242,19 @@ func (e *OpenShellEnv) SyncGitRefToLocal(ctx context.Context, ref string) error 
 	return syncGitRefToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, ref)
 }
 
+var _ FlowBranchBackupSyncer = (*OpenShellEnv)(nil)
+
+func (e *OpenShellEnv) SyncFlowBranchToLocal(ctx context.Context, branch string) error {
+	if e.LocalRepoDir == "" {
+		return fmt.Errorf("cannot sync flow branch to local: OpenShellEnv has no LocalRepoDir")
+	}
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return fmt.Errorf("failed to get SSH args: %w", err)
+	}
+	return syncFlowBranchToLocalOverSSH(ctx, sshArgs, e.WorkingDirectory, e.LocalRepoDir, branch)
+}
+
 var _ TargetBranchSyncer = (*OpenShellEnv)(nil)
 
 func (e *OpenShellEnv) SyncBranchToRemote(ctx context.Context, branch string) error {
@@ -334,32 +349,44 @@ func (openShellSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteS
 	return openShellDeleteSandbox(ctx, input.SandboxName)
 }
 
-// openShellSSHArgs runs `openshell sandbox ssh-config <name>`, parses the
-// resulting SSH config block, and returns ssh CLI arguments with ControlMaster
-// multiplexing enabled.
-func openShellSSHArgs(ctx context.Context, sandboxName string) ([]string, error) {
+// openShellSSHConnConfig runs `openshell sandbox ssh-config <name>` and parses
+// the resulting SSH config block into a typed connection config.
+func openShellSSHConnConfig(ctx context.Context, sandboxName string) (SSHConnConfig, error) {
 	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: ".",
 		Command:    "openshell",
 		Args:       []string{"sandbox", "ssh-config", sandboxName},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("openshell sandbox ssh-config failed: %w", err)
+		return SSHConnConfig{}, fmt.Errorf("openshell sandbox ssh-config failed: %w", err)
 	}
 	if output.ExitStatus != 0 {
-		return nil, fmt.Errorf("openshell sandbox ssh-config exited with status %d: %s", output.ExitStatus, output.Stderr)
+		return SSHConnConfig{}, fmt.Errorf("openshell sandbox ssh-config exited with status %d: %s", output.ExitStatus, output.Stderr)
 	}
 
-	return parseSSHConfigArgs(output.Stdout, sandboxName)
+	return parseSSHConnConfig(output.Stdout, sandboxName)
 }
 
-// parseSSHConfigArgs parses an OpenSSH config block and returns ssh CLI args
-// that pass all options explicitly via -o flags, so no ~/.ssh/config entry is
-// needed. The Host alias is used as the destination hostname.
-func parseSSHConfigArgs(configOutput string, sandboxName string) ([]string, error) {
-	var host string
-	var user string
-	var opts []string
+// openShellSSHArgs returns ssh CLI arguments for the sandbox, with
+// ControlMaster multiplexing enabled.
+func openShellSSHArgs(ctx context.Context, sandboxName string) ([]string, error) {
+	config, err := openShellSSHConnConfig(ctx, sandboxName)
+	if err != nil {
+		return nil, err
+	}
+	return config.LegacyArgs(), nil
+}
+
+// parseSSHConnConfig parses an OpenSSH config block into a typed connection
+// config. Directives it models become typed fields; the rest are carried
+// verbatim, since passing every option explicitly is what lets us connect
+// without a ~/.ssh/config entry. The Host alias is the destination hostname.
+func parseSSHConnConfig(configOutput string, sandboxName string) (SSHConnConfig, error) {
+	// Multiplexing gives fast reuse of a master connection to the sandbox.
+	config := SSHConnConfig{
+		ControlPath:           "/tmp/ssh-%r@%h:%p",
+		ControlPersistForever: true,
+	}
 
 	scanner := bufio.NewScanner(strings.NewReader(configOutput))
 	for scanner.Scan() {
@@ -375,33 +402,109 @@ func parseSSHConfigArgs(configOutput string, sandboxName string) ([]string, erro
 		key := parts[0]
 		value := strings.TrimSpace(parts[1])
 
-		switch key {
-		case "Host":
-			host = value
-		case "User":
-			user = value
+		// OpenSSH keywords are case-insensitive.
+		switch strings.ToLower(key) {
+		case "host":
+			config.Host = value
+		case "user":
+			config.User = value
+		case "port":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return SSHConnConfig{}, fmt.Errorf("invalid Port %q in ssh-config output for sandbox %s: %w", value, sandboxName, err)
+			}
+			config.Port = port
+		case "identityfile":
+			config.IdentityFiles = append(config.IdentityFiles, expandSSHConfigPath(value))
+		case "stricthostkeychecking":
+			policy, err := hostKeyPolicyFromStrictSetting(value)
+			if err != nil {
+				return SSHConnConfig{}, fmt.Errorf("ssh-config output for sandbox %s: %w", sandboxName, err)
+			}
+			config.HostKeyPolicy = policy
+		case "userknownhostsfile":
+			for _, file := range strings.Fields(value) {
+				config.KnownHostsFiles = append(config.KnownHostsFiles, expandSSHConfigPath(file))
+			}
+		case "globalknownhostsfile":
+			for _, file := range strings.Fields(value) {
+				config.GlobalKnownHostsFiles = append(config.GlobalKnownHostsFiles, expandSSHConfigPath(file))
+			}
+		case "loglevel":
+			config.LogLevel = value
+		case "batchmode":
+			batchMode, err := parseSandboxBool(key, value, sandboxName)
+			if err != nil {
+				return SSHConnConfig{}, err
+			}
+			config.BatchMode = &batchMode
+		case "proxycommand":
+			config.ProxyCommand = value
+		case "connecttimeout":
+			seconds, err := parseSandboxCount(key, value, sandboxName)
+			if err != nil {
+				return SSHConnConfig{}, err
+			}
+			config.ConnectTimeout = utils.Ptr(time.Duration(seconds) * time.Second)
+		case "serveraliveinterval":
+			seconds, err := parseSandboxCount(key, value, sandboxName)
+			if err != nil {
+				return SSHConnConfig{}, err
+			}
+			config.KeepaliveInterval = utils.Ptr(time.Duration(seconds) * time.Second)
+		case "serveralivecountmax":
+			count, err := parseSandboxCount(key, value, sandboxName)
+			if err != nil {
+				return SSHConnConfig{}, err
+			}
+			config.KeepaliveMaxFailures = &count
 		default:
-			opts = append(opts, "-o", key+"="+value)
+			config.LegacyOptions = append(config.LegacyOptions, SSHOption{Key: key, Value: value})
 		}
 	}
-
-	if host == "" {
-		return nil, fmt.Errorf("no Host directive found in ssh-config output for sandbox %s", sandboxName)
+	if err := scanner.Err(); err != nil {
+		return SSHConnConfig{}, fmt.Errorf("read ssh-config output for sandbox %s: %w", sandboxName, err)
 	}
 
-	// enable fast reuse of a master ssh connection to the sandbox
-	args := []string{
-		"-o", "ControlMaster=auto",
-		"-S", "/tmp/ssh-%r@%h:%p",
-		"-o", "ControlPersist=yes",
+	if config.Host == "" {
+		return SSHConnConfig{}, fmt.Errorf("no Host directive found in ssh-config output for sandbox %s", sandboxName)
 	}
-	args = append(args, opts...)
+	return config, nil
+}
 
-	dest := host
-	if user != "" {
-		dest = user + "@" + host
+// parseSandboxCount parses a directive whose value OpenSSH expresses as a
+// count of seconds or attempts, naming the directive so a provider change is
+// easy to place. Zero is a meaningful value OpenSSH assigns its own meaning to
+// and is kept; negative values are meaningless and are refused.
+func parseSandboxCount(key, value, sandboxName string) (int, error) {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q in ssh-config output for sandbox %s: %w", key, value, sandboxName, err)
 	}
-	args = append(args, dest)
+	if parsed < 0 {
+		return 0, fmt.Errorf("invalid %s %q in ssh-config output for sandbox %s: must not be negative", key, value, sandboxName)
+	}
+	return parsed, nil
+}
 
-	return args, nil
+// parseSandboxBool maps an OpenSSH boolean directive, refusing values it does
+// not recognize so a directive is never quietly read as its opposite.
+func parseSandboxBool(key, value, sandboxName string) (bool, error) {
+	switch strings.ToLower(value) {
+	case "yes", "true":
+		return true, nil
+	case "no", "false":
+		return false, nil
+	}
+	return false, fmt.Errorf("invalid %s %q in ssh-config output for sandbox %s", key, value, sandboxName)
+}
+
+// parseSSHConfigArgs renders the parsed connection config as ssh CLI args for
+// the legacy transport.
+func parseSSHConfigArgs(configOutput string, sandboxName string) ([]string, error) {
+	config, err := parseSSHConnConfig(configOutput, sandboxName)
+	if err != nil {
+		return nil, err
+	}
+	return config.LegacyArgs(), nil
 }

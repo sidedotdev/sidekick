@@ -137,12 +137,47 @@ type ToolCall struct {
 	Signature []byte `json:"signature"`
 }
 
+// ToolType discriminates client-side function tools from provider-native
+// (server-side) builtin tools within a single tools list, mirroring how
+// providers accept both kinds of tools in one request-level tool list.
+type ToolType string
+
+const (
+	// The zero value is treated as a function tool for backward compatibility
+	// with persisted tool lists that predate ToolType.
+	ToolTypeFunction ToolType = "function"
+	// ToolTypeWebSearch enables the provider-native web search tool. Name,
+	// Description and Parameters are ignored for this type: each provider
+	// emits its own native tool name/type.
+	ToolTypeWebSearch ToolType = "web_search"
+)
+
+// WebSearchToolConfig configures the provider-native web search tool. Fields
+// that a provider does not support are ignored by that provider.
+type WebSearchToolConfig struct {
+	// MaxUses limits how many searches may run in one request (Anthropic only).
+	MaxUses int `json:"maxUses,omitempty"`
+	// AllowedDomains restricts search results to the given domains
+	// (Anthropic allowed_domains, OpenAI filters.allowed_domains).
+	AllowedDomains []string `json:"allowedDomains,omitempty"`
+}
+
 type Tool struct {
+	Type           ToolType           `json:"type,omitempty"`
 	Name           string             `json:"name"`
 	Description    string             `json:"description"`
 	Parameters     *jsonschema.Schema `json:"parameters"`
 	ParametersType reflect.Type       `json:"-"`
 	// TODO: add field pointing to function to call for the tool call
+
+	// WebSearch optionally configures the web search tool when Type is
+	// ToolTypeWebSearch; nil means provider defaults.
+	WebSearch *WebSearchToolConfig `json:"webSearch,omitempty"`
+}
+
+// IsFunction reports whether the tool is a client-side function tool.
+func (t Tool) IsFunction() bool {
+	return t.Type == "" || t.Type == ToolTypeFunction
 }
 
 type ChatProvider string

@@ -2489,3 +2489,53 @@ func TestBasePermissions_ShellSyntaxCheck(t *testing.T) {
 		}
 	})
 }
+
+func TestTagCommandPatternSources_SurvivesFourWayMerge(t *testing.T) {
+	t.Parallel()
+
+	untaggedBase := CommandPermissionConfig{
+		AutoApprove:     []CommandPattern{{Pattern: "ls"}},
+		RequireApproval: []CommandPattern{{Pattern: "git push"}},
+		Deny:            []CommandPattern{{Pattern: "rm -rf /", Message: "dangerous"}},
+	}
+	base := TagCommandPatternSources(untaggedBase, CommandPatternSourceBase)
+	local := TagCommandPatternSources(CommandPermissionConfig{
+		AutoApprove: []CommandPattern{{Pattern: "cat"}},
+		Deny:        []CommandPattern{{Pattern: "sudo"}},
+	}, CommandPatternSourceLocalConfig)
+	repo := TagCommandPatternSources(CommandPermissionConfig{
+		AutoApprove:      []CommandPattern{{Pattern: "go test"}},
+		ResetAutoApprove: true,
+	}, CommandPatternSourceRepoConfig)
+	workspace := TagCommandPatternSources(CommandPermissionConfig{
+		RequireApproval:      []CommandPattern{{Pattern: "docker push"}},
+		ResetRequireApproval: true,
+		Deny:                 []CommandPattern{{Pattern: "mkfs"}},
+	}, CommandPatternSourceWorkspaceConfig)
+
+	// tagging returns a copy: the input config is not mutated
+	assert.Empty(t, untaggedBase.AutoApprove[0].Source)
+	assert.Equal(t, CommandPatternSourceBase, base.AutoApprove[0].Source)
+
+	result := MergeCommandPermissions(base, local, repo, workspace)
+
+	// repo's ResetAutoApprove replaces base+local auto-approve lists
+	require.Len(t, result.AutoApprove, 1)
+	assert.Equal(t, "go test", result.AutoApprove[0].Pattern)
+	assert.Equal(t, CommandPatternSourceRepoConfig, result.AutoApprove[0].Source)
+
+	// workspace's ResetRequireApproval replaces the base require-approval list
+	require.Len(t, result.RequireApproval, 1)
+	assert.Equal(t, "docker push", result.RequireApproval[0].Pattern)
+	assert.Equal(t, CommandPatternSourceWorkspaceConfig, result.RequireApproval[0].Source)
+
+	// deny always accumulates, preserving each origin and message
+	require.Len(t, result.Deny, 3)
+	assert.Equal(t, "rm -rf /", result.Deny[0].Pattern)
+	assert.Equal(t, CommandPatternSourceBase, result.Deny[0].Source)
+	assert.Equal(t, "dangerous", result.Deny[0].Message)
+	assert.Equal(t, "sudo", result.Deny[1].Pattern)
+	assert.Equal(t, CommandPatternSourceLocalConfig, result.Deny[1].Source)
+	assert.Equal(t, "mkfs", result.Deny[2].Pattern)
+	assert.Equal(t, CommandPatternSourceWorkspaceConfig, result.Deny[2].Source)
+}

@@ -272,6 +272,7 @@
             v-if="store.workspaceId"
             :workspace-id="store.workspaceId"
             v-model="finishTargetBranch"
+            allow-create
           />
         </div>
 
@@ -1990,5 +1991,8 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--color-border);
 }
 
-
+.clarify-list {
+  max-height: 40vh;
+  overflow: scroll;
+}
 </style>
