@@ -33,6 +33,8 @@ intent_links:
       - dev/follow_dev_plan.go:checkIfDevStepCompleted
       - dev/follow_dev_plan.go:completeDevStepSubflow
       - dev/step_start_pin_test.go:StepStartPinTestSuite
+      - dev/planned_dev_review_diffs_test.go:TestPlannedDevStepDiffsRealFlow
+      - dev/planned_dev_review_diffs_test.go:TestPlannedDevPlanPinsEachStepWhereItStarted
       - coding/git/git_conflict_resolution.go:GitConflictResolutionDiffActivity
   - intent: "#degradation"
     code:

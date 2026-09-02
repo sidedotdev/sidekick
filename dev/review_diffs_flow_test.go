@@ -66,6 +66,12 @@ type reviewDiffsFlowHarness struct {
 	codingResponse     string
 	codingResponseSent bool
 
+	// unfulfilledRounds is how many auto-review rounds report the work as not
+	// yet meeting its criteria, which is what drives a flow into another coding
+	// round and hence another review round.
+	unfulfilledRounds int
+	fulfillmentRounds int
+
 	fulfillmentDiffs   []string
 	fulfillmentIndexes map[string]int
 	mergeApprovals     []MergeApprovalParams
@@ -251,8 +257,7 @@ func (h *reviewDiffsFlowHarness) streamResponse(input persisted_ai.StreamInput) 
 
 	switch {
 	case forced == determineCriteriaFulfillmentTool.Name || (forced == "" && offered[determineCriteriaFulfillmentTool.Name]):
-		return toolUse(determineCriteriaFulfillmentTool.Name,
-			`{"whatWasActuallyDone":"the work","analysis":"looks complete","isFulfilled":true}`)
+		return toolUse(determineCriteriaFulfillmentTool.Name, h.fulfillmentArguments())
 	case forced == generateBranchNamesTool.Name || offered[generateBranchNamesTool.Name]:
 		return toolUse(generateBranchNamesTool.Name, `{"candidates":["review-round-work"]}`)
 	case forced == getSymbolDefinitionsTool.Name:
@@ -280,6 +285,17 @@ func (h *reviewDiffsFlowHarness) streamResponse(input persisted_ai.StreamInput) 
 			Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "ok"}},
 		},
 	}
+}
+
+// fulfillmentArguments stands in for the auto-reviewer's judgement, rejecting
+// the rounds a test asks to be rejected so that a later round reviews only the
+// work done since the rejected one.
+func (h *reviewDiffsFlowHarness) fulfillmentArguments() string {
+	h.fulfillmentRounds++
+	if h.fulfillmentRounds <= h.unfulfilledRounds {
+		return `{"whatWasActuallyDone":"part of the work","analysis":"more is needed","isFulfilled":false}`
+	}
+	return `{"whatWasActuallyDone":"the work","analysis":"looks complete","isFulfilled":true}`
 }
 
 // endCodingRound stands in for the repository changes a real model would have
