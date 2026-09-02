@@ -523,7 +523,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 		Secrets:     *dCtx.Secrets,
 		ChatHistory: chatHistory,
 		WorkspaceId: dCtx.WorkspaceId,
-		Providers:   dCtx.Providers,
+		Providers:   dCtx.GetProviders(),
 	}
 
 	actionCtx := dCtx.NewActionContext("generate." + actionType)

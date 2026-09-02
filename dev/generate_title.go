@@ -175,7 +175,7 @@ func generateIntentSubtaskTitle(dCtx DevContext, commit, diff string) (string, e
 		ChatHistory: chatHistory,
 		WorkspaceId: eCtx.WorkspaceId,
 		FlowId:      workflow.GetInfo(eCtx).WorkflowExecution.ID,
-		Providers:   eCtx.Providers,
+		Providers:   eCtx.GetProviders(),
 	}
 	actionCtx.ActionParams = streamInput.ActionParams()
 
@@ -245,7 +245,7 @@ func generateTaskTitle(ctx workflow.Context, input GenerateTitleInput, repoDir s
 		ChatHistory: chatHistory,
 		WorkspaceId: eCtx.WorkspaceId,
 		FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
-		Providers:   eCtx.Providers,
+		Providers:   eCtx.GetProviders(),
 	}
 	actionCtx.ActionParams = streamInput.ActionParams()
 

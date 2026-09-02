@@ -287,6 +287,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	if err = SetupModalConfigHandlers(dCtx); err != nil {
 		return "", err
 	}
+	SetupProfileChangeHandler(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
