@@ -69,10 +69,13 @@ var reverseForwardHolderStartGrace = 500 * time.Millisecond
 // that requested them, so binding them to command-scoped channels would sever
 // backgrounded remote processes as soon as their command finished.
 type reverseForwardHolder struct {
-	mu     sync.Mutex
-	key    string
-	cmd    *exec.Cmd
-	exited chan struct{}
+	mu  sync.Mutex
+	key string
+	// executable overrides the ssh binary; tests inject an absolute path to a
+	// fake ssh so they cannot fall through to the real one via PATH.
+	executable string
+	cmd        *exec.Cmd
+	exited     chan struct{}
 }
 
 var reverseForwardHolders = struct {
@@ -137,7 +140,11 @@ func (h *reverseForwardHolder) ensure(ctx context.Context, sshEnv SSHCapableEnv,
 	holderArgs := append([]string{"-N", "-o", "ExitOnForwardFailure=yes"}, reverseForwardArgs(forwards)...)
 	// The holder deliberately outlives ctx: its whole purpose is to survive
 	// the command that first needed the forwards.
-	cmd := exec.Command("ssh", insertBeforeSSHDestination(independentSSHArgs(sshArgs), holderArgs)...)
+	executable := h.executable
+	if executable == "" {
+		executable = "ssh"
+	}
+	cmd := exec.Command(executable, insertBeforeSSHDestination(independentSSHArgs(sshArgs), holderArgs)...)
 	diagnostics := &synchronizedBuffer{}
 	cmd.Stderr = diagnostics
 	if err := cmd.Start(); err != nil {

@@ -34,11 +34,24 @@ func checkEmbeddedFileValidity(tree *tree_sitter_lib.Tree, sourceCode []byte, la
 
 const SyntaxError = "Syntax error(s)"
 
+// CheckFileValidityOptions controls optional, more expensive validity checks.
+type CheckFileValidityOptions struct {
+	// EnableGoBuildCheck runs a `go test -c` compile check on Go files. It is
+	// expensive, especially on remote environments, so it is off by default.
+	EnableGoBuildCheck bool
+}
+
 // CheckFileValidity checks a source file for bad syntax or other particularly bad issues.
 // Returns true if the file is valid, false otherwise, along with a string
 // containing any errors found, or warnings for errors that should not revert
 // edits.
 func CheckFileValidity(ctx context.Context, envContainer env.EnvContainer, relativeFilePath string) (bool, string, error) {
+	return CheckFileValidityWithOptions(ctx, envContainer, relativeFilePath, CheckFileValidityOptions{})
+}
+
+// CheckFileValidityWithOptions is CheckFileValidity with optional checks
+// controlled by opts.
+func CheckFileValidityWithOptions(ctx context.Context, envContainer env.EnvContainer, relativeFilePath string, opts CheckFileValidityOptions) (bool, string, error) {
 	fileBytes, readErr := envContainer.Env.ReadFile(ctx, relativeFilePath)
 	if readErr != nil {
 		return false, fmt.Sprintf("Failed to read file: %v", readErr), readErr
@@ -79,7 +92,7 @@ func CheckFileValidity(ctx context.Context, envContainer env.EnvContainer, relat
 		var err error
 		valid, errorString := checkGoTree(sourceCode, tree.RootNode())
 
-		if valid {
+		if valid && opts.EnableGoBuildCheck {
 			valid, errorString, err = CheckViaGoBuild(ctx, envContainer, relativeFilePath)
 		}
 
