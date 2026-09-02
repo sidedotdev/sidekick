@@ -255,6 +255,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "git add"},
 			{Pattern: "git commit"},
 			{Pattern: "git rm"},
+			// Only the file-restore form of checkout: the `--` separator rules
+			// out switching branches or creating one.
+			{Pattern: `git checkout -- \S`},
 			// Go commands
 			{Pattern: "go test"},
 			{Pattern: "go build"},
