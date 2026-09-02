@@ -589,9 +589,16 @@ func sftpMkdirAll(ctx context.Context, transport SSHTransport, p string, perm fs
 
 // sftpStat stats a path via the transport's SFTP channel.
 func sftpStat(ctx context.Context, transport SSHTransport, p string) (fs.FileInfo, error) {
-	return sftpValue[fs.FileInfo](ctx, transport, SFTPOp{Name: "stat", Path: p, Run: func(client *sftp.Client) (any, error) {
+	info, err := sftpValue[fs.FileInfo](ctx, transport, SFTPOp{Name: "stat", Path: p, Run: func(client *sftp.Client) (any, error) {
 		return client.Stat(p)
 	}})
+	if err != nil && errors.Is(err, fs.ErrNotExist) {
+		// Transports wrap errors with %w, which errors.Is unwraps but
+		// os.IsNotExist does not, so callers relying on the os predicate
+		// need the canonical *os.PathError shape.
+		return nil, &os.PathError{Op: "stat", Path: p, Err: fs.ErrNotExist}
+	}
+	return info, err
 }
 
 // sftpRemove deletes a file or empty directory via the transport's SFTP channel.

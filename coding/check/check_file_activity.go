@@ -28,6 +28,9 @@ type CheckFileActivityInput struct {
 	// SkipBaseFileValidityCheck skips the built-in syntax check, e.g. when the
 	// file already had syntax errors before the edit was applied.
 	SkipBaseFileValidityCheck bool
+	// EnableGoBuildCheck runs the expensive go compile check on Go files as
+	// part of the base file validity check.
+	EnableGoBuildCheck bool
 }
 
 func CheckFileActivity(ctx context.Context, input CheckFileActivityInput) (CheckFileActivityOutput, error) {
@@ -68,7 +71,9 @@ func CheckFileActivity(ctx context.Context, input CheckFileActivityInput) (Check
 		combinedOutput += "skipped base file validity check: file had pre-existing syntax errors\n"
 		checkPassed["baseFileValidityChecks"] = true
 	} else {
-		valid, checkOutput, err := CheckFileValidity(ctx, input.EnvContainer, input.FilePath)
+		valid, checkOutput, err := CheckFileValidityWithOptions(ctx, input.EnvContainer, input.FilePath, CheckFileValidityOptions{
+			EnableGoBuildCheck: input.EnableGoBuildCheck,
+		})
 		if err != nil {
 			return CheckFileActivityOutput{}, fmt.Errorf("failed to check file validity: %w", err)
 		}

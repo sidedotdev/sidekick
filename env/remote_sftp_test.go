@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,10 +16,40 @@ import (
 	"testing"
 	"time"
 
+	"sidekick/common"
+	"sidekick/sideagent"
+
 	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// notExistSFTPTransport reproduces how real transports surface a missing
+// path: a %w-wrapped error that errors.Is unwraps but os.IsNotExist does not.
+type notExistSFTPTransport struct{}
+
+func (notExistSFTPTransport) Exec(context.Context, sideagent.ExecRequest) (sideagent.ExecResponse, error) {
+	return sideagent.ExecResponse{}, errors.New("not implemented")
+}
+
+func (notExistSFTPTransport) WithSFTP(ctx context.Context, op SFTPOp) (any, error) {
+	return nil, fmt.Errorf("%s %s: %w", op.Name, op.Path, fs.ErrNotExist)
+}
+
+func (notExistSFTPTransport) EnsureReverseForwards(context.Context, []common.PortForwardConfig) error {
+	return nil
+}
+
+func (notExistSFTPTransport) Close() {}
+
+func TestSFTPStatNotExistSatisfiesOSIsNotExist(t *testing.T) {
+	t.Parallel()
+
+	_, err := sftpStat(context.Background(), notExistSFTPTransport{}, "/no/such/file")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, fs.ErrNotExist))
+	assert.True(t, os.IsNotExist(err), "remote Stat not-exist errors must satisfy os.IsNotExist, got %v", err)
+}
 
 // startSleepProcess launches a cheap long-running local process (standing in
 // for the remote ssh+agent chain) whose reaping can be observed in tests.
@@ -519,19 +550,23 @@ func TestRemoteAgentInstallCommand(t *testing.T) {
 }
 
 // installFakeSSH puts a fake ssh on PATH whose behavior is given by script
-// (a /bin/sh body). The caller's test must not be parallel.
-func installFakeSSH(t *testing.T, script string) {
+// (a /bin/sh body) and returns its absolute path. The caller's test must not
+// be parallel.
+func installFakeSSH(t *testing.T, script string) string {
 	t.Helper()
-	installFakeCommand(t, "ssh", script)
+	return installFakeCommand(t, "ssh", script)
 }
 
 // installFakeCommand puts a fake command named name on PATH whose behavior is
-// given by script (a /bin/sh body). The caller's test must not be parallel.
-func installFakeCommand(t *testing.T, name, script string) {
+// given by script (a /bin/sh body) and returns its absolute path. The
+// caller's test must not be parallel.
+func installFakeCommand(t *testing.T, name, script string) string {
 	t.Helper()
 	tempDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tempDir, name), []byte("#!/bin/sh\n"+script), 0700))
+	commandPath := filepath.Join(tempDir, name)
+	require.NoError(t, os.WriteFile(commandPath, []byte("#!/bin/sh\n"+script), 0700))
 	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return commandPath
 }
 
 // stubAgentBinary points agentBinaryForPlatform at a fixed local file,

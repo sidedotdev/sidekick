@@ -110,6 +110,10 @@ type ApplyEditBlockActivityInput struct {
 	CheckCommands []common.CommandConfig
 }
 
+func (input ApplyEditBlockActivityInput) goBuildCheckEnabled() bool {
+	return slices.Contains(input.EnabledFlags, fflag.CheckGoBuild)
+}
+
 // DEPRECATED: use DevActivities.ApplyEditBlocks instead
 // needed for backcompat, avoiding non-deterministic temporal workflow runs
 func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
@@ -244,7 +248,9 @@ func (da *DevActivities) tryBatchApply(
 	preEditFileHadErrors := false
 	firstEditType := blocks[0].block.EditType
 	if firstEditType == "update" || firstEditType == "append" {
-		preEditValid, _, preEditErr := check.CheckFileValidity(ctx, input.EnvContainer, filePath)
+		preEditValid, _, preEditErr := check.CheckFileValidityWithOptions(ctx, input.EnvContainer, filePath, check.CheckFileValidityOptions{
+			EnableGoBuildCheck: input.goBuildCheckEnabled(),
+		})
 		preEditFileHadErrors = !preEditValid && preEditErr == nil
 	}
 
@@ -371,7 +377,7 @@ func (da *DevActivities) tryBatchApply(
 
 	if checksEnabled {
 		checkResult, checkErr := checkAndStageOrRestoreFile(
-			ctx, input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors,
+			ctx, input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors, input.goBuildCheckEnabled(),
 		)
 
 		if !checkResult.Success {
@@ -471,7 +477,9 @@ func (da *DevActivities) applyBlocksSequentially(
 
 		preEditFileHadErrors := false
 		if block.EditType == "update" || block.EditType == "append" {
-			preEditValid, _, preEditErr := check.CheckFileValidity(ctx, input.EnvContainer, block.FilePath)
+			preEditValid, _, preEditErr := check.CheckFileValidityWithOptions(ctx, input.EnvContainer, block.FilePath, check.CheckFileValidityOptions{
+				EnableGoBuildCheck: input.goBuildCheckEnabled(),
+			})
 			preEditFileHadErrors = !preEditValid && preEditErr == nil
 		}
 
@@ -544,7 +552,7 @@ func (da *DevActivities) applyBlocksSequentially(
 					report.CheckResult.Message = "Skipped"
 				}
 			} else {
-				checkResult, checkErr := checkAndStageOrRestoreFile(ctx, input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors)
+				checkResult, checkErr := checkAndStageOrRestoreFile(ctx, input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors, input.goBuildCheckEnabled())
 				report.CheckResult = checkResult
 				if preEditFileHadErrors {
 					report.CheckWarning = "file had pre-existing syntax errors; base file validity check was skipped"
@@ -816,7 +824,7 @@ func countUnbalanced(lines []string, openingDelimiter, closingDelimiter string) 
 // restored, otherwise it is staged, so that future restores don't affect this
 // change. When preEditFileHadErrors is true, the built-in syntax check is
 // skipped since the file was already invalid before the edit.
-func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool) (CheckResult, error) {
+func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool, enableGoBuildCheck bool) (CheckResult, error) {
 	ctx, span := applyEditBlocksTracer.Start(ctx, "checkAndStageOrRestoreFile")
 	defer span.End()
 	span.SetAttributes(
@@ -831,6 +839,7 @@ func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContain
 		FilePath:                  filePath,
 		CheckCommands:             checkCommands,
 		SkipBaseFileValidityCheck: preEditFileHadErrors,
+		EnableGoBuildCheck:        enableGoBuildCheck,
 	})
 	checkSpan.SetAttributes(attribute.Bool("allPassed", checkOutput.AllPassed))
 	if checkErr != nil {
@@ -1045,6 +1054,10 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		enabledFlags := make([]string, 0)
 		if fflag.IsEnabled(trackedCtx, fflag.CheckEdits) {
 			enabledFlags = append(enabledFlags, fflag.CheckEdits)
+		}
+		goBuildCheckVersion := workflow.GetVersion(trackedCtx, "check-go-build", workflow.DefaultVersion, 1)
+		if goBuildCheckVersion >= 1 && fflag.IsEnabled(trackedCtx, fflag.CheckGoBuild) {
+			enabledFlags = append(enabledFlags, fflag.CheckGoBuild)
 		}
 
 		applyEditBlockInput := ApplyEditBlockActivityInput{

@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"runtime"
 	"sidekick/env"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -318,15 +320,13 @@ func generateTagAssignments(tagNames []string) []map[string]bool {
 // then includes only files that match that same context. The target file is
 // always included.
 func filterFilesByBuildTags(ctx context.Context, filePaths []string, targetFile string, envContainer env.EnvContainer) []string {
-	readConstraint := func(path string) constraint.Expr {
-		data, err := envContainer.Env.ReadFile(ctx, path)
-		if err != nil {
-			return nil
-		}
-		return parseBuildConstraintFromBytes(data)
+	fetchPaths := filePaths
+	if !slices.Contains(filePaths, targetFile) {
+		fetchPaths = append(append([]string{}, filePaths...), targetFile)
 	}
+	constraints := readBuildConstraints(ctx, envContainer, fetchPaths)
 
-	targetConstraint := readConstraint(targetFile)
+	targetConstraint := constraints[targetFile]
 
 	// Find a build context that satisfies the target constraint
 	buildCtx := findSatisfyingContext(targetConstraint)
@@ -348,12 +348,71 @@ func filterFilesByBuildTags(ctx context.Context, filePaths []string, targetFile 
 			result = append(result, fp)
 			continue
 		}
-		expr := readConstraint(fp)
-		if matchesBuildContextFull(expr, buildCtx) {
+		if matchesBuildContextFull(constraints[fp], buildCtx) {
 			result = append(result, fp)
 		}
 	}
 	return result
+}
+
+// readBuildConstraints returns the build constraint expression (nil when there
+// is none or the file is unreadable) for each of the given files. All files
+// are read in a single command round trip, which matters for remote
+// environments where each per-file read costs a full network round trip.
+func readBuildConstraints(ctx context.Context, envContainer env.EnvContainer, filePaths []string) map[string]constraint.Expr {
+	constraints := make(map[string]constraint.Expr, len(filePaths))
+	if len(filePaths) == 0 {
+		return constraints
+	}
+
+	// Emit "<file index>\t<line>" for each comment line preceding the package
+	// clause, so build constraint directives can be parsed locally. Numeric
+	// indices sidestep delimiter/injection issues with filenames in the
+	// output, and awk receives the paths as argv so no shell line is built.
+	const program = `
+BEGIN { for (i = 1; i < ARGC; i++) idx[ARGV[i]] = i }
+FNR == 1 { collecting = 1 }
+{
+	if (!collecting) next
+	t = $0
+	sub(/^[ \t]+/, "", t)
+	if (t ~ /^package[ \t]/) { collecting = 0; next }
+	if (t ~ /^\/\//) print idx[FILENAME] "\t" $0
+}`
+	output, err := envContainer.Env.RunCommand(ctx, env.EnvRunCommandInput{
+		Command: "awk",
+		Args:    append([]string{program}, filePaths...),
+	})
+	if err != nil || output.ExitStatus != 0 {
+		// Fall back to per-file reads, e.g. when a file is unreadable.
+		for _, fp := range filePaths {
+			data, readErr := envContainer.Env.ReadFile(ctx, fp)
+			if readErr != nil {
+				continue
+			}
+			constraints[fp] = parseBuildConstraintFromBytes(data)
+		}
+		return constraints
+	}
+
+	directiveLines := make(map[int][]string)
+	for _, line := range strings.Split(output.Stdout, "\n") {
+		numStr, rest, found := strings.Cut(line, "\t")
+		if !found {
+			continue
+		}
+		i, convErr := strconv.Atoi(numStr)
+		if convErr != nil || i < 1 || i > len(filePaths) {
+			continue
+		}
+		directiveLines[i] = append(directiveLines[i], rest)
+	}
+	for i, fp := range filePaths {
+		if lines, ok := directiveLines[i+1]; ok {
+			constraints[fp] = parseBuildConstraintFromBytes([]byte(strings.Join(lines, "\n")))
+		}
+	}
+	return constraints
 }
 
 // CheckViaGoBuild checks a Go source file for errors via go's build system. To
