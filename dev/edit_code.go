@@ -160,7 +160,7 @@ editLoop:
 			switch info := promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
 				// Flush initial instructions into chat history before replacing with pause feedback
-				if _, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan, environmentContext); err != nil {
+				if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan, environmentContext); err != nil {
 					return err
 				}
 				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
@@ -308,7 +308,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 			switch info := promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
 				// Flush initial instructions into chat history before replacing with pause feedback
-				if _, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext); err != nil {
+				if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext); err != nil {
 					return nil, err
 				}
 				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
@@ -356,7 +356,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		}
 
 		// Flush any pending FeedbackInfo to chat history before building LLM input.
-		// This replaces buildAuthorEditBlockInput's handling of FeedbackInfo,
+		// This replaces buildCodingInput's handling of FeedbackInfo,
 		// producing the same single AppendChatHistory activity.
 		if feedbackInfo, ok := promptInfo.(FeedbackInfo); ok {
 			if err := appendEditFeedback(dCtx.ExecContext, chatHistory, feedbackInfo.Feedback, feedbackInfo.Type); err != nil {
@@ -366,7 +366,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
-		authorEditBlockInput, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext)
+		authorEditBlockInput, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext)
 		if err != nil {
 			return nil, err
 		}
@@ -394,7 +394,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		}
 
 		if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 && advisor != nil {
-			if err := advisor.MaybeAdvise(dCtx, chatHistory, authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan), nil); err != nil {
+			if err := advisor.MaybeAdvise(dCtx, chatHistory, codingTools(dCtx, codingModelConfig, doneRequired, hasPlan), nil); err != nil {
 				if advisor.handlePauseInterruption(dCtx) {
 					continue
 				}
@@ -407,10 +407,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		attemptsSinceLastEditBlockOrFeedback++
 
 		resolveOptions := func() llm2.Options {
-			attemptOptions := authorEditBlockInput
-			attemptOptions.ModelConfig = resolveModelConfig()
-			attemptOptions.Tools = authorEditBlockTools(dCtx, attemptOptions.ModelConfig, doneRequired, hasPlan)
-			return attemptOptions
+			return resolveCodingOptions(dCtx, authorEditBlockInput, resolveModelConfig(), doneRequired, hasPlan)
 		}
 
 		// call Open AI to get back messages that contain edit blocks
@@ -593,9 +590,11 @@ func appendEditFeedback(eCtx flow_action.ExecContext, chatHistory *persisted_ai.
 	})
 }
 
-// authorEditBlockTools builds the tool slice shared by the coding executor and
+// codingTools builds the tool slice shared by the coding executor and
 // its advisor so both operate over an identical tool set each turn.
-func authorEditBlockTools(dCtx DevContext, codingModelConfig common.ModelConfig, doneRequired bool, hasPlan bool) []*llm.Tool {
+// It includes the env-gated web search tool, so it must be used everywhere
+// coding tools are resolved, including per-attempt option resolution.
+func codingTools(dCtx DevContext, codingModelConfig common.ModelConfig, doneRequired bool, hasPlan bool) []*llm.Tool {
 	tools := []*llm.Tool{
 		&bulkSearchRepositoryTool,
 		currentGetSymbolDefinitionsTool(),
@@ -623,12 +622,22 @@ func authorEditBlockTools(dCtx DevContext, codingModelConfig common.ModelConfig,
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	return tools
+	return appendWebSearchToolIfNonLocal(dCtx, tools)
 }
 
-// buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
+// resolveCodingOptions rebuilds the LLM options for a single stream
+// attempt, so retries pick up the current model config and its matching tool
+// list.
+func resolveCodingOptions(dCtx DevContext, baseOptions llm2.Options, modelConfig common.ModelConfig, doneRequired bool, hasPlan bool) llm2.Options {
+	attemptOptions := baseOptions
+	attemptOptions.ModelConfig = modelConfig
+	attemptOptions.Tools = codingTools(dCtx, modelConfig, doneRequired, hasPlan)
+	return attemptOptions
+}
+
+// buildCodingInput builds the LLM options for authoring edit blocks.
 // Returns the options and the visible messages (for edit block extraction).
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, doneRequired bool, hasPlan bool, environmentContext string) (llm2.Options, error) {
+func buildCodingInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, doneRequired bool, hasPlan bool, environmentContext string) (llm2.Options, error) {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser
@@ -681,8 +690,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		}
 	}
 
-	tools := authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan)
-	tools = appendWebSearchToolIfNonLocal(dCtx, tools)
+	tools := codingTools(dCtx, codingModelConfig, doneRequired, hasPlan)
 
 	options := llm2.Options{
 		Tools: tools,
