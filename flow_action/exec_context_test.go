@@ -16,6 +16,40 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+func TestProfileIdAccessors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil global state", func(t *testing.T) {
+		t.Parallel()
+		eCtx := &ExecContext{}
+		assert.Equal(t, "", eCtx.GetProfileId())
+	})
+
+	t.Run("set then get", func(t *testing.T) {
+		t.Parallel()
+		eCtx := &ExecContext{GlobalState: &GlobalState{}}
+		eCtx.SetProfileId("work")
+		assert.Equal(t, "work", eCtx.GetProfileId())
+	})
+
+	t.Run("set initializes nil global state", func(t *testing.T) {
+		t.Parallel()
+		eCtx := &ExecContext{}
+		eCtx.SetProfileId("work")
+		require.NotNil(t, eCtx.GlobalState)
+		assert.Equal(t, "work", eCtx.GetProfileId())
+	})
+
+	t.Run("copies share global-state-backed profile id", func(t *testing.T) {
+		t.Parallel()
+		eCtx := &ExecContext{GlobalState: &GlobalState{}}
+		eCtx.SetProfileId("work")
+		copied := *eCtx
+		eCtx.SetProfileId("personal")
+		assert.Equal(t, "personal", copied.GetProfileId())
+	})
+}
+
 func setupModelsCache(t *testing.T, modelsData map[string]interface{}) {
 	t.Helper()
 	common.ClearModelsCache()
@@ -234,4 +268,57 @@ func TestGetModelConfigUsesLatestGlobalState(t *testing.T) {
 	require.Len(t, modelConfigs, 2)
 	assert.Equal(t, "initial-model", modelConfigs[0].Model)
 	assert.Equal(t, "updated-model", modelConfigs[1].Model)
+}
+
+func TestGetModelConfig_SmallFallback_UsesLatestProvidersGlobalState(t *testing.T) {
+	setupModelsCache(t, map[string]interface{}{
+		"custom-provider": map[string]interface{}{
+			"models": map[string]interface{}{
+				"stale-small": map[string]interface{}{"reasoning": false},
+				"live-small":  map[string]interface{}{"reasoning": false},
+			},
+		},
+	})
+
+	eCtx := &ExecContext{
+		GlobalState: &GlobalState{},
+		Providers: []common.ModelProviderPublicConfig{
+			{Name: "custom-provider", SmallLLM: "stale-small"},
+		},
+	}
+	eCtx.SetLLMConfig(common.LLMConfig{
+		Defaults: []common.ModelConfig{{Provider: "custom-provider", Model: ""}},
+	})
+	eCtx.SetProviders([]common.ModelProviderPublicConfig{
+		{Name: "custom-provider", SmallLLM: "live-small"},
+	})
+
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
+	env.RegisterActivity(&FlowActivities{})
+	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var modelConfig common.ModelConfig
+	require.NoError(t, env.GetWorkflowResult(&modelConfig))
+	assert.Equal(t, "custom-provider", modelConfig.Provider)
+	assert.Equal(t, "live-small", modelConfig.Model)
+}
+
+func TestGetEmbeddingModelConfigUsesLatestGlobalState(t *testing.T) {
+	t.Parallel()
+
+	eCtx := &ExecContext{
+		EmbeddingConfig: common.EmbeddingConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "stale-embedding"}},
+		},
+	}
+	assert.Equal(t, "stale-embedding", eCtx.GetEmbeddingModelConfig(common.DefaultKey).Model)
+
+	eCtx.SetEmbeddingConfig(common.EmbeddingConfig{
+		Defaults: []common.ModelConfig{{Provider: "openai", Model: "live-embedding"}},
+	})
+	assert.Equal(t, "live-embedding", eCtx.GetEmbeddingModelConfig(common.DefaultKey).Model)
 }

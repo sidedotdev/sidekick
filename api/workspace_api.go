@@ -13,6 +13,7 @@ import (
 
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/srv"
@@ -20,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	"go.temporal.io/api/serviceerror"
 )
 
 // BranchInfo represents basic information about a git branch.
@@ -436,6 +438,8 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		workspaceConfig = domain.WorkspaceConfig{}
 	}
 
+	previousProfileId := workspace.EffectiveProfileId()
+
 	// Update fields directly without preserving unspecified values
 	workspace.Name = workspaceReq.Name
 	workspace.LocalRepoDir = workspaceReq.LocalRepoDir
@@ -455,6 +459,10 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	if newProfileId := workspace.EffectiveProfileId(); newProfileId != previousProfileId {
+		ctrl.notifyFlowsOfProfileChange(c.Request.Context(), workspaceId, newProfileId)
+	}
+
 	response := WorkspaceResponse{
 		Id:              workspace.Id,
 		Created:         workspace.Created,
@@ -468,6 +476,46 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})
+}
+
+// notifyFlowsOfProfileChange signals every in-progress flow in the workspace so
+// mid-flow profile resolution picks up the new workspace profile. Flows whose
+// workflows are already closed or not found are skipped, and failures never
+// fail the workspace update itself.
+func (ctrl *Controller) notifyFlowsOfProfileChange(ctx context.Context, workspaceId, profileId string) {
+	unfinishedStatuses := []domain.TaskStatus{
+		domain.TaskStatusToDo,
+		domain.TaskStatusInProgress,
+		domain.TaskStatusBlocked,
+		domain.TaskStatusInReview,
+	}
+	tasks, err := ctrl.service.GetTasks(ctx, workspaceId, unfinishedStatuses)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to list tasks for profile change notification")
+		return
+	}
+
+	signal := dev.ProfileChangeSignal{ProfileId: profileId}
+	for _, task := range tasks {
+		flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
+		if err != nil {
+			log.Error().Err(err).Str("workspaceId", workspaceId).Str("taskId", task.Id).Msg("Failed to list flows for profile change notification")
+			continue
+		}
+		for _, flow := range flows {
+			if flow.Status != "in_progress" && flow.Status != domain.FlowStatusPaused {
+				continue
+			}
+			err := ctrl.temporalClient.SignalWorkflow(ctx, flow.Id, "", dev.SignalNameProfileChange, signal)
+			if err != nil {
+				var notFoundErr *serviceerror.NotFound
+				if errors.As(err, &notFoundErr) || strings.Contains(err.Error(), "workflow execution already completed") {
+					continue
+				}
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flow.Id).Msg("Failed to signal flow about profile change")
+			}
+		}
+	}
 }
 
 // GetTaskConfigHandler returns task-creation UI defaults/config for a workspace.

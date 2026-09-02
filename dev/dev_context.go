@@ -143,6 +143,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	var workspaceConfig domain.WorkspaceConfig
 	var llmConfig common.LLMConfig
 	var embeddingConfig common.EmbeddingConfig
+	var unscopedProviders []common.ModelProviderPublicConfig
+	var unscopedLLMConfig common.LLMConfig
+	var unscopedEmbeddingConfig common.EmbeddingConfig
 
 	enableBranchNameGeneration := workflow.GetVersion(ctx, "branch-name-generation", workflow.DefaultVersion, 1) >= 1
 
@@ -154,7 +157,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			return DevContext{}, err
 		}
 		llmConfig = tempLocalExecContext.GetLLMConfig()
-		embeddingConfig = tempLocalExecContext.EmbeddingConfig
+		embeddingConfig = tempLocalExecContext.GetEmbeddingConfig()
 	} else {
 		tempProviders := localConfig.Providers
 		if configOverrides.Providers != nil {
@@ -569,7 +572,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	// for workflow backcompat/replay, we have to do this later
-	profileId := tempLocalExecContext.ProfileId
+	profileId := tempLocalExecContext.GetProfileId()
 	finalProviders := tempLocalExecContext.Providers
 	if !enableBranchNameGeneration {
 		resolved, configErr := getConfigs(ctx, workspaceId)
@@ -580,13 +583,13 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		workspaceConfig = resolved.WorkspaceConfig
 		profileId = resolved.ProfileId
 		finalProviders, llmConfig, embeddingConfig = applyConfigOverrides(resolved, configOverrides)
+		unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig = unscopedOverriddenConfigs(resolved, configOverrides)
 	}
 
 	eCtx := flow_action.ExecContext{
 		FlowScope:    &flow_action.FlowScope{},
 		Context:      ctx,
 		WorkspaceId:  workspaceId,
-		ProfileId:    profileId,
 		EnvContainer: &envContainer,
 		Secrets: &secret_manager.SecretManagerContainer{
 			SecretManager: secret_manager.NewProfileSecretManager(profileId),
@@ -595,7 +598,15 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		EmbeddingConfig: embeddingConfig,
 		GlobalState:     &flow_action.GlobalState{},
 	}
+	eCtx.SetProfileId(profileId)
 	eCtx.SetLLMConfig(llmConfig)
+	eCtx.SetProviders(finalProviders)
+	eCtx.SetEmbeddingConfig(embeddingConfig)
+	if enableBranchNameGeneration {
+		copyUnscopedConfigs(tempLocalExecContext, eCtx)
+	} else {
+		persistUnscopedConfigs(eCtx, unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig)
+	}
 
 	// NOTE: it's important to do this *after* the eCtx has been created, since
 	// that ensures we get the correct repo config for the given start branch
@@ -867,6 +878,12 @@ type resolvedConfigs struct {
 	// ones when configs are filtered again after per-flow overrides.
 	declaredProviders []common.ModelProviderPublicConfig
 
+	// unscopedLLMConfig/unscopedEmbeddingConfig retain the pre-profile-filter
+	// model selectors so a mid-flow profile change can re-derive
+	// profile-scoped configs from them.
+	unscopedLLMConfig       common.LLMConfig
+	unscopedEmbeddingConfig common.EmbeddingConfig
+
 	profileFilterEnabled bool
 }
 
@@ -941,6 +958,9 @@ func getConfigs(ctx workflow.Context, workspaceId string) (resolvedConfigs, erro
 		resolved.LLMConfig, resolved.EmbeddingConfig = mergeConfigs(resolved.LocalConfig.LLM, resolved.LocalConfig.Embedding, resolved.WorkspaceConfig.LLM, resolved.WorkspaceConfig.Embedding)
 	}
 
+	resolved.unscopedLLMConfig = resolved.LLMConfig
+	resolved.unscopedEmbeddingConfig = resolved.EmbeddingConfig
+
 	if !resolved.profileFilterEnabled {
 		return resolved, nil
 	}
@@ -985,6 +1005,25 @@ func applyConfigOverrides(resolved resolvedConfigs, configOverrides common.Confi
 	}
 
 	return profileScopedConfig(resolved.ProfileId, providers, llmConfig, embeddingConfig)
+}
+
+// unscopedOverriddenConfigs applies per-flow config overrides to the
+// pre-profile-filter configuration, yielding the inputs from which a mid-flow
+// profile change re-derives profile-scoped configs.
+func unscopedOverriddenConfigs(resolved resolvedConfigs, configOverrides common.ConfigOverrides) ([]common.ModelProviderPublicConfig, common.LLMConfig, common.EmbeddingConfig) {
+	providers := resolved.declaredProviders
+	if configOverrides.Providers != nil {
+		providers = *configOverrides.Providers
+	}
+	llmConfig := resolved.unscopedLLMConfig
+	if configOverrides.LLM != nil {
+		llmConfig = *configOverrides.LLM
+	}
+	embeddingConfig := resolved.unscopedEmbeddingConfig
+	if configOverrides.Embedding != nil {
+		embeddingConfig = *configOverrides.Embedding
+	}
+	return providers, llmConfig, embeddingConfig
 }
 
 // profileScopedConfig restricts providers and model selectors to the given
@@ -1109,7 +1148,6 @@ func newTempLocalExecContext(
 		FlowScope:    &flow_action.FlowScope{},
 		Context:      ctx,
 		WorkspaceId:  workspaceId,
-		ProfileId:    profileId,
 		EnvContainer: &env.EnvContainer{Env: tempLocalEnv},
 		Secrets: &secret_manager.SecretManagerContainer{
 			SecretManager: secret_manager.NewProfileSecretManager(profileId),
@@ -1118,7 +1156,10 @@ func newTempLocalExecContext(
 		EmbeddingConfig: embeddingConfig,
 		GlobalState:     &flow_action.GlobalState{},
 	}
+	eCtx.SetProfileId(profileId)
 	eCtx.SetLLMConfig(llmConfig)
+	eCtx.SetProviders(providers)
+	eCtx.SetEmbeddingConfig(embeddingConfig)
 	return eCtx, nil
 }
 
@@ -1144,5 +1185,7 @@ func NewTempLocalExecContext(ctx workflow.Context, workspaceId, repoDir string, 
 	if err != nil {
 		return flow_action.ExecContext{}, resolved.LocalConfig, resolved.WorkspaceConfig, err
 	}
+	unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig := unscopedOverriddenConfigs(resolved, configOverrides)
+	persistUnscopedConfigs(eCtx, unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig)
 	return eCtx, resolved.LocalConfig, resolved.WorkspaceConfig, nil
 }

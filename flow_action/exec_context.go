@@ -43,10 +43,7 @@ func (eCtx *ExecContext) getModelMetadata(provider, model string) common.ModelMe
 // around.
 type ExecContext struct {
 	workflow.Context
-	WorkspaceId string
-	// ProfileId scopes secret resolution and model provider selection. An empty
-	// value means the default profile.
-	ProfileId             string
+	WorkspaceId           string
 	EnvContainer          *env.EnvContainer
 	Secrets               *secret_manager.SecretManagerContainer
 	FlowScope             *FlowScope
@@ -96,7 +93,7 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 				modelConfig.Model = provider.SmallModel()
 			} else {
 				// Try to find provider in configured providers
-				for _, p := range eCtx.Providers {
+				for _, p := range eCtx.GetProviders() {
 					if p.Name == modelConfig.Provider {
 						if p.SmallLLM != "" {
 							modelConfig.Model = p.SmallLLM
@@ -140,7 +137,7 @@ func (eCtx *ExecContext) FetchModelMetadata(provider, model string) common.Model
 }
 
 func (eCtx *ExecContext) GetEmbeddingModelConfig(key string) common.ModelConfig {
-	modelConfig := eCtx.EmbeddingConfig.GetModelConfig(key)
+	modelConfig := eCtx.GetEmbeddingConfig().GetModelConfig(key)
 	return modelConfig
 }
 
@@ -159,4 +156,69 @@ func (eCtx *ExecContext) GetLLMConfig() common.LLMConfig {
 	}
 	llmConfig, _ := eCtx.GlobalState.GetValue(GlobalStateKeyLLMConfig).(common.LLMConfig)
 	return llmConfig
+}
+
+const GlobalStateKeyProfileId = "profileId"
+
+// SetProfileId records the profile that scopes secret resolution and model
+// provider selection in global state, so it can be live-updated mid-flow. An
+// empty value means the default profile.
+func (eCtx *ExecContext) SetProfileId(profileId string) {
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	eCtx.GlobalState.SetValue(GlobalStateKeyProfileId, profileId)
+}
+
+// GetProfileId reads the current profile id from global state. An empty value
+// means the default profile.
+func (eCtx *ExecContext) GetProfileId() string {
+	if eCtx.GlobalState == nil {
+		return ""
+	}
+	return eCtx.GlobalState.GetStringValue(GlobalStateKeyProfileId)
+}
+
+const GlobalStateKeyProviders = "providers"
+
+// SetProviders replaces the effective provider catalog in global state so it
+// can be live-updated mid-flow, e.g. on a workspace profile change.
+func (eCtx *ExecContext) SetProviders(providers []common.ModelProviderPublicConfig) {
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	eCtx.GlobalState.SetValue(GlobalStateKeyProviders, providers)
+}
+
+// GetProviders returns the effective provider catalog, preferring a live value
+// from global state over the one captured at setup time.
+func (eCtx *ExecContext) GetProviders() []common.ModelProviderPublicConfig {
+	if eCtx.GlobalState != nil {
+		if providers, ok := eCtx.GlobalState.GetValue(GlobalStateKeyProviders).([]common.ModelProviderPublicConfig); ok {
+			return providers
+		}
+	}
+	return eCtx.Providers
+}
+
+const GlobalStateKeyEmbeddingConfig = "embeddingConfig"
+
+// SetEmbeddingConfig replaces the effective embedding configuration in global
+// state so it can be live-updated mid-flow, e.g. on a workspace profile change.
+func (eCtx *ExecContext) SetEmbeddingConfig(embeddingConfig common.EmbeddingConfig) {
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	eCtx.GlobalState.SetValue(GlobalStateKeyEmbeddingConfig, embeddingConfig)
+}
+
+// GetEmbeddingConfig returns the effective embedding configuration, preferring
+// a live value from global state over the one captured at setup time.
+func (eCtx *ExecContext) GetEmbeddingConfig() common.EmbeddingConfig {
+	if eCtx.GlobalState != nil {
+		if embeddingConfig, ok := eCtx.GlobalState.GetValue(GlobalStateKeyEmbeddingConfig).(common.EmbeddingConfig); ok {
+			return embeddingConfig
+		}
+	}
+	return eCtx.EmbeddingConfig
 }

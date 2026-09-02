@@ -183,10 +183,10 @@ func tempExecContextWorkflow(ctx workflow.Context, workspaceId, repoDir string, 
 		return tempExecContextResult{}, err
 	}
 	return tempExecContextResult{
-		Providers:       eCtx.Providers,
+		Providers:       eCtx.GetProviders(),
 		LLMConfig:       eCtx.GetLLMConfig(),
-		EmbeddingConfig: eCtx.EmbeddingConfig,
-		ProfileId:       eCtx.ProfileId,
+		EmbeddingConfig: eCtx.GetEmbeddingConfig(),
+		ProfileId:       eCtx.GetProfileId(),
 	}, nil
 }
 
@@ -295,4 +295,47 @@ func (s *GetConfigsTestSuite) TestProfileFiltering_NoDefaultsAvailableForProfile
 	err := s.env.GetWorkflowError()
 	s.Error(err)
 	s.Contains(err.Error(), `no default LLM models are available for profile "work"`)
+}
+
+func tempExecContextProfileChangeWorkflow(ctx workflow.Context, workspaceId, repoDir, newProfileId string) (tempExecContextResult, error) {
+	ctx = utils.NoRetryCtx(ctx)
+	eCtx, _, _, err := NewTempLocalExecContext(ctx, workspaceId, repoDir, common.ConfigOverrides{})
+	if err != nil {
+		return tempExecContextResult{}, err
+	}
+	applyProfileChange(DevContext{ExecContext: eCtx}, newProfileId)
+	return tempExecContextResult{
+		Providers:       eCtx.GetProviders(),
+		LLMConfig:       eCtx.GetLLMConfig(),
+		EmbeddingConfig: eCtx.GetEmbeddingConfig(),
+		ProfileId:       eCtx.GetProfileId(),
+	}, nil
+}
+
+func (s *GetConfigsTestSuite) TestProfileChange_RederivesConfigsFromStateCapturedAtSetup() {
+	var wa *workspace.Activities
+
+	ws := domain.Workspace{
+		Id:         "ws_profile_change",
+		ConfigMode: "local",
+	}
+
+	s.env.RegisterWorkflow(tempExecContextProfileChangeWorkflow)
+	s.env.OnActivity(common.GetLocalConfig).Return(profileFilterLocalConfig(), nil)
+	s.env.OnActivity(wa.GetWorkspaceConfig, ws.Id).Return(domain.WorkspaceConfig{}, nil)
+	s.env.OnActivity(wa.GetWorkspace, ws.Id).Return(ws, nil)
+
+	s.env.ExecuteWorkflow(tempExecContextProfileChangeWorkflow, ws.Id, s.T().TempDir(), "work")
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var result tempExecContextResult
+	s.NoError(s.env.GetWorkflowResult(&result))
+
+	s.Equal("work", result.ProfileId)
+	s.Require().Len(result.Providers, 1)
+	s.Equal("openai-work", result.Providers[0].Name)
+	s.Equal([]common.ModelConfig{{Provider: "openai-work", Model: "gpt-work"}}, result.LLMConfig.Defaults)
+	s.Equal([]common.ModelConfig{{Provider: "openai-work", Model: "embed-work"}}, result.EmbeddingConfig.Defaults)
 }

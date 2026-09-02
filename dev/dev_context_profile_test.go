@@ -14,7 +14,7 @@ func TestNewTempLocalExecContextScopesSecretsToProfile(t *testing.T) {
 	eCtx, err := newTempLocalExecContext(nil, "workspace-id", t.TempDir(), "work", nil, common.LLMConfig{}, common.EmbeddingConfig{})
 	require.NoError(t, err)
 
-	assert.Equal(t, "work", eCtx.ProfileId)
+	assert.Equal(t, "work", eCtx.GetProfileId())
 
 	secret, err := eCtx.Secrets.GetSecret("PROFILE_SCOPED_API_KEY")
 	require.NoError(t, err)

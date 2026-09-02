@@ -251,6 +251,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	if err = SetupModalConfigHandlers(dCtx); err != nil {
 		return err
 	}
+	SetupProfileChangeHandler(dCtx)
 
 	state.DefaultTargetBranch = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 

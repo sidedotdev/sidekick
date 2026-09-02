@@ -84,6 +84,37 @@ intent_links:
       - frontend/src/components/LlmConfigEditor.vue
       - frontend/src/components/EmbeddingConfigEditor.vue
       - frontend/src/components/__tests__/WorkspaceForm.spec.ts
+  - intent: "#flows"
+    code:
+      - flow_action/exec_context.go:ExecContext.SetProfileId
+      - flow_action/exec_context.go:ExecContext.GetProfileId
+      - flow_action/exec_context.go:ExecContext.SetProviders
+      - flow_action/exec_context.go:ExecContext.GetProviders
+      - flow_action/exec_context.go:ExecContext.SetEmbeddingConfig
+      - flow_action/exec_context.go:ExecContext.GetEmbeddingConfig
+      - flow_action/exec_context.go:ExecContext.GetModelConfig
+      - flow_action/exec_context.go:ExecContext.GetEmbeddingModelConfig
+      - flow_action/exec_context_test.go:TestProfileIdAccessors
+      - flow_action/exec_context_test.go:TestGetModelConfig_SmallFallback_UsesLatestProvidersGlobalState
+      - flow_action/exec_context_test.go:TestGetEmbeddingModelConfigUsesLatestGlobalState
+      - dev/dev_context.go:setupDevContextAction
+      - dev/dev_context.go:newTempLocalExecContext
+      - dev/dev_context.go:NewTempLocalExecContext
+      - dev/dev_context.go:getConfigs
+      - dev/dev_context.go:unscopedOverriddenConfigs
+      - dev/build_dev_requirements.go:TrackedToolChat
+      - dev/generate_title.go:generateIntentSubtaskTitle
+      - dev/generate_title.go:generateTaskTitle
+      - persisted_ai/helpers.go:forceToolCallV2
+      - dev/profile_config.go
+      - dev/profile_config_test.go
+      - dev/dev_context_profile_filter_test.go
+      - dev/dev_workflow_signals.go:SignalNameProfileChange
+      - dev/basic_dev_workflow.go:BasicDevWorkflow
+      - dev/planned_dev_workflow.go:PlannedDevWorkflow
+      - dev/idd_workflow.go:IddWorkflow
+      - api/workspace_api.go:notifyFlowsOfProfileChange
+      - api/workspace_api_test.go:TestUpdateWorkspaceHandler_ProfileChangeSignalsFlows
 ---
 
 # Profiles
