@@ -71,13 +71,17 @@ modal:
   vm: false
   dockerfile_path: "Dockerfile.modal"
   # Requests are billing floors; usage bursts freely up to the limits (CPU is
-  # left unlimited at Modal's minimum 0.125-core request). Memory measured via
-  # scripts/modal_mem_measure: sampled peak ~2.9 GiB running test_commands
-  # concurrently and ~4.2 GiB for integration_test_commands, so an 8 GiB limit
-  # leaves ~2x headroom against OOM while the 1 GiB floor minimizes cost.
+  # left unlimited at Modal's minimum 0.125-core request). Memory: an 8 GiB
+  # limit repeatedly OOM-killed the whole sandbox (exit 137) when the
+  # integration_test_commands ran concurrently without affected-test skips;
+  # that workload's sampled peak measured 8.6 GiB with a warm build cache
+  # (see TEST_TIMING_MODAL.md; the previously measured ~4.2 GiB covered only
+  # the lighter affected-tests workload), so the limit is sized with ~2x
+  # headroom over it. Only usage above the 1 GiB floor is billed, so the
+  # higher limit is free when memory stays low.
   cpu: 0.125
   memory: 1024
-  memory_limit: 8192
+  memory_limit: 16384
   # Sandbox filesystem snapshots only follow a single sandbox lineage, so a
   # replacement sandbox starts with a cold affected-test cache and recompiles
   # and reruns every Go package. Keeping the cache on a volume lets any sandbox

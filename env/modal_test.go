@@ -12,6 +12,7 @@ import (
 
 	"sidekick/common"
 
+	modal "github.com/modal-labs/libmodal/modal-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/temporal"
@@ -573,6 +574,223 @@ func TestModalRecreateSandboxActivity(t *testing.T) {
 		assert.Equal(t, []string{"check", "create"}, *sequence)
 		assert.Equal(t, "new.modal.host", output.EnvContainer.Env.(*ModalEnv).SSHHost)
 	})
+}
+
+func TestModalCreateSandboxWithRecovery(t *testing.T) {
+	t.Parallel()
+
+	input := ModalCreateSandboxInput{Name: "side-test-recovery"}
+	// The dead sandbox is an adopted successor of the requested name, so the
+	// recovery path must terminate and chain from it, not the requested name.
+	deadName := modalReplacementSandboxName(input.Name)
+	unhealthyErr := &modalSandboxUnhealthyError{
+		sandboxName: deadName,
+		cause:       errors.New("sshd did not come up in modal sandbox (exit 137)"),
+	}
+	shuttingDownErr := status.Error(codes.FailedPrecondition, "Modal Sandbox is shutting down.")
+	plainErr := errors.New("boom")
+
+	cases := []struct {
+		name          string
+		createResults []error
+		recycleErr    error
+		awaitErr      error
+		wantErr       string
+		wantCreates   int
+		wantRecycles  int
+		wantAwaits    int
+	}{
+		{
+			name:          "healthy create needs no recovery",
+			createResults: []error{nil},
+			wantCreates:   1,
+		},
+		{
+			name:          "unhealthy reused sandbox is replaced under a fresh name",
+			createResults: []error{unhealthyErr, nil},
+			wantCreates:   2,
+			wantRecycles:  1,
+		},
+		{
+			name:          "recycle failure surfaces",
+			createResults: []error{unhealthyErr},
+			recycleErr:    errors.New("terminate denied"),
+			wantErr:       "terminate denied",
+			wantCreates:   1,
+			wantRecycles:  1,
+		},
+		{
+			name:          "still unhealthy after recycle surfaces without looping",
+			createResults: []error{unhealthyErr, unhealthyErr},
+			wantErr:       "polls as running but is unusable",
+			wantCreates:   2,
+			wantRecycles:  1,
+		},
+		{
+			name:          "terminating sandbox awaits shutdown then recreates",
+			createResults: []error{shuttingDownErr, nil},
+			wantCreates:   2,
+			wantAwaits:    1,
+		},
+		{
+			name:          "other errors pass through untouched",
+			createResults: []error{plainErr},
+			wantErr:       "boom",
+			wantCreates:   1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			recycles, awaits := 0, 0
+			var createNames []string
+			createOnce := func(ctx context.Context, in ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
+				require.Less(t, len(createNames), len(tc.createResults), "unexpected extra create attempt")
+				err := tc.createResults[len(createNames)]
+				createNames = append(createNames, in.Name)
+				if err != nil {
+					return ModalCreateSandboxOutput{}, err
+				}
+				return ModalCreateSandboxOutput{SandboxName: in.Name, SSHHost: "h", SSHPort: 1}, nil
+			}
+			recycle := func(ctx context.Context, name string) error {
+				recycles++
+				assert.Equal(t, deadName, name)
+				return tc.recycleErr
+			}
+			await := func(ctx context.Context, name string) error {
+				awaits++
+				assert.Equal(t, input.Name, name)
+				return tc.awaitErr
+			}
+
+			output, err := modalCreateSandboxWithRecovery(context.Background(), input, createOnce, recycle, await)
+
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err)
+				if tc.wantRecycles > 0 {
+					// The zombie's name is held by Modal for minutes after
+					// termination, so the replacement must use a fresh name
+					// (derived from the dead sandbox's name so activity
+					// retries converge on it) and report it to the caller.
+					wantReplacement := modalReplacementSandboxName(deadName)
+					assert.NotEqual(t, deadName, output.SandboxName)
+					assert.Equal(t, wantReplacement, output.SandboxName)
+					assert.Equal(t, wantReplacement, createNames[1])
+				} else {
+					assert.Equal(t, input.Name, output.SandboxName)
+				}
+			}
+			assert.Equal(t, tc.wantCreates, len(createNames), "create attempts")
+			assert.Equal(t, tc.wantRecycles, recycles, "recycle attempts")
+			assert.Equal(t, tc.wantAwaits, awaits, "shutdown waits")
+			assert.Equal(t, input.Name, createNames[0], "first create must use the requested name")
+		})
+	}
+}
+
+func TestModalReplacementSandboxName(t *testing.T) {
+	t.Parallel()
+
+	name := modalReplacementSandboxName("side--myrepo-abc123")
+	assert.Regexp(t, `^side--myrepo-abc123-r[0-9a-f]{6}$`, name)
+
+	// The successor is a pure function of the replaced name, so a retried
+	// create can rediscover a successor created by an earlier lost attempt.
+	assert.Equal(t, name, modalReplacementSandboxName("side--myrepo-abc123"))
+
+	// Chained replacements stay distinct across generations.
+	second := modalReplacementSandboxName(name)
+	assert.NotEqual(t, name, second)
+	assert.Regexp(t, `-r[0-9a-f]{6}$`, second)
+
+	// Long names are truncated so chains never exceed name length limits.
+	long := modalReplacementSandboxName(strings.Repeat("a", 80))
+	assert.LessOrEqual(t, len(long), 63)
+	chained := modalReplacementSandboxName(modalReplacementSandboxName(long))
+	assert.LessOrEqual(t, len(chained), 63)
+}
+
+// TestResolveModalSandboxWith models the lost-success retry: an earlier create
+// terminated the requested sandbox and created its successor, but the result
+// never reached the workflow, so the retry must re-attach to the live
+// successor instead of recreating the requested name and orphaning it.
+func TestResolveModalSandboxWith(t *testing.T) {
+	t.Parallel()
+
+	const requested = "side--myrepo-abc123"
+	succ1 := modalReplacementSandboxName(requested)
+	succ2 := modalReplacementSandboxName(succ1)
+	live := &modal.Sandbox{}
+
+	cases := []struct {
+		name     string
+		alive    map[string]*modal.Sandbox
+		wantSb   *modal.Sandbox
+		wantName string
+	}{
+		{
+			name:     "requested name live",
+			alive:    map[string]*modal.Sandbox{requested: live},
+			wantSb:   live,
+			wantName: requested,
+		},
+		{
+			name:     "lost success retry adopts live successor",
+			alive:    map[string]*modal.Sandbox{succ1: live},
+			wantSb:   live,
+			wantName: succ1,
+		},
+		{
+			name:     "second generation successor adopted",
+			alive:    map[string]*modal.Sandbox{succ2: live},
+			wantSb:   live,
+			wantName: succ2,
+		},
+		{
+			name:     "nothing live falls back to requested for fresh create",
+			alive:    map[string]*modal.Sandbox{},
+			wantSb:   nil,
+			wantName: requested,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var looked []string
+			sb, name, err := resolveModalSandboxWith(func(n string) (*modal.Sandbox, error) {
+				looked = append(looked, n)
+				return tc.alive[n], nil
+			}, requested)
+			require.NoError(t, err)
+			assert.Same(t, tc.wantSb, sb)
+			assert.Equal(t, tc.wantName, name)
+			assert.Equal(t, requested, looked[0], "the requested name must be checked first")
+		})
+	}
+
+	lookupErr := errors.New("modal lookup failed")
+	_, _, err := resolveModalSandboxWith(func(n string) (*modal.Sandbox, error) {
+		return nil, lookupErr
+	}, requested)
+	assert.ErrorIs(t, err, lookupErr)
+}
+
+func TestModalSandboxUnhealthyErrorUnwraps(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("sshd did not come up in modal sandbox (exit 137)")
+	err := error(&modalSandboxUnhealthyError{sandboxName: "side-x", cause: cause})
+
+	var unhealthy *modalSandboxUnhealthyError
+	require.ErrorAs(t, err, &unhealthy)
+	assert.ErrorIs(t, err, cause)
+	assert.Contains(t, err.Error(), "side-x")
+	assert.Contains(t, err.Error(), "exit 137")
 }
 
 func TestIsModalSandboxTerminatingOrTerminated(t *testing.T) {
