@@ -762,20 +762,138 @@ func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int,
 // watchdog's guard-initiated terminate leaves such a window). When reuse
 // trips over it, wait for the shutdown to finish and create afresh, which
 // restores from the snapshot the watchdog took just before terminating.
+//
+// A sandbox may also poll as running while its container is permanently
+// unusable (e.g. after an OOM kill of the container's processes, every exec
+// is admitted but exits 137 with no error). Reuse recycles such a sandbox:
+// terminate it and create a replacement under a fresh name, returned via
+// SandboxName. Modal holds a terminated sandbox's name for minutes, so the
+// replacement must not reuse it; callers already persist the actual name from
+// the output rather than assuming it matches the requested one.
 func modalCreateSandbox(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
-	output, err := modalCreateSandboxOnce(ctx, input)
-	if err == nil || !isModalSandboxTerminatingOrTerminated(err) {
+	return modalCreateSandboxWithRecovery(ctx, input, modalCreateSandboxOnce, recycleModalSandbox,
+		func(ctx context.Context, name string) error {
+			client, err := getModalClient()
+			if err != nil {
+				return err
+			}
+			return waitForModalSandboxGone(ctx, client, name)
+		})
+}
+
+// modalSandboxUnhealthyError marks a reused sandbox that Modal reports as
+// running (nil poll result, resolvable tunnel) but whose container no longer
+// executes commands, so create must recycle it instead of surfacing an error
+// that requires manual sandbox deletion. sandboxName is the actual name of
+// the dead sandbox (the requested name or an adopted successor), which the
+// recovery path terminates and derives the replacement name from.
+type modalSandboxUnhealthyError struct {
+	sandboxName string
+	cause       error
+}
+
+func (e *modalSandboxUnhealthyError) Error() string {
+	return fmt.Sprintf("modal sandbox %s polls as running but is unusable: %v", e.sandboxName, e.cause)
+}
+
+func (e *modalSandboxUnhealthyError) Unwrap() error { return e.cause }
+
+// modalCreateSandboxWithRecovery orchestrates the single-retry recovery paths
+// around createOnce; the operations are injected so the orchestration is
+// testable without a Modal control plane.
+func modalCreateSandboxWithRecovery(
+	ctx context.Context,
+	input ModalCreateSandboxInput,
+	createOnce func(context.Context, ModalCreateSandboxInput) (ModalCreateSandboxOutput, error),
+	recycleUnhealthy func(context.Context, string) error,
+	awaitShutdown func(context.Context, string) error,
+) (ModalCreateSandboxOutput, error) {
+	output, err := createOnce(ctx, input)
+	var unhealthy *modalSandboxUnhealthyError
+	switch {
+	case err == nil:
+		return output, nil
+	case errors.As(err, &unhealthy):
+		replacement := modalReplacementSandboxName(unhealthy.sandboxName)
+		log.Warn().Str("sandbox", unhealthy.sandboxName).Str("replacement", replacement).Err(unhealthy.cause).
+			Msg("reused modal sandbox polls as running but is unusable; replacing it under a fresh name")
+		if recycleErr := recycleUnhealthy(ctx, unhealthy.sandboxName); recycleErr != nil {
+			return ModalCreateSandboxOutput{}, fmt.Errorf("failed to recycle unusable modal sandbox %s: %w", unhealthy.sandboxName, recycleErr)
+		}
+		input.Name = replacement
+	case isModalSandboxTerminatingOrTerminated(err):
+		log.Info().Str("sandbox", input.Name).Msg("modal sandbox is shutting down; waiting before recreating it")
+		if waitErr := awaitShutdown(ctx, input.Name); waitErr != nil {
+			return ModalCreateSandboxOutput{}, waitErr
+		}
+	default:
 		return output, err
 	}
-	log.Info().Str("sandbox", input.Name).Msg("modal sandbox is shutting down; waiting before recreating it")
-	client, clientErr := getModalClient()
-	if clientErr != nil {
-		return ModalCreateSandboxOutput{}, clientErr
+	return createOnce(ctx, input)
+}
+
+// modalReplacementSandboxName derives the successor name for a sandbox that
+// must be replaced. It is a pure function of the name it replaces, so a
+// retried create whose earlier attempt already terminated the old sandbox and
+// created its successor (but whose result was lost) rediscovers the successor
+// by name instead of orphaning it (see resolveModalSandboxWith). The base is
+// truncated so chained replacements stay within name length limits.
+func modalReplacementSandboxName(name string) string {
+	base := name
+	if len(base) > 55 {
+		base = strings.TrimRight(base[:55], "-")
 	}
-	if waitErr := waitForModalSandboxGone(ctx, client, input.Name); waitErr != nil {
-		return ModalCreateSandboxOutput{}, waitErr
+	sum := sha256.Sum256([]byte(name))
+	return fmt.Sprintf("%s-r%x", base, sum[:3])
+}
+
+// resolveModalSandboxWith returns the live sandbox for the requested name or,
+// when none is live, walks the deterministic successor-name chain left by
+// recycles of unusable sandboxes. A live successor means an earlier create
+// attempt already replaced the requested sandbox but its result was lost, so
+// the retry must re-attach to that successor rather than recreate (and
+// thereby orphan) it. With nothing live anywhere on the chain, the requested
+// name is returned for a fresh create.
+func resolveModalSandboxWith(lookup func(string) (*modal.Sandbox, error), requested string) (*modal.Sandbox, string, error) {
+	name := requested
+	sb, err := lookup(name)
+	if err != nil {
+		return nil, "", err
 	}
-	return modalCreateSandboxOnce(ctx, input)
+	for i := 0; sb == nil && i < 3; i++ {
+		name = modalReplacementSandboxName(name)
+		sb, err = lookup(name)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if sb == nil {
+		return nil, requested, nil
+	}
+	return sb, name, nil
+}
+
+// recycleModalSandbox terminates an unusable sandbox without waiting for
+// Modal to release its name: the replacement is created under a fresh name,
+// so the multi-minute name-release hold never blocks recovery. Unlike
+// deletion, snapshots are deliberately kept and the old name remains a seed
+// candidate, letting the replacement restore the state the watchdog captured
+// before the sandbox became unusable.
+func recycleModalSandbox(ctx context.Context, name string) error {
+	client, err := getModalClient()
+	if err != nil {
+		return err
+	}
+	sb, err := findModalSandbox(ctx, client, name)
+	if err != nil {
+		return err
+	}
+	if sb != nil {
+		if _, err := sb.Terminate(ctx, nil); err != nil {
+			return fmt.Errorf("failed to terminate unusable modal sandbox %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
@@ -788,7 +906,9 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 		return ModalCreateSandboxOutput{}, err
 	}
 
-	sb, err := findModalSandbox(ctx, client, input.Name)
+	sb, name, err := resolveModalSandboxWith(func(n string) (*modal.Sandbox, error) {
+		return findModalSandbox(ctx, client, n)
+	}, input.Name)
 	if err != nil {
 		return ModalCreateSandboxOutput{}, err
 	}
@@ -805,7 +925,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 		// they were. Otherwise bootstrap from a compatible snapshot of another
 		// sandbox for the same repo, or fall back to a clean current image.
 		var image *modal.Image
-		for _, snapName := range append([]string{input.Name}, modalSeedCandidates(input.RepoDir)...) {
+		for _, snapName := range append([]string{name}, modalSeedCandidates(input.RepoDir)...) {
 			record, snapErr := modalLatestSnapshot(ctx, client, snapName)
 			if snapErr != nil {
 				log.Warn().Err(snapErr).Str("sandbox", snapName).Msg("failed to check for modal snapshot")
@@ -837,7 +957,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 			}
 		}
 
-		watchdogEnv, guardTokenHash, wdErr := modalWatchdogEnv(ctx, client, input.Name, input.Config)
+		watchdogEnv, guardTokenHash, wdErr := modalWatchdogEnv(ctx, client, name, input.Config)
 		if wdErr != nil {
 			return ModalCreateSandboxOutput{}, wdErr
 		}
@@ -845,7 +965,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 		if volErr != nil {
 			return ModalCreateSandboxOutput{}, volErr
 		}
-		params := modalSandboxCreateParams(input.Config, input.Name, publicKey, watchdogEnv)
+		params := modalSandboxCreateParams(input.Config, name, publicKey, watchdogEnv)
 		params.Volumes = volumes
 		sb, err = client.Sandboxes.Create(ctx, app, image, params)
 		if err != nil {
@@ -854,14 +974,14 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 			// outcome callers want, so fall back to it.
 			var alreadyExists modal.AlreadyExistsError
 			if !errors.As(err, &alreadyExists) {
-				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to create modal sandbox %s: %w", input.Name, err)
+				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to create modal sandbox %s: %w", name, err)
 			}
-			sb, err = findModalSandbox(ctx, client, input.Name)
+			sb, err = findModalSandbox(ctx, client, name)
 			if err != nil {
 				return ModalCreateSandboxOutput{}, err
 			}
 			if sb == nil {
-				return ModalCreateSandboxOutput{}, fmt.Errorf("modal sandbox %s already exists but is not running", input.Name)
+				return ModalCreateSandboxOutput{}, fmt.Errorf("modal sandbox %s already exists but is not running", name)
 			}
 			reused = true
 		}
@@ -870,14 +990,20 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 			// hibernation requests are rejected without it, so failure here
 			// must fail creation (auto-hibernation is mandatory).
 			if tagErr := sb.SetTags(ctx, map[string]string{modalGuardTokenTagKey: guardTokenHash}); tagErr != nil {
-				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to set modal guard token tag on sandbox %s: %w", input.Name, tagErr)
+				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to set modal guard token tag on sandbox %s: %w", name, tagErr)
 			}
 		}
 	}
 
-	modalRegisterSeedSandbox(input.RepoDir, input.Name)
+	modalRegisterSeedSandbox(input.RepoDir, name)
 
 	if err := waitForModalSSHD(ctx, sb); err != nil {
+		// A freshly created sandbox failing readiness is a genuine error, but
+		// a reused one is a permanently dead container still polling as
+		// running; only the latter can be cured by recycling.
+		if reused {
+			return ModalCreateSandboxOutput{}, &modalSandboxUnhealthyError{sandboxName: name, cause: err}
+		}
 		return ModalCreateSandboxOutput{}, err
 	}
 	if input.Config.VM {
@@ -888,7 +1014,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 		return ModalCreateSandboxOutput{}, err
 	}
 	return ModalCreateSandboxOutput{
-		SandboxName: input.Name,
+		SandboxName: name,
 		SSHHost:     sshHost,
 		SSHPort:     sshPort,
 		Reused:      reused,
@@ -904,7 +1030,10 @@ type ModalCheckSandboxOutput struct {
 // modalCheckSandbox reports whether a named Modal sandbox is currently
 // running, returning its SSH tunnel endpoint when it is. Failures are treated
 // as "not alive" so callers can fall through to (re)creation, which surfaces
-// any persistent error.
+// any persistent error. A cheap exec probe guards against sandboxes that poll
+// as running while their container is dead (e.g. OOM-killed): such execs are
+// admitted but exit non-zero, and handing out their endpoint would give
+// callers an environment that cannot run anything.
 func modalCheckSandbox(ctx context.Context, sandboxName string) (ModalCheckSandboxOutput, error) {
 	client, err := getModalClient()
 	if err != nil {
@@ -912,6 +1041,13 @@ func modalCheckSandbox(ctx context.Context, sandboxName string) (ModalCheckSandb
 	}
 	sb, err := findModalSandbox(ctx, client, sandboxName)
 	if err != nil || sb == nil {
+		return ModalCheckSandboxOutput{}, nil
+	}
+	proc, err := sb.Exec(ctx, []string{"true"}, &modal.SandboxExecParams{Stdout: modal.Ignore, Stderr: modal.Ignore})
+	if err != nil {
+		return ModalCheckSandboxOutput{}, nil
+	}
+	if code, waitErr := proc.Wait(ctx); waitErr != nil || code != 0 {
 		return ModalCheckSandboxOutput{}, nil
 	}
 	sshHost, sshPort, err := modalTunnelEndpoint(ctx, sb)
