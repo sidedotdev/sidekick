@@ -139,7 +139,11 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 	wg.Wait()
 }
 
-// Test end-to-end flow action streaming with new-only (default) behavior
+// Test end-to-end flow action streaming with new-only (default) behavior,
+// while publishers add flow actions concurrently with the active stream
+// consumer. The concurrency is intentional and load-bearing: do not serialize
+// the publishes to reduce flakiness, as that would stop exercising concurrent
+// inserts during streaming.
 func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -215,6 +219,8 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		Id:          "end",
 	}
 
+	// Publish concurrently on purpose (see the test's doc comment). Sleeps
+	// stagger the publishes so the expected ordering usually holds.
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {

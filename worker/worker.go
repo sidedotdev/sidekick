@@ -66,7 +66,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
 
-	logger := logur.LoggerToKV(zerologadapter.New(sidekicklogger.Get()))
+	logger := warnDowngradingLogger{inner: logur.LoggerToKV(zerologadapter.New(sidekicklogger.Get()))}
 
 	service, err := sidekick.GetService()
 	if err != nil {
