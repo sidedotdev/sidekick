@@ -30,6 +30,7 @@
       <template v-else-if="editor">
         <ModelConfigPresetEditor
           :editor="editor"
+          :workspace-id="workspaceId"
           always-show-editor
         />
 

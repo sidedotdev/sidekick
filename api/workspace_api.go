@@ -97,6 +97,7 @@ func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup 
 	workspaceApiRoutes.GET("", ctrl.GetWorkspacesHandler)
 	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceHandler)
 	workspaceApiRoutes.PUT(":workspaceId", ctrl.UpdateWorkspaceHandler)
+	workspaceApiRoutes.GET(":workspaceId/providers", ctrl.GetWorkspaceProvidersHandler)
 	workspaceApiRoutes.GET(":workspaceId/branches", ctrl.GetWorkspaceBranchesHandler)
 	workspaceApiRoutes.POST(":workspaceId/branches", ctrl.CreateWorkspaceBranchHandler)
 	workspaceApiRoutes.GET(":workspaceId/task_config", ctrl.GetTaskConfigHandler)

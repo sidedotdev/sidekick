@@ -56,6 +56,7 @@
       <LlmConfigEditor
         v-model="llmConfig"
         :profile-id="editor.profileId.value"
+        :workspace-id="workspaceId"
       />
     </div>
   </div>
@@ -71,6 +72,7 @@ import type { ModelConfigPresetEditorState } from '../composables/useModelConfig
 const props = withDefaults(defineProps<{
   editor: ModelConfigPresetEditorState
   alwaysShowEditor?: boolean
+  workspaceId?: string
 }>(), {
   alwaysShowEditor: false,
 })

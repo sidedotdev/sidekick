@@ -1,13 +1,16 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/secret_manager"
 	"testing"
 
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -166,6 +169,57 @@ func TestGetProvidersHandlerFiltersByProfile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetWorkspaceProvidersHandlerDerivesProfileFromWorkspaceConfig(t *testing.T) {
+	t.Parallel()
+
+	config := common.LocalConfig{
+		Profiles: []common.ProfileConfig{{Id: "work"}},
+		Providers: []common.ModelProviderConfig{
+			{Name: "work_openai", Type: "openai", Key: "work-key", Profiles: profileIds("work")},
+			{Name: "personal_openai", Type: "openai", Key: "personal-key"},
+		},
+	}
+	ctrl := newLocalConfigController(t, config, nil)
+	ctrl.secretManager = testSecretManager{secrets: map[string]string{}}
+
+	workspaceId := "ws_" + ksuid.New().String()
+	err := ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId, ProfileId: "work"})
+	require.NoError(t, err)
+
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
+
+	req, _ := http.NewRequest("GET", "/api/v1/workspaces/"+workspaceId+"/providers", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var response struct {
+		Providers []string `json:"providers"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+	assert.Contains(t, response.Providers, "work_openai")
+	assert.NotContains(t, response.Providers, "personal_openai")
+
+	// the workspace's persisted profile is authoritative: a profileId query
+	// param must not override it
+	req, _ = http.NewRequest("GET", "/api/v1/workspaces/"+workspaceId+"/providers?profileId=default", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	response.Providers = nil
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+	assert.Contains(t, response.Providers, "work_openai")
+	assert.NotContains(t, response.Providers, "personal_openai")
+
+	// an unknown workspace id behaves like other workspace-scoped APIs and
+	// returns not found, rather than silently falling back to a default profile
+	req, _ = http.NewRequest("GET", "/api/v1/workspaces/nonexistent/providers", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestGetProvidersHandlerBuiltinCredentialsAreProfileScoped(t *testing.T) {
