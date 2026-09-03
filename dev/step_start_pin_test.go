@@ -12,7 +12,6 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/env"
-	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/utils"
 )
@@ -137,39 +136,6 @@ func (s *StepStartPinTestSuite) TestLegacyVersionDoesNotPinStepStart() {
 		s.Empty(round.BaseBranch, "round %d", i)
 		s.Empty(round.LastReviewDiff, "round %d", i)
 	}
-}
-
-// TestPinnedStepsGenerateReviewDiffsWithCheckEdits guards the interaction that
-// would otherwise freeze a pinned step's review baseline: the staged-only
-// shortcut cannot report the full diff a step carries into its next round.
-func (s *StepStartPinTestSuite) TestPinnedStepsGenerateReviewDiffsWithCheckEdits() {
-	var ffa *fflag.FFlagActivities
-	checkEditsEvaluations := 0
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, params fflag.EvaluateFeatureFlagParams) (bool, error) {
-			checkEditsEvaluations++
-			return true, nil
-		},
-	).Maybe()
-
-	testWorkflow := func(ctx workflow.Context) ([]bool, error) {
-		ctx = utils.NoRetryCtx(ctx)
-		dCtx := s.newDevContext(ctx)
-		return []bool{
-			useStagedOnlyReviewDiff(dCtx, 7, CheckWorkInfo{StartPoint: "step-start-sha", BaseBranch: "main"}),
-			useStagedOnlyReviewDiff(dCtx, 7, CheckWorkInfo{BaseBranch: "main"}),
-		}, nil
-	}
-
-	s.env.RegisterWorkflow(testWorkflow)
-	s.env.ExecuteWorkflow(testWorkflow)
-	s.Require().True(s.env.IsWorkflowCompleted())
-	s.Require().NoError(s.env.GetWorkflowError())
-
-	var stagedOnly []bool
-	s.Require().NoError(s.env.GetWorkflowResult(&stagedOnly))
-	s.Equal([]bool{false, true}, stagedOnly)
-	s.Equal(1, checkEditsEvaluations, "a pinned step needs no feature flag to decide")
 }
 
 func TestStepStartPinTestSuite(t *testing.T) {

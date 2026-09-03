@@ -74,14 +74,6 @@ func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ig
 	return diffs.FullDiff, diffs.FullDiff, nil
 }
 
-// useStagedOnlyReviewDiff reports whether the review can rely on staged changes
-// alone, which holds when CheckEdits stages every bit of the current step's work.
-// A pinned start point is the exception: those flows review the same work over
-// several rounds against a baseline that only generated review diffs can advance.
-func useStagedOnlyReviewDiff(dCtx DevContext, v workflow.Version, promptInfo CheckWorkInfo) bool {
-	return v >= 6 && promptInfo.StartPoint == "" && fflag.IsEnabled(dCtx, fflag.CheckEdits)
-}
-
 // TODO /gen add a test for this function
 func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
 	return checkWorkMeetsCriteria(dCtx, promptInfo, nil)
@@ -101,8 +93,11 @@ func CheckWorkMeetsCriteriaWithDiff(dCtx DevContext, promptInfo CheckWorkInfo) (
 // that the review was based on, which is only available once review diffs are
 // generated rather than derived from legacy git object comparisons.
 func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedFullDiff *string) (CriteriaFulfillment, error) {
-	// Use GlobalState as single source of truth for base branch, falling back to caller-provided value
-	if v := workflow.GetVersion(dCtx, "check-work-global-base-branch", workflow.DefaultVersion, 1); v >= 1 {
+	// Use GlobalState as single source of truth for base branch, falling back
+	// to caller-provided value. A caller that pinned a start point already
+	// decided what the work is compared against, including whether the base
+	// branch says anything about it at all, so its choice stands.
+	if v := workflow.GetVersion(dCtx, "check-work-global-base-branch", workflow.DefaultVersion, 1); v >= 1 && promptInfo.StartPoint == "" {
 		if globalBase := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); globalBase != "" {
 			promptInfo.BaseBranch = globalBase
 		}
@@ -114,29 +109,37 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 	ignoreWhitespace := true
 
 	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 7)
-	if useStagedOnlyReviewDiff(dCtx, v, promptInfo) {
-		// When CheckEdits is enabled, all current-step work is staged, so
-		// git diff --staged captures exactly the relevant changes without
-		// including prior committed steps or merged upstream changes.
+	if v >= 7 {
+		if promptInfo.StartPoint == "" && promptInfo.BaseBranch == "" {
+			// nothing to diff against, so the current working state is the work
+			err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
+			if err != nil {
+				return CriteriaFulfillment{}, fmt.Errorf("failed to get git diff: %v", err)
+			}
+		} else {
+			var fullDiff string
+			diff, fullDiff, err = criteriaFulfillmentReviewDiff(dCtx, promptInfo, ignoreWhitespace)
+			if err != nil {
+				return CriteriaFulfillment{}, err
+			}
+			if reviewedFullDiff != nil {
+				*reviewedFullDiff = fullDiff
+			}
+		}
+	} else if v == 6 && fflag.IsEnabled(dCtx, fflag.CheckEdits) {
+		// Legacy path: reviews relied on CheckEdits staging the current step's
+		// work, which misses anything the agent committed and anything merged
+		// in from the target branch. Generated review diffs cover those cases,
+		// so this remains only to keep older workflows replay-deterministic.
 		//
 		// We deliberately re-evaluate the CheckEdits flag below to preserve
 		// the exact activity command sequence previously emitted by
 		// git.GitDiff (which internally checks the flag again before
-		// running GitDiffActivity). This keeps in-flight and completed
-		// workflows replay-deterministic with the prior implementation.
+		// running GitDiffActivity).
 		_ = fflag.IsEnabled(dCtx, fflag.CheckEdits)
 		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get staged git diff: %v", err)
-		}
-	} else if v >= 7 && (promptInfo.StartPoint != "" || promptInfo.BaseBranch != "") {
-		var fullDiff string
-		diff, fullDiff, err = criteriaFulfillmentReviewDiff(dCtx, promptInfo, ignoreWhitespace)
-		if err != nil {
-			return CriteriaFulfillment{}, err
-		}
-		if reviewedFullDiff != nil {
-			*reviewedFullDiff = fullDiff
 		}
 	} else if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
 		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)

@@ -345,6 +345,12 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		requirements = devRequirements.String()
 	}
 
+	// pinned once here so every round of this flow measures its work from the
+	// same starting state
+	if err = pinInPlaceReviewStart(dCtx); err != nil {
+		return "", fmt.Errorf("failed to pin the review start point: %w", err)
+	}
+
 	v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
 	if v == 1 {
 		result, err = RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
@@ -427,6 +433,73 @@ func prepareBasicCodingContext(
 		return "", 0, fmt.Errorf("failed to prepare code context: %w", err)
 	}
 	return codeContext, len(fullCodeContext) - len(codeContext), nil
+}
+
+// pinInPlaceReviewStart records in global state what work done without a
+// worktree is compared against. The branch such work lands on is also its base,
+// so it can't tell our changes apart from anything else there: without a pin,
+// review would only ever see staged changes and anything the flow committed
+// would go unreviewed.
+//
+// It must be pinned once per flow, since every later round's diffs are measured
+// from it. Concurrent flows sharing a checkout still see each other's changes;
+// only a worktree isolates that.
+func pinInPlaceReviewStart(dCtx DevContext) error {
+	if workflow.GetVersion(dCtx, "in-place-start-point", workflow.DefaultVersion, 1) < 1 {
+		return nil
+	}
+	if dCtx.Worktree != nil || dCtx.EnvContainer == nil {
+		return nil
+	}
+
+	var revParsed git.GitRevParseResult
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Pin review start point", git.GitRevParseActivity, &revParsed, git.GitRevParseParams{
+		EnvContainer: *dCtx.EnvContainer,
+		Ref:          "HEAD",
+	})
+	if err != nil {
+		return err
+	}
+
+	// rendered the same way later review diffs are, so the two compare cleanly
+	alreadyStaged, err := generateReviewDiffs(dCtx, revParsed.CommitHash, "", "", true)
+	if err != nil {
+		return err
+	}
+
+	var workingTreeDiff string
+	err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &workingTreeDiff, *dCtx.EnvContainer, git.GitDiffParams{IgnoreWhitespace: true})
+	if err != nil {
+		return err
+	}
+
+	var priorParts []string
+	for _, part := range []string{alreadyStaged.FullDiff, workingTreeDiff} {
+		if strings.TrimSpace(part) != "" {
+			priorParts = append(priorParts, part)
+		}
+	}
+
+	dCtx.ExecContext.GlobalState.SetValue(common.KeyReviewStartPoint, revParsed.CommitHash)
+	dCtx.ExecContext.GlobalState.SetValue(common.KeyReviewStartPriorDiff, strings.Join(priorParts, "\n"))
+	return nil
+}
+
+// applyPinnedReviewStart anchors a criteria check to the review start point
+// pinned in global state, if any. The work then sits on the very branch it
+// targets, so nothing there can be attributed to that branch and only the pin
+// bounds the work.
+func applyPinnedReviewStart(dCtx DevContext, info CheckWorkInfo) CheckWorkInfo {
+	startPoint := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyReviewStartPoint)
+	if startPoint == "" {
+		return info
+	}
+	info.StartPoint = startPoint
+	info.BaseBranch = ""
+	if info.LastReviewDiff == "" {
+		info.LastReviewDiff = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyReviewStartPriorDiff)
+	}
+	return info
 }
 
 func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, lastReviewDiff string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
@@ -608,13 +681,13 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		if baseBranch == "" && startBranch != nil {
 			baseBranch = *startBranch
 		}
-		fulfillment, err = CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
+		fulfillment, err = CheckWorkMeetsCriteria(dCtx, applyPinnedReviewStart(dCtx, CheckWorkInfo{
 			Requirements:       requirements,
 			AutoChecks:         testOutput,
 			LastReviewTreeHash: lastReviewTreeHash,
 			LastReviewDiff:     lastReviewDiff,
 			BaseBranch:         baseBranch,
-		})
+		}))
 		if err != nil {
 			return "", fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
 		}

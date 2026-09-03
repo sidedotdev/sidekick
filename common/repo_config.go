@@ -276,6 +276,12 @@ func (c ModalEnvConfig) Validate() error {
 // GlobalState keys for workflow-specific state
 const (
 	KeyCurrentTargetBranch = "currentTargetBranch"
+	// KeyReviewStartPoint is the commit that bounds the work under review for
+	// flows without a worktree, where the branch itself can't isolate the work.
+	KeyReviewStartPoint = "reviewStartPoint"
+	// KeyReviewStartPriorDiff is what was already modified in the checkout when
+	// the review start point was pinned, treated as already reviewed.
+	KeyReviewStartPriorDiff = "reviewStartPriorDiff"
 )
 
 // DevRunConfig maps command IDs to their configurations.
