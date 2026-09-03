@@ -140,8 +140,8 @@ func TestAnthropicRequestHeadersOAuth(t *testing.T) {
 			if got := headers["Accept"]; got != "application/json" {
 				t.Fatalf("Accept = %q, want %q", got, "application/json")
 			}
-			if got := headers["User-Agent"]; got != "claude-cli/2.0.65 (external, cli)" {
-				t.Fatalf("User-Agent = %q, want %q", got, "claude-cli/2.0.65 (external, cli)")
+			if got := headers["User-Agent"]; got != "claude-cli/2.1.258 (external, cli)" {
+				t.Fatalf("User-Agent = %q, want %q", got, "claude-cli/2.1.258 (external, cli)")
 			}
 			if got := headers["x-app"]; got != "cli" {
 				t.Fatalf("x-app = %q, want %q", got, "cli")

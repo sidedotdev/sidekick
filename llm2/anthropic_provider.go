@@ -22,9 +22,11 @@ const anthropicDefaultModel = "claude-opus-4-5"
 const anthropicDefaultMaxTokens = 24000
 
 const (
-	anthropicAcceptHeaderValue                  = "application/json"
-	anthropicDangerousBrowserAccessHeaderValue  = "true"
-	anthropicClaudeCLIUserAgent                 = "claude-cli/2.0.65 (external, cli)"
+	anthropicAcceptHeaderValue                 = "application/json"
+	anthropicDangerousBrowserAccessHeaderValue = "true"
+	// matches interactive-mode, print mode sends "(external, sdk-cli)" instead
+	// NOTE: the API rejects newer models (e.g. claude-fable-5-1) for versions < 2.1.251
+	anthropicClaudeCLIUserAgent                 = "claude-cli/2.1.258 (external, cli)"
 	anthropicCLIAppHeaderValue                  = "cli"
 	anthropicClaudeCodeBetaHeader               = "claude-code-20250219"
 	anthropicOAuthBetaHeader                    = "oauth-2025-04-20"
