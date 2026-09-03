@@ -354,8 +354,38 @@ func NewController() (Controller, error) {
 	}, nil
 }
 
+// GetProvidersHandler returns providers available to a profile, resolved
+// directly from the profileId query param. This is a generic, non-workspace-
+// specific lookup used where no workspace has been persisted yet, e.g. while
+// configuring a workspace's profile before it's created.
 func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 	profileId := common.NormalizeProfileId(c.Query("profileId"))
+	c.JSON(http.StatusOK, gin.H{"providers": ctrl.resolveProviders(profileId)})
+}
+
+// GetWorkspaceProvidersHandler returns providers available to a workspace,
+// with the profile derived authoritatively from the workspace's persisted
+// configuration rather than any client-supplied override.
+func (ctrl *Controller) GetWorkspaceProvidersHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+
+	workspace, err := ctrl.service.GetWorkspace(c.Request.Context(), workspaceId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get workspace"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"providers": ctrl.resolveProviders(workspace.EffectiveProfileId())})
+}
+
+// resolveProviders lists the providers available to a profile, combining
+// explicitly configured providers with builtin providers detected via
+// available credentials.
+func (ctrl *Controller) resolveProviders(profileId string) []string {
 	providers := []string{}
 	seen := make(map[string]bool)
 
@@ -397,7 +427,7 @@ func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"providers": providers})
+	return providers
 }
 
 // GetProfilesHandler returns the declared profiles, always including the

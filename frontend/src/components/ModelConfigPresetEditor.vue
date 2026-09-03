@@ -54,7 +54,7 @@
         :placeholder="editor.isEditingPreset.value ? 'Preset name' : 'Preset name (optional)'"
         class="preset-name-input"
       />
-      <LlmConfigEditor v-model="llmConfig" :overlay-base-z-index="overlayBaseZIndex" />
+      <LlmConfigEditor v-model="llmConfig" :overlay-base-z-index="overlayBaseZIndex" :workspace-id="workspaceId" />
     </div>
   </div>
 </template>
@@ -70,6 +70,7 @@ const props = withDefaults(defineProps<{
   editor: ModelConfigPresetEditorState
   alwaysShowEditor?: boolean
   overlayBaseZIndex?: number
+  workspaceId?: string
 }>(), {
   alwaysShowEditor: false,
   overlayBaseZIndex: 0,

@@ -10,7 +10,7 @@
       </button>
     </div>
     <form @submit.prevent="startTask">
-      <ModelConfigPresetEditor :editor="modelConfigPresetEditor" />
+      <ModelConfigPresetEditor :editor="modelConfigPresetEditor" :workspace-id="workspaceId" />
 
       <div>
         <label>Flow</label>

@@ -108,6 +108,7 @@ const props = withDefaults(defineProps<{
   modelValue?: LLMConfig | null
   overlayBaseZIndex?: number
   profileId?: string
+  workspaceId?: string
 }>(), {
   overlayBaseZIndex: 0,
 })
@@ -148,11 +149,17 @@ const providerOptions = ref<string[]>([])
 const providersError = ref(false)
 const reasoningEffortOptions = ['', 'lowest', 'low', 'medium', 'high', 'highest'] as const
 
-const providersUrl = (): string => (
-  props.profileId
+// When a workspaceId is provided, providers are filtered authoritatively by
+// that workspace's persisted profile; otherwise the profileId prop (if any)
+// is used, e.g. while a workspace's profile is still being chosen.
+const providersUrl = (): string => {
+  if (props.workspaceId) {
+    return `/api/v1/workspaces/${encodeURIComponent(props.workspaceId)}/providers`
+  }
+  return props.profileId
     ? `/api/v1/providers?profileId=${encodeURIComponent(props.profileId)}`
     : '/api/v1/providers'
-)
+}
 
 // Profile changes can leave earlier requests in flight, so only the most
 // recently issued response is applied.
@@ -177,7 +184,7 @@ const fetchProviders = async () => {
   }
 }
 
-watch(() => props.profileId, () => {
+watch(() => [props.profileId, props.workspaceId], () => {
   fetchProviders()
 })
 

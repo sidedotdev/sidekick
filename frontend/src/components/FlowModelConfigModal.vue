@@ -31,6 +31,7 @@
         <ModelConfigPresetEditor
           :editor="editor"
           :overlay-base-z-index="1102"
+          :workspace-id="workspaceId"
           always-show-editor
         />
 

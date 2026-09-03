@@ -33,7 +33,7 @@ const mockProvidersData = {
 
 const createMockFetch = (modelsData: object = mockModelsData, providersData: object = mockProvidersData) => {
   return vi.fn((url: string) => {
-    if (url === '/api/v1/providers') {
+    if (url.startsWith('/api/v1/providers') || url.startsWith('/api/v1/workspaces/')) {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(providersData),
@@ -434,5 +434,33 @@ describe('LlmConfigEditor', () => {
     await wrapper.setProps({ modelValue: emittedValue })
     
     expect((useCaseCheckbox.element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('fetches providers from the workspace-scoped endpoint when workspaceId is provided', async () => {
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+
+    mount(LlmConfigEditor, {
+      props: { workspaceId: 'ws_123', profileId: 'work' }
+    })
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/v1/workspaces/ws_123/providers')
+    })
+
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('profileId'))
+  })
+
+  it('falls back to the generic profile-based endpoint when no workspaceId is provided', async () => {
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+
+    mount(LlmConfigEditor, {
+      props: { profileId: 'work' }
+    })
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/v1/providers?profileId=work')
+    })
   })
 })
