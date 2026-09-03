@@ -222,6 +222,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(git.GetDefaultBranch)
 	w.RegisterActivity(git.ListLocalBranches)
 	w.RegisterActivity(git.WriteTreeActivity)
+	w.RegisterActivity(git.GitRevParseActivity)
 	w.RegisterActivity(embedActivities)
 	w.RegisterActivity(vectorActivities)
 	w.RegisterActivity(flowActivities)

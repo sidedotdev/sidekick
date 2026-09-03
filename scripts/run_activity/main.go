@@ -202,6 +202,7 @@ func buildActivityRegistry() map[string]interface{} {
 		git.GetDefaultBranch,
 		git.ListLocalBranches,
 		git.WriteTreeActivity,
+		git.GitRevParseActivity,
 		dev.GetRepoConfigActivity,
 		dev.GetRepoConfigActivityV2,
 		dev.GetSymbolsActivity,

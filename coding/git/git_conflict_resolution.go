@@ -3,8 +3,12 @@ package git
 import (
 	"context"
 	"fmt"
+	"sidekick/coding/diffanalysis"
 	"sidekick/env"
+	"strconv"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ConflictMarkerSnapshot identifies the state captured immediately after
@@ -20,6 +24,19 @@ type ConflictMarkerSnapshot struct {
 	// ConflictedPaths lists repository-relative paths that were unmerged
 	// at the time the snapshot was taken.
 	ConflictedPaths []string `json:"conflictedPaths"`
+	// ConflictRegions locates the conflict-marker blocks within the
+	// snapshotted files, so that edits made elsewhere in those same files
+	// can be excluded from the conflict-resolution diff.
+	ConflictRegions []ConflictRegion `json:"conflictRegions,omitempty"`
+}
+
+// ConflictRegion is the line span of a single conflict-marker block in the
+// snapshotted version of a file, from the `<<<<<<<` line through the
+// `>>>>>>>` line. Start is inclusive and End is exclusive, both 1-indexed.
+type ConflictRegion struct {
+	Path  string `json:"path"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
 }
 
 // GitMergeAbortParams targets a specific worktree/directory to abort an
@@ -252,7 +269,91 @@ func GitSnapshotConflictMarkersActivity(ctx context.Context, envContainer env.En
 		return snapshot, fmt.Errorf("git write-tree for conflict snapshot failed: %s", strings.TrimSpace(out.Stderr+out.Stdout))
 	}
 	snapshot.TreeHash = strings.TrimSpace(out.Stdout)
+
+	regions, err := conflictMarkerRegions(ctx, envContainer, dir, unmerged)
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.ConflictRegions = regions
 	return snapshot, nil
+}
+
+// conflictMarkerRegions locates the conflict-marker blocks in the working-tree
+// versions of the given paths. Those line numbers also address the old side of
+// a later snapshot-vs-worktree diff, since the snapshot holds exactly this
+// marker content.
+func conflictMarkerRegions(ctx context.Context, envContainer env.EnvContainer, dir string, paths []string) ([]ConflictRegion, error) {
+	args := []string{"grep", "--no-color", "-nE", shellQuote(`^(<{7}|>{7})( |$)`), "--"}
+	for _, p := range paths {
+		args = append(args, shellQuote(p))
+	}
+	// `git grep` exits non-zero when nothing matches, which is not an error here.
+	cmd := fmt.Sprintf("cd %s && { git %s || true; }", shellQuote(dir), strings.Join(args, " "))
+	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "sh",
+		Args:         []string{"-c", cmd},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate conflict markers: %w", err)
+	}
+
+	var regions []ConflictRegion
+	openStarts := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(out.Stdout), "\n") {
+		path, lineNum, content, ok := parseGrepLine(line, paths)
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(content, "<<<<<<<"):
+			openStarts[path] = lineNum
+		case strings.HasPrefix(content, ">>>>>>>"):
+			start, isOpen := openStarts[path]
+			if !isOpen {
+				continue
+			}
+			delete(openStarts, path)
+			regions = append(regions, ConflictRegion{Path: path, Start: start, End: lineNum + 1})
+		}
+	}
+	return regions, nil
+}
+
+// parseGrepLine splits a `git grep -n` output line into path, line number and
+// content. Matching against the known paths avoids mis-splitting paths that
+// themselves contain a colon.
+func parseGrepLine(line string, paths []string) (string, int, string, bool) {
+	if line == "" {
+		return "", 0, "", false
+	}
+	for _, p := range paths {
+		if strings.HasPrefix(line, p+":") {
+			if lineNum, content, ok := splitLineNumber(line[len(p)+1:]); ok {
+				return p, lineNum, content, true
+			}
+			return "", 0, "", false
+		}
+	}
+	// git omits the path prefix in some single-file cases.
+	if len(paths) == 1 {
+		if lineNum, content, ok := splitLineNumber(line); ok {
+			return paths[0], lineNum, content, true
+		}
+	}
+	return "", 0, "", false
+}
+
+func splitLineNumber(s string) (int, string, bool) {
+	idx := strings.Index(s, ":")
+	if idx < 0 {
+		return 0, "", false
+	}
+	lineNum, err := strconv.Atoi(s[:idx])
+	if err != nil {
+		return 0, "", false
+	}
+	return lineNum, s[idx+1:], true
 }
 
 // GitConflictResolutionDiffParams diffs a previously captured conflict
@@ -295,7 +396,26 @@ func GitConflictResolutionDiffActivity(ctx context.Context, envContainer env.Env
 	if out.ExitStatus != 0 {
 		return "", fmt.Errorf("git diff for conflict resolution failed: %s", out.Stderr)
 	}
-	return out.Stdout, nil
+
+	// Edits the resolver made elsewhere in a conflicted file are not part of the
+	// resolution, so they must not show up in the resolution diff.
+	filtered, err := diffanalysis.FilterHunksByOldLineRanges(out.Stdout, conflictRangesByPath(params.Snapshot.ConflictRegions))
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to restrict conflict resolution diff to conflict regions, using unfiltered diff")
+		return out.Stdout, nil
+	}
+	return filtered, nil
+}
+
+func conflictRangesByPath(regions []ConflictRegion) map[string][]diffanalysis.LineRange {
+	if len(regions) == 0 {
+		return nil
+	}
+	rangesByPath := make(map[string][]diffanalysis.LineRange, len(regions))
+	for _, region := range regions {
+		rangesByPath[region.Path] = append(rangesByPath[region.Path], diffanalysis.LineRange{Start: region.Start, End: region.End})
+	}
+	return rangesByPath
 }
 
 // GitCommitMergeParams finalizes an in-progress merge by committing it.
