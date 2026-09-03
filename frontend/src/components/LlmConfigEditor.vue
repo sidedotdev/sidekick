@@ -18,8 +18,7 @@
         class="model-input-wrapper"
         inputClass="model-input-inner"
         :suggestions="filteredModels"
-        :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
-        :overlay-style="overlayStyle"
+        overlay-class="llm-config-editor-overlay"
         @complete="(e) => searchModels(e, defaultConfig.provider)"
         @item-select="emitUpdate"
         @change="emitUpdate"
@@ -68,8 +67,7 @@
           inputClass="model-input-inner"
           :disabled="!useCaseStates[useCase].enabled"
           :suggestions="filteredModels"
-          :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
-          :overlay-style="overlayStyle"
+          overlay-class="llm-config-editor-overlay"
           @complete="(e) => searchModels(e, useCaseStates[useCase].config.provider)"
           @item-select="emitUpdate"
           @change="emitUpdate"
@@ -104,19 +102,10 @@ import AutoComplete from 'primevue/autocomplete'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
 
-const props = withDefaults(defineProps<{
+const props = defineProps<{
   modelValue?: LLMConfig | null
-  overlayBaseZIndex?: number
   profileId?: string
-}>(), {
-  overlayBaseZIndex: 0,
-})
-
-const overlayStyle = computed(() => (
-  props.overlayBaseZIndex > 0
-    ? { '--model-config-editor-overlay-z-index': props.overlayBaseZIndex }
-    : undefined
-))
+}>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: LLMConfig): void
@@ -319,10 +308,6 @@ watch(() => props.modelValue, (newValue) => {
 </script>
 
 <style scoped>
-:global(.model-config-editor-overlay) {
-  z-index: var(--model-config-editor-overlay-z-index) !important;
-}
-
 :disabled, :deep(.p-disabled), :deep(:disabled) {
   opacity: 0.5;
   cursor: not-allowed;
@@ -414,5 +399,14 @@ watch(() => props.modelValue, (newValue) => {
   background-color: var(--color-error-bg, rgba(220, 53, 69, 0.1));
   color: var(--color-error, #dc3545);
   font-size: 0.875rem;
+}
+</style>
+
+<!-- PrimeVue teleports the autocomplete overlay to the body, out of reach of
+     scoped styles, so it needs an explicit stack level above the modals hosting
+     this editor, the topmost of which is .model-config-modal at 1101 -->
+<style>
+.llm-config-editor-overlay {
+  z-index: 1102 !important;
 }
 </style>

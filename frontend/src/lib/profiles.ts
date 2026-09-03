@@ -40,6 +40,21 @@ export const refreshProfiles = (): Promise<void> => {
   return refreshInFlight
 }
 
+// fetchProfileProviders lists the provider names usable within a profile,
+// returning null when the providers could not be determined.
+export const fetchProfileProviders = async (profileId?: string): Promise<string[] | null> => {
+  const url = profileId && profileId !== DEFAULT_PROFILE_ID
+    ? `/api/v1/providers?profileId=${encodeURIComponent(profileId)}`
+    : '/api/v1/providers'
+  try {
+    const response = await fetch(url)
+    if (!response.ok) return null
+    return (await response.json()).providers ?? []
+  } catch {
+    return null
+  }
+}
+
 // profileName derives a profile's display name from its id, falling back to the
 // id itself while the name is unknown.
 export const profileName = (profileId?: string): string => {

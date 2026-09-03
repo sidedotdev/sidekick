@@ -87,18 +87,11 @@ describe('LlmConfigEditor', () => {
     expect((modelInput.element as HTMLInputElement).value).toBe('claude-3')
   })
 
-  it('places autocomplete overlays above a containing modal', () => {
-    const wrapper = mount(LlmConfigEditor, {
-      props: { overlayBaseZIndex: 1102 },
-    })
+  it('marks autocomplete overlays so they stack above containing modals', () => {
+    const wrapper = mount(LlmConfigEditor)
 
     const autocomplete = wrapper.findComponent(AutoComplete)
-    expect(autocomplete.props('overlayClass')).toEqual({
-      'model-config-editor-overlay': true,
-    })
-    expect(autocomplete.props('overlayStyle')).toEqual({
-      '--model-config-editor-overlay-z-index': 1102,
-    })
+    expect(autocomplete.props('overlayClass')).toBe('llm-config-editor-overlay')
   })
 
   it('renders all use case rows', () => {

@@ -30,7 +30,6 @@
       <template v-else-if="editor">
         <ModelConfigPresetEditor
           :editor="editor"
-          :overlay-base-z-index="1102"
           always-show-editor
         />
 

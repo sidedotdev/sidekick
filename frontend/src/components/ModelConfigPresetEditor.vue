@@ -9,8 +9,7 @@
         optionLabel="label"
         optionValue="value"
         class="preset-dropdown"
-        :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
-        :overlay-style="overlayStyle"
+        overlay-class="preset-dropdown-overlay"
         @change="(event: any) => handlePresetChange(event.value)"
       >
         <template #option="{ option }">
@@ -54,7 +53,10 @@
         :placeholder="editor.isEditingPreset.value ? 'Preset name' : 'Preset name (optional)'"
         class="preset-name-input"
       />
-      <LlmConfigEditor v-model="llmConfig" :overlay-base-z-index="overlayBaseZIndex" />
+      <LlmConfigEditor
+        v-model="llmConfig"
+        :profile-id="editor.profileId.value"
+      />
     </div>
   </div>
 </template>
@@ -69,17 +71,9 @@ import type { ModelConfigPresetEditorState } from '../composables/useModelConfig
 const props = withDefaults(defineProps<{
   editor: ModelConfigPresetEditorState
   alwaysShowEditor?: boolean
-  overlayBaseZIndex?: number
 }>(), {
   alwaysShowEditor: false,
-  overlayBaseZIndex: 0,
 })
-
-const overlayStyle = computed(() => (
-  props.overlayBaseZIndex > 0
-    ? { '--model-config-editor-overlay-z-index': props.overlayBaseZIndex }
-    : undefined
-))
 
 const presetDropdownRef = ref<InstanceType<typeof Dropdown> | null>(null)
 
@@ -113,9 +107,6 @@ const editPreset = (presetId: string) => {
 </script>
 
 <style scoped>
-:global(.model-config-editor-overlay) {
-  z-index: var(--model-config-editor-overlay-z-index) !important;
-}
 .preset-section {
   display: flex;
   align-items: center;
@@ -204,5 +195,14 @@ const editPreset = (presetId: string) => {
   border-radius: 0.25rem;
   background-color: var(--color-background);
   color: var(--color-text);
+}
+</style>
+
+<!-- PrimeVue teleports the dropdown overlay to the body, out of reach of scoped
+     styles, so it needs an explicit stack level above the modals hosting this
+     editor, the topmost of which is .model-config-modal at 1101 -->
+<style>
+.preset-dropdown-overlay {
+  z-index: 1102 !important;
 }
 </style>

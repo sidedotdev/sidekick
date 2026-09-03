@@ -18,7 +18,7 @@ describe('ModelConfigPresetEditor', () => {
     localStorage.clear()
   })
 
-  it('places the preset overlay above a containing modal', () => {
+  it('marks the preset overlay so it stacks above containing modals', () => {
     const editor = useModelConfigPresets(initialConfig, {
       initiallyCustom: true,
       useDefaultWhenMissing: false,
@@ -26,7 +26,6 @@ describe('ModelConfigPresetEditor', () => {
     const wrapper = mount(ModelConfigPresetEditor, {
       props: {
         editor,
-        overlayBaseZIndex: 1102,
       },
       global: {
         stubs: {
@@ -36,11 +35,6 @@ describe('ModelConfigPresetEditor', () => {
     })
 
     const dropdown = wrapper.findComponent(Dropdown)
-    expect(dropdown.props('overlayClass')).toEqual({
-      'model-config-editor-overlay': true,
-    })
-    expect(dropdown.props('overlayStyle')).toEqual({
-      '--model-config-editor-overlay-z-index': 1102,
-    })
+    expect(dropdown.props('overlayClass')).toBe('preset-dropdown-overlay')
   })
 })

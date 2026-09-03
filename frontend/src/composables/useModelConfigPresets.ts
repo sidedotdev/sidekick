@@ -1,6 +1,8 @@
 import { computed, ref, type Ref } from 'vue'
 import type { LLMConfig } from '../lib/models'
-import { getModelSummary } from '../lib/llmPresets'
+import { getModelSummary, llmConfigProviders } from '../lib/llmPresets'
+import { fetchProfileProviders } from '../lib/profiles'
+import { fetchWorkspace } from '../lib/workspaces'
 import {
   llmConfigsEqual,
   loadLastPresetSelection,
@@ -38,6 +40,7 @@ export interface ModelConfigPresetEditorState {
   llmConfig: Ref<LLMConfig>
   selectedPresetValue: Ref<string>
   presets: Ref<ModelPreset[]>
+  profileId: Ref<string | undefined>
   currentPresetId: Ref<string | null>
   newPresetName: Ref<string>
   presetOptions: ReturnType<typeof computed<PresetOption[]>>
@@ -82,6 +85,48 @@ export const useModelConfigPresets = (
   const llmConfig = ref<LLMConfig>(cloneConfig(selectedPreset?.config || initialConfig || emptyLlmConfig()))
   const currentPresetId = ref<string | null>(null)
   const newPresetName = ref('')
+  const profileId = ref<string | undefined>(undefined)
+  const profileProviders = ref<string[] | null>(null)
+
+  const presetUsableWith = (preset: ModelPreset, providers: string[]): boolean => (
+    llmConfigProviders(preset.config).every((provider) => providers.includes(provider))
+  )
+
+  // A selection restored from another workspace or profile may reference
+  // providers this workspace cannot use. Such a selection falls back to the
+  // default models, or, where no default option exists, becomes a custom
+  // configuration retaining the preset's models.
+  const reconcileSelection = () => {
+    const providers = profileProviders.value
+    if (!providers) return
+
+    const selected = presets.value.find((preset) => preset.id === selectedPresetValue.value)
+    if (!selected || presetUsableWith(selected, providers)) return
+
+    if (options.useDefaultWhenMissing === false) {
+      setSelectedPresetValue('add_preset')
+      currentPresetId.value = null
+    } else {
+      handlePresetChange('default')
+    }
+  }
+
+  const loadProfileProviders = async () => {
+    if (!options.workspaceId) return
+    const workspace = await fetchWorkspace(options.workspaceId)
+    if (!workspace) return
+    profileId.value = workspace.profileId
+    profileProviders.value = await fetchProfileProviders(workspace.profileId)
+    reconcileSelection()
+  }
+
+  // Presets whose providers belong to another profile cannot be used by the
+  // workspace, so they are hidden once the profile's providers are known.
+  const availablePresets = computed((): ModelPreset[] => {
+    const providers = profileProviders.value
+    if (!providers) return presets.value
+    return presets.value.filter((preset) => presetUsableWith(preset, providers))
+  })
 
   const presetOptions = computed((): PresetOption[] => {
     const result: PresetOption[] = []
@@ -89,7 +134,7 @@ export const useModelConfigPresets = (
       result.push({ value: 'default', label: 'Default' })
     }
 
-    const sortedPresets = [...presets.value].sort((a, b) => {
+    const sortedPresets = [...availablePresets.value].sort((a, b) => {
       const labelA = a.name || getModelSummary(a.config)
       const labelB = b.name || getModelSummary(b.config)
       return labelA.localeCompare(labelB)
@@ -203,10 +248,13 @@ export const useModelConfigPresets = (
     return true
   }
 
+  void loadProfileProviders()
+
   return {
     llmConfig,
     selectedPresetValue,
     presets,
+    profileId,
     currentPresetId,
     newPresetName,
     presetOptions,
