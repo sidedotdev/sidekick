@@ -528,26 +528,26 @@ func TestRenderAuthorEditBlockInitialPromptIddInstructions(t *testing.T) {
 	assert.NotContains(t, withoutIddStep, "intent/.generated")
 }
 
-type BuildAuthorEditBlockInputTestSuite struct {
+type BuildCodingInputTestSuite struct {
 	suite.Suite
 	testsuite.WorkflowTestSuite
 	env *testsuite.TestWorkflowEnvironment
 }
 
-func (s *BuildAuthorEditBlockInputTestSuite) SetupTest() {
+func (s *BuildCodingInputTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 }
 
-func (s *BuildAuthorEditBlockInputTestSuite) AfterTest(suiteName, testName string) {
+func (s *BuildCodingInputTestSuite) AfterTest(suiteName, testName string) {
 	s.env.AssertExpectations(s.T())
 }
 
-func TestBuildAuthorEditBlockInputTestSuite(t *testing.T) {
-	suite.Run(t, new(BuildAuthorEditBlockInputTestSuite))
+func TestBuildCodingInputTestSuite(t *testing.T) {
+	suite.Run(t, new(BuildCodingInputTestSuite))
 }
 
-func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
+func (s *BuildCodingInputTestSuite) TestIncludesDoneTool() {
 	wrapperWorkflow := func(ctx workflow.Context, disableHumanInTheLoop bool) ([]string, error) {
 		dCtx := DevContext{
 			ExecContext: flow_action.ExecContext{
@@ -563,7 +563,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result, err := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false, "OS: Linux, Arch: x86_64")
+		result, err := buildCodingInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false, "OS: Linux, Arch: x86_64")
 		if err != nil {
 			return nil, err
 		}
@@ -594,7 +594,52 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 	s.Contains(toolNames, getHelpOrInputTool.Name)
 }
 
-func (s *BuildAuthorEditBlockInputTestSuite) TestWebSearchToolUsableOnlyInNonLocalEnv() {
+func (s *BuildCodingInputTestSuite) TestResolveCodingOptionsKeepsWebSearchTool() {
+	wrapperWorkflow := func(ctx workflow.Context) (llm2.Options, error) {
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context: ctx,
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+				EnvContainer: &env.EnvContainer{Env: &env.ModalEnv{}},
+			},
+			RepoConfig: common.RepoConfig{},
+		}
+		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
+		baseOptions, err := buildCodingInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, true, false, "OS: Linux, Arch: x86_64")
+		if err != nil {
+			return llm2.Options{}, err
+		}
+		retryModelConfig := common.ModelConfig{Provider: "anthropic", Model: "test-model"}
+		return resolveCodingOptions(dCtx, baseOptions, retryModelConfig, true, false), nil
+	}
+
+	var ffa *fflag.FFlagActivities
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+
+	s.env.ExecuteWorkflow(wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var options llm2.Options
+	s.NoError(s.env.GetWorkflowResult(&options))
+
+	s.Equal("test-model", options.ModelConfig.Model)
+	webSearchCount := 0
+	functionToolCount := 0
+	for _, tool := range options.Tools {
+		if tool.Type == common.ToolTypeWebSearch {
+			webSearchCount++
+		} else {
+			functionToolCount++
+		}
+	}
+	s.Equal(1, webSearchCount, "per-attempt resolved options must retain the web search tool in a non-local env")
+	s.Greater(functionToolCount, 0, "function tools should remain available alongside web search")
+}
+
+func (s *BuildCodingInputTestSuite) TestWebSearchToolUsableOnlyInNonLocalEnv() {
 	wrapperWorkflow := func(ctx workflow.Context, useDevPodEnv bool) (llm2.Options, error) {
 		envContainer := &env.EnvContainer{Env: &env.LocalEnv{}}
 		if useDevPodEnv {
@@ -612,7 +657,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestWebSearchToolUsableOnlyInNonLoc
 		}
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
-		return buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, true, false, "OS: Linux, Arch: x86_64")
+		return buildCodingInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, true, false, "OS: Linux, Arch: x86_64")
 	}
 
 	var ffa *fflag.FFlagActivities
@@ -652,7 +697,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestWebSearchToolUsableOnlyInNonLoc
 	}
 }
 
-func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
+func (s *BuildCodingInputTestSuite) TestHumanInTheLoopDisabled() {
 	wrapperWorkflow := func(ctx workflow.Context, disableHumanInTheLoop bool) ([]string, error) {
 		dCtx := DevContext{
 			ExecContext: flow_action.ExecContext{
@@ -668,7 +713,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result, err := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false, "OS: Linux, Arch: x86_64")
+		result, err := buildCodingInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false, "OS: Linux, Arch: x86_64")
 		if err != nil {
 			return nil, err
 		}
@@ -696,10 +741,10 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 	s.NotContains(toolNames, getHelpOrInputTool.Name)
 }
 
-// buildInitialCodePromptContent runs buildAuthorEditBlockInput for an
+// buildInitialCodePromptContent runs buildCodingInput for an
 // InitialCodeInfo prompt with the given idd flag (as BasicDevWorkflow sets it on
 // DevContext from BasicDevOptions.Idd) and returns the rendered message content.
-func (s *BuildAuthorEditBlockInputTestSuite) buildInitialCodePromptContent(idd bool) string {
+func (s *BuildCodingInputTestSuite) buildInitialCodePromptContent(idd bool) string {
 	wrapperWorkflow := func(ctx workflow.Context, idd bool) (string, error) {
 		dCtx := DevContext{
 			ExecContext: flow_action.ExecContext{
@@ -716,7 +761,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) buildInitialCodePromptContent(idd b
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLegacyChatHistoryFromChatMessages(nil)}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		_, err := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, InitialCodeInfo{
+		_, err := buildCodingInput(dCtx, common.ModelConfig{}, chatHistory, InitialCodeInfo{
 			CodeContext:  "some code",
 			Requirements: "some requirements",
 		}, doneRequired, false, "OS: Linux, Arch: x86_64")
@@ -745,7 +790,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) buildInitialCodePromptContent(idd b
 	return content
 }
 
-func (s *BuildAuthorEditBlockInputTestSuite) TestIddInstructionsIncludedForIddFlow() {
+func (s *BuildCodingInputTestSuite) TestIddInstructionsIncludedForIddFlow() {
 	iddBytes, err := os.ReadFile("prompts/author_edit_block/idd_instructions.mustache")
 	s.NoError(err)
 	iddBlock := strings.TrimRight(string(iddBytes), "\n")
@@ -755,7 +800,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIddInstructionsIncludedForIddFl
 	s.Contains(content, iddBlock)
 }
 
-func (s *BuildAuthorEditBlockInputTestSuite) TestIddInstructionsExcludedForNonIddFlow() {
+func (s *BuildCodingInputTestSuite) TestIddInstructionsExcludedForNonIddFlow() {
 	content := s.buildInitialCodePromptContent(false)
 	s.NotEmpty(content)
 	s.NotContains(content, "intent/.generated")

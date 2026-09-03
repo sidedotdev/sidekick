@@ -43,6 +43,11 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 			wantAdded:    true,
 		},
 		{
+			name:         "modal env enables web search",
+			envContainer: &env.EnvContainer{Env: &env.ModalEnv{}},
+			wantAdded:    true,
+		},
+		{
 			name:         "missing env stays disabled",
 			envContainer: &env.EnvContainer{},
 			wantAdded:    false,
