@@ -208,12 +208,17 @@ func TestSSHTestServerTunnelsDirectTCPIP(t *testing.T) {
 // TestSSHTestServerRefusesUnreachableDirectTCPIP is the negative control: a
 // destination that cannot be reached must be refused when the channel is
 // opened, not accepted and then silently closed.
+//
+// Port 0 is never a valid TCP destination, so no listener can ever own it. A
+// merely released ephemeral port would be racy here: any concurrent listener,
+// in this process or another, can be handed that port and turn the
+// unreachable destination into a reachable one.
 func TestSSHTestServerRefusesUnreachableDirectTCPIP(t *testing.T) {
 	t.Parallel()
 
 	server := startSSHTestServer(t, sshTestServerOptions{})
 	client := dialTestServer(t, server)
-	unreachable := fmt.Sprintf("127.0.0.1:%d", freeLoopbackPort(t))
+	unreachable := "127.0.0.1:0"
 
 	_, err := client.Dial("tcp", unreachable)
 	require.Error(t, err)
