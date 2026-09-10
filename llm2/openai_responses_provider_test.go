@@ -99,7 +99,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "openai",
-			Model:    "gpt-5.4-mini",
+			Model:    common.SmallModels[common.OpenaiToolChatProviderType],
 		},
 		Tools:      []*common.Tool{mockTool},
 		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
@@ -291,7 +291,7 @@ func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider:        "openai",
-			Model:           "gpt-5.4-mini",
+			Model:           common.SmallModels[common.OpenaiToolChatProviderType],
 			ReasoningEffort: "low",
 			MaxTokens:       1024,
 		},
@@ -633,7 +633,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "openai",
-			Model:    "gpt-5.4-mini",
+			Model:    common.SmallModels[common.OpenaiToolChatProviderType],
 		},
 		Tools: []*common.Tool{
 			{
@@ -709,12 +709,15 @@ func TestOpenAIResponsesProvider_SubscriptionRequest(t *testing.T) {
 	var authorization string
 	var accountID string
 	var requestBody map[string]any
+	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
 		requestPath = r.URL.Path
 		authorization = r.Header.Get("Authorization")
 		accountID = r.Header.Get("ChatGPT-Account-Id")
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&requestBody))
-		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+		w.Header().Set("Retry-After", "0")
+		http.Error(w, "stop after request inspection", http.StatusTooManyRequests)
 	}))
 	defer server.Close()
 
@@ -745,6 +748,7 @@ func TestOpenAIResponsesProvider_SubscriptionRequest(t *testing.T) {
 	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
 
 	assert.Error(t, err)
+	assert.Equal(t, 1, requestCount)
 	assert.Equal(t, "/responses", requestPath)
 	assert.Equal(t, "Bearer oauth-token", authorization)
 	assert.Equal(t, "account-id", accountID)

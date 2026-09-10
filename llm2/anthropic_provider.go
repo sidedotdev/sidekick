@@ -141,6 +141,9 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	clientOptions := []option.RequestOption{
 		option.WithHTTPClient(httpClient),
+		// Callers own request retries. SDK retries can honor a provider's
+		// Retry-After for hours and hide an actionable response until timeout.
+		option.WithMaxRetries(0),
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))

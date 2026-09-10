@@ -62,6 +62,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
+		option.WithMaxRetries(0),
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
