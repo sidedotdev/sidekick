@@ -106,3 +106,7 @@ func StartReadOnlyProxy(listenHostPort, temporalHostPort string, payloadStorage 
 
 	return &ReadOnlyProxy{server: server, conn: conn, listener: listener}, nil
 }
+
+func (s *readOnlyWorkflowService) DescribeWorkflowExecution(ctx context.Context, req *workflowservice.DescribeWorkflowExecutionRequest) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+	return s.client.DescribeWorkflowExecution(ctx, req)
+}

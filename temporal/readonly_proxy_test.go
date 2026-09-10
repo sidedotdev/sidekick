@@ -86,6 +86,12 @@ func TestReadOnlyProxy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED, event.EventType)
 
+	description, err := c.DescribeWorkflowExecution(ctx, "wf1", "run1")
+	require.NoError(t, err)
+	assert.Equal(t, "wf1", description.GetWorkflowExecutionInfo().GetExecution().GetWorkflowId())
+	assert.Equal(t, "run1", description.GetWorkflowExecutionInfo().GetExecution().GetRunId())
+	assert.Equal(t, enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING, description.GetWorkflowExecutionInfo().GetStatus())
+
 	mutations := map[string]error{
 		"signal":    c.SignalWorkflow(ctx, "wf1", "run1", "some-signal", nil),
 		"terminate": c.TerminateWorkflow(ctx, "wf1", "run1", "some-reason"),
@@ -148,4 +154,13 @@ func TestReadOnlyProxyDecodesOffloadedPayloads(t *testing.T) {
 	var decoded string
 	require.NoError(t, converter.GetDefaultDataConverter().FromPayload(payloads[0], &decoded))
 	assert.Equal(t, value, decoded)
+}
+
+func (s *fakeWorkflowService) DescribeWorkflowExecution(ctx context.Context, req *workflowservice.DescribeWorkflowExecutionRequest) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+	return &workflowservice.DescribeWorkflowExecutionResponse{
+		WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+			Execution: req.Execution,
+			Status:    enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
+		},
+	}, nil
 }

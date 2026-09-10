@@ -83,7 +83,7 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to initialize service")
 	}
 
-	hostPort := common.GetTemporalServerHostPort()
+	hostPort := common.GetTemporalClientHostPort()
 	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create tracing interceptor")

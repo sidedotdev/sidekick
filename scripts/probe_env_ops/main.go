@@ -45,7 +45,7 @@ func loadEnvContainer(ctx context.Context, flowID, runID string, eventID int64) 
 		return env.EnvContainer{}, "", fmt.Errorf("error initializing storage: %w", err)
 	}
 
-	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalDiagnosticHostPort())
 	if err != nil {
 		return env.EnvContainer{}, "", fmt.Errorf("error creating Temporal client options: %w", err)
 	}

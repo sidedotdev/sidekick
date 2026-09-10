@@ -124,3 +124,30 @@ func GetNatsServerPort() int {
 	}
 	return intPort
 }
+
+// GetTemporalDiagnosticHostPort selects a forwarded endpoint for read-only
+// diagnostics without changing the addresses used to bind local services.
+func GetTemporalDiagnosticHostPort() string {
+	if os.Getenv("SIDE_TEMPORAL_SERVER_HOST") != "" || os.Getenv("SIDE_TEMPORAL_SERVER_PORT") != "" {
+		return GetTemporalServerHostPort()
+	}
+	if port, ok := LookupForwardedPort(GetTemporalReadOnlyServerPort()); ok {
+		return fmt.Sprintf("127.0.0.1:%d", port)
+	}
+	if port, ok := LookupForwardedPort(GetTemporalServerPort()); ok {
+		return fmt.Sprintf("127.0.0.1:%d", port)
+	}
+	return GetTemporalServerHostPort()
+}
+
+// GetTemporalClientHostPort resolves full-API forwards without selecting the
+// read-only proxy, which cannot support workers or mutating requests.
+func GetTemporalClientHostPort() string {
+	if os.Getenv("SIDE_TEMPORAL_SERVER_HOST") != "" || os.Getenv("SIDE_TEMPORAL_SERVER_PORT") != "" {
+		return GetTemporalServerHostPort()
+	}
+	if port, ok := LookupForwardedPort(GetTemporalServerPort()); ok {
+		return fmt.Sprintf("127.0.0.1:%d", port)
+	}
+	return GetTemporalServerHostPort()
+}
