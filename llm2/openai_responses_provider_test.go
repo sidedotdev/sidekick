@@ -99,7 +99,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "openai",
-			Model:    "gpt-5.4-mini",
+			Model:    common.OpenaiToolChatProviderType.SmallModel(),
 		},
 		Tools:      []*common.Tool{mockTool},
 		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
@@ -291,7 +291,7 @@ func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider:        "openai",
-			Model:           "gpt-5.4-mini",
+			Model:           common.OpenaiToolChatProviderType.SmallModel(),
 			ReasoningEffort: "low",
 			MaxTokens:       1024,
 		},
@@ -633,7 +633,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "openai",
-			Model:    "gpt-5.4-mini",
+			Model:    common.OpenaiToolChatProviderType.SmallModel(),
 		},
 		Tools: []*common.Tool{
 			{
