@@ -1,6 +1,7 @@
 package flow_action
 
 import (
+	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -91,6 +92,9 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
 			if err == nil {
 				modelConfig.Model = provider.SmallModel()
+				if provider == common.OpenaiToolChatProviderType && eCtx.useHistoricalOpenAISmallModel() {
+					modelConfig.Model = "gpt-5.4-mini"
+				}
 			} else {
 				// Try to find provider in configured providers
 				for _, p := range eCtx.GetProviders() {
@@ -221,4 +225,25 @@ func (eCtx *ExecContext) GetEmbeddingConfig() common.EmbeddingConfig {
 		}
 	}
 	return eCtx.EmbeddingConfig
+}
+
+func (eCtx *ExecContext) useHistoricalOpenAISmallModel() bool {
+	const stateKey = "openai-small-model-migration"
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	state, _ := eCtx.GlobalState.GetValue(stateKey).(int)
+	if state < 0 {
+		return false
+	}
+	state++
+	eCtx.GlobalState.SetValue(stateKey, state)
+	// Each historical invocation needs its own check: GetVersion caches
+	// DefaultVersion for a change ID for the remainder of the run.
+	version := workflow.GetVersion(eCtx, fmt.Sprintf("%s-%d", stateKey, state), workflow.DefaultVersion, 1)
+	if version == workflow.DefaultVersion {
+		return true
+	}
+	eCtx.GlobalState.SetValue(stateKey, -1)
+	return false
 }
