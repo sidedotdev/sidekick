@@ -93,6 +93,7 @@ func newStepReviewRound(info CheckWorkInfo) stepReviewRound {
 }
 
 func (s *StepStartPinTestSuite) TestPinsStepStartAndCarriesPriorReviewDiff() {
+	s.env.OnGetVersion("step-user-review-baseline", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 	var revParseParams []git.GitRevParseParams
 	s.env.OnActivity(git.GitRevParseActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, params git.GitRevParseParams) (git.GitRevParseResult, error) {

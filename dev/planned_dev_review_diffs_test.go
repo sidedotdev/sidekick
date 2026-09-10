@@ -155,8 +155,8 @@ func TestPlannedDevStepDiffsRealFlow(t *testing.T) {
 			},
 			assert: func(t *testing.T, outcome plannedStepOutcome, work *repoMutator) {
 				assert.Contains(t, outcome.fullDiff, "REVIEWED_WORK")
-				assert.Empty(t, normalizeReviewDiff(outcome.sinceDiff),
-					"the second round changed nothing, so there is nothing new to review")
+				assert.Equal(t, normalizeReviewDiff(outcome.fullDiff), normalizeReviewDiff(outcome.sinceDiff),
+					"auto-review retries must still review the unchanged work")
 				assert.Equal(t, normalizeReviewDiff(outcome.fullDiff), normalizeReviewDiff(outcome.mergeApproval.Diff),
 					"the step's work is the whole task's work, so both reviews judge the same diff")
 			},
@@ -172,8 +172,8 @@ func TestPlannedDevStepDiffsRealFlow(t *testing.T) {
 			assert: func(t *testing.T, outcome plannedStepOutcome, work *repoMutator) {
 				assert.Contains(t, outcome.fullDiff, "FIRST_ROUND_STAGED")
 				assert.Contains(t, outcome.sinceDiff, "SECOND_ROUND_STAGED")
-				assert.NotContains(t, outcome.sinceDiff, "FIRST_ROUND_STAGED",
-					"work already reviewed must not reappear in the since diff")
+				assert.Contains(t, outcome.sinceDiff, "FIRST_ROUND_STAGED",
+					"auto-review does not establish a user-review baseline")
 				assert.Contains(t, outcome.mergeApproval.Diff, "FIRST_ROUND_STAGED")
 				assert.Contains(t, outcome.mergeApproval.Diff, "SECOND_ROUND_STAGED")
 			},
@@ -195,7 +195,7 @@ func TestPlannedDevStepDiffsRealFlow(t *testing.T) {
 				assert.NotContains(t, outcome.fullDiff, "PREVIOUS_STEP_WORK",
 					"work committed before the step started belongs to an earlier step")
 				assert.Contains(t, outcome.sinceDiff, "SECOND_ROUND_COMMIT")
-				assert.NotContains(t, outcome.sinceDiff, "FIRST_ROUND_COMMIT")
+				assert.Contains(t, outcome.sinceDiff, "FIRST_ROUND_COMMIT")
 				assert.NotContains(t, outcome.sinceDiff, "PREVIOUS_STEP_WORK")
 				assert.Contains(t, outcome.mergeApproval.Diff, "PREVIOUS_STEP_WORK",
 					"the merge review covers the whole task, not just this step")
@@ -216,8 +216,8 @@ func TestPlannedDevStepDiffsRealFlow(t *testing.T) {
 				assert.Equal(t, 1, work.merges, "the base branch must have been merged in")
 				assert.Contains(t, outcome.fullDiff, "OUR_WORK")
 				assert.NotContains(t, outcome.fullDiff, "UNRELATED_BASE_CHANGE")
-				assert.Empty(t, normalizeReviewDiff(outcome.sinceDiff),
-					"a clean base merge changes nothing on our end")
+				assert.Equal(t, normalizeReviewDiff(outcome.fullDiff), normalizeReviewDiff(outcome.sinceDiff),
+					"a clean base merge leaves the step's work unchanged")
 				assert.Equal(t, normalizeReviewDiff(outcome.fullDiff), normalizeReviewDiff(outcome.mergeApproval.Diff),
 					"the step's work is all the task did, so both reviews show the same diff")
 			},

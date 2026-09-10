@@ -428,28 +428,40 @@ func (t *nativeSSHTransport) dropLiveSession(ctx context.Context) (bool, error) 
 // operation. The config is re-read and revalidated on every attempt, so a
 // directive a native client cannot honour is never silently dropped.
 func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativeSSHConn, client *ssh.Client) error) error {
-	config, err := t.sshEnv.SSHConnConfig(ctx)
-	if err != nil {
-		return fmt.Errorf("resolve ssh connection config: %w", err)
-	}
-	if err := config.ValidateNative(); err != nil {
-		return err
-	}
-	poolKey := nativeSSHPoolKey(t.key, config, t.forwards)
-
 	// The loop is bounded so that a shutdown storm cannot spin here: each pass
 	// either runs the operation or re-acquires an entry shutdown took away.
 	const maxAttempts = 4
 	opAttempts := 0
+	recoveryAttempted := false
 	var lastErr error
 	for range maxAttempts {
+		config, err := t.sshEnv.SSHConnConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve ssh connection config: %w", err)
+		}
+		if err := config.ValidateNative(); err != nil {
+			return err
+		}
+		poolKey := nativeSSHPoolKey(t.key, config, t.forwards)
 		conn := t.hold(poolKey)
 		client, err := conn.beginOp(ctx, config)
 		if err != nil {
-			if !errors.Is(err, errNativeConnOrphaned) {
+			lastErr = err
+			if errors.Is(err, errNativeConnOrphaned) {
+				continue
+			}
+			recoverer, ok := t.sshEnv.(sshTransportRecoverer)
+			if !ok || recoveryAttempted || ctx.Err() != nil {
 				return err
 			}
-			lastErr = err
+			recoveryAttempted = true
+			recovered, recoveryErr := recoverer.recoverSSHTransport(ctx, err)
+			if recoveryErr != nil {
+				return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+			}
+			if !recovered {
+				return err
+			}
 			continue
 		}
 		opErr := op(conn, client)

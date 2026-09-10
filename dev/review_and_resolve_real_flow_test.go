@@ -168,8 +168,10 @@ func TestReviewAndResolveRealFlow(t *testing.T) {
 		"already reviewed work must not be shown as new")
 
 	workDiff := h.fulfillmentDiffs[len(h.fulfillmentDiffs)-1]
-	assert.Equal(t, normalizeReviewDiff(workDiff), normalizeReviewDiff(lastApproval.DiffSinceLastReview),
-		"the auto-reviewer and merge approval must judge the same since-review diff")
+	assert.Contains(t, workDiff, normalizeReviewDiff(firstApproval.Diff),
+		"auto-review needs the original user-reviewed work")
+	assert.Contains(t, workDiff, normalizeReviewDiff(lastApproval.DiffSinceLastReview),
+		"auto-review also needs the changes since user rejection")
 
 	mungedRequirements := ""
 	for _, text := range h.promptTexts {

@@ -347,3 +347,95 @@ func (s *CriteriaFulfillmentDiffTestSuite) TestReviewsGeneratedDiffEvenWhenWorkI
 func TestCriteriaFulfillmentDiffTestSuite(t *testing.T) {
 	suite.Run(t, new(CriteriaFulfillmentDiffTestSuite))
 }
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestRejectedUserReviewIncludesOriginalDiff() {
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{
+			FullDiff:  "current full work",
+			SinceDiff: "changes after user rejection",
+		}, nil)
+	prompts := s.mockCriteriaReviewer()
+	_, err := s.runCheckWorkflow(CheckWorkInfo{
+		BaseBranch:     "main",
+		Requirements:   "do the work",
+		LastReviewDiff: "original user reviewed work",
+	})
+	s.Require().NoError(err)
+	text := strings.Join(*prompts, "\n")
+	s.Contains(text, "original user reviewed work")
+	s.Contains(text, "changes after user rejection")
+}
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestUnchangedRejectedUserReviewIncludesOriginalDiff() {
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{FullDiff: "original user reviewed work"}, nil)
+	prompts := s.mockCriteriaReviewer()
+	_, err := s.runCheckWorkflow(CheckWorkInfo{
+		BaseBranch:     "main",
+		Requirements:   "do the work",
+		LastReviewDiff: "original user reviewed work",
+	})
+	s.Require().NoError(err)
+	text := strings.Join(*prompts, "\n")
+	s.Contains(text, "original user reviewed work")
+	s.NotContains(text, "git diff is empty: no changes were made.")
+}
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestRepeatedPlanAutoReviewIncludesUnchangedWork() {
+	const fullDiff = "unchanged staged work marker"
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, params coding.GenerateReviewDiffsParams) (coding.GenerateReviewDiffsResult, error) {
+			s.Empty(params.PriorReviewDiff, "auto-review must not establish a user-review baseline")
+			return coding.GenerateReviewDiffsResult{FullDiff: fullDiff}, nil
+		}).Twice()
+	prompts := s.mockCriteriaReviewer()
+	testWorkflow := func(ctx workflow.Context) error {
+		dCtx := s.newDevContext(utils.NoRetryCtx(ctx))
+		state := stepReviewState{startPoint: "step-start"}
+		for range 2 {
+			_, reviewed, err := CheckWorkMeetsCriteriaWithDiff(dCtx, state.checkWorkInfo(dCtx, CheckWorkInfo{
+				BaseBranch: "main", Requirements: "do the work",
+			}))
+			if err != nil {
+				return err
+			}
+			state.recordReview(reviewed)
+		}
+		return nil
+	}
+	s.env.RegisterWorkflow(testWorkflow)
+	s.env.ExecuteWorkflow(testWorkflow)
+	s.Require().NoError(s.env.GetWorkflowError())
+	reviews := 0
+	for _, text := range *prompts {
+		if strings.Contains(text, "# START REQUIREMENTS") {
+			reviews++
+			s.Contains(text, fullDiff)
+			s.NotContains(text, "git diff is empty: no changes were made.")
+		}
+	}
+	s.Equal(2, reviews)
+}
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestRejectedReviewBudgetPreservesBothComponents() {
+	budget := (common.ModelMetadata{}).MaxChars() / 4
+	original := "ORIGINAL_WORK\n" + strings.Repeat("a", budget*3)
+	incremental := "INCREMENTAL_WORK\n" + strings.Repeat("b", budget*3)
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{FullDiff: "current full diff", SinceDiff: incremental}, nil)
+	s.env.OnActivity(SummarizeDiffActivity, mock.Anything, mock.Anything).
+		Return("", errors.New("summarizer unavailable")).Maybe()
+	prompts := s.mockCriteriaReviewer()
+	_, err := s.runCheckWorkflow(CheckWorkInfo{
+		BaseBranch: "main", Requirements: "do the work", LastReviewDiff: original,
+	})
+	s.Require().NoError(err)
+	text := strings.Join(*prompts, "\n")
+	s.Contains(text, "ORIGINAL_WORK")
+	s.Contains(text, "INCREMENTAL_WORK")
+	s.Less(len(text), budget*2+10000)
+}

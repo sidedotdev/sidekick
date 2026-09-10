@@ -539,8 +539,14 @@ func TestReviewRoundDiffsRealFlow(t *testing.T) {
 
 				assert.Empty(t, h.mergeApprovals[0].DiffSinceLastReview,
 					"the first review has no prior review to diff against")
-				assert.Equal(t, normalizeReviewDiff(outcome.workDiff), normalizeReviewDiff(outcome.sinceDiff),
-					"the auto-reviewer and merge approval must judge the same since-review diff")
+				assert.Contains(t, outcome.workDiff, normalizeReviewDiff(outcome.fullDiffs[0]),
+					"auto-review needs the original user-reviewed work")
+				if normalizeReviewDiff(outcome.sinceDiff) == "" {
+					assert.Contains(t, outcome.workDiff, "No changes since the rejected user review.")
+				} else {
+					assert.Contains(t, outcome.workDiff, normalizeReviewDiff(outcome.sinceDiff),
+						"auto-review also needs the changes since user rejection")
+				}
 
 				tc.assert(t, outcome.fullDiffs, outcome.sinceDiff, h.repos.work)
 			})

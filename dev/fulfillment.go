@@ -191,8 +191,11 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 	}
 
 	// Summarize diff to fit within 50% of the judging model's context capacity
+	pairedReview := workflow.GetVersion(dCtx, "criteria-user-review-context", workflow.DefaultVersion, 1) >= 1 && promptInfo.LastReviewDiff != ""
 	summarizeVersion := workflow.GetVersion(dCtx, "summarize-diff-for-fulfillment", workflow.DefaultVersion, 1)
-	if summarizeVersion >= 1 && len(diff) > 0 {
+	if pairedReview {
+		diff = prepareUserReviewWork(dCtx, promptInfo, diff)
+	} else if summarizeVersion >= 1 && len(diff) > 0 {
 		modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
 		metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
 		maxDiffChars := metadata.MaxChars() / 2
@@ -320,4 +323,40 @@ func getCriteriaFulfillmentPrompt(eCtx flow_action.ExecContext, workspaceId stri
 		return nil, err
 	}
 	return chatHistory, nil
+}
+
+// Each component has its own budget because an interdiff is not meaningful
+// without the work the user originally reviewed.
+func prepareUserReviewWork(dCtx DevContext, info CheckWorkInfo, reviewDiff string) string {
+	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+	metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
+	budget := metadata.MaxChars() / 4
+	summarize := func(diff string) string {
+		if len(diff) <= budget {
+			return diff
+		}
+		var summary string
+		err := workflow.ExecuteActivity(dCtx, SummarizeDiffActivity, SummarizeDiffActivityInput{
+			GitDiff:                diff,
+			ReviewFeedback:         info.Requirements,
+			EnvContainer:           *dCtx.EnvContainer,
+			ModelConfig:            dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize"),
+			SecretManagerContainer: *dCtx.Secrets,
+			MaxChars:               budget,
+		}).Get(dCtx, &summary)
+		if err == nil && strings.TrimSpace(summary) != "" {
+			diff = summary
+		}
+		if len(diff) > budget {
+			diff = diff[:budget]
+		}
+		return diff
+	}
+	original := summarize(info.LastReviewDiff)
+	current := "No changes since the rejected user review."
+	if strings.TrimSpace(reviewDiff) != "" {
+		current = summarize(reviewDiff)
+	}
+	return "# Original diff from rejected user review\n\n" + original +
+		"\n\n# Review changes (full current diff if incremental generation was unavailable)\n\n" + current
 }

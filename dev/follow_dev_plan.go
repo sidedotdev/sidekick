@@ -237,7 +237,9 @@ func (s *stepReviewState) checkWorkInfo(dCtx DevContext, info CheckWorkInfo) Che
 		return info
 	}
 	info.StartPoint = s.startPoint
-	info.LastReviewDiff = s.lastReviewDiff
+	if workflow.GetVersion(dCtx, "step-user-review-baseline", workflow.DefaultVersion, 1) < 1 {
+		info.LastReviewDiff = s.lastReviewDiff
+	}
 
 	// a pinned start point alone can't tell our own changes apart from changes
 	// merged in from the target branch, which only the target branch identifies
@@ -613,7 +615,9 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 		if err != nil {
 			return result, fmt.Errorf("error checking if criteria are fulfilled: %w", err)
 		}
-		reviewState.recordReview(reviewedFullDiff)
+		if workflow.GetVersion(dCtx, "step-user-review-baseline", workflow.DefaultVersion, 1) < 1 {
+			reviewState.recordReview(reviewedFullDiff)
+		}
 		result.Fulfillment = &fulfillment
 		result.Successful = fulfillment.IsFulfilled
 		// including test results when not successful only, so the outer process
