@@ -396,13 +396,12 @@ func (s *CriteriaFulfillmentDiffTestSuite) TestRepeatedPlanAutoReviewIncludesUnc
 		dCtx := s.newDevContext(utils.NoRetryCtx(ctx))
 		state := stepReviewState{startPoint: "step-start"}
 		for range 2 {
-			_, reviewed, err := CheckWorkMeetsCriteriaWithDiff(dCtx, state.checkWorkInfo(dCtx, CheckWorkInfo{
+			_, err := CheckWorkMeetsCriteria(dCtx, state.checkWorkInfo(dCtx, CheckWorkInfo{
 				BaseBranch: "main", Requirements: "do the work",
 			}))
 			if err != nil {
 				return err
 			}
-			state.recordReview(reviewed)
 		}
 		return nil
 	}

@@ -69,7 +69,6 @@ func (s *StepStartPinTestSuite) runTwoRounds() []stepReviewRound {
 		}
 
 		rounds := []stepReviewRound{newStepReviewRound(reviewState.checkWorkInfo(dCtx, CheckWorkInfo{}))}
-		reviewState.recordReview("full diff at first review")
 		rounds = append(rounds, newStepReviewRound(reviewState.checkWorkInfo(dCtx, CheckWorkInfo{})))
 		return rounds, nil
 	}
@@ -92,8 +91,7 @@ func newStepReviewRound(info CheckWorkInfo) stepReviewRound {
 	}
 }
 
-func (s *StepStartPinTestSuite) TestPinsStepStartAndCarriesPriorReviewDiff() {
-	s.env.OnGetVersion("step-user-review-baseline", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+func (s *StepStartPinTestSuite) TestPinsStepStartWithoutAutoReviewBaseline() {
 	var revParseParams []git.GitRevParseParams
 	s.env.OnActivity(git.GitRevParseActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, params git.GitRevParseParams) (git.GitRevParseResult, error) {
@@ -114,7 +112,7 @@ func (s *StepStartPinTestSuite) TestPinsStepStartAndCarriesPriorReviewDiff() {
 
 	s.Equal("step-start-sha", rounds[1].StartPoint)
 	s.Equal("main", rounds[1].BaseBranch)
-	s.Equal("full diff at first review", rounds[1].LastReviewDiff)
+	s.Empty(rounds[1].LastReviewDiff, "automatic reviews must include unchanged work")
 }
 
 func (s *StepStartPinTestSuite) TestLegacyVersionDoesNotPinStepStart() {

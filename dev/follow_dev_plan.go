@@ -202,12 +202,9 @@ func preparePlannedCodingContext(
 	return codeContext, len(fullCodeContext) - len(codeContext), nil
 }
 
-// stepReviewState pins what a single plan step's work is compared against and
-// carries the diff shown at that step's previous auto-review round, so each step
-// is reviewed the same way a whole task is, but starting where the step did.
+// stepReviewState pins what a single plan step's work is compared against.
 type stepReviewState struct {
-	startPoint     string
-	lastReviewDiff string
+	startPoint string
 }
 
 // pinStepReviewState resolves the commit the step starts from. A commit reachable
@@ -237,9 +234,6 @@ func (s *stepReviewState) checkWorkInfo(dCtx DevContext, info CheckWorkInfo) Che
 		return info
 	}
 	info.StartPoint = s.startPoint
-	if workflow.GetVersion(dCtx, "step-user-review-baseline", workflow.DefaultVersion, 1) < 1 {
-		info.LastReviewDiff = s.lastReviewDiff
-	}
 
 	// a pinned start point alone can't tell our own changes apart from changes
 	// merged in from the target branch, which only the target branch identifies
@@ -254,13 +248,6 @@ func (s *stepReviewState) checkWorkInfo(dCtx DevContext, info CheckWorkInfo) Che
 	}
 	info.BaseBranch = targetBranch
 	return info
-}
-
-func (s *stepReviewState) recordReview(fullDiff string) {
-	if s == nil || s.startPoint == "" || fullDiff == "" {
-		return
-	}
-	s.lastReviewDiff = fullDiff
 }
 
 func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution DevPlanExecution, step DevStep) (result DevStepResult, err error) {
@@ -605,7 +592,7 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 				}
 			}
 		}
-		fulfillment, reviewedFullDiff, err := CheckWorkMeetsCriteriaWithDiff(dCtx, reviewState.checkWorkInfo(dCtx, CheckWorkInfo{
+		fulfillment, err := CheckWorkMeetsCriteria(dCtx, reviewState.checkWorkInfo(dCtx, CheckWorkInfo{
 			CodeContext:   "", // TODO providing the code context will help with checking for criteria fulfillment
 			Requirements:  overallRequirements,
 			Step:          step,
@@ -614,9 +601,6 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 		}))
 		if err != nil {
 			return result, fmt.Errorf("error checking if criteria are fulfilled: %w", err)
-		}
-		if workflow.GetVersion(dCtx, "step-user-review-baseline", workflow.DefaultVersion, 1) < 1 {
-			reviewState.recordReview(reviewedFullDiff)
 		}
 		result.Fulfillment = &fulfillment
 		result.Successful = fulfillment.IsFulfilled
