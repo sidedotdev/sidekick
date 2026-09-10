@@ -118,6 +118,12 @@ func main() {
 	e := ec.Env
 	fmt.Printf("env: type=%s workingDir=%s (from %s input)\n", e.GetType(), e.GetWorkingDirectory(), activityName)
 
+	// Command recovery must not mask a broken filesystem connection path.
+	coldStart := time.Now()
+	_, err = e.Stat(ctx, ".")
+	must(err, "cold stat")
+	fmt.Printf("Cold Stat: %s\n", time.Since(coldStart).Round(time.Millisecond))
+
 	// Warm the transport twice: the first op pays any dial cost, the second
 	// shows the steady-state command round trip.
 	for i := range 2 {
