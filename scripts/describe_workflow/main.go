@@ -38,7 +38,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to initialize service: %v\n", err)
 		os.Exit(1)
 	}
-	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalDiagnosticHostPort())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create client options: %v\n", err)
 		os.Exit(1)

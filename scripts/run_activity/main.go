@@ -90,7 +90,7 @@ func buildActivityRegistry() map[string]interface{} {
 	}
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
 
-	hostPort := common.GetTemporalServerHostPort()
+	hostPort := common.GetTemporalClientHostPort()
 	tracingInterceptor, _ := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
 	temporalClient, err := client.Dial(client.Options{
 		HostPort:     hostPort,
@@ -459,7 +459,7 @@ func loadActivityInvocation(ctx context.Context, flowID string, runID string, id
 		return activityInvocation{}, fmt.Errorf("error initializing storage: %w", err)
 	}
 
-	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalDiagnosticHostPort())
 	if err != nil {
 		return activityInvocation{}, fmt.Errorf("error creating Temporal client options: %w", err)
 	}
@@ -580,7 +580,7 @@ func main() {
 }
 
 func executeActivityViaWorkflow(activityName string, activityArgs []json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
-	hostPort := common.GetTemporalServerHostPort()
+	hostPort := common.GetTemporalClientHostPort()
 	service, err := sidekick.GetService()
 	if err != nil {
 		return nil, fmt.Errorf("error initializing storage: %w", err)
