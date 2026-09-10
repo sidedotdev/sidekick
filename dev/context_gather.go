@@ -53,6 +53,114 @@ func contextGatherHandoffEnabled(dCtx DevContext) bool {
 	return workflow.GetVersion(dCtx, "context-gather-handoff", workflow.DefaultVersion, 1) >= 1
 }
 
+// contextGatherLimitsEnabled reports whether the gatherer is nudged back
+// towards terminating and eventually forced to hand off. Older executions
+// replay without either. The change ID predates the iteration limits, which
+// ship together with the reminders.
+func contextGatherLimitsEnabled(dCtx DevContext) bool {
+	return workflow.GetVersion(dCtx, "context-gather-ready-reminder", workflow.DefaultVersion, 1) >= 1
+}
+
+const (
+	// defaultContextGatherRemindAfter is when gathering first gets reminded to
+	// wrap up, absent "code_localization" agent config.
+	defaultContextGatherRemindAfter = 10
+	// defaultContextGatherEscalateReminderEvery is how long gathering may run
+	// past each reminder before the next, escalated one.
+	defaultContextGatherEscalateReminderEvery = 5
+	// defaultContextGatherMaxIterations is when gathering is restricted to
+	// wrapping up, absent "code_localization" agent config.
+	defaultContextGatherMaxIterations = 30
+)
+
+// contextGatherLimits holds when gathering is first reminded to wrap up, how
+// often that reminder escalates thereafter, and when gathering is cut short.
+type contextGatherLimits struct {
+	remindAfter   int
+	escalateEvery int
+	maxIterations int
+}
+
+func contextGatherLimitsFor(dCtx DevContext) contextGatherLimits {
+	cfg := dCtx.RepoConfig.AgentConfig[common.CodeLocalizationKey]
+
+	limits := contextGatherLimits{
+		remindAfter:   defaultContextGatherRemindAfter,
+		escalateEvery: defaultContextGatherEscalateReminderEvery,
+		maxIterations: defaultContextGatherMaxIterations,
+	}
+	if cfg.RemindAfter > 0 {
+		limits.remindAfter = cfg.RemindAfter
+	}
+	if cfg.EscalateReminderEvery > 0 {
+		limits.escalateEvery = cfg.EscalateReminderEvery
+	}
+	if cfg.MaxIterations > 0 {
+		limits.maxIterations = cfg.MaxIterations
+	}
+	return limits
+}
+
+// wrapUpOnly reports whether gathering has hit its iteration limit, past which
+// only the wrap-up tools remain available.
+func (l contextGatherLimits) wrapUpOnly(iterations int) bool {
+	return l.maxIterations > 0 && iterations >= l.maxIterations
+}
+
+// handoffForced reports whether gathering has spent a whole escalateEvery
+// interval failing to wrap up, at which point it hands off as if the ready
+// tool had been called.
+func (l contextGatherLimits) handoffForced(iterations int) bool {
+	return l.wrapUpOnly(iterations) && iterations >= l.maxIterations+l.escalateEvery
+}
+
+func contextGatherSystemMessage(content string) llm.ChatMessage {
+	return llm.ChatMessage{
+		Role:    llm.ChatMessageRoleSystem,
+		Content: content,
+	}
+}
+
+// contextGatherReadyReminder answers prose-only turns, which otherwise leave
+// the phase running indefinitely without reaching any audience.
+func contextGatherReadyReminder() llm.ChatMessage {
+	return contextGatherSystemMessage(fmt.Sprintf(
+		"SYSTEM MESSAGE: The user cannot see prose here, and user interaction is out of scope. Call %s to finish, or continue gathering with read-only tools.",
+		contextGatherReadyTool.Name,
+	))
+}
+
+// reminder nudges a long-running gather: a warning once remindAfter iterations
+// have passed, a stronger nudge every escalateEvery iterations after that, and
+// a final notice on every iteration once only wrap-up tools remain.
+func (l contextGatherLimits) reminder(iterations int, forgettingEnabled bool) (llm.ChatMessage, bool) {
+	forgetStep := ""
+	if forgettingEnabled {
+		forgetStep = fmt.Sprintf("%s what isn't needed, ", contextGatherForgetTool.Name)
+	}
+
+	switch {
+	case l.wrapUpOnly(iterations):
+		return contextGatherSystemMessage(fmt.Sprintf(
+			"SYSTEM MESSAGE: ⚠️‼️ Gathering hit its limit, so only wrap-up tools remain: %scall %s now, or the handoff happens without you.",
+			forgetStep, contextGatherReadyTool.Name,
+		)), true
+	case iterations < l.remindAfter:
+		return llm.ChatMessage{}, false
+	case iterations == l.remindAfter:
+		return contextGatherSystemMessage(fmt.Sprintf(
+			"SYSTEM MESSAGE: Gathering is running long. Do not perform or code the task: gather only needed context, %sthen call %s for the next agent.",
+			forgetStep, contextGatherReadyTool.Name,
+		)), true
+	case l.escalateEvery > 0 && (iterations-l.remindAfter)%l.escalateEvery == 0:
+		return contextGatherSystemMessage(fmt.Sprintf(
+			"SYSTEM MESSAGE: ⚠️‼️ Gathering has run far too long. Do not perform or code the task: %scall %s NOW so the next agent takes over.",
+			forgetStep, contextGatherReadyTool.Name,
+		)), true
+	}
+	return llm.ChatMessage{}, false
+}
+
 // gatherPlanningContext runs the explore context gather for planning-phase
 // subflows (dev requirements and dev plan building) when enabled. With the
 // handoff enabled, the ranked repo summary feeds both the gather prompt and
@@ -136,7 +244,14 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 		ModelConfig: modelConfig,
 	}
 
+	limits := contextGatherLimitsFor(dCtx)
+	limitsEnabled := contextGatherLimitsEnabled(dCtx)
+	iterations := 0
 	for {
+		if limitsEnabled && limits.handoffForced(iterations) {
+			return finishContextGather(dCtx, chatHistory, tracker, opts)
+		}
+
 		userResponse, err := UserRequestIfPaused(dCtx, "Context gathering is paused. Would you like to provide any guidance?", nil)
 		if err != nil {
 			return 0, fmt.Errorf("failed to check for pause during context gathering: %w", err)
@@ -150,7 +265,13 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 			}
 		}
 
-		response, err := TrackedToolChat(dCtx.WithCancelOnPause(), "context_gather", options, chatHistory)
+		iterationOptions := options
+		if limitsEnabled && limits.wrapUpOnly(iterations) {
+			iterationOptions.Tools = contextGatherWrapUpTools(forgettingEnabled)
+			iterationOptions.ToolChoice = llm.ToolChoice{Type: llm.ToolChoiceTypeRequired}
+		}
+
+		response, err := TrackedToolChat(dCtx.WithCancelOnPause(), "context_gather", iterationOptions, chatHistory)
 		if err != nil {
 			if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
 				// likely interrupted by the pause: loop back so
@@ -159,6 +280,7 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 			}
 			return 0, fmt.Errorf("failed to gather repository context: %w", err)
 		}
+		iterations++
 
 		message := response.GetMessage()
 		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, message); err != nil {
@@ -170,8 +292,9 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 			tracker.llm2Transcript = append(tracker.llm2Transcript, *llm2Message)
 		}
 
+		toolCalls := message.GetToolCalls()
 		terminal := false
-		for _, toolCall := range message.GetToolCalls() {
+		for _, toolCall := range toolCalls {
 			result, contextResult, toolTerminal, err := handleContextGatherToolCall(dCtx, tracker, toolCall)
 			if err != nil {
 				return 0, err
@@ -196,16 +319,40 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 		}
 
 		if terminal {
-			if err := tracker.filterForCoding(); err != nil {
-				return 0, err
+			return finishContextGather(dCtx, chatHistory, tracker, opts)
+		}
+
+		if limitsEnabled {
+			if len(toolCalls) == 0 {
+				if err := AppendChatHistory(dCtx.ExecContext, chatHistory, contextGatherReadyReminder()); err != nil {
+					return 0, fmt.Errorf("failed to append context gathering ready reminder: %w", err)
+				}
 			}
-			contextSizeExtension := int(float64(tracker.gatheredContextSize()) * gatheredContextExtensionRatio)
-			if err := persistFilteredContextGatherHistory(dCtx, chatHistory, opts.InitialMessage, tracker.llm2Transcript); err != nil {
-				return 0, err
+			if reminder, ok := limits.reminder(iterations, forgettingEnabled); ok {
+				if err := AppendChatHistory(dCtx.ExecContext, chatHistory, reminder); err != nil {
+					return 0, fmt.Errorf("failed to append context gathering iteration reminder: %w", err)
+				}
 			}
-			return contextSizeExtension, nil
 		}
 	}
+}
+
+// finishContextGather hands the retained context off to coding, returning the
+// chat history keep-length extension.
+func finishContextGather(
+	dCtx DevContext,
+	chatHistory *persisted_ai.ChatHistoryContainer,
+	tracker *contextGatherHistory,
+	opts ContextGatherOptions,
+) (int, error) {
+	if err := tracker.filterForCoding(); err != nil {
+		return 0, err
+	}
+	contextSizeExtension := int(float64(tracker.gatheredContextSize()) * gatheredContextExtensionRatio)
+	if err := persistFilteredContextGatherHistory(dCtx, chatHistory, opts.InitialMessage, tracker.llm2Transcript); err != nil {
+		return 0, err
+	}
+	return contextSizeExtension, nil
 }
 
 func persistFilteredContextGatherHistory(
@@ -231,6 +378,16 @@ func persistFilteredContextGatherHistory(
 		}
 	}
 	return nil
+}
+
+// contextGatherWrapUpTools are all that remain once gathering hits its
+// iteration limit: hand off, adjusting what is carried over at most.
+func contextGatherWrapUpTools(forgettingEnabled bool) []*llm.Tool {
+	tools := []*llm.Tool{&contextGatherReadyTool}
+	if forgettingEnabled {
+		tools = append(tools, &contextGatherForgetTool, &contextGatherRememberTool)
+	}
+	return tools
 }
 
 func contextGatherTools(modelConfig common.ModelConfig, forgettingEnabled bool) []*llm.Tool {

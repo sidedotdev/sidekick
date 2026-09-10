@@ -330,7 +330,22 @@ type CommandConfig struct {
 
 // AgentUseCaseConfig contains configuration for a specific agent use case.
 type AgentUseCaseConfig struct {
+	// AutoIterations is the number of iterations run before human feedback is
+	// requested.
 	AutoIterations int `toml:"auto_iterations,omitempty"`
+
+	// RemindAfter is the iteration at which a long-running loop is first
+	// reminded to wrap up. No human is involved. Zero uses the use case default.
+	RemindAfter int `toml:"remind_after,omitempty"`
+
+	// EscalateReminderEvery is the interval, in iterations after RemindAfter,
+	// at which those reminders escalate and repeat. Zero uses the use case
+	// default.
+	EscalateReminderEvery int `toml:"escalate_reminder_every,omitempty"`
+
+	// MaxIterations is the iteration at which a loop is restricted to wrapping
+	// up. Zero uses the use case default.
+	MaxIterations int `toml:"max_iterations,omitempty"`
 }
 
 type EditCodeConfig struct {

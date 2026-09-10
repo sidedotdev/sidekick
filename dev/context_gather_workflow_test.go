@@ -476,3 +476,385 @@ func TestContextGatherPauseKeepsResponseAndRequestsGuidance(t *testing.T) {
 	assert.True(t, toolResultAppended, "tool result for the paused response should be appended")
 	assert.True(t, guidanceAppended, "pause guidance should be appended to chat history")
 }
+
+type contextGatherReminderRun struct {
+	streamLens       []int
+	streamOptions    []llm2.Options
+	appendedMessages []llm2.Message
+}
+
+func toolNames(tools []*llm.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+type contextGatherReminderOptions struct {
+	legacyVersion bool
+	// proseTurns is how many responses lack tool calls before the phase ends.
+	proseTurns int
+	// remindAfter, escalateEvery and maxIterations configure the
+	// "code_localization" agent use case when set.
+	remindAfter   int
+	escalateEvery int
+	maxIterations int
+	// neverReady keeps every response prose-only, so gathering only ends if it
+	// is cut short.
+	neverReady bool
+}
+
+// runContextGatherReminderWorkflow drives a gather phase whose first
+// proseTurns responses are prose without tool calls, followed by a response
+// that ends the phase.
+func runContextGatherReminderWorkflow(t *testing.T, opts contextGatherReminderOptions) contextGatherReminderRun {
+	t.Helper()
+
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
+
+	run := contextGatherReminderRun{}
+	streamCalls := 0
+
+	repoConfig := common.RepoConfig{}
+	if opts.remindAfter > 0 || opts.escalateEvery > 0 || opts.maxIterations > 0 {
+		repoConfig.AgentConfig = map[string]common.AgentUseCaseConfig{
+			common.CodeLocalizationKey: {
+				RemindAfter:           opts.remindAfter,
+				EscalateReminderEvery: opts.escalateEvery,
+				MaxIterations:         opts.maxIterations,
+			},
+		}
+	}
+
+	wrapper := func(ctx workflow.Context) error {
+		history := NewVersionedChatHistory(ctx, "context-gather-reminder-workspace")
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     ctx,
+				WorkspaceId: "context-gather-reminder-workspace",
+				GlobalState: &flow_action.GlobalState{},
+				FlowScope:   &flow_action.FlowScope{SubflowName: "test"},
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+			},
+			RepoConfig: repoConfig,
+		}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "test", Model: "default-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.CodeLocalizationKey: {{Provider: "test", Model: "localization-model"}},
+			},
+		})
+		if err := SetupModelConfigHandlers(dCtx); err != nil {
+			return err
+		}
+		_, err := GatherContextForCoding(dCtx, history, InitialCodeInfo{Requirements: "Reminder test"}, ContextGatherOptions{})
+		return err
+	}
+	env.RegisterWorkflow(wrapper)
+	env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
+	if opts.legacyVersion {
+		env.OnGetVersion("context-gather-ready-reminder", workflow.DefaultVersion, 1).
+			Return(workflow.DefaultVersion).
+			Maybe()
+	}
+
+	var flowActivities *flow_action.FlowActivities
+	env.OnActivity(flowActivities.PersistSubflow, mock.Anything, mock.Anything).Return(nil).Twice()
+	env.OnActivity(flowActivities.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
+	env.OnActivity(flowActivities.GetModelMetadata, mock.Anything, mock.Anything, mock.Anything).
+		Return(common.ModelMetadata{}, nil).
+		Maybe()
+
+	var chatHistoryActivities *persisted_ai.ChatHistoryActivities
+	env.OnActivity(chatHistoryActivities.AppendMessage, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, input persisted_ai.AppendMessageInput) (*persisted_ai.MessageRef, error) {
+			run.appendedMessages = append(run.appendedMessages, input.Message)
+			return &persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: string(input.Message.Role)}, nil
+		}).Maybe()
+
+	var flagActivities *fflag.FFlagActivities
+	env.OnActivity(flagActivities.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+
+	var llmActivities *persisted_ai.Llm2Activities
+	streamCall := env.OnActivity(llmActivities.Stream, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+			streamCalls++
+			run.streamLens = append(run.streamLens, input.ChatHistory.Len())
+			run.streamOptions = append(run.streamOptions, input.Options)
+			if opts.neverReady || streamCalls <= opts.proseTurns {
+				return &llm2.MessageResponse{
+					StopReason: "stop",
+					Output: llm2.Message{
+						Role: llm2.RoleAssistant,
+						Content: []llm2.ContentBlock{{
+							Type: llm2.ContentBlockTypeText,
+							Text: "Still considering which files matter.",
+						}},
+					},
+				}, nil
+			}
+			return contextGatherTerminalResponse("ready-call", contextGatherReadyTool.Name), nil
+		})
+	if opts.neverReady {
+		streamCall.Maybe()
+	} else {
+		streamCall.Times(opts.proseTurns + 1)
+	}
+
+	env.ExecuteWorkflow(wrapper)
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	return run
+}
+
+// contextGatherSystemTexts collects the system-role reminders appended during
+// the gather phase, in order.
+func contextGatherSystemTexts(messages []llm2.Message) []string {
+	texts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.Role != llm2.RoleSystem {
+			continue
+		}
+		for _, block := range message.Content {
+			if block.Type == llm2.ContentBlockTypeText {
+				texts = append(texts, block.Text)
+			}
+		}
+	}
+	return texts
+}
+
+func countText(texts []string, wanted string) int {
+	count := 0
+	for _, text := range texts {
+		if text == wanted {
+			count++
+		}
+	}
+	return count
+}
+
+func TestContextGatherRemindsToCallReadyWhenResponseHasNoToolCalls(t *testing.T) {
+	run := runContextGatherReminderWorkflow(t, contextGatherReminderOptions{proseTurns: 1})
+
+	reminders := contextGatherSystemTexts(run.appendedMessages)
+	require.Len(t, reminders, 1)
+	assert.Equal(t, contextGatherReadyReminder().Content, reminders[0])
+	assert.Contains(t, reminders[0], contextGatherReadyTool.Name)
+	// prompt first, then the assistant prose and the reminder are both visible
+	// to the next stream
+	assert.Equal(t, []int{1, 3}, run.streamLens)
+}
+
+func TestContextGatherLegacyVersionSkipsReadyReminder(t *testing.T) {
+	run := runContextGatherReminderWorkflow(t, contextGatherReminderOptions{legacyVersion: true, proseTurns: 1})
+
+	assert.Empty(t, contextGatherSystemTexts(run.appendedMessages))
+	assert.Equal(t, []int{1, 2}, run.streamLens)
+}
+
+func TestContextGatherRemindsWhenGatheringRunsLong(t *testing.T) {
+	limits := contextGatherLimits{remindAfter: 2, escalateEvery: 2, maxIterations: 100}
+	// warning at iteration 2, escalations at 4 and 6
+	proseTurns := 6
+	run := runContextGatherReminderWorkflow(t, contextGatherReminderOptions{
+		proseTurns:    proseTurns,
+		remindAfter:   limits.remindAfter,
+		escalateEvery: limits.escalateEvery,
+		maxIterations: limits.maxIterations,
+	})
+
+	texts := contextGatherSystemTexts(run.appendedMessages)
+	warning, ok := limits.reminder(limits.remindAfter, false)
+	require.True(t, ok)
+	strong, ok := limits.reminder(limits.remindAfter+limits.escalateEvery, false)
+	require.True(t, ok)
+
+	assert.Equal(t, 1, countText(texts, warning.Content))
+	assert.Equal(t, 2, countText(texts, strong.Content))
+	assert.Equal(t, proseTurns, countText(texts, contextGatherReadyReminder().Content))
+}
+
+func TestContextGatherForcesWrapUpThenHandsOffAtMaxIterations(t *testing.T) {
+	limits := contextGatherLimits{remindAfter: 1, escalateEvery: 2, maxIterations: 3}
+	run := runContextGatherReminderWorkflow(t, contextGatherReminderOptions{
+		neverReady:    true,
+		remindAfter:   limits.remindAfter,
+		escalateEvery: limits.escalateEvery,
+		maxIterations: limits.maxIterations,
+	})
+
+	// gathering hands off on its own once it spends a whole escalation
+	// interval past the limit without calling ready
+	require.Len(t, run.streamOptions, limits.maxIterations+limits.escalateEvery)
+	for i, options := range run.streamOptions {
+		completedIterations := i
+		if !limits.wrapUpOnly(completedIterations) {
+			assert.Equal(t, llm.ToolChoiceTypeAuto, options.ToolChoice.Type)
+			assert.Contains(t, toolNames(options.Tools), bulkSearchRepositoryTool.Name)
+			continue
+		}
+		assert.Equal(t, llm.ToolChoiceTypeRequired, options.ToolChoice.Type)
+		assert.Equal(t, []string{contextGatherReadyTool.Name}, toolNames(options.Tools))
+	}
+}
+
+func TestContextGatherLimitsFollowAgentConfig(t *testing.T) {
+	t.Parallel()
+
+	localizationConfig := func(cfg common.AgentUseCaseConfig) DevContext {
+		return DevContext{
+			RepoConfig: common.RepoConfig{
+				AgentConfig: map[string]common.AgentUseCaseConfig{
+					common.CodeLocalizationKey: cfg,
+				},
+			},
+		}
+	}
+	defaults := contextGatherLimits{
+		remindAfter:   defaultContextGatherRemindAfter,
+		escalateEvery: defaultContextGatherEscalateReminderEvery,
+		maxIterations: defaultContextGatherMaxIterations,
+	}
+
+	tests := []struct {
+		name string
+		dCtx DevContext
+		want contextGatherLimits
+	}{
+		{
+			name: "defaults when unconfigured",
+			dCtx: DevContext{},
+			want: defaults,
+		},
+		{
+			name: "auto iterations do not affect reminders",
+			dCtx: localizationConfig(common.AgentUseCaseConfig{AutoIterations: 4}),
+			want: defaults,
+		},
+		{
+			name: "configured first reminder keeps the other defaults",
+			dCtx: localizationConfig(common.AgentUseCaseConfig{RemindAfter: 4}),
+			want: contextGatherLimits{
+				remindAfter:   4,
+				escalateEvery: defaults.escalateEvery,
+				maxIterations: defaults.maxIterations,
+			},
+		},
+		{
+			name: "configured escalation interval alone",
+			dCtx: localizationConfig(common.AgentUseCaseConfig{EscalateReminderEvery: 2}),
+			want: contextGatherLimits{
+				remindAfter:   defaults.remindAfter,
+				escalateEvery: 2,
+				maxIterations: defaults.maxIterations,
+			},
+		},
+		{
+			name: "all configured",
+			dCtx: localizationConfig(common.AgentUseCaseConfig{
+				RemindAfter:           4,
+				EscalateReminderEvery: 20,
+				MaxIterations:         50,
+			}),
+			want: contextGatherLimits{remindAfter: 4, escalateEvery: 20, maxIterations: 50},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, contextGatherLimitsFor(tt.dCtx))
+		})
+	}
+}
+
+func TestContextGatherIterationReminderThresholds(t *testing.T) {
+	t.Parallel()
+
+	limits := contextGatherLimits{remindAfter: 4, escalateEvery: 3, maxIterations: 100}
+	tests := []struct {
+		name       string
+		iterations int
+		wantOk     bool
+		wantStrong bool
+	}{
+		{name: "early iterations stay quiet", iterations: 1},
+		{name: "just below the first reminder", iterations: limits.remindAfter - 1},
+		{name: "first reminder", iterations: limits.remindAfter, wantOk: true},
+		{name: "within the escalation interval", iterations: limits.remindAfter + 1},
+		{
+			name:       "first escalation",
+			iterations: limits.remindAfter + limits.escalateEvery,
+			wantOk:     true,
+			wantStrong: true,
+		},
+		{
+			name:       "off interval after escalating",
+			iterations: limits.remindAfter + limits.escalateEvery + 1,
+		},
+		{
+			name:       "next escalation",
+			iterations: limits.remindAfter + 2*limits.escalateEvery,
+			wantOk:     true,
+			wantStrong: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reminder, ok := limits.reminder(tt.iterations, false)
+			require.Equal(t, tt.wantOk, ok)
+			if !tt.wantOk {
+				return
+			}
+			assert.Equal(t, llm.ChatMessageRoleSystem, reminder.Role)
+			assert.True(t, strings.HasPrefix(reminder.Content, "SYSTEM MESSAGE: "))
+			assert.Contains(t, reminder.Content, contextGatherReadyTool.Name)
+			assert.NotContains(t, reminder.Content, contextGatherForgetTool.Name)
+			if tt.wantStrong {
+				strong, _ := limits.reminder(limits.remindAfter+limits.escalateEvery, false)
+				assert.Equal(t, strong.Content, reminder.Content)
+			}
+		})
+	}
+}
+
+func TestContextGatherIterationReminderMentionsForgettingWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	limits := contextGatherLimitsFor(DevContext{})
+	reminder, ok := limits.reminder(limits.remindAfter, true)
+	require.True(t, ok)
+	assert.Contains(t, reminder.Content, contextGatherForgetTool.Name)
+	assert.Contains(t, reminder.Content, contextGatherReadyTool.Name)
+}
+
+func TestContextGatherExplainsRestrictedToolsBeforeTheFirstReminder(t *testing.T) {
+	t.Parallel()
+
+	limits := contextGatherLimits{remindAfter: 10, escalateEvery: 5, maxIterations: 3}
+	reminder, ok := limits.reminder(limits.maxIterations, false)
+	require.True(t, ok)
+	assert.Contains(t, reminder.Content, "wrap-up tools")
+	assert.Contains(t, reminder.Content, contextGatherReadyTool.Name)
+}
+
+func TestContextGatherWrapUpToolsOnlyAllowHandoffAdjustments(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{contextGatherReadyTool.Name}, toolNames(contextGatherWrapUpTools(false)))
+	assert.Equal(t, []string{
+		contextGatherReadyTool.Name,
+		contextGatherForgetTool.Name,
+		contextGatherRememberTool.Name,
+	}, toolNames(contextGatherWrapUpTools(true)))
+}
