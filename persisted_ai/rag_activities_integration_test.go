@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,21 +352,25 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
 	ragActivities := setupRagService(t, ctx, repoRoot)
 
+	headOutput, err := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err, "failed to resolve test repository HEAD: %s", headOutput)
+	objectOutput, err := exec.CommandContext(ctx, "git", "-C", repoRoot, "count-objects", "-vH").CombinedOutput()
+	require.NoError(t, err, "failed to inspect test repository objects: %s", objectOutput)
+	t.Logf("source repo: path=%s HEAD=%s\n%s", repoRoot, strings.TrimSpace(string(headOutput)), objectOutput)
+
 	// The sandbox is intentionally reused across runs (never deleted): the
 	// idle watchdog snapshots and terminates it after the test so it stops
 	// billing, and the next run restores it — with the synced repo intact,
 	// making the sync incremental — instead of recreating from scratch.
 	sandboxName := env.E2ESandboxName("side-e2e-modal-rag")
 
-	// Missing Modal credentials only surface on the first RPC, so probe with a
-	// real lookup before creating anything.
-	phaseStart := time.Now()
-	if _, err := env.CheckSandboxActivity(ctx, env.CheckSandboxInput{EnvType: env.EnvTypeModal, SandboxName: sandboxName}); err != nil {
-		t.Skipf("modal credentials not configured or Modal unreachable: %v", err)
+	configured, err := env.ModalCredentialsConfigured()
+	require.NoError(t, err, "failed to read local Modal credential configuration")
+	if !configured {
+		t.Skip("Modal credentials not configured locally")
 	}
-	t.Logf("phase: credential probe took %s", time.Since(phaseStart))
 
-	phaseStart = time.Now()
+	phaseStart := time.Now()
 	createOut, err := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{EnvType: env.EnvTypeModal, Name: sandboxName})
 	require.NoError(t, err, "CreateSandboxActivity failed")
 	t.Logf("phase: create sandbox took %s (reused=%v)", time.Since(phaseStart), createOut.Reused)
@@ -381,7 +386,7 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 		LocalRepoDir: repoRoot,
 	})
 	require.NoError(t, err, "SyncRepoToRemoteActivity failed")
-	t.Logf("phase: repo sync took %s", time.Since(phaseStart))
+	t.Logf("phase: repo sync took %s (remote main worktree=%s)", time.Since(phaseStart), syncOut.RemoteRepoDir)
 
 	modalEnv := &env.ModalEnv{
 		WorkingDirectory: syncOut.RemoteRepoDir,
