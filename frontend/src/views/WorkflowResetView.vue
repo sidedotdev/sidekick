@@ -67,9 +67,23 @@
           </tr>
           <tr v-if="expandedEventId === event.eventId" class="details-row">
             <td colspan="5">
-              <div v-if="detailLoading[event.eventId]" class="details-loading">Loading payloads...</div>
+              <div v-if="detailLoading[event.eventId]" class="details-loading">Loading event details...</div>
               <div v-else-if="detailError[event.eventId]" class="details-error">{{ detailError[event.eventId] }}</div>
               <div v-else-if="eventDetails[event.eventId]" class="details-content">
+                <section v-if="eventDetails[event.eventId].failure" class="details-section failure-details">
+                  <h3>Failure</h3>
+                  <dl>
+                    <dt>Error cause</dt>
+                    <dd><code>{{ eventDetails[event.eventId].failure?.cause }}</code></dd>
+                    <dt>Error message</dt>
+                    <dd class="failure-message">{{ eventDetails[event.eventId].failure?.message || 'No error message available.' }}</dd>
+                    <dt>Stack trace</dt>
+                    <dd>
+                      <pre v-if="eventDetails[event.eventId].failure?.stackTrace" class="failure-stack" tabindex="0" aria-label="Stack trace">{{ eventDetails[event.eventId].failure?.stackTrace }}</pre>
+                      <span v-else class="details-empty">No stack trace available.</span>
+                    </dd>
+                  </dl>
+                </section>
                 <div class="details-section">
                   <h3>Input</h3>
                   <div v-if="eventDetails[event.eventId].input.length === 0" class="details-empty">No input payloads.</div>
@@ -125,6 +139,11 @@ interface EventDetail {
   eventType: string
   input: JSONDataType[]
   output: JSONDataType[]
+  failure?: {
+    cause: string
+    message: string
+    stackTrace: string
+  } | null
 }
 
 interface EventDetailResponse {
@@ -382,6 +401,50 @@ onMounted(() => {
 
 .details-tree {
   margin-bottom: 0.5rem;
+}
+
+.failure-details {
+  min-width: 0;
+  padding: 1rem;
+  border: 0.0625rem solid var(--color-error-border);
+  border-radius: 0.375rem;
+  background: var(--color-error-background);
+  overflow-wrap: anywhere;
+}
+
+.failure-details h3 {
+  color: var(--color-error-text);
+}
+
+.failure-details dl {
+  margin: 0;
+}
+
+.failure-details dt {
+  margin-top: 0.75rem;
+  font-weight: 600;
+}
+
+.failure-details dd {
+  margin: 0.25rem 0 0;
+}
+
+.failure-message {
+  white-space: pre-wrap;
+}
+
+.failure-stack {
+  max-height: 24rem;
+  margin: 0;
+  padding: 0.75rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--color-background);
+  color: var(--color-text);
+  border-radius: 0.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
 }
 
 .details-loading,

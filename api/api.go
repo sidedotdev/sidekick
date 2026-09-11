@@ -1182,6 +1182,7 @@ type EventDetail struct {
 	EventType string        `json:"eventType"`
 	Input     []interface{} `json:"input"`
 	Output    []interface{} `json:"output"`
+	Failure   *EventFailure `json:"failure,omitempty"`
 }
 
 // eventInputPayloads returns the input payloads carried by an event, if any.
@@ -1332,6 +1333,13 @@ func (ctrl *Controller) GetFlowEventDetailHandler(c *gin.Context) {
 		EventType: target.EventType.String(),
 		Input:     decodePayloads(dc, inputPayloads),
 		Output:    decodePayloads(dc, outputPayloads),
+	}
+	if attrs := target.GetWorkflowTaskFailedEventAttributes(); attrs != nil {
+		detail.Failure = &EventFailure{
+			Cause:      attrs.GetCause().String(),
+			Message:    attrs.GetFailure().GetMessage(),
+			StackTrace: attrs.GetFailure().GetStackTrace(),
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"event": detail})
@@ -2265,4 +2273,10 @@ func (ctrl *Controller) WildcardHandler(c *gin.Context) {
 			log.Error().Err(err).Msg("Failed to serve index.html")
 		}
 	}
+}
+
+type EventFailure struct {
+	Cause      string `json:"cause"`
+	Message    string `json:"message"`
+	StackTrace string `json:"stackTrace"`
 }
