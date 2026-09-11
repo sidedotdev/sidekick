@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,7 +21,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/urfave/cli/v3"
-	temporal_worker "go.temporal.io/sdk/worker"
 )
 
 // openURL opens the specified URL in the default browser of the user.
@@ -241,7 +241,13 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 				return
 			}
 			log.Info().Msg("Starting worker...")
-			w := startWorker()
+			w, err := startWorker(ctx)
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					log.Error().Err(err).Msg("Failed to start worker")
+				}
+				return
+			}
 
 			// Wait for cancellation
 			<-ctx.Done()
@@ -356,6 +362,6 @@ func startServer() *api.Server {
 	return api.RunServer()
 }
 
-func startWorker() temporal_worker.Worker {
-	return worker.StartWorker(common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
+func startWorker(ctx context.Context) (*worker.Worker, error) {
+	return worker.StartWorker(ctx, common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"sidekick/common"
@@ -24,11 +25,16 @@ func main() {
 
 	common.StartPprofServer()
 
-	w := worker.StartWorker(common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	w, err := worker.StartWorker(ctx, common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
+	if err != nil {
+		log.Info().Err(err).Msg("Worker startup aborted")
+		return
+	}
+
+	<-ctx.Done()
 
 	// graceful shutdown
 	w.Stop()

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -53,8 +54,10 @@ func (w *Worker) Stop() {
 	}
 }
 
-// StartWorker initializes and starts a new worker
-func StartWorker(hostPort string, taskQueue string) *Worker {
+// StartWorker initializes and starts a new worker, blocking until it can reach
+// the Temporal server. It returns an error only when ctx is done before the
+// connection is established.
+func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worker, error) {
 	shutdownTracer, err := telemetry.InitTracer("sidekick-worker")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize telemetry tracer")
@@ -83,17 +86,19 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 	clientOptions.Logger = logger
 	clientOptions.ContextPropagators = []workflow.ContextPropagator{flow_action.NewFlowActionIdPropagator()}
-	var temporalClient client.Client
-	for i := 0; i < 30; i++ {
-		temporalClient, err = client.Dial(clientOptions)
-		if err == nil {
-			break
-		}
-		log.Debug().Err(err).Msgf("Failed to create Temporal client, retrying in 1s (attempt %d/30)", i+1)
-		time.Sleep(1 * time.Second)
-	}
+	temporalClient, err := newTemporalDialRetrier(func(dialCtx context.Context) (client.Client, error) {
+		return client.DialContext(dialCtx, clientOptions)
+	}).run(ctx)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Unable to create Temporal client after multiple retries.")
+		featureFlag.Client.Close()
+		if shutdownTracer != nil {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancelCleanup()
+			if shutdownErr := shutdownTracer(cleanupCtx); shutdownErr != nil {
+				log.Error().Err(shutdownErr).Msg("Failed to shutdown telemetry tracer")
+			}
+		}
+		return nil, fmt.Errorf("failed to create Temporal client: %w", err)
 	}
 
 	devManagerActivities := &dev.DevAgentManagerActivities{
@@ -281,7 +286,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	return &Worker{
 		Worker:         w,
 		shutdownTracer: shutdownTracer,
-	}
+	}, nil
 }
 
 func RegisterWorkflows(w worker.WorkflowRegistry) {

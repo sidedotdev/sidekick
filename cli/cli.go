@@ -43,7 +43,9 @@ func (p *program) run() {
 	} else {
 		p.remote = remoteServer
 	}
-	startWorker()
+	if _, err := startWorker(context.Background()); err != nil {
+		log.Error().Err(err).Msg("Failed to start worker")
+	}
 	temporal.Start()
 }
 
