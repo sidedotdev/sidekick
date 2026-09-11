@@ -930,6 +930,12 @@ func modalCreateSandboxWithRecovery(
 	recycleUnhealthy func(context.Context, string) error,
 	awaitShutdown func(context.Context, string) error,
 ) (ModalCreateSandboxOutput, error) {
+	release, err := acquireModalLifecycleLock(ctx, input.Name)
+	if err != nil {
+		return ModalCreateSandboxOutput{}, err
+	}
+	defer release()
+
 	output, err := createOnce(ctx, input)
 	var unhealthy *modalSandboxUnhealthyError
 	switch {
