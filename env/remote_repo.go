@@ -2,6 +2,7 @@ package env
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -596,47 +597,42 @@ func reserveLocalBranch(ctx context.Context, localRepoDir, branchName, startBran
 	return reserveErr
 }
 
-// clearStaleRemoteWorktree removes same-name branch worktrees and leftover
-// worktree directories in the sandbox, which can survive in restored or reused
-// snapshots. It is only used when the local repo holds branch-name authority,
-// so stale sandbox state must never block or rename a flow branch.
-func clearStaleRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, worktreePath string) error {
-	quotedRepo := shellQuote(repoDir)
+// remoteWorktreeMatches reports whether worktreePath already holds a git
+// worktree checked out on branchName, meaning provisioning is re-running for
+// an existing flow (activity retry, sandbox restore, repeated env setup) and
+// must reuse the worktree rather than recreate it.
+func remoteWorktreeMatches(ctx context.Context, envContainer EnvContainer, branchName, worktreePath string) (bool, error) {
 	quotedPath := shellQuote(worktreePath)
 	script := fmt.Sprintf(
-		`cd %s && git worktree prune && `+
-			`git worktree list --porcelain | awk -v b=%s '$1=="worktree"{p=substr($0,10)} $0==("branch " b){print p}' | `+
-			`while IFS= read -r wt; do git worktree unlock "$wt" >/dev/null 2>&1; git worktree remove --force "$wt" >/dev/null 2>&1; done; `+
-			`git worktree unlock %s >/dev/null 2>&1; git worktree remove --force %s >/dev/null 2>&1; `+
-			`rm -rf %s; git worktree prune`,
-		quotedRepo, shellQuote("refs/heads/"+branchName), quotedPath, quotedPath, quotedPath,
+		`[ -e %s/.git ] || exit 1; `+
+			`[ "$(git -C %s symbolic-ref --quiet --short HEAD)" = %s ] && echo MATCH`,
+		quotedPath, quotedPath, shellQuote(branchName),
 	)
 	output, err := envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "sh",
 		Args:    []string{"-c", script},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to clear stale worktree state in sandbox: %w", err)
+		return false, fmt.Errorf("failed to check for existing worktree in sandbox: %w", err)
 	}
-	if output.ExitStatus != 0 {
-		return fmt.Errorf("clearing stale worktree state failed in sandbox (exit %d): %s", output.ExitStatus, output.Stderr)
-	}
-	return nil
+	return output.ExitStatus == 0 && strings.Contains(output.Stdout, "MATCH"), nil
+}
+
+// isBranchAlreadyExists reports whether err is the non-retryable
+// branch-already-exists application error.
+func isBranchAlreadyExists(err error) bool {
+	var appErr *temporal.ApplicationError
+	return errors.As(err, &appErr) && appErr.Type() == ErrTypeBranchAlreadyExists
 }
 
 // createRemoteWorktree creates a git worktree under $HOME/sidekick-worktrees
 // inside a remote environment via its RunCommand, so that the worktree's .git
 // references resolve within the remote filesystem. When localRepoDir is set,
-// the same-name branch is first reserved in the worker-local repository, which
-// then decides name availability and makes the sandbox side tolerant of stale
-// same-name state.
+// the same-name branch is reserved in the worker-local repository.
+// Conflicting sandbox state is left intact. Provisioning is idempotent: an
+// existing worktree already on the flow branch at the expected path is reused
+// as-is, so re-runs never destroy in-progress work.
 func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, startBranch, workspaceId, localRepoDir string) (string, error) {
-	if localRepoDir != "" {
-		if err := reserveLocalBranch(ctx, localRepoDir, branchName, startBranch); err != nil {
-			return "", err
-		}
-	}
-
 	repoName := filepath.Base(repoDir)
 	branchSuffix := strings.TrimPrefix(branchName, "side/")
 	dirName := repoName + "-" + branchSuffix
@@ -654,34 +650,33 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 	}
 	worktreePath := filepath.Join(baseDir, "sidekick-worktrees", workspaceId, dirName)
 
+	matches, err := remoteWorktreeMatches(ctx, envContainer, branchName, worktreePath)
+	if err != nil {
+		return "", err
+	}
+	if matches {
+		if localRepoDir != "" {
+			// Re-provisioning an existing flow: the local branch was normally
+			// reserved by the earlier run, so its existence is expected here.
+			if err := reserveLocalBranch(ctx, localRepoDir, branchName, startBranch); err != nil && !isBranchAlreadyExists(err) {
+				return "", err
+			}
+		}
+		return worktreePath, nil
+	}
 	if localRepoDir != "" {
-		if err := clearStaleRemoteWorktree(ctx, envContainer, repoDir, branchName, worktreePath); err != nil {
+		if err := reserveLocalBranch(ctx, localRepoDir, branchName, startBranch); err != nil {
 			return "", err
 		}
-	}
-
-	mkdirOutput, err := envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-		Command: "mkdir",
-		Args:    []string{"-p", worktreePath},
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to create worktree directory in sandbox: %w", err)
-	}
-	if mkdirOutput.ExitStatus != 0 {
-		return "", fmt.Errorf("mkdir failed in sandbox (exit %d): %s", mkdirOutput.ExitStatus, mkdirOutput.Stderr)
 	}
 
 	baseRef := "HEAD"
 	if startBranch != "" {
 		baseRef = startBranch
 	}
-	createFlag := "-b"
-	if localRepoDir != "" {
-		createFlag = "-B"
-	}
 	addOutput, err := envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "git",
-		Args:    []string{"worktree", "add", createFlag, branchName, worktreePath, baseRef},
+		Args:    []string{"worktree", "add", "-b", branchName, worktreePath, baseRef},
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to run git worktree add in sandbox: %w", err)

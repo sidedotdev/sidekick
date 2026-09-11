@@ -552,6 +552,30 @@ type ModalCreateSandboxInput struct {
 	RepoDir string `json:"repoDir,omitempty"`
 	// Config carries the repo-level modal settings (image, VM runtime, sizing).
 	Config common.ModalEnvConfig `json:"config"`
+	// SnapshotImageId pins the filesystem image a fresh sandbox is restored
+	// from. Creation fails rather than falling back to another image, since
+	// callers set this to resume a specific checkpoint of live work.
+	SnapshotImageId string `json:"snapshotImageId,omitempty"`
+	// SkipSeedSnapshots restricts restores to the sandbox's own snapshots.
+	// Seeding from another sandbox of the same repo is only appropriate for
+	// brand-new sandboxes: for an existing flow it silently resurrects a
+	// stale copy of the flow's worktree.
+	SkipSeedSnapshots bool `json:"skipSeedSnapshots,omitempty"`
+}
+
+// modalSnapshotSources lists, in preference order, the sandbox names whose
+// latest snapshot may back a fresh sandbox: its own name first, then recent
+// sandboxes of the same repo unless the caller opted out. A pinned image
+// bypasses the lookup entirely.
+func modalSnapshotSources(input ModalCreateSandboxInput, name string) []string {
+	if input.SnapshotImageId != "" {
+		return nil
+	}
+	sources := []string{name}
+	if !input.SkipSeedSnapshots {
+		sources = append(sources, modalSeedCandidates(input.RepoDir)...)
+	}
+	return sources
 }
 
 type ModalCreateSandboxOutput struct {
@@ -570,31 +594,92 @@ type ModalRecreateSandboxOutput struct {
 	EnvContainer EnvContainer `json:"envContainer"`
 }
 
+// ErrTypeModalSnapshotIncompatible is the application error type returned
+// when a settings change cannot boot the sandbox's snapshot (e.g. it adds a
+// volume mount the snapshot predates), so applying it would lose live work.
+const ErrTypeModalSnapshotIncompatible = "ModalSnapshotIncompatible"
+
 // modalRecreate* are seams so tests can drive the destructive
-// snapshot/delete/create sequence without a Modal client.
+// snapshot/terminate/create sequence without a Modal client.
 var (
-	modalRecreateCheckSandbox = modalCheckSandbox
-	modalRecreateSnapshot     = func(ctx context.Context, modalEnv *ModalEnv) error {
-		_, err := modalEnv.Snapshot(ctx)
-		return err
+	modalRecreateCheckSandbox   = modalCheckSandbox
+	modalRecreateSnapshot       = modalSnapshotAndVerify
+	modalRecreateLatestSnapshot = func(ctx context.Context, sandboxName string) (*modalSnapshotRecord, error) {
+		client, err := getModalClient()
+		if err != nil {
+			return nil, err
+		}
+		return modalLatestSnapshot(ctx, client, sandboxName)
 	}
-	modalRecreateDeleteSandbox = func(ctx context.Context, sandboxName string) error {
-		_, err := DeleteSandboxActivity(ctx, DeleteSandboxInput{
-			EnvType:     EnvTypeModal,
-			SandboxName: sandboxName,
-		})
-		return err
+	// Termination deliberately keeps the snapshot record: it is what the
+	// replacement restores from.
+	modalRecreateTerminateSandbox = recycleModalSandbox
+	modalRecreateCreateSandbox    = modalCreateSandbox
+	modalRecreateDeleteSnapshots  = func(ctx context.Context, sandboxName string) error {
+		client, err := getModalClient()
+		if err != nil {
+			return err
+		}
+		deletion, err := modalDeleteSnapshots(ctx, client, sandboxName)
+		if err != nil {
+			return err
+		}
+		if len(deletion.FailedImages) > 0 {
+			return fmt.Errorf("%d snapshot image(s) of sandbox %s could not be deleted; they stay tracked for retry",
+				len(deletion.FailedImages), sandboxName)
+		}
+		return nil
 	}
-	modalRecreateCreateSandbox = CreateSandboxActivity
 )
 
-// ModalRecreateSandboxActivity checkpoints a sandbox before replacing it with
-// one using new resource settings. The replacement keeps the same name so the
-// filesystem snapshot selected by modalCreateSandbox contains the current
-// repository and worktrees. The configuration is fully validated before the
-// old sandbox is touched, and the snapshot/delete steps only run while it is
-// still alive, so a retry after a failed creation resumes from the snapshot
-// instead of failing on the already-deleted sandbox.
+// modalSnapshotAndVerify forces a filesystem snapshot of a live sandbox and
+// returns the guard record it produced, failing unless the guard actually
+// recorded a new image: the caller is about to terminate the sandbox on the
+// strength of this checkpoint.
+func modalSnapshotAndVerify(ctx context.Context, modalEnv *ModalEnv) (*modalSnapshotRecord, error) {
+	client, err := getModalClient()
+	if err != nil {
+		return nil, err
+	}
+	before, err := modalLatestSnapshot(ctx, client, modalEnv.SandboxName)
+	if err != nil {
+		return nil, err
+	}
+	output, err := modalEnv.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if output.ExitStatus != 0 {
+		return nil, fmt.Errorf("snapshot request exited with status %d: %s%s", output.ExitStatus, output.Stdout, output.Stderr)
+	}
+	after, err := modalLatestSnapshot(ctx, client, modalEnv.SandboxName)
+	if err != nil {
+		return nil, err
+	}
+	if after == nil || (before != nil && before.ImageId == after.ImageId) {
+		return nil, fmt.Errorf("guard reported success but recorded no new snapshot for sandbox %s", modalEnv.SandboxName)
+	}
+	return after, nil
+}
+
+// ModalRecreateSandboxActivity applies new sandbox settings to a flow's Modal
+// sandbox by replacing it. The configuration is validated before anything
+// destructive happens. A live sandbox is checkpointed first and only
+// terminated once the guard has verified a fresh snapshot the new settings
+// can boot. The successor is pinned to exactly that image and created under
+// the deterministic replacement name: Modal holds a terminated sandbox's name
+// for minutes, and a fresh name avoids both that wait and the reuse-then-
+// replace recovery path, while a retry after a failed creation re-attaches
+// to the successor by name. An absent sandbox is restored from its own latest
+// snapshot, which is also how a retry resumes. Only when neither exists is a
+// clean sandbox created; seed snapshots from other sandboxes are never used,
+// as they hold stale copies of this flow's work.
+//
+// The predecessor's snapshot record is recovery state until the successor
+// has a checkpoint of its own, so it is only discarded after the successor
+// has been snapshotted under its own name. The whole sequence converges on
+// retry: the successor is re-attached (or restored from its own record) and
+// deleting an already-deleted record is a no-op.
 func ModalRecreateSandboxActivity(ctx context.Context, input ModalRecreateSandboxInput) (ModalRecreateSandboxOutput, error) {
 	modalEnv, ok := input.EnvContainer.Env.(*ModalEnv)
 	if !ok {
@@ -604,41 +689,78 @@ func ModalRecreateSandboxActivity(ctx context.Context, input ModalRecreateSandbo
 		return ModalRecreateSandboxOutput{}, temporal.NewNonRetryableApplicationError(
 			"invalid Modal configuration", "InvalidModalEnvConfig", err)
 	}
-	configJSON, err := json.Marshal(input.Config)
-	if err != nil {
-		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to marshal Modal configuration: %w", err)
+	name := modalEnv.SandboxName
+	createInput := ModalCreateSandboxInput{
+		Name:              modalReplacementSandboxName(name),
+		RepoDir:           modalEnv.LocalRepoDir,
+		Config:            input.Config,
+		SkipSeedSnapshots: true,
 	}
-	check, err := modalRecreateCheckSandbox(ctx, modalEnv.SandboxName)
+
+	check, err := modalRecreateCheckSandbox(ctx, name)
 	if err != nil {
 		return ModalRecreateSandboxOutput{}, err
 	}
 	if check.Alive {
-		if err := modalRecreateSnapshot(ctx, modalEnv); err != nil {
-			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to snapshot Modal sandbox %s: %w", modalEnv.SandboxName, err)
+		record, err := modalRecreateSnapshot(ctx, modalEnv)
+		if err != nil {
+			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to snapshot Modal sandbox %s: %w", name, err)
 		}
-		if err := modalRecreateDeleteSandbox(ctx, modalEnv.SandboxName); err != nil {
-			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to delete Modal sandbox %s: %w", modalEnv.SandboxName, err)
+		if !modalSnapshotCompatible(record, input.Config) {
+			return ModalRecreateSandboxOutput{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("the new Modal configuration cannot restore sandbox %s from its snapshot; the sandbox was left running", name),
+				ErrTypeModalSnapshotIncompatible, nil)
+		}
+		createInput.SnapshotImageId = record.ImageId
+		if err := modalRecreateTerminateSandbox(ctx, name); err != nil {
+			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to terminate Modal sandbox %s: %w", name, err)
+		}
+	} else {
+		snapshotName := createInput.Name
+		record, err := modalRecreateLatestSnapshot(ctx, snapshotName)
+		if err != nil {
+			return ModalRecreateSandboxOutput{}, err
+		}
+		if record == nil {
+			snapshotName = name
+			record, err = modalRecreateLatestSnapshot(ctx, snapshotName)
+			if err != nil {
+				return ModalRecreateSandboxOutput{}, err
+			}
+		}
+		if record != nil {
+			if !modalSnapshotCompatible(record, input.Config) {
+				return ModalRecreateSandboxOutput{}, temporal.NewNonRetryableApplicationError(
+					fmt.Sprintf("the new Modal configuration cannot restore sandbox %s from its snapshot", snapshotName),
+					ErrTypeModalSnapshotIncompatible, nil)
+			}
+			createInput.SnapshotImageId = record.ImageId
+		} else {
+			log.Warn().Str("sandbox", name).
+				Msg("no snapshot recorded for modal sandbox; its successor restores from its own snapshot if one exists, else starts clean")
 		}
 	}
-	createOutput, err := modalRecreateCreateSandbox(ctx, CreateSandboxInput{
-		EnvType: EnvTypeModal,
-		Name:    modalEnv.SandboxName,
-		RepoDir: modalEnv.LocalRepoDir,
-		Config:  configJSON,
-	})
+
+	createOutput, err := modalRecreateCreateSandbox(ctx, createInput)
 	if err != nil {
-		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to recreate Modal sandbox %s: %w", modalEnv.SandboxName, err)
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to recreate Modal sandbox %s: %w", name, err)
 	}
-	return ModalRecreateSandboxOutput{
-		EnvContainer: EnvContainer{Env: &ModalEnv{
-			WorkingDirectory: modalEnv.WorkingDirectory,
-			SandboxName:      createOutput.SandboxName,
-			SSHHost:          createOutput.SSHHost,
-			SSHPort:          createOutput.SSHPort,
-			LocalRepoDir:     modalEnv.LocalRepoDir,
-			PortForwards:     modalEnv.PortForwards,
-		}},
-	}, nil
+	successor := &ModalEnv{
+		WorkingDirectory: modalEnv.WorkingDirectory,
+		SandboxName:      createOutput.SandboxName,
+		SSHHost:          createOutput.SSHHost,
+		SSHPort:          createOutput.SSHPort,
+		LocalRepoDir:     modalEnv.LocalRepoDir,
+		PortForwards:     modalEnv.PortForwards,
+	}
+	if _, err := modalRecreateSnapshot(ctx, successor); err != nil {
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to snapshot successor Modal sandbox %s: %w", successor.SandboxName, err)
+	}
+	if err := modalRecreateDeleteSnapshots(ctx, name); err != nil {
+		return ModalRecreateSandboxOutput{}, fmt.Errorf("successor Modal sandbox %s is ready but cleanup of predecessor %s snapshots failed: %w",
+			successor.SandboxName, name, err)
+	}
+	return ModalRecreateSandboxOutput{EnvContainer: EnvContainer{Env: successor}}, nil
 }
 
 // modalSandboxCreateParams builds the sandbox creation parameters for the
@@ -925,7 +1047,13 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 		// they were. Otherwise bootstrap from a compatible snapshot of another
 		// sandbox for the same repo, or fall back to a clean current image.
 		var image *modal.Image
-		for _, snapName := range append([]string{name}, modalSeedCandidates(input.RepoDir)...) {
+		if input.SnapshotImageId != "" {
+			image, err = client.Images.FromID(ctx, input.SnapshotImageId)
+			if err != nil {
+				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to load pinned modal snapshot image %s: %w", input.SnapshotImageId, err)
+			}
+		}
+		for _, snapName := range modalSnapshotSources(input, name) {
 			record, snapErr := modalLatestSnapshot(ctx, client, snapName)
 			if snapErr != nil {
 				log.Warn().Err(snapErr).Str("sandbox", snapName).Msg("failed to check for modal snapshot")
