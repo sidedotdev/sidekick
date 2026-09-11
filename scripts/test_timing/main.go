@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -49,6 +50,10 @@ func main() {
 	breakdown := flag.Bool("breakdown", false, "parse `go test -json` streams given as label=path args and print the markdown breakdown")
 	where := flag.String("where", "local", "where to run the batch: local or modal")
 	sandboxName := flag.String("sandbox", "side-timing-default", "Modal sandbox name (reused when still alive)")
+	sourceRepoDir := flag.String("source-repo-dir", "", "local repository to sync; defaults to the current directory")
+	remoteRepoDir := flag.String("remote-repo-dir", "", "override the remote repository path")
+	defaultModalConfig := flag.Bool("default-modal-config", false, "use Modal defaults instead of side.yml configuration")
+	disableRepoSnapshotSeed := flag.Bool("disable-repo-snapshot-seed", false, "omit the repository identity used to find snapshots from other sandboxes")
 	scriptPath := flag.String("script", "scripts/test_timing/run.sh", "repo-relative shell script executed in the (remote) repo dir")
 	uploads := flag.String("upload", "scripts/test_timing/run.sh,scripts/test_timing/main.go,scripts/test_timing/breakdown.go",
 		"comma-separated repo-relative files copied into the sandbox so local edits apply without a re-sync")
@@ -76,23 +81,37 @@ func main() {
 		os.Exit(2)
 	}
 
-	repoDir, err := os.Getwd()
-	must(err, "getwd")
+	repoDir := *sourceRepoDir
+	if repoDir == "" {
+		var err error
+		repoDir, err = os.Getwd()
+		must(err, "getwd")
+	}
+	repoDir, err := filepath.Abs(repoDir)
+	must(err, "resolve source repo")
 
 	repoConfig, err := dev.GetRepoConfigActivity(env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: repoDir}})
 	must(err, "read side.yml")
-	configJSON, err := json.Marshal(repoConfig.ModalConfig)
-	must(err, "marshal modal config")
-	fmt.Printf("side.yml modal config: %s\n", configJSON)
+	var configJSON []byte
+	if !*defaultModalConfig {
+		configJSON, err = json.Marshal(repoConfig.ModalConfig)
+		must(err, "marshal modal config")
+	}
+	fmt.Printf("source repo: %s\n", repoDir)
+	fmt.Printf("modal config: %s\n", configJSON)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
+	snapshotRepoDir := repoDir
+	if *disableRepoSnapshotSeed {
+		snapshotRepoDir = ""
+	}
 	start := time.Now()
 	created, err := env.CreateSandboxActivity(ctx, env.CreateSandboxInput{
 		EnvType: env.EnvTypeModal,
 		Name:    *sandboxName,
-		RepoDir: repoDir,
+		RepoDir: snapshotRepoDir,
 		Config:  configJSON,
 	})
 	must(err, "create sandbox")
@@ -134,8 +153,9 @@ func main() {
 	} else {
 		syncStart := time.Now()
 		syncOutput, err := env.SyncRepoToRemoteActivity(ctx, env.SyncRepoToRemoteInput{
-			EnvContainer: env.EnvContainer{Env: remoteEnv},
-			LocalRepoDir: repoDir,
+			EnvContainer:  env.EnvContainer{Env: remoteEnv},
+			LocalRepoDir:  repoDir,
+			RemoteRepoDir: *remoteRepoDir,
 		})
 		must(err, "sync repo")
 		remoteEnv.WorkingDirectory = syncOutput.RemoteRepoDir
