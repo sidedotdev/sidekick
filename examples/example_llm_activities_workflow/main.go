@@ -164,7 +164,10 @@ func main() {
 	// StartWorker itself handles logging its start.
 	// It uses common.GetTemporalServerHostPort() internally if an empty hostPort is passed,
 	// but we pass it explicitly for clarity.
-	w := sidekickworker.StartWorker(common.GetTemporalServerHostPort(), taskQueueName)
+	w, err := sidekickworker.StartWorker(context.Background(), common.GetTemporalServerHostPort(), taskQueueName)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to start worker")
+	}
 	log.Info().Msgf("Worker setup by StartWorker on task queue '%s'", taskQueueName)
 
 	// Register ExampleLlmActivitiesWorkflow with this worker
