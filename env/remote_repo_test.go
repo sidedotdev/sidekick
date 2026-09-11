@@ -162,7 +162,93 @@ func TestCreateRemoteWorktreeActivity_LocalBranchReservation(t *testing.T) {
 		assert.Equal(t, ErrTypeBranchAlreadyExists, appErr.Type())
 	})
 
-	t.Run("tolerates stale same-name branch and worktree in sandbox", func(t *testing.T) {
+	t.Run("reuses existing worktree with uncommitted changes on re-provisioning", func(t *testing.T) {
+		t.Parallel()
+		remoteRepoDir := setupTestGitRepo(t)
+		localRepoDir := setupTestGitRepo(t)
+
+		input := CreateRemoteWorktreeInput{
+			EnvContainer: newRemoteEnvContainer(t, remoteRepoDir),
+			RepoDir:      remoteRepoDir,
+			BranchName:   "side/reprovisioned-branch",
+			StartBranch:  "main",
+			WorkspaceId:  "ws-" + ksuid.New().String(),
+			LocalRepoDir: localRepoDir,
+		}
+		first, err := CreateRemoteWorktreeActivity(ctx, input)
+		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(filepath.Dir(first.WorktreePath)) })
+
+		gitOutput := func(args ...string) string {
+			t.Helper()
+			cmd := exec.Command("git", append([]string{"-C", first.WorktreePath}, args...)...)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "git %v: %s", args, out)
+			return string(out)
+		}
+		trackedFile := filepath.Join(first.WorktreePath, "tracked.txt")
+		require.NoError(t, os.WriteFile(trackedFile, []byte("committed\n"), 0644))
+		gitOutput("add", "tracked.txt")
+		gitOutput("commit", "-m", "flow progress")
+		require.NoError(t, os.WriteFile(trackedFile, []byte("staged\n"), 0644))
+		gitOutput("add", "tracked.txt")
+		require.NoError(t, os.WriteFile(trackedFile, []byte("unstaged\n"), 0644))
+		dirtyFile := filepath.Join(first.WorktreePath, "uncommitted.txt")
+		require.NoError(t, os.WriteFile(dirtyFile, []byte("live work"), 0644))
+
+		head := gitOutput("rev-parse", "HEAD")
+		branch := gitOutput("symbolic-ref", "HEAD")
+		index := gitOutput("ls-files", "--stage")
+		reflog := gitOutput("reflog", "show", "HEAD")
+		branchReflog := gitOutput("reflog", "show", input.BranchName)
+		require.NotEmpty(t, gitOutput("diff", "--cached"))
+		require.NotEmpty(t, gitOutput("diff"))
+
+		for i := 0; i < 2; i++ {
+			second, err := CreateRemoteWorktreeActivity(ctx, input)
+			require.NoError(t, err)
+			assert.Equal(t, first.WorktreePath, second.WorktreePath)
+			assert.Equal(t, head, gitOutput("rev-parse", "HEAD"))
+			assert.Equal(t, branch, gitOutput("symbolic-ref", "HEAD"))
+			assert.Equal(t, index, gitOutput("ls-files", "--stage"))
+			assert.Equal(t, "staged\n", gitOutput("show", ":tracked.txt"))
+			assert.Equal(t, reflog, gitOutput("reflog", "show", "HEAD"))
+			assert.Equal(t, branchReflog, gitOutput("reflog", "show", input.BranchName))
+			content, err := os.ReadFile(trackedFile)
+			require.NoError(t, err)
+			assert.Equal(t, "unstaged\n", string(content))
+			content, err = os.ReadFile(dirtyFile)
+			require.NoError(t, err)
+			assert.Equal(t, "live work", string(content))
+		}
+	})
+
+	t.Run("refuses to clear dirty same-branch worktree at another path", func(t *testing.T) {
+		t.Parallel()
+		remoteRepoDir := setupTestGitRepo(t)
+		localRepoDir := setupTestGitRepo(t)
+		branchName := "side/dirty-stale-branch"
+
+		dirtyWorktreePath := filepath.Join(t.TempDir(), "dirty-worktree")
+		cmd := exec.Command("git", "-C", remoteRepoDir, "worktree", "add", "-b", branchName, dirtyWorktreePath, "main")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "worktree setup failed: %s", string(out))
+		dirtyFile := filepath.Join(dirtyWorktreePath, "uncommitted.txt")
+		require.NoError(t, os.WriteFile(dirtyFile, []byte("live work"), 0644))
+
+		_, err = CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+			EnvContainer: newRemoteEnvContainer(t, remoteRepoDir),
+			RepoDir:      remoteRepoDir,
+			BranchName:   branchName,
+			StartBranch:  "main",
+			WorkspaceId:  "ws-" + ksuid.New().String(),
+			LocalRepoDir: localRepoDir,
+		})
+		require.Error(t, err)
+		assert.FileExists(t, dirtyFile, "uncommitted work must never be wiped")
+	})
+
+	t.Run("refuses existing same-name branch and worktree in sandbox", func(t *testing.T) {
 		t.Parallel()
 		remoteRepoDir := setupTestGitRepo(t)
 		localRepoDir := setupTestGitRepo(t)
@@ -181,11 +267,11 @@ func TestCreateRemoteWorktreeActivity_LocalBranchReservation(t *testing.T) {
 			WorkspaceId:  "ws-" + ksuid.New().String(),
 			LocalRepoDir: localRepoDir,
 		})
-		require.NoError(t, err)
-		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
-		assert.DirExists(t, output.WorktreePath)
+		require.Error(t, err)
+		assert.Empty(t, output.WorktreePath)
+		assert.DirExists(t, staleWorktreePath)
 
-		cmd = exec.Command("git", "-C", output.WorktreePath, "branch", "--show-current")
+		cmd = exec.Command("git", "-C", staleWorktreePath, "branch", "--show-current")
 		branchOut, err := cmd.CombinedOutput()
 		require.NoError(t, err)
 		assert.Equal(t, branchName, strings.TrimSpace(string(branchOut)))
@@ -387,5 +473,259 @@ func TestRemoteUnpackFailed(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, remoteUnpackFailed(tc.err))
 		})
+	}
+}
+
+func TestCreateRemoteWorktreeActivity_InvalidIndexConflictPreserved(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+	branchName := "side/status-failure"
+	out, err := exec.Command("git", "-C", repoDir, "worktree", "add", "-b", branchName, worktreePath, "main").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	indexOutput, err := exec.Command("git", "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-path", "index").CombinedOutput()
+	require.NoError(t, err, "%s", indexOutput)
+	indexPath := strings.TrimSpace(string(indexOutput))
+	require.NoError(t, os.WriteFile(indexPath, []byte("invalid index"), 0644))
+	workFile := filepath.Join(worktreePath, "live.txt")
+	require.NoError(t, os.WriteFile(workFile, []byte("live work"), 0644))
+
+	out, err = exec.Command("git", "-C", worktreePath, "status", "--porcelain").CombinedOutput()
+	require.Error(t, err, "fixture must fail Git status: %s", out)
+
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+	_, err = CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+		EnvContainer: EnvContainer{Env: localEnv},
+		RepoDir:      repoDir, BranchName: branchName, StartBranch: "main",
+		WorkspaceId: "ws-" + ksuid.New().String(), LocalRepoDir: setupTestGitRepo(t),
+	})
+	assert.Error(t, err)
+	content, err := os.ReadFile(workFile)
+	require.NoError(t, err)
+	assert.Equal(t, "live work", string(content))
+	content, err = os.ReadFile(indexPath)
+	require.NoError(t, err)
+	assert.Equal(t, "invalid index", string(content))
+}
+
+func TestCreateRemoteWorktreeActivity_HiddenUntrackedConflictPreserved(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+	branchName := "side/hidden-untracked"
+	gitRun := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", repoDir}, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	gitRun("worktree", "add", "-b", branchName, worktreePath, "main")
+	gitRun("config", "status.showUntrackedFiles", "no")
+	workFile := filepath.Join(worktreePath, "live.txt")
+	require.NoError(t, os.WriteFile(workFile, []byte("live work"), 0644))
+
+	out, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Empty(t, string(out), "fixture must hide untracked work")
+
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+	_, err = CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+		EnvContainer: EnvContainer{Env: localEnv},
+		RepoDir:      repoDir, BranchName: branchName, StartBranch: "main",
+		WorkspaceId: "ws-" + ksuid.New().String(), LocalRepoDir: setupTestGitRepo(t),
+	})
+	require.Error(t, err)
+	content, err := os.ReadFile(workFile)
+	require.NoError(t, err)
+	assert.Equal(t, "live work", string(content))
+}
+
+func TestCreateRemoteWorktreeActivity_HiddenSubmoduleConflictPreserved(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	submoduleRepo := setupTestGitRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+	branchName := "side/hidden-submodule"
+	gitRun := func(dir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	gitRun(repoDir, "worktree", "add", "-b", branchName, worktreePath, "main")
+	gitRun(worktreePath, "-c", "protocol.file.allow=always", "submodule", "add", submoduleRepo, "module")
+	gitRun(worktreePath, "commit", "-am", "add submodule")
+	gitRun(worktreePath, "config", "submodule.module.ignore", "all")
+	moduleDir := filepath.Join(worktreePath, "module")
+	workFile := filepath.Join(moduleDir, "live.txt")
+	require.NoError(t, os.WriteFile(workFile, []byte("committed"), 0644))
+	gitRun(moduleDir, "add", "live.txt")
+	gitRun(moduleDir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "module baseline")
+	gitRun(worktreePath, "-c", "submodule.module.ignore=none", "add", "module")
+	gitRun(worktreePath, "commit", "-m", "update module")
+	require.NoError(t, os.WriteFile(workFile, []byte("live work"), 0644))
+	require.Empty(t, gitRun(worktreePath, "status", "--porcelain"))
+	require.NotEmpty(t, gitRun(worktreePath, "status", "--porcelain", "--ignore-submodules=none"))
+
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+	_, err = CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+		EnvContainer: EnvContainer{Env: localEnv},
+		RepoDir:      repoDir, BranchName: branchName, StartBranch: "main",
+		WorkspaceId: "ws-" + ksuid.New().String(), LocalRepoDir: setupTestGitRepo(t),
+	})
+	require.Error(t, err)
+	content, err := os.ReadFile(workFile)
+	require.NoError(t, err)
+	assert.Equal(t, "live work", string(content))
+}
+
+// provisioningBoundaryEnv isolates HOME and permits writes at command boundaries.
+type provisioningBoundaryEnv struct {
+	Env
+	home         string
+	afterCommand func(EnvRunCommandInput)
+}
+
+func (e *provisioningBoundaryEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	if input.Command == "sh" && len(input.Args) == 2 && input.Args[1] == "echo $HOME" {
+		return EnvRunCommandOutput{Stdout: e.home}, nil
+	}
+	output, err := e.Env.RunCommand(ctx, input)
+	if e.afterCommand != nil {
+		e.afterCommand(input)
+	}
+	return output, err
+}
+
+func TestCreateRemoteWorktreeActivity_PreservesConflicts(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"directory", "worktree", "branch", "write-after-inspection"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			repoDir := setupTestGitRepo(t)
+			localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+			require.NoError(t, err)
+			e := &provisioningBoundaryEnv{Env: localEnv, home: t.TempDir()}
+			branch := "side/conflict"
+			target := filepath.Join(e.home, "sidekick-worktrees", "ws", filepath.Base(repoDir)+"-conflict")
+			gitRun := func(dir string, args ...string) string {
+				t.Helper()
+				out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+				require.NoError(t, err, "git %v: %s", args, out)
+				return string(out)
+			}
+			var file, head, index string
+			if kind == "branch" {
+				gitRun(repoDir, "checkout", "-b", branch)
+				gitRun(repoDir, "commit", "--allow-empty", "-m", "remote progress")
+				head = gitRun(repoDir, "rev-parse", branch)
+				gitRun(repoDir, "checkout", "main")
+			} else if kind == "directory" {
+				require.NoError(t, os.MkdirAll(target, 0755))
+				file = filepath.Join(target, "live.txt")
+				require.NoError(t, os.WriteFile(file, []byte("live work"), 0644))
+			} else {
+				gitRun(repoDir, "worktree", "add", "-b", "side/other", target, "main")
+				file = filepath.Join(target, "live.txt")
+				require.NoError(t, os.WriteFile(file, []byte("baseline"), 0644))
+				gitRun(target, "add", "live.txt")
+				gitRun(target, "commit", "-m", "baseline")
+				head = gitRun(target, "rev-parse", "HEAD")
+				index = gitRun(target, "ls-files", "--stage")
+			}
+			injected := false
+			e.afterCommand = func(input EnvRunCommandInput) {
+				if kind != "write-after-inspection" || input.Command != "sh" ||
+					!strings.Contains(strings.Join(input.Args, " "), "symbolic-ref") {
+					return
+				}
+				require.False(t, injected)
+				injected = true
+				require.NoError(t, os.WriteFile(file, []byte("staged"), 0644))
+				gitRun(target, "add", "live.txt")
+				index = gitRun(target, "ls-files", "--stage")
+				require.NoError(t, os.WriteFile(file, []byte("unstaged"), 0644))
+			}
+			_, err = CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+				EnvContainer: EnvContainer{Env: e},
+				RepoDir:      repoDir, BranchName: branch, StartBranch: "main",
+				WorkspaceId: "ws", LocalRepoDir: setupTestGitRepo(t),
+			})
+			require.Error(t, err)
+			switch kind {
+			case "branch":
+				assert.Equal(t, head, gitRun(repoDir, "rev-parse", branch))
+			case "directory":
+				content, err := os.ReadFile(file)
+				require.NoError(t, err)
+				assert.Equal(t, "live work", string(content))
+			default:
+				assert.Equal(t, head, gitRun(target, "rev-parse", "HEAD"))
+				assert.Equal(t, index, gitRun(target, "ls-files", "--stage"))
+				content, err := os.ReadFile(file)
+				require.NoError(t, err)
+				if kind == "write-after-inspection" {
+					require.True(t, injected)
+					assert.Equal(t, "unstaged", string(content))
+					assert.Equal(t, "staged", gitRun(target, "show", ":live.txt"))
+				} else {
+					assert.Equal(t, "baseline", string(content))
+				}
+			}
+		})
+	}
+}
+
+func TestCreateRemoteWorktreeActivity_ReusesWithoutLocalRepo(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+	e := &provisioningBoundaryEnv{Env: localEnv, home: t.TempDir()}
+	input := CreateRemoteWorktreeInput{
+		EnvContainer: EnvContainer{Env: e},
+		RepoDir:      repoDir,
+		BranchName:   "side/repeated",
+		StartBranch:  "main",
+		WorkspaceId:  "ws",
+	}
+	first, err := CreateRemoteWorktreeActivity(ctx, input)
+	require.NoError(t, err)
+	gitRun := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", first.WorktreePath}, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	file := filepath.Join(first.WorktreePath, "live.txt")
+	require.NoError(t, os.WriteFile(file, []byte("baseline"), 0644))
+	gitRun("add", "live.txt")
+	gitRun("commit", "-m", "flow progress")
+	require.NoError(t, os.WriteFile(file, []byte("staged"), 0644))
+	gitRun("add", "live.txt")
+	require.NoError(t, os.WriteFile(file, []byte("unstaged"), 0644))
+	head := gitRun("rev-parse", "HEAD")
+	index := gitRun("ls-files", "--stage")
+	reflog := gitRun("reflog", "show", "HEAD")
+	for i := 0; i < 2; i++ {
+		repeated, err := CreateRemoteWorktreeActivity(ctx, input)
+		require.NoError(t, err)
+		assert.Equal(t, first.WorktreePath, repeated.WorktreePath)
+		assert.Equal(t, head, gitRun("rev-parse", "HEAD"))
+		assert.Equal(t, index, gitRun("ls-files", "--stage"))
+		assert.Equal(t, reflog, gitRun("reflog", "show", "HEAD"))
+		assert.Equal(t, "staged", gitRun("show", ":live.txt"))
+		content, err := os.ReadFile(file)
+		require.NoError(t, err)
+		assert.Equal(t, "unstaged", string(content))
 	}
 }

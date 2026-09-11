@@ -457,18 +457,84 @@ func TestModalSnapshotCompatibleVolumes(t *testing.T) {
 	}
 }
 
+func TestModalSnapshotSources(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, modalSnapshotSources(ModalCreateSandboxInput{SnapshotImageId: "im-1"}, "side--a"),
+		"a pinned image must bypass every snapshot lookup")
+	assert.Equal(t, []string{"side--a"}, modalSnapshotSources(ModalCreateSandboxInput{SkipSeedSnapshots: true}, "side--a"))
+	assert.Equal(t, []string{"side--a"}, modalSnapshotSources(ModalCreateSandboxInput{}, "side--a"),
+		"without a repo there are no seed candidates")
+}
+
+// recreateSeams captures the sequence of destructive/constructive steps the
+// recreate activity takes, standing in for the Modal control plane.
+type recreateSeams struct {
+	sequence    []string
+	createInput ModalCreateSandboxInput
+}
+
+func installRecreateSeams(t *testing.T, alive bool, live, stored *modalSnapshotRecord, snapshotErr, createErr error) *recreateSeams {
+	t.Helper()
+	seams := &recreateSeams{}
+	step := func(name string) { seams.sequence = append(seams.sequence, name) }
+
+	modalRecreateCheckSandbox = func(context.Context, string) (ModalCheckSandboxOutput, error) {
+		step("check")
+		return ModalCheckSandboxOutput{Alive: alive, SSHHost: "old.modal.host", SSHPort: 1111}, nil
+	}
+	modalRecreateSnapshot = func(_ context.Context, env *ModalEnv) (*modalSnapshotRecord, error) {
+		if env.SandboxName != "side--repo-abc" {
+			step("snapshot-successor:" + env.SandboxName)
+			return &modalSnapshotRecord{ImageId: "im-successor", ImageVersion: modalSnapshotImageVersion}, nil
+		}
+		step("snapshot")
+		return live, snapshotErr
+	}
+	modalRecreateLatestSnapshot = func(_ context.Context, name string) (*modalSnapshotRecord, error) {
+		if name != "side--repo-abc" {
+			return nil, nil
+		}
+		step("latest")
+		return stored, nil
+	}
+	modalRecreateTerminateSandbox = func(context.Context, string) error {
+		step("terminate")
+		return nil
+	}
+	modalRecreateCreateSandbox = func(_ context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
+		step("create")
+		seams.createInput = input
+		if createErr != nil {
+			return ModalCreateSandboxOutput{}, createErr
+		}
+		return ModalCreateSandboxOutput{SandboxName: input.Name, SSHHost: "new.modal.host", SSHPort: 2222}, nil
+	}
+	modalRecreateDeleteSnapshots = func(_ context.Context, name string) error {
+		step("delete-snapshots:" + name)
+		return nil
+	}
+	return seams
+}
+
 func TestModalRecreateSandboxActivity(t *testing.T) {
 	// Not parallel: subtests swap the package-level recreation seams.
 	origCheck := modalRecreateCheckSandbox
 	origSnapshot := modalRecreateSnapshot
-	origDelete := modalRecreateDeleteSandbox
+	origLatest := modalRecreateLatestSnapshot
+	origTerminate := modalRecreateTerminateSandbox
 	origCreate := modalRecreateCreateSandbox
+	origDeleteSnapshots := modalRecreateDeleteSnapshots
 	t.Cleanup(func() {
 		modalRecreateCheckSandbox = origCheck
 		modalRecreateSnapshot = origSnapshot
-		modalRecreateDeleteSandbox = origDelete
+		modalRecreateLatestSnapshot = origLatest
+		modalRecreateTerminateSandbox = origTerminate
 		modalRecreateCreateSandbox = origCreate
+		modalRecreateDeleteSnapshots = origDeleteSnapshots
 	})
+	successorName := modalReplacementSandboxName("side--repo-abc")
+	successorSteps := []string{"snapshot-successor:" + successorName, "delete-snapshots:side--repo-abc"}
 
 	newInput := func(config common.ModalEnvConfig) ModalRecreateSandboxInput {
 		return ModalRecreateSandboxInput{
@@ -483,43 +549,29 @@ func TestModalRecreateSandboxActivity(t *testing.T) {
 			Config: config,
 		}
 	}
-
-	install := func(alive bool, createErr error) *[]string {
-		sequence := &[]string{}
-		modalRecreateCheckSandbox = func(context.Context, string) (ModalCheckSandboxOutput, error) {
-			*sequence = append(*sequence, "check")
-			return ModalCheckSandboxOutput{Alive: alive, SSHHost: "old.modal.host", SSHPort: 1111}, nil
-		}
-		modalRecreateSnapshot = func(context.Context, *ModalEnv) error {
-			*sequence = append(*sequence, "snapshot")
-			return nil
-		}
-		modalRecreateDeleteSandbox = func(context.Context, string) error {
-			*sequence = append(*sequence, "delete")
-			return nil
-		}
-		modalRecreateCreateSandbox = func(_ context.Context, input CreateSandboxInput) (CreateSandboxOutput, error) {
-			*sequence = append(*sequence, "create")
-			if createErr != nil {
-				return CreateSandboxOutput{}, createErr
-			}
-			return CreateSandboxOutput{SandboxName: input.Name, SSHHost: "new.modal.host", SSHPort: 2222}, nil
-		}
-		return sequence
+	compatible := func(imageId string) *modalSnapshotRecord {
+		return &modalSnapshotRecord{ImageId: imageId, ImageVersion: modalSnapshotImageVersion}
+	}
+	requireIncompatibleError := func(t *testing.T, err error) {
+		t.Helper()
+		var appErr *temporal.ApplicationError
+		require.ErrorAs(t, err, &appErr)
+		assert.Equal(t, ErrTypeModalSnapshotIncompatible, appErr.Type())
+		assert.True(t, appErr.NonRetryable())
 	}
 
 	t.Run("rejects non-Modal environment without touching sandbox", func(t *testing.T) {
-		sequence := install(true, nil)
+		seams := installRecreateSeams(t, true, compatible("im-live"), nil, nil, nil)
 		_, err := ModalRecreateSandboxActivity(context.Background(), ModalRecreateSandboxInput{
 			EnvContainer: EnvContainer{Env: &LocalEnv{}},
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not Modal")
-		assert.Empty(t, *sequence)
+		assert.Empty(t, seams.sequence)
 	})
 
 	t.Run("rejects invalid config before destroying sandbox", func(t *testing.T) {
-		sequence := install(true, nil)
+		seams := installRecreateSeams(t, true, compatible("im-live"), nil, nil, nil)
 		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{
 			Volumes: []common.ModalVolumeMount{
 				{Name: "a", MountPath: "/cache"},
@@ -531,18 +583,23 @@ func TestModalRecreateSandboxActivity(t *testing.T) {
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		assert.True(t, appErr.NonRetryable())
-		assert.Empty(t, *sequence)
+		assert.Empty(t, seams.sequence)
 	})
 
-	t.Run("snapshots and deletes live sandbox before recreating", func(t *testing.T) {
-		sequence := install(true, nil)
+	t.Run("live sandbox is checkpointed, stopped and succeeded by a fresh name pinned to that exact image", func(t *testing.T) {
+		seams := installRecreateSeams(t, true, compatible("im-live"), compatible("im-stale"), nil, nil)
 		output, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
 		require.NoError(t, err)
-		assert.Equal(t, []string{"check", "snapshot", "delete", "create"}, *sequence)
+		assert.Equal(t, append([]string{"check", "snapshot", "terminate", "create"}, successorSteps...), seams.sequence)
+		assert.Equal(t, "im-live", seams.createInput.SnapshotImageId)
+		assert.True(t, seams.createInput.SkipSeedSnapshots)
+		assert.Equal(t, successorName, seams.createInput.Name)
+		assert.Equal(t, "/host/repo", seams.createInput.RepoDir)
+		assert.Equal(t, 2048, seams.createInput.Config.Memory)
 
 		modalEnv, ok := output.EnvContainer.Env.(*ModalEnv)
 		require.True(t, ok)
-		assert.Equal(t, "side--repo-abc", modalEnv.SandboxName)
+		assert.Equal(t, successorName, modalEnv.SandboxName)
 		assert.Equal(t, "new.modal.host", modalEnv.SSHHost)
 		assert.Equal(t, 2222, modalEnv.SSHPort)
 		assert.Equal(t, "/root/repo", modalEnv.WorkingDirectory)
@@ -550,28 +607,137 @@ func TestModalRecreateSandboxActivity(t *testing.T) {
 		assert.Equal(t, []common.PortForwardConfig{{HostPort: 18855}}, modalEnv.PortForwards)
 	})
 
-	t.Run("skips snapshot and delete when sandbox is already gone", func(t *testing.T) {
-		sequence := install(false, nil)
+	t.Run("snapshot failure leaves the live sandbox untouched", func(t *testing.T) {
+		seams := installRecreateSeams(t, true, nil, nil, errors.New("guard timed out"), nil)
 		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
-		require.NoError(t, err)
-		assert.Equal(t, []string{"check", "create"}, *sequence)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to snapshot")
+		assert.Equal(t, []string{"check", "snapshot"}, seams.sequence)
 	})
 
-	t.Run("retry after failed creation resumes without a live sandbox", func(t *testing.T) {
+	t.Run("termination failure halts before any successor is created", func(t *testing.T) {
+		seams := installRecreateSeams(t, true, compatible("im-live"), nil, nil, nil)
+		modalRecreateTerminateSandbox = func(context.Context, string) error {
+			seams.sequence = append(seams.sequence, "terminate")
+			return errors.New("modal API unavailable")
+		}
+		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to terminate")
+		assert.Equal(t, []string{"check", "snapshot", "terminate"}, seams.sequence)
+	})
+
+	t.Run("config the snapshot cannot boot is rejected before termination", func(t *testing.T) {
+		seams := installRecreateSeams(t, true, compatible("im-live"), nil, nil, nil)
+		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{
+			Volumes: []common.ModalVolumeMount{{Name: "new", MountPath: "/data"}},
+		}))
+		require.Error(t, err)
+		requireIncompatibleError(t, err)
+		assert.Equal(t, []string{"check", "snapshot"}, seams.sequence)
+	})
+
+	t.Run("absent sandbox is restored from its own latest snapshot", func(t *testing.T) {
+		seams := installRecreateSeams(t, false, nil, compatible("im-stored"), nil, nil)
+		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
+		require.NoError(t, err)
+		assert.Equal(t, append([]string{"check", "latest", "create"}, successorSteps...), seams.sequence)
+		assert.Equal(t, "im-stored", seams.createInput.SnapshotImageId)
+		assert.True(t, seams.createInput.SkipSeedSnapshots)
+		assert.Equal(t, successorName, seams.createInput.Name,
+			"every path must target the same successor so retries re-attach to it")
+	})
+
+	t.Run("absent sandbox with incompatible snapshot is rejected", func(t *testing.T) {
+		seams := installRecreateSeams(t, false, nil, &modalSnapshotRecord{ImageId: "im-old", ImageVersion: modalSnapshotImageVersion - 1}, nil, nil)
+		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
+		require.Error(t, err)
+		requireIncompatibleError(t, err)
+		assert.Equal(t, []string{"check", "latest"}, seams.sequence)
+	})
+
+	t.Run("absent sandbox without snapshot is created clean, never from repo seeds", func(t *testing.T) {
+		seams := installRecreateSeams(t, false, nil, nil, nil, nil)
+		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
+		require.NoError(t, err)
+		assert.Equal(t, append([]string{"check", "latest", "create"}, successorSteps...), seams.sequence)
+		assert.Empty(t, seams.createInput.SnapshotImageId)
+		assert.True(t, seams.createInput.SkipSeedSnapshots)
+		assert.Equal(t, successorName, seams.createInput.Name)
+	})
+
+	t.Run("predecessor snapshots survive until the successor has its own checkpoint", func(t *testing.T) {
+		seams := installRecreateSeams(t, true, compatible("im-live"), nil, nil, nil)
+		modalRecreateSnapshot = func(_ context.Context, env *ModalEnv) (*modalSnapshotRecord, error) {
+			if env.SandboxName == successorName {
+				seams.sequence = append(seams.sequence, "snapshot-successor")
+				return nil, errors.New("guard timed out")
+			}
+			seams.sequence = append(seams.sequence, "snapshot")
+			return compatible("im-live"), nil
+		}
+		_, err := ModalRecreateSandboxActivity(context.Background(), newInput(common.ModalEnvConfig{Memory: 2048}))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to snapshot successor")
+		assert.Equal(t, []string{"check", "snapshot", "terminate", "create", "snapshot-successor"}, seams.sequence)
+	})
+
+	t.Run("retry after cleanup failure restores the successor checkpoint", func(t *testing.T) {
+		input := newInput(common.ModalEnvConfig{Memory: 2048})
+		seams := installRecreateSeams(t, true, compatible("im-live"), nil, nil, nil)
+		records := map[string]*modalSnapshotRecord{}
+		modalRecreateSnapshot = func(_ context.Context, env *ModalEnv) (*modalSnapshotRecord, error) {
+			image := "im-predecessor"
+			if env.SandboxName == successorName {
+				image = "im-successor"
+			}
+			record := compatible(image)
+			records[env.SandboxName] = record
+			return record, nil
+		}
+		modalRecreateLatestSnapshot = func(_ context.Context, name string) (*modalSnapshotRecord, error) {
+			return records[name], nil
+		}
+		modalRecreateDeleteSnapshots = func(context.Context, string) error {
+			return errors.New("cleanup unavailable")
+		}
+		_, err := ModalRecreateSandboxActivity(context.Background(), input)
+		require.ErrorContains(t, err, "cleanup")
+		require.Equal(t, "im-predecessor", seams.createInput.SnapshotImageId)
+		require.Contains(t, records, successorName)
+		require.Contains(t, records, "side--repo-abc")
+
+		// Both sandboxes disappeared, but cleanup left both checkpoints intact.
+		modalRecreateCheckSandbox = func(context.Context, string) (ModalCheckSandboxOutput, error) {
+			return ModalCheckSandboxOutput{Alive: false}, nil
+		}
+		modalRecreateDeleteSnapshots = func(_ context.Context, name string) error {
+			delete(records, name)
+			return nil
+		}
+		_, err = ModalRecreateSandboxActivity(context.Background(), input)
+		require.NoError(t, err)
+		assert.Equal(t, "im-successor", seams.createInput.SnapshotImageId)
+		assert.NotContains(t, records, "side--repo-abc")
+	})
+
+	t.Run("retry after failed creation resumes from the checkpoint", func(t *testing.T) {
 		input := newInput(common.ModalEnvConfig{Memory: 2048})
 
-		sequence := install(true, errors.New("transient provisioning failure"))
+		seams := installRecreateSeams(t, true, compatible("im-live"), nil, nil, errors.New("transient provisioning failure"))
 		_, err := ModalRecreateSandboxActivity(context.Background(), input)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to recreate")
-		assert.Equal(t, []string{"check", "snapshot", "delete", "create"}, *sequence)
+		assert.Equal(t, []string{"check", "snapshot", "terminate", "create"}, seams.sequence)
 
-		// The retry finds the sandbox already deleted and goes straight to
-		// creation, which restores from the snapshot taken above.
-		sequence = install(false, nil)
+		// The sandbox is gone but its record survived termination, so the
+		// retry restores the checkpoint taken above.
+		seams = installRecreateSeams(t, false, nil, compatible("im-live"), nil, nil)
 		output, err := ModalRecreateSandboxActivity(context.Background(), input)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"check", "create"}, *sequence)
+		assert.Equal(t, append([]string{"check", "latest", "create"}, successorSteps...), seams.sequence)
+		assert.Equal(t, "im-live", seams.createInput.SnapshotImageId)
+		assert.Equal(t, successorName, seams.createInput.Name)
 		assert.Equal(t, "new.modal.host", output.EnvContainer.Env.(*ModalEnv).SSHHost)
 	})
 }
