@@ -43,6 +43,16 @@ agent_config:
     auto_iterations: 27
 
 command_permissions:
+  require_approval:
+    - pattern: 'JAVA_TOOL_OPTIONS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'JDK_JAVA_OPTIONS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: '_JAVA_OPTIONS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'JAVA_OPTS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'GRADLE_OPTS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'GRADLE_USER_HOME=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'JAVA_HOME=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'GRADLEW=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'ANDROID_PROJECT=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
   auto_approve:
     - pattern: "gotestreport"
     - pattern: "go run ./cmd/gotestreport"
@@ -63,6 +73,9 @@ command_permissions:
     - pattern: "go run ./scripts/lint_.*"
     - pattern: "go run ./scripts/modal_sandbox_status"
     - pattern: "playwright-cli"
+    - pattern: '^(?:SIDE_SERVER_PORT=[0-9]{1,5} +)?(?:\./)?scripts/android_phone_remote_e2e/run\.sh(?: +(?:-h|-t +[0-9]+|-s +(?:[A-Za-z0-9_.:-]+|''[A-Za-z0-9_.:() -]+''|"[A-Za-z0-9_.:() -]+")))*$'
+    - pattern: '^(?:\./)?app/android/gradlew -p app/android(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
+    - pattern: '^\./gradlew(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
 
 openshell:
   from: "Dockerfile.openshell"

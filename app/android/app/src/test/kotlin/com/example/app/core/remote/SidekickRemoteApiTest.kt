@@ -53,7 +53,7 @@ class SidekickRemoteApiTest {
         assertEquals(listOf("workspace-1"), workspaces.map(Workspace::id))
         assertEquals("Sidekick", workspaces.single().name)
         server.takeRequest().let { request ->
-            assertEquals("/api/v1/workspaces/", request.path)
+            assertEquals("/api/v1/workspaces", request.path)
             assertEquals("Bearer secret-token", request.getHeader("Authorization"))
         }
     }
@@ -118,7 +118,7 @@ class SidekickRemoteApiTest {
         }
 
         assertEquals(500, error.code())
-        assertEquals("/api/v1/workspaces/", server.takeRequest().path)
+        assertEquals("/api/v1/workspaces", server.takeRequest().path)
     }
 
     @Test
