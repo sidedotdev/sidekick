@@ -19,6 +19,7 @@ import (
 )
 
 type buildDevPlanState struct {
+	forceRecording              bool
 	contextSizeExtension        int
 	hasRevisedPerPlanningPrompt bool
 	hasRevisedPerReproPrompt    bool
@@ -399,7 +400,17 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 
 	var chatResponse common.MessageResponse
 	var err error
-	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
+	if state.forceRecording {
+		tool := &recordDevPlanTool
+		if len(state.devPlan.Steps) > 0 {
+			tool = &updateDevPlanTool
+		}
+		chatResponse, err = TrackedToolChat(iteration.ExecCtx, "dev_plan", llm2.Options{
+			Tools:       []*llm.Tool{tool},
+			ToolChoice:  llm.ToolChoice{Type: llm.ToolChoiceTypeTool, Name: tool.Name},
+			ModelConfig: iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default"),
+		}, iteration.ChatHistory)
+	} else if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
 		chatResponse, err = generateDevPlan(iteration.ExecCtx, iteration.ChatHistory, hasExistingPlan)
 	} else {
 		// old version: new one does this in outer LlmLoop
@@ -436,6 +447,13 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			return recordedPlan, nil
 		}
 	} else {
+		if workflow.GetVersion(iteration.ExecCtx, "dev-plan-force-recording", workflow.DefaultVersion, 1) == 1 &&
+			(!state.devPlan.Complete || len(state.devPlan.Steps) == 0) {
+			return nil, AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
+				Role:    "system",
+				Content: state.recordingReminder(),
+			})
+		}
 		stopReason := chatResponse.GetStopReason()
 		noToolCallStop := stopReason == string(openai.FinishReasonStop) || stopReason == string(openai.FinishReasonToolCalls)
 
@@ -780,4 +798,37 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryCont
 		CacheControl: cacheControl,
 		ContextType:  contextType,
 	})
+}
+
+func (state *buildDevPlanState) prepareFinalization(iteration *LlmIteration) (bool, error) {
+	if workflow.GetVersion(iteration.ExecCtx, "dev-plan-force-recording", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		return false, nil
+	}
+
+	atLimit := iteration.AutoIterationCount >= iteration.autoIterations ||
+		iteration.Num >= iteration.maxIterations
+	state.forceRecording = state.forceRecording || atLimit
+	nearLimit := iteration.AutoIterationCount >= max(1, iteration.autoIterations-2) ||
+		iteration.Num >= max(1, iteration.maxIterations-2)
+	if nearLimit || state.forceRecording {
+		if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
+			Role:    "system",
+			Content: state.recordingReminder(),
+		}); err != nil {
+			return false, err
+		}
+	}
+	return state.forceRecording, nil
+}
+
+func (state *buildDevPlanState) recordingReminder() string {
+	helpReminder := " If user input is needed to complete the plan, use the " + getHelpOrInputTool.Name + " tool to request it before finalizing the plan."
+	if len(state.devPlan.Steps) == 0 {
+		return "No executable plan has been recorded. Finish planning now and call " + recordDevPlanTool.Name + " with executable steps and is_planning_complete set to true. Writing a plan in prose does not record it." + helpReminder
+	}
+	status := "Only a partial plan has been recorded."
+	if state.devPlan.Complete {
+		status = "A plan has been recorded, but its revision or approval is still pending."
+	}
+	return status + " Finish planning now and call " + updateDevPlanTool.Name + " to finalize it, or " + recordDevPlanTool.Name + " to replace it. Set is_planning_complete to true once complete." + helpReminder + "\n\nCurrent plan:\n" + state.devPlan.String()
 }
