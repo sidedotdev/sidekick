@@ -8,4 +8,5 @@ data class PairingUiState(
     val workspaces: List<Workspace> = emptyList(),
     val selectedWorkspaceId: String? = null,
     val errorMessage: String? = null,
+    val workspaceToOpen: Workspace? = null,
 )

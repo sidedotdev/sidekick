@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { RouterLink, RouterView, useRouter, useRoute } from 'vue-router'
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, provide } from 'vue'
 import { store } from './lib/store'
+import { pairingEntryWorkspaceKey } from './lib/pairing'
 import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
 import GearIcon from './components/icons/GearIcon.vue'
@@ -31,6 +32,18 @@ if (initialQueryWorkspaceId) {
     applyWorkspaceId(storedWorkspaceId)
   }
 }
+
+const pairingEntryWorkspace = ref(store.workspaceId)
+provide(pairingEntryWorkspaceKey, pairingEntryWorkspace)
+watch(() => route.name, (name, previousName) => {
+  if (name !== 'remote-control') return
+  const queryWorkspaceId = route.query.workspaceId
+  if (typeof queryWorkspaceId === 'string' && queryWorkspaceId) {
+    pairingEntryWorkspace.value = queryWorkspaceId
+  } else if (previousName != null) {
+    pairingEntryWorkspace.value = store.workspaceId
+  }
+}, { flush: 'sync' })
 
 // look up if system is dark mode
 const isDarkMode = ref(window.matchMedia('(prefers-color-scheme: dark)').matches)

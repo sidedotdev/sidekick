@@ -1,6 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import RemoteControlView from '../RemoteControlView.vue'
+import { store } from '@/lib/store'
+import App from '@/App.vue'
+import { createRouter, createMemoryHistory } from 'vue-router'
+import PrimeVue from 'primevue/config'
 
 vi.mock('qrcode', () => ({
   default: {
@@ -21,6 +25,111 @@ const jsonResponse = (body: unknown, status = 200) =>
 describe('RemoteControlView', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    store.workspaceId = null
+  })
+
+  it.each([
+    { active: 'one', expected: 'one' },
+    { active: null, expected: 'two' },
+  ])('includes workspace $expected when active workspace is $active', async ({ active, expected }) => {
+    store.workspaceId = active
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (init?.method === 'POST') {
+        return jsonResponse({ device, ticket: 'ticket-1', token: 'token-1' }, 201)
+      }
+      if (input === '/api/v1/workspaces') {
+        return jsonResponse({ workspaces: [
+          { id: 'one', updated: '2024-02-01T00:00:00Z' },
+          { id: 'two', updated: '2024-01-01T00:00:00Z' },
+        ] })
+      }
+      if (input === '/api/v1/workspaces/two/tasks/') {
+        return jsonResponse({ tasks: [{ created: '2024-03-01T00:00:00Z' }] })
+      }
+      if (input === '/api/v1/workspaces/one/tasks/') {
+        return jsonResponse({ tasks: [] })
+      }
+      return jsonResponse({ devices: [] })
+    })
+
+    const wrapper = mount(RemoteControlView)
+    await flushPromises()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const QRCode = (await import('qrcode')).default
+    expect(QRCode.toDataURL).toHaveBeenLastCalledWith(
+      JSON.stringify({ ticket: 'ticket-1', token: 'token-1', workspaceId: expected }),
+      expect.anything(),
+    )
+  })
+
+  it.each([
+    { ready: true, query: false },
+    { ready: false, query: false },
+    { ready: true, query: true },
+    { ready: false, query: true },
+  ])('uses entry selection with router ready=$ready and query=$query', async ({ ready, query }) => {
+    sessionStorage.clear()
+    localStorage.clear()
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (init?.method === 'POST') {
+        return jsonResponse({ device, ticket: 'ticket', token: 'token' }, 201)
+      }
+      if (input === '/api/v1/workspaces') {
+        return jsonResponse({ workspaces: [
+          { id: 'a', name: 'Recent activity', updated: '2024-01-01T00:00:00Z' },
+          { id: 'z', name: 'Newest workspace', updated: '2024-02-01T00:00:00Z' },
+        ] })
+      }
+      if (input === '/api/v1/workspaces/a/tasks/') {
+        return jsonResponse({ tasks: [{ created: '2024-03-01T00:00:00Z' }] })
+      }
+      return jsonResponse({ devices: [], tasks: [] })
+    })
+    const history = createMemoryHistory()
+    const entryUrl = query ? '/remote-control?workspaceId=z' : '/remote-control'
+    history.replace(entryUrl)
+    const router = createRouter({
+      history,
+      routes: [{ path: '/remote-control', name: 'remote-control', component: RemoteControlView }],
+    })
+    if (ready) await router.push(entryUrl)
+    const wrapper = mount(App, { global: { plugins: [router, PrimeVue] } })
+    await router.isReady()
+    await flushPromises()
+    expect(store.workspaceId).toBe('z')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const QRCode = (await import('qrcode')).default
+    expect(QRCode.toDataURL).toHaveBeenLastCalledWith(
+      JSON.stringify({ ticket: 'ticket', token: 'token', workspaceId: query ? 'z' : 'a' }),
+      expect.anything(),
+    )
+    wrapper.unmount()
+  })
+
+  it('keeps the workspace from page entry when selection later changes', async () => {
+    store.workspaceId = 'entry'
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) =>
+      jsonResponse(init?.method === 'POST'
+        ? { device, ticket: 'ticket', token: 'token' }
+        : { devices: [] }),
+    )
+    const wrapper = mount(RemoteControlView)
+    await flushPromises()
+    store.workspaceId = 'later'
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const QRCode = (await import('qrcode')).default
+    expect(QRCode.toDataURL).toHaveBeenLastCalledWith(
+      JSON.stringify({ ticket: 'ticket', token: 'token', workspaceId: 'entry' }),
+      expect.anything(),
+    )
+    wrapper.unmount()
   })
 
   it('lists paired devices, showing "never" for unused ones', async () => {

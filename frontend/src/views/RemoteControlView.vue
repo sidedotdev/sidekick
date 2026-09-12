@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, inject } from 'vue'
 import QRCode from 'qrcode'
 import TrashIcon from '@/components/icons/TrashIcon.vue'
+import { store } from '@/lib/store'
+import { resolvePairingWorkspace, pairingEntryWorkspaceKey } from '@/lib/pairing'
+
+const providedEntryWorkspace = inject(pairingEntryWorkspaceKey, null)
+const entryWorkspaceId = providedEntryWorkspace ? providedEntryWorkspace.value : store.workspaceId
 
 interface RemoteDevice {
   id: string
@@ -37,6 +42,7 @@ const createPairing = async () => {
   creating.value = true
   error.value = null
   try {
+    const workspaceId = await resolvePairingWorkspace(entryWorkspaceId)
     const response = await fetch('/api/v1/remote/pairings/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -50,7 +56,7 @@ const createPairing = async () => {
     // The QR payload carries the one-time plaintext token; it cannot be
     // recovered later, so a lost code requires a new pairing.
     qrCodeDataUrl.value = await QRCode.toDataURL(
-      JSON.stringify({ ticket: data.ticket, token: data.token }),
+      JSON.stringify({ ticket: data.ticket, token: data.token, workspaceId }),
       { width: 320, margin: 2 },
     )
     pairedDeviceName.value = data.device?.name ?? deviceName.value
