@@ -470,6 +470,11 @@ func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string)
 	return modalSSHConnConfig(sandboxName, sshHost, sshPort, identityFile).LegacyArgs()
 }
 
+// errModalSandboxNotRunning is reported by API-side operations when no live
+// sandbox exists under the requested name. Because the API never started
+// anything, callers can treat it as proof the sandbox vanished and restore it.
+var errModalSandboxNotRunning = errors.New("modal sandbox is not running")
+
 // modalExecCommand runs a shell command inside the named sandbox through
 // Modal's API. The API is reached over HTTPS on port 443 and honors the
 // standard proxy environment variables, so it remains usable on networks
@@ -484,7 +489,7 @@ func modalExecCommand(ctx context.Context, sandboxName, command string) (EnvRunC
 		return EnvRunCommandOutput{}, err
 	}
 	if sb == nil {
-		return EnvRunCommandOutput{}, fmt.Errorf("modal sandbox %s is not running", sandboxName)
+		return EnvRunCommandOutput{}, fmt.Errorf("%w: %s", errModalSandboxNotRunning, sandboxName)
 	}
 	// Modal's login shell integration installs a DEBUG trap that decorates
 	// stdout with terminal title escape sequences whenever TERM names a

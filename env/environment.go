@@ -1189,35 +1189,62 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	}
 
 	// The stored tunnel endpoint may be stale because the idle watchdog
-	// snapshotted and terminated the sandbox; refreshing restores it.
-	host, port, refreshErr := refreshEndpoint(ctx, e.SandboxName)
-	if refreshErr != nil {
-		log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
-	} else {
-		e.SSHHost, e.SSHPort = host, port
-		output, diagnostics, err = runCommand(ctx, input)
-		appendDiagnostics()
-		if !transportFailed() {
-			return output, err
+	// snapshotted and terminated the sandbox; refreshing restores it. The
+	// idle timeout is short enough that the sandbox can be terminated again
+	// between a refresh and the retry, which the API fallback exposes as "not
+	// running": since nothing ran, that is grounds for another round rather
+	// than a hard failure. Every round ends with its own API fallback so the
+	// decision to go again rests on current evidence, never on a previous
+	// round's lookup.
+	var refreshErr, apiErr error
+	for round := 1; round <= maxModalRecoveryRounds; round++ {
+		var host string
+		var port int
+		host, port, refreshErr = refreshEndpoint(ctx, e.SandboxName)
+		if refreshErr != nil {
+			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
+		} else {
+			e.SSHHost, e.SSHPort = host, port
+			output, diagnostics, err = runCommand(ctx, input)
+			appendDiagnostics()
+			if !transportFailed() {
+				return output, err
+			}
 		}
+
+		// SSH is preferred for its multiplexed connection, but the tunnel
+		// endpoint is only reachable by dialing an ephemeral high port, which
+		// some networks forbid (e.g. HTTP proxies that only allow CONNECT to
+		// 443). Modal's API stays usable there, at the cost of losing the
+		// reverse port forwards that only SSH can provide.
+		var apiOutput EnvRunCommandOutput
+		apiOutput, apiErr = runAPICommand(ctx, input)
+		if apiErr == nil {
+			log.Info().Str("sandbox", e.SandboxName).Msg("ran command via modal API after SSH transport failure")
+			return apiOutput, nil
+		}
+		if !errors.Is(apiErr, errModalSandboxNotRunning) {
+			break
+		}
+		log.Warn().Err(apiErr).Str("sandbox", e.SandboxName).Int("round", round).
+			Msg("modal sandbox is not running after endpoint refresh")
 	}
 
-	// SSH is preferred for its multiplexed connection, but the tunnel endpoint
-	// is only reachable by dialing an ephemeral high port, which some networks
-	// forbid (e.g. HTTP proxies that only allow CONNECT to 443). Modal's API
-	// stays usable there, at the cost of losing the reverse port forwards that
-	// only SSH can provide.
-	apiOutput, apiErr := runAPICommand(ctx, input)
-	if apiErr != nil {
-		log.Warn().Err(apiErr).Str("sandbox", e.SandboxName).Msg("failed to run command via modal API after SSH transport failure")
-		// The command never started, so returning its synthetic 255 exit would
-		// masquerade as the command itself failing and send callers chasing
-		// output that no command produced.
-		return output, fmt.Errorf("modal sandbox %s is unreachable: modal API fallback after SSH transport failure: %w: ssh diagnostics: %s", e.SandboxName, apiErr, diagnostics)
+	log.Warn().Err(apiErr).Str("sandbox", e.SandboxName).Msg("failed to run command via modal API after SSH transport failure")
+	// The command never started, so returning its synthetic 255 exit would
+	// masquerade as the command itself failing and send callers chasing
+	// output that no command produced.
+	failure := fmt.Errorf("modal sandbox %s is unreachable: modal API fallback after SSH transport failure: %w: ssh diagnostics: %s", e.SandboxName, apiErr, diagnostics)
+	if refreshErr != nil {
+		failure = fmt.Errorf("%w; endpoint refresh failed: %v", failure, refreshErr)
 	}
-	log.Info().Str("sandbox", e.SandboxName).Msg("ran command via modal API after SSH transport failure")
-	return apiOutput, nil
+	return output, failure
 }
+
+// maxModalRecoveryRounds bounds how many times RunCommand refreshes the
+// sandbox endpoint (restoring the sandbox from its snapshot when it is gone)
+// and retries after a proven pre-execution SSH transport failure.
+const maxModalRecoveryRounds = 2
 
 func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
 	return e.RunCommand(ctx, EnvRunCommandInput{
