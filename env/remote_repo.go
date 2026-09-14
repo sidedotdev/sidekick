@@ -455,7 +455,11 @@ git update-ref -d "$tempref"`
 // into the local repo. Unlike branch syncing there is no local working tree
 // to update, so a plain fetch of the ref suffices.
 func syncGitRefToLocalOverSSH(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, ref string) error {
-	return fetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, fmt.Sprintf("%s:%s", ref, ref))
+	err := fetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, fmt.Sprintf("%s:%s", ref, ref))
+	if err != nil && strings.HasPrefix(ref, "refs/tags/") && strings.Contains(err.Error(), "(would clobber existing tag)") {
+		return fmt.Errorf("%w: %w", ErrGitTagConflict, err)
+	}
+	return err
 }
 
 // syncFlowBranchToLocalOverSSH backs up a flow branch's commits from a remote
@@ -484,7 +488,8 @@ func fetchRemoteRefToLocal(ctx context.Context, sshArgs []string, workingDirecto
 	}
 	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir,
 		"fetch", "--no-tags", "--no-write-fetch-head", dest+":"+workingDirectory, refspec)
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
+	// Tag conflict detection relies on Git's diagnostic text.
+	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH, "LC_ALL=C")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch %s %s: %w: %s", workingDirectory, refspec, err, string(out))
 	}

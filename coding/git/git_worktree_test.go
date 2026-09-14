@@ -634,3 +634,57 @@ func TestLockExistingSidekickWorktrees(t *testing.T) {
 	lockWorktreesUnder(ctx, worktreesRoot)
 	assert.True(t, hasLockedWorktreeLine(runGitCommandInTestRepo(t, repoDir, "worktree", "list", "--porcelain")), "startup pass should remain idempotent")
 }
+
+type conflictingArchiveSyncerEnv struct {
+	env.Env
+	syncedRefs []string
+	syncError  error
+}
+
+func (e *conflictingArchiveSyncerEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
+	e.syncedRefs = append(e.syncedRefs, ref)
+	if len(e.syncedRefs) <= 2 {
+		return e.syncError
+	}
+	return nil
+}
+
+func TestCleanupWorktreeArchiveSyncConflicts(t *testing.T) {
+	t.Parallel()
+	for _, conflict := range []bool{true, false} {
+		t.Run(fmt.Sprintf("conflict=%t", conflict), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			repoDir := setupTestGitRepo(t)
+			createCommit(t, repoDir, "Initial commit")
+			branchName := "side/archive-" + ksuid.New().String()
+			devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, domain.Worktree{
+				Name:        branchName,
+				WorkspaceId: "test-" + ksuid.New().String(),
+			})
+			require.NoError(t, err)
+			worktreePath := devEnv.GetWorkingDirectory()
+			t.Cleanup(func() { _ = os.RemoveAll(worktreePath) })
+			tip := runGitCommandInTestRepo(t, repoDir, "rev-parse", branchName)
+			syncErr := fmt.Errorf("transport unavailable")
+			if conflict {
+				syncErr = fmt.Errorf("fetch rejected: %w", env.ErrGitTagConflict)
+			}
+			syncer := &conflictingArchiveSyncerEnv{Env: devEnv, syncError: syncErr}
+			err = CleanupWorktreeActivity(ctx, env.EnvContainer{Env: syncer}, worktreePath, branchName, "archive message")
+			if !conflict {
+				require.ErrorIs(t, err, syncErr)
+				require.Len(t, syncer.syncedRefs, 1)
+				assert.DirExists(t, worktreePath)
+				assert.Equal(t, tip, runGitCommandInTestRepo(t, repoDir, "rev-parse", branchName))
+				return
+			}
+			require.NoError(t, err)
+			baseRef := "refs/tags/archive/" + branchName
+			assert.Equal(t, []string{baseRef, baseRef + "-2", baseRef + "-3"}, syncer.syncedRefs)
+			assert.NoDirExists(t, worktreePath)
+			assert.Equal(t, tip, runGitCommandInTestRepo(t, repoDir, "rev-parse", baseRef+"-3^{commit}"))
+			assert.Contains(t, runGitCommandInTestRepo(t, repoDir, "tag", "-l", "-n1", "archive/"+branchName+"-3"), "archive message")
+		})
+	}
+}

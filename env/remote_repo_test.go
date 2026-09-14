@@ -729,3 +729,37 @@ func TestCreateRemoteWorktreeActivity_ReusesWithoutLocalRepo(t *testing.T) {
 		assert.Equal(t, "unstaged", string(content))
 	}
 }
+
+func TestSyncGitRefToLocalOverSSH(t *testing.T) {
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+	ctx := context.Background()
+	remoteRepoDir := setupTestGitRepo(t)
+	localRepoDir := setupTestGitRepo(t)
+	gitRun := func(repoDir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", repoDir}, args...)...).CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		return strings.TrimSpace(string(out))
+	}
+	ref := "refs/tags/archive/side/test"
+	gitRun(remoteRepoDir, "tag", "-m", "remote archive", "archive/side/test")
+	remoteTag := gitRun(remoteRepoDir, "rev-parse", ref)
+
+	require.NoError(t, syncGitRefToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, ref))
+	assert.Equal(t, remoteTag, gitRun(localRepoDir, "rev-parse", ref))
+	require.NoError(t, syncGitRefToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, ref))
+
+	gitRun(localRepoDir, "tag", "-f", "-m", "existing local archive", "archive/side/test")
+	localTag := gitRun(localRepoDir, "rev-parse", ref)
+	require.NotEqual(t, remoteTag, localTag)
+	err := syncGitRefToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, ref)
+	require.ErrorIs(t, err, ErrGitTagConflict)
+	assert.Equal(t, localTag, gitRun(localRepoDir, "rev-parse", ref))
+	assert.Equal(t, remoteTag, gitRun(remoteRepoDir, "rev-parse", ref))
+
+	err = syncGitRefToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, "refs/tags/missing")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrGitTagConflict)
+}

@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sidekick/env"
 	"strings"
@@ -119,8 +120,24 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	// Propagate it to the host repo now, while the worktree still exists, so
 	// the archived state survives the environment's deletion.
 	if syncer, ok := envContainer.Env.(env.GitRefSyncer); ok {
-		if err := syncer.SyncGitRefToLocal(ctx, "refs/tags/"+tagName); err != nil {
-			return fmt.Errorf("failed to sync archive tag %s to local repo: %w", tagName, err)
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			syncErr := syncer.SyncGitRefToLocal(ctx, "refs/tags/"+tagName)
+			if syncErr == nil {
+				break
+			}
+			if !errors.Is(syncErr, env.ErrGitTagConflict) {
+				return fmt.Errorf("failed to sync archive tag %s to local repo: %w", tagName, syncErr)
+			}
+			// The host may retain archives absent from the sandbox clone.
+			// Retaining the conflicting sandbox tag reserves its name so the
+			// next attempt selects a suffix without overwriting either archive.
+			tagName, err = createArchiveTag(ctx, envContainer, baseTagName, branchName, archiveMessage)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
