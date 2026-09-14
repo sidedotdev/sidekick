@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sidekick/common"
@@ -120,6 +121,7 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	}
 
 	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
+	require.NoError(t, err)
 	defer func() {
 		// Sidekick worktrees are created locked, so removal requires --force twice.
 		cmd := exec.Command("git", "worktree", "remove", "--force", "--force", env.GetWorkingDirectory())
@@ -130,13 +132,13 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 		}
 	}()
 
-	assert.NoError(t, err)
 	assert.Equal(t, EnvType("local_git_worktree"), env.GetType())
 
 	sidekickDataHome, _ := common.GetSidekickDataHome()
 	expectedDirName := filepath.Base(repoDir) + "-" + branchName
 	expectedWorkingDir := filepath.Join(sidekickDataHome, "worktrees", worktree.WorkspaceId, expectedDirName)
 	assert.Equal(t, expectedWorkingDir, env.GetWorkingDirectory())
+	assertSideTmpReady(t, expectedWorkingDir)
 
 	// Test RunCommand
 	cmdInput := EnvRunCommandInput{
@@ -441,6 +443,7 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 		assert.Equal(t, filepath.Join(filepath.Dir(repoDir), "sidekick-worktrees"),
 			filepath.Dir(filepath.Dir(output.WorktreePath)))
 		assert.DirExists(t, output.WorktreePath)
+		assertSideTmpReady(t, output.WorktreePath)
 
 		// Verify the branch was created inside the worktree
 		cmd := exec.Command("git", "branch", "--show-current")
@@ -1059,6 +1062,7 @@ func TestHibernateEnvIsNoOpForModal(t *testing.T) {
 	assert.Equal(t, HibernationMetadata{}, metadata)
 	assert.Zero(t, commands, "modal hibernation must not touch the sandbox")
 }
+
 func TestModalRunCommandDoesNotRetryEstablishedChannelFailure(t *testing.T) {
 	t.Parallel()
 
@@ -1359,4 +1363,46 @@ func TestModalRunCommandDoesNotRetryAmbiguousFailureAfterRefresh(t *testing.T) {
 			assert.Equal(t, 0, apiAttempts, "the API fallback must not re-run a possibly-executed command")
 		})
 	}
+}
+
+func TestEnsureSideTmp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+
+	cmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	cmd.Dir = repoDir
+	excludePathOutput, err := cmd.CombinedOutput()
+	require.NoError(t, err)
+	excludePath := strings.TrimSpace(string(excludePathOutput))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(repoDir, excludePath)
+	}
+	require.NoError(t, os.WriteFile(excludePath, []byte("existing-pattern"), 0644))
+
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+
+	require.NoError(t, ensureSideTmp(ctx, localEnv))
+	require.NoError(t, ensureSideTmp(ctx, localEnv))
+	assertSideTmpReady(t, repoDir)
+
+	excludeContent, err := os.ReadFile(excludePath)
+	require.NoError(t, err)
+	assert.Equal(t, "existing-pattern\n/.side/tmp/\n", string(excludeContent))
+
+	cmd = exec.Command("grep", "-Fxc", "/.side/tmp/", excludePath)
+	countOutput, err := cmd.CombinedOutput()
+	require.NoError(t, err)
+	assert.Equal(t, "1", strings.TrimSpace(string(countOutput)))
+}
+
+func assertSideTmpReady(t *testing.T, worktreePath string) {
+	t.Helper()
+	assert.DirExists(t, filepath.Join(worktreePath, ".side", "tmp"))
+
+	cmd := exec.Command("git", "check-ignore", "--no-index", ".side/tmp/probe")
+	cmd.Dir = worktreePath
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected .side/tmp to be excluded from Git: %s", output)
 }

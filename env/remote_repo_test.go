@@ -36,6 +36,7 @@ func TestCreateRemoteWorktreeActivity(t *testing.T) {
 		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
 		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
 		assert.DirExists(t, output.WorktreePath)
+		assertSideTmpReady(t, output.WorktreePath)
 
 		cmd := exec.Command("git", "branch", "--show-current")
 		cmd.Dir = output.WorktreePath

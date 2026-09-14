@@ -460,7 +460,24 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 		return nil, err
 	}
 
-	return &LocalGitWorktreeEnv{WorkingDirectory: workingDir}, nil
+	worktreeEnv := &LocalGitWorktreeEnv{WorkingDirectory: workingDir}
+	if err := ensureSideTmp(ctx, worktreeEnv); err != nil {
+		removeInput := unix.RunCommandActivityInput{
+			WorkingDir: params.RepoDir,
+			Command:    "git",
+			Args:       []string{"worktree", "remove", "--force", "--force", workingDir},
+		}
+		_, _ = unix.RunCommandActivity(ctx, removeInput)
+		deleteBranchInput := unix.RunCommandActivityInput{
+			WorkingDir: params.RepoDir,
+			Command:    "git",
+			Args:       []string{"branch", "-D", newBranchName},
+		}
+		_, _ = unix.RunCommandActivity(ctx, deleteBranchInput)
+		return nil, err
+	}
+
+	return worktreeEnv, nil
 }
 
 func (e *LocalEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
@@ -1716,4 +1733,34 @@ func truncateMiddle(s string, maxBytes int) string {
 	}
 	half := available / 2
 	return s[:half] + marker + s[len(s)-half:] + marker
+}
+
+// EnsureSideTmpScript is shared with workflow code that schedules the same
+// setup through EnvRunCommandActivity in the final execution environment.
+const EnsureSideTmpScript = `set -eu
+mkdir -p .side/tmp
+exclude_file=$(git rev-parse --git-path info/exclude)
+mkdir -p "$(dirname "$exclude_file")"
+touch "$exclude_file"
+if ! grep -Fqx '/.side/tmp/' "$exclude_file"; then
+	if [ -s "$exclude_file" ] && ! tail -c 1 "$exclude_file" | grep -q '^$'; then
+		printf '\n' >> "$exclude_file"
+	fi
+	printf '%s\n' '/.side/tmp/' >> "$exclude_file"
+fi`
+
+// ensureSideTmp creates Sidekick's scratch directory and excludes it from Git
+// in the environment where commands execute.
+func ensureSideTmp(ctx context.Context, e Env) error {
+	output, err := e.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", EnsureSideTmpScript},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set up .side/tmp: %w", err)
+	}
+	if output.ExitStatus != 0 {
+		return fmt.Errorf("failed to set up .side/tmp (exit %d): %s", output.ExitStatus, output.Stderr)
+	}
+	return nil
 }
