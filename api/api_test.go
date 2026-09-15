@@ -3745,3 +3745,71 @@ func TestUpdateFlowModalConfigHandler_RejectsInvalidConfigBeforeUpdatingWorkflow
 	// No workflow update may be attempted for any rejected config.
 	mockTemporalClient.AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
 }
+
+func TestUpdateTaskHandler_DraftStartAssignment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		body      string
+		wantAgent domain.AgentType
+		wantState domain.TaskStatus
+	}{
+		{
+			name:      "starting draft defaults to llm",
+			body:      `{"status":"to_do"}`,
+			wantAgent: domain.AgentTypeLLM,
+			wantState: domain.TaskStatusInProgress,
+		},
+		{
+			name:      "explicit human assignment is respected",
+			body:      `{"status":"to_do","agentType":"human"}`,
+			wantAgent: domain.AgentTypeHuman,
+			wantState: domain.TaskStatusInProgress,
+		},
+		{
+			name:      "explicit llm assignment is respected",
+			body:      `{"status":"to_do","agentType":"llm"}`,
+			wantAgent: domain.AgentTypeLLM,
+			wantState: domain.TaskStatusInProgress,
+		},
+		{
+			name:      "title edit preserves draft assignment",
+			body:      `{"title":"new title"}`,
+			wantAgent: domain.AgentTypeHuman,
+			wantState: domain.TaskStatusDrafting,
+		},
+		{
+			name:      "saving draft preserves human assignment",
+			body:      `{"status":"drafting"}`,
+			wantAgent: domain.AgentTypeHuman,
+			wantState: domain.TaskStatusDrafting,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := NewMockController(t)
+			task := domain.Task{
+				WorkspaceId: "ws_" + ksuid.New().String(),
+				Id:          "task_" + ksuid.New().String(),
+				Title:       "original title",
+				Description: "test task",
+				AgentType:   domain.AgentTypeHuman,
+				Status:      domain.TaskStatusDrafting,
+				FlowType:    domain.FlowTypeBasicDev,
+			}
+			require.NoError(t, ctrl.service.PersistTask(context.Background(), task))
+
+			c := updateTaskWithRawBody(t, ctrl, task.WorkspaceId, task.Id, tt.body)
+			require.Equal(t, http.StatusOK, c.Writer.Status())
+
+			updatedTask, err := ctrl.service.GetTask(context.Background(), task.WorkspaceId, task.Id)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAgent, updatedTask.AgentType)
+			assert.Equal(t, tt.wantState, updatedTask.Status)
+			assert.Equal(t, task.Description, updatedTask.Description)
+			assert.Equal(t, task.FlowType, updatedTask.FlowType)
+		})
+	}
+}
