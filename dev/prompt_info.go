@@ -178,6 +178,7 @@ type CheckWorkInfo struct {
 	Step               DevStep
 	Work               string
 	AutoChecks         string
+	IncrementalReview  bool
 	LastReviewTreeHash string
 	BaseBranch         string
 

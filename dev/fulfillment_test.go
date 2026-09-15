@@ -152,3 +152,86 @@ func TestRenderFulfillmentConflictResolution(t *testing.T) {
 		assert.Contains(t, out, "conflict resolution diff here")
 	})
 }
+
+func TestRequirementsWithoutPriorWork(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "generated context",
+			input: formatRequirementsWithReview("requirements", []string{"older feedback"}, "old diff", "latest feedback"),
+			want:  formatRequirementsWithReview("requirements", []string{"older feedback"}, "", "latest feedback"),
+		},
+		{
+			name:  "heading inside original requirements",
+			input: formatRequirementsWithReview("Work Done So Far:\n\nkeep this", nil, "old diff", "latest feedback"),
+			want:  formatRequirementsWithReview("Work Done So Far:\n\nkeep this", nil, "", "latest feedback"),
+		},
+		{
+			name:  "unwrapped requirements",
+			input: "requirements\n\nWork Done So Far:\n\nuser text",
+			want:  "requirements\n\nWork Done So Far:\n\nuser text",
+		},
+		{
+			name:  "no generated work",
+			input: formatRequirementsWithReview("requirements", nil, "", "Work Done So Far:\n\nfeedback text"),
+			want:  formatRequirementsWithReview("requirements", nil, "", "Work Done So Far:\n\nfeedback text"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, requirementsWithoutPriorWork(tc.input))
+		})
+	}
+}
+
+func TestRequirementsWithoutPriorWorkDelimiterCollisions(t *testing.T) {
+	t.Parallel()
+	const workHeading = "\n\nWork Done So Far:\n\n"
+	const feedbackIntro = "\n\nGiven the above context, please address the following latest user feedback:\n\n"
+	for _, tc := range []struct {
+		name     string
+		original string
+		history  []string
+		work     string
+		latest   string
+	}{
+		{
+			name:     "work heading in historical feedback",
+			original: "requirements", history: []string{"keep" + workHeading + "all this feedback"},
+			work: "old diff", latest: "latest feedback",
+		},
+		{
+			name:     "feedback introduction in historical feedback",
+			original: "requirements", history: []string{"keep" + feedbackIntro + "all this feedback"},
+			work: "old diff", latest: "latest feedback",
+		},
+		{
+			name:     "feedback introduction in prior work",
+			original: "requirements", history: []string{"historical feedback"},
+			work: "old diff" + feedbackIntro + "more old diff", latest: "latest feedback",
+		},
+		{
+			name:     "all delimiters in every component",
+			original: "requirements#END Original Requirements\n\n" + workHeading + feedbackIntro,
+			history:  []string{workHeading + feedbackIntro, feedbackIntro + workHeading},
+			work:     workHeading + feedbackIntro + workHeading,
+			latest:   feedbackIntro + workHeading + "retain latest feedback",
+		},
+		{
+			name:     "historical work heading without generated work",
+			original: "requirements", history: []string{workHeading + "retain this"},
+			latest: "latest feedback",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			input := formatRequirementsWithReview(tc.original, tc.history, tc.work, tc.latest)
+			want := formatRequirementsWithReview(tc.original, tc.history, "", tc.latest)
+			assert.Equal(t, want, requirementsWithoutPriorWork(input))
+		})
+	}
+}

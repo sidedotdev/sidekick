@@ -245,7 +245,7 @@ func getBaseSinceReviewDiff(dCtx DevContext, baseBranch string, lastReviewTreeHa
 
 // formatRequirementsWithReview combines original requirements with review history and work done
 // to create comprehensive requirements for the next iteration
-func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
+func legacyFormatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
 	var b strings.Builder
 	b.WriteString("#START Original Requirements\n\n")
 	b.WriteString(originalReqs)
@@ -992,7 +992,11 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				}
 
 				// Format new requirements with review history + latest rejection message
-				requirements := formatRequirementsWithReview(
+				formatReview := legacyFormatRequirementsWithReview
+				if workflow.GetVersion(dCtx, "review-context-work-boundaries", workflow.DefaultVersion, 1) >= 1 {
+					formatReview = formatRequirementsWithReview
+				}
+				requirements := formatReview(
 					originalRequirements,
 					reviewMessages,
 					diffForRequirements,
@@ -1450,4 +1454,18 @@ func handleCodingTestError(dCtx DevContext, err error, integration bool) bool {
 		Bool("integration", integration).
 		Msg("Ignoring test error while paused")
 	return true
+}
+
+func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
+	context := legacyFormatRequirementsWithReview(originalReqs, reviewMsgs, workDone, latestReview)
+	if workDone == "" {
+		return context
+	}
+	const feedbackIntro = "\n\nGiven the above context, please address the following latest user feedback:\n\n"
+	const workHeading = "\n\nWork Done So Far:\n\n"
+	withoutWork := legacyFormatRequirementsWithReview(originalReqs, reviewMsgs, "", latestReview)
+	start := len(withoutWork) - len(feedbackIntro) - len(latestReview)
+	end := start + len(workHeading) + len(workDone)
+	// Byte ranges distinguish generated context from arbitrary quoted headings.
+	return fmt.Sprintf("<!-- sidekick-review-work: %d %d -->\n", start, end) + context
 }

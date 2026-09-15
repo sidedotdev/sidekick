@@ -96,7 +96,7 @@ new file mode 100644
 			priorDiff:   priorSimple,
 			currentDiff: currentWithBrandNewFile,
 			contains:    []string{"+var brandNew = 4"},
-			notContains: []string{"+var first = 1", revertedSectionHeader},
+			notContains: []string{"+var first = 1", "Reverted since last review"},
 		},
 		{
 			name:        "empty prior diff yields empty result",
@@ -109,33 +109,34 @@ new file mode 100644
 			priorDiff:   priorSimple,
 			currentDiff: currentWithMore,
 			contains:    []string{"+var second = 2"},
-			notContains: []string{"+var first = 1", revertedSectionHeader},
+			notContains: []string{"+var first = 1", "Reverted since last review"},
 		},
 		{
 			name:        "diverged base excludes upstream shift noise",
 			priorDiff:   priorSimple,
 			currentDiff: currentShiftedByUpstream,
 			contains:    []string{"+var second = 2"},
-			notContains: []string{revertedSectionHeader},
+			notContains: []string{"Reverted since last review"},
 		},
 		{
 			name:        "unchanged work yields no delta",
 			priorDiff:   priorSimple,
 			currentDiff: priorSimple,
-			notContains: []string{"+var first = 1", revertedSectionHeader},
+			notContains: []string{"+var first = 1", "Reverted since last review"},
 		},
 		{
 			name:        "reverted change is reported",
 			priorDiff:   priorSimple,
 			currentDiff: "",
-			contains:    []string{revertedSectionHeader, "previously added: var first = 1"},
+			contains:    []string{"--- a/main.go", "+++ b/main.go", "-var first = 1"},
+			notContains: []string{"Reverted since last review", "previously added"},
 		},
 		{
 			name:        "new file's changes are included, prior file's are not",
 			priorDiff:   priorSimple,
 			currentDiff: currentWithSecondFile,
 			contains:    []string{"+var other = 3"},
-			notContains: []string{"+var first = 1", revertedSectionHeader},
+			notContains: []string{"+var first = 1", "Reverted since last review"},
 		},
 		{
 			name:        "malformed prior diff errors",
@@ -196,7 +197,8 @@ func TestInterdiffModifiedPriorChange(t *testing.T) {
 
 	result, err := Interdiff(prior, current)
 	require.NoError(t, err)
-	assert.Contains(t, result, "var value = 2")
+	assert.Contains(t, result, "+var value = 2")
+	assert.Contains(t, result, "-var value = 1")
 	assert.NotContains(t, result, "+var value = 1")
 }
 
@@ -232,7 +234,7 @@ func TestInterdiffDivergedBaseRendersEachChangeOnce(t *testing.T) {
 	assert.Contains(t, result, "+var second = 2")
 	assert.LessOrEqual(t, strings.Count(result, "+var first = 1"), 1,
 		"the prior change may appear as context of the emitted hunk, but never more than once")
-	assert.NotContains(t, result, revertedSectionHeader)
+	assert.NotContains(t, result, "Reverted since last review")
 }
 
 // Files whose changes are identical in both diffs must not leave behind bare
@@ -270,9 +272,8 @@ diff --git a/fresh.go b/fresh.go
 	assert.NotContains(t, result, "stable.go")
 }
 
-// An interdiff result becomes the prior diff of the next review round, so it
-// must be parseable as a unified diff in its own right.
-func TestInterdiffResultIsReusableAsPriorDiff(t *testing.T) {
+// Each review compares full diffs, never the previous incremental result.
+func TestInterdiffSuccessiveFullReviewBaselines(t *testing.T) {
 	t.Parallel()
 
 	prior := `diff --git a/main.go b/main.go
@@ -312,7 +313,9 @@ func TestInterdiffResultIsReusableAsPriorDiff(t *testing.T) {
 	require.NotEmpty(t, files, "an interdiff result must parse as a unified diff")
 	require.NotEmpty(t, files[0].Hunks)
 
-	sinceSecondReview, err := Interdiff(sinceFirstReview, later)
+	sinceSecondReview, err := Interdiff(current, later)
 	require.NoError(t, err)
-	assert.Contains(t, sinceSecondReview, "var third = 3")
+	assert.Contains(t, sinceSecondReview, "+var third = 3")
+	assert.NotContains(t, sinceSecondReview, "+var first = 1")
+	assert.NotContains(t, sinceSecondReview, "+var second = 2")
 }

@@ -40,7 +40,7 @@ type CriteriaFulfillment struct {
 // skip such retries and fall back to the full diff so review keeps progressing.
 // It also reports the full diff since the start point, which callers reviewing
 // the same work repeatedly carry forward as the baseline of the next round.
-func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ignoreWhitespace bool) (reviewDiff string, fullDiff string, err error) {
+func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ignoreWhitespace bool) (reviewDiff string, fullDiff string, incremental bool, err error) {
 	startPoint := promptInfo.StartPoint
 	if startPoint == "" {
 		startPoint = promptInfo.BaseBranch
@@ -63,15 +63,15 @@ func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ig
 		workflow.GetLogger(dCtx).Warn("Failed to generate review diffs, falling back to base branch diff", "error", err)
 		fallbackDiff, fallbackErr := GetGitDiff(dCtx, fallbackBase, ignoreWhitespace)
 		if fallbackErr != nil {
-			return "", "", fmt.Errorf("failed to get fallback base branch diff: %v", fallbackErr)
+			return "", "", false, fmt.Errorf("failed to get fallback base branch diff: %v", fallbackErr)
 		}
-		return fallbackDiff, fallbackDiff, nil
+		return fallbackDiff, fallbackDiff, false, nil
 	}
 
 	if promptInfo.LastReviewDiff != "" && diffs.SinceDiffError == "" {
-		return diffs.SinceDiff, diffs.FullDiff, nil
+		return diffs.SinceDiff, diffs.FullDiff, true, nil
 	}
-	return diffs.FullDiff, diffs.FullDiff, nil
+	return diffs.FullDiff, diffs.FullDiff, false, nil
 }
 
 // TODO /gen add a test for this function
@@ -105,6 +105,7 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 
 	var diff string
 	var err error
+	var incremental bool
 
 	ignoreWhitespace := true
 
@@ -118,7 +119,7 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 			}
 		} else {
 			var fullDiff string
-			diff, fullDiff, err = criteriaFulfillmentReviewDiff(dCtx, promptInfo, ignoreWhitespace)
+			diff, fullDiff, incremental, err = criteriaFulfillmentReviewDiff(dCtx, promptInfo, ignoreWhitespace)
 			if err != nil {
 				return CriteriaFulfillment{}, err
 			}
@@ -191,14 +192,24 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 	}
 
 	// Summarize diff to fit within 50% of the judging model's context capacity
-	pairedReview := workflow.GetVersion(dCtx, "criteria-user-review-context", workflow.DefaultVersion, 1) >= 1 && promptInfo.LastReviewDiff != ""
+	reviewContextVersion := workflow.GetVersion(dCtx, "criteria-user-review-context", workflow.DefaultVersion, 2)
+	pairedReview := reviewContextVersion == 1 && promptInfo.LastReviewDiff != ""
 	summarizeVersion := workflow.GetVersion(dCtx, "summarize-diff-for-fulfillment", workflow.DefaultVersion, 1)
+	if reviewContextVersion >= 2 {
+		promptInfo.IncrementalReview = incremental
+		if !incremental {
+			promptInfo.Requirements = requirementsWithoutPriorWork(promptInfo.Requirements)
+		}
+	}
 	if pairedReview {
 		diff = prepareUserReviewWork(dCtx, promptInfo, diff)
 	} else if summarizeVersion >= 1 && len(diff) > 0 {
 		modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
 		metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
 		maxDiffChars := metadata.MaxChars() / 2
+		if promptInfo.IncrementalReview {
+			maxDiffChars = metadata.MaxChars() / 4
+		}
 		if len(diff) > maxDiffChars {
 			embeddingModelConfig := dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize")
 			var summarizedDiff string
@@ -210,7 +221,14 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 				SecretManagerContainer: *dCtx.Secrets,
 				MaxChars:               maxDiffChars,
 			}).Get(dCtx, &summarizedDiff)
-			if err == nil {
+			if reviewContextVersion >= 2 {
+				if err == nil && strings.TrimSpace(summarizedDiff) != "" {
+					diff = summarizedDiff
+				}
+				if len(diff) > maxDiffChars {
+					diff = diff[:maxDiffChars]
+				}
+			} else if err == nil {
 				diff = summarizedDiff
 			} else {
 				diff = diff[:maxDiffChars]
@@ -220,7 +238,11 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 
 	promptInfo.Work = diff
 	if strings.TrimSpace(diff) == "" {
-		promptInfo.Work = "git diff is empty: no changes were made."
+		if promptInfo.IncrementalReview {
+			promptInfo.Work = "No changes since the last review."
+		} else {
+			promptInfo.Work = "git diff is empty: no changes were made."
+		}
 	}
 	fulfillment, err := CheckIfCriteriaFulfilled(dCtx, promptInfo)
 	if err == nil {
@@ -294,11 +316,12 @@ func getCriteriaFulfillmentPrompt(eCtx flow_action.ExecContext, workspaceId stri
 	chatHistory := NewVersionedChatHistory(eCtx, workspaceId)
 
 	data := map[string]interface{}{
-		"editCodeHints":  editCodeHints,
-		"requirements":   promptInfo.Requirements,
-		"previousReview": promptInfo.PreviousReview,
-		"work":           promptInfo.Work,
-		"autoChecks":     promptInfo.AutoChecks,
+		"editCodeHints":     editCodeHints,
+		"requirements":      promptInfo.Requirements,
+		"previousReview":    promptInfo.PreviousReview,
+		"work":              promptInfo.Work,
+		"autoChecks":        promptInfo.AutoChecks,
+		"incrementalReview": promptInfo.IncrementalReview,
 	}
 
 	var content string
@@ -359,4 +382,28 @@ func prepareUserReviewWork(dCtx DevContext, info CheckWorkInfo, reviewDiff strin
 	}
 	return "# Original diff from rejected user review\n\n" + original +
 		"\n\n# Review changes (full current diff if incremental generation was unavailable)\n\n" + current
+}
+
+// Unmarked context is ambiguous: quoted headings cannot identify generated work.
+func requirementsWithoutPriorWork(requirements string) string {
+	header, context, ok := strings.Cut(requirements, "\n")
+	if !ok {
+		return requirements
+	}
+	var start, end int
+	if _, err := fmt.Sscanf(header, "<!-- sidekick-review-work: %d %d -->", &start, &end); err != nil {
+		return requirements
+	}
+	if header != fmt.Sprintf("<!-- sidekick-review-work: %d %d -->", start, end) ||
+		start < 0 || end < start || end > len(context) {
+		return requirements
+	}
+	const workHeading = "\n\nWork Done So Far:\n\n"
+	const feedbackIntro = "\n\nGiven the above context, please address the following latest user feedback:\n\n"
+	if !strings.HasPrefix(context, "#START Original Requirements\n\n") ||
+		!strings.HasPrefix(context[start:end], workHeading) ||
+		!strings.HasPrefix(context[end:], feedbackIntro) {
+		return requirements
+	}
+	return context[:start] + context[end:]
 }
