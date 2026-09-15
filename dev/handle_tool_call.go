@@ -163,8 +163,9 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 	// to respond, which happens inside the GetHelpOrInput tool call itself
 	if toolCall.Name == getHelpOrInputTool.Name {
 		var wrapper GetHelpOrInputArguments
+		human := false
 		response, err := unmarshalAndInvoke(toolCall, &wrapper, func() (string, error) {
-			return GetHelpOrInput(dCtx, wrapper.Requests)
+			return getHelpOrInputWithProvenance(dCtx, wrapper.Requests, &human)
 		})
 		if errors.Is(err, ErrEmptyHelpOrInputRequests) {
 			// Self-correctable: surface the error as tool result content so the
@@ -174,6 +175,9 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 			return ToolCallOutput{ToolResultBlock: toolCallResult}, nil
 		}
 		toolCallResult.Content = llm2.TextContentBlocks(response)
+		if human && err == nil {
+			persisted_ai.SetContextType(&toolCallResult.Content[0], ContextTypeUserFeedback)
+		}
 		return ToolCallOutput{ToolResultBlock: toolCallResult}, err
 	}
 

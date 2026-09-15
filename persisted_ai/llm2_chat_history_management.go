@@ -553,3 +553,12 @@ func cleanLlm2ToolCallsAndResponses(messages *[]llm2.Message) {
 	}
 	*messages = newMessages
 }
+
+// MeasureLlm2Messages uses the same provider-aware sizing as history management.
+func MeasureLlm2Messages(provider string, messages []llm2.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += llm2MessageLength(provider, message)
+	}
+	return total
+}

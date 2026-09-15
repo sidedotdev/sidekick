@@ -609,6 +609,17 @@ func addToolCallResponse(eCtx flow_action.ExecContext, chatHistory *persisted_ai
 			ToolResult: &trb,
 		}},
 	}
+	allHuman := len(trb.Content) > 0
+	for _, block := range trb.Content {
+		if persisted_ai.GetContextType(block) != ContextTypeUserFeedback {
+			allHuman = false
+			break
+		}
+	}
+	if allHuman {
+		// Legacy conversion reads context metadata from the outer block.
+		persisted_ai.SetContextType(&msg.Content[0], ContextTypeUserFeedback)
+	}
 	return AppendChatHistory(eCtx, chatHistory, msg)
 }
 

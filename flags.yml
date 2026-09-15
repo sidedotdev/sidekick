@@ -46,3 +46,32 @@ context-gathering-forget:
     c: false
   defaultRule:
     variation: t1
+review_chat_history_enabled:
+  variations:
+    enabled: true
+    disabled: false
+  defaultRule:
+    variation: enabled
+persistent_reviewer_history:
+  variations:
+    enabled: true
+    disabled: false
+  defaultRule:
+    percentage:
+      enabled: 50
+      disabled: 50
+review_tool_result_max_chars:
+  variations:
+    default: 1000
+  defaultRule:
+    variation: default
+review_recent_tool_results_count:
+  variations:
+    default: 20
+  defaultRule:
+    variation: default
+review_chat_history_max_size:
+  variations:
+    default: 40000
+  defaultRule:
+    variation: default

@@ -258,11 +258,16 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 }
 
 func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
-	// new chat history so we can fit a lot of git diff in the context
-	// FIXME /gen/req this fails in cases where we figured out that no changes
-	// were required to fulfill the requirements (eg already done in previous
-	// step), in which case we need more info in the chat history, eg summary of
-	// chat, and include that in the CheckWorkInfo struct.
+	if workflow.GetVersion(dCtx, "criteria-review-chat-history", workflow.DefaultVersion, 1) >= 1 &&
+		workflow.GetVersion(dCtx, "chat-history-llm2", workflow.DefaultVersion, 1) >= 1 {
+		modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+		settings := resolveVerifierSettings(dCtx, modelConfig.Model)
+		if settings.Enabled {
+			return reviewWithChatHistory(dCtx, promptInfo, modelConfig, settings)
+		}
+	}
+	promptInfo.PreparedChatHistory = nil
+	// A fresh history reserves context capacity for the diff in legacy reviews.
 	chatHistory, err := getCriteriaFulfillmentPrompt(dCtx.ExecContext, dCtx.WorkspaceId, dCtx.RepoConfig.EditCode.Hints, promptInfo)
 	if err != nil {
 		return CriteriaFulfillment{}, err
@@ -314,36 +319,10 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 
 func getCriteriaFulfillmentPrompt(eCtx flow_action.ExecContext, workspaceId string, editCodeHints string, promptInfo CheckWorkInfo) (*persisted_ai.ChatHistoryContainer, error) {
 	chatHistory := NewVersionedChatHistory(eCtx, workspaceId)
-
-	data := map[string]interface{}{
-		"editCodeHints":     editCodeHints,
-		"requirements":      promptInfo.Requirements,
-		"previousReview":    promptInfo.PreviousReview,
-		"work":              promptInfo.Work,
-		"autoChecks":        promptInfo.AutoChecks,
-		"incrementalReview": promptInfo.IncrementalReview,
-	}
-
-	var content string
-	switch {
-	case promptInfo.ResolvingMergeConflicts:
-		content = RenderPrompt(FulfillmentConflictResolution, data)
-	case promptInfo.Step.Definition != "":
-		data["planContext"] = promptInfo.PlanExecution.String()
-		data["currentStep"] = promptInfo.Step.Definition
-		data["completionCriteria"] = promptInfo.Step.CompletionAnalysis
-		content = RenderPrompt(FulfillmentInitialWithPlan, data)
-	default:
-		content = RenderPrompt(FulfillmentInitial, data)
-	}
-
-	newMessage := llm.ChatMessage{
-		Role:        llm.ChatMessageRoleUser,
-		Content:     content,
-		ContextType: ContextTypeInitialInstructions,
-	}
-	if err := AppendChatHistory(eCtx, chatHistory, newMessage); err != nil {
-		return nil, err
+	for _, message := range criteriaFulfillmentMessages(promptInfo, editCodeHints) {
+		if err := AppendChatHistory(eCtx, chatHistory, &message); err != nil {
+			return nil, err
+		}
 	}
 	return chatHistory, nil
 }

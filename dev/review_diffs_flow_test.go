@@ -182,6 +182,10 @@ func (h *reviewDiffsFlowHarness) registerMocks() {
 
 	var flags *fflag.FFlagActivities
 	h.env.OnActivity(flags.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	settings := DefaultVerifierSettings()
+	settings.Enabled = false
+	h.env.OnActivity(flags.EvaluateFlags, mock.Anything, mock.Anything).
+		Return(verifierFlagValues(settings), nil).Maybe()
 
 	// the test repository is the flow's working copy, so it must outlive the flow
 	h.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()

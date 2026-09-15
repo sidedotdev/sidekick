@@ -545,6 +545,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
 		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
+	reviewer := &verifierSession{}
 
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig
@@ -687,6 +688,8 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 			LastReviewTreeHash: lastReviewTreeHash,
 			LastReviewDiff:     lastReviewDiff,
 			BaseBranch:         baseBranch,
+			ChatHistory:        chatHistory,
+			VerifierSession:    reviewer,
 		}))
 		if err != nil {
 			return "", fmt.Errorf("failed to check if requirements are fulfilled: %w", err)

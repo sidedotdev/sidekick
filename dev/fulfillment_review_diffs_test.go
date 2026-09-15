@@ -43,6 +43,12 @@ type CriteriaFulfillmentDiffTestSuite struct {
 func (s *CriteriaFulfillmentDiffTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
+	var flags *fflag.FFlagActivities
+	settings := DefaultVerifierSettings()
+	settings.Enabled = false
+	s.env.OnActivity(flags.EvaluateFlags, mock.Anything, mock.Anything).
+		Return(verifierFlagValues(settings), nil).Maybe()
+
 	var fa *flow_action.FlowActivities
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
 
