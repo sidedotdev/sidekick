@@ -1954,8 +1954,23 @@ func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
 func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	requestCtx := c.Request.Context()
 	workspaceId := c.Param("workspaceId")
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
+		return
+	}
+
+	// Field presence makes partial updates possible: omitted fields keep their
+	// persisted values rather than being reset to the zero value.
+	var providedFields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &providedFields); err != nil {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
+		return
+	}
+
 	var taskReq TaskRequest
-	if err := c.ShouldBindJSON(&taskReq); err != nil {
+	if err := json.Unmarshal(body, &taskReq); err != nil {
 		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
 		return
 	}
@@ -1969,6 +1984,20 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 		}
 		return
+	}
+
+	_, statusProvided := providedFields["status"]
+	if !statusProvided {
+		taskReq.Status = string(task.Status)
+	}
+	if _, ok := providedFields["agentType"]; !ok {
+		taskReq.AgentType = string(task.AgentType)
+	}
+	if _, ok := providedFields["description"]; !ok {
+		taskReq.Description = task.Description
+	}
+	if _, ok := providedFields["flowOptions"]; !ok {
+		taskReq.FlowOptions = task.FlowOptions
 	}
 
 	agentType, status, err := validateTaskRequest(&taskReq)
@@ -1994,16 +2023,19 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 		task.FlowType = taskReq.FlowType
 	}
 
-	// If the task status is 'to_do' and there is no flow record, start the flow
-	flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
-	if err != nil {
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
-		return
-	}
-
-	if task.Status == domain.TaskStatusToDo && len(flows) == 0 {
-		if err := ctrl.startTaskWithTimeout(c, &task); err != nil {
+	// Starting a flow is a consequence of a client moving a task into the
+	// 'to_do' state, so updates leaving the status alone never start one.
+	if statusProvided && task.Status == domain.TaskStatusToDo {
+		flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
+		if err != nil {
+			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 			return
+		}
+
+		if len(flows) == 0 {
+			if err := ctrl.startTaskWithTimeout(c, &task); err != nil {
+				return
+			}
 		}
 	}
 

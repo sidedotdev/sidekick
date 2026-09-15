@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { shallowMount } from '@vue/test-utils'
+import { flushPromises, shallowMount } from '@vue/test-utils'
 import TaskCard from '../TaskCard.vue'
 import type { FullTask, Task } from '../../lib/models'
 
@@ -65,6 +65,76 @@ const task: FullTask = {
     })
     await wrapper.find('.action.edit').trigger('click')
     expect(wrapper.emitted('edit')).toEqual([[task]])
+  })
+
+  it('does not offer the full edit modal for a running task', () => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, status: 'in_progress' } },
+    })
+    expect(wrapper.find('.action.edit').exists()).toBe(false)
+    expect(wrapper.find('.action.rename').exists()).toBe(true)
+  })
+
+  it('renames a running task with a title-only request', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
+    global.fetch = mockFetch
+
+    const runningTask: FullTask = { ...task, status: 'in_progress' }
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: runningTask },
+      attachTo: document.body,
+    })
+
+    await wrapper.find('.action.rename').trigger('click')
+    const input = wrapper.get('.task-title-input')
+    expect((input.element as HTMLInputElement).value).toBe(runningTask.title)
+
+    await input.setValue('Renamed Task')
+    await input.trigger('keydown.enter')
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/workspaces/ws_1/tasks/task_1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Renamed Task' }),
+    })
+    expect(wrapper.emitted('updated')).toEqual([['task_1']])
+    expect(wrapper.find('.task-title-input').exists()).toBe(false)
+  })
+
+  it('emits an error when the rename request fails', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error('offline'))
+
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, status: 'in_progress' } },
+      attachTo: document.body,
+    })
+
+    await wrapper.find('.action.rename').trigger('click')
+    const input = wrapper.get('.task-title-input')
+    await input.setValue('Renamed Task')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    expect(wrapper.emitted('updated')).toBeUndefined()
+    expect(wrapper.emitted('error')).toEqual([['Failed to rename task']])
+  })
+
+  it('does not send a rename request when the edit is canceled', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
+    global.fetch = mockFetch
+
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, status: 'in_progress' } },
+      attachTo: document.body,
+    })
+
+    await wrapper.find('.action.rename').trigger('click')
+    const input = wrapper.get('.task-title-input')
+    await input.setValue('Renamed Task')
+    await input.trigger('keydown.esc')
+
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(wrapper.find('.task-title-input').exists()).toBe(false)
   })
 
   it('emits a copy event with a duplicated task when the copy button is clicked', async () => {

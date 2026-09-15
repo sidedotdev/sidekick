@@ -341,12 +341,6 @@ const onBoardDrop = async (event: DragEvent) => {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title: task.title,
-        description: task.description,
-        status: task.status,
-        agentType: task.agentType,
-        flowType: task.flowType,
-        flowOptions: task.flowOptions,
         // An empty projectId clears the assignment (everything else group)
         projectId: groupKey,
       }),

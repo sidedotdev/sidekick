@@ -522,7 +522,7 @@ describe('KanbanBoard', () => {
       })
     })
 
-    it('reassigns a task dropped on another project group, preserving status', async () => {
+    it('reassigns a task dropped on another project group without touching other fields', async () => {
       const wrapper = await mountBoard({ tasks }, projects)
 
       await dropTask(wrapper, 1, '1')
@@ -531,11 +531,7 @@ describe('KanbanBoard', () => {
       const [url, options] = putCalls()[0]
       expect(url.toString()).toContain('/tasks/1')
       const body = JSON.parse(options.body as string)
-      expect(body.projectId).toBe('project_2')
-      expect(body.status).toBe('to_do')
-      expect(body.agentType).toBe('human')
-      expect(body.flowType).toBe('basic_dev')
-      expect(body.title).toBe('Task one')
+      expect(body).toEqual({ projectId: 'project_2' })
     })
 
     it('clears the project assignment when dropped on the everything else group', async () => {
