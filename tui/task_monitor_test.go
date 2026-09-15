@@ -170,8 +170,7 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 
 	// Verify flow gets updated
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
-	mockCall.Unset()
-	mockCall = mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	mockCall.Return(testTask, nil)
 	status = <-statusChan
 	assert.Equal(t, testTask.Flows, status.Task.Flows)
 	assert.Equal(t, testTask.Status, status.Task.Status)
@@ -184,8 +183,7 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 
 	// Verify final status after marking as complete
 	testTask.Status = domain.TaskStatusComplete
-	mockCall.Unset()
-	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	mockCall.Return(testTask, nil)
 	status = <-statusChan
 	assert.NoError(t, status.Error)
 	assert.Equal(t, testTask.Status, status.Task.Status)
@@ -220,8 +218,7 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 
 	// Update mock to return task with flows
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
-	mockCall.Unset()
-	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	mockCall.Return(testTask, nil)
 
 	// Wait for at least one WebSocket error, then drain remaining messages
 	var sawWebSocketError bool
@@ -341,8 +338,7 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 
 	// Verify flow gets updated
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
-	mockCall.Unset()
-	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	mockCall.Return(testTask, nil)
 	status = <-statusChan
 	assert.Equal(t, testTask.Flows, status.Task.Flows)
 	assert.Equal(t, testTask.Status, status.Task.Status)
@@ -383,8 +379,7 @@ func TestTaskMonitor_Start_ExternalTaskCancellation(t *testing.T) {
 
 	// Verify flow gets updated
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
-	mockCall.Unset()
-	mockCall = mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	mockCall.Return(testTask, nil)
 	status = <-statusChan
 	assert.Equal(t, testTask.Flows, status.Task.Flows)
 	assert.NoError(t, status.Error)
@@ -396,8 +391,7 @@ func TestTaskMonitor_Start_ExternalTaskCancellation(t *testing.T) {
 
 	// Simulate external cancellation
 	testTask.Status = domain.TaskStatusCanceled
-	mockCall.Unset()
-	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	mockCall.Return(testTask, nil)
 	status = <-statusChan
 	assert.NoError(t, status.Error)
 	assert.Equal(t, domain.TaskStatusCanceled, status.Task.Status)

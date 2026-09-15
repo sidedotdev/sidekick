@@ -657,7 +657,7 @@ func (s *BuildCodingInputTestSuite) TestWebSearchToolUsableOnlyInNonLocalEnv() {
 		}
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
-		return buildCodingInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, true, false, "OS: Linux, Arch: x86_64")
+		return buildCodingInput(dCtx, common.ModelConfig{Provider: "openai"}, chatHistory, SkipInfo{}, true, false, "OS: Linux, Arch: x86_64")
 	}
 
 	var ffa *fflag.FFlagActivities

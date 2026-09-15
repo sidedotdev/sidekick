@@ -692,7 +692,7 @@ func devPlanTools(dCtx DevContext, hasExistingPlan bool) []*llm.Tool {
 func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	tools := devPlanTools(dCtx, hasExistingPlan)
-	tools = appendWebSearchToolIfNonLocal(dCtx, tools)
+	tools = appendWebSearchToolIfNonLocal(dCtx, tools, modelConfig)
 
 	chatOptions := llm2.Options{
 		Tools: tools,
