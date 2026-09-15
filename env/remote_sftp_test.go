@@ -40,6 +40,10 @@ func (notExistSFTPTransport) EnsureReverseForwards(context.Context, []common.Por
 	return nil
 }
 
+func (notExistSFTPTransport) ReplaceReverseForwards(context.Context, []common.PortForwardConfig, []common.PortForwardConfig) error {
+	return nil
+}
+
 func (notExistSFTPTransport) Close() {}
 
 func TestSFTPStatNotExistSatisfiesOSIsNotExist(t *testing.T) {

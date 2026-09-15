@@ -698,6 +698,18 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 		return "", err
 	}
 
+	if err := ensureSideTmp(ctx, EnvWithDir(envContainer.Env, worktreePath)); err != nil {
+		_, _ = envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+			Command: "git",
+			Args:    []string{"worktree", "remove", "--force", worktreePath},
+		})
+		_, _ = envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+			Command: "git",
+			Args:    []string{"branch", "-D", branchName},
+		})
+		return "", err
+	}
+
 	return worktreePath, nil
 }
 

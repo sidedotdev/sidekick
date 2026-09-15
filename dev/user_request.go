@@ -322,7 +322,12 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 
 	switch info := currentPromptInfo.(type) {
 	case FeedbackInfo:
-
+		if workflow.GetVersion(dCtx, "human-feedback-provenance", workflow.DefaultVersion, 1) >= 1 {
+			if err := appendEditFeedback(dCtx.ExecContext, chatHistory, info.Feedback, info.Type); err != nil {
+				return FeedbackInfo{}, err
+			}
+			return FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}, nil
+		}
 		info.Feedback += "\n\n" + userResponse.Content
 		info.Type = FeedbackTypeUserGuidance
 		return info, nil

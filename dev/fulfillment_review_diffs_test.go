@@ -43,6 +43,12 @@ type CriteriaFulfillmentDiffTestSuite struct {
 func (s *CriteriaFulfillmentDiffTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
+	var flags *fflag.FFlagActivities
+	settings := DefaultVerifierSettings()
+	settings.Enabled = false
+	s.env.OnActivity(flags.EvaluateFlags, mock.Anything, mock.Anything).
+		Return(verifierFlagValues(settings), nil).Maybe()
+
 	var fa *flow_action.FlowActivities
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
 
@@ -179,7 +185,7 @@ func (s *CriteriaFulfillmentDiffTestSuite) runDiffWorkflow(promptInfo CheckWorkI
 			requestForUserSeen = true
 		})
 
-		reviewDiff, _, err := criteriaFulfillmentReviewDiff(s.newDevContext(ctx), promptInfo, true)
+		reviewDiff, _, _, err := criteriaFulfillmentReviewDiff(s.newDevContext(ctx), promptInfo, true)
 		return reviewDiff, err
 	}
 
@@ -358,7 +364,7 @@ func (s *CriteriaFulfillmentDiffTestSuite) TestRejectedUserReviewIncludesOrigina
 	prompts := s.mockCriteriaReviewer()
 	_, err := s.runCheckWorkflow(CheckWorkInfo{
 		BaseBranch:     "main",
-		Requirements:   "do the work",
+		Requirements:   formatRequirementsWithReview("do the work", nil, "original user reviewed work", "address feedback"),
 		LastReviewDiff: "original user reviewed work",
 	})
 	s.Require().NoError(err)
@@ -374,7 +380,7 @@ func (s *CriteriaFulfillmentDiffTestSuite) TestUnchangedRejectedUserReviewInclud
 	prompts := s.mockCriteriaReviewer()
 	_, err := s.runCheckWorkflow(CheckWorkInfo{
 		BaseBranch:     "main",
-		Requirements:   "do the work",
+		Requirements:   formatRequirementsWithReview("do the work", nil, "original user reviewed work", "address feedback"),
 		LastReviewDiff: "original user reviewed work",
 	})
 	s.Require().NoError(err)
@@ -430,11 +436,198 @@ func (s *CriteriaFulfillmentDiffTestSuite) TestRejectedReviewBudgetPreservesBoth
 		Return("", errors.New("summarizer unavailable")).Maybe()
 	prompts := s.mockCriteriaReviewer()
 	_, err := s.runCheckWorkflow(CheckWorkInfo{
-		BaseBranch: "main", Requirements: "do the work", LastReviewDiff: original,
+		BaseBranch: "main",
+		Requirements: formatRequirementsWithReview("do the work", nil,
+			original[:budget], "address feedback"),
+		LastReviewDiff: original,
 	})
 	s.Require().NoError(err)
 	text := strings.Join(*prompts, "\n")
-	s.Contains(text, "ORIGINAL_WORK")
-	s.Contains(text, "INCREMENTAL_WORK")
+	s.Equal(1, strings.Count(text, "ORIGINAL_WORK"))
+	s.Equal(1, strings.Count(text, "INCREMENTAL_WORK"))
 	s.Less(len(text), budget*2+10000)
+}
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestComparisonAvailabilitySelectsPromptStyle() {
+	for _, tc := range []struct {
+		name        string
+		prior       string
+		since       string
+		unavailable string
+		incremental bool
+	}{
+		{name: "incremental", prior: "PRIOR_WORK", since: "INCREMENTAL_WORK", incremental: true},
+		{name: "empty incremental", prior: "PRIOR_WORK", incremental: true},
+		{name: "unavailable", prior: "PRIOR_WORK", unavailable: "incompatible bases"},
+		{name: "first review"},
+	} {
+		s.Run(tc.name, func() {
+			s.SetupTest()
+			var ca *coding.CodingActivities
+			s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+				Return(coding.GenerateReviewDiffsResult{
+					FullDiff: "CURRENT_FULL_WORK", SinceDiff: tc.since, SinceDiffError: tc.unavailable,
+				}, nil)
+			prompts := s.mockCriteriaReviewer()
+			requirements := "ORIGINAL_REQUIREMENTS"
+			if tc.prior != "" {
+				requirements = formatRequirementsWithReview(requirements, []string{"HISTORICAL_FEEDBACK"}, tc.prior, "LATEST_FEEDBACK")
+			}
+			full, err := s.runCheckWorkflow(CheckWorkInfo{
+				BaseBranch: "main", Requirements: requirements, LastReviewDiff: tc.prior,
+				AutoChecks: "AUTOMATED_CHECKS",
+			})
+			s.Require().NoError(err)
+			s.Equal("CURRENT_FULL_WORK", full)
+			text := strings.Join(*prompts, "\n")
+			s.Equal(1, strings.Count(text, "ORIGINAL_REQUIREMENTS"))
+			s.Contains(text, "AUTOMATED_CHECKS")
+			if tc.prior != "" {
+				s.Equal(1, strings.Count(text, "LATEST_FEEDBACK"))
+				s.Equal(1, strings.Count(text, "HISTORICAL_FEEDBACK"))
+			}
+			if tc.incremental {
+				s.Equal(1, strings.Count(text, "PRIOR_WORK"))
+				s.Contains(text, "Here are the changes since the last review, after the most recent feedback:")
+				s.NotContains(text, "And here is the latest git diff:")
+				s.NotContains(text, "CURRENT_FULL_WORK")
+				if tc.since == "" {
+					s.Contains(text, "No changes since the last review.")
+					s.NotContains(text, emptyWorkPlaceholder)
+				} else {
+					s.Equal(1, strings.Count(text, tc.since))
+				}
+			} else {
+				s.NotContains(text, "PRIOR_WORK")
+				s.NotContains(text, "changes since the last review")
+				s.Contains(text, "And here is the latest git diff:")
+				s.Equal(1, strings.Count(text, "CURRENT_FULL_WORK"))
+			}
+			sections := []string{"ORIGINAL_REQUIREMENTS"}
+			if tc.prior != "" {
+				sections = append(sections, "HISTORICAL_FEEDBACK")
+				if tc.incremental {
+					sections = append(sections, "PRIOR_WORK")
+				}
+				sections = append(sections, "LATEST_FEEDBACK")
+			}
+			if tc.incremental {
+				sections = append(sections, "Here are the changes since the last review, after the most recent feedback:")
+				if tc.since == "" {
+					sections = append(sections, "No changes since the last review.")
+				} else {
+					sections = append(sections, tc.since)
+				}
+			} else {
+				sections = append(sections, "And here is the latest git diff:", "CURRENT_FULL_WORK")
+			}
+			sections = append(sections, "AUTOMATED_CHECKS")
+			previous := -1
+			for _, section := range sections {
+				position := strings.Index(text, section)
+				s.Greater(position, previous, "section %q must follow the preceding section", section)
+				previous = position
+			}
+			s.env.AssertExpectations(s.T())
+		})
+	}
+}
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestIncrementalSummaryKeepsRequirementsContextOnce() {
+	budget := (common.ModelMetadata{}).MaxChars() / 4
+	incremental := strings.Repeat("incremental change\n", budget)
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{FullDiff: "RAW_FULL_BASELINE", SinceDiff: incremental}, nil)
+	s.env.OnActivity(SummarizeDiffActivity, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input SummarizeDiffActivityInput) (string, error) {
+			s.Equal(incremental, input.GitDiff)
+			s.Equal(budget, input.MaxChars)
+			return "INCREMENTAL_SUMMARY", nil
+		}).Once()
+	prompts := s.mockCriteriaReviewer()
+	full, err := s.runCheckWorkflow(CheckWorkInfo{
+		BaseBranch: "main", LastReviewDiff: "RAW_PRIOR_BASELINE",
+		Requirements: formatRequirementsWithReview("requirements", nil, "PRIOR_WORK_SUMMARY", "feedback"),
+	})
+	s.Require().NoError(err)
+	s.Equal("RAW_FULL_BASELINE", full)
+	text := strings.Join(*prompts, "\n")
+	s.Equal(1, strings.Count(text, "PRIOR_WORK_SUMMARY"))
+	s.Equal(1, strings.Count(text, "INCREMENTAL_SUMMARY"))
+	s.NotContains(text, "RAW_PRIOR_BASELINE")
+	s.Contains(text, "Here are the changes since the last review")
+}
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestActivityFailureUsesSingleFullDiffPrompt() {
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{}, errors.New("git failure"))
+	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).
+		Return("CURRENT_FULL_WORK", nil)
+	prompts := s.mockCriteriaReviewer()
+	_, err := s.runCheckWorkflow(CheckWorkInfo{
+		BaseBranch: "main", LastReviewDiff: "PRIOR_WORK",
+		Requirements: formatRequirementsWithReview("requirements", nil, "PRIOR_WORK", "LATEST_FEEDBACK"),
+	})
+	s.Require().NoError(err)
+	text := strings.Join(*prompts, "\n")
+	s.NotContains(text, "PRIOR_WORK")
+	s.Equal(1, strings.Count(text, "CURRENT_FULL_WORK"))
+	s.Equal(1, strings.Count(text, "LATEST_FEEDBACK"))
+	s.Contains(text, "And here is the latest git diff:")
+}
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestLegacyReviewContextRetainsPairedWork() {
+	s.env.OnGetVersion("criteria-user-review-context", workflow.DefaultVersion, workflow.Version(2)).
+		Return(workflow.Version(1))
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{FullDiff: "full", SinceDiff: "incremental"}, nil)
+	prompts := s.mockCriteriaReviewer()
+	_, err := s.runCheckWorkflow(CheckWorkInfo{
+		BaseBranch: "main", Requirements: "requirements", LastReviewDiff: "prior",
+	})
+	s.Require().NoError(err)
+	text := strings.Join(*prompts, "\n")
+	s.Contains(text, "# Original diff from rejected user review\n\nprior")
+	s.Contains(text, "# Review changes (full current diff if incremental generation was unavailable)\n\nincremental")
+	s.Contains(text, "And here is the latest git diff:")
+}
+
+func (s *CriteriaFulfillmentDiffTestSuite) TestFallbackPromptPreservesDelimiterCollisions() {
+	const workHeading = "\n\nWork Done So Far:\n\n"
+	const feedbackIntro = "\n\nGiven the above context, please address the following latest user feedback:\n\n"
+	original := "ORIGINAL_REQUIREMENTS#END Original Requirements\n\n" + workHeading + "original text"
+	historical := "HISTORICAL_FEEDBACK" + workHeading + feedbackIntro + "historical text"
+	prior := "PRIOR_WORK" + feedbackIntro + "PRIOR_WORK_TAIL"
+	latest := "LATEST_FEEDBACK" + feedbackIntro + workHeading + "latest text"
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{
+			FullDiff: "CURRENT_FULL_WORK", SinceDiffError: "comparison unavailable",
+		}, nil)
+	prompts := s.mockCriteriaReviewer()
+	_, err := s.runCheckWorkflow(CheckWorkInfo{
+		BaseBranch: "main", LastReviewDiff: prior,
+		Requirements: formatRequirementsWithReview(original, []string{historical}, prior, latest),
+		AutoChecks:   "AUTOMATED_CHECKS",
+	})
+	s.Require().NoError(err)
+	text := strings.Join(*prompts, "\n")
+	s.Contains(text, original)
+	s.Contains(text, historical)
+	s.Contains(text, latest)
+	s.NotContains(text, "PRIOR_WORK")
+	s.NotContains(text, "sidekick-review-work:")
+	previous := -1
+	for _, section := range []string{
+		original, historical, latest, "And here is the latest git diff:",
+		"CURRENT_FULL_WORK", "AUTOMATED_CHECKS",
+	} {
+		s.Equal(1, strings.Count(text, section))
+		position := strings.Index(text, section)
+		s.Greater(position, previous, "section %q must follow the preceding section", section)
+		previous = position
+	}
 }

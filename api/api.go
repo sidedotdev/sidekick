@@ -124,6 +124,18 @@ type ModalConfigUpdateRequest struct {
 	Config common.ModalEnvConfig `json:"config"`
 }
 
+// PortForwardsUpdateRequest replaces the full list of host→container port
+// mappings of a flow's environment; an empty list clears all forwards.
+type PortForwardsUpdateRequest struct {
+	PortForwards []common.PortForwardConfig `json:"portForwards"`
+}
+
+// PortForwardsResponse reports the mappings actually in effect after an
+// update, e.g. with container ports the environment defaulted.
+type PortForwardsResponse struct {
+	PortForwards []common.PortForwardConfig `json:"portForwards"`
+}
+
 // UserActionRequest defines the expected request body for user actions.
 type UserActionRequest struct {
 	ActionType string `json:"actionType"`
@@ -270,6 +282,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
 	flowRoutes.PUT("/:id/model_config", ctrl.UpdateFlowModelConfigHandler)
 	flowRoutes.PUT("/:id/modal_config", ctrl.UpdateFlowModalConfigHandler)
+	flowRoutes.PUT("/:id/port_forwards", ctrl.UpdateFlowPortForwardsHandler)
 	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
 	flowRoutes.GET("/:id/history/:eventId", ctrl.GetFlowEventDetailHandler)
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
@@ -779,12 +792,7 @@ func (ctrl *Controller) UpdateFlowModalConfigHandler(c *gin.Context) {
 		return
 	}
 
-	_, err := ctrl.temporalClient.UpdateWorkflow(c.Request.Context(), client.UpdateWorkflowOptions{
-		WorkflowID:   flowId,
-		UpdateName:   dev.UpdateNameModalConfig,
-		Args:         []interface{}{req.Config},
-		WaitForStage: client.WorkflowUpdateStageCompleted,
-	})
+	err := ctrl.awaitFlowUpdate(c.Request.Context(), flowId, dev.UpdateNameModalConfig, req.Config, nil)
 	if err != nil {
 		var serviceErrNotFound *serviceerror.NotFound
 		if errors.As(err, &serviceErrNotFound) {
@@ -797,6 +805,71 @@ func (ctrl *Controller) UpdateFlowModalConfigHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Modal environment recreated"})
+}
+
+func (ctrl *Controller) UpdateFlowPortForwardsHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if _, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var req PortForwardsUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
+		return
+	}
+	if err := common.ValidatePortForwards(req.PortForwards); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid port forwards: " + err.Error()})
+		return
+	}
+
+	var applied dev.PortForwardsConfig
+	err := ctrl.awaitFlowUpdate(
+		c.Request.Context(),
+		flowId,
+		dev.UpdateNamePortForwards,
+		dev.PortForwardsConfig{PortForwards: req.PortForwards},
+		&applied,
+	)
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to update workflow port forwards")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update port forwards: " + err.Error()})
+		return
+	}
+
+	if applied.PortForwards == nil {
+		applied.PortForwards = []common.PortForwardConfig{}
+	}
+	c.JSON(http.StatusOK, PortForwardsResponse{PortForwards: applied.PortForwards})
+}
+
+// awaitFlowUpdate runs a workflow update to completion and decodes its
+// outcome into result (which may be nil). Waiting for the completed stage
+// alone is not enough: UpdateWorkflow still returns a handle when the update
+// handler itself failed, and that failure is only reported by the handle.
+func (ctrl *Controller) awaitFlowUpdate(ctx context.Context, flowId, updateName string, arg, result interface{}) error {
+	handle, err := ctrl.temporalClient.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   flowId,
+		UpdateName:   updateName,
+		Args:         []interface{}{arg},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	if err != nil {
+		return err
+	}
+	return handle.Get(ctx, result)
 }
 
 // QueryFlowHandler handles requests to query a workflow.
@@ -1881,8 +1954,23 @@ func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
 func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	requestCtx := c.Request.Context()
 	workspaceId := c.Param("workspaceId")
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
+		return
+	}
+
+	// Field presence makes partial updates possible: omitted fields keep their
+	// persisted values rather than being reset to the zero value.
+	var providedFields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &providedFields); err != nil {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
+		return
+	}
+
 	var taskReq TaskRequest
-	if err := c.ShouldBindJSON(&taskReq); err != nil {
+	if err := json.Unmarshal(body, &taskReq); err != nil {
 		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
 		return
 	}
@@ -1896,6 +1984,23 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 		}
 		return
+	}
+
+	_, statusProvided := providedFields["status"]
+	if !statusProvided {
+		taskReq.Status = string(task.Status)
+	}
+	if _, ok := providedFields["agentType"]; !ok {
+		taskReq.AgentType = string(task.AgentType)
+		if task.Status == domain.TaskStatusDrafting && taskReq.Status == string(domain.TaskStatusToDo) {
+			taskReq.AgentType = string(domain.AgentTypeLLM)
+		}
+	}
+	if _, ok := providedFields["description"]; !ok {
+		taskReq.Description = task.Description
+	}
+	if _, ok := providedFields["flowOptions"]; !ok {
+		taskReq.FlowOptions = task.FlowOptions
 	}
 
 	agentType, status, err := validateTaskRequest(&taskReq)
@@ -1921,16 +2026,19 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 		task.FlowType = taskReq.FlowType
 	}
 
-	// If the task status is 'to_do' and there is no flow record, start the flow
-	flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
-	if err != nil {
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
-		return
-	}
-
-	if task.Status == domain.TaskStatusToDo && len(flows) == 0 {
-		if err := ctrl.startTaskWithTimeout(c, &task); err != nil {
+	// Starting a flow is a consequence of a client moving a task into the
+	// 'to_do' state, so updates leaving the status alone never start one.
+	if statusProvided && task.Status == domain.TaskStatusToDo {
+		flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
+		if err != nil {
+			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 			return
+		}
+
+		if len(flows) == 0 {
+			if err := ctrl.startTaskWithTimeout(c, &task); err != nil {
+				return
+			}
 		}
 	}
 

@@ -16,6 +16,11 @@ export interface ModalVolumeMount {
   readOnly?: boolean
 }
 
+export interface PortForwardConfig {
+  hostPort: number
+  containerPort?: number
+}
+
 export interface ModalEnvConfig {
   vm?: boolean
   image?: string

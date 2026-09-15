@@ -670,19 +670,19 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		}
 	}
 
-	// Ensure the sanctioned scratch directory exists so agents have a
-	// git-ignored location for temp files instead of system temp paths.
-	if v := workflow.GetVersion(ctx, "ensure-side-tmp-dir", workflow.DefaultVersion, 1); v >= 1 {
-		var mkdirOutput env.EnvRunCommandActivityOutput
+	// Version 1 retains the activity for replay compatibility. Worktree
+	// provisioning performs this setup for new workflows.
+	if v := workflow.GetVersion(ctx, "ensure-side-tmp-dir", workflow.DefaultVersion, 2); v == 1 {
+		var output env.EnvRunCommandActivityOutput
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
-			Command:      "mkdir",
-			Args:         []string{"-p", ".side/tmp"},
-		}).Get(ctx, &mkdirOutput)
+			Command:      "/usr/bin/env",
+			Args:         []string{"sh", "-c", env.EnsureSideTmpScript},
+		}).Get(ctx, &output)
 		if err != nil {
-			return DevContext{}, fmt.Errorf("failed to create .side/tmp scratch directory: %v", err)
-		} else if mkdirOutput.ExitStatus != 0 {
-			return DevContext{}, fmt.Errorf("failed to create .side/tmp scratch directory (exit status %d):\n\n%s", mkdirOutput.ExitStatus, mkdirOutput.Stderr)
+			return DevContext{}, fmt.Errorf("failed to set up .side/tmp scratch directory: %v", err)
+		} else if output.ExitStatus != 0 {
+			return DevContext{}, fmt.Errorf("failed to set up .side/tmp scratch directory (exit status %d):\n\n%s", output.ExitStatus, output.Stderr)
 		}
 	}
 

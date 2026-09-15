@@ -58,6 +58,13 @@ same git state, by a single activity:
 Neither diff depends on a git object that only the review mechanism references,
 so garbage collection can never invalidate a review round.
 
+The baseline is the raw full diff actually reviewed, never its summary or the
+previous interdiff. Successful ordinary-sized comparisons are unified diffs with
+file headers and counted hunks. Reverted additions are removals and restored
+deletions are additions, including when a file section or the entire prior change
+disappears. Unchanged reviewed edits are not emitted as new changes. Reversions
+are not rendered as explanatory prose or substituted with the current full diff.
+
 The full diff is a plain three-dot plus staged plus unmerged diff. It never
 picks between candidate diffs by length or by any other heuristic: earlier
 review-diff mechanisms did so and were wrong in ways this intent exists to rule
@@ -102,9 +109,11 @@ Each flow carries the prior review's diff text forward in workflow state, and
 gets the same diff semantics:
 
 - Basic dev: start point is the base branch.
-- Review/resolve: start point is the base branch; the auto-reviewer sees the
-  full diff from before the user's feedback plus the since diff of the changes
-  made in response to it.
+- Review/resolve: start point is the base branch. When an incremental comparison
+  is available, the existing requirements context supplies prior work once,
+  followed by the changes since the last review and automated checks. An empty
+  comparison explicitly says no changes occurred since review, not that no work
+  exists.
 - Planned dev: start point is pinned to the state at the beginning of the step,
   so work committed by earlier steps is in neither diff.
 - Conflict resolution: the resolution diff covers the conflict regions only,
@@ -116,9 +125,20 @@ both the full and the since diff and one of them matches.
 
 ## Degradation
 
-Review diff generation fails only when git itself fails. Interdiff trouble,
-including diffs that cannot be aligned or malformed input, degrades to a
-best-effort delta or to the full diff, so a review round is never blocked by
-diffing the diffs. Diff generation failures are not user-retryable: the
-auto-reviewer falls back to the full diff, and merge approval shows a failure
-note where the since-review section would be.
+Interdiff trouble, including incompatible bases, unsupported representations,
+and malformed input, returns an explicit comparison error rather than a
+successful approximation. The activity supplies the full diff and
+`SinceDiffError`, so comparison failure does not block review. Merge approval
+shows an unavailable notice where the since-review section would be.
+
+Criteria fulfillment selects its style by successful comparison availability.
+Without a comparison, including the first review and comparison-error fallback,
+it uses the existing single-full-diff style: requirements and available feedback,
+one current full diff, then automated checks. Generated prior-work context is
+omitted in fallback, without removing original requirements or feedback. Git
+activity failures use the existing non-user-retry fallback where possible.
+
+Oversized diffs may be summarized or truncated to their context budget, but
+ordinary-sized unified output remains intact. Summaries never replace the saved
+raw full-diff baseline. Workflow versioning retains legacy prompt preparation and
+activity ordering for existing histories.

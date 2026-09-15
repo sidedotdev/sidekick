@@ -38,6 +38,7 @@ type IddWorkflowTestSuite struct {
 	// generateIntentSubtaskTitle so tests can pin how many title generations a
 	// single sub-task dispatch performs.
 	titleGenerationCalls int
+	sideTmpSetupCalls    []env.EnvRunCommandActivityInput
 }
 
 func (s *IddWorkflowTestSuite) SetupTest() {
@@ -45,6 +46,7 @@ func (s *IddWorkflowTestSuite) SetupTest() {
 	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.ima = nil
 	s.titleGenerationCalls = 0
+	s.sideTmpSetupCalls = nil
 }
 
 func (s *IddWorkflowTestSuite) AfterTest(suiteName, testName string) {
@@ -807,6 +809,12 @@ func (s *IddWorkflowTestSuite) setupLocalParentMocks() {
 	s.env.OnActivity(GetRepoConfigActivity, mock.Anything).Return(common.RepoConfig{}, nil).Maybe()
 
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			input := args.Get(1).(env.EnvRunCommandActivityInput)
+			if len(input.Args) == 3 && input.Args[0] == "sh" && input.Args[1] == "-c" && input.Args[2] == env.EnsureSideTmpScript {
+				s.sideTmpSetupCalls = append(s.sideTmpSetupCalls, input)
+			}
+		}).
 		Return(env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil).Maybe()
 	s.env.OnActivity(common.BaseCommandPermissionsActivity, mock.Anything, mock.Anything).
 		Return(common.CommandPermissionConfig{}, nil).Maybe()
@@ -857,6 +865,7 @@ func (s *IddWorkflowTestSuite) TestIddWorkflowSetsUpLocalParentForRemoteSelectio
 	startBranch := "main"
 
 	s.setupLocalParentMocks()
+	s.env.OnGetVersion("ensure-side-tmp-dir", workflow.DefaultVersion, 2).Return(workflow.Version(2))
 	remote := s.recordRemoteActivities()
 
 	var localParams env.LocalEnvParams
@@ -921,6 +930,7 @@ func (s *IddWorkflowTestSuite) TestIddWorkflowSetsUpLocalParentForRemoteSelectio
 	s.Equal(worktreeDir, watchInput.WorktreeDir)
 	s.Equal("intent", watchInput.WatchSubdir)
 
+	s.Empty(s.sideTmpSetupCalls, "worktree provisioning must avoid redundant scratch-directory setup")
 	s.Empty(remote.calls, "a local IDD parent must not reach the selected remote environment")
 }
 

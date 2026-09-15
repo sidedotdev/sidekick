@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,6 +123,9 @@ func (s *stubSSHTransport) WithSFTP(_ context.Context, op SFTPOp) (any, error) {
 	return []byte(nil), nil
 }
 func (s *stubSSHTransport) EnsureReverseForwards(context.Context, []common.PortForwardConfig) error {
+	return nil
+}
+func (s *stubSSHTransport) ReplaceReverseForwards(context.Context, []common.PortForwardConfig, []common.PortForwardConfig) error {
 	return nil
 }
 func (s *stubSSHTransport) Close() {}
@@ -398,6 +402,310 @@ func TestReverseForwardHolderPlacesOptionsBeforeDestination(t *testing.T) {
 	require.GreaterOrEqual(t, destination, 0)
 	assert.Less(t, strings.Index(args, "-N"), destination, "-N must precede the destination")
 	assert.Less(t, strings.Index(args, "-R 127.0.0.1:3000:127.0.0.1:8080"), destination, "-R must precede the destination")
+}
+
+// holderAlive reports whether the holder registered under key is running.
+func holderAlive(key string) bool {
+	holder := getReverseForwardHolder(key)
+	holder.mu.Lock()
+	defer holder.mu.Unlock()
+	return holder.aliveLocked()
+}
+
+// TestReverseForwardStateRetirementWaitsForInFlightOperation pins that
+// shutdown retiring a remote's shared state does not let a newcomer run under
+// a second lock while an operation still holds the first. The newcomer queues
+// behind it and then runs under whichever state is published when its turn
+// comes: the old one if it wins the lock before retirement, a fresh one after.
+func TestReverseForwardStateRetirementWaitsForInFlightOperation(t *testing.T) {
+	// Deliberately not parallel: retirement touches every remote's state.
+	const key = "test:retire-in-flight"
+	inFlight := lockReverseForwardState(key)
+	inFlight.replaceLocked([]common.PortForwardConfig{{HostPort: 1}})
+	unlockInFlight := sync.OnceFunc(inFlight.mu.Unlock)
+	newcomer := make(chan *reverseForwardState, 1)
+	queuedReceived := false
+	// Cleanups run last-registered first: every lock this test may still hold
+	// on a failure path is released before the state is retired.
+	t.Cleanup(func() {
+		state := lockReverseForwardState(key)
+		state.retireLocked()
+		state.mu.Unlock()
+	})
+	t.Cleanup(func() {
+		unlockInFlight()
+		if queuedReceived {
+			return
+		}
+		select {
+		case state := <-newcomer:
+			state.mu.Unlock()
+		case <-time.After(time.Second):
+		}
+	})
+
+	retired := make(chan struct{})
+	go func() {
+		retireUnservedReverseForwardStates(func(string) bool { return false })
+		close(retired)
+	}()
+	go func() { newcomer <- lockReverseForwardState(key) }()
+
+	select {
+	case <-retired:
+		t.Fatal("retirement completed while an operation still held the state")
+	case state := <-newcomer:
+		state.mu.Unlock()
+		queuedReceived = true
+		t.Fatal("a second lock was handed out for one remote while an operation still held the first")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	unlockInFlight()
+	var queued *reverseForwardState
+	select {
+	case queued = <-newcomer:
+		queuedReceived = true
+	case <-time.After(10 * time.Second):
+		t.Fatal("queued operation never acquired the remote's state")
+	}
+	assert.False(t, queued.retired, "a queued operation must never run under a retired state")
+	reverseForwardStates.mu.Lock()
+	published := reverseForwardStates.byRemote[key]
+	reverseForwardStates.mu.Unlock()
+	assert.True(t, queued == published, "the queued operation must run under the state later callers find")
+	if queued != inFlight {
+		assert.False(t, queued.replaced, "a retired replacement must not carry over")
+	}
+	queued.mu.Unlock()
+
+	select {
+	case <-retired:
+	case <-time.After(10 * time.Second):
+		t.Fatal("retirement never completed")
+	}
+	assert.True(t, inFlight.retired)
+}
+
+// TestLegacyTransportReplaceReverseForwardsRestartsHolder pins that a mapping
+// change stops the holder bound under the old mappings before starting one for
+// the new, across the transports production builds per operation. Holders are
+// keyed by their forwards, so the transport built under the old mappings would
+// otherwise keep a holder competing for the same remote ports, and re-running
+// setup through it must not start that holder again. An empty desired list
+// must leave no holder running, even against stale setup.
+func TestLegacyTransportReplaceReverseForwardsRestartsHolder(t *testing.T) {
+	// Deliberately not parallel: overrides PATH.
+	argsFile, _ := startedForwardHolderArgs(t)
+	const key = "test:replace-forwards"
+	previous := []common.PortForwardConfig{{HostPort: 8080, ContainerPort: 3000}}
+	desired := []common.PortForwardConfig{{HostPort: 9090, ContainerPort: 3000}}
+	previousKey := reverseForwardHolderKey(key, previous)
+	desiredKey := reverseForwardHolderKey(key, desired)
+	sshEnv := &recordingSSHEnv{&LocalEnv{}}
+	ctx := context.Background()
+
+	before := &legacySSHTransport{key: key, forwards: previous, sshEnv: sshEnv}
+	t.Cleanup(before.Close)
+	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	require.Len(t, waitForHolderInvocations(t, argsFile, 1), 1)
+	previousHolder := getReverseForwardHolder(previousKey)
+	previousHolder.mu.Lock()
+	previousExited := previousHolder.exited
+	previousHolder.mu.Unlock()
+	require.NotNil(t, previousExited)
+
+	require.NoError(t, before.ReplaceReverseForwards(ctx, previous, desired))
+	select {
+	case <-previousExited:
+	default:
+		t.Fatal("the holder for the old mappings must be stopped before the new one binds")
+	}
+	invocations := waitForHolderInvocations(t, argsFile, 2)
+	require.Len(t, invocations, 2)
+	assert.Contains(t, invocations[1], "-R 127.0.0.1:3000:127.0.0.1:9090")
+
+	after := &legacySSHTransport{key: key, forwards: desired, sshEnv: sshEnv}
+	require.NoError(t, after.EnsureReverseForwards(ctx, desired))
+	assert.Len(t, readHolderInvocations(t, argsFile), 2, "a fresh transport must reuse the replacement holder")
+
+	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	assert.False(t, holderAlive(previousKey), "stale setup must not start a holder for replaced mappings")
+	assert.True(t, holderAlive(desiredKey))
+	assert.Len(t, readHolderInvocations(t, argsFile), 2)
+
+	cleared := &legacySSHTransport{key: key, sshEnv: sshEnv}
+	require.NoError(t, cleared.ReplaceReverseForwards(ctx, desired, nil))
+	assert.False(t, holderAlive(desiredKey), "clearing the mappings must stop the holder")
+
+	require.NoError(t, after.EnsureReverseForwards(ctx, desired))
+	assert.False(t, holderAlive(desiredKey), "stale setup must not start a holder for cleared mappings")
+	assert.Len(t, readHolderInvocations(t, argsFile), 2, "an empty mapping list must not start a holder")
+}
+
+// TestLegacyTransportReplaceReverseForwardsKeepsRetainedAndOtherRemotes
+// covers a replacement that edits a multi-mapping list: the holder restarts
+// with the mapping kept plus the one added and without the one dropped, while
+// another remote's holder and the remote's pooled exec and SFTP channels keep
+// serving through both the replacement and a later clear.
+func TestLegacyTransportReplaceReverseForwardsKeepsRetainedAndOtherRemotes(t *testing.T) {
+	// Deliberately not parallel: overrides PATH.
+	argsFile, _ := startedForwardHolderArgs(t)
+	const key = "test:replace-multi"
+	const otherKey = "test:replace-multi-other"
+	retained := common.PortForwardConfig{HostPort: 8080, ContainerPort: 3000}
+	removed := common.PortForwardConfig{HostPort: 8081, ContainerPort: 3001}
+	added := common.PortForwardConfig{HostPort: 8082, ContainerPort: 3002}
+	initial := []common.PortForwardConfig{retained, removed}
+	desired := []common.PortForwardConfig{retained, added}
+	other := []common.PortForwardConfig{{HostPort: 9000, ContainerPort: 4000}}
+	sshEnv := &recordingSSHEnv{&LocalEnv{}}
+	ctx := context.Background()
+
+	edited := &legacySSHTransport{key: key, forwards: initial, sshEnv: sshEnv}
+	t.Cleanup(edited.Close)
+	otherRemote := &legacySSHTransport{key: otherKey, forwards: other, sshEnv: sshEnv}
+	t.Cleanup(otherRemote.Close)
+
+	execConn := getPooledAgentExecConn(key)
+	execClient := startTestAgentClient(t)
+	execConn.mu.Lock()
+	execConn.client = execClient
+	execConn.mu.Unlock()
+	sftpConn := sharedSFTPConnFor(key)
+	sftpClient := newInMemorySFTPClient(t)
+	sftpConn.mu.Lock()
+	sftpConn.client = sftpClient
+	sftpConn.mu.Unlock()
+	dir := t.TempDir()
+	assertChannelsServe := func(name string) {
+		t.Helper()
+		resp, err := edited.Exec(ctx, sideagent.ExecRequest{Argv: []string{"echo", name}})
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Stdout), name)
+		execConn.mu.Lock()
+		sameExec := execConn.client == execClient
+		execConn.mu.Unlock()
+		assert.True(t, sameExec, "the pooled exec channel must be the one established before the replacement")
+
+		path := filepath.Join(dir, name)
+		require.NoError(t, sftpWriteFile(ctx, edited, path, []byte(name), 0o644))
+		content, err := sftpReadFile(ctx, edited, path)
+		require.NoError(t, err)
+		assert.Equal(t, name, string(content))
+		sftpConn.mu.Lock()
+		sameSFTP := sftpConn.client == sftpClient
+		sftpConn.mu.Unlock()
+		assert.True(t, sameSFTP, "the pooled SFTP channel must be the one established before the replacement")
+	}
+	exitedOf := func(holderKey string) chan struct{} {
+		t.Helper()
+		holder := getReverseForwardHolder(holderKey)
+		holder.mu.Lock()
+		defer holder.mu.Unlock()
+		require.NotNil(t, holder.exited)
+		return holder.exited
+	}
+	assertStillRunning := func(exited chan struct{}, msg string) {
+		t.Helper()
+		select {
+		case <-exited:
+			t.Fatal(msg)
+		default:
+		}
+	}
+
+	require.NoError(t, edited.EnsureReverseForwards(ctx, initial))
+	require.NoError(t, otherRemote.EnsureReverseForwards(ctx, other))
+	invocations := waitForHolderInvocations(t, argsFile, 2)
+	require.Len(t, invocations, 2)
+	assert.Contains(t, invocations[0], "-R 127.0.0.1:3000:127.0.0.1:8080")
+	assert.Contains(t, invocations[0], "-R 127.0.0.1:3001:127.0.0.1:8081")
+	initialExited := exitedOf(reverseForwardHolderKey(key, initial))
+	otherExited := exitedOf(reverseForwardHolderKey(otherKey, other))
+	assertChannelsServe("before-replace")
+
+	require.NoError(t, edited.ReplaceReverseForwards(ctx, initial, desired))
+	select {
+	case <-initialExited:
+	default:
+		t.Fatal("the holder bound under the old mappings must be stopped")
+	}
+	invocations = waitForHolderInvocations(t, argsFile, 3)
+	require.Len(t, invocations, 3)
+	assert.Contains(t, invocations[2], "-R 127.0.0.1:3000:127.0.0.1:8080", "the retained mapping must stay bound")
+	assert.Contains(t, invocations[2], "-R 127.0.0.1:3002:127.0.0.1:8082", "the added mapping must be bound")
+	assert.NotContains(t, invocations[2], "127.0.0.1:8081", "the dropped mapping must not be bound again")
+	assertStillRunning(otherExited, "another remote's holder must survive a replacement")
+	assertChannelsServe("after-replace")
+
+	require.NoError(t, edited.ReplaceReverseForwards(ctx, desired, nil))
+	assert.False(t, holderAlive(reverseForwardHolderKey(key, desired)), "clearing must stop the remote's holder")
+	assertStillRunning(otherExited, "another remote's holder must survive a clear")
+	assert.Len(t, readHolderInvocations(t, argsFile), 3, "clearing must not start a holder")
+	assertChannelsServe("after-clear")
+}
+
+// TestLegacyTransportCloseAfterReplacementStopsEffectiveHolder pins that
+// closing a transport built under the old mappings stops the holder a
+// replacement made effective, and forgets the replacement so the remote key
+// starts afresh: setup afterwards binds the transport's own mappings again.
+func TestLegacyTransportCloseAfterReplacementStopsEffectiveHolder(t *testing.T) {
+	// Deliberately not parallel: overrides PATH.
+	argsFile, _ := startedForwardHolderArgs(t)
+	const key = "test:close-after-replace"
+	previous := []common.PortForwardConfig{{HostPort: 8080, ContainerPort: 3000}}
+	desired := []common.PortForwardConfig{{HostPort: 9090, ContainerPort: 3000}}
+	ctx := context.Background()
+
+	before := &legacySSHTransport{key: key, forwards: previous, sshEnv: &recordingSSHEnv{&LocalEnv{}}}
+	t.Cleanup(before.Close)
+	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	require.NoError(t, before.ReplaceReverseForwards(ctx, previous, desired))
+	require.Len(t, waitForHolderInvocations(t, argsFile, 2), 2)
+	require.True(t, holderAlive(reverseForwardHolderKey(key, desired)))
+
+	before.Close()
+	assert.False(t, holderAlive(reverseForwardHolderKey(key, desired)), "Close must stop the holder in effect, not the one the transport was built with")
+
+	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	invocations := waitForHolderInvocations(t, argsFile, 3)
+	require.Len(t, invocations, 3)
+	assert.Contains(t, invocations[2], "-R 127.0.0.1:3000:127.0.0.1:8080")
+}
+
+// TestLegacyTransportReplaceReverseForwardsRetriesFailedBind covers a holder
+// that exits at once because the remote refused a binding: the failure must be
+// reported, and a retry must start a holder afresh.
+func TestLegacyTransportReplaceReverseForwardsRetriesFailedBind(t *testing.T) {
+	// Deliberately not parallel: overrides PATH.
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	failedOnce := filepath.Join(dir, "failed-once")
+	installFakeSSH(t, strings.Join([]string{
+		"if [ ! -f " + failedOnce + " ]; then",
+		"  touch " + failedOnce,
+		"  echo 'bind: Address already in use' >&2",
+		"  exit 255",
+		"fi",
+		"printf '%s\\n' \"$*\" >> " + argsFile,
+		"exec sleep 30",
+		"",
+	}, "\n"))
+	const key = "test:replace-forwards-retry"
+	desired := []common.PortForwardConfig{{HostPort: 8080, ContainerPort: 3000}}
+	t.Cleanup(func() { closeReverseForwardHolder(reverseForwardHolderKey(key, desired)) })
+	transport := &legacySSHTransport{key: key, forwards: desired, sshEnv: &recordingSSHEnv{&LocalEnv{}}}
+	ctx := context.Background()
+
+	err := transport.ReplaceReverseForwards(ctx, nil, desired)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Address already in use")
+
+	require.NoError(t, transport.ReplaceReverseForwards(ctx, nil, desired))
+	invocations := waitForHolderInvocations(t, argsFile, 1)
+	require.Len(t, invocations, 1)
+	assert.Contains(t, invocations[0], "-R 127.0.0.1:3000:127.0.0.1:8080")
 }
 
 // TestRunRemoteCommandGivesForwardsToTheHolderOnly pins the ownership rule:

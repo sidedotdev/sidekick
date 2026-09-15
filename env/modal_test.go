@@ -980,3 +980,282 @@ func TestIsModalSandboxTerminatingOrTerminated(t *testing.T) {
 		errors.New("Sandbox sb-123 has already completed with result: status:GENERIC_STATUS_FAILURE exit_code:1")),
 		"completed-with-failure is not a shutdown race and must not trigger recreation")
 }
+
+func TestModalEnvReconcileConfig(t *testing.T) {
+	// Not parallel: subtests swap the package-level recreation and forward
+	// replacement seams.
+	origCheck := modalRecreateCheckSandbox
+	origSnapshot := modalRecreateSnapshot
+	origLatest := modalRecreateLatestSnapshot
+	origTerminate := modalRecreateTerminateSandbox
+	origCreate := modalRecreateCreateSandbox
+	origDeleteSnapshots := modalRecreateDeleteSnapshots
+	origReplace := modalReplaceReverseForwards
+	t.Cleanup(func() {
+		modalRecreateCheckSandbox = origCheck
+		modalRecreateSnapshot = origSnapshot
+		modalRecreateLatestSnapshot = origLatest
+		modalRecreateTerminateSandbox = origTerminate
+		modalRecreateCreateSandbox = origCreate
+		modalRecreateDeleteSnapshots = origDeleteSnapshots
+		modalReplaceReverseForwards = origReplace
+	})
+
+	type replacement struct {
+		sandbox            string
+		previous, forwards []common.PortForwardConfig
+	}
+	var replacements []replacement
+	var replaceErr error
+	installSeams := func(t *testing.T) *recreateSeams {
+		t.Helper()
+		replacements = nil
+		replaceErr = nil
+		modalReplaceReverseForwards = func(_ context.Context, modalEnv *ModalEnv, previous, forwards []common.PortForwardConfig) error {
+			replacements = append(replacements, replacement{sandbox: modalEnv.SandboxName, previous: previous, forwards: forwards})
+			return replaceErr
+		}
+		return installRecreateSeams(t, true, &modalSnapshotRecord{ImageId: "im-live", ImageVersion: modalSnapshotImageVersion}, nil, nil, nil)
+	}
+
+	initialForwards := []common.PortForwardConfig{{HostPort: 18855}}
+	newForwards := []common.PortForwardConfig{{HostPort: 3000, ContainerPort: 3001}, {HostPort: 5432}}
+	newEnv := func() *ModalEnv {
+		return &ModalEnv{
+			WorkingDirectory: "/root/repo",
+			SandboxName:      "side--repo-abc",
+			SSHHost:          "old.modal.host",
+			SSHPort:          1111,
+			LocalRepoDir:     "/host/repo",
+			PortForwards:     initialForwards,
+		}
+	}
+	successorName := modalReplacementSandboxName("side--repo-abc")
+
+	t.Run("ValidateConfig rejects sandbox settings the sandbox cannot apply", func(t *testing.T) {
+		err := newEnv().ValidateConfig(EnvConfig{Modal: common.ModalEnvConfig{
+			Volumes: []common.ModalVolumeMount{
+				{Name: "a", MountPath: "/cache"},
+				{Name: "b", MountPath: "/cache/"},
+			},
+		}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "configured more than once")
+		assert.NoError(t, newEnv().ValidateConfig(EnvConfig{Modal: common.ModalEnvConfig{Memory: 2048}}))
+	})
+
+	t.Run("invalid desired configuration is rejected before any comparison", func(t *testing.T) {
+		valid := common.ModalEnvConfig{Memory: 1024}
+		invalidModal := common.ModalEnvConfig{
+			Memory: 1024,
+			Volumes: []common.ModalVolumeMount{
+				{Name: "a", MountPath: "/cache"},
+				{Name: "b", MountPath: "/cache/"},
+			},
+		}
+		invalidForwards := []common.PortForwardConfig{{HostPort: 3000, ContainerPort: 4000}, {HostPort: 4000}}
+		cases := map[string]struct{ current, desired EnvConfig }{
+			"invalid mappings with unchanged settings": {
+				current: EnvConfig{PortForwards: initialForwards, Modal: valid},
+				desired: EnvConfig{PortForwards: invalidForwards, Modal: valid},
+			},
+			"invalid settings with unchanged mappings": {
+				current: EnvConfig{PortForwards: initialForwards, Modal: valid},
+				desired: EnvConfig{PortForwards: initialForwards, Modal: invalidModal},
+			},
+			"unchanged but invalid settings": {
+				current: EnvConfig{PortForwards: initialForwards, Modal: invalidModal},
+				desired: EnvConfig{PortForwards: initialForwards, Modal: invalidModal},
+			},
+			"unchanged but invalid mappings": {
+				current: EnvConfig{PortForwards: invalidForwards, Modal: valid},
+				desired: EnvConfig{PortForwards: invalidForwards, Modal: valid},
+			},
+		}
+		for name, tc := range cases {
+			t.Run(name, func(t *testing.T) {
+				seams := installSeams(t)
+				updated, err := newEnv().ReconcileConfig(context.Background(), tc.current, tc.desired)
+				require.Error(t, err)
+				assert.Nil(t, updated)
+				assert.Empty(t, seams.sequence)
+				assert.Empty(t, replacements)
+			})
+		}
+	})
+
+	t.Run("unchanged configuration is a no-op", func(t *testing.T) {
+		seams := installSeams(t)
+		modalEnv := newEnv()
+		current := EnvConfig{PortForwards: initialForwards, Modal: common.ModalEnvConfig{Memory: 1024}}
+		desired := EnvConfig{
+			PortForwards: []common.PortForwardConfig{{HostPort: 18855, ContainerPort: 18855}},
+			Modal:        common.ModalEnvConfig{Memory: 1024, Volumes: []common.ModalVolumeMount{}},
+		}
+		updated, err := modalEnv.ReconcileConfig(context.Background(), current, desired)
+		require.NoError(t, err)
+		assert.Same(t, modalEnv, updated)
+		assert.Empty(t, seams.sequence)
+		assert.Empty(t, replacements)
+	})
+
+	t.Run("mapping-only change swaps listeners on the live sandbox", func(t *testing.T) {
+		seams := installSeams(t)
+		modalEnv := newEnv()
+		modal := common.ModalEnvConfig{Memory: 1024}
+		updated, err := modalEnv.ReconcileConfig(context.Background(),
+			EnvConfig{PortForwards: initialForwards, Modal: modal},
+			EnvConfig{PortForwards: newForwards, Modal: modal})
+		require.NoError(t, err)
+		assert.Empty(t, seams.sequence)
+		require.Equal(t, []replacement{{sandbox: "side--repo-abc", previous: initialForwards, forwards: newForwards}}, replacements)
+
+		updatedEnv, ok := updated.(*ModalEnv)
+		require.True(t, ok)
+		assert.Equal(t, "side--repo-abc", updatedEnv.SandboxName)
+		assert.Equal(t, "old.modal.host", updatedEnv.SSHHost)
+		assert.Equal(t, 1111, updatedEnv.SSHPort)
+		assert.Equal(t, newForwards, updatedEnv.PortForwards)
+		assert.Equal(t, initialForwards, modalEnv.PortForwards, "input env must not be mutated")
+	})
+
+	t.Run("retrying a mapping change reissues the same replacement", func(t *testing.T) {
+		seams := installSeams(t)
+		modal := common.ModalEnvConfig{Memory: 1024}
+		current := EnvConfig{PortForwards: initialForwards, Modal: modal}
+		desired := EnvConfig{PortForwards: newForwards, Modal: modal}
+		modalEnv := newEnv()
+
+		replaceErr = errors.New("connection reset")
+		_, err := modalEnv.ReconcileConfig(context.Background(), current, desired)
+		require.Error(t, err)
+
+		// A retry is handed the same predecessor environment, so it must
+		// describe the same transition to the transport rather than treat
+		// the failed attempt's mappings as already bound.
+		replaceErr = nil
+		updated, err := modalEnv.ReconcileConfig(context.Background(), current, desired)
+		require.NoError(t, err)
+		expected := replacement{sandbox: "side--repo-abc", previous: initialForwards, forwards: newForwards}
+		assert.Equal(t, []replacement{expected, expected}, replacements)
+		assert.Equal(t, newForwards, updated.(*ModalEnv).PortForwards)
+		assert.Empty(t, seams.sequence)
+	})
+
+	t.Run("clearing mappings releases listeners without rebinding", func(t *testing.T) {
+		seams := installSeams(t)
+		modal := common.ModalEnvConfig{Memory: 1024}
+		updated, err := newEnv().ReconcileConfig(context.Background(),
+			EnvConfig{PortForwards: initialForwards, Modal: modal},
+			EnvConfig{Modal: modal})
+		require.NoError(t, err)
+		assert.Empty(t, seams.sequence)
+		require.Len(t, replacements, 1)
+		assert.Empty(t, replacements[0].forwards)
+		assert.Empty(t, updated.(*ModalEnv).PortForwards)
+	})
+
+	t.Run("listener replacement failure surfaces without touching the sandbox", func(t *testing.T) {
+		seams := installSeams(t)
+		replaceErr = errors.New("remote port 3001 already bound")
+		modal := common.ModalEnvConfig{Memory: 1024}
+		_, err := newEnv().ReconcileConfig(context.Background(),
+			EnvConfig{PortForwards: initialForwards, Modal: modal},
+			EnvConfig{PortForwards: newForwards, Modal: modal})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "remote port 3001 already bound")
+		assert.Empty(t, seams.sequence)
+	})
+
+	t.Run("sandbox setting change recreates the sandbox and keeps its mappings", func(t *testing.T) {
+		seams := installSeams(t)
+		updated, err := newEnv().ReconcileConfig(context.Background(),
+			EnvConfig{PortForwards: initialForwards, Modal: common.ModalEnvConfig{Memory: 1024}},
+			EnvConfig{PortForwards: initialForwards, Modal: common.ModalEnvConfig{Memory: 2048}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"check", "snapshot", "terminate", "create", "snapshot-successor:" + successorName, "delete-snapshots:side--repo-abc"}, seams.sequence)
+		assert.Equal(t, 2048, seams.createInput.Config.Memory)
+		assert.Empty(t, replacements)
+
+		successor, ok := updated.(*ModalEnv)
+		require.True(t, ok)
+		assert.Equal(t, successorName, successor.SandboxName)
+		assert.Equal(t, "new.modal.host", successor.SSHHost)
+		assert.Equal(t, initialForwards, successor.PortForwards)
+	})
+
+	t.Run("changing both sections recreates the sandbox and rebinds the successor's mappings", func(t *testing.T) {
+		seams := installSeams(t)
+		updated, err := newEnv().ReconcileConfig(context.Background(),
+			EnvConfig{PortForwards: initialForwards, Modal: common.ModalEnvConfig{Memory: 1024}},
+			EnvConfig{PortForwards: newForwards, Modal: common.ModalEnvConfig{Memory: 2048}})
+		require.NoError(t, err)
+		assert.Contains(t, seams.sequence, "create")
+		// Snapshotting the successor already connected to it under the
+		// predecessor's mappings, so those listeners must be swapped out.
+		require.Equal(t, []replacement{{sandbox: successorName, previous: initialForwards, forwards: newForwards}}, replacements)
+
+		successor := updated.(*ModalEnv)
+		assert.Equal(t, successorName, successor.SandboxName)
+		assert.Equal(t, newForwards, successor.PortForwards)
+	})
+
+	t.Run("successor mapping rebind failure surfaces after recreation", func(t *testing.T) {
+		installSeams(t)
+		replaceErr = errors.New("remote port 3001 already bound")
+		_, err := newEnv().ReconcileConfig(context.Background(),
+			EnvConfig{PortForwards: initialForwards, Modal: common.ModalEnvConfig{Memory: 1024}},
+			EnvConfig{PortForwards: newForwards, Modal: common.ModalEnvConfig{Memory: 2048}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), successorName)
+		assert.Contains(t, err.Error(), "remote port 3001 already bound")
+	})
+
+	t.Run("recreation failure is returned as-is", func(t *testing.T) {
+		installSeams(t)
+		modalRecreateCreateSandbox = func(context.Context, ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
+			return ModalCreateSandboxOutput{}, errors.New("modal API unavailable")
+		}
+		_, err := newEnv().ReconcileConfig(context.Background(),
+			EnvConfig{Modal: common.ModalEnvConfig{Memory: 1024}},
+			EnvConfig{Modal: common.ModalEnvConfig{Memory: 2048}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "modal API unavailable")
+	})
+
+	t.Run("update activity rejects invalid combined configuration before touching anything", func(t *testing.T) {
+		current := EnvConfig{PortForwards: initialForwards, Modal: common.ModalEnvConfig{Memory: 1024}}
+		invalidUpdates := map[string]EnvConfig{
+			"invalid sandbox settings": {
+				PortForwards: newForwards,
+				Modal: common.ModalEnvConfig{
+					Memory: 2048,
+					Volumes: []common.ModalVolumeMount{
+						{Name: "a", MountPath: "/cache"},
+						{Name: "b", MountPath: "/cache/"},
+					},
+				},
+			},
+			"invalid port forwards": {
+				PortForwards: []common.PortForwardConfig{{HostPort: 3000, ContainerPort: 4000}, {HostPort: 4000}},
+				Modal:        common.ModalEnvConfig{Memory: 2048},
+			},
+		}
+		for name, desired := range invalidUpdates {
+			t.Run(name, func(t *testing.T) {
+				seams := installSeams(t)
+				_, err := UpdateEnvConfigActivity(context.Background(), UpdateEnvConfigInput{
+					EnvContainer: EnvContainer{Env: newEnv()},
+					Current:      current,
+					Desired:      desired,
+				})
+				require.Error(t, err)
+				var appErr *temporal.ApplicationError
+				require.ErrorAs(t, err, &appErr)
+				assert.True(t, appErr.NonRetryable())
+				assert.Empty(t, seams.sequence)
+				assert.Empty(t, replacements)
+			})
+		}
+	})
+}

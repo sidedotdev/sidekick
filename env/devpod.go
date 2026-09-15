@@ -111,6 +111,18 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 		return CreateDevPodWorktreeOutput{}, err
 	}
 
+	if err := ensureSideTmp(ctx, EnvWithDir(input.EnvContainer.Env, worktreePath)); err != nil {
+		_, _ = input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+			Command: "git",
+			Args:    []string{"worktree", "remove", "--force", worktreePath},
+		})
+		_, _ = input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+			Command: "git",
+			Args:    []string{"branch", "-D", input.BranchName},
+		})
+		return CreateDevPodWorktreeOutput{}, err
+	}
+
 	return CreateDevPodWorktreeOutput{WorktreePath: worktreePath}, nil
 }
 

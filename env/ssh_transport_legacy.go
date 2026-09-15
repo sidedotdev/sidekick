@@ -38,13 +38,40 @@ func (t *legacySSHTransport) WithSFTP(ctx context.Context, op SFTPOp) (any, erro
 }
 
 func (t *legacySSHTransport) EnsureReverseForwards(ctx context.Context, forwards []common.PortForwardConfig) error {
+	state := lockReverseForwardState(t.key)
+	defer state.mu.Unlock()
+	forwards = state.effectiveLocked(forwards)
 	return getReverseForwardHolder(reverseForwardHolderKey(t.key, forwards)).ensure(ctx, t.sshEnv, forwards)
 }
 
+// ReplaceReverseForwards stops the holder for previous before starting one for
+// forwards: holders are keyed by their forwards, so the old one would otherwise
+// keep running and hold remote ports the new one needs.
+func (t *legacySSHTransport) ReplaceReverseForwards(ctx context.Context, previous, forwards []common.PortForwardConfig) error {
+	state := lockReverseForwardState(t.key)
+	defer state.mu.Unlock()
+	// A caller built under mappings an earlier replacement already retired
+	// names those, but the holder actually running is the effective one's.
+	previous = state.effectiveLocked(previous)
+	previousKey := reverseForwardHolderKey(t.key, previous)
+	desiredKey := reverseForwardHolderKey(t.key, forwards)
+	state.replaceLocked(forwards)
+	if previousKey != desiredKey {
+		closeReverseForwardHolder(previousKey)
+	}
+	return getReverseForwardHolder(desiredKey).ensure(ctx, t.sshEnv, forwards)
+}
+
+// Close tears down the remote's pooled channels and its reverse forwards. The
+// holder to stop is the one for the mappings currently in effect, which a
+// replacement may have changed since this transport was built.
 func (t *legacySSHTransport) Close() {
 	getPooledAgentExecConn(t.execKey()).Close()
 	sharedSFTPConnFor(t.key).Close()
-	closeReverseForwardHolder(reverseForwardHolderKey(t.key, t.forwards))
+	state := lockReverseForwardState(t.key)
+	defer state.mu.Unlock()
+	closeReverseForwardHolder(reverseForwardHolderKey(t.key, state.effectiveLocked(t.forwards)))
+	state.retireLocked()
 }
 
 // reverseForwardHolderKey identifies a holder by the listeners it binds, since
@@ -117,6 +144,27 @@ func CloseAllReverseForwardHolders() {
 	for _, h := range holders {
 		h.close()
 	}
+	retireUnservedReverseForwardStates(reverseForwardHolderServes)
+}
+
+// reverseForwardHolderServes reports whether a holder is running for any
+// mapping list of remoteKey.
+func reverseForwardHolderServes(remoteKey string) bool {
+	prefix := reverseForwardHolderKey(remoteKey, nil)
+	reverseForwardHolders.mu.Lock()
+	defer reverseForwardHolders.mu.Unlock()
+	for key, h := range reverseForwardHolders.holders {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		h.mu.Lock()
+		alive := h.aliveLocked()
+		h.mu.Unlock()
+		if alive {
+			return true
+		}
+	}
+	return false
 }
 
 // ensure starts the holder if it is not already running, and restarts it if a

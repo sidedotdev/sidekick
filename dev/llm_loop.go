@@ -113,8 +113,9 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 		}
 		if response != nil && response.Content != "" {
 			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
-				Role:    "user",
-				Content: renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
+				Role:        "user",
+				ContextType: ContextTypeUserFeedback,
+				Content:     renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
 			}); err != nil {
 				return nil, err
 			}
@@ -144,9 +145,14 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 			}
 
 			// Add feedback to chat history
+			contextType := ""
+			if !dCtx.ExecContext.DisableHumanInTheLoop {
+				contextType = ContextTypeUserFeedback
+			}
 			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
-				Role:    "user",
-				Content: userResponse.Content,
+				Role:        "user",
+				ContextType: contextType,
+				Content:     userResponse.Content,
 			}); err != nil {
 				return nil, err
 			}

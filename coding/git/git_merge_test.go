@@ -972,3 +972,182 @@ func TestGitMergeActivityPropagatesMergeResultSyncFailure(t *testing.T) {
 	assert.Equal(t, fixture.hostIntentCommit, hostBranchCommit)
 	assert.NoFileExists(t, filepath.Join(fixture.hostWorktreeDir, "child.txt"))
 }
+
+type hostTargetMergeEnv struct {
+	*mergeResultSyncerEnv
+	backupErr error
+}
+
+func (e *hostTargetMergeEnv) HostRepository(ctx context.Context) (env.Env, error) {
+	return env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: e.hostRepoDir})
+}
+
+func (e *hostTargetMergeEnv) SyncFlowBranchToLocal(ctx context.Context, branch string) error {
+	if e.backupErr != nil {
+		return e.backupErr
+	}
+	runGitCommandInTestRepo(e.t, e.hostRepoDir, "fetch", e.childRepoDir, "+refs/heads/"+branch+":refs/heads/"+branch)
+	return nil
+}
+
+func (e *hostTargetMergeEnv) SSHArgs(context.Context) ([]string, error) {
+	return []string{"merge-test-host"}, nil
+}
+
+func (e *hostTargetMergeEnv) SSHConnConfig(context.Context) (env.SSHConnConfig, error) {
+	return env.SSHConnConfig{}, errors.New("native SSH is not used by this fixture")
+}
+
+func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
+	sshDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "ssh"), []byte("#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -o|-p|-i) shift 2 ;;\n    merge-test-host) shift; exec sh -c \"$*\" ;;\n    *) exit 2 ;;\n  esac\ndone\nexit 2\n"), 0755))
+	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_SSH_VARIANT", "ssh")
+	ctx := context.Background()
+
+	for _, strategy := range []MergeStrategy{MergeStrategyMerge, MergeStrategySquash} {
+		for _, scenario := range []string{"clean", "dirty", "stash conflict", "ordinary conflict", "no host worktree", "backup failure"} {
+			t.Run(string(strategy)+"/"+scenario, func(t *testing.T) {
+				fixture := setupIddChildMergeFixture(t)
+				childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
+				require.NoError(t, err)
+				remote := &hostTargetMergeEnv{mergeResultSyncerEnv: &mergeResultSyncerEnv{
+					Env: childEnv, t: t, childRepoDir: fixture.childRepoDir, hostRepoDir: fixture.hostRepoDir,
+				}}
+				container := env.EnvContainer{Env: remote}
+				switch scenario {
+				case "dirty":
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "intent.md"), []byte("staged intent\n"), 0644))
+					runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "add", "intent.md")
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "intent.md"), []byte("unstaged intent\n"), 0644))
+				case "stash conflict":
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "saved.txt"), []byte("unrelated stash\n"), 0644))
+					runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "stash", "push", "-u", "-m", "user stash")
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"), []byte("staged local child\n"), 0644))
+					runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "add", "child.txt")
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"), []byte("local child edit\n"), 0644))
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "notes.txt"), []byte("untracked local notes\n"), 0644))
+				case "ordinary conflict":
+					createCommitWithFile(t, fixture.childRepoDir, "Conflicting intent", "intent.md", "child intent\n")
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "notes.txt"), []byte("local notes\n"), 0644))
+				case "no host worktree":
+					runGitCommandInTestRepo(t, fixture.hostRepoDir, "worktree", "remove", fixture.hostWorktreeDir)
+				case "backup failure":
+					remote.backupErr = errors.New("source backup unavailable")
+				}
+				before := runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", iddBranch)
+				result, err := GitMergeActivity(ctx, container, GitMergeParams{
+					SourceBranch: iddChildBranch, TargetBranch: iddBranch, MergeStrategy: strategy,
+				})
+				if scenario == "backup failure" {
+					require.ErrorContains(t, err, "source backup unavailable")
+					assert.Equal(t, before, runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", iddBranch))
+					return
+				}
+				require.NoError(t, err)
+				if scenario == "no host worktree" {
+					assert.False(t, result.HasConflicts)
+					assert.Equal(t, []string{iddBranch}, remote.syncedBranches)
+					assert.Equal(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", iddBranch),
+						runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", iddBranch))
+					return
+				}
+				assert.Empty(t, remote.syncedBranches)
+				assert.Equal(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", iddChildBranch),
+					runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", iddChildBranch))
+				if scenario == "ordinary conflict" || scenario == "stash conflict" {
+					require.True(t, result.HasConflicts)
+					assert.False(t, result.ConflictOnTargetBranch)
+					assert.Equal(t, evalSymlinks(t, fixture.childRepoDir), evalSymlinks(t, result.ConflictDirPath))
+					assert.False(t, mergeHeadExists(t, fixture.hostWorktreeDir))
+					if scenario == "ordinary conflict" {
+						assert.Empty(t, result.BaseStashSha)
+						assert.True(t, mergeHeadExists(t, fixture.childRepoDir))
+						assert.Equal(t, before, runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", iddBranch))
+						content, err := os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "notes.txt"))
+						require.NoError(t, err)
+						assert.Equal(t, "local notes\n", string(content))
+						content, err = os.ReadFile(filepath.Join(fixture.childRepoDir, "intent.md"))
+						require.NoError(t, err)
+						assert.Contains(t, string(content), "<<<<<<<")
+						assert.Contains(t, string(content), "updated intent")
+						return
+					}
+					assert.False(t, mergeHeadExists(t, fixture.childRepoDir))
+					assert.Equal(t, evalSymlinks(t, fixture.hostWorktreeDir), evalSymlinks(t, result.BaseStashWorktreePath))
+					require.NotEmpty(t, result.BaseStashSha)
+					assert.Equal(t, result.BaseStashSha, runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", "refs/stash"))
+					assert.Empty(t, runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "status", "--porcelain"))
+					content, err := os.ReadFile(filepath.Join(fixture.childRepoDir, "child.txt"))
+					require.NoError(t, err)
+					assert.Contains(t, string(content), "<<<<<<<")
+					assert.Contains(t, string(content), "local child edit")
+					assert.Equal(t, "staged local child", runGitCommandInTestRepo(t, fixture.hostRepoDir, "show", result.BaseStashSha+"^2:child.txt"))
+					assert.Equal(t, "untracked local notes", runGitCommandInTestRepo(t, fixture.hostRepoDir, "show", result.BaseStashSha+"^3:notes.txt"))
+					userStash := runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", "stash@{1}")
+					sourceTip := runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "HEAD")
+					targetTip := runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD")
+					assert.NotEqual(t, before, targetTip)
+					assert.NotEqual(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "HEAD^{tree}"),
+						runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD^{tree}"))
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.childRepoDir, "child.txt"), []byte("resolved child\n"), 0644))
+					runGitCommandInTestRepo(t, fixture.childRepoDir, "add", "child.txt")
+					transfer := GitTransferWorktreeChangesParams{
+						SourceWorktreePath: result.ConflictDirPath, TargetWorktreePath: result.BaseStashWorktreePath, BaseStashSha: result.BaseStashSha,
+					}
+					source := mergeRepository{envContainer: container}
+					target := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: fixture.hostRepoDir}}}
+					transport := &repositoryTestTransport{source: source, target: target, fail: true}
+					require.Error(t, (&mergeCoordinator{repository: source}).returnResolution(ctx, transport, transfer))
+					assert.Empty(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "status", "--porcelain"))
+					assert.Equal(t, result.BaseStashSha, runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", "refs/stash"))
+					assert.Equal(t, "resolved child", runGitCommandInTestRepo(t, fixture.childRepoDir, "show", "refs/stash:child.txt"))
+					assert.Equal(t, "untracked local notes", runGitCommandInTestRepo(t, fixture.childRepoDir, "show", "refs/stash^3:notes.txt"))
+
+					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"), []byte("intervening host edit\n"), 0644))
+					require.Error(t, GitTransferWorktreeChangesActivity(ctx, container, transfer))
+					content, err = os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"))
+					require.NoError(t, err)
+					assert.Equal(t, "intervening host edit\n", string(content))
+					assert.Equal(t, result.BaseStashSha, runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", "refs/stash"))
+					runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "restore", "child.txt")
+
+					for attempt := 0; attempt < 2; attempt++ {
+						require.NoError(t, GitTransferWorktreeChangesActivity(ctx, container, transfer))
+						for name, expected := range map[string]string{
+							"child.txt": "resolved child\n",
+							"intent.md": "updated intent\n",
+							"notes.txt": "untracked local notes\n",
+						} {
+							content, err = os.ReadFile(filepath.Join(fixture.hostWorktreeDir, name))
+							require.NoError(t, err)
+							assert.Equal(t, expected, string(content), name)
+						}
+						assert.Empty(t, stagedFiles(t, fixture.hostWorktreeDir))
+						assert.Equal(t, "notes.txt", runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "ls-files", "--others", "--exclude-standard"))
+						assert.Empty(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "status", "--porcelain"))
+						assert.Empty(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "stash", "list"))
+						assert.Equal(t, userStash, runGitCommandInTestRepo(t, fixture.hostRepoDir, "stash", "list", "--format=%H"))
+						assert.Equal(t, "unrelated stash", runGitCommandInTestRepo(t, fixture.hostRepoDir, "show", userStash+"^3:saved.txt"))
+						assert.Equal(t, sourceTip, runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "HEAD"))
+						assert.Equal(t, targetTip, runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD"))
+					}
+					return
+				}
+				assert.False(t, result.HasConflicts)
+				content, err := os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"))
+				require.NoError(t, err)
+				assert.Equal(t, "child work\n", string(content))
+				if scenario == "dirty" {
+					assert.Equal(t, "staged intent", runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "show", ":intent.md"))
+					content, err = os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "intent.md"))
+					require.NoError(t, err)
+					assert.Equal(t, "unstaged intent\n", string(content))
+					assert.Empty(t, runGitCommandInTestRepo(t, fixture.hostRepoDir, "stash", "list"))
+				} else {
+					assert.Empty(t, runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "status", "--porcelain"))
+				}
+			})
+		}
+	}
+}

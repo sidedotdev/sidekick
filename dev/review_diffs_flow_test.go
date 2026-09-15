@@ -182,9 +182,13 @@ func (h *reviewDiffsFlowHarness) registerMocks() {
 
 	var flags *fflag.FFlagActivities
 	h.env.OnActivity(flags.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	settings := DefaultVerifierSettings()
+	settings.Enabled = false
+	h.env.OnActivity(flags.EvaluateFlags, mock.Anything, mock.Anything).
+		Return(verifierFlagValues(settings), nil).Maybe()
 
 	// the test repository is the flow's working copy, so it must outlive the flow
-	h.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
+	h.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	var ragActivities *persisted_ai.RagActivities
 	h.env.OnActivity(ragActivities.RankedDirSignatureOutline, mock.Anything, mock.Anything).
@@ -446,6 +450,28 @@ func TestReviewRoundDiffsRealFlow(t *testing.T) {
 		assert  func(t *testing.T, fullDiffs []string, sinceDiff string, work *repoMutator)
 	}{
 		{
+			name: "reported version check reversion survives a disappeared file section",
+			prepare: func(t *testing.T, repos *flowRepos) {
+				repos.work.stage("shared.txt", "line one\n"+reportedReviewVersionCheck+"\nline two\nline three\n")
+				repos.work.stage("retained.txt", "RETAINED_REVIEWED_WORK\n")
+			},
+			respond: func(t *testing.T, repos *flowRepos) {
+				repos.work.stage("shared.txt", "line one\nline two\nline three\n")
+				repos.work.stage("response.txt", "FEEDBACK_RESPONSE\n")
+			},
+			assert: func(t *testing.T, fullDiffs []string, sinceDiff string, work *repoMutator) {
+				assert.Contains(t, fullDiffs[0], "+"+reportedReviewVersionCheck)
+				assert.NotContains(t, fullDiffs[1], "shared.txt")
+				assert.Contains(t, fullDiffs[1], "RETAINED_REVIEWED_WORK")
+				assert.Contains(t, sinceDiff, "\n-"+reportedReviewVersionCheck+"\n")
+				assert.Contains(t, sinceDiff, "FEEDBACK_RESPONSE")
+				assert.NotContains(t, sinceDiff, "RETAINED_REVIEWED_WORK")
+				assert.NotContains(t, sinceDiff, "Reverted since last review")
+				assert.NotContains(t, sinceDiff, "previously added")
+				assert.NotContains(t, sinceDiff, "previously removed")
+			},
+		},
+		{
 			name: "staged changes are always included",
 			prepare: func(t *testing.T, repos *flowRepos) {
 				repos.work.stage("staged_first.txt", "FIRST_ROUND_STAGED\n")
@@ -517,8 +543,8 @@ func TestReviewRoundDiffsRealFlow(t *testing.T) {
 				assert.Contains(t, fullDiffs[0], "OUR_CHANGE")
 				assert.Contains(t, fullDiffs[1], "RESOLVED_CHANGE")
 				assert.NotContains(t, fullDiffs[1], "UNRELATED_BASE_CHANGE")
-				assert.Contains(t, sinceDiff, "RESOLVED_CHANGE",
-					"our conflict resolution is our own change")
+				assert.Contains(t, sinceDiff, "Failed to generate diff since last review:",
+					"incompatible bases must not produce a successful approximate comparison")
 				assert.NotContains(t, sinceDiff, "UNRELATED_BASE_CHANGE",
 					"non-conflicting base changes are not ours")
 			},
@@ -539,10 +565,23 @@ func TestReviewRoundDiffsRealFlow(t *testing.T) {
 
 				assert.Empty(t, h.mergeApprovals[0].DiffSinceLastReview,
 					"the first review has no prior review to diff against")
-				assert.Contains(t, outcome.workDiff, normalizeReviewDiff(outcome.fullDiffs[0]),
-					"auto-review needs the original user-reviewed work")
+				prompt := h.fulfillmentPromptContaining(outcome.workDiff)
+				if strings.HasPrefix(outcome.sinceDiff, "Failed to generate diff since last review:") {
+					assert.NotContains(t, prompt, "Work Done So Far:")
+					assert.NotContains(t, prompt, normalizeReviewDiff(outcome.fullDiffs[0]))
+				} else {
+					assert.Equal(t, 1, strings.Count(prompt, normalizeReviewDiff(outcome.fullDiffs[0])),
+						"prior work belongs once in the requirements context")
+				}
+				if strings.Contains(outcome.fullDiffs[0], reportedReviewVersionCheck) {
+					assert.Contains(t, outcome.workDiff, "\n-"+reportedReviewVersionCheck+"\n",
+						"criteria fulfillment must receive the unified removal")
+				}
 				if normalizeReviewDiff(outcome.sinceDiff) == "" {
-					assert.Contains(t, outcome.workDiff, "No changes since the rejected user review.")
+					assert.Contains(t, outcome.workDiff, "No changes since the last review.")
+				} else if strings.HasPrefix(outcome.sinceDiff, "Failed to generate diff since last review:") {
+					assert.Contains(t, outcome.workDiff, normalizeReviewDiff(outcome.fullDiffs[1]),
+						"an unavailable comparison must leave the current full diff reviewable")
 				} else {
 					assert.Contains(t, outcome.workDiff, normalizeReviewDiff(outcome.sinceDiff),
 						"auto-review also needs the changes since user rejection")
@@ -552,4 +591,18 @@ func TestReviewRoundDiffsRealFlow(t *testing.T) {
 			})
 		}
 	}
+}
+
+const reportedReviewVersionCheck = `workflow.GetVersion(dCtx, "human-feedback-provenance", workflow.DefaultVersion, 1) >= 1`
+
+func (h *reviewDiffsFlowHarness) fulfillmentPromptContaining(work string) string {
+	h.t.Helper()
+	require.NotEmpty(h.t, strings.TrimSpace(work))
+	for i := len(h.promptTexts) - 1; i >= 0; i-- {
+		if strings.Contains(h.promptTexts[i], strings.TrimSpace(work)) {
+			return h.promptTexts[i]
+		}
+	}
+	h.t.Fatal("no captured fulfillment message contains the reviewed work")
+	return ""
 }

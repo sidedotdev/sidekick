@@ -126,6 +126,7 @@ func TestReviewAndResolveRealFlow(t *testing.T) {
 
 	h := newReviewDiffsFlowHarness(t)
 	h.repos.work.stage("pre_feedback.txt", "PRE_FEEDBACK_WORK\n")
+	h.repos.work.stage("shared.txt", "line one\n"+reportedReviewVersionCheck+"\nline two\nline three\n")
 	h.codingResponse = strings.Join([]string{
 		"Here is the fix.",
 		"",
@@ -138,6 +139,11 @@ func TestReviewAndResolveRealFlow(t *testing.T) {
 		">>>>>>> NEW_LINES",
 		"~~~~",
 	}, "\n")
+	h.roundHooks = map[int]func(t *testing.T, repos *flowRepos){
+		1: func(t *testing.T, repos *flowRepos) {
+			repos.work.stage("shared.txt", "line one\nline two\nline three\n")
+		},
+	}
 
 	const reviewMessage = "please also handle the edge case"
 	target := "main"
@@ -168,17 +174,23 @@ func TestReviewAndResolveRealFlow(t *testing.T) {
 		"already reviewed work must not be shown as new")
 
 	workDiff := h.fulfillmentDiffs[len(h.fulfillmentDiffs)-1]
-	assert.Contains(t, workDiff, normalizeReviewDiff(firstApproval.Diff),
-		"auto-review needs the original user-reviewed work")
+	prompt := h.fulfillmentPromptContaining(workDiff)
+	assert.Contains(t, prompt, normalizeReviewDiff(firstApproval.Diff),
+		"auto-review needs the original user-reviewed work in its complete prompt")
 	assert.Contains(t, workDiff, normalizeReviewDiff(lastApproval.DiffSinceLastReview),
 		"auto-review also needs the changes since user rejection")
+	assert.Contains(t, prompt, "Work Done So Far:")
+	assert.Contains(t, prompt, reviewMessage)
 
-	mungedRequirements := ""
-	for _, text := range h.promptTexts {
-		if containsAll(text, "Work Done So Far:", "PRE_FEEDBACK_WORK") {
-			mungedRequirements = text
-		}
+	assert.Contains(t, firstApproval.Diff, "+"+reportedReviewVersionCheck)
+	assert.NotContains(t, lastApproval.Diff, "shared.txt")
+	for name, diff := range map[string]string{
+		"merge approval":       lastApproval.DiffSinceLastReview,
+		"criteria fulfillment": workDiff,
+	} {
+		assert.Contains(t, diff, "\n-"+reportedReviewVersionCheck+"\n", name)
+		assert.NotContains(t, diff, "Reverted since last review", name)
+		assert.NotContains(t, diff, "previously added", name)
+		assert.NotContains(t, diff, "previously removed", name)
 	}
-	assert.NotEmpty(t, mungedRequirements,
-		"the diff reviewed before the feedback must reach criteria fulfillment as work done so far")
 }

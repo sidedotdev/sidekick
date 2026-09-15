@@ -20,8 +20,69 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 	cases := []struct {
 		name         string
 		envContainer *env.EnvContainer
+		providerType string
+		builtinTools []string
 		wantAdded    bool
 	}{
+		{
+			name:         "responses compatible without opt in",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "openai_responses_compatible",
+		},
+		{
+			name:         "responses compatible with unrelated opt in",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "openai_responses_compatible",
+			builtinTools: []string{"other_tool"},
+		},
+		{
+			name:         "responses compatible with web search opt in",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "openai_responses_compatible",
+			builtinTools: []string{"web_search"},
+			wantAdded:    true,
+		},
+		{
+			name:         "anthropic compatible without opt in",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "anthropic_compatible",
+		},
+		{
+			name:         "anthropic compatible with opt in",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "anthropic_compatible",
+			builtinTools: []string{"web_search"},
+			wantAdded:    true,
+		},
+		{
+			name:         "chat completions compatible does not support hosted search",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "openai_compatible",
+			builtinTools: []string{"web_search"},
+		},
+		{
+			name:         "builtin anthropic",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "anthropic",
+			wantAdded:    true,
+		},
+		{
+			name:         "builtin google",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "google",
+			wantAdded:    true,
+		},
+		{
+			name:         "unsupported provider",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "unknown",
+		},
+		{
+			name:         "local environment remains disabled with opt in",
+			envContainer: &env.EnvContainer{Env: &env.LocalEnv{}},
+			providerType: "openai_responses_compatible",
+			builtinTools: []string{"web_search"},
+		},
 		{
 			name:         "local env stays disabled",
 			envContainer: &env.EnvContainer{Env: &env.LocalEnv{}},
@@ -68,13 +129,22 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 
 			existing := &llm.Tool{Name: "some_function_tool"}
 			wf := func(ctx workflow.Context) ([]*llm.Tool, error) {
+				providerType := tc.providerType
+				if providerType == "" {
+					providerType = "openai"
+				}
 				dCtx := DevContext{
 					ExecContext: flow_action.ExecContext{
 						Context:      ctx,
 						EnvContainer: tc.envContainer,
+						Providers: []common.ModelProviderPublicConfig{{
+							Name:         "selected-provider",
+							Type:         providerType,
+							BuiltinTools: tc.builtinTools,
+						}},
 					},
 				}
-				return appendWebSearchToolIfNonLocal(dCtx, []*llm.Tool{existing}), nil
+				return appendWebSearchToolIfNonLocal(dCtx, []*llm.Tool{existing}, common.ModelConfig{Provider: "selected-provider"}), nil
 			}
 			wfEnv.RegisterWorkflow(wf)
 			wfEnv.ExecuteWorkflow(wf)

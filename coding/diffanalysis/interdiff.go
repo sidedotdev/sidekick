@@ -2,32 +2,17 @@ package diffanalysis
 
 import (
 	"fmt"
-	"maps"
 	"strings"
 
 	patchutils "github.com/google/go-patchutils"
 )
 
-// revertedSectionHeader introduces the notes about prior-review changes that
-// are no longer present in the current diff.
-const revertedSectionHeader = "Reverted since last review (present in the prior review diff, absent now):"
-
-// Interdiff renders the changes present in currentDiff but not in priorDiff,
-// i.e. the diff of two unified diffs of the same work taken at different times.
-//
-// When the two diffs are aligned (taken against the same base), an exact
-// diff-of-diffs is produced. Otherwise - typically when the base moved because
-// the target branch was merged in - a best-effort delta is rendered instead:
-// the hunks of currentDiff whose changed lines (whitespace-normalized) are not
-// already part of priorDiff, followed by notes about prior changes that are no
-// longer present.
+// Interdiff compares two full review diffs, including reversions of prior work.
+// Comparisons that cannot be represented as unified diffs return an error so
+// callers can distinguish a full-diff fallback from an incremental comparison.
 //
 // An empty priorDiff yields an empty result: there is nothing to compare
 // against, so callers are expected to fall back to the full diff.
-//
-// An error is returned only when a non-empty input cannot be parsed as a
-// unified diff at all; every other problem degrades to best-effort output so
-// that review flows never fail because of interdiff trouble.
 func Interdiff(priorDiff, currentDiff string) (string, error) {
 	if strings.TrimSpace(priorDiff) == "" {
 		return "", nil
@@ -42,11 +27,7 @@ func Interdiff(priorDiff, currentDiff string) (string, error) {
 		return "", fmt.Errorf("current diff: %w", err)
 	}
 
-	if result, ok := exactInterdiff(priorFiles, currentFiles); ok {
-		return result, nil
-	}
-
-	return bestEffortDelta(priorFiles, currentFiles), nil
+	return exactInterdiff(priorFiles, currentFiles)
 }
 
 func parseForInterdiff(diff string) ([]FileDiff, error) {
@@ -60,65 +41,79 @@ func parseForInterdiff(diff string) ([]FileDiff, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no file diffs found in non-empty input")
 	}
+	seen := make(map[string]bool, len(files))
+	for _, file := range files {
+		path := filePathKey(file)
+		if seen[path] {
+			return nil, fmt.Errorf("duplicate file section: %s", path)
+		}
+		seen[path] = true
+		if file.IsBinary || len(file.Hunks) == 0 {
+			return nil, fmt.Errorf("unsupported non-text change: %s", path)
+		}
+		for _, hunk := range file.Hunks {
+			var oldCount, newCount int
+			for _, line := range hunk.Lines {
+				if line.Type != LineAdded {
+					oldCount++
+				}
+				if line.Type != LineRemoved {
+					newCount++
+				}
+			}
+			if oldCount != hunk.OldCount || newCount != hunk.NewCount {
+				return nil, fmt.Errorf("invalid hunk counts in %s: %s", path, hunk.RawHeader)
+			}
+		}
+	}
 	return files, nil
 }
 
-// exactInterdiff computes a true diff-of-diffs, which is only meaningful when
-// both diffs apply to the same source. Misalignment is detected either by the
-// underlying library erroring out or by a file's result differing from the
-// delta implied by the two inputs: extra lines mean changes that are identical
-// in both inputs failed to cancel, missing lines mean part of the delta was
-// dropped.
-//
 // Files are interdiffed one at a time because the library's multi-file path
 // collects its per-file results from several goroutines without synchronizing
 // between them, which crashes the process with a concurrent map write.
-//
-// Files present in the prior diff but not in the current one read as reverts,
-// which the best-effort delta describes rather than renders, so those fall back.
-func exactInterdiff(priorFiles, currentFiles []FileDiff) (string, bool) {
-	if len(currentFiles) == 0 {
-		return "", false
-	}
-
+func exactInterdiff(priorFiles, currentFiles []FileDiff) (string, error) {
 	priorByPath := make(map[string]FileDiff, len(priorFiles))
 	for _, file := range priorFiles {
 		priorByPath[filePathKey(file)] = file
 	}
-	currentPaths := make(map[string]struct{}, len(currentFiles))
-	for _, file := range currentFiles {
-		currentPaths[filePathKey(file)] = struct{}{}
-	}
-	for path := range priorByPath {
-		if _, ok := currentPaths[path]; !ok {
-			return "", false
-		}
-	}
 
 	var out strings.Builder
 	for _, current := range currentFiles {
-		prior, ok := priorByPath[filePathKey(current)]
+		path := filePathKey(current)
+		prior, ok := priorByPath[path]
 		if !ok {
 			out.WriteString(ensureTrailingNewline(current.RawContent))
 			continue
 		}
+		delete(priorByPath, path)
+		if strings.TrimSpace(prior.RawContent) == strings.TrimSpace(current.RawContent) {
+			continue
+		}
 
+		prior = alignInterdiffBase(prior, current)
 		section, err := safeInterDiff(ensureTrailingNewline(prior.RawContent), ensureTrailingNewline(current.RawContent))
 		if err != nil {
-			return "", false
-		}
-		if !maps.Equal(changedLineCounts(section), expectedDeltaCounts([]FileDiff{prior}, []FileDiff{current})) {
-			return "", false
+			return "", fmt.Errorf("interdiff for %s: %w", path, err)
 		}
 		out.WriteString(withGitFileHeader(dropEmptyFileSections(section), current))
 	}
+	for _, prior := range priorFiles {
+		if _, ok := priorByPath[filePathKey(prior)]; ok {
+			out.WriteString(reverseFileSection(prior))
+		}
+	}
 
-	return out.String(), true
+	result := out.String()
+	if _, err := parseForInterdiff(result); err != nil {
+		return "", fmt.Errorf("invalid interdiff output: %w", err)
+	}
+	return result, nil
 }
 
 // withGitFileHeader prefixes a rendered file section with the git header line,
 // which the exact interdiff omits, so that the result stays parseable as a
-// unified diff and can serve as the prior diff of a later review round.
+// unified diff.
 func withGitFileHeader(section string, file FileDiff) string {
 	if strings.TrimSpace(section) == "" {
 		return ""
@@ -187,111 +182,6 @@ func safeInterDiff(priorDiff, currentDiff string) (result string, err error) {
 	return patchutils.InterDiff(strings.NewReader(priorDiff), strings.NewReader(currentDiff))
 }
 
-// expectedDeltaCounts is the multiset of normalized changed lines an interdiff
-// must contain: changes only the current diff has, plus the sign-flipped
-// changes only the prior diff had (which read as reverts).
-func expectedDeltaCounts(priorFiles, currentFiles []FileDiff) map[string]int {
-	prior := allChangedLineCounts(priorFiles)
-	current := allChangedLineCounts(currentFiles)
-
-	expected := make(map[string]int)
-	for key, count := range current {
-		if count > prior[key] {
-			expected[key] += count - prior[key]
-		}
-	}
-	for key, count := range prior {
-		if count > current[key] {
-			expected[flipSign(key)] += count - current[key]
-		}
-	}
-	return expected
-}
-
-func bestEffortDelta(priorFiles, currentFiles []FileDiff) string {
-	priorByPath := make(map[string]FileDiff, len(priorFiles))
-	for _, file := range priorFiles {
-		priorByPath[filePathKey(file)] = file
-	}
-
-	var out strings.Builder
-	for _, file := range currentFiles {
-		remaining := map[string]int{}
-		if prior, ok := priorByPath[filePathKey(file)]; ok {
-			remaining = fileChangedLineCounts(prior)
-		}
-
-		var newHunks []Hunk
-		for _, hunk := range file.Hunks {
-			if consumeIfCovered(remaining, hunkChangedLineCounts(hunk)) {
-				continue
-			}
-			newHunks = append(newHunks, hunk)
-		}
-		if len(newHunks) > 0 {
-			out.WriteString(renderFileDiff(file, newHunks))
-		}
-	}
-
-	out.WriteString(revertedSection(priorFiles, currentFiles))
-	return out.String()
-}
-
-// consumeIfCovered reports whether every changed line of a hunk is already
-// accounted for by the remaining prior-diff changes, consuming them when so.
-func consumeIfCovered(remaining, hunkCounts map[string]int) bool {
-	if len(hunkCounts) == 0 {
-		return true
-	}
-	for key, count := range hunkCounts {
-		if remaining[key] < count {
-			return false
-		}
-	}
-	for key, count := range hunkCounts {
-		remaining[key] -= count
-	}
-	return true
-}
-
-func revertedSection(priorFiles, currentFiles []FileDiff) string {
-	currentByPath := make(map[string]FileDiff, len(currentFiles))
-	for _, file := range currentFiles {
-		currentByPath[filePathKey(file)] = file
-	}
-
-	var notes []string
-	for _, priorFile := range priorFiles {
-		path := filePathKey(priorFile)
-		remaining := fileChangedLineCounts(priorFile)
-		if current, ok := currentByPath[path]; ok {
-			for key, count := range fileChangedLineCounts(current) {
-				remaining[key] -= count
-			}
-		}
-
-		for _, hunk := range priorFile.Hunks {
-			for _, line := range hunk.Lines {
-				key, ok := normalizedLineKey(line.Type, line.Content)
-				if !ok || remaining[key] <= 0 {
-					continue
-				}
-				remaining[key]--
-				verb := "added"
-				if line.Type == LineRemoved {
-					verb = "removed"
-				}
-				notes = append(notes, fmt.Sprintf("  %s: previously %s: %s", path, verb, strings.TrimSpace(line.Content)))
-			}
-		}
-	}
-
-	if len(notes) == 0 {
-		return ""
-	}
-	return revertedSectionHeader + "\n" + strings.Join(notes, "\n") + "\n"
-}
-
 func renderFileDiff(file FileDiff, hunks []Hunk) string {
 	oldPath, newPath := file.OldPath, file.NewPath
 	if oldPath == "" {
@@ -341,89 +231,87 @@ func filePathKey(file FileDiff) string {
 	return file.OldPath
 }
 
-// normalizedLineKey keys a changed line by its sign plus whitespace-stripped
-// content, so identical changes collapse together regardless of indentation or
-// line numbers, and pure-whitespace changes are ignored.
-func normalizedLineKey(lineType LineType, content string) (string, bool) {
-	sign := ""
-	switch lineType {
-	case LineAdded:
-		sign = "+"
-	case LineRemoved:
-		sign = "-"
-	default:
-		return "", false
+// Reverse raw hunk lines so no-final-newline markers retain their association
+// with the affected line rather than being lost through the shared parser.
+func reverseFileSection(file FileDiff) string {
+	reversed := file
+	reversed.OldPath, reversed.NewPath = file.NewPath, file.OldPath
+	var out strings.Builder
+	out.WriteString(gitFileHeader(reversed))
+	if file.IsDeleted {
+		out.WriteString("--- /dev/null\n")
+	} else {
+		fmt.Fprintf(&out, "--- a/%s\n", file.NewPath)
 	}
-	stripped := strings.Join(strings.Fields(content), "")
-	if stripped == "" {
-		return "", false
+	if file.IsNewFile {
+		out.WriteString("+++ /dev/null\n")
+	} else {
+		fmt.Fprintf(&out, "+++ b/%s\n", file.OldPath)
 	}
-	return sign + stripped, true
-}
-
-func flipSign(key string) string {
-	if key == "" {
-		return key
-	}
-	if key[0] == '+' {
-		return "-" + key[1:]
-	}
-	return "+" + key[1:]
-}
-
-func hunkChangedLineCounts(hunk Hunk) map[string]int {
-	counts := make(map[string]int)
-	for _, line := range hunk.Lines {
-		if key, ok := normalizedLineKey(line.Type, line.Content); ok {
-			counts[key]++
-		}
-	}
-	return counts
-}
-
-func fileChangedLineCounts(file FileDiff) map[string]int {
-	counts := make(map[string]int)
-	for _, hunk := range file.Hunks {
-		for key, count := range hunkChangedLineCounts(hunk) {
-			counts[key] += count
-		}
-	}
-	return counts
-}
-
-func allChangedLineCounts(files []FileDiff) map[string]int {
-	counts := make(map[string]int)
-	for _, file := range files {
-		for key, count := range fileChangedLineCounts(file) {
-			counts[key] += count
-		}
-	}
-	return counts
-}
-
-// changedLineCounts counts changed lines of raw unified diff text, for inputs
-// that have not been parsed into FileDiff structures.
-func changedLineCounts(diff string) map[string]int {
-	counts := make(map[string]int)
-	for _, line := range strings.Split(diff, "\n") {
-		if len(line) == 0 {
+	inHunk := false
+	for _, line := range strings.Split(strings.TrimSuffix(file.RawContent, "\n"), "\n") {
+		if matches := hunkHeaderRegex.FindStringSubmatch(line); matches != nil {
+			inHunk = true
+			oldRange, newRange := matches[1], matches[3]
+			if matches[2] != "" {
+				oldRange += "," + matches[2]
+			}
+			if matches[4] != "" {
+				newRange += "," + matches[4]
+			}
+			fmt.Fprintf(&out, "@@ -%s +%s @@%s\n", newRange, oldRange, matches[5])
 			continue
 		}
-		if strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "--- ") {
+		if !inHunk {
 			continue
 		}
-		var lineType LineType
-		switch line[0] {
-		case '+':
-			lineType = LineAdded
-		case '-':
-			lineType = LineRemoved
-		default:
-			continue
+		if strings.HasPrefix(line, "+") {
+			line = "-" + line[1:]
+		} else if strings.HasPrefix(line, "-") {
+			line = "+" + line[1:]
 		}
-		if key, ok := normalizedLineKey(lineType, line[1:]); ok {
-			counts[key]++
+		out.WriteString(line + "\n")
+	}
+	return out.String()
+}
+
+// A uniform coordinate shift is safe to align only when the visible base
+// content agrees exactly; changed-line multisets cannot establish this.
+func alignInterdiffBase(prior, current FileDiff) FileDiff {
+	if len(prior.Hunks) != len(current.Hunks) || len(prior.Hunks) == 0 {
+		return prior
+	}
+	offset := current.Hunks[0].OldStart - prior.Hunks[0].OldStart
+	if offset == 0 {
+		return prior
+	}
+	baseLines := func(hunk Hunk) string {
+		var out strings.Builder
+		for _, line := range hunk.Lines {
+			if line.Type != LineAdded {
+				out.WriteString(line.Content + "\n")
+			}
+		}
+		return out.String()
+	}
+	for i, old := range prior.Hunks {
+		new := current.Hunks[i]
+		if old.OldCount == 0 || old.OldCount != new.OldCount ||
+			new.OldStart-old.OldStart != offset || baseLines(old) != baseLines(new) {
+			return prior
 		}
 	}
-	return counts
+	lines := strings.Split(prior.RawContent, "\n")
+	hunkIndex := 0
+	for i, line := range lines {
+		if matches := hunkHeaderRegex.FindStringSubmatch(line); matches != nil {
+			hunk := prior.Hunks[hunkIndex]
+			lines[i] = fmt.Sprintf("@@ -%d,%d +%d,%d @@%s",
+				hunk.OldStart+offset, hunk.OldCount,
+				hunk.NewStart+offset, hunk.NewCount, matches[5])
+			hunkIndex++
+		}
+	}
+	prior.RawContent = strings.Join(lines, "\n")
+	return prior
 }

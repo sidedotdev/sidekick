@@ -3,13 +3,25 @@
     <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
       <div class="actions">
         <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
+        <button v-else class="action rename" title="Rename task" @click.stop="startRenaming">✎️</button>
         <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
         <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
         <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
         <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask"><TrashIcon/></button>
       </div>
 
-      <h3 v-if="task.title" class="task-title">{{ task.title }}</h3>
+      <input
+        v-if="isRenaming"
+        ref="titleInputRef"
+        v-model="editedTitle"
+        class="task-title-input"
+        aria-label="Task title"
+        @click.stop
+        @keydown.enter.stop.prevent="saveTitle"
+        @keydown.esc.stop.prevent="cancelRenaming"
+        @blur="saveTitle"
+      />
+      <h3 v-else-if="task.title" class="task-title">{{ task.title }}</h3>
       <p class="task-description" @mouseleave.self="handleDescriptionBlur">{{ task.description }}</p>
       <div class="card-footer">
         <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
@@ -27,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, nextTick, ref, type Component } from 'vue'
 import type { FullTask, Task, LLMConfig } from '../lib/models'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, llmConfigsEqual } from '../lib/llmPresetStorage'
@@ -144,6 +156,48 @@ const openEditModal = () => {
   emit('edit', props.task)
 }
 
+const isRenaming = ref(false)
+const editedTitle = ref('')
+const titleInputRef = ref<HTMLInputElement | null>(null)
+
+const startRenaming = async () => {
+  editedTitle.value = props.task.title ?? ''
+  isRenaming.value = true
+  await nextTick()
+  titleInputRef.value?.focus()
+  titleInputRef.value?.select()
+}
+
+const cancelRenaming = () => {
+  isRenaming.value = false
+}
+
+const saveTitle = async () => {
+  if (!isRenaming.value) {
+    return
+  }
+  const title = editedTitle.value.trim()
+  isRenaming.value = false
+  if (!title || title === props.task.title) {
+    return
+  }
+
+  const {id, workspaceId} = props.task
+  try {
+    const response = await fetch(`/api/v1/workspaces/${workspaceId}/tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    })
+    if (!response.ok) {
+      throw new Error('rename request failed')
+    }
+    emit('updated', id)
+  } catch {
+    emit('error', 'Failed to rename task')
+  }
+}
+
 
 const archiveTask = async () => {
   const {id, workspaceId} = props.task
@@ -180,6 +234,10 @@ const deleteTask = async () => {
 }
 
 const cardClicked = async () => {
+  if (isRenaming.value) {
+    return
+  }
+
   const selection = window.getSelection()?.toString();
   if (selection) {
     return
@@ -347,6 +405,20 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   display: block;
   -webkit-line-clamp: unset;
   overflow: visible;
+}
+
+.task-title-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 0.25rem 0;
+  padding: 0.1rem 0.25rem;
+  font-size: 1.05rem;
+  line-height: 1.3;
+  font-family: inherit;
+  color: var(--color-text);
+  background-color: var(--color-background);
+  border: 0.0625rem solid var(--task-card-border);
+  border-radius: var(--kanban-radius);
 }
 
 .task-description {

@@ -486,7 +486,7 @@ func devRequirementsTools(dCtx DevContext, hasExistingRequirements bool) []*llm.
 func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingRequirements bool) (common.MessageResponse, error) {
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	tools := devRequirementsTools(dCtx, hasExistingRequirements)
-	tools = appendWebSearchToolIfNonLocal(dCtx, tools)
+	tools = appendWebSearchToolIfNonLocal(dCtx, tools, modelConfig)
 
 	// random order of tools to avoid bias in the LLM's use of the tools
 	// NOTE: disabled shuffling as it can mess with cache hit rate
@@ -608,6 +608,17 @@ func addToolCallResponse(eCtx flow_action.ExecContext, chatHistory *persisted_ai
 			Type:       llm2.ContentBlockTypeToolResult,
 			ToolResult: &trb,
 		}},
+	}
+	allHuman := len(trb.Content) > 0
+	for _, block := range trb.Content {
+		if persisted_ai.GetContextType(block) != ContextTypeUserFeedback {
+			allHuman = false
+			break
+		}
+	}
+	if allHuman {
+		// Legacy conversion reads context metadata from the outer block.
+		persisted_ai.SetContextType(&msg.Content[0], ContextTypeUserFeedback)
 	}
 	return AppendChatHistory(eCtx, chatHistory, msg)
 }

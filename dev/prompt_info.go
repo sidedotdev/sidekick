@@ -3,6 +3,8 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
+
+	"sidekick/persisted_ai"
 )
 
 // PromptInfoContainer  is a wrapper for the PromptInfo interface that provides custom
@@ -178,6 +180,7 @@ type CheckWorkInfo struct {
 	Step               DevStep
 	Work               string
 	AutoChecks         string
+	IncrementalReview  bool
 	LastReviewTreeHash string
 	BaseBranch         string
 
@@ -198,7 +201,10 @@ type CheckWorkInfo struct {
 	// rounds (the same feedback reviewAndResolve keeps), so the resolution
 	// doesn't undo edits made to address it. Only used when
 	// ResolvingMergeConflicts is set.
-	PreviousReview string
+	PreviousReview      string
+	ChatHistory         *persisted_ai.ChatHistoryContainer `json:"chatHistory,omitempty"`
+	PreparedChatHistory *verifierChatHistory               `json:"preparedChatHistory,omitempty"`
+	VerifierSession     *verifierSession                   `json:"-"`
 }
 
 // Implement the PromptInfo interface for InitialDevStepInfo

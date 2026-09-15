@@ -79,6 +79,10 @@ func isMeaningfulContent(content string) bool {
 }
 
 func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, error) {
+	return getHelpOrInputWithProvenance(dCtx, requests, nil)
+}
+
+func getHelpOrInputWithProvenance(dCtx DevContext, requests []HelpOrInputRequest, human *bool) (string, error) {
 	validRequests := make([]HelpOrInputRequest, 0, len(requests))
 	for _, r := range requests {
 		if isMeaningfulContent(r.Content) {
@@ -134,5 +138,14 @@ func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, err
 	actionCtx := dCtx.NewActionContext("user_request")
 	actionCtx.ActionParams = req.ActionParams()
 	userResponse, err := GetUserResponse(actionCtx, req)
-	return userResponse.Content, err
+	if err != nil {
+		return "", err
+	}
+	if userResponse == nil {
+		return "", nil
+	}
+	if human != nil {
+		*human = true
+	}
+	return userResponse.Content, nil
 }

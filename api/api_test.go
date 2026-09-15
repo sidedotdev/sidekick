@@ -1406,6 +1406,122 @@ func TestUpdateTaskHandler_TitleOnlyUpdatedWhenNonEmpty(t *testing.T) {
 	assert.Equal(t, "new title", updatedTask.Title, "title should be updated when request title is non-empty")
 }
 
+func updateTaskWithRawBody(t *testing.T, ctrl Controller, workspaceId, taskId, body string) *gin.Context {
+	t.Helper()
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = httptest.NewRequest(http.MethodPut, "/workspaces/"+workspaceId+"/tasks/"+taskId, strings.NewReader(body))
+	ginCtx.Params = []gin.Param{
+		{Key: "workspaceId", Value: workspaceId},
+		{Key: "id", Value: taskId},
+	}
+	ctrl.UpdateTaskHandler(ginCtx)
+	return ginCtx
+}
+
+func TestUpdateTaskHandler_TitleOnlyUpdateLeavesRestOfTaskUntouched(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+
+	workspaceId := "ws_" + ksuid.New().String()
+	project := domain.Project{
+		WorkspaceId: workspaceId,
+		Id:          "project_" + ksuid.New().String(),
+		Title:       "Alpha",
+	}
+	require.NoError(t, ctrl.service.PersistProject(context.Background(), project))
+
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Title:       "original title",
+		Description: "original description",
+		ProjectId:   project.Id,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusInProgress,
+		FlowType:    "basic_dev",
+		FlowOptions: map[string]interface{}{"envType": "local"},
+	}
+	require.NoError(t, ctrl.service.PersistTask(context.Background(), task))
+
+	ginCtx := updateTaskWithRawBody(t, ctrl, workspaceId, task.Id, `{"title":"renamed while running"}`)
+	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+	updatedTask, err := ctrl.service.GetTask(context.Background(), workspaceId, task.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "renamed while running", updatedTask.Title)
+	assert.Equal(t, task.Description, updatedTask.Description)
+	assert.Equal(t, task.ProjectId, updatedTask.ProjectId)
+	assert.Equal(t, task.Status, updatedTask.Status)
+	assert.Equal(t, task.AgentType, updatedTask.AgentType)
+	assert.Equal(t, task.FlowType, updatedTask.FlowType)
+	assert.Equal(t, task.FlowOptions, updatedTask.FlowOptions)
+}
+
+func TestUpdateTaskHandler_PartialUpdateDoesNotStartFlow(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+
+	task := domain.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Title:       "original title",
+		Description: "original description",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusToDo,
+	}
+	require.NoError(t, ctrl.service.PersistTask(context.Background(), task))
+
+	// The temporal mock has no ExecuteWorkflow expectation, so starting a flow
+	// here would fail the test.
+	ginCtx := updateTaskWithRawBody(t, ctrl, task.WorkspaceId, task.Id, `{"title":"renamed before starting"}`)
+	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+	updatedTask, err := ctrl.service.GetTask(context.Background(), task.WorkspaceId, task.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "renamed before starting", updatedTask.Title)
+	assert.Equal(t, domain.TaskStatusToDo, updatedTask.Status)
+
+	flows, err := ctrl.service.GetFlowsForTask(context.Background(), task.WorkspaceId, task.Id)
+	require.NoError(t, err)
+	assert.Empty(t, flows)
+}
+
+func TestUpdateTaskHandler_ProjectIdOnlyUpdateLeavesRestOfTaskUntouched(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+
+	workspaceId := "ws_" + ksuid.New().String()
+	project := domain.Project{
+		WorkspaceId: workspaceId,
+		Id:          "project_" + ksuid.New().String(),
+		Title:       "Alpha",
+	}
+	require.NoError(t, ctrl.service.PersistProject(context.Background(), project))
+
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Title:       "original title",
+		Description: "original description",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusInProgress,
+		FlowType:    "basic_dev",
+	}
+	require.NoError(t, ctrl.service.PersistTask(context.Background(), task))
+
+	ginCtx := updateTaskWithRawBody(t, ctrl, workspaceId, task.Id, `{"projectId":"`+project.Id+`"}`)
+	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+	updatedTask, err := ctrl.service.GetTask(context.Background(), workspaceId, task.Id)
+	require.NoError(t, err)
+	assert.Equal(t, project.Id, updatedTask.ProjectId)
+	assert.Equal(t, task.Title, updatedTask.Title)
+	assert.Equal(t, task.Description, updatedTask.Description)
+	assert.Equal(t, task.Status, updatedTask.Status)
+	assert.Equal(t, task.AgentType, updatedTask.AgentType)
+	assert.Equal(t, task.FlowType, updatedTask.FlowType)
+}
+
 func TestUpdateTaskHandler_UpdatesFlowType(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
@@ -3628,4 +3744,72 @@ func TestUpdateFlowModalConfigHandler_RejectsInvalidConfigBeforeUpdatingWorkflow
 	}
 	// No workflow update may be attempted for any rejected config.
 	mockTemporalClient.AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
+}
+
+func TestUpdateTaskHandler_DraftStartAssignment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		body      string
+		wantAgent domain.AgentType
+		wantState domain.TaskStatus
+	}{
+		{
+			name:      "starting draft defaults to llm",
+			body:      `{"status":"to_do"}`,
+			wantAgent: domain.AgentTypeLLM,
+			wantState: domain.TaskStatusInProgress,
+		},
+		{
+			name:      "explicit human assignment is respected",
+			body:      `{"status":"to_do","agentType":"human"}`,
+			wantAgent: domain.AgentTypeHuman,
+			wantState: domain.TaskStatusInProgress,
+		},
+		{
+			name:      "explicit llm assignment is respected",
+			body:      `{"status":"to_do","agentType":"llm"}`,
+			wantAgent: domain.AgentTypeLLM,
+			wantState: domain.TaskStatusInProgress,
+		},
+		{
+			name:      "title edit preserves draft assignment",
+			body:      `{"title":"new title"}`,
+			wantAgent: domain.AgentTypeHuman,
+			wantState: domain.TaskStatusDrafting,
+		},
+		{
+			name:      "saving draft preserves human assignment",
+			body:      `{"status":"drafting"}`,
+			wantAgent: domain.AgentTypeHuman,
+			wantState: domain.TaskStatusDrafting,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := NewMockController(t)
+			task := domain.Task{
+				WorkspaceId: "ws_" + ksuid.New().String(),
+				Id:          "task_" + ksuid.New().String(),
+				Title:       "original title",
+				Description: "test task",
+				AgentType:   domain.AgentTypeHuman,
+				Status:      domain.TaskStatusDrafting,
+				FlowType:    domain.FlowTypeBasicDev,
+			}
+			require.NoError(t, ctrl.service.PersistTask(context.Background(), task))
+
+			c := updateTaskWithRawBody(t, ctrl, task.WorkspaceId, task.Id, tt.body)
+			require.Equal(t, http.StatusOK, c.Writer.Status())
+
+			updatedTask, err := ctrl.service.GetTask(context.Background(), task.WorkspaceId, task.Id)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAgent, updatedTask.AgentType)
+			assert.Equal(t, tt.wantState, updatedTask.Status)
+			assert.Equal(t, task.Description, updatedTask.Description)
+			assert.Equal(t, task.FlowType, updatedTask.FlowType)
+		})
+	}
 }

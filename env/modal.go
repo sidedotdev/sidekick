@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -827,6 +828,73 @@ func ModalRecreateSandboxActivity(ctx context.Context, input ModalRecreateSandbo
 			successor.SandboxName, name, err)
 	}
 	return ModalRecreateSandboxOutput{EnvContainer: EnvContainer{Env: successor}}, nil
+}
+
+// modalReplaceReverseForwards is a seam for tests: swapping listeners needs a
+// live SSH connection to the sandbox.
+var modalReplaceReverseForwards = func(ctx context.Context, modalEnv *ModalEnv, previous, forwards []common.PortForwardConfig) error {
+	return modalEnv.transport().ReplaceReverseForwards(ctx, previous, forwards)
+}
+
+// modalEnvConfigsEqual treats an absent volume list and an empty one alike,
+// since the TOML and JSON encodings a config travels through do not
+// distinguish them.
+func modalEnvConfigsEqual(a, b common.ModalEnvConfig) bool {
+	if len(a.Volumes) == 0 && len(b.Volumes) == 0 {
+		a.Volumes, b.Volumes = nil, nil
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// ValidateConfig implements ConfigReconcilingEnv.
+func (e *ModalEnv) ValidateConfig(desired EnvConfig) error {
+	return errors.Join(desired.Modal.Validate(), common.ValidatePortForwards(desired.PortForwards))
+}
+
+// ReconcileConfig implements ConfigReconcilingEnv. Sandbox settings only
+// take effect on a replacement sandbox, whereas port mappings are reverse
+// forwards on the SSH connection and are swapped on the live sandbox, so a
+// mapping-only change never disturbs the sandbox. A replacement inherits the
+// predecessor's mappings; when the desired configuration changes them too,
+// the successor's listeners are swapped after recreation, since snapshotting
+// it already connected under the inherited mappings.
+func (e *ModalEnv) ReconcileConfig(ctx context.Context, current, desired EnvConfig) (Env, error) {
+	// Validation does not depend on the caller having gone through the
+	// generic activity, and an unchanged configuration may itself be invalid.
+	if err := e.ValidateConfig(desired); err != nil {
+		return nil, fmt.Errorf("invalid Modal environment configuration: %w", err)
+	}
+	forwardsChanged := !samePortForwards(current.PortForwards, desired.PortForwards)
+	if modalEnvConfigsEqual(current.Modal, desired.Modal) {
+		if !forwardsChanged {
+			return e, nil
+		}
+		if err := modalReplaceReverseForwards(ctx, e, e.PortForwards, desired.PortForwards); err != nil {
+			return nil, fmt.Errorf("failed to replace port forwards of Modal sandbox %s: %w", e.SandboxName, err)
+		}
+		updated := *e
+		updated.PortForwards = desired.PortForwards
+		return &updated, nil
+	}
+
+	output, err := ModalRecreateSandboxActivity(ctx, ModalRecreateSandboxInput{
+		EnvContainer: EnvContainer{Env: e},
+		Config:       desired.Modal,
+	})
+	if err != nil {
+		return nil, err
+	}
+	successor, ok := output.EnvContainer.Env.(*ModalEnv)
+	if !ok {
+		return nil, fmt.Errorf("recreated Modal sandbox %s yielded a %T environment", e.SandboxName, output.EnvContainer.Env)
+	}
+	if forwardsChanged {
+		if err := modalReplaceReverseForwards(ctx, successor, successor.PortForwards, desired.PortForwards); err != nil {
+			return nil, fmt.Errorf("failed to replace port forwards of recreated Modal sandbox %s: %w", successor.SandboxName, err)
+		}
+		successor.PortForwards = desired.PortForwards
+	}
+	return successor, nil
 }
 
 // modalSandboxCreateParams builds the sandbox creation parameters for the

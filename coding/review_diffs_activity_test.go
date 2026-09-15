@@ -404,3 +404,63 @@ func TestGenerateReviewDiffsActivity_RequiresStartPoint(t *testing.T) {
 	})
 	assert.Error(t, err)
 }
+
+func TestGenerateReviewDiffsActivity_Reversions(t *testing.T) {
+	t.Parallel()
+
+	const versionCheck = `workflow.GetVersion(dCtx, "human-feedback-provenance", workflow.DefaultVersion, 1) >= 1`
+	for _, scenario := range reviewDiffsScenarios() {
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
+			startPoint, baseBranch, _ := scenario.prepare(t, repoDir)
+			ca := &CodingActivities{}
+			review := func(prior string) GenerateReviewDiffsResult {
+				t.Helper()
+				result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
+					EnvContainer:    envContainer,
+					StartPoint:      startPoint,
+					BaseBranch:      baseBranch,
+					PriorReviewDiff: prior,
+				})
+				require.NoError(t, err)
+				require.Empty(t, result.SinceDiffError)
+				return result
+			}
+
+			original := "package shared\n\nfunc PreExisting() {}\n"
+			writeAndStage(t, repoDir, "shared.go", original+versionCheck+"\n")
+			writeAndStage(t, repoDir, "retained.go", "package retained\n")
+			first := review("")
+			require.Contains(t, first.FullDiff, "+"+versionCheck)
+
+			writeAndStage(t, repoDir, "shared.go", original)
+			second := review(first.FullDiff)
+			require.NotContains(t, second.FullDiff, "shared.go")
+			require.Contains(t, second.SinceDiff, "\n-"+versionCheck+"\n")
+			require.NotContains(t, second.SinceDiff, "retained.go")
+			require.NotContains(t, second.SinceDiff, "previously added")
+			require.NotContains(t, second.SinceDiff, "Reverted since last review")
+
+			patchPath := filepath.Join(t.TempDir(), "since.patch")
+			require.NoError(t, os.WriteFile(patchPath, []byte(second.SinceDiff), 0600))
+			writeAndStage(t, repoDir, "shared.go", original+versionCheck+"\n")
+			runGit(t, repoDir, "apply", "--index", patchPath)
+			actual, err := os.ReadFile(filepath.Join(repoDir, "shared.go"))
+			require.NoError(t, err)
+			require.Equal(t, original, string(actual))
+
+			unchanged := review(second.FullDiff)
+			require.Empty(t, unchanged.SinceDiff)
+
+			runGit(t, repoDir, "rm", "-f", "retained.go")
+			third := review(second.FullDiff)
+			require.Empty(t, third.FullDiff)
+			require.Contains(t, third.SinceDiff, "-package retained")
+			require.Contains(t, third.SinceDiff, "+++ /dev/null")
+			require.NotContains(t, third.SinceDiff, versionCheck)
+		})
+	}
+}

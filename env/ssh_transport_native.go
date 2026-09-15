@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,19 +57,22 @@ var errNativeConnOrphaned = errors.New("pooled ssh connection retired by shutdow
 
 // nativeSSHTransport speaks SSH in-process over one pooled connection per
 // remote. It is a value over process-wide state, like the legacy transport,
-// because callers construct a transport per operation.
+// because callers construct a transport per operation. Reverse forwards are
+// not part of its identity: they are bound on the pooled connection after the
+// dial, so every transport for a remote shares one connection whatever
+// mappings it was built with, and a mapping change is a change of listeners
+// rather than of connection.
 type nativeSSHTransport struct {
-	key      string
-	forwards []common.PortForwardConfig
-	sshEnv   SSHCapableEnv
+	key    string
+	sshEnv SSHCapableEnv
 
 	mu   sync.Mutex
 	held *nativeSSHConn
 }
 
 func init() {
-	newNativeSSHTransport = func(key string, forwards []common.PortForwardConfig, sshEnv SSHCapableEnv) SSHTransport {
-		return &nativeSSHTransport{key: key, forwards: forwards, sshEnv: sshEnv}
+	newNativeSSHTransport = func(key string, _ []common.PortForwardConfig, sshEnv SSHCapableEnv) SSHTransport {
+		return &nativeSSHTransport{key: key, sshEnv: sshEnv}
 	}
 }
 
@@ -79,6 +81,10 @@ func init() {
 // closing must not tear down a connection another is still using.
 type nativeSSHConn struct {
 	poolKey string
+	// remoteKey is the transport key the pool key was derived from, which is
+	// what the reverse-forward state shared by the remote's transports is
+	// filed under.
+	remoteKey string
 
 	mu   sync.Mutex
 	refs int
@@ -106,6 +112,10 @@ type nativeSSHConn struct {
 	// listeners are the reverse forwards held for this connection's lifetime,
 	// keyed by their forward spec.
 	listeners map[string]net.Listener
+	// unreleased are listeners whose cancellation the remote refused: dead
+	// locally, since the client stops routing to a listener before asking,
+	// but still bound on the remote until a later release cancels again.
+	unreleased map[string]net.Listener
 	// orphaned marks an entry removed from the pool by shutdown. Holders must
 	// re-acquire rather than redial it, or their connection would belong to no
 	// pool and escape every later shutdown.
@@ -120,14 +130,14 @@ var nativeSSHPool = struct {
 var startNativeSSHReaperOnce sync.Once
 
 // acquireNativeSSHConn returns the pool entry for poolKey, taking a reference.
-func acquireNativeSSHConn(poolKey string) *nativeSSHConn {
+func acquireNativeSSHConn(remoteKey, poolKey string) *nativeSSHConn {
 	startNativeSSHReaperOnce.Do(startNativeSSHReaper)
 
 	nativeSSHPool.mu.Lock()
 	defer nativeSSHPool.mu.Unlock()
 	conn, ok := nativeSSHPool.conns[poolKey]
 	if !ok {
-		conn = &nativeSSHConn{poolKey: poolKey, lastUsed: time.Now()}
+		conn = &nativeSSHConn{poolKey: poolKey, remoteKey: remoteKey, lastUsed: time.Now()}
 		nativeSSHPool.conns[poolKey] = conn
 	}
 	conn.mu.Lock()
@@ -215,6 +225,7 @@ func CloseAllNativeSSHClients() {
 	for _, resources := range closing {
 		resources.close()
 	}
+	retireUnservedReverseForwardStates(nativeSSHPoolServes)
 }
 
 // release drops one reference, closing the connection when the last holder
@@ -237,6 +248,18 @@ func (c *nativeSSHConn) release() {
 	}
 	nativeSSHPool.mu.Unlock()
 	resources.close()
+}
+
+// nativeSSHPoolServes reports whether any pool entry still reaches remoteKey.
+func nativeSSHPoolServes(remoteKey string) bool {
+	nativeSSHPool.mu.Lock()
+	defer nativeSSHPool.mu.Unlock()
+	for _, conn := range nativeSSHPool.conns {
+		if conn.remoteKey == remoteKey {
+			return true
+		}
+	}
+	return false
 }
 
 // nativeConnResources is what outlives a pool entry's lock during teardown:
@@ -289,6 +312,7 @@ func (c *nativeSSHConn) detachClientLocked() nativeConnResources {
 	}
 	c.client = nil
 	c.listeners = nil
+	c.unreleased = nil
 	c.proxy = nil
 	c.sftpClient = nil
 	c.sftpSession = nil
@@ -387,17 +411,32 @@ func (t *nativeSSHTransport) hold(poolKey string) *nativeSSHConn {
 		t.held.release()
 		t.held = nil
 	}
-	t.held = acquireNativeSSHConn(poolKey)
+	t.held = acquireNativeSSHConn(t.key, poolKey)
 	return t.held
 }
 
+// Close releases this transport's reference. When that was the last reference
+// to the remote, its reverse forwards went down with the connection, so the
+// state the remote's transports shared about them is retired. Shutdown
+// retires state itself; an entry it orphaned may close long after a newer
+// generation of the remote's state exists, which must be left alone.
 func (t *nativeSSHTransport) Close() {
 	t.mu.Lock()
 	held := t.held
 	t.held = nil
 	t.mu.Unlock()
-	if held != nil {
-		held.release()
+	if held == nil {
+		return
+	}
+	orphaned := held.isOrphaned()
+	held.release()
+	if orphaned {
+		return
+	}
+	state := lockReverseForwardState(t.key)
+	defer state.mu.Unlock()
+	if !nativeSSHPoolServes(t.key) {
+		state.retireLocked()
 	}
 }
 
@@ -407,11 +446,11 @@ func (t *nativeSSHTransport) Close() {
 // connection rather than this transport's reference to it, which is what makes
 // it a way to recover from a peer that vanished without closing.
 func (t *nativeSSHTransport) dropLiveSession(ctx context.Context) (bool, error) {
-	config, err := t.sshEnv.SSHConnConfig(ctx)
+	config, err := t.connConfig(ctx)
 	if err != nil {
-		return false, fmt.Errorf("resolve ssh connection config: %w", err)
+		return false, err
 	}
-	conn := t.hold(nativeSSHPoolKey(t.key, config, t.forwards))
+	conn := t.hold(nativeSSHPoolKey(t.key, config))
 	conn.mu.Lock()
 	if conn.client == nil {
 		conn.mu.Unlock()
@@ -421,6 +460,19 @@ func (t *nativeSSHTransport) dropLiveSession(ctx context.Context) (bool, error) 
 	conn.mu.Unlock()
 	resources.close()
 	return true, nil
+}
+
+// connConfig resolves the env's connection config and checks a native client
+// can honour it.
+func (t *nativeSSHTransport) connConfig(ctx context.Context) (SSHConnConfig, error) {
+	config, err := t.sshEnv.SSHConnConfig(ctx)
+	if err != nil {
+		return SSHConnConfig{}, fmt.Errorf("resolve ssh connection config: %w", err)
+	}
+	if err := config.ValidateNative(); err != nil {
+		return SSHConnConfig{}, err
+	}
+	return config, nil
 }
 
 // withClient runs op on a live connection, retrying once on a fresh connection
@@ -435,14 +487,11 @@ func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativ
 	recoveryAttempted := false
 	var lastErr error
 	for range maxAttempts {
-		config, err := t.sshEnv.SSHConnConfig(ctx)
+		config, err := t.connConfig(ctx)
 		if err != nil {
-			return fmt.Errorf("resolve ssh connection config: %w", err)
-		}
-		if err := config.ValidateNative(); err != nil {
 			return err
 		}
-		poolKey := nativeSSHPoolKey(t.key, config, t.forwards)
+		poolKey := nativeSSHPoolKey(t.key, config)
 		conn := t.hold(poolKey)
 		client, err := conn.beginOp(ctx, config)
 		if err != nil {
@@ -511,13 +560,7 @@ func nativeKeepaliveRequest(client *ssh.Client, timeout time.Duration) error {
 // nativeSSHPoolKey identifies a pooled connection by the remote it reaches and
 // everything that changes what "reaching it" means, so a config change opens a
 // new connection rather than reusing one dialed under the old settings.
-func nativeSSHPoolKey(key string, config SSHConnConfig, forwards []common.PortForwardConfig) string {
-	forwardSpecs := make([]string, 0, len(forwards))
-	for _, forward := range forwards {
-		forwardSpecs = append(forwardSpecs, fmt.Sprintf("%d:%d", forward.ContainerPortOrDefault(), forward.HostPort))
-	}
-	sort.Strings(forwardSpecs)
-
+func nativeSSHPoolKey(key string, config SSHConnConfig) string {
 	options := make([]string, 0, len(config.LegacyOptions))
 	for _, option := range config.LegacyOptions {
 		options = append(options, option.Key+"="+option.Value)
@@ -536,7 +579,6 @@ func nativeSSHPoolKey(key string, config SSHConnConfig, forwards []common.PortFo
 		optionalDirective(config.KeepaliveInterval),
 		optionalDirective(config.KeepaliveMaxFailures),
 		strings.Join(options, ","),
-		strings.Join(forwardSpecs, ","),
 	}, "\x00")))
 	return key + "\x00" + hex.EncodeToString(fingerprint[:8])
 }
@@ -964,6 +1006,14 @@ func dialNativeSFTPChannel(ctx context.Context, client *ssh.Client, remotePath s
 }
 
 func (t *nativeSSHTransport) EnsureReverseForwards(ctx context.Context, forwards []common.PortForwardConfig) error {
+	state := lockReverseForwardState(t.key)
+	defer state.mu.Unlock()
+	if state.replaced {
+		// A replacement may have left work behind — a bind the remote
+		// refused, or a release it did not honour — so setup after one
+		// reconciles the whole set rather than only adding to it.
+		return t.reconcileForwards(ctx, state.effective)
+	}
 	if len(forwards) == 0 {
 		return nil
 	}
@@ -972,12 +1022,123 @@ func (t *nativeSSHTransport) EnsureReverseForwards(ctx context.Context, forwards
 	})
 }
 
+// ReplaceReverseForwards makes forwards the exact set of listeners on the
+// remote's pooled connection. previous is not needed to find what to release:
+// every transport for the remote shares the connection, which tracks what it
+// has bound.
+func (t *nativeSSHTransport) ReplaceReverseForwards(ctx context.Context, _, forwards []common.PortForwardConfig) error {
+	state := lockReverseForwardState(t.key)
+	defer state.mu.Unlock()
+	// A config the native client cannot honour is reported before the
+	// desired mappings become the ones every later setup reconciles toward.
+	if _, err := t.connConfig(ctx); err != nil {
+		return err
+	}
+	state.replaceLocked(forwards)
+	return t.reconcileForwards(ctx, state.effective)
+}
+
+// reconcileForwards binds exactly forwards on the remote's pooled connection.
+// Clearing releases without dialing, since an undialed connection holds
+// nothing.
+func (t *nativeSSHTransport) reconcileForwards(ctx context.Context, forwards []common.PortForwardConfig) error {
+	if len(forwards) == 0 {
+		config, err := t.connConfig(ctx)
+		if err != nil {
+			return err
+		}
+		return releasePooledReverseForwards(nativeSSHPoolKey(t.key, config))
+	}
+	return t.withClient(ctx, func(conn *nativeSSHConn, client *ssh.Client) error {
+		return conn.replaceForwards(client, forwards)
+	})
+}
+
+// releasePooledReverseForwards closes every listener the entry for poolKey
+// holds, if the entry exists, without touching the connection itself.
+func releasePooledReverseForwards(poolKey string) error {
+	nativeSSHPool.mu.Lock()
+	conn := nativeSSHPool.conns[poolKey]
+	nativeSSHPool.mu.Unlock()
+	if conn == nil {
+		return nil
+	}
+	return conn.releaseForwards(nil)
+}
+
 // ensureForwards binds each requested listener on the remote once, keeping it
 // for the connection's lifetime so processes a command backgrounds keep their
 // route home after that command exits.
 func (c *nativeSSHConn) ensureForwards(client *ssh.Client, forwards []common.PortForwardConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.bindForwardsLocked(client, forwards)
+}
+
+// replaceForwards makes forwards the connection's exact set of listeners:
+// obsolete ones are released before any binding, since a new mapping may
+// reuse a remote port an obsolete one holds. Listeners already matching are
+// kept, so a retry after a partial failure only binds what is still missing.
+func (c *nativeSSHConn) replaceForwards(client *ssh.Client, forwards []common.PortForwardConfig) error {
+	if err := c.releaseForwards(forwards); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bindForwardsLocked(client, forwards)
+}
+
+// releaseForwards closes every listener not in keep, and retries every
+// cancellation the remote refused earlier — kept or not, since a refused
+// listener no longer carries traffic and must be rebound afresh. Closing waits
+// for the remote to acknowledge, so it happens outside the entry lock: a
+// silent peer must not hold up every other operation on this entry.
+func (c *nativeSSHConn) releaseForwards(keep []common.PortForwardConfig) error {
+	kept := make(map[string]bool, len(keep))
+	for _, forward := range keep {
+		kept[reverseForwardSpec(forward)] = true
+	}
+	c.mu.Lock()
+	client := c.client
+	obsolete := map[string]net.Listener{}
+	for spec, listener := range c.listeners {
+		if kept[spec] {
+			continue
+		}
+		obsolete[spec] = listener
+		delete(c.listeners, spec)
+	}
+	for spec, listener := range c.unreleased {
+		obsolete[spec] = listener
+	}
+	c.unreleased = nil
+	c.mu.Unlock()
+
+	var failures []string
+	for spec, listener := range obsolete {
+		err := listener.Close()
+		if err == nil {
+			continue
+		}
+		failures = append(failures, fmt.Sprintf("%s: %v", spec, err))
+		c.mu.Lock()
+		// A connection replaced meanwhile took the binding down with it.
+		if c.client == client && client != nil {
+			if c.unreleased == nil {
+				c.unreleased = map[string]net.Listener{}
+			}
+			c.unreleased[spec] = listener
+		}
+		c.mu.Unlock()
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("release reverse forwards: %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// bindForwardsLocked binds each forward not already held. c.mu must be held.
+func (c *nativeSSHConn) bindForwardsLocked(client *ssh.Client, forwards []common.PortForwardConfig) error {
 	if c.client != client {
 		return errors.New("connection replaced while binding reverse forwards")
 	}
@@ -985,7 +1146,7 @@ func (c *nativeSSHConn) ensureForwards(client *ssh.Client, forwards []common.Por
 	var failures []string
 	for _, forward := range forwards {
 		remotePort := forward.ContainerPortOrDefault()
-		spec := fmt.Sprintf("%d:%d", remotePort, forward.HostPort)
+		spec := reverseForwardSpec(forward)
 		if _, ok := c.listeners[spec]; ok {
 			continue
 		}
@@ -1005,6 +1166,12 @@ func (c *nativeSSHConn) ensureForwards(client *ssh.Client, forwards []common.Por
 		return fmt.Errorf("bind reverse forwards: %s", strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+// reverseForwardSpec identifies a listener by what it binds and where it
+// routes, which is all that distinguishes one forward from another.
+func reverseForwardSpec(forward common.PortForwardConfig) string {
+	return fmt.Sprintf("%d:%d", forward.ContainerPortOrDefault(), forward.HostPort)
 }
 
 // serveReverseForward carries each connection arriving on the remote listener
