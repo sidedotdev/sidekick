@@ -190,6 +190,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.StopSandboxActivity)
 	w.RegisterActivity(env.DeleteSandboxActivity)
 	w.RegisterActivity(env.ModalRecreateSandboxActivity)
+	w.RegisterActivity(env.UpdateEnvConfigActivity)
 	w.RegisterActivity(env.SyncRepoToRemoteActivity)
 	w.RegisterActivity(env.DeepenRepoActivity)
 	w.RegisterActivity(env.SnapshotEnvironmentActivity)

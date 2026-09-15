@@ -144,7 +144,7 @@ func TestNativeSSHPoolKeyDistinguishesConnectionSemantics(t *testing.T) {
 		User:          "side",
 		HostKeyPolicy: SSHHostKeyVerify,
 	}
-	baseKey := nativeSSHPoolKey("devpod:box", base, nil)
+	baseKey := nativeSSHPoolKey("devpod:box", base)
 
 	cases := []struct {
 		name         string
@@ -194,7 +194,7 @@ func TestNativeSSHPoolKeyDistinguishesConnectionSemantics(t *testing.T) {
 			t.Parallel()
 			config := base
 			tc.mutate(&config)
-			key := nativeSSHPoolKey("devpod:box", config, nil)
+			key := nativeSSHPoolKey("devpod:box", config)
 			if tc.wantDistinct {
 				assert.NotEqual(t, baseKey, key, "a connection dialed under a different policy must not be reused")
 				return
@@ -361,6 +361,404 @@ func TestNativeTransportReverseForwardDeliversBytes(t *testing.T) {
 	require.NoError(t, transport.EnsureReverseForwards(context.Background(), forwards))
 	assertForwardEchoes(t, forwards[0].ContainerPortOrDefault(), "forwarded-reply")
 	requireNoHarnessErrors(t, echo.Errors)
+}
+
+// assertRemotePortRefused proves nothing listens on the remote port, which is
+// the only evidence that a release actually reached the remote.
+func assertRemotePortRefused(t *testing.T, remotePort int, msg string) {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort), time.Second)
+	if err == nil {
+		_ = conn.Close()
+	}
+	require.Error(t, err, msg)
+}
+
+// TestNativeTransportReplaceReverseForwardsRetargetsAndClears covers a live
+// mapping change across the transports production builds per operation. The
+// transport built under the old mappings performs the replacement — the same
+// remote port retargeted — over the connection whose command channel is
+// already open; a fresh transport must then find the replacement in place; a
+// stale transport re-running setup under the old mappings must not bring them
+// back; and an empty desired list must leave nothing bound, even against
+// stale setup.
+func TestNativeTransportReplaceReverseForwardsRetargetsAndClears(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	firstEcho := serveTCPEcho(t, "first-reply")
+	secondEcho := serveTCPEcho(t, "second-reply")
+	previous := forwardsToEcho(t, firstEcho)
+	remotePort := previous[0].ContainerPortOrDefault()
+	desired := forwardsToEcho(t, secondEcho)
+	desired[0].ContainerPort = remotePort
+
+	// Deliberately not parallel: transport selection is process-wide.
+	t.Setenv(SSHTransportEnvVar, "native")
+	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: server.connConfig()}
+	transportFor := func(forwards []common.PortForwardConfig) SSHTransport {
+		transport := sshTransportFor("native-replace-forwards", forwards, env)
+		require.IsType(t, &nativeSSHTransport{}, transport)
+		t.Cleanup(transport.Close)
+		return transport
+	}
+	ctx := context.Background()
+
+	before := transportFor(previous)
+	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	assertForwardEchoes(t, remotePort, "first-reply")
+	_, err := nativeExecEcho(ctx, before, "warm-up")
+	require.NoError(t, err)
+
+	require.NoError(t, before.ReplaceReverseForwards(ctx, previous, desired))
+	assertForwardEchoes(t, remotePort, "second-reply")
+
+	after := transportFor(desired)
+	require.NoError(t, after.EnsureReverseForwards(ctx, desired))
+	assertForwardEchoes(t, remotePort, "second-reply")
+
+	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	assertForwardEchoes(t, remotePort, "second-reply")
+
+	resp, err := nativeExecEcho(ctx, before, "still-open")
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Stdout), "still-open")
+	assert.Equal(t, 1, server.stats().Connections, "replacement must reuse the remote's pooled connection")
+	assert.Equal(t, 1, server.stats().Sessions, "replacement must not close the pooled command channel")
+
+	cleared := transportFor(nil)
+	require.NoError(t, cleared.ReplaceReverseForwards(ctx, desired, nil))
+	assertRemotePortRefused(t, remotePort, "clearing the mappings must release the remote listener")
+
+	require.NoError(t, after.EnsureReverseForwards(ctx, desired))
+	assertRemotePortRefused(t, remotePort, "stale setup must not bind cleared mappings back")
+	requireNoHarnessErrors(t, firstEcho.Errors)
+	requireNoHarnessErrors(t, secondEcho.Errors)
+}
+
+// TestNativeTransportReplaceReverseForwardsKeepsRetainedAndOtherRemotes
+// covers a replacement that edits a multi-mapping list: the mapping kept must
+// carry traffic throughout, the one dropped must be released, the one added
+// must be bound, and neither the replacement nor a later clear may touch
+// another remote's forwards or the pooled SFTP channel already serving files.
+func TestNativeTransportReplaceReverseForwardsKeepsRetainedAndOtherRemotes(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	retainedEcho := serveTCPEcho(t, "retained-reply")
+	removedEcho := serveTCPEcho(t, "removed-reply")
+	addedEcho := serveTCPEcho(t, "added-reply")
+	otherEcho := serveTCPEcho(t, "other-reply")
+	retained := forwardsToEcho(t, retainedEcho)[0]
+	removed := forwardsToEcho(t, removedEcho)[0]
+	added := forwardsToEcho(t, addedEcho)[0]
+	other := forwardsToEcho(t, otherEcho)
+	initial := []common.PortForwardConfig{retained, removed}
+	desired := []common.PortForwardConfig{retained, added}
+
+	// Deliberately not parallel: transport selection is process-wide.
+	t.Setenv(SSHTransportEnvVar, "native")
+	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: server.connConfig()}
+	transportFor := func(key string, forwards []common.PortForwardConfig) SSHTransport {
+		transport := sshTransportFor(key, forwards, env)
+		require.IsType(t, &nativeSSHTransport{}, transport)
+		t.Cleanup(transport.Close)
+		return transport
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	statOverSFTP := func(transport SSHTransport) {
+		t.Helper()
+		value, err := transport.WithSFTP(ctx, SFTPOp{
+			Name: "stat",
+			Path: dir,
+			Run: func(client *sftp.Client) (any, error) {
+				return client.Stat(dir)
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, value)
+	}
+	roundTripOverSFTP := func(transport SSHTransport, name string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		require.NoError(t, sftpWriteFile(ctx, transport, path, []byte(name), 0o644))
+		content, err := sftpReadFile(ctx, transport, path)
+		require.NoError(t, err)
+		assert.Equal(t, name, string(content))
+	}
+
+	edited := transportFor("native-replace-multi", initial)
+	otherRemote := transportFor("native-replace-multi-other", other)
+	require.NoError(t, edited.EnsureReverseForwards(ctx, initial))
+	require.NoError(t, otherRemote.EnsureReverseForwards(ctx, other))
+	assertForwardEchoes(t, retained.ContainerPortOrDefault(), "retained-reply")
+	assertForwardEchoes(t, removed.ContainerPortOrDefault(), "removed-reply")
+	assertForwardEchoes(t, other[0].ContainerPortOrDefault(), "other-reply")
+	statOverSFTP(edited)
+	warm := server.stats()
+
+	require.NoError(t, edited.ReplaceReverseForwards(ctx, initial, desired))
+	assertForwardEchoes(t, retained.ContainerPortOrDefault(), "retained-reply")
+	assertForwardEchoes(t, added.ContainerPortOrDefault(), "added-reply")
+	assertRemotePortRefused(t, removed.ContainerPortOrDefault(), "the dropped mapping must be released")
+	assertForwardEchoes(t, other[0].ContainerPortOrDefault(), "other-reply")
+	roundTripOverSFTP(edited, "after-replace")
+	assert.Equal(t, warm.Connections, server.stats().Connections, "replacement must not redial")
+	assert.Equal(t, warm.Sessions, server.stats().Sessions, "replacement must keep the pooled SFTP channel")
+
+	require.NoError(t, edited.ReplaceReverseForwards(ctx, desired, nil))
+	assertRemotePortRefused(t, retained.ContainerPortOrDefault(), "clearing must release every mapping")
+	assertRemotePortRefused(t, added.ContainerPortOrDefault(), "clearing must release every mapping")
+	assertForwardEchoes(t, other[0].ContainerPortOrDefault(), "other-reply")
+	roundTripOverSFTP(edited, "after-clear")
+	assert.Equal(t, warm.Connections, server.stats().Connections, "clearing must not redial")
+	assert.Equal(t, warm.Sessions, server.stats().Sessions, "clearing must keep the pooled SFTP channel")
+	for _, echo := range []tcpEcho{retainedEcho, removedEcho, addedEcho, otherEcho} {
+		requireNoHarnessErrors(t, echo.Errors)
+	}
+}
+
+// TestNativeTransportReplaceReverseForwardsRetriesFailedBind pins that a bind
+// the remote refuses is reported, and that the retry binds on the same
+// connection once the port frees up rather than redialing or tearing down the
+// command channel alongside the failed listener.
+func TestNativeTransportReplaceReverseForwardsRetriesFailedBind(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	echo := serveTCPEcho(t, "after-retry")
+	desired := forwardsToEcho(t, echo)
+	remotePort := desired[0].ContainerPortOrDefault()
+	occupant, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = occupant.Close() })
+
+	// Deliberately not parallel: transport selection is process-wide.
+	t.Setenv(SSHTransportEnvVar, "native")
+	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: server.connConfig()}
+	transport := sshTransportFor("native-replace-retry", desired, env)
+	require.IsType(t, &nativeSSHTransport{}, transport)
+	t.Cleanup(transport.Close)
+	ctx := context.Background()
+
+	_, err = nativeExecEcho(ctx, transport, "warm-up")
+	require.NoError(t, err)
+
+	require.Error(t, transport.ReplaceReverseForwards(ctx, nil, desired), "a bind the remote refuses must be reported")
+	require.Error(t, transport.EnsureReverseForwards(ctx, nil), "setup must report the bind still pending")
+	require.NoError(t, occupant.Close())
+
+	require.NoError(t, transport.EnsureReverseForwards(ctx, nil), "setup must bind the pending mapping once the port frees up")
+	assertForwardEchoes(t, remotePort, "after-retry")
+	require.NoError(t, transport.ReplaceReverseForwards(ctx, nil, desired), "re-applying bound mappings is a no-op")
+	assertForwardEchoes(t, remotePort, "after-retry")
+	resp, err := nativeExecEcho(ctx, transport, "channel-kept")
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Stdout), "channel-kept")
+	assert.Equal(t, 1, server.stats().Connections, "a failed bind must not cost a redial")
+	assert.Equal(t, 1, server.stats().Sessions, "a failed bind must not close the command channel")
+	requireNoHarnessErrors(t, echo.Errors)
+}
+
+// TestNativeTransportReplaceReverseForwardsReportsRefusedRelease pins that a
+// release the remote refuses is an error rather than a silent success with the
+// port still bound, and that a retry cancels the binding again instead of
+// having forgotten it.
+func TestNativeTransportReplaceReverseForwardsReportsRefusedRelease(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	echo := serveTCPEcho(t, "bound")
+	forwards := forwardsToEcho(t, echo)
+	remotePort := forwards[0].ContainerPortOrDefault()
+
+	// Deliberately not parallel: transport selection is process-wide.
+	t.Setenv(SSHTransportEnvVar, "native")
+	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: server.connConfig()}
+	transport := sshTransportFor("native-replace-refused-release", forwards, env)
+	require.IsType(t, &nativeSSHTransport{}, transport)
+	t.Cleanup(transport.Close)
+	ctx := context.Background()
+
+	require.NoError(t, transport.EnsureReverseForwards(ctx, forwards))
+	assertForwardEchoes(t, remotePort, "bound")
+
+	server.setRejectForwardCancels(true)
+	require.Error(t, transport.ReplaceReverseForwards(ctx, forwards, nil), "a refused release must not be reported as success")
+	require.Error(t, transport.EnsureReverseForwards(ctx, forwards), "setup must report the release still pending")
+	stillBound, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort), time.Second)
+	require.NoError(t, err, "the remote keeps the port bound while it refuses cancellation")
+	_ = stillBound.Close()
+
+	server.setRejectForwardCancels(false)
+	require.NoError(t, transport.EnsureReverseForwards(ctx, forwards), "setup must release the binding the remote refused to cancel")
+	assertRemotePortRefused(t, remotePort, "the pending release must reach the remote once it honours cancellations")
+	assert.Equal(t, 1, server.stats().Connections, "a refused release must not cost a redial")
+	requireNoHarnessErrors(t, echo.Errors)
+}
+
+// awaitErr returns the result a forward operation sends on ch, failing the
+// test rather than hanging when the operation never completes.
+func awaitErr(t *testing.T, ch <-chan error, msg string) error {
+	t.Helper()
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s: operation did not complete", msg)
+		return nil
+	}
+}
+
+// gatedConfigEnv holds the first config resolution until gate is closed,
+// which parks forward setup after it has decided what to bind and before it
+// reaches the remote — the window in which a replacement could slip in.
+type gatedConfigEnv struct {
+	*nativeTestEnv
+	gate    <-chan struct{}
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (e *gatedConfigEnv) SSHConnConfig(ctx context.Context) (SSHConnConfig, error) {
+	e.once.Do(func() {
+		close(e.entered)
+		<-e.gate
+	})
+	return e.nativeTestEnv.SSHConnConfig(ctx)
+}
+
+// TestNativeTransportReplacementWaitsForInFlightSetup pins that a replacement
+// does not overtake forward setup already under way from a transport built
+// under the old mappings. Setup that had decided to bind the old mappings
+// before the replacement ran would otherwise bind them back afterwards — and
+// collide on the remote port the new mapping now holds.
+func TestNativeTransportReplacementWaitsForInFlightSetup(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	firstEcho := serveTCPEcho(t, "first-reply")
+	secondEcho := serveTCPEcho(t, "second-reply")
+	previous := forwardsToEcho(t, firstEcho)
+	remotePort := previous[0].ContainerPortOrDefault()
+	desired := forwardsToEcho(t, secondEcho)
+	desired[0].ContainerPort = remotePort
+
+	// Deliberately not parallel: transport selection is process-wide.
+	t.Setenv(SSHTransportEnvVar, "native")
+	const key = "native-replace-in-flight"
+	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: server.connConfig()}
+	ctx := context.Background()
+
+	before := sshTransportFor(key, previous, env)
+	require.IsType(t, &nativeSSHTransport{}, before)
+	t.Cleanup(before.Close)
+	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	assertForwardEchoes(t, remotePort, "first-reply")
+
+	gate := make(chan struct{})
+	var openGate sync.Once
+	gatedEnv := &gatedConfigEnv{nativeTestEnv: env, gate: gate, entered: make(chan struct{})}
+	stale := sshTransportFor(key, previous, gatedEnv)
+	t.Cleanup(stale.Close)
+	// Registered after the Close cleanups so it runs before them: Close waits
+	// on the shared state the parked setup holds until the gate opens.
+	t.Cleanup(func() { openGate.Do(func() { close(gate) }) })
+	setupErr := make(chan error, 1)
+	go func() { setupErr <- stale.EnsureReverseForwards(ctx, previous) }()
+	select {
+	case <-gatedEnv.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stale setup never reached config resolution")
+	}
+
+	replaceErr := make(chan error, 1)
+	go func() { replaceErr <- before.ReplaceReverseForwards(ctx, previous, desired) }()
+	// A replacement that does not wait for the parked setup completes here;
+	// one that waits cannot complete until the gate opens, so this only
+	// bounds how long the test gives the former to show itself.
+	select {
+	case err := <-replaceErr:
+		replaceErr <- err
+	case <-time.After(300 * time.Millisecond):
+	}
+	openGate.Do(func() { close(gate) })
+
+	require.NoError(t, awaitErr(t, setupErr, "stale setup"))
+	require.NoError(t, awaitErr(t, replaceErr, "replacement"))
+	assertForwardEchoes(t, remotePort, "second-reply")
+	require.NoError(t, stale.EnsureReverseForwards(ctx, previous))
+	assertForwardEchoes(t, remotePort, "second-reply")
+	assert.Equal(t, 1, server.stats().Connections)
+	requireNoHarnessErrors(t, firstEcho.Errors)
+	requireNoHarnessErrors(t, secondEcho.Errors)
+}
+
+// TestNativeTransportShutdownKeepsStateOfSurvivingGeneration pins the
+// shutdown race with an operation under way: setup parked past its decision
+// to bind the replaced mappings outlives the pool teardown, rejoins the pool
+// and binds them on a fresh connection. Shutdown must then leave the remote's
+// replacement in force — forgetting it would let setup from a transport built
+// under the old mappings bind those back, colliding on the new connection.
+func TestNativeTransportShutdownKeepsStateOfSurvivingGeneration(t *testing.T) {
+	server := startSSHTestServer(t, sshTestServerOptions{})
+	firstEcho := serveTCPEcho(t, "first-reply")
+	secondEcho := serveTCPEcho(t, "second-reply")
+	previous := forwardsToEcho(t, firstEcho)
+	remotePort := previous[0].ContainerPortOrDefault()
+	desired := forwardsToEcho(t, secondEcho)
+	desired[0].ContainerPort = remotePort
+
+	// Deliberately not parallel: transport selection and the pool are
+	// process-wide.
+	t.Setenv(SSHTransportEnvVar, "native")
+	const key = "native-shutdown-generation"
+	env := &nativeTestEnv{LocalEnv: &LocalEnv{}, config: server.connConfig()}
+	ctx := context.Background()
+
+	before := sshTransportFor(key, previous, env)
+	require.IsType(t, &nativeSSHTransport{}, before)
+	t.Cleanup(before.Close)
+	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	require.NoError(t, before.ReplaceReverseForwards(ctx, previous, desired))
+	assertForwardEchoes(t, remotePort, "second-reply")
+
+	gate := make(chan struct{})
+	var openGate sync.Once
+	gatedEnv := &gatedConfigEnv{nativeTestEnv: env, gate: gate, entered: make(chan struct{})}
+	parked := sshTransportFor(key, previous, gatedEnv)
+	t.Cleanup(parked.Close)
+	// Registered after the Close cleanups so it runs before them: Close waits
+	// on the shared state the parked setup holds until the gate opens.
+	t.Cleanup(func() { openGate.Do(func() { close(gate) }) })
+	setupErr := make(chan error, 1)
+	go func() { setupErr <- parked.EnsureReverseForwards(ctx, previous) }()
+	select {
+	case <-gatedEnv.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("parked setup never reached config resolution")
+	}
+
+	shutdown := make(chan struct{})
+	go func() {
+		CloseAllNativeSSHClients()
+		close(shutdown)
+	}()
+	require.Eventually(t, func() bool {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort), 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+		}
+		return err != nil
+	}, 10*time.Second, 10*time.Millisecond, "shutdown must release the remote binding while setup is parked")
+	openGate.Do(func() { close(gate) })
+
+	require.NoError(t, awaitErr(t, setupErr, "parked setup"))
+	select {
+	case <-shutdown:
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown never completed")
+	}
+	assertForwardEchoes(t, remotePort, "second-reply")
+
+	stale := sshTransportFor(key, previous, env)
+	t.Cleanup(stale.Close)
+	require.NoError(t, stale.EnsureReverseForwards(ctx, previous), "setup after shutdown must honour the replacement still bound")
+	assertForwardEchoes(t, remotePort, "second-reply")
+	assert.Equal(t, 2, server.stats().Connections, "the surviving setup redials once")
+	requireNoHarnessErrors(t, firstEcho.Errors)
+	requireNoHarnessErrors(t, secondEcho.Errors)
 }
 
 // forwardsToEcho describes a forward whose remote port is unbound and whose

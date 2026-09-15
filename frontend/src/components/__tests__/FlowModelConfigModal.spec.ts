@@ -22,8 +22,9 @@ const EditorStub = {
   data: () => ({ config: updatedConfig }),
 }
 
-// The preset editor resolves the workspace profile on its own, so those
-// requests are answered outside the flow config sequence these tests set up.
+// The preset editor resolves the workspace profile on its own and port
+// mappings are covered by their own suite, so both are answered outside the
+// flow config sequence these tests set up.
 const withProfileRequests = (
   fetchMock: (url: string, options?: RequestInit) => unknown,
 ) => (url: string, options?: RequestInit) => {
@@ -32,6 +33,9 @@ const withProfileRequests = (
   }
   if (url.startsWith('/api/v1/providers')) {
     return Promise.resolve({ ok: true, json: async () => ({ providers: ['anthropic', 'openai'] }) })
+  }
+  if (typeof options?.body === 'string' && options.body.includes('port_forwards')) {
+    return Promise.resolve({ ok: false })
   }
   return fetchMock(url, options)
 }

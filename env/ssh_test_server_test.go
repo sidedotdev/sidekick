@@ -51,9 +51,12 @@ type sshTestServer struct {
 	forwardRequests    []string
 	forwardedChannels  int
 	directDestinations []string
-	openConns          []net.Conn
-	closed             bool
-	wg                 sync.WaitGroup
+	// forwardListeners are the remote listeners currently bound, keyed by
+	// address, so a cancel-tcpip-forward releases the port as sshd would.
+	forwardListeners map[string]net.Listener
+	openConns        []net.Conn
+	closed           bool
+	wg               sync.WaitGroup
 }
 
 // sshTestServerOptions configures how the server answers, so tests can drive
@@ -72,6 +75,10 @@ type sshTestServerOptions struct {
 	// RejectForwards makes tcpip-forward requests fail, as a remote already
 	// binding that port would.
 	RejectForwards bool
+	// RejectForwardCancels makes cancel-tcpip-forward requests fail while
+	// leaving the listener bound, so a release the remote refuses is
+	// observable as a port that stays reachable.
+	RejectForwardCancels bool
 	// RejectSessions makes session channels fail, simulating a remote that
 	// accepts connections but cannot run anything.
 	RejectSessions bool
@@ -439,6 +446,14 @@ func (s *sshTestServer) stallGlobalRequests() bool {
 	return s.opts.StallGlobalRequests
 }
 
+// setRejectForwardCancels changes whether the server honours forward
+// cancellations, so a test can bind a forward and only then refuse its release.
+func (s *sshTestServer) setRejectForwardCancels(reject bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.RejectForwardCancels = reject
+}
+
 // hostsAgentCommand reports whether the agent path command invokes is one this
 // server stands in for.
 func (s *sshTestServer) hostsAgentCommand(command string) bool {
@@ -452,7 +467,23 @@ func (s *sshTestServer) sendExitStatus(channel ssh.Channel, status uint32) {
 	_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
 }
 
+// handleGlobalRequests serves one connection's global requests. Reverse
+// forwards it binds belong to that connection, as with sshd: they are released
+// when the connection ends, whether or not the client cancelled them.
 func (s *sshTestServer) handleGlobalRequests(serverConn *ssh.ServerConn, requests <-chan *ssh.Request) {
+	owned := map[string]net.Listener{}
+	defer func() {
+		s.mu.Lock()
+		for addr, listener := range owned {
+			if s.forwardListeners[addr] == listener {
+				delete(s.forwardListeners, addr)
+			}
+		}
+		s.mu.Unlock()
+		for _, listener := range owned {
+			_ = listener.Close()
+		}
+	}()
 	for request := range requests {
 		if s.stallGlobalRequests() {
 			continue
@@ -480,16 +511,65 @@ func (s *sshTestServer) handleGlobalRequests(serverConn *ssh.ServerConn, request
 				continue
 			}
 			boundPort := uint32(listener.Addr().(*net.TCPAddr).Port)
+			boundAddr := net.JoinHostPort(payload.Addr, strconv.Itoa(int(boundPort)))
+			owned[boundAddr] = listener
+			s.mu.Lock()
+			if s.forwardListeners == nil {
+				s.forwardListeners = map[string]net.Listener{}
+			}
+			s.forwardListeners[boundAddr] = listener
+			s.mu.Unlock()
 			if request.WantReply {
 				request.Reply(true, ssh.Marshal(struct{ Port uint32 }{boundPort}))
 			}
 			go s.serveForwardListener(serverConn, listener, payload.Addr, boundPort)
+		case "cancel-tcpip-forward":
+			var payload struct {
+				Addr string
+				Port uint32
+			}
+			if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
+				if request.Reply(false, nil) != nil {
+					return
+				}
+				continue
+			}
+			if s.cancelForward(owned, net.JoinHostPort(payload.Addr, strconv.Itoa(int(payload.Port))), request) != nil {
+				return
+			}
 		default:
 			if request.WantReply {
 				request.Reply(false, nil)
 			}
 		}
 	}
+}
+
+// cancelForward releases the connection's own listener bound at addr as sshd
+// would, or refuses to when the server is configured to keep it bound. A
+// connection cannot cancel another's binding. The returned error is a failed
+// reply, meaning the connection is gone.
+func (s *sshTestServer) cancelForward(owned map[string]net.Listener, addr string, request *ssh.Request) error {
+	s.mu.Lock()
+	reject := s.opts.RejectForwardCancels
+	s.mu.Unlock()
+	if reject {
+		return request.Reply(false, nil)
+	}
+	listener, ok := owned[addr]
+	if ok {
+		delete(owned, addr)
+		s.mu.Lock()
+		if s.forwardListeners[addr] == listener {
+			delete(s.forwardListeners, addr)
+		}
+		s.mu.Unlock()
+		_ = listener.Close()
+	}
+	if !request.WantReply {
+		return nil
+	}
+	return request.Reply(ok, nil)
 }
 
 // serveForwardListener carries connections arriving on a remote listener back
