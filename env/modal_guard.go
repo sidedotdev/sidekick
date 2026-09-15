@@ -425,6 +425,44 @@ type modalSnapshotRecord struct {
 	// History holds the recent images kept by the guard's own GC, which are
 	// otherwise unreachable once superseded.
 	History []string `json:"history,omitempty"`
+	// SnapshotStartedAt is the unix time the published snapshot began, which
+	// is the filesystem state a restore brings back; zero for records written
+	// by guards that predate it.
+	SnapshotStartedAt float64 `json:"snapshotStartedAt,omitempty"`
+	// SandboxId names the incarnation the published snapshot was taken from.
+	SandboxId string `json:"sandboxId,omitempty"`
+}
+
+// snapshotTime is the published snapshot's start time, or the zero time when
+// the guard did not record one.
+func (r *modalSnapshotRecord) snapshotTime() time.Time {
+	if r == nil || r.SnapshotStartedAt == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, int64(r.SnapshotStartedAt*float64(time.Second))).UTC()
+}
+
+// modalSnapshotEvents returns the guard's durable lifecycle events for a
+// sandbox name (snapshots started/published/failed, terminations), oldest
+// first as JSON lines. Empty when the guard is not deployed or has none.
+func modalSnapshotEvents(ctx context.Context, client *modal.Client, sandboxName string, limit int) ([]string, error) {
+	fn, err := client.Functions.FromName(ctx, modalGuardAppName(), "snapshot_events", nil)
+	if err != nil {
+		var notFound modal.NotFoundError
+		if errors.As(err, &notFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to look up modal guard: %w", err)
+	}
+	result, err := fn.Remote(ctx, []any{sandboxName, limit}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query modal guard for snapshot events: %w", err)
+	}
+	encoded, _ := result.(string)
+	if strings.TrimSpace(encoded) == "" {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSpace(encoded), "\n"), nil
 }
 
 // modalSnapshotDeletion reports what a delete_snapshot call reclaimed.

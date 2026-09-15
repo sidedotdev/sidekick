@@ -1360,3 +1360,125 @@ func TestModalRunCommandDoesNotRetryAmbiguousFailureAfterRefresh(t *testing.T) {
 		})
 	}
 }
+
+// TestModalRunCommandReportsRestoreWhenRecoveryFails covers the rollback that
+// is hardest to notice: recovery restored the sandbox and then still failed.
+// The restore is only ever reported by the refresh that performed it, so a
+// notice dropped here is lost for good, and a later successful command finds
+// the sandbox running with no sign its filesystem moved backwards.
+func TestModalRunCommandReportsRestoreWhenRecoveryFails(t *testing.T) {
+	prev := refreshModalEndpointDetailed
+	t.Cleanup(func() { refreshModalEndpointDetailed = prev })
+	exitCode := 137
+	refreshModalEndpointDetailed = func(context.Context, string) (modalEndpointRefresh, error) {
+		return modalEndpointRefresh{
+			SSHHost:           "new.host",
+			SSHPort:           2222,
+			Restored:          true,
+			SnapshotImageId:   "im-restored",
+			PreviousSandboxID: "sb-dead",
+			PreviousExitCode:  &exitCode,
+		}, nil
+	}
+
+	e := &ModalEnv{
+		SandboxName: "side--test",
+		SSHHost:     "old.host",
+		SSHPort:     1,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			return EnvRunCommandOutput{ExitStatus: 255},
+				"ssh transport failure before agent channel established: ssh handshake with old.host:1 timed out after 10s", nil
+		},
+		runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+			return EnvRunCommandOutput{}, errModalSandboxNotRunning
+		},
+	}
+
+	_, err := e.RunCommand(context.Background(), EnvRunCommandInput{Command: "true"})
+	require.Error(t, err)
+	for _, want := range []string{"im-restored", "sb-dead", "137", "lost"} {
+		assert.Contains(t, err.Error(), want, "the failure must still report the rollback")
+	}
+}
+
+// TestModalRunCommandReportsSnapshotRestore covers the silent-rollback case:
+// when the sandbox died and had to be restored from its last snapshot before
+// the command could run, the command's caller must be told, because every
+// filesystem change made after that snapshot is gone.
+func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
+	transportFailure := "ssh transport failure before agent channel established: ssh handshake with old.host:1 timed out after 10s"
+	exitCode := 137
+	restored := modalEndpointRefresh{
+		SSHHost:           "new.host",
+		SSHPort:           2222,
+		Restored:          true,
+		SnapshotImageId:   "im-restored",
+		PreviousSandboxID: "sb-dead",
+		PreviousExitCode:  &exitCode,
+	}
+	cases := []struct {
+		name         string
+		refresh      modalEndpointRefresh
+		wantNotice   bool
+		wantContains []string
+	}{
+		{
+			name:       "endpoint refreshed without restore",
+			refresh:    modalEndpointRefresh{SSHHost: "new.host", SSHPort: 2222},
+			wantNotice: false,
+		},
+		{
+			name:         "restored from snapshot",
+			refresh:      restored,
+			wantNotice:   true,
+			wantContains: []string{"side--test", "im-restored", "sb-dead", "137", "lost"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := refreshModalEndpointDetailed
+			t.Cleanup(func() { refreshModalEndpointDetailed = prev })
+			refreshModalEndpointDetailed = func(context.Context, string) (modalEndpointRefresh, error) {
+				return tc.refresh, nil
+			}
+
+			calls := 0
+			e := &ModalEnv{
+				SandboxName: "side--test",
+				SSHHost:     "old.host",
+				SSHPort:     1,
+				runModalCommand: func(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+					calls++
+					if calls == 1 {
+						return EnvRunCommandOutput{ExitStatus: 255}, transportFailure, nil
+					}
+					return EnvRunCommandOutput{Stdout: "ok\n", Stderr: "warn\n", ExitStatus: 0}, "", nil
+				},
+			}
+			output, err := e.RunCommand(context.Background(), EnvRunCommandInput{Command: "true"})
+			if err != nil {
+				t.Fatalf("RunCommand: %v", err)
+			}
+			if output.ExitStatus != 0 || output.Stdout != "ok\n" {
+				t.Fatalf("unexpected output %+v", output)
+			}
+			if e.SSHHost != "new.host" || e.SSHPort != 2222 {
+				t.Fatalf("endpoint not refreshed: %s:%d", e.SSHHost, e.SSHPort)
+			}
+			if !tc.wantNotice {
+				if output.Stderr != "warn\n" {
+					t.Fatalf("stderr altered without a restore: %q", output.Stderr)
+				}
+				return
+			}
+			if !strings.HasSuffix(output.Stderr, "\nwarn\n") {
+				t.Fatalf("command stderr must follow the notice, got %q", output.Stderr)
+			}
+			for _, want := range tc.wantContains {
+				if !strings.Contains(output.Stderr, want) {
+					t.Errorf("restore notice missing %q: %q", want, output.Stderr)
+				}
+			}
+		})
+	}
+}

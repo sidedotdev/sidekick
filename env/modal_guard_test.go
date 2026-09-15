@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"sidekick/common"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,11 +107,11 @@ func TestModalGuardDiscardsSnapshotsOnDelete(t *testing.T) {
 	assert.Contains(t, modalGuardAppSource, "def delete_snapshot(name: str) -> str:")
 	assert.Contains(t, modalGuardAppSource, "modal.experimental.image_delete(image_id)")
 	assert.Contains(t, modalGuardAppSource, "os.remove(_record_path(name))")
-	assert.Contains(t, modalGuardAppSource, "_write_record(name, SnapshotRecord(pendingDelete=failed))",
+	assert.Contains(t, modalGuardAppSource, "_forget_images(name, [image_id for image_id in tracked if image_id not in failed], failed)",
 		"failed deletions must stay durably tracked, or their images leak forever")
 	assert.Contains(t, modalGuardAppSource, "except modal.exception.NotFoundError:",
 		"an already-deleted image must count as confirmed so retries converge")
-	assert.Contains(t, modalGuardAppSource, "stale = previous.pendingDelete + history[:-2]",
+	assert.Contains(t, modalGuardAppSource, "+ _pending_images(name) +",
 		"the rolling keep-2 GC must retry previously failed deletions")
 }
 
@@ -167,7 +169,9 @@ func TestModalGuardEmbeds(t *testing.T) {
 	assert.Contains(t, modalSnapshotScript, "guard $phase HTTP failure")
 	assert.Contains(t, modalSnapshotScript, "guard $phase transport failure")
 	assert.Contains(t, modalSnapshotScript, "guard $phase request confirmed")
-	assert.Contains(t, modalWatchdogScript, `/usr/local/bin/sidekick-snapshot "$phase"`)
+	assert.Contains(t, modalWatchdogScript, `"${SIDE_SNAPSHOT_BIN:-/usr/local/bin/sidekick-snapshot}" "$phase"`)
+	assert.Contains(t, modalWatchdogScript, `log_file="${SIDE_WATCHDOG_LOG_FILE:-/var/log/sidekick-watchdog.log}"`)
+	assert.Contains(t, modalSnapshotScript, `log_file="${SIDE_WATCHDOG_LOG_FILE:-/var/log/sidekick-watchdog.log}"`)
 	assert.Contains(t, modalSSHDCommand, `"$SIDE_SNAPSHOT"`)
 	assert.Contains(t, modalSSHDCommand, `/usr/local/bin/sidekick-snapshot`)
 	assert.Contains(t, modalGuardAppSource, "app = modal.App(APP_NAME)")
@@ -493,4 +497,106 @@ printf '%s' "$status"
 			}
 		})
 	}
+}
+
+// runWatchdogIdleCycle drives one idle cycle of the watchdog script with the
+// sandbox-only tools stubbed: the activity marker's mtime comes from a file,
+// no sshd/pty/load activity exists, and the guard "request" records its
+// phase and, when editDuringSnapshot is set, plants an edit (marker touch)
+// while the snapshot is in flight and then lets the idle threshold elapse
+// before returning. The first poll sleep lets the idle threshold elapse; the
+// second sleep (either the next poll or the post-terminate wait) ends the
+// script with SIGTERM. It returns the guard phases requested, in order, and
+// the watchdog log.
+func runWatchdogIdleCycle(t *testing.T, script string, editDuringSnapshot bool) ([]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	markerFile := filepath.Join(dir, "marker-mtime")
+	callsFile := filepath.Join(dir, "guard-calls")
+	sleepCount := filepath.Join(dir, "sleep-count")
+	logFile := filepath.Join(dir, "watchdog.log")
+	stubs := map[string]string{
+		"sidekick-snapshot": `#!/bin/sh
+echo "$1" >> "$FAKE_GUARD_CALLS"
+if [ "$1" = snapshot ] && [ "$FAKE_EDIT_DURING_SNAPSHOT" = 1 ]; then
+    date +%s > "$FAKE_MARKER_FILE"
+    /bin/sleep 1
+fi
+exit 0
+`,
+		"stat": `#!/bin/sh
+if [ "$3" = /tmp/.sidekick-activity ]; then
+    cat "$FAKE_MARKER_FILE" 2>/dev/null || echo 0
+else
+    echo 0
+fi
+`,
+		"pgrep": "#!/bin/sh\nexit 1\n",
+		"cut":   "#!/bin/sh\necho 0\n",
+		"sleep": `#!/bin/sh
+count=$(($(cat "$FAKE_SLEEP_COUNT" 2>/dev/null || echo 0) + 1))
+echo "$count" > "$FAKE_SLEEP_COUNT"
+[ "$count" -ge 2 ] && kill "$PPID"
+/bin/sleep 1
+`,
+		"watchdog.sh": script,
+	}
+	for name, content := range stubs {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o700))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", filepath.Join(dir, "watchdog.sh"))
+	edit := "0"
+	if editDuringSnapshot {
+		edit = "1"
+	}
+	cmd.Env = []string{
+		"PATH=" + dir + ":" + os.Getenv("PATH"),
+		"SIDE_IDLE_SECONDS=1",
+		"SIDE_SNAPSHOT_BIN=" + filepath.Join(dir, "sidekick-snapshot"),
+		"FAKE_MARKER_FILE=" + markerFile,
+		"FAKE_GUARD_CALLS=" + callsFile,
+		"FAKE_SLEEP_COUNT=" + sleepCount,
+		"FAKE_EDIT_DURING_SNAPSHOT=" + edit,
+		"SIDE_WATCHDOG_LOG_FILE=" + logFile,
+	}
+	output, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, "the stubbed sleep must end the script; output: %s", output)
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	require.True(t, ok && status.Signaled() && status.Signal() == syscall.SIGTERM,
+		"the script must end by the stub's SIGTERM, not exit on its own (%v); output: %s", err, output)
+	calls, err := os.ReadFile(callsFile)
+	require.NoError(t, err, "the guard was never called; watchdog output: %s", output)
+	logged, err := os.ReadFile(logFile)
+	require.NoError(t, err, "the watchdog must honour the log path override rather than writing to the real one")
+	require.NotEmpty(t, logged)
+	return strings.Fields(string(calls)), string(output)
+}
+
+// TestModalWatchdogIdleShutdown covers the shutdown decision the watchdog
+// makes once its idle snapshot completes. A genuinely idle sandbox proceeds
+// to terminate. An edit that landed after the snapshot started is not in the
+// snapshot, and by the time the snapshot completes the edit's activity marker
+// can already be older than the idle threshold; the watchdog must still
+// treat it as unsaved work and abort rather than terminate on a checkpoint
+// that predates the edit.
+func TestModalWatchdogIdleShutdown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("idle sandbox terminates after its snapshot", func(t *testing.T) {
+		t.Parallel()
+		calls, output := runWatchdogIdleCycle(t, modalWatchdogScript, false)
+		assert.Equal(t, []string{"snapshot", "terminate"}, calls, "output: %s", output)
+		assert.Contains(t, output, "terminate accepted")
+	})
+
+	t.Run("edit during a slow snapshot aborts the shutdown", func(t *testing.T) {
+		t.Parallel()
+		calls, output := runWatchdogIdleCycle(t, modalWatchdogScript, true)
+		assert.Equal(t, []string{"snapshot"}, calls, "must not terminate; output: %s", output)
+		assert.Contains(t, output, "shutdown aborted after snapshot")
+		assert.Contains(t, output, "sidekick-activity-during-snapshot")
+	})
 }

@@ -69,6 +69,12 @@ class SnapshotRecord:
     # before its deletion is confirmed leaks its image forever.
     pendingDelete: List[str] = field(default_factory=list)
     lastShutdown: Optional[float] = None
+    # When the published snapshot began: a filesystem snapshot reflects the
+    # sandbox as of its start, so this orders concurrent snapshots and dates
+    # the state a restore brings back.
+    snapshotStartedAt: Optional[float] = None
+    # The sandbox incarnation the published snapshot was taken from.
+    sandboxId: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "SnapshotRecord":
@@ -79,6 +85,8 @@ class SnapshotRecord:
             history=list(data.get("history") or []),
             pendingDelete=list(data.get("pendingDelete") or []),
             lastShutdown=data.get("lastShutdown"),
+            snapshotStartedAt=data.get("snapshotStartedAt"),
+            sandboxId=data.get("sandboxId") or "",
         )
 
     def to_dict(self) -> dict:
@@ -93,6 +101,10 @@ class SnapshotRecord:
             record["pendingDelete"] = self.pendingDelete
         if self.lastShutdown is not None:
             record["lastShutdown"] = self.lastShutdown
+        if self.snapshotStartedAt is not None:
+            record["snapshotStartedAt"] = self.snapshotStartedAt
+        if self.sandboxId:
+            record["sandboxId"] = self.sandboxId
         return record
 
     def tracked_images(self) -> List[str]:
@@ -108,15 +120,87 @@ def _record_path(name: str) -> str:
     return os.path.join(SNAPSHOT_DIR, name.replace("/", "_") + ".json")
 
 
-def _read_record(name: str) -> Optional[SnapshotRecord]:
-    """Latest snapshot record for a sandbox name, or None when none exists.
+# Storage layout, per sandbox name:
+#
+#   <name>.json                 legacy single-file record (read-only now;
+#                               removed once its images are reclaimed)
+#   <name>.snapshots/<key>.json one immutable entry per published snapshot
+#   <name>.pending/<imageId>    marker: deletion of this image failed
+#   <name>.events/<key>.json    one immutable lifecycle event each
+#
+# Handlers for one name can overlap (the watchdog's snapshot and a
+# host-requested one), and the volume offers no locking, so nothing here is
+# ever rewritten in place: every handler only adds files under a unique key
+# and derives "latest" by listing. Two overlapping snapshots therefore both
+# stay restorable, whichever finishes first.
+def _snapshots_dir(name: str) -> str:
+    return os.path.join(SNAPSHOT_DIR, name.replace("/", "_") + ".snapshots")
 
-    Absence is the only condition reported as None: storage failures and
-    malformed records raise, because answering "no snapshot" would tell the
-    host that a live sandbox is unrestorable and let deletion forget images it
-    still owns.
-    """
-    snapshots.reload()
+
+def _pending_dir(name: str) -> str:
+    return os.path.join(SNAPSHOT_DIR, name.replace("/", "_") + ".pending")
+
+
+def _events_dir(name: str) -> str:
+    return os.path.join(SNAPSHOT_DIR, name.replace("/", "_") + ".events")
+
+
+def _unique_key(stamp: float) -> str:
+    """Sorts chronologically and cannot collide across handlers, which may
+    share a PID when they run in separate containers."""
+    return "%017.6f-%s" % (stamp, os.urandom(4).hex())
+
+
+def _write_file(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = path + "." + os.urandom(16).hex() + ".tmp"
+    try:
+        with open(temporary, "w") as handle:
+            handle.write(content)
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.remove(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _list_dir(path: str) -> List[str]:
+    try:
+        return sorted(os.listdir(path))
+    except FileNotFoundError:
+        return []
+
+
+# Lifecycle events are the one durable account of which snapshots were taken
+# (or failed) and when a sandbox was terminated: Modal's own logs for the
+# guard and for sandboxes are retained only briefly, and a terminated
+# incarnation takes its in-sandbox logs with it. Bounded so a long-lived name
+# cannot grow the directory forever.
+MAX_EVENTS = 1000
+
+
+def _append_event(name: str, event: dict) -> None:
+    """Best effort: bookkeeping must never fail the snapshot it describes."""
+    try:
+        snapshots.reload()
+        now = time.time()
+        entry = {"at": now, "atIso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))}
+        entry.update(event)
+        _write_file(os.path.join(_events_dir(name), _unique_key(now) + ".json"), json.dumps(entry))
+        existing = _list_dir(_events_dir(name))
+        if len(existing) > 2 * MAX_EVENTS:
+            for stale in existing[: len(existing) - MAX_EVENTS]:
+                try:
+                    os.remove(os.path.join(_events_dir(name), stale))
+                except FileNotFoundError:
+                    pass
+        snapshots.commit()
+    except Exception as exc:  # noqa: BLE001
+        print("failed to append guard event for %s: %r" % (name, exc))
+
+
+def _read_legacy_record(name: str) -> Optional[SnapshotRecord]:
     try:
         with open(_record_path(name)) as record_file:
             return SnapshotRecord.from_dict(json.load(record_file))
@@ -124,21 +208,140 @@ def _read_record(name: str) -> Optional[SnapshotRecord]:
         return None
 
 
-def _write_record(name: str, record: SnapshotRecord) -> None:
-    """Persist a record, replacing it atomically so a crash mid-write cannot
-    leave a truncated record that would make a restorable sandbox look lost.
+def _list_snapshots(name: str) -> List[SnapshotRecord]:
+    """Every restorable snapshot for a name, oldest first.
 
-    Each sandbox owns exactly one file and only its own watchdog (which
-    serializes its guard calls) writes it, so concurrent guard invocations for
-    different sandboxes never contend for the same record.
+    A legacy record's images sort before every dated entry, so they age out
+    through the same keep-latest-2 GC as everything else. Malformed entries
+    and storage failures raise rather than read as absent, because answering
+    "no snapshot" would tell the host that a live sandbox is unrestorable and
+    let deletion forget images it still owns.
     """
-    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-    path = _record_path(name)
-    temp_path = path + ".tmp"
-    with open(temp_path, "w") as record_file:
-        json.dump(record.to_dict(), record_file)
-    os.replace(temp_path, path)
+    entries: List[SnapshotRecord] = []
+    legacy = _read_legacy_record(name)
+    if legacy is not None:
+        for image_id in legacy.history or [legacy.imageId]:
+            if image_id:
+                entries.append(
+                    SnapshotRecord(imageId=image_id, imageVersion=legacy.imageVersion, meta=legacy.meta)
+                )
+    dated: List[SnapshotRecord] = []
+    for entry_name in _list_dir(_snapshots_dir(name)):
+        if not entry_name.endswith(".json"):
+            continue
+        with open(os.path.join(_snapshots_dir(name), entry_name)) as entry_file:
+            dated.append(SnapshotRecord.from_dict(json.load(entry_file)))
+    dated.sort(key=lambda entry: (entry.snapshotStartedAt or 0.0, entry.imageId))
+    deleted = _deleted_images(name)
+    return [entry for entry in entries + dated if entry.imageId not in deleted]
+
+
+def _deleted_dir(name: str) -> str:
+    return os.path.join(SNAPSHOT_DIR, name.replace("/", "_") + ".deleted")
+
+
+def _deleted_images(name: str) -> set:
+    return {entry for entry in _list_dir(_deleted_dir(name)) if not entry.endswith(".tmp")}
+
+
+def _pending_images(name: str) -> List[str]:
+    legacy = _read_legacy_record(name)
+    pending = (legacy.pendingDelete if legacy else []) + _list_dir(_pending_dir(name))
+    deleted = _deleted_images(name)
+    return list(dict.fromkeys(image_id for image_id in pending
+                              if image_id not in deleted and not image_id.endswith(".tmp")))
+
+
+def _read_record(name: str) -> Optional[SnapshotRecord]:
+    """The latest snapshot for a sandbox name as the host expects it (with
+    history newest-last and images still awaiting deletion), or None when
+    nothing was ever published."""
+    snapshots.reload()
+    entries = _list_snapshots(name)
+    pending = _pending_images(name)
+    if not entries:
+        return SnapshotRecord(pendingDelete=pending) if pending else None
+    latest = entries[-1]
+    return SnapshotRecord(
+        imageId=latest.imageId,
+        imageVersion=latest.imageVersion,
+        meta=latest.meta,
+        history=[entry.imageId for entry in entries[-2:]],
+        pendingDelete=pending,
+        snapshotStartedAt=latest.snapshotStartedAt,
+        sandboxId=latest.sandboxId,
+    )
+
+
+def _publish_snapshot(name: str, record: SnapshotRecord) -> None:
+    """Add a snapshot entry, then reclaim everything but the latest two.
+
+    GC only ever deletes images older than the two newest this handler can
+    see, so an overlapping handler publishing something newer is never
+    harmed by it, and both handlers deleting the same stale image converge
+    (an already-deleted image counts as deleted).
+    """
+    snapshots.reload()
+    _write_file(
+        os.path.join(_snapshots_dir(name), _unique_key(record.snapshotStartedAt or 0.0) + ".json"),
+        json.dumps(record.to_dict()),
+    )
     snapshots.commit()
+    _collect_garbage(name)
+
+
+def _collect_garbage(name: str) -> None:
+    """Keep-latest-2 GC. Snapshots are per-cycle diff-from-base images and,
+    being retained indefinitely, are deleted here or never. An image leaves
+    tracking only once its deletion is confirmed; failures stay marked as
+    pending and are retried on every cycle and at final deletion."""
+    entries = _list_snapshots(name)
+    keep = {entry.imageId for entry in entries[-2:]}
+    stale_entries = [entry for entry in entries[:-2] if entry.imageId not in keep]
+    legacy = _read_legacy_record(name)
+    candidates: List[str] = []
+    for image_id in [entry.imageId for entry in stale_entries] + _pending_images(name) + (
+        legacy.tracked_images() if legacy else []
+    ):
+        if image_id and image_id not in keep and image_id not in candidates:
+            candidates.append(image_id)
+    candidates = [image_id for image_id in candidates if image_id not in _deleted_images(name)]
+    _, failed = _delete_images(candidates)
+    _forget_images(name, [image_id for image_id in candidates if image_id not in failed], failed)
+    if legacy and set(legacy.tracked_images()).issubset(_deleted_images(name)):
+        try:
+            os.remove(_record_path(name))
+        except FileNotFoundError:
+            pass
+    snapshots.commit()
+
+
+def _forget_images(name: str, deleted: List[str], failed: List[str]) -> None:
+    """Drop entries and pending markers of confirmed deletions; mark failed
+    ones pending so they are retried."""
+    for image_id in deleted:
+        _write_file(os.path.join(_deleted_dir(name), image_id), "")
+    for entry_name in _list_dir(_snapshots_dir(name)):
+        if not entry_name.endswith(".json"):
+            continue
+        path = os.path.join(_snapshots_dir(name), entry_name)
+        try:
+            with open(path) as entry_file:
+                image_id = SnapshotRecord.from_dict(json.load(entry_file)).imageId
+        except FileNotFoundError:
+            continue
+        if image_id in deleted:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+    for image_id in deleted:
+        try:
+            os.remove(os.path.join(_pending_dir(name), image_id))
+        except FileNotFoundError:
+            pass
+    for image_id in failed:
+        _write_file(os.path.join(_pending_dir(name), image_id), "")
 
 
 def _authorized(sb, token: str) -> bool:
@@ -185,40 +388,72 @@ def hibernate(req: dict):
         return {"status": "not_running"}
 
     phase = str(req.get("phase", ""))
+    request_id = os.urandom(16).hex()
+
+    def event(kind: str, **details) -> None:
+        _append_event(
+            name,
+            {
+                "event": kind,
+                "requestId": request_id,
+                "sandboxId": sb.object_id,
+                "phase": phase or "hibernate",
+                **details,
+            },
+        )
+
+    def terminate(image_id: str) -> None:
+        event("terminate", imageId=image_id)
+        try:
+            sb.terminate()
+        except Exception as exc:
+            event("terminate_failed", imageId=image_id, error=repr(exc)[:500])
+            raise
+        event("terminated", imageId=image_id)
+
     if phase == "terminate":
-        record = _read_record(name) or SnapshotRecord()
-        record.lastShutdown = time.time()
-        _write_record(name, record)
-        sb.terminate()
+        latest = _read_record(name)
+        terminate(latest.imageId if latest else "")
         return JSONResponse({"status": "terminated"}, status_code=202)
 
+    # The request's start is the best available bound on the state a snapshot
+    # holds: Modal does not report when the filesystem was captured.
+    started = time.time()
+    event("snapshot_started")
     # Retained indefinitely (the default is 30 days): a flow can sit idle for
     # months and must still be restorable from its last snapshot. Retention is
-    # therefore bounded only by the keep-latest-2 GC below.
-    snapshot = sb.snapshot_filesystem(SNAPSHOT_TIMEOUT_SECONDS, ttl=None)
-    previous = _read_record(name) or SnapshotRecord()
-    # Keep-latest-2 GC: snapshots are per-cycle diff-from-base images and,
-    # being retained indefinitely, are deleted here or never. An ID leaves the
-    # record only once its deletion is confirmed; failures stay tracked in
-    # pendingDelete and are retried on every cycle and at final deletion.
-    history = list(previous.history)
-    if not history and previous.imageId:
-        history = [previous.imageId]
-    history.append(snapshot.object_id)
-    stale = previous.pendingDelete + history[:-2]
-    _, still_pending = _delete_images(stale)
-    _write_record(
-        name,
-        SnapshotRecord(
-            imageId=snapshot.object_id,
-            imageVersion=req.get("imageVersion") or 0,
-            meta=req.get("meta"),
-            history=history[-2:],
-            pendingDelete=still_pending,
-        ),
+    # therefore bounded only by the keep-latest-2 GC in _publish_snapshot.
+    try:
+        snapshot = sb.snapshot_filesystem(SNAPSHOT_TIMEOUT_SECONDS, ttl=None)
+    except Exception as exc:
+        event(
+            "snapshot_failed",
+            durationSeconds=round(time.time() - started, 1),
+            error=repr(exc)[:500],
+        )
+        raise
+    try:
+        _publish_snapshot(
+            name,
+            SnapshotRecord(
+                imageId=snapshot.object_id,
+                imageVersion=req.get("imageVersion") or 0,
+                meta=req.get("meta"),
+                snapshotStartedAt=started,
+                sandboxId=sb.object_id,
+            ),
+        )
+    except Exception as exc:
+        event("snapshot_publish_failed", imageId=snapshot.object_id, error=repr(exc)[:500])
+        raise
+    event(
+        "snapshot_published",
+        imageId=snapshot.object_id,
+        snapshotStartedAt=started,
+        durationSeconds=round(time.time() - started, 1),
     )
     if not phase:
-        sb.terminate()
+        terminate(snapshot.object_id)
         return {
             "status": "hibernated",
             "snapshotImageId": snapshot.object_id,
@@ -261,26 +496,44 @@ def delete_snapshot(name: str) -> str:
     without this they would accumulate forever. Idempotent: deleting an absent
     record reports zero work done.
     """
-    record = _read_record(name) or SnapshotRecord()
-    deleted_images, failed = _delete_images(record.tracked_images())
+    snapshots.reload()
+    legacy = _read_legacy_record(name)
+    tracked: List[str] = []
+    for image_id in [entry.imageId for entry in _list_snapshots(name)] + _pending_images(name) + (
+        legacy.tracked_images() if legacy else []
+    ):
+        if image_id and image_id not in tracked:
+            tracked.append(image_id)
+    record_existed = bool(tracked) or legacy is not None
+    tracked = [image_id for image_id in tracked if image_id not in _deleted_images(name)]
+    deleted_images, failed = _delete_images(tracked)
+    _forget_images(name, [image_id for image_id in tracked if image_id not in failed], failed)
     if failed:
         # Failed IDs must stay durable: with indefinite retention, an ID
         # forgotten here is an image leaked forever. Reporting them lets the
         # caller fail and retry.
-        _write_record(name, SnapshotRecord(pendingDelete=failed))
+        snapshots.commit()
         return json.dumps(
             {"deletedImages": deleted_images, "failedImages": failed, "recordDeleted": False}
         )
 
-    record_deleted = False
-    try:
-        os.remove(_record_path(name))
-        snapshots.commit()
-        record_deleted = True
-    except FileNotFoundError:
-        pass
+    for path in [_record_path(name)] + [
+        os.path.join(directory, entry)
+        for directory in (_snapshots_dir(name), _pending_dir(name), _events_dir(name), _deleted_dir(name))
+        for entry in _list_dir(directory)
+    ]:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    for directory in (_snapshots_dir(name), _pending_dir(name), _events_dir(name), _deleted_dir(name)):
+        try:
+            os.rmdir(directory)
+        except OSError:
+            pass
+    snapshots.commit()
 
-    return json.dumps({"deletedImages": deleted_images, "recordDeleted": record_deleted})
+    return json.dumps({"deletedImages": deleted_images, "recordDeleted": record_existed})
 
 
 @app.function(image=image)
@@ -312,3 +565,21 @@ def latest_snapshot(name: str) -> str:
     """
     record = _read_record(name)
     return json.dumps(record.to_dict()) if record else ""
+
+
+@app.function(image=image, volumes={SNAPSHOT_DIR: snapshots})
+def snapshot_events(name: str, limit: int = 200) -> str:
+    """Return at most `limit` of the most recent lifecycle events for a
+    sandbox name, one JSON object per line, oldest first. Empty when none were
+    recorded or when no events were asked for."""
+    if limit <= 0:
+        return ""
+    snapshots.reload()
+    lines: List[str] = []
+    for entry_name in _list_dir(_events_dir(name))[-limit:]:
+        try:
+            with open(os.path.join(_events_dir(name), entry_name)) as event_file:
+                lines.append(event_file.read().strip())
+        except FileNotFoundError:
+            continue
+    return "\n".join(lines)

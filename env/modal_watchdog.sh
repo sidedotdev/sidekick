@@ -28,10 +28,14 @@ was_quiet=""
 polls=0
 busy_reason=""
 
-# log to a file (survives in snapshots for post-mortems) and to stdout
-# (surfaces in Modal sandbox logs)
+# log to a file and to stdout (which surfaces in Modal sandbox logs). A
+# restored sandbox's file log is truncated at the snapshot it was restored
+# from, so it never holds an incarnation's final lines: a completed snapshot,
+# a terminate or an abort all land after the capture point. Read the guard's
+# events (kept outside the sandbox) for lifecycle history instead.
+log_file="${SIDE_WATCHDOG_LOG_FILE:-/var/log/sidekick-watchdog.log}"
 log() {
-    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> /var/log/sidekick-watchdog.log 2>/dev/null
+    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$log_file" 2>/dev/null
     echo "$*"
 }
 
@@ -93,11 +97,11 @@ guard_post() {
     esac
     last_attempt=$(date +%s)
     log "guard $phase request starting (attempt $attempt)"
-    if /usr/local/bin/sidekick-snapshot "$phase"; then
+    if "${SIDE_SNAPSHOT_BIN:-/usr/local/bin/sidekick-snapshot}" "$phase"; then
         log "guard $phase request succeeded (attempt $attempt)"
         return 0
     fi
-    log "guard $phase request failed (attempt $attempt); see /var/log/sidekick-watchdog.log for response details"
+    log "guard $phase request failed (attempt $attempt); see $log_file for response details"
     return 1
 }
 
@@ -146,8 +150,17 @@ while :; do
         # test hook: widen the window between snapshot and the abort re-check
         [ "${SIDE_SNAPSHOT_GRACE:-0}" -gt 0 ] 2>/dev/null && sleep "$SIDE_SNAPSHOT_GRACE"
         # re-check: anything that arrived while the snapshot was being taken
-        # aborts the shutdown; the snapshot is kept as a checkpoint
-        if is_busy; then
+        # aborts the shutdown; the snapshot is kept as a checkpoint. The
+        # snapshot reflects the filesystem as of its start, so a marker touch
+        # since then is unsaved work even when it is already older than the
+        # idle threshold (snapshots can take far longer than that)
+        marker=$(stat -c %Y /tmp/.sidekick-activity 2>/dev/null || echo 0)
+        if [ "$marker" -ge "$attempt_start" ] 2>/dev/null; then
+            busy_reason="sidekick-activity-during-snapshot age=$(( $(date +%s) - marker ))s"
+        elif ! is_busy; then
+            busy_reason=""
+        fi
+        if [ -n "$busy_reason" ]; then
             log "shutdown aborted after snapshot: activity detected reason=$busy_reason"
             was_quiet=""
             idle_since=$(date +%s)
@@ -155,6 +168,12 @@ while :; do
             terminate_failures=0
             continue
         fi
+        # Residual loss window: the guard terminates over the network, several
+        # control-plane calls and a volume commit after this last check, so a
+        # write landing in between is in no snapshot and is lost silently.
+        # Renewing the activity marker cannot close it, as nothing reads the
+        # marker again; that needs the sandbox to refuse work once it commits
+        # to dying, or writes replicated off-sandbox.
         failed_phase="terminate"
         if guard_post terminate; then
             log "terminate accepted: the guard ends this sandbox shortly"

@@ -1162,9 +1162,13 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	if e.runModalAPICommand != nil {
 		runAPICommand = e.runModalAPICommand
 	}
-	refreshEndpoint := refreshModalEndpoint
+	refreshEndpoint := refreshModalEndpointDetailed
 	if e.refreshModalEndpoint != nil {
-		refreshEndpoint = e.refreshModalEndpoint
+		injected := e.refreshModalEndpoint
+		refreshEndpoint = func(ctx context.Context, name string) (modalEndpointRefresh, error) {
+			host, port, err := injected(ctx, name)
+			return modalEndpointRefresh{SSHHost: host, SSHPort: port}, err
+		}
 	}
 
 	output, diagnostics, err := runCommand(ctx, input)
@@ -1196,19 +1200,25 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	// than a hard failure. Every round ends with its own API fallback so the
 	// decision to go again rests on current evidence, never on a previous
 	// round's lookup.
+	// A refresh that restored the sandbox from a snapshot rolled its
+	// filesystem back; the command's caller must learn that alongside the
+	// output rather than discovering missing files later.
+	var restoreNotice string
 	var refreshErr, apiErr error
 	for round := 1; round <= maxModalRecoveryRounds; round++ {
-		var host string
-		var port int
-		host, port, refreshErr = refreshEndpoint(ctx, e.SandboxName)
+		var refresh modalEndpointRefresh
+		refresh, refreshErr = refreshEndpoint(ctx, e.SandboxName)
 		if refreshErr != nil {
 			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
 		} else {
-			e.SSHHost, e.SSHPort = host, port
+			if refresh.Restored {
+				restoreNotice = refresh.restoreNotice(e.SandboxName)
+			}
+			e.SSHHost, e.SSHPort = refresh.SSHHost, refresh.SSHPort
 			output, diagnostics, err = runCommand(ctx, input)
 			appendDiagnostics()
 			if !transportFailed() {
-				return output, err
+				return withRestoreNotice(output, restoreNotice), err
 			}
 		}
 
@@ -1221,7 +1231,7 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		apiOutput, apiErr = runAPICommand(ctx, input)
 		if apiErr == nil {
 			log.Info().Str("sandbox", e.SandboxName).Msg("ran command via modal API after SSH transport failure")
-			return apiOutput, nil
+			return withRestoreNotice(apiOutput, restoreNotice), nil
 		}
 		if !errors.Is(apiErr, errModalSandboxNotRunning) {
 			break
@@ -1238,7 +1248,23 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	if refreshErr != nil {
 		failure = fmt.Errorf("%w; endpoint refresh failed: %v", failure, refreshErr)
 	}
+	// Only the refresh that performed a restore reports it: once the sandbox
+	// is running again, later refreshes see nothing to restore. Dropping the
+	// notice on this path would bury the rollback for good.
+	if restoreNotice != "" {
+		failure = fmt.Errorf("%w; %s", failure, restoreNotice)
+	}
 	return output, failure
+}
+
+// withRestoreNotice prefixes a command's stderr with the snapshot-restore
+// notice, if any, so it is the first thing the reader sees.
+func withRestoreNotice(output EnvRunCommandOutput, notice string) EnvRunCommandOutput {
+	if notice == "" {
+		return output
+	}
+	output.Stderr = notice + "\n" + output.Stderr
+	return output
 }
 
 // maxModalRecoveryRounds bounds how many times RunCommand refreshes the
