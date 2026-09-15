@@ -736,11 +736,12 @@ func TestNativeTransportShutdownKeepsStateOfSurvivingGeneration(t *testing.T) {
 		close(shutdown)
 	}()
 	require.Eventually(t, func() bool {
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort), 100*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+		if err != nil {
+			return false
 		}
-		return err != nil
+		_ = listener.Close()
+		return true
 	}, 10*time.Second, 10*time.Millisecond, "shutdown must release the remote binding while setup is parked")
 	openGate.Do(func() { close(gate) })
 
