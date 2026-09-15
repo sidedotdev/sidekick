@@ -384,7 +384,10 @@ func TestVerifierChatHistoryPreservesProviderCompanionsAndImages(t *testing.T) {
 	chatHistory := prepareVerifierMessages(messages, &index, DefaultVerifierSettings(), "")
 	require.Len(t, chatHistory.Records, 2)
 	assert.Equal(t, messages[:2], chatHistory.Records[0].Messages)
-	assert.Equal(t, []llm2.Message{assistant}, chatHistory.Records[1].Messages)
+	assert.Equal(t, []llm2.Message{{
+		Role:    llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{assistant.Content[2]},
+	}}, chatHistory.Records[1].Messages)
 	assert.NotContains(t, chatHistory.Text, "Ordinary assistant prose")
 	assert.NotContains(t, chatHistory.Text, "opaque-reasoning")
 	assert.Contains(t, chatHistory.Text, "provider/search")
@@ -521,4 +524,48 @@ func TestVerifierChatHistoryOuterOnlyHumanToolMarker(t *testing.T) {
 	assert.Equal(t, "Preserve compatibility.", chatHistory.HumanMessages[0].GetContentString())
 	assert.Empty(t, chatHistory.Records[0].Result)
 	assert.Empty(t, chatHistory.Text)
+}
+
+func TestVerifierChatHistoryFiltersAssistantCommentary(t *testing.T) {
+	t.Parallel()
+
+	for _, arguments := range []string{
+		`{"analysis":"PRIVATE OPINION","command":"echo ok","nested":{"analysis":"preserve"},"number":9007199254740993}`,
+		`{"command":"echo ok"}`,
+		`{invalid`,
+		`null`,
+	} {
+		t.Run(arguments, func(t *testing.T) {
+			t.Parallel()
+
+			messages := verifierTestCall("call", "run_command", arguments, "command output")
+			messages[0].Content = append(messages[0].Content, llm2.ContentBlock{
+				Type: llm2.ContentBlockTypeText, Text: "ASSISTANT OPINION",
+			})
+			before, err := json.Marshal(messages)
+			require.NoError(t, err)
+
+			var index verifierChatHistoryIndex
+			history := prepareVerifierMessages(messages, &index, DefaultVerifierSettings(), "")
+			require.Len(t, history.Records, 1)
+			record := history.Records[0]
+			require.Len(t, record.Messages, 2)
+			require.Len(t, record.Messages[0].Content, 1)
+			actual := record.Messages[0].Content[0].ToolUse.Arguments
+			if strings.Contains(arguments, "PRIVATE OPINION") {
+				assert.JSONEq(t, `{"command":"echo ok","nested":{"analysis":"preserve"},"number":9007199254740993}`, actual)
+			} else {
+				assert.Equal(t, arguments, actual)
+			}
+			assert.Equal(t, actual, record.Request)
+			assert.Equal(t, messages[1], record.Messages[1])
+			encoded, err := json.Marshal(history)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), "PRIVATE OPINION")
+			assert.NotContains(t, string(encoded), "ASSISTANT OPINION")
+			after, err := json.Marshal(messages)
+			require.NoError(t, err)
+			assert.Equal(t, string(before), string(after))
+		})
+	}
 }
