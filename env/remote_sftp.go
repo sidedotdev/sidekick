@@ -457,15 +457,20 @@ func boundedSFTPOp[T any](ctx context.Context, conn *sftpConn, client *sftp.Clie
 // like a dropped session.
 func withSFTPRetry(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, op SFTPOp) (any, error) {
 	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
+	if _, modalRecovery := sshEnv.(interface{ waitForSFTPRecovery(context.Context) error }); err != nil && !modalRecovery {
 		return nil, err
 	}
-
-	value, err := boundedSFTPOp(ctx, conn, client, op.Name, op.Path, func() (any, error) {
-		return op.Run(client)
-	})
+	var value any
+	if err == nil {
+		value, err = boundedSFTPOp(ctx, conn, client, op.Name, op.Path, func() (any, error) {
+			return op.Run(client)
+		})
+	}
 	if err == nil || !sftpFailureWarrantsReconnect(ctx, err, op) {
 		return value, err
+	}
+	if waitErr := waitForSFTPRecovery(ctx, sshEnv); waitErr != nil {
+		return nil, waitErr
 	}
 
 	retryClient, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)

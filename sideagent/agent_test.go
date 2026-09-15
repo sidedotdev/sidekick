@@ -20,10 +20,17 @@ import (
 // in for the ssh-hosted stdio channel used in production.
 func startTestChannel(t *testing.T) *Client {
 	t.Helper()
+	return startTestChannelWithSeal(t, testSeal(t))
+}
+
+// startTestChannelWithSeal keeps each test's admission state to itself rather
+// than sharing the sandbox-wide paths.
+func startTestChannelWithSeal(t *testing.T, seal *Seal) *Client {
+	t.Helper()
 	reqR, reqW := io.Pipe()
 	respR, respW := io.Pipe()
 	go func() {
-		err := Serve(reqR, respW)
+		err := serveWithSeal(reqR, respW, seal)
 		respW.CloseWithError(err)
 	}()
 	t.Cleanup(func() { _ = reqW.Close() })

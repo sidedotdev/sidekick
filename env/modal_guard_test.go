@@ -3,10 +3,13 @@ package env
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sidekick/common"
+	"sidekick/sideagent"
 	"strings"
 	"syscall"
 	"testing"
@@ -235,8 +238,8 @@ func TestModalWatchdogNeverKillsUnsnapshotted(t *testing.T) {
 
 	assert.Equal(t, 1, strings.Count(modalWatchdogScript, "kill 1"),
 		"self-termination must exist only in the terminate-phase escalation")
-	assert.Contains(t, modalWatchdogScript, "guard terminate unreachable after $failures attempts: terminating sandbox")
-	assert.Contains(t, modalWatchdogScript, "guard snapshot still failing after $failures attempts; retrying at a slower cadence")
+	assert.Contains(t, modalWatchdogScript, "guard terminate unreachable after $terminate_failures attempts: terminating sandbox")
+	assert.Contains(t, modalWatchdogScript, "guard snapshot still failing after $snapshot_failures attempts; retrying at a slower cadence")
 }
 
 func TestModalIdleSeconds(t *testing.T) {
@@ -508,7 +511,20 @@ printf '%s' "$status"
 // second sleep (either the next poll or the post-terminate wait) ends the
 // script with SIGTERM. It returns the guard phases requested, in order, and
 // the watchdog log.
-func runWatchdogIdleCycle(t *testing.T, script string, editDuringSnapshot bool) ([]string, string) {
+// watchdogScenario selects which idle cycle to drive. The zero value is a
+// plainly idle sandbox whose shutdown runs to completion.
+type watchdogScenario struct {
+	// plants an edit while the snapshot is in flight
+	editDuringSnapshot bool
+	// overrides where termination is recorded, to exercise a sandbox that
+	// cannot persist that state
+	terminatingFile string
+	// starts the sandbox already sealed, as a watchdog restart finds one that
+	// was sealed by the incarnation before it
+	startSealed bool
+}
+
+func runWatchdogIdleCycle(t *testing.T, script string, scenario watchdogScenario) watchdogCycle {
 	t.Helper()
 	dir := t.TempDir()
 	markerFile := filepath.Join(dir, "marker-mtime")
@@ -518,6 +534,7 @@ func runWatchdogIdleCycle(t *testing.T, script string, editDuringSnapshot bool) 
 	stubs := map[string]string{
 		"sidekick-snapshot": `#!/bin/sh
 echo "$1" >> "$FAKE_GUARD_CALLS"
+[ -e "$SIDE_SEAL_FILE" ] && echo "$1" >> "$FAKE_SEALED_DURING"
 if [ "$1" = snapshot ] && [ "$FAKE_EDIT_DURING_SNAPSHOT" = 1 ]; then
     date +%s > "$FAKE_MARKER_FILE"
     /bin/sleep 1
@@ -533,6 +550,17 @@ fi
 `,
 		"pgrep": "#!/bin/sh\nexit 1\n",
 		"cut":   "#!/bin/sh\necho 0\n",
+		// stands in for util-linux flock, which the sandbox has but macOS
+		// does not; the locking semantics themselves are covered in Go
+		"flock": `#!/bin/sh
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -c) shift; exec /bin/sh -c "$1" ;;
+        *) shift ;;
+    esac
+done
+exit 1
+`,
 		"sleep": `#!/bin/sh
 count=$(($(cat "$FAKE_SLEEP_COUNT" 2>/dev/null || echo 0) + 1))
 echo "$count" > "$FAKE_SLEEP_COUNT"
@@ -548,8 +576,17 @@ echo "$count" > "$FAKE_SLEEP_COUNT"
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", filepath.Join(dir, "watchdog.sh"))
 	edit := "0"
-	if editDuringSnapshot {
+	if scenario.editDuringSnapshot {
 		edit = "1"
+	}
+	terminatingFile := scenario.terminatingFile
+	if terminatingFile == "" {
+		terminatingFile = filepath.Join(dir, "terminating")
+	}
+	sealLock := filepath.Join(dir, "seal.lock")
+	sealFile := filepath.Join(dir, "sealed")
+	if scenario.startSealed {
+		require.NoError(t, os.WriteFile(sealFile, nil, 0o644))
 	}
 	cmd.Env = []string{
 		"PATH=" + dir + ":" + os.Getenv("PATH"),
@@ -560,6 +597,10 @@ echo "$count" > "$FAKE_SLEEP_COUNT"
 		"FAKE_SLEEP_COUNT=" + sleepCount,
 		"FAKE_EDIT_DURING_SNAPSHOT=" + edit,
 		"SIDE_WATCHDOG_LOG_FILE=" + logFile,
+		"SIDE_SEAL_LOCK=" + sealLock,
+		"SIDE_SEAL_FILE=" + sealFile,
+		"SIDE_TERMINATING_FILE=" + terminatingFile,
+		"FAKE_SEALED_DURING=" + filepath.Join(dir, "sealed-during"),
 	}
 	output, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
@@ -572,7 +613,28 @@ echo "$count" > "$FAKE_SLEEP_COUNT"
 	logged, err := os.ReadFile(logFile)
 	require.NoError(t, err, "the watchdog must honour the log path override rather than writing to the real one")
 	require.NotEmpty(t, logged)
-	return strings.Fields(string(calls)), string(output)
+	_, sealErr := os.Stat(sealFile)
+	sealedDuring, _ := os.ReadFile(filepath.Join(dir, "sealed-during"))
+	return watchdogCycle{
+		calls:        strings.Fields(string(calls)),
+		output:       string(output),
+		sealed:       sealErr == nil,
+		sealedDuring: strings.Fields(string(sealedDuring)),
+		sealLock:     sealLock,
+		sealFile:     sealFile,
+	}
+}
+
+// watchdogCycle is what one idle cycle of the watchdog did: the guard phases
+// it requested, its log, whether the sandbox was left sealed, and which
+// phases ran while the sandbox was sealed against new work.
+type watchdogCycle struct {
+	calls        []string
+	output       string
+	sealed       bool
+	sealedDuring []string
+	sealLock     string
+	sealFile     string
 }
 
 // TestModalWatchdogIdleShutdown covers the shutdown decision the watchdog
@@ -587,16 +649,243 @@ func TestModalWatchdogIdleShutdown(t *testing.T) {
 
 	t.Run("idle sandbox terminates after its snapshot", func(t *testing.T) {
 		t.Parallel()
-		calls, output := runWatchdogIdleCycle(t, modalWatchdogScript, false)
-		assert.Equal(t, []string{"snapshot", "terminate"}, calls, "output: %s", output)
-		assert.Contains(t, output, "terminate accepted")
+		cycle := runWatchdogIdleCycle(t, modalWatchdogScript, watchdogScenario{})
+		assert.Equal(t, []string{"snapshot", "terminate"}, cycle.calls, "output: %s", cycle.output)
+		assert.Contains(t, cycle.output, "terminate accepted")
+		assert.True(t, cycle.sealed,
+			"a sandbox that dispatched terminate must stay sealed: the terminate may still arrive")
+	})
+
+	// Termination that cannot be recorded could be forgotten by a restarted
+	// watchdog, which would then lift the seal of a sandbox already dying.
+	for name, unwritable := range map[string]func(t *testing.T) string{
+		"missing parent directory": func(t *testing.T) string {
+			return filepath.Join(t.TempDir(), "no-such-dir", "terminating")
+		},
+		// touch would succeed on this without creating a marker
+		"path is a directory": func(t *testing.T) string {
+			path := filepath.Join(t.TempDir(), "terminating")
+			require.NoError(t, os.Mkdir(path, 0o755))
+			return path
+		},
+	} {
+		t.Run("termination that cannot be recorded is not dispatched: "+name, func(t *testing.T) {
+			t.Parallel()
+			cycle := runWatchdogIdleCycle(t, modalWatchdogScript, watchdogScenario{
+				terminatingFile: unwritable(t),
+			})
+			assert.Equal(t, []string{"snapshot"}, cycle.calls, "must not terminate; output: %s", cycle.output)
+			assert.Contains(t, cycle.output, "could not record termination state")
+			assert.False(t, cycle.sealed, "an abandoned shutdown must lift the seal so the sandbox serves work again")
+		})
+	}
+
+	// A watchdog that restarts after termination was dispatched must not
+	// treat the sandbox as healthy: snapshotting it again or lifting its seal
+	// would admit work that the pending terminate is about to destroy.
+	t.Run("a restarted watchdog resumes terminating rather than reviving", func(t *testing.T) {
+		t.Parallel()
+		recorded := filepath.Join(t.TempDir(), "terminating")
+		require.NoError(t, os.WriteFile(recorded, nil, 0o644))
+
+		cycle := runWatchdogIdleCycle(t, modalWatchdogScript, watchdogScenario{
+			terminatingFile: recorded,
+			startSealed:     true,
+		})
+		assert.Equal(t, []string{"terminate"}, cycle.calls,
+			"a dying sandbox must not be snapshotted afresh; output: %s", cycle.output)
+		assert.NotContains(t, cycle.output, "shutdown aborted",
+			"a dying sandbox must never reach the path that lifts the seal")
+		require.True(t, cycle.sealed,
+			"the seal of a dying sandbox must survive a watchdog restart; output: %s", cycle.output)
+
+		// The seal only matters if it still refuses work, since the pending
+		// terminate would destroy anything accepted now.
+		witness := filepath.Join(t.TempDir(), "ran")
+		status, stderr := runFencedCommand(t, fenceToolDir(t, true),
+			"touch "+shellQuote(witness), cycle.sealLock, cycle.sealFile)
+		assert.Equal(t, modalSealedExitCode, status, "stderr: %s", stderr)
+		assert.NoFileExists(t, witness, "a dying sandbox accepted work that its terminate will destroy")
 	})
 
 	t.Run("edit during a slow snapshot aborts the shutdown", func(t *testing.T) {
 		t.Parallel()
-		calls, output := runWatchdogIdleCycle(t, modalWatchdogScript, true)
-		assert.Equal(t, []string{"snapshot"}, calls, "must not terminate; output: %s", output)
-		assert.Contains(t, output, "shutdown aborted after snapshot")
-		assert.Contains(t, output, "sidekick-activity-during-snapshot")
+		cycle := runWatchdogIdleCycle(t, modalWatchdogScript, watchdogScenario{editDuringSnapshot: true})
+		assert.Equal(t, []string{"snapshot"}, cycle.calls, "must not terminate; output: %s", cycle.output)
+		assert.Contains(t, cycle.output, "shutdown aborted after snapshot")
+		assert.Contains(t, cycle.output, "sidekick-activity-during-snapshot")
+		assert.False(t, cycle.sealed, "an abandoned shutdown must lift the seal so the sandbox serves work again")
 	})
+
+	// The whole point of the fence: what the snapshot captures cannot be
+	// changing underneath it, which holds only if the sandbox was already
+	// refusing new work when the capture began.
+	t.Run("the snapshot is captured while sealed", func(t *testing.T) {
+		t.Parallel()
+		cycle := runWatchdogIdleCycle(t, modalWatchdogScript, watchdogScenario{})
+		assert.Contains(t, cycle.sealedDuring, "snapshot",
+			"the sandbox was still accepting work when it was snapshotted; output: %s", cycle.output)
+	})
+}
+
+// TestModalFencedCommand: commands reaching the sandbox through Modal's API
+// bypass the side-agent, so the fence has to be applied to them directly or
+// they would keep writing to a sandbox that has committed to shutting down.
+func TestModalFencedCommand(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "seal.lock")
+	flag := filepath.Join(dir, "sealed")
+	witness := filepath.Join(dir, "ran")
+
+	withoutFlock := fenceToolDir(t, false)
+	withFlock := fenceToolDir(t, true)
+	run := func(t *testing.T, binDir, command string) (int, string) {
+		t.Helper()
+		return runFencedCommand(t, binDir, command, lock, flag)
+	}
+	touchWitness := "touch " + shellQuote(witness)
+
+	t.Run("runs when the sandbox is not sealed", func(t *testing.T) {
+		status, stderr := run(t, withFlock, touchWitness)
+		require.Equal(t, 0, status, "stderr: %s", stderr)
+		require.FileExists(t, witness)
+	})
+
+	t.Run("refuses once the sandbox is sealed", func(t *testing.T) {
+		require.NoError(t, os.RemoveAll(witness))
+		require.NoError(t, os.WriteFile(flag, nil, 0o644))
+		t.Cleanup(func() { _ = os.Remove(flag) })
+
+		status, stderr := run(t, withFlock, touchWitness)
+		assert.Equal(t, modalSealedExitCode, status)
+		assert.Contains(t, stderr, sideagent.SealedMessage)
+		assert.NoFileExists(t, witness, "a sealed sandbox must not have run the command")
+	})
+
+	// Running unfenced is the data loss the fence exists to prevent, so an
+	// environment that cannot fence refuses instead.
+	t.Run("refuses when the fence cannot be applied", func(t *testing.T) {
+		require.NoError(t, os.RemoveAll(witness))
+		status, stderr := run(t, withoutFlock, touchWitness)
+		assert.Equal(t, modalFenceUnavailableExitCode, status)
+		assert.Contains(t, stderr, modalFenceUnavailableMessage)
+		assert.NoFileExists(t, witness, "an unfenceable sandbox must not have run the command")
+	})
+
+	// The fence and the Go seal are two implementations of one contract; this
+	// is the only place they are proven to interoperate.
+	t.Run("a running command blocks the seal", func(t *testing.T) {
+		if _, err := exec.LookPath("flock"); err != nil {
+			t.Skip("real flock(1) is required to observe the drain")
+		}
+		started := filepath.Join(dir, "long-started")
+		script := modalFencedCommand("touch "+shellQuote(started)+"; sleep 2", lock, flag)
+		cmd := exec.Command("/bin/sh", "-c", script)
+		cmd.Env = []string{"PATH=" + withFlock}
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Wait() })
+
+		require.Eventually(t, func() bool {
+			_, err := os.Stat(started)
+			return err == nil
+		}, 20*time.Second, 20*time.Millisecond, "the fenced command never started")
+
+		sealed, err := sideagent.NewSeal(lock, flag).TrySeal(200 * time.Millisecond)
+		require.NoError(t, err)
+		assert.False(t, sealed, "a shutdown drained past a command that was still running")
+	})
+}
+
+// TestModalExecResponse covers how a genuine agent response is classified,
+// which is where a refusal would otherwise be turned into a command result.
+func TestModalExecResponse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a sealed refusal is an error, not a result", func(t *testing.T) {
+		t.Parallel()
+		output, diagnostics, err := modalExecResponse(sideagent.ExecResponse{Sealed: true}, "sb-sealed")
+		require.ErrorIs(t, err, errModalCommandNotAdmitted)
+		assert.NotErrorIs(t, err, errModalSandboxSealed)
+		assert.Zero(t, output.ExitStatus, "a refusal must not be dressed up as a command result")
+		assert.Empty(t, diagnostics,
+			"a mid-shutdown sandbox must not be recycled: it may be taking the snapshot a retry restores from")
+	})
+
+	t.Run("an ordinary response passes through", func(t *testing.T) {
+		t.Parallel()
+		output, diagnostics, err := modalExecResponse(
+			sideagent.ExecResponse{ExitStatus: 3, Stdout: []byte("out"), Stderr: []byte("err")}, "sb")
+		require.NoError(t, err)
+		assert.Empty(t, diagnostics)
+		assert.Equal(t, 3, output.ExitStatus)
+		assert.Equal(t, "out", output.Stdout)
+		assert.Equal(t, "err", output.Stderr)
+	})
+}
+
+// TestModalRunCommand_SealedRefusalIsAnError: a sealed sandbox runs nothing,
+// so the refusal must reach the caller as an error. Any exit status would be
+// indistinguishable from the command itself having failed, and the caller
+// would act on a result no command produced.
+func TestModalRunCommand_SealedRefusalIsAnError(t *testing.T) {
+	t.Parallel()
+	refreshes := 0
+	e := &ModalEnv{
+		SandboxName: "sb-sealed",
+		runModalCommand: func(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			return EnvRunCommandOutput{}, "", fmt.Errorf("%w: sb-sealed", errModalSandboxSealed)
+		},
+		refreshModalEndpoint: func(ctx context.Context, name string) (string, int, error) {
+			refreshes++
+			return "", 0, nil
+		},
+	}
+
+	output, err := e.RunCommand(context.Background(), EnvRunCommandInput{Command: "true"})
+	require.ErrorIs(t, err, errModalSandboxSealed)
+	assert.Zero(t, output.ExitStatus, "a refusal must not be dressed up as a command result")
+	assert.Zero(t, refreshes,
+		"a sealed sandbox must not be recycled: it may be taking the snapshot the retry will restore from")
+}
+
+// fenceToolDir builds the PATH a fenced command runs with. The fence's
+// decision depends on whether flock is reachable, so PATH is constructed
+// rather than inherited. macOS has no flock(1) while the sandbox image does,
+// so it is stubbed where absent: the refusals are observable without real
+// locking, and the drain guarantee is covered separately against the real
+// tool.
+func fenceToolDir(t *testing.T, includeFlock bool) string {
+	t.Helper()
+	bin := t.TempDir()
+	for _, tool := range []string{"touch", "sleep"} {
+		real, err := exec.LookPath(tool)
+		require.NoError(t, err, "this test needs %s", tool)
+		require.NoError(t, os.Symlink(real, filepath.Join(bin, tool)))
+	}
+	if !includeFlock {
+		return bin
+	}
+	if real, err := exec.LookPath("flock"); err == nil {
+		require.NoError(t, os.Symlink(real, filepath.Join(bin, "flock")))
+	} else {
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	}
+	return bin
+}
+
+// runFencedCommand runs a command through the fence with PATH limited to
+// binDir, reporting its exit status and stderr.
+func runFencedCommand(t *testing.T, binDir, command, lockPath, flagPath string) (int, string) {
+	t.Helper()
+	cmd := exec.Command("/bin/sh", "-c", modalFencedCommand(command, lockPath, flagPath))
+	cmd.Env = []string{"PATH=" + binDir}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if err != nil && !errors.As(err, &exitErr) {
+		t.Fatalf("running the fenced command: %v", err)
+	}
+	return cmd.ProcessState.ExitCode(), stderr.String()
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/sideagent"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -1481,4 +1482,13 @@ func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAgentExecOutput_SealedIsNeverSuccess: a sealed sandbox runs nothing, so
+// reporting success would let a caller build on state about to be discarded.
+func TestAgentExecOutput_SealedIsNeverSuccess(t *testing.T) {
+	t.Parallel()
+	output := agentExecOutput(sideagent.ExecResponse{Sealed: true})
+	assert.NotEqual(t, 0, output.ExitStatus, "a refused command must not look successful")
+	assert.Contains(t, output.Stderr, sideagent.SealedMessage)
 }

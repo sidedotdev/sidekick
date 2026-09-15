@@ -761,6 +761,18 @@ func agentExecOutput(resp sideagent.ExecResponse) EnvRunCommandOutput {
 		output.ExitStatus = hibernatedRemoteExitCode
 		return output
 	}
+	if resp.Sealed {
+		// Nothing ran. Never report success: the sandbox has committed to
+		// shutting down and is about to be replaced, so a caller that
+		// believed the command had succeeded would carry on against state
+		// that no longer exists.
+		output.ExitStatus = -1
+		if output.Stderr != "" && !strings.HasSuffix(output.Stderr, "\n") {
+			output.Stderr += "\n"
+		}
+		output.Stderr += sideagent.SealedMessage + "\n"
+		return output
+	}
 	if resp.Error != "" {
 		if output.Stderr != "" && !strings.HasSuffix(output.Stderr, "\n") {
 			output.Stderr += "\n"
@@ -1153,10 +1165,23 @@ func (e *ModalEnv) GetWorkingDirectory() string {
 // idle instead), so commands run without hibernation preflights or read-lock
 // wrapping.
 func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	output, _, err := e.runCommandWithRestoreNotice(ctx, input)
+	return output, err
+}
 
+func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
 	runCommand := e.runCommandInner
 	if e.runModalCommand != nil {
 		runCommand = e.runModalCommand
+	}
+	attempt := runCommand
+	runCommand = func(ctx context.Context, input EnvRunCommandInput) (output EnvRunCommandOutput, diagnostics string, err error) {
+		err = retryModalAdmission(ctx, modalAdmissionWaitBudget, func() error {
+			var attemptErr error
+			output, diagnostics, attemptErr = attempt(ctx, input)
+			return attemptErr
+		})
+		return
 	}
 	runAPICommand := e.runAPICommandInner
 	if e.runModalAPICommand != nil {
@@ -1189,7 +1214,7 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		return err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
 	}
 	if !transportFailed() {
-		return output, err
+		return output, "", err
 	}
 
 	// The stored tunnel endpoint may be stale because the idle watchdog
@@ -1218,7 +1243,7 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 			output, diagnostics, err = runCommand(ctx, input)
 			appendDiagnostics()
 			if !transportFailed() {
-				return withRestoreNotice(output, restoreNotice), err
+				return withRestoreNotice(output, restoreNotice), restoreNotice, err
 			}
 		}
 
@@ -1231,7 +1256,7 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		apiOutput, apiErr = runAPICommand(ctx, input)
 		if apiErr == nil {
 			log.Info().Str("sandbox", e.SandboxName).Msg("ran command via modal API after SSH transport failure")
-			return withRestoreNotice(apiOutput, restoreNotice), nil
+			return withRestoreNotice(apiOutput, restoreNotice), restoreNotice, nil
 		}
 		if !errors.Is(apiErr, errModalSandboxNotRunning) {
 			break
@@ -1254,7 +1279,7 @@ func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	if restoreNotice != "" {
 		failure = fmt.Errorf("%w; %s", failure, restoreNotice)
 	}
-	return output, failure
+	return output, restoreNotice, failure
 }
 
 // withRestoreNotice prefixes a command's stderr with the snapshot-restore
@@ -1381,6 +1406,18 @@ func (e *ModalEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput
 	resp, err := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, nonRecoveringSSHEnv{e}, req)
 	if err != nil {
 		return classifyModalExecFailure(ctx, err)
+	}
+	return modalExecResponse(resp, e.SandboxName)
+}
+
+// modalExecResponse maps an agent response onto RunCommand's contract: an
+// output plus diagnostics that mark it retryable, or an error when the
+// command provably never ran.
+func modalExecResponse(resp sideagent.ExecResponse, sandboxName string) (EnvRunCommandOutput, string, error) {
+	if resp.Sealed {
+		// Unlike API exit-code conventions, this proves nothing ran and
+		// permits waiting for admission without replaying executed work.
+		return EnvRunCommandOutput{}, "", fmt.Errorf("%w: %s", errModalCommandNotAdmitted, sandboxName)
 	}
 	return agentExecOutput(resp), "", nil
 }
