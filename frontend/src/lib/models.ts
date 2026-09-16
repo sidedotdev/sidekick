@@ -314,8 +314,8 @@ export interface CriteriaFulfillment {
   whatWasActuallyDone: string;
   analysis: string;
   isFulfilled: boolean;
-  confidence: number;
-  feedbackMessage?: string;
+  confidence?: number;
+  feedbackMessage?: string | null;
 }
 
 /**
