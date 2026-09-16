@@ -223,6 +223,16 @@ func (a *Advisor) MaybeAdvise(
 	}
 
 	tools := append([]*llm.Tool{&advisorProceedTool, &advisorGuideTool}, executorTools...)
+	if workflow.GetVersion(dCtx, "advisor-filter-unsupported-web-search", workflow.DefaultVersion, 1) == 1 &&
+		!providerSupportsWebSearch(resolveAdvisorModelConfig(dCtx), dCtx.GetProviders()) {
+		filtered := tools[:0]
+		for _, tool := range tools {
+			if tool.Type != common.ToolTypeWebSearch {
+				filtered = append(filtered, tool)
+			}
+		}
+		tools = filtered
+	}
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.advise")
 	response, err := persisted_ai.ForceParallelToolCallWithModelConfigResolver(actionCtx, func() common.ModelConfig {
 		return resolveAdvisorModelConfig(dCtx)
