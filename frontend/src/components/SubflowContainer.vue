@@ -11,7 +11,9 @@
     <template v-if="accordionState.expanded">
       <template v-for="(child, index) in subflowTree.children" :key="childKey(child, index)">
         <template v-if="isFlowAction(child)">
-          <FlowActionItem v-if="!isStartFlowAction(child)" :flowAction="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1"/>
+          <FlowActionErrorBoundary v-if="!isStartFlowAction(child)" :action-id="child.id">
+            <FlowActionItem :flowAction="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1"/>
+          </FlowActionErrorBoundary>
         </template>
         <SubflowContainer v-else :subflowTree="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1" :subflowsById="subflowsById" />
       </template>
@@ -25,6 +27,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import FlowActionItem from './FlowActionItem.vue'
+import FlowActionErrorBoundary from './FlowActionErrorBoundary.vue'
 import type { FlowAction, SubflowTree, Subflow } from '../lib/models'
 import { useEventBus } from '@vueuse/core';
 
