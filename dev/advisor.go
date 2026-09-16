@@ -223,10 +223,33 @@ func (a *Advisor) MaybeAdvise(
 	}
 
 	tools := append([]*llm.Tool{&advisorProceedTool, &advisorGuideTool}, executorTools...)
+	filterVersion := workflow.GetVersion(dCtx, "advisor-filter-web-search", workflow.DefaultVersion, 2)
+	resolveTools := func(modelConfig common.ModelConfig) []*llm.Tool {
+		if providerSupportsWebSearch(modelConfig, dCtx.GetProviders()) {
+			return tools
+		}
+		filtered := make([]*llm.Tool, 0, len(tools))
+		for _, tool := range tools {
+			if tool.Type != common.ToolTypeWebSearch {
+				filtered = append(filtered, tool)
+			}
+		}
+		return filtered
+	}
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.advise")
-	response, err := persisted_ai.ForceParallelToolCallWithModelConfigResolver(actionCtx, func() common.ModelConfig {
+	resolveModel := func() common.ModelConfig {
 		return resolveAdvisorModelConfig(dCtx)
-	}, a.ChatHistory, tools...)
+	}
+	var response common.MessageResponse
+	var err error
+	if filterVersion >= 2 {
+		response, err = persisted_ai.ForceParallelToolCallWithToolsResolver(actionCtx, resolveModel, resolveTools, a.ChatHistory)
+	} else {
+		if filterVersion == 1 {
+			tools = resolveTools(resolveModel())
+		}
+		response, err = persisted_ai.ForceParallelToolCallWithModelConfigResolver(actionCtx, resolveModel, a.ChatHistory, tools...)
+	}
 	if err != nil {
 		// Treat a refusal like "proceed": skip advising this turn so the
 		// executor continues unchanged rather than failing the workflow.

@@ -83,6 +83,21 @@ func forceToolCallV2(
 	disableUserRetry bool,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
+	return forceToolCallWithToolsResolver(actionCtx, trackOptions, modelConfig, resolveModelConfig, nil, chatHistory, toolNameMapping, parallelToolCalls, disableUserRetry, tools...)
+}
+
+func forceToolCallWithToolsResolver(
+	actionCtx flow_action.ActionContext,
+	trackOptions flow_action.TrackOptions,
+	modelConfig common.ModelConfig,
+	resolveModelConfig ModelConfigResolver,
+	resolveTools func(common.ModelConfig) []*llm.Tool,
+	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
+	parallelToolCalls *bool,
+	disableUserRetry bool,
+	tools ...*llm.Tool,
+) (common.MessageResponse, error) {
 
 	toolChoice := llm.ToolChoice{
 		Type: llm.ToolChoiceTypeRequired,
@@ -106,19 +121,32 @@ func forceToolCallV2(
 		Providers:   actionCtx.GetProviders(),
 	}
 
+	executeStream := func(ctx flow_action.ActionContext) (common.MessageResponse, error) {
+		if resolveTools == nil {
+			return ExecuteChatStreamWithModelConfigResolver(ctx, streamInput, toolNameMapping, disableUserRetry, resolveModelConfig)
+		}
+		return ExecuteChatStreamWithAttemptResolver(ctx, streamInput, toolNameMapping, disableUserRetry, func() (llm2.Options, *ToolNameMappingConfig, error) {
+			options := streamInput.Options
+			if resolveModelConfig != nil {
+				options.ModelConfig = resolveModelConfig()
+			}
+			options.Tools = resolveTools(options.ModelConfig)
+			options.ToolChoice = llm.ToolChoice{Type: llm.ToolChoiceTypeRequired}
+			if len(options.Tools) == 1 {
+				options.ToolChoice.Type = llm.ToolChoiceTypeTool
+				options.ToolChoice.Name = options.Tools[0].Name
+			}
+			return options, toolNameMapping, nil
+		})
+	}
+
 	for k, v := range streamInput.ActionParams() {
 		actionCtx.ActionParams[k] = v
 	}
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStreamWithModelConfigResolver(
-			trackedActionCtx,
-			streamInput,
-			toolNameMapping,
-			disableUserRetry,
-			resolveModelConfig,
-		)
+		msgResponse, err := executeStream(trackedActionCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -155,13 +183,7 @@ func forceToolCallV2(
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			streamInput.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStreamWithModelConfigResolver(
-				trackedActionCtx,
-				streamInput,
-				toolNameMapping,
-				disableUserRetry,
-				resolveModelConfig,
-			)
+			msgResponse, err := executeStream(trackedActionCtx)
 			if err != nil {
 				return nil, err
 			}
@@ -305,4 +327,17 @@ func AppendChatHistory(eCtx flow_action.ExecContext, chatHistory *ChatHistoryCon
 	}
 	llm2History.AppendRef(*ref)
 	return nil
+}
+
+// ForceParallelToolCallWithToolsResolver rebuilds model-dependent tools for each stream attempt.
+func ForceParallelToolCallWithToolsResolver(
+	actionCtx flow_action.ActionContext,
+	resolveModelConfig ModelConfigResolver,
+	resolveTools func(common.ModelConfig) []*llm.Tool,
+	chatHistory *ChatHistoryContainer,
+) (common.MessageResponse, error) {
+	parallel := true
+	modelConfig := resolveModelConfig()
+	tools := resolveTools(modelConfig)
+	return forceToolCallWithToolsResolver(actionCtx, flow_action.TrackOptions{}, modelConfig, resolveModelConfig, resolveTools, chatHistory, nil, &parallel, false, tools...)
 }
