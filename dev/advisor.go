@@ -223,6 +223,7 @@ func (a *Advisor) MaybeAdvise(
 	}
 
 	tools := append([]*llm.Tool{&advisorProceedTool, &advisorGuideTool}, executorTools...)
+	unsupportedSearchVersion := workflow.GetVersion(dCtx, "advisor-filter-unsupported-web-search", workflow.DefaultVersion, 1)
 	filterVersion := workflow.GetVersion(dCtx, "advisor-filter-web-search", workflow.DefaultVersion, 2)
 	resolveTools := func(modelConfig common.ModelConfig) []*llm.Tool {
 		if providerSupportsWebSearch(modelConfig, dCtx.GetProviders()) {
@@ -245,7 +246,7 @@ func (a *Advisor) MaybeAdvise(
 	if filterVersion >= 2 {
 		response, err = persisted_ai.ForceParallelToolCallWithToolsResolver(actionCtx, resolveModel, resolveTools, a.ChatHistory)
 	} else {
-		if filterVersion == 1 {
+		if filterVersion == 1 || unsupportedSearchVersion == 1 {
 			tools = resolveTools(resolveModel())
 		}
 		response, err = persisted_ai.ForceParallelToolCallWithModelConfigResolver(actionCtx, resolveModel, a.ChatHistory, tools...)

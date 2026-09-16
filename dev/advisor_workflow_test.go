@@ -908,3 +908,96 @@ func advisorWebSearchUpdateWorkflow(ctx workflow.Context, history *persisted_ai.
 	}
 	return nil
 }
+
+func (s *AdvisorWorkflowTestSuite) testMaybeAdviseWebSearch(optIn bool) {
+	executorHistory, originalRefs := s.persistExecutorHistory("exec_flow_unsupported_search")
+	searchTool := &llm.Tool{Type: common.ToolTypeWebSearch}
+	functionTool := &llm.Tool{Name: "executor_function"}
+	executorTools := []*llm.Tool{searchTool, functionTool}
+
+	wf := func(ctx workflow.Context, history *persisted_ai.ChatHistoryContainer) (*persisted_ai.ChatHistoryContainer, error) {
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     utils.NoRetryCtx(ctx),
+				WorkspaceId: advisorTestWorkspaceId,
+				GlobalState: gs,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "advisor"},
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+				Providers: []common.ModelProviderPublicConfig{{
+					Name: "advisor-provider",
+					Type: "openai_responses_compatible",
+				}},
+			},
+		}
+		if optIn {
+			dCtx.Providers[0].BuiltinTools = []string{"web_search"}
+		}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "executor"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.AdvisingKey: {{Provider: "advisor-provider", Model: "advisor"}},
+			},
+		})
+		advisor := &Advisor{
+			Enabled:     true,
+			EveryNTurns: 1,
+			ChatHistory: NewVersionedChatHistory(ctx, dCtx.WorkspaceId),
+		}
+		if err := advisor.MaybeAdvise(dCtx, history, executorTools, nil); err != nil {
+			return nil, err
+		}
+		return history, nil
+	}
+
+	var activities *persisted_ai.Llm2Activities
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		input := args.Get(1).(persisted_ai.StreamInput)
+		s.Equal("advisor-provider", input.Options.ModelConfig.Provider)
+		var names []string
+		searchCount := 0
+		for _, tool := range input.Options.Tools {
+			if tool.Type == common.ToolTypeWebSearch {
+				searchCount++
+				continue
+			}
+			names = append(names, tool.Name)
+		}
+		if optIn {
+			s.Equal(1, searchCount)
+		} else {
+			s.Zero(searchCount)
+		}
+		s.Equal([]string{advisorProceedToolName, advisorGuideTool.Name, functionTool.Name}, names)
+	}).Return(&llm2.MessageResponse{
+		StopReason: "tool_use",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeToolUse,
+				ToolUse: &llm2.ToolUseBlock{
+					Id:        "call_filtered_search",
+					Name:      advisorProceedToolName,
+					Arguments: "{}",
+				},
+			}},
+		},
+	}, nil).Once()
+
+	s.env.ExecuteWorkflow(wf, executorHistory)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Len(s.executorRefsFromResult(), originalRefs)
+	s.Equal([]*llm.Tool{searchTool, functionTool}, executorTools)
+}
+
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_FiltersUnsupportedWebSearch() {
+	s.testMaybeAdviseWebSearch(false)
+}
+
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_PreservesOptedInWebSearch() {
+	s.testMaybeAdviseWebSearch(true)
+}
