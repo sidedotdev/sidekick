@@ -835,19 +835,33 @@ func (t *nativeSSHTransport) WithSFTP(ctx context.Context, op SFTPOp) (any, erro
 	}
 
 	var value any
-	err = t.withClient(ctx, func(conn *nativeSSHConn, client *ssh.Client) error {
-		return withAgentBootstrap(ctx, client, remotePath, func() error {
-			var opErr error
-			value, opErr = conn.runPooledSFTPOp(ctx, client, remotePath, op)
-			if opErr == nil || !sftpFailureWarrantsReconnect(ctx, opErr, op) {
+	_, modalRecovery := t.sshEnv.(interface{ waitForSFTPRecovery(context.Context) error })
+	retryEligible := false
+	run := func() error {
+		return t.withClient(ctx, func(conn *nativeSSHConn, client *ssh.Client) error {
+			retryEligible = false
+			return withAgentBootstrap(ctx, client, remotePath, func() error {
+				var opErr error
+				value, opErr = conn.runPooledSFTPOp(ctx, client, remotePath, op)
+				retryEligible = opErr != nil && sftpFailureWarrantsReconnect(ctx, opErr, op)
+				if retryEligible && !modalRecovery {
+					value, opErr = conn.runPooledSFTPOp(ctx, client, remotePath, op)
+				}
+				if modalRecovery && errors.Is(opErr, errNativeAgentAbsent) {
+					retryEligible = false
+				}
 				return opErr
-			}
-			// A dead SFTP channel says nothing about the connection carrying
-			// it, so retry the operation on a fresh channel before giving up.
-			value, opErr = conn.runPooledSFTPOp(ctx, client, remotePath, op)
-			return opErr
+			})
 		})
-	})
+	}
+	err = run()
+	if err != nil && modalRecovery && retryEligible && sftpFailureWarrantsReconnect(ctx, err, op) {
+		if waitErr := waitForSFTPRecovery(ctx, t.sshEnv); waitErr != nil {
+			return nil, waitErr
+		}
+		// Readiness may restore a different sandbox; reacquire its connection.
+		err = run()
+	}
 	if err != nil {
 		return nil, err
 	}

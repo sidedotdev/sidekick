@@ -86,6 +86,7 @@ type sshTestServerOptions struct {
 	// as keepalives and forward cancellations, reproducing a wedged peer: the
 	// connection stays open, but nothing that waits for a reply ever returns.
 	StallGlobalRequests bool
+	SFTPHandler         func(ssh.Channel)
 }
 
 // harnessWaitTimeout bounds every harness wait, so a protocol mistake fails
@@ -400,6 +401,10 @@ func (s *sshTestServer) runCommand(channel ssh.Channel, command string) uint32 {
 			return 127
 		}
 		if strings.HasSuffix(command, " sftp") {
+			if s.opts.SFTPHandler != nil {
+				s.opts.SFTPHandler(channel)
+				return 0
+			}
 			_ = sideagent.ServeSFTP(sessionReadWriteCloser{channel})
 			return 0
 		}

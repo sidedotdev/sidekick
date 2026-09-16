@@ -40,6 +40,18 @@ type server struct {
 
 	loginEnvOnce sync.Once
 	loginEnv     []string
+
+	// seal gates admission; nil means the sandbox default.
+	seal *Seal
+}
+
+// admission is nil-safe so a zero-valued server still refuses work during a
+// shutdown rather than panicking.
+func (s *server) admission() *Seal {
+	if s.seal == nil {
+		return DefaultSeal()
+	}
+	return s.seal
 }
 
 // Serve handles exec requests from r until it reaches EOF, writing one
@@ -48,11 +60,16 @@ type server struct {
 // dropped SSH connection) is a clean shutdown: all still-running commands are
 // killed so nothing outlives the channel.
 func Serve(r io.Reader, w io.Writer) error {
+	return serveWithSeal(r, w, DefaultSeal())
+}
+
+func serveWithSeal(r io.Reader, w io.Writer, seal *Seal) error {
 	s := &server{
 		w:        bufio.NewWriter(w),
 		procs:    map[uint64]*os.Process{},
 		canceled: map[uint64]bool{},
 		done:     make(chan struct{}),
+		seal:     seal,
 	}
 	br := bufio.NewReader(r)
 	var wg sync.WaitGroup
@@ -161,6 +178,16 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 		resp.Error = "empty argv"
 		return resp
 	}
+	// Held for the command's whole duration, so a shutdown cannot snapshot
+	// midway through it. Failing closed: without proof that no shutdown is
+	// under way, running the command risks acknowledging work the sandbox is
+	// about to discard.
+	release, sealed, err := s.admission().admit()
+	if err != nil || sealed {
+		resp.Sealed = true
+		return resp
+	}
+	defer release()
 	if req.TouchPath != "" {
 		stopHeartbeat := startActivityHeartbeat(req.TouchPath, activityHeartbeatInterval)
 		defer stopHeartbeat()

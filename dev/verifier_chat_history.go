@@ -96,6 +96,7 @@ func verifierBlockIdentity(block llm2.ContentBlock) string {
 }
 
 func prepareVerifierMessages(messages []llm2.Message, index *verifierChatHistoryIndex, settings VerifierSettings, provider string) verifierChatHistory {
+	messages = verifierFilterMessages(messages)
 	chatHistory := verifierChatHistory{}
 	results := make(map[string][]llm2.Message)
 	for _, message := range messages {
@@ -393,4 +394,58 @@ func verifierInvokedCommands(arguments string) string {
 		}
 	}
 	return strings.Join(names, "; ")
+}
+
+func verifierFilterMessages(messages []llm2.Message) []llm2.Message {
+	filtered := make([]llm2.Message, 0, len(messages))
+	for _, message := range messages {
+		content := make([]llm2.ContentBlock, 0, len(message.Content))
+		for _, block := range message.Content {
+			if message.Role == llm2.RoleAssistant {
+				switch block.Type {
+				case llm2.ContentBlockTypeToolUse, llm2.ContentBlockTypeToolResult,
+					llm2.ContentBlockTypeMcpCall, llm2.ContentBlockTypeBuiltinToolUse,
+					llm2.ContentBlockTypeBuiltinToolResult:
+				default:
+					continue
+				}
+			}
+			if block.ToolUse != nil {
+				call := *block.ToolUse
+				call.Arguments = verifierFilterArguments(call.Arguments)
+				block.ToolUse = &call
+			}
+			if block.McpCall != nil {
+				call := *block.McpCall
+				call.Arguments = verifierFilterArguments(call.Arguments)
+				block.McpCall = &call
+			}
+			if block.BuiltinToolUse != nil {
+				call := *block.BuiltinToolUse
+				call.Arguments = verifierFilterArguments(call.Arguments)
+				block.BuiltinToolUse = &call
+			}
+			content = append(content, block)
+		}
+		if len(content) > 0 {
+			filtered = append(filtered, llm2.Message{Role: message.Role, Content: content})
+		}
+	}
+	return filtered
+}
+
+func verifierFilterArguments(arguments string) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(arguments), &fields) != nil {
+		return arguments
+	}
+	if _, ok := fields["analysis"]; !ok {
+		return arguments
+	}
+	delete(fields, "analysis")
+	filtered, err := json.Marshal(fields)
+	if err != nil {
+		return arguments
+	}
+	return string(filtered)
 }

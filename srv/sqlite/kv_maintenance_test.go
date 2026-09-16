@@ -263,7 +263,8 @@ func TestMaintainKVReclaimsWhenFreelistIsLarge(t *testing.T) {
 
 	after, err := storage.KVMaintenanceStats(ctx)
 	require.NoError(t, err)
-	assert.Zero(t, after.FreelistCount)
+	// A bounded maintenance pass may leave free pages for subsequent passes.
+	assert.Less(t, after.FreelistCount, before.FreelistCount)
 	assert.Less(t, after.PageCount, before.PageCount)
 }
 

@@ -27,11 +27,17 @@ terminate_failures=0
 was_quiet=""
 polls=0
 busy_reason=""
+# set once termination has been dispatched; never cleared
+terminating=""
 
-# log to a file (survives in snapshots for post-mortems) and to stdout
-# (surfaces in Modal sandbox logs)
+# log to a file and to stdout (which surfaces in Modal sandbox logs). A
+# restored sandbox's file log is truncated at the snapshot it was restored
+# from, so it never holds an incarnation's final lines: a completed snapshot,
+# a terminate or an abort all land after the capture point. Read the guard's
+# events (kept outside the sandbox) for lifecycle history instead.
+log_file="${SIDE_WATCHDOG_LOG_FILE:-/var/log/sidekick-watchdog.log}"
 log() {
-    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> /var/log/sidekick-watchdog.log 2>/dev/null
+    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$log_file" 2>/dev/null
     echo "$*"
 }
 
@@ -85,6 +91,34 @@ is_busy() {
     return 1
 }
 
+# Admission fence. The agent refuses new work once the seal file exists, and
+# only ever checks for it while holding this lock shared; taking the lock
+# exclusively therefore waits for work already admitted to finish. Sealing is
+# thus the drain that makes "nothing was running when we snapshotted" a fact
+# rather than an assumption. Failing to seal means work is still in flight,
+# and the shutdown must be abandoned rather than run over it.
+seal_lock="${SIDE_SEAL_LOCK:-/tmp/.sidekick-seal.lock}"
+seal_file="${SIDE_SEAL_FILE:-/tmp/.sidekick-sealed}"
+SEAL_WAIT="${SIDE_SEAL_WAIT:-30}"
+# Records that termination was dispatched, so a watchdog that is restarted
+# cannot mistake a dying sandbox for a healthy one and lift its seal. Written
+# after the snapshot, so a restored image never carries it.
+terminating_file="${SIDE_TERMINATING_FILE:-/tmp/.sidekick-terminating}"
+# -f, not -e: only the regular file this script writes records a dispatched
+# termination. Anything else at that path is a misconfiguration, and reading it
+# as a termination would make the sandbox terminate without snapshotting.
+[ -f "$terminating_file" ] && terminating=1
+
+seal() {
+    # without flock the drain cannot be proven, so the shutdown is abandoned
+    command -v flock >/dev/null 2>&1 || return 1
+    flock -x -w "$SEAL_WAIT" "$seal_lock" -c ": > '$seal_file'"
+}
+
+unseal() {
+    rm -f "$seal_file"
+}
+
 guard_post() {
     phase=$1
     case "$phase" in
@@ -93,11 +127,11 @@ guard_post() {
     esac
     last_attempt=$(date +%s)
     log "guard $phase request starting (attempt $attempt)"
-    if /usr/local/bin/sidekick-snapshot "$phase"; then
+    if "${SIDE_SNAPSHOT_BIN:-/usr/local/bin/sidekick-snapshot}" "$phase"; then
         log "guard $phase request succeeded (attempt $attempt)"
         return 0
     fi
-    log "guard $phase request failed (attempt $attempt); see /var/log/sidekick-watchdog.log for response details"
+    log "guard $phase request failed (attempt $attempt); see $log_file for response details"
     return 1
 }
 
@@ -123,6 +157,26 @@ while :; do
     sleep 15
     polls=$((polls + 1))
     now=$(date +%s)
+    # Dispatching termination is irreversible: the request may still be in
+    # flight, so the sandbox stays sealed and never returns to serving work.
+    # Only the termination is retried, against the checkpoint already taken.
+    if [ -n "$terminating" ]; then
+        if guard_post terminate; then
+            log "terminate accepted: the guard ends this sandbox shortly"
+            sleep 300
+            continue
+        fi
+        terminate_failures=$((terminate_failures + 1))
+        log "guard terminate retry scheduled after failure $terminate_failures"
+        if [ "$terminate_failures" -ge 20 ]; then
+            # this cycle's snapshot succeeded, so nothing is lost: stop the
+            # bleeding by ending pid 1, which terminates the sandbox
+            log "guard terminate unreachable after $terminate_failures attempts: terminating sandbox"
+            kill 1
+        fi
+        sleep 30
+        continue
+    fi
     if is_busy; then
         [ -n "$was_quiet" ] && log "active again: reason=$busy_reason"
         was_quiet=""
@@ -137,58 +191,85 @@ while :; do
     idle_for=$((now - idle_since))
     [ $((polls % 2)) -eq 0 ] && log "heartbeat: quiet idle-for=${idle_for}s threshold=${IDLE}s snapshot-failures=$snapshot_failures terminate-failures=$terminate_failures"
     [ "$idle_for" -lt "$IDLE" ] && continue
-    log "idle for ${idle_for}s (threshold ${IDLE}s) -> snapshotting"
+    log "idle for ${idle_for}s (threshold ${IDLE}s) -> sealing"
+    if ! seal; then
+        log "shutdown aborted: could not seal within ${SEAL_WAIT}s (work in flight, or flock unavailable)"
+        was_quiet=""
+        idle_since=$(date +%s)
+        continue
+    fi
+    # Work admitted before the seal has now finished, and anything arriving
+    # from here is refused, so the snapshot below cannot miss acknowledged
+    # work. Activity the fence does not mediate (an attached pty, background
+    # load) still aborts.
+    if is_busy; then
+        log "shutdown aborted after sealing: activity detected reason=$busy_reason"
+        unseal
+        was_quiet=""
+        idle_since=$(date +%s)
+        continue
+    fi
+    log "sealed -> snapshotting"
     attempt_start=$(date +%s)
-    failed_phase="snapshot"
     if guard_post snapshot; then
         snapshot_failures=0
         last_snapshot=$(date +%s)
         # test hook: widen the window between snapshot and the abort re-check
         [ "${SIDE_SNAPSHOT_GRACE:-0}" -gt 0 ] 2>/dev/null && sleep "$SIDE_SNAPSHOT_GRACE"
         # re-check: anything that arrived while the snapshot was being taken
-        # aborts the shutdown; the snapshot is kept as a checkpoint
-        if is_busy; then
+        # aborts the shutdown; the snapshot is kept as a checkpoint. The
+        # snapshot reflects the filesystem as of its start, so a marker touch
+        # since then is unsaved work even when it is already older than the
+        # idle threshold (snapshots can take far longer than that)
+        marker=$(stat -c %Y /tmp/.sidekick-activity 2>/dev/null || echo 0)
+        if [ "$marker" -ge "$attempt_start" ] 2>/dev/null; then
+            busy_reason="sidekick-activity-during-snapshot age=$(( $(date +%s) - marker ))s"
+        elif ! is_busy; then
+            busy_reason=""
+        fi
+        if [ -n "$busy_reason" ]; then
             log "shutdown aborted after snapshot: activity detected reason=$busy_reason"
+            unseal
             was_quiet=""
             idle_since=$(date +%s)
             snapshot_failures=0
             terminate_failures=0
             continue
         fi
-        failed_phase="terminate"
-        if guard_post terminate; then
-            log "terminate accepted: the guard ends this sandbox shortly"
-            sleep 300
+        # The guard terminates over the network, several control-plane calls
+        # and a volume commit after this point. The sandbox stays sealed
+        # through all of it, so work arriving in that window is refused rather
+        # than acknowledged and then destroyed. The seal is never lifted once
+        # terminate is dispatched: it may still arrive.
+        # Recorded before dispatch: a watchdog restarted after this point must
+        # find the sandbox dying rather than lift its seal. The redirection
+        # runs in a subshell because a failing redirection on the ':' special
+        # builtin exits a POSIX shell outright rather than yielding a status,
+        # and because it must fail on a path that is not a writable file.
+        if ! ( : > "$terminating_file" ) 2>/dev/null; then
+            log "shutdown aborted: could not record termination state at $terminating_file"
+            unseal
+            was_quiet=""
             idle_since=$(date +%s)
             continue
         fi
+        terminating=1
+        if guard_post terminate; then
+            log "terminate accepted: the guard ends this sandbox shortly"
+            sleep 300
+        fi
+        continue
     fi
-    case "$failed_phase" in
-        snapshot)
-            snapshot_failures=$((snapshot_failures + 1))
-            failures=$snapshot_failures
-            ;;
-        terminate)
-            terminate_failures=$((terminate_failures + 1))
-            failures=$terminate_failures
-            ;;
-    esac
-    log "guard $failed_phase retry scheduled after failure $failures"
-    if [ "$failures" -ge 20 ]; then
-        case "$failed_phase" in
-            terminate)
-                # this cycle's snapshot succeeded, so nothing is lost: stop
-                # the bleeding by ending pid 1, which terminates the sandbox
-                log "guard terminate unreachable after $failures attempts: terminating sandbox"
-                kill 1
-                ;;
-            snapshot)
-                # never self-terminate without a fresh snapshot: work since
-                # the last successful one would be lost permanently
-                log "guard snapshot still failing after $failures attempts; retrying at a slower cadence"
-                sleep 570
-                ;;
-        esac
+    # the snapshot failed, so nothing was captured and the sandbox goes back
+    # to serving work while it is retried
+    unseal
+    snapshot_failures=$((snapshot_failures + 1))
+    log "guard snapshot retry scheduled after failure $snapshot_failures"
+    if [ "$snapshot_failures" -ge 20 ]; then
+        # never self-terminate without a fresh snapshot: work since the last
+        # successful one would be lost permanently
+        log "guard snapshot still failing after $snapshot_failures attempts; retrying at a slower cadence"
+        sleep 570
     fi
     # keep at least 30s between guard attempts; a slow failure (curl timeout)
     # plus the loop's own poll sleep may already cover it

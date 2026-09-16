@@ -1992,6 +1992,9 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	}
 	if _, ok := providedFields["agentType"]; !ok {
 		taskReq.AgentType = string(task.AgentType)
+		if task.Status == domain.TaskStatusDrafting && taskReq.Status == string(domain.TaskStatusToDo) {
+			taskReq.AgentType = string(domain.AgentTypeLLM)
+		}
 	}
 	if _, ok := providedFields["description"]; !ok {
 		taskReq.Description = task.Description

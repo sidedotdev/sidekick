@@ -61,6 +61,12 @@ type ExecResponse struct {
 	// Hibernated reports the command was not run because HibernationSentinel
 	// exists; the client is expected to wake the worktree and retry.
 	Hibernated bool `json:"hibernated,omitempty"`
+	// Sealed reports the command was not run because the sandbox has
+	// committed to shutting down. Reported in the protocol rather than as an
+	// exit status so a command that happens to exit with the same status is
+	// never mistaken for a refusal. Nothing ran, so the client is expected to
+	// retry against the sandbox restored from the shutdown's snapshot.
+	Sealed bool `json:"sealed,omitempty"`
 }
 
 // clientMessage is the envelope for client→server frames: exactly one of

@@ -164,6 +164,13 @@ editLoop:
 					return err
 				}
 				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+			case ConflictResolutionInfo:
+				if workflow.GetVersion(dCtx, "preserve-paused-conflict-instructions", workflow.DefaultVersion, 1) >= 1 {
+					if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan, environmentContext); err != nil {
+						return err
+					}
+				}
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			case FeedbackInfo:
 				if workflow.GetVersion(dCtx, "human-feedback-provenance", workflow.DefaultVersion, 1) >= 1 {
 					if err := appendEditFeedback(dCtx.ExecContext, chatHistory, info.Feedback, info.Type); err != nil {
@@ -317,6 +324,13 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 				// Flush initial instructions into chat history before replacing with pause feedback
 				if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext); err != nil {
 					return nil, err
+				}
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+			case ConflictResolutionInfo:
+				if workflow.GetVersion(dCtx, "preserve-paused-conflict-instructions", workflow.DefaultVersion, 1) >= 1 {
+					if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext); err != nil {
+						return nil, err
+					}
 				}
 				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			case FeedbackInfo:
@@ -638,7 +652,7 @@ func codingTools(dCtx DevContext, codingModelConfig common.ModelConfig, doneRequ
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	return appendWebSearchToolIfNonLocal(dCtx, tools)
+	return appendWebSearchToolIfNonLocal(dCtx, tools, codingModelConfig)
 }
 
 // resolveCodingOptions rebuilds the LLM options for a single stream

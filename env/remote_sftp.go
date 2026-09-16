@@ -69,13 +69,12 @@ var remoteBinaryOpTimeout = 60 * time.Second
 // sftpConn manages a persistent SFTP client connection over SSH.
 // It is safe for concurrent use; the underlying sftp.Client multiplexes requests.
 type sftpConn struct {
-	mu                sync.Mutex
-	key               string
-	client            *sftp.Client
-	cmd               *exec.Cmd
-	latency           time.Duration
-	idleTimer         *time.Timer
-	lastActivityTouch time.Time
+	mu        sync.Mutex
+	key       string
+	client    *sftp.Client
+	cmd       *exec.Cmd
+	latency   time.Duration
+	idleTimer *time.Timer
 	// lastUsed and evicted are maintained by lockLive, the idle reaper and
 	// CloseAllSharedSFTPConns.
 	lastUsed time.Time
@@ -215,29 +214,7 @@ func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.
 		}
 	}
 	sc.resetIdleTimerLocked()
-	sc.touchActivityLocked()
 	return sc.client, nil
-}
-
-// touchActivityLocked asynchronously refreshes the in-sandbox idle-watchdog
-// activity marker: command execution touches it via a shell wrapper, but pure
-// file operations would otherwise be invisible to the watchdog between its
-// polls. Best-effort, and throttled since every touch costs a round trip.
-func (sc *sftpConn) touchActivityLocked() {
-	if time.Since(sc.lastActivityTouch) < 10*time.Second {
-		return
-	}
-	sc.lastActivityTouch = time.Now()
-	client := sc.client
-	go func() {
-		now := time.Now()
-		if err := client.Chtimes(remoteActivityMarker, now, now); err != nil {
-			if f, createErr := client.Create(remoteActivityMarker); createErr == nil {
-				f.Close()
-				_ = client.Chtimes(remoteActivityMarker, now, now)
-			}
-		}
-	}()
 }
 
 // Close tears down the connection and its remote process chain, reaping the
@@ -480,15 +457,20 @@ func boundedSFTPOp[T any](ctx context.Context, conn *sftpConn, client *sftp.Clie
 // like a dropped session.
 func withSFTPRetry(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, op SFTPOp) (any, error) {
 	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
+	if _, modalRecovery := sshEnv.(interface{ waitForSFTPRecovery(context.Context) error }); err != nil && !modalRecovery {
 		return nil, err
 	}
-
-	value, err := boundedSFTPOp(ctx, conn, client, op.Name, op.Path, func() (any, error) {
-		return op.Run(client)
-	})
+	var value any
+	if err == nil {
+		value, err = boundedSFTPOp(ctx, conn, client, op.Name, op.Path, func() (any, error) {
+			return op.Run(client)
+		})
+	}
 	if err == nil || !sftpFailureWarrantsReconnect(ctx, err, op) {
 		return value, err
+	}
+	if waitErr := waitForSFTPRecovery(ctx, sshEnv); waitErr != nil {
+		return nil, waitErr
 	}
 
 	retryClient, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
@@ -532,6 +514,7 @@ func sftpErrOp(ctx context.Context, transport SSHTransport, op SFTPOp) error {
 // sftpReadFile reads a file via the transport's SFTP channel.
 func sftpReadFile(ctx context.Context, transport SSHTransport, path string) ([]byte, error) {
 	return sftpValue[[]byte](ctx, transport, SFTPOp{Name: "read", Path: path, Run: func(client *sftp.Client) (any, error) {
+		defer touchRemoteActivityForRead(client)
 		return doSFTPRead(client, path)
 	}})
 }
@@ -539,6 +522,7 @@ func sftpReadFile(ctx context.Context, transport SSHTransport, path string) ([]b
 // sftpReadDir lists a directory via the transport's SFTP channel.
 func sftpReadDir(ctx context.Context, transport SSHTransport, path string) ([]fs.DirEntry, error) {
 	return sftpValue[[]fs.DirEntry](ctx, transport, SFTPOp{Name: "readdir", Path: path, Run: func(client *sftp.Client) (any, error) {
+		defer touchRemoteActivityForRead(client)
 		return doSFTPReadDir(client, path)
 	}})
 }
@@ -572,10 +556,84 @@ func doSFTPRead(client *sftp.Client, path string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// touchRemoteActivity renews the in-sandbox idle-watchdog marker on the
+// channel an operation just used. Command execution touches the marker via
+// its shell wrapper, but file operations would otherwise be invisible to the
+// watchdog. Mutations call this unconditionally, before the caller learns
+// they succeeded: an edit with no command following it must still count as
+// activity, or an idle shutdown can discard it. Truncating (rather than
+// Chtimes with the host clock) stamps the marker with the sandbox's own
+// clock, which is the one the watchdog compares against. Best effort: a
+// failure here must not fail the operation.
+func touchRemoteActivity(client *sftp.Client) {
+	f, err := client.OpenFile(remoteActivityMarker, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	if err != nil {
+		return
+	}
+	_ = f.Close()
+}
+
+// remoteReadTouchInterval bounds how often reads renew the marker per SFTP
+// client. Reads create nothing a lost snapshot could discard; they only need
+// to keep an agent that is browsing code from idling its sandbox out, and one
+// round trip per interval is enough for that.
+const remoteReadTouchInterval = 10 * time.Second
+
+// remoteReadTouchClients caps the throttle's memory of clients. Clients are
+// not told when they are closed here, so the oldest reservation is evicted
+// instead; a spurious extra touch for an evicted-but-live client is harmless.
+const remoteReadTouchClients = 64
+
+// readTouchThrottle records, per SFTP client, when a read last renewed the
+// activity marker, so concurrent reads on one connection collapse into a
+// single touch per interval.
+type readTouchThrottle struct {
+	mu   sync.Mutex
+	last map[*sftp.Client]time.Time
+}
+
+var remoteReadTouches readTouchThrottle
+
+// reserve reports whether the caller should touch the marker for client now,
+// recording the reservation atomically so concurrent callers cannot all win.
+func (r *readTouchThrottle) reserve(client *sftp.Client, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last, known := r.last[client]
+	if known && now.Sub(last) < remoteReadTouchInterval {
+		return false
+	}
+	if r.last == nil {
+		r.last = make(map[*sftp.Client]time.Time)
+	}
+	if !known && len(r.last) >= remoteReadTouchClients {
+		var oldest *sftp.Client
+		for candidate, at := range r.last {
+			if oldest == nil || at.Before(r.last[oldest]) {
+				oldest = candidate
+			}
+		}
+		delete(r.last, oldest)
+	}
+	r.last[client] = now
+	return true
+}
+
+// touchRemoteActivityForRead is touchRemoteActivity throttled per client.
+func touchRemoteActivityForRead(client *sftp.Client) {
+	if remoteReadTouches.reserve(client, time.Now()) {
+		touchRemoteActivity(client)
+	}
+}
+
 // sftpWriteFile writes data to a file via the transport's SFTP channel.
 func sftpWriteFile(ctx context.Context, transport SSHTransport, p string, data []byte, perm fs.FileMode) error {
 	return sftpErrOp(ctx, transport, SFTPOp{Name: "write", Path: p, Run: func(client *sftp.Client) (any, error) {
-		return nil, doSFTPWrite(client, p, data, perm)
+		if err := doSFTPWrite(client, p, data, perm); err != nil {
+			return nil, err
+		}
+		touchRemoteActivity(client)
+		return nil, nil
 	}})
 }
 
@@ -583,13 +641,18 @@ func sftpWriteFile(ctx context.Context, transport SSHTransport, p string, data [
 // paths are what it exists to create, so they never end the retry.
 func sftpMkdirAll(ctx context.Context, transport SSHTransport, p string, perm fs.FileMode) error {
 	return sftpErrOp(ctx, transport, SFTPOp{Name: "mkdirall", Path: p, RetryOnNotExist: true, Run: func(client *sftp.Client) (any, error) {
-		return nil, doSFTPMkdirAll(client, p, perm)
+		if err := doSFTPMkdirAll(client, p, perm); err != nil {
+			return nil, err
+		}
+		touchRemoteActivity(client)
+		return nil, nil
 	}})
 }
 
 // sftpStat stats a path via the transport's SFTP channel.
 func sftpStat(ctx context.Context, transport SSHTransport, p string) (fs.FileInfo, error) {
 	info, err := sftpValue[fs.FileInfo](ctx, transport, SFTPOp{Name: "stat", Path: p, Run: func(client *sftp.Client) (any, error) {
+		defer touchRemoteActivityForRead(client)
 		return client.Stat(p)
 	}})
 	if err != nil && errors.Is(err, fs.ErrNotExist) {
@@ -604,7 +667,11 @@ func sftpStat(ctx context.Context, transport SSHTransport, p string) (fs.FileInf
 // sftpRemove deletes a file or empty directory via the transport's SFTP channel.
 func sftpRemove(ctx context.Context, transport SSHTransport, p string) error {
 	return sftpErrOp(ctx, transport, SFTPOp{Name: "remove", Path: p, Run: func(client *sftp.Client) (any, error) {
-		return nil, client.Remove(p)
+		if err := client.Remove(p); err != nil {
+			return nil, err
+		}
+		touchRemoteActivity(client)
+		return nil, nil
 	}})
 }
 
@@ -619,7 +686,12 @@ func sftpCreateTemp(ctx context.Context, transport SSHTransport, dir, pattern st
 	}
 
 	return sftpValue[string](ctx, transport, SFTPOp{Name: "createtemp", Path: dir, Run: func(client *sftp.Client) (any, error) {
-		return doSFTPCreateTemp(client, dir, prefix, suffix)
+		name, err := doSFTPCreateTemp(client, dir, prefix, suffix)
+		if err != nil {
+			return nil, err
+		}
+		touchRemoteActivity(client)
+		return name, nil
 	}})
 }
 
