@@ -22,10 +22,6 @@ import (
 // state in its worktree and launch a sub-task that implements it.
 const SignalNameStartIntentSubtask = "startIntentSubtask"
 
-// SignalNameFinishIdd asks an IddWorkflow to merge its worktree into the
-// requested target branch, cleanup the worktree, and exit cleanly.
-const SignalNameFinishIdd = "finishIdd"
-
 // SignalNameSetIddAutoMode toggles the background orchestrator's auto
 // task-creation mode. Other orchestrator behaviors (e.g. surfacing
 // clarifications) are unaffected by this toggle.
@@ -83,12 +79,6 @@ type StartIntentSubtaskSignal struct {
 	// 'prompt' scope). The orchestrator then remains responsible for following
 	// up on intent the prompt does not cover.
 	PromptOnly bool
-}
-
-// FinishIddSignal is the payload for SignalNameFinishIdd, asking the workflow
-// to merge the idd worktree branch into TargetBranch and exit.
-type FinishIddSignal struct {
-	TargetBranch string `json:"targetBranch"`
 }
 
 // SetIddAutoModeSignal toggles whether the background orchestrator will
@@ -155,12 +145,6 @@ type IddState struct {
 	// AutoMode indicates whether the background orchestrator will auto-create
 	// sub-tasks when intent edits settle in the worktree.
 	AutoMode bool `json:"autoMode"`
-	// FinishError records the most recent failure encountered while finishing
-	// the IDD flow (e.g. missing target branch or merge conflicts) so the
-	// canvas finish panel can surface it prominently rather than leaving the
-	// user staring at a silently still-running workflow. It is cleared at the
-	// start of each finish attempt.
-	FinishError string `json:"finishError,omitempty"`
 	// PendingSubtaskNotices queues human-readable notices about sub-tasks
 	// that reached a terminal status since the last orchestrator turn. The
 	// next turn that actually runs drains them into its prompt so the
@@ -168,6 +152,29 @@ type IddState struct {
 	// instead of inferring it from the sub-task summary. Workflow-internal
 	// only; never surfaced on the canvas.
 	PendingSubtaskNotices []string `json:"-"`
+	// Finishing is set once the merge approval starts finishing the flow. Work
+	// dispatched after that would merge into a branch that is about to be
+	// archived, so sub-task dispatch is refused until the finish completes or
+	// fails. Workflow-internal only.
+	Finishing bool `json:"-"`
+	// InFlightSubtaskRunners counts the coroutines dispatching or supervising a
+	// sub-task. A sub-task's work reaches the idd branch through its own
+	// auto-merge, which can land after it reports closure, so only the runner
+	// returning proves that work has settled. Workflow-internal only.
+	InFlightSubtaskRunners int `json:"-"`
+}
+
+// beginSubtaskRunner registers a sub-task runner as in flight. It must be
+// called before the dispatch yields (reservation included), so a finish
+// starting in that window still waits for the runner.
+func (s *IddState) beginSubtaskRunner() {
+	s.InFlightSubtaskRunners++
+}
+
+// endSubtaskRunner marks a sub-task runner as settled, including runners that
+// refused to start their sub-task, so a finish's drain always completes.
+func (s *IddState) endSubtaskRunner() {
+	s.InFlightSubtaskRunners--
 }
 
 // IddWorkflow drives the Intent Driven Development canvas: it sets up a worktree
@@ -367,10 +374,31 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		startEditWatcher()
 	}
 
+	// The merge-approval request is how the user finishes the flow, and how
+	// they see what would be merged as work lands, so it is raised up front and
+	// kept pending until approved.
+	mergeApproval := startIddMergeApproval(dCtx, input, state)
+
+	if err = runIddMainLoop(dCtx, input, state, mergeApproval, requestOrchestratorTurn); err != nil {
+		return err
+	}
+
+	if closureErr := signalWorkflowClosure(dCtx, "completed"); closureErr != nil {
+		workflow.GetLogger(dCtx).Error("Failed to signal idd workflow closure", "Error", closureErr)
+	}
+	return nil
+}
+
+// runIddMainLoop handles the signals an IDD flow lives on — sub-task starts,
+// sub-task user requests and closures, auto-mode and orchestrator triggers —
+// until the merge approval reports the flow finished or the workflow is
+// canceled. It is the only consumer of the sub-task closure channel, so every
+// sub-task status transition observed by waiters (e.g. cancelPendingSubtasks)
+// flows through here.
+func runIddMainLoop(dCtx DevContext, input IddWorkflowInput, state *IddState, mergeApproval *iddMergeApproval, requestOrchestratorTurn func()) error {
 	startSubtaskCh := workflow.GetSignalChannel(dCtx, SignalNameStartIntentSubtask)
 	requestForUserCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameRequestForUser)
 	subtaskUnblockedCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameSubtaskUnblocked)
-	finishIddCh := workflow.GetSignalChannel(dCtx, SignalNameFinishIdd)
 	setAutoModeCh := workflow.GetSignalChannel(dCtx, SignalNameSetIddAutoMode)
 	runOrchestratorCh := workflow.GetSignalChannel(dCtx, SignalNameRunIddOrchestrator)
 	workflowClosedCh := workflow.GetSignalChannel(dCtx, SignalNameWorkflowClosed)
@@ -385,6 +413,11 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(startSubtaskCh, func(c workflow.ReceiveChannel, _ bool) {
 			var sig StartIntentSubtaskSignal
 			c.Receive(dCtx, &sig)
+			if state.Finishing {
+				workflow.GetLogger(dCtx).Info("Ignoring start intent sub-task signal: the idd flow is finishing")
+				return
+			}
+			state.beginSubtaskRunner()
 			// Pre-reserve the sub-task entry synchronously so the canvas (and
 			// any subsequent orchestrator turn) sees it immediately, before
 			// the commit and child-workflow start yields complete. Version-
@@ -399,6 +432,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			// Spawn a coroutine so committing and running the sub-task to
 			// completion doesn't block the selector from handling more signals.
 			workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
+				defer state.endSubtaskRunner()
 				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId, requestOrchestratorTurn)
 			})
 		})
@@ -435,15 +469,8 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			updateSubtaskStatus(dCtx, input, state, sig.FlowId, "in_progress")
 		})
 
-		selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
-			var sig FinishIddSignal
-			c.Receive(dCtx, &sig)
-			state.FinishError = ""
-			if err := finishIdd(dCtx, input, sig, state); err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to finish idd flow", "Error", err)
-				state.FinishError = err.Error()
-				return
-			}
+		selector.AddReceive(mergeApproval.finishedCh, func(c workflow.ReceiveChannel, _ bool) {
+			c.Receive(dCtx, nil)
 			finished = true
 		})
 
@@ -473,9 +500,6 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.Select(dCtx)
 
 		if finished {
-			if closureErr := signalWorkflowClosure(dCtx, "completed"); closureErr != nil {
-				workflow.GetLogger(dCtx).Error("Failed to signal idd workflow closure", "Error", closureErr)
-			}
 			return nil
 		}
 
@@ -644,6 +668,18 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 
 	if !preReserved {
 		flowId = "flow_" + ksuidSideEffect(dCtx)
+	}
+
+	// Committing and title generation yielded, so a finish may have begun since
+	// this runner was dispatched. Starting the child now would produce work on a
+	// branch that is about to be archived, and the finish could merge before
+	// that work lands.
+	if state.Finishing {
+		log.Info("Not starting intent sub-task: the idd flow is finishing", "FlowId", flowId)
+		if preReserved {
+			updateSubtaskStatus(dCtx, input, state, flowId, "canceled")
+		}
+		return
 	}
 
 	branch := dCtx.Worktree.Name
@@ -915,73 +951,27 @@ func pendingSubtaskFlowIds(state *IddState) []string {
 }
 
 // cancelPendingSubtasks requests cancellation of every in-flight sub-task and
-// waits for each to reach a terminal status. This stops sub-tasks from racing
-// the finish-merge against the idd worktree branch, and lets their own
-// cleanup/auto-merge logic settle so the worktree is in a consistent state
-// before we merge it elsewhere.
+// waits for the work they were doing to settle, so nothing lands on the idd
+// worktree branch after the caller is done with it.
+//
+// Reaching a terminal status is not enough to prove that: a canceled sub-task
+// reports its closure before running its own cleanup, and its auto-merge into
+// the idd branch can complete after that. The runner coroutine supervising the
+// child only returns once the child workflow has actually closed, so the drain
+// waits for the runners too — including those that refuse to start a sub-task
+// while finishing, which settle immediately.
 func cancelPendingSubtasks(dCtx DevContext, state *IddState) error {
-	pending := pendingSubtaskFlowIds(state)
-	for _, flowId := range pending {
+	for _, flowId := range pendingSubtaskFlowIds(state) {
+		// A sub-task reserved but not yet started has no workflow to cancel;
+		// its runner sees the flow finishing and closes the reservation out.
 		if err := workflow.RequestCancelExternalWorkflow(dCtx, flowId, "").Get(dCtx, nil); err != nil {
 			workflow.GetLogger(dCtx).Warn("Failed to request cancel of intent sub-task", "FlowId", flowId, "Error", err)
 		}
 	}
-	if len(pending) == 0 {
-		return nil
-	}
 	if err := workflow.Await(dCtx, func() bool {
-		return len(pendingSubtaskFlowIds(state)) == 0
+		return len(pendingSubtaskFlowIds(state)) == 0 && state.InFlightSubtaskRunners == 0
 	}); err != nil {
 		return fmt.Errorf("waiting for intent sub-tasks to finish: %w", err)
 	}
-	return nil
-}
-
-// finishIdd commits any pending intent in the worktree, merges the idd
-// worktree branch into the requested target branch, and cleans up the
-// worktree. A clean exit lets the parent task workflow mark the IDD task
-// completed via the closure signal sent by the caller.
-func finishIdd(dCtx DevContext, input IddWorkflowInput, sig FinishIddSignal, state *IddState) error {
-	target := strings.TrimSpace(sig.TargetBranch)
-	if target == "" {
-		target = state.DefaultTargetBranch
-	}
-	if target == "" {
-		return fmt.Errorf("finish idd: no target branch specified")
-	}
-	if dCtx.Worktree == nil {
-		return fmt.Errorf("finish idd: no worktree associated with idd workflow")
-	}
-	if target == dCtx.Worktree.Name {
-		return fmt.Errorf("finish idd: target branch %q is the idd worktree branch", target)
-	}
-
-	if err := cancelPendingSubtasks(dCtx, state); err != nil {
-		return err
-	}
-
-	if _, err := commitIntent(dCtx, input.Title, true); err != nil {
-		return fmt.Errorf("failed to commit pending intent before merge: %w", err)
-	}
-
-	var mergeResult git.MergeActivityResult
-	err := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, *dCtx.EnvContainer, git.GitMergeParams{
-		SourceBranch:  dCtx.Worktree.Name,
-		TargetBranch:  target,
-		CommitMessage: fmt.Sprintf("Finish IDD: %s", input.Title),
-		MergeStrategy: git.MergeStrategyMerge,
-	}).Get(dCtx, &mergeResult)
-	if err != nil {
-		return fmt.Errorf("failed to merge idd worktree into %s: %w", target, err)
-	}
-	if mergeResult.HasConflicts {
-		return fmt.Errorf("merge conflicts encountered while finishing idd into %s; resolve them manually", target)
-	}
-
-	cleanupErr := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, *dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "IDD flow finished").Get(dCtx, nil)
-	if cleanupErr != nil {
-		workflow.GetLogger(dCtx).Warn("Failed to cleanup IDD worktree after finish merge", "Error", cleanupErr)
-	}
-
 	return nil
 }

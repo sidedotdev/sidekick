@@ -276,7 +276,6 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.POST("/:id/intent/start_subtask", ctrl.StartIntentSubtaskHandler)
 	flowRoutes.GET("/:id/intent/branches", ctrl.ListIntentBranchesHandler)
 	flowRoutes.GET("/:id/intent/finish_diff", ctrl.FinishIntentDiffHandler)
-	flowRoutes.POST("/:id/intent/finish", ctrl.FinishIntentHandler)
 	flowRoutes.POST("/:id/intent/auto_mode", ctrl.SetIddAutoModeHandler)
 	flowRoutes.POST("/:id/intent/run_orchestrator", ctrl.RunIddOrchestratorHandler)
 

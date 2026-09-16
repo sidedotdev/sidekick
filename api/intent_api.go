@@ -49,11 +49,6 @@ type StartIntentSubtaskRequest struct {
 	Update bool `json:"update"`
 }
 
-// FinishIntentRequest is the body for finishing the idd flow with a merge.
-type FinishIntentRequest struct {
-	TargetBranch string `json:"targetBranch"`
-}
-
 type SetIddAutoModeRequest struct {
 	Enabled bool `json:"enabled"`
 }
@@ -379,46 +374,6 @@ func (ctrl *Controller) FinishIntentDiffHandler(c *gin.Context) {
 		"target": target,
 		"diff":   out.String(),
 	})
-}
-
-// FinishIntentHandler signals the IddWorkflow to merge its worktree into the
-// requested target branch and exit.
-func (ctrl *Controller) FinishIntentHandler(c *gin.Context) {
-	workspaceId := c.Param("workspaceId")
-	flowId := c.Param("id")
-
-	var req FinishIntentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
-		return
-	}
-	if strings.TrimSpace(req.TargetBranch) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "targetBranch is required"})
-		return
-	}
-
-	if _, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId); err != nil {
-		if errors.Is(err, srv.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		}
-		return
-	}
-
-	err := ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameFinishIdd, dev.FinishIddSignal{TargetBranch: req.TargetBranch})
-	if err != nil {
-		var serviceErrNotFound *serviceerror.NotFound
-		if errors.As(err, &serviceErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
-			return
-		}
-		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to signal intent finish")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to finish intent: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Intent finish requested"})
 }
 
 // SetIddAutoModeHandler signals the IddWorkflow to enable or disable the

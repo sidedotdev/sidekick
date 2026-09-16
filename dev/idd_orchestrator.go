@@ -354,6 +354,21 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 				Planned:     args.Planned,
 				PromptOnly:  scope == IntentSubtaskScopePrompt,
 			}
+			// This turn may have been suspended in an LLM call while the user
+			// approved the merge, in which case the branch a sub-task would
+			// work off is about to be archived.
+			if state.Finishing {
+				if err := addToolCallResponse(dCtx.ExecContext, chatHistory, llm2.ToolResultBlock{
+					Name:       tc.Name,
+					ToolCallId: tc.Id,
+					IsError:    true,
+					Content:    llm2.TextContentBlocks("The flow is being finished and merged, so no new sub-tasks can be started."),
+				}); err != nil {
+					log.Error("Orchestrator: failed to append finishing tool result", "Error", err)
+				}
+				continue
+			}
+			state.beginSubtaskRunner()
 			// Reserve the sub-task entry synchronously so the very next
 			// iteration of this tool-call loop (and any subsequent
 			// orchestrator turn that may run before commitIntent yields
@@ -368,6 +383,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 			// possibly many minutes. Fire-and-forget via workflow.Go
 			// mirrors the user-initiated signal path in IddWorkflow.
 			workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
+				defer state.endSubtaskRunner()
 				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId, requestOrchestratorTurn)
 			})
 			startedAny = true
