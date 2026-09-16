@@ -289,41 +289,66 @@ func splitLargeFileDiff(fd diffanalysis.FileDiff, targetSize int) []DiffChunk {
 // splitHunkByLines splits an oversized hunk into multiple chunks by lines.
 func splitHunkByLines(filePath, header string, hunk diffanalysis.Hunk, targetSize int, startChunkIndex int) []DiffChunk {
 	var chunks []DiffChunk
-	chunkIndex := startChunkIndex
-	var sb strings.Builder
-	var added, removed int
+	var body strings.Builder
+	var added, removed, oldCount, newCount int
+	oldNext, newNext := hunk.OldStart, hunk.NewStart
+	// Empty ranges identify the preceding line rather than the next line.
+	if hunk.OldCount == 0 {
+		oldNext++
+	}
+	if hunk.NewCount == 0 {
+		newNext++
+	}
 
-	sb.WriteString(hunk.RawHeader)
-	sb.WriteString("\n")
+	fragmentHeader := func(oldLines, newLines int) string {
+		oldStart, newStart := oldNext, newNext
+		if oldLines == 0 {
+			oldStart--
+		}
+		if newLines == 0 {
+			newStart--
+		}
+		return fmt.Sprintf("@@ -%d,%d +%d,%d @@%s\n", oldStart, oldLines, newStart, newLines, hunk.Context)
+	}
+	flush := func() {
+		if body.Len() == 0 {
+			return
+		}
+		chunks = append(chunks, DiffChunk{
+			FilePath:     filePath,
+			Content:      header + fragmentHeader(oldCount, newCount) + body.String(),
+			ChunkIndex:   startChunkIndex + len(chunks),
+			LinesAdded:   added,
+			LinesRemoved: removed,
+		})
+		oldNext += oldCount
+		newNext += newCount
+		body.Reset()
+		added, removed, oldCount, newCount = 0, 0, 0, 0
+	}
 
 	for _, line := range hunk.Lines {
 		var lineStr string
+		var oldLines, newLines int
 		switch line.Type {
 		case diffanalysis.LineContext:
 			lineStr = " " + line.Content + "\n"
+			oldLines, newLines = 1, 1
 		case diffanalysis.LineAdded:
 			lineStr = "+" + line.Content + "\n"
+			newLines = 1
 		case diffanalysis.LineRemoved:
 			lineStr = "-" + line.Content + "\n"
+			oldLines = 1
 		}
 
-		if sb.Len()+len(lineStr)+len(header) > targetSize && sb.Len() > len(hunk.RawHeader)+1 {
-			chunks = append(chunks, DiffChunk{
-				FilePath:     filePath,
-				Content:      header + sb.String(),
-				ChunkIndex:   chunkIndex,
-				LinesAdded:   added,
-				LinesRemoved: removed,
-			})
-			chunkIndex++
-			sb.Reset()
-			sb.WriteString(hunk.RawHeader)
-			sb.WriteString("\n")
-			added = 0
-			removed = 0
+		size := len(header) + len(fragmentHeader(oldCount+oldLines, newCount+newLines)) + body.Len() + len(lineStr)
+		if size > targetSize {
+			flush()
 		}
-
-		sb.WriteString(lineStr)
+		body.WriteString(lineStr)
+		oldCount += oldLines
+		newCount += newLines
 		switch line.Type {
 		case diffanalysis.LineAdded:
 			added++
@@ -331,16 +356,7 @@ func splitHunkByLines(filePath, header string, hunk diffanalysis.Hunk, targetSiz
 			removed++
 		}
 	}
-
-	if sb.Len() > len(hunk.RawHeader)+1 {
-		chunks = append(chunks, DiffChunk{
-			FilePath:     filePath,
-			Content:      header + sb.String(),
-			ChunkIndex:   chunkIndex,
-			LinesAdded:   added,
-			LinesRemoved: removed,
-		})
-	}
+	flush()
 
 	return chunks
 }
@@ -754,12 +770,23 @@ func buildSummarizedOutput(rankedChunks []DiffChunk, symbolSummaries map[string]
 			strings.HasPrefix(content, "rename to ")
 	}
 
-	var diffContent strings.Builder
+	var fileOrder []string
+	fileHeaders := make(map[string]string)
+	selectedChunks := make(map[string][]DiffChunk)
 	writeDiffChunk := func(chunk DiffChunk, key chunkKey) bool {
-		chunkSize := len(chunk.Content) + 1 // +1 for newline
+		header := extractDiffHeader(chunk.Content)
+		content := strings.TrimPrefix(chunk.Content, header)
+		chunkSize := len(content) + 1
+		if _, ok := fileHeaders[chunk.FilePath]; !ok {
+			chunkSize += len(header)
+		}
 		if chunkSize <= remainingChars {
-			diffContent.WriteString(chunk.Content)
-			diffContent.WriteString("\n")
+			if _, ok := fileHeaders[chunk.FilePath]; !ok {
+				fileOrder = append(fileOrder, chunk.FilePath)
+				fileHeaders[chunk.FilePath] = header
+			}
+			chunk.Content = content
+			selectedChunks[chunk.FilePath] = append(selectedChunks[chunk.FilePath], chunk)
 			remainingChars -= chunkSize
 			expandedChunks[key] = true
 			return true
@@ -781,9 +808,9 @@ func buildSummarizedOutput(rankedChunks []DiffChunk, symbolSummaries map[string]
 
 		header := extractDiffHeader(chunk.Content)
 		headerSize := len(header) + 1
-		if header != "" && headerSize <= remainingChars {
-			diffContent.WriteString(header)
-			diffContent.WriteString("\n")
+		if _, ok := fileHeaders[chunk.FilePath]; !ok && header != "" && headerSize <= remainingChars {
+			fileOrder = append(fileOrder, chunk.FilePath)
+			fileHeaders[chunk.FilePath] = header
 			remainingChars -= headerSize
 		}
 		omittedChunks = append(omittedChunks, key)
@@ -836,10 +863,20 @@ func buildSummarizedOutput(rankedChunks []DiffChunk, symbolSummaries map[string]
 			totalAdded, totalRemoved, strings.Join(fileSummaries, ", "))
 	}
 
-	// Assemble final output
+	// Ranking determines selection, but source order keeps excerpts readable.
 	output.WriteString(summarySection)
 	output.WriteString("\n")
-	output.WriteString(diffContent.String())
+	for _, file := range fileOrder {
+		output.WriteString(fileHeaders[file])
+		chunks := selectedChunks[file]
+		sort.SliceStable(chunks, func(i, j int) bool {
+			return chunks[i].ChunkIndex < chunks[j].ChunkIndex
+		})
+		for _, chunk := range chunks {
+			output.WriteString(chunk.Content)
+			output.WriteString("\n")
+		}
+	}
 	if truncationNote != "" {
 		output.WriteString(truncationNote)
 	}
