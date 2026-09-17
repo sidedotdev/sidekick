@@ -139,8 +139,9 @@ func prepareVerifierMessages(messages []llm2.Message, index *verifierChatHistory
 				for _, result := range results[block.ToolUse.Id] {
 					for _, resultBlock := range result.Content {
 						for _, content := range resultBlock.ToolResult.Content {
-							if persisted_ai.GetContextType(resultBlock) != ContextTypeUserFeedback &&
-								persisted_ai.GetContextType(content) != ContextTypeUserFeedback {
+							if record.Name == getHelpOrInputTool.Name ||
+								(persisted_ai.GetContextType(resultBlock) != ContextTypeUserFeedback &&
+									persisted_ai.GetContextType(content) != ContextTypeUserFeedback) {
 								record.Result += content.Text
 							}
 						}
@@ -191,7 +192,11 @@ func prepareVerifierMessages(messages []llm2.Message, index *verifierChatHistory
 			result := ""
 			if record.IsTool {
 				toolPosition++
-				if toolPosition > toolCount-max(0, settings.RecentToolResultsCount) && settings.ToolResultMaxChars > 0 {
+				if record.Name == getHelpOrInputTool.Name {
+					if settings.HelpResultMaxChars > 0 {
+						result = verifierShorten(record.Result, min(fieldLimit, settings.HelpResultMaxChars), record.ID)
+					}
+				} else if toolPosition > toolCount-max(0, settings.RecentToolResultsCount) && settings.ToolResultMaxChars > 0 {
 					result = verifierShorten(record.Result, min(fieldLimit, settings.ToolResultMaxChars), record.ID)
 				}
 				if result == "" && record.Result != "" {

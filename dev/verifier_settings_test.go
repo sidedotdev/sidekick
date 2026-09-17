@@ -67,8 +67,34 @@ func verifierFlagValues(settings VerifierSettings) fflag.EvaluateFlagsOutput {
 		},
 		IntValues: map[string]int{
 			ReviewToolResultMaxChars:     settings.ToolResultMaxChars,
+			ReviewHelpResultMaxChars:     settings.HelpResultMaxChars,
 			ReviewRecentToolResultsCount: settings.RecentToolResultsCount,
 			ReviewChatHistoryMaxSize:     settings.ChatHistoryMaxSize,
 		},
 	}
+}
+
+func TestVerifierHelpResultLimitFlag(t *testing.T) {
+	t.Parallel()
+
+	input := verifierFlagsInput("flow", "coding", "judge")
+	require.Equal(t, 2000, input.IntFlags[ReviewHelpResultMaxChars])
+	for _, tc := range []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"custom", 3000, 3000},
+		{"disabled", 0, 0},
+		{"negative falls back", -1, 2000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			settings := verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{
+				IntValues: map[string]int{ReviewHelpResultMaxChars: tc.value},
+			})
+			require.Equal(t, tc.want, settings.HelpResultMaxChars)
+		})
+	}
+	require.Equal(t, 2000, verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{}).HelpResultMaxChars)
 }
