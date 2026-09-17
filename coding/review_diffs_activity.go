@@ -59,6 +59,9 @@ func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, par
 		return GenerateReviewDiffsResult{}, fmt.Errorf("start point is required to generate review diffs")
 	}
 
+	// Git -w can emit modified whitespace as unchanged base context. Such
+	// patches cannot safely serve as the baseline of a later interdiff.
+	params.IgnoreWhitespace = false
 	fullDiff, err := fullReviewDiff(ctx, params)
 	if err != nil {
 		return GenerateReviewDiffsResult{}, err

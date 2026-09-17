@@ -464,3 +464,47 @@ func TestGenerateReviewDiffsActivity_Reversions(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateReviewDiffsActivity_WhitespaceChangesPreserveBaseline(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	createFileAndCommit(t, repoDir, "fields.txt", "first int\nsecond int\n", "initial commit")
+	runGit(t, repoDir, "checkout", "-b", "feature")
+	envContainer := newReviewDiffsTestEnv(t, ctx, repoDir)
+	ca := &CodingActivities{}
+	review := func(prior string, ignoreWhitespace bool) GenerateReviewDiffsResult {
+		t.Helper()
+		result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
+			EnvContainer:     envContainer,
+			StartPoint:       "main",
+			PriorReviewDiff:  prior,
+			IgnoreWhitespace: ignoreWhitespace,
+		})
+		require.NoError(t, err)
+		require.Empty(t, result.SinceDiffError)
+		return result
+	}
+
+	writeAndStage(t, repoDir, "fields.txt", "first int\nsecond int\nthird int\n")
+	first := review("", false)
+	writeAndStage(t, repoDir, "fields.txt", "first  int\nsecond int\nthird int\n")
+	second := review(first.FullDiff, true)
+	require.Contains(t, second.FullDiff, "-first int")
+	require.Contains(t, second.FullDiff, "+first  int")
+	require.Contains(t, second.SinceDiff, "-first int")
+	require.Contains(t, second.SinceDiff, "+first  int")
+
+	patchPath := filepath.Join(t.TempDir(), "since.patch")
+	require.NoError(t, os.WriteFile(patchPath, []byte(second.SinceDiff), 0600))
+	writeAndStage(t, repoDir, "fields.txt", "first int\nsecond int\nthird int\n")
+	runGit(t, repoDir, "apply", "--index", patchPath)
+	actual, err := os.ReadFile(filepath.Join(repoDir, "fields.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "first  int\nsecond int\nthird int\n", string(actual))
+
+	third := review(second.FullDiff, false)
+	require.Equal(t, second.FullDiff, third.FullDiff)
+	require.Empty(t, third.SinceDiff)
+}

@@ -319,3 +319,61 @@ func TestInterdiffSuccessiveFullReviewBaselines(t *testing.T) {
 	assert.NotContains(t, sinceSecondReview, "+var first = 1")
 	assert.NotContains(t, sinceSecondReview, "+var second = 2")
 }
+
+func TestRestoreInterdiffTrailingContextRequiresMatchingPostImages(t *testing.T) {
+	t.Parallel()
+
+	const priorDiff = `diff --git a/fields.txt b/fields.txt
+--- a/fields.txt
++++ b/fields.txt
+@@ -1,2 +1,3 @@
+ first int
+ second int
++third int
+`
+	const currentDiff = `diff --git a/fields.txt b/fields.txt
+--- a/fields.txt
++++ b/fields.txt
+@@ -1,2 +1,3 @@
+-first int
++first  int
+ second int
++third int
+`
+	const incomplete = `diff --git a/fields.txt b/fields.txt
+--- a/fields.txt
++++ b/fields.txt
+@@ -1,3 +1,3 @@
+-first int
++first  int
+ second int
+`
+	for _, tc := range []struct {
+		name    string
+		current string
+		section string
+		recover bool
+	}{
+		{"common trailing context", currentDiff, incomplete, true},
+		{"different trailing content", strings.ReplaceAll(currentDiff, "third int", "other int"), incomplete, false},
+		{"incorrect emitted content", currentDiff, strings.ReplaceAll(incomplete, "+first  int", "+wrong int"), false},
+		{"missing post-image evidence", currentDiff, strings.ReplaceAll(incomplete, "-1,3 +1,3", "-1,4 +1,4"), false},
+		{"unequal missing counts", currentDiff, strings.ReplaceAll(incomplete, "-1,3 +1,3", "-1,3 +1,2"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prior, err := parseForInterdiff(priorDiff)
+			require.NoError(t, err)
+			current, err := parseForInterdiff(tc.current)
+			require.NoError(t, err)
+			got := restoreInterdiffTrailingContext(tc.section, prior[0], current[0])
+			if !tc.recover {
+				require.Equal(t, tc.section, got)
+				return
+			}
+			require.Equal(t, incomplete+" third int\n", got)
+			_, err = parseForInterdiff(got)
+			require.NoError(t, err)
+		})
+	}
+}
