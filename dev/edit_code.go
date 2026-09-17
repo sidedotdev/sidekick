@@ -1028,6 +1028,10 @@ func feedbackContextType(feedbackType string, disableHumanInTheLoop bool) string
 	switch feedbackType {
 	case FeedbackTypeApplyError:
 		return ContextTypeEditBlockReport
+	case FeedbackTypeTestFailure:
+		return ContextTypeTestResult
+	case FeedbackTypeAutoReview:
+		return ContextTypeAutoReviewFeedback
 	case FeedbackTypePause, FeedbackTypeUserGuidance:
 		if !disableHumanInTheLoop {
 			return ContextTypeUserFeedback
