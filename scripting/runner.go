@@ -33,6 +33,8 @@ type Input struct {
 	// Functions supplies explicit event-specific global operations.
 	Functions map[string]Operation
 	Redactor  *Redactor
+
+	commandEmissions *commandEmissions
 }
 
 type Result struct {
@@ -187,6 +189,12 @@ func Run(parent context.Context, input Input) (result Result, runErr error) {
 	if err := vm.Set("console", console); err != nil {
 		failure = "cannot install diagnostics"
 		return
+	}
+	if input.commandEmissions != nil {
+		if err := vm.Set("emitCommandEnvironment", input.commandEmissions.bind(vm)); err != nil {
+			failure = "cannot install command environment emitter"
+			return
+		}
 	}
 	for name, operation := range input.Functions {
 		if !bindingName.MatchString(name) || name == "__proto__" || operation == nil || vm.Get(name) != nil {
