@@ -18,9 +18,17 @@ import (
 )
 
 func TestOpenAIProvider_Unauthorized(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	mockSecretManager := &secret_manager.MockSecretManager{}
-	provider := OpenAIProvider{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`))
+	}))
+	defer upstream.Close()
+	provider := OpenAIProvider{BaseURL: upstream.URL}
 
 	messages := []Message{
 		{
@@ -337,7 +345,6 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	provider := OpenAIProvider{}
 
 	mockTool := &common.Tool{
 		Name:        "get_current_weather",
@@ -358,7 +365,7 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	provider, secretManager := requireOpenAIChatIntegration(t, OpenAIProvider{})
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -518,7 +525,6 @@ func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	provider := OpenAIProvider{}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
@@ -539,7 +545,7 @@ func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	provider, secretManager := requireOpenAIChatIntegration(t, OpenAIProvider{})
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -594,7 +600,6 @@ func TestOpenAIProvider_ToolResultImageIntegration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	provider := OpenAIProvider{}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
@@ -644,7 +649,7 @@ func TestOpenAIProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	provider, secretManager := requireOpenAIChatIntegration(t, OpenAIProvider{})
 
 	options := Options{
 		ModelConfig: common.ModelConfig{

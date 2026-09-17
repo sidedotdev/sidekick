@@ -25,6 +25,10 @@ type OpenAIProvider struct {
 	DefaultModel  string
 	AuthType      common.ProviderAuthType
 	CustomHeaders map[string]string
+	// AuthToken authenticates requests directly instead of resolving provider
+	// credentials from the secret manager, for callers that already hold a
+	// bearer credential for BaseURL.
+	AuthToken string
 }
 
 func resolveOpenAIReasoningEffort(effort, model string) string {
@@ -64,7 +68,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 
 	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
-	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
+	credentials, err := openAIRequestAuth(p.AuthToken, request.SecretManager, providerNameNormalized, authType)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +84,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
 	}
-	if credentials.useOAuth {
+	if credentials.useOAuth && credentials.accountID != "" {
 		clientOptions = append(clientOptions, option.WithHeader("ChatGPT-Account-Id", credentials.accountID))
 	}
 	for k, v := range p.CustomHeaders {

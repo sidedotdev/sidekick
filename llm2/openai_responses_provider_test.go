@@ -26,9 +26,17 @@ type getCurrentWeather struct {
 }
 
 func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	mockSecretManager := &secret_manager.MockSecretManager{}
-	provider := OpenAIResponsesProvider{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`))
+	}))
+	defer upstream.Close()
+	provider := OpenAIResponsesProvider{BaseURL: upstream.URL}
 
 	messages := []Message{
 		{
@@ -71,9 +79,6 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	// Keep the default auth type so these tests work with either available credential type.
-	provider := OpenAIResponsesProvider{}
-
 	fmt.Println("\n=== OpenAI Responses Provider Integration Test ===")
 
 	mockTool := &common.Tool{
@@ -94,7 +99,8 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireOpenAIIntegrationCredentials(t)
+	// Keep the default auth type so these tests work with either available credential type.
+	provider, secretManager := requireOpenAIResponsesIntegration(t, OpenAIResponsesProvider{})
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -269,9 +275,6 @@ func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	// Keep the default auth type so these tests work with either available credential type.
-	provider := OpenAIResponsesProvider{}
-
 	fmt.Println("\n=== OpenAI Responses Reasoning Test ===")
 
 	messages := []Message{
@@ -286,7 +289,8 @@ func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 		},
 	}
 
-	secretManager := requireOpenAIIntegrationCredentials(t)
+	// Keep the default auth type so these tests work with either available credential type.
+	provider, secretManager := requireOpenAIResponsesIntegration(t, OpenAIResponsesProvider{})
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -568,9 +572,6 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	// Keep the default auth type so these tests work with either available credential type.
-	provider := OpenAIResponsesProvider{}
-
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
 
@@ -628,7 +629,8 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireOpenAIIntegrationCredentials(t)
+	// Keep the default auth type so these tests work with either available credential type.
+	provider, secretManager := requireOpenAIResponsesIntegration(t, OpenAIResponsesProvider{})
 
 	options := Options{
 		ModelConfig: common.ModelConfig{

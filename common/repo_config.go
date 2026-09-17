@@ -85,6 +85,8 @@ type RepoConfig struct {
 	// container.
 	PortForwards []PortForwardConfig `toml:"port_forwards,omitempty"`
 
+	CredentialProxies map[string]CredentialProxyConfig `toml:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
+
 	DevPodConfig    DevPodEnvConfig    `toml:"devpod,omitempty"`
 	OpenShellConfig OpenShellEnvConfig `toml:"openshell,omitempty"`
 	ModalConfig     ModalEnvConfig     `toml:"modal,omitempty"`
@@ -116,7 +118,8 @@ type DevPodEnvConfig struct {
 	// WorkspaceId overrides the workspace name DevPod derives from the
 	// repo directory basename. When empty, the repo directory's basename is
 	// used, matching DevPod's default behavior.
-	WorkspaceId string `toml:"workspace_id,omitempty"`
+	WorkspaceId       string   `toml:"workspace_id,omitempty"`
+	CredentialProxies []string `toml:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
 }
 
 // OpenShellEnvConfig holds configuration specific to the OpenShell environment type.
@@ -124,7 +127,8 @@ type OpenShellEnvConfig struct {
 	// PrebuildCommand is a shell command executed locally before sandbox creation.
 	PrebuildCommand string `toml:"prebuild_command,omitempty"`
 	// From is passed as the --from flag to "openshell sandbox create".
-	From string `toml:"from,omitempty"`
+	From              string   `toml:"from,omitempty"`
+	CredentialProxies []string `toml:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
 }
 
 // ModalVolumeMount attaches a named Modal Volume at an absolute path inside
@@ -200,7 +204,8 @@ type ModalEnvConfig struct {
 	// the sandbox filesystem, whose snapshots are tied to a single sandbox
 	// lineage, volumes are reachable from any sandbox that mounts them, so
 	// data placed there survives sandbox recreation.
-	Volumes []ModalVolumeMount `toml:"volumes,omitempty" json:"volumes,omitempty"`
+	Volumes           []ModalVolumeMount `toml:"volumes,omitempty" json:"volumes,omitempty"`
+	CredentialProxies []string           `toml:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
 }
 
 // ModalDefaultCPU and ModalDefaultMemoryMiB are the effective resource

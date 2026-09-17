@@ -712,3 +712,51 @@ func (s *RunTestsTestSuite) TestGracefullyHandlePausedTestErrorVersioning() {
 		})
 	}
 }
+
+func (s *RunTestsTestSuite) TestVerificationCredentialProxyActivity() {
+	s.checkVerificationCredentialProxyActivity(1)
+}
+
+func (s *RunTestsTestSuite) TestVerificationCredentialProxyLegacyActivity() {
+	s.checkVerificationCredentialProxyActivity(workflow.DefaultVersion)
+}
+
+func (s *RunTestsTestSuite) checkVerificationCredentialProxyActivity(version workflow.Version) {
+	s.envContainer = env.EnvContainer{Env: &env.ModalEnv{}}
+	s.devContext.RepoConfig.TestCommands = []common.CommandConfig{
+		{WorkingDir: "integration", Command: "run inference tests"},
+	}
+	s.devContext.RepoConfig.ModalConfig.CredentialProxies = []string{"inference"}
+	s.env.OnGetVersion("verification-credential-proxy", workflow.DefaultVersion, 2).Return(version)
+	if version >= 2 {
+		s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+			return input.RelativeWorkingDir == "integration" &&
+				len(input.EnvVars) == 0 &&
+				len(input.Args) == 3 &&
+				input.Args[2] == "run inference tests" &&
+				input.Provisioning != nil &&
+				input.Provisioning.Kind == "credential-proxy" &&
+				input.Provisioning.Scope != ""
+		})).Return(env.EnvRunCommandActivityOutput{}, nil).Once()
+	} else if version == workflow.DefaultVersion {
+		s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+			Return(env.EnvRunCommandActivityOutput{}, nil).Once()
+	} else {
+		s.env.OnActivity(CredentialProxyCommandActivity, mock.Anything, mock.MatchedBy(func(input CredentialProxyCommandInput) bool {
+			return input.Command.RelativeWorkingDir == "integration" &&
+				len(input.Command.EnvVars) == 0 &&
+				len(input.Command.Args) == 3 &&
+				input.Command.Args[2] == "run inference tests" &&
+				len(input.RepoConfig.ModalConfig.CredentialProxies) == 1
+		})).Return(env.EnvRunCommandActivityOutput{}, nil).Once()
+	}
+	s.env.ExecuteWorkflow(s.wrapperWorkflow)
+	s.NoError(s.env.GetWorkflowError())
+	var result TestResult
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.True(result.TestsPassed)
+}
+
+func (s *RunTestsTestSuite) TestVerificationCommandProvisioning() {
+	s.checkVerificationCredentialProxyActivity(2)
+}

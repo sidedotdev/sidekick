@@ -25,7 +25,18 @@ func openAICredentialsForRequest(
 	apiKeySecretName := fmt.Sprintf("%s_API_KEY", providerName)
 	oauthSecretName := openai_oauth.SecretName
 
-	switch common.NormalizeProviderAuthType(string(authType)) {
+	var oauthCredentials openAIRequestCredentials
+	oauthLoaded := false
+	resolved, err := openai_oauth.ResolveAuthType(authType, func() error {
+		var lookupErr error
+		oauthCredentials, lookupErr = getOpenAIOAuthCredentials(secretManager, oauthSecretName)
+		oauthLoaded = lookupErr == nil
+		return lookupErr
+	})
+	if err != nil {
+		return openAIRequestCredentials{}, err
+	}
+	switch resolved {
 	case common.ProviderAuthTypeAPI:
 		token, err := secretManager.GetSecret(apiKeySecretName)
 		if err != nil {
@@ -36,6 +47,9 @@ func openAICredentialsForRequest(
 			authType: common.ProviderAuthTypeAPI,
 		}, nil
 	case common.ProviderAuthTypeSubscription:
+		if oauthLoaded {
+			return oauthCredentials, nil
+		}
 		credentials, err := getOpenAIOAuthCredentials(secretManager, oauthSecretName)
 		if err != nil {
 			if errors.Is(err, secret_manager.ErrSecretNotFound) {
@@ -44,25 +58,35 @@ func openAICredentialsForRequest(
 			return openAIRequestCredentials{}, err
 		}
 		return credentials, nil
-	case common.ProviderAuthTypeAny:
-		credentials, err := getOpenAIOAuthCredentials(secretManager, oauthSecretName)
-		if err == nil {
-			return credentials, nil
-		}
-		if !errors.Is(err, secret_manager.ErrSecretNotFound) {
-			return openAIRequestCredentials{}, err
-		}
-
-		token, err := secretManager.GetSecret(apiKeySecretName)
-		if err != nil {
-			return openAIRequestCredentials{}, err
-		}
-		return openAIRequestCredentials{
-			token:    token,
-			authType: common.ProviderAuthTypeAPI,
-		}, nil
 	default:
 		return openAIRequestCredentials{}, fmt.Errorf("unsupported OpenAI auth type: %s", authType)
+	}
+}
+
+// openAIRequestAuth resolves the credentials one request authenticates with.
+// An auth token configured on a provider is a credential the caller already
+// holds for the endpoint that provider points at, e.g. a gateway that injects
+// the real provider credentials; no secret is read then, and the configured
+// auth type alone decides how the request is shaped. That type must be
+// explicit, since there is no credential document to infer it from.
+func openAIRequestAuth(
+	authToken string,
+	secretManager secret_manager.SecretManager,
+	providerName string,
+	authType common.ProviderAuthType,
+) (openAIRequestCredentials, error) {
+	if authToken == "" {
+		return openAICredentialsForRequest(secretManager, providerName, authType)
+	}
+	switch normalized := common.NormalizeProviderAuthType(string(authType)); normalized {
+	case common.ProviderAuthTypeAPI, common.ProviderAuthTypeSubscription:
+		return openAIRequestCredentials{
+			token:    authToken,
+			useOAuth: normalized == common.ProviderAuthTypeSubscription,
+			authType: normalized,
+		}, nil
+	default:
+		return openAIRequestCredentials{}, fmt.Errorf("a configured OpenAI auth token requires auth type %q or %q, got: %s", common.ProviderAuthTypeAPI, common.ProviderAuthTypeSubscription, authType)
 	}
 }
 

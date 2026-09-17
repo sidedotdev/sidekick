@@ -55,7 +55,7 @@ type AnthropicProvider struct {
 // Compatible proxies are opted out by default since their backend may not
 // support Anthropic builtin tools.
 func (p AnthropicProvider) webSearchToolEnabled() bool {
-	return !p.AnthropicCompatible || slices.Contains(p.BuiltinTools, webSearchToolName)
+	return !p.AnthropicCompatible || slices.Contains(p.BuiltinTools, WebSearchToolName)
 }
 
 func anthropicBetaHeader(model string, useOAuth bool, tools []*common.Tool, assumeAnthropicModelNames, fastMode bool) string {
@@ -573,7 +573,7 @@ func parseAnthropicVersion(model string) (major, minor int, ok bool) {
 func anthropicWebSearchResultToBlock(resultBlock anthropic.WebSearchToolResultBlock) *BuiltinToolResultBlock {
 	result := &BuiltinToolResultBlock{
 		ToolCallId: resultBlock.ToolUseID,
-		Name:       webSearchToolName,
+		Name:       WebSearchToolName,
 	}
 	if resultBlock.Content.ErrorCode != "" {
 		result.IsError = true

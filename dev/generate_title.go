@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"sidekick/common"
+	"sidekick/credential_proxy/llmproxy"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -97,6 +98,7 @@ func (ima *DevAgentManagerActivities) GenerateTaskTitle(ctx context.Context, inp
 	if err != nil {
 		return GenerateTitleOutput{}, fmt.Errorf("failed to create LLM provider: %w", err)
 	}
+	provider = llmproxy.Wrap(provider)
 
 	secrets := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
 		&secret_manager.LocalConfigSecretManager{},

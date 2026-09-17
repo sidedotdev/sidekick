@@ -41,8 +41,9 @@ func RunCommandActivity(ctx context.Context, input RunCommandActivityInput) (Run
 	filteredEnvs := utils.Filter(os.Environ(), func(envVar string) bool {
 		isSide := strings.HasPrefix(envVar, "SIDE_")
 		if isSide {
+			name, _, _ := strings.Cut(envVar, "=")
 			l := logger.Get()
-			l.Debug().Msg("Filtered envVar with \"SIDE_\" prefix: " + envVar)
+			l.Debug().Str("name", name).Msg("Filtered SIDE_ environment variable")
 		}
 		return !isSide
 	})
