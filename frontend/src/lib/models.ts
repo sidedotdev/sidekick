@@ -289,6 +289,7 @@ export type Llm2ContentBlock =
   | Llm2ToolResultBlock
   | Llm2ReasoningBlock
   | Llm2RefusalBlock
+  | Llm2BuiltinToolUseBlock
 
 export type Llm2Message = {
   role: string
@@ -377,4 +378,14 @@ export interface ScriptPermissionEvaluation {
   outcome: PermissionResult
   commands?: CommandPermissionEvaluation[]
   factors?: PermissionFactor[]
+}
+
+export type Llm2BuiltinToolUseBlock = Llm2ContentBlockBase & {
+  type: 'builtin_tool_use'
+  builtinToolUse: {
+    id: string
+    name: string
+    arguments: string
+    status?: string
+  }
 }
