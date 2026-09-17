@@ -1315,7 +1315,13 @@ func withRestoreNotice(output EnvRunCommandOutput, notice string) EnvRunCommandO
 const maxModalRecoveryRounds = 2
 
 func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
-	return e.RunCommand(ctx, EnvRunCommandInput{
+	// Guard credentials live in the sandbox process environment, which
+	// Modal exec inherits but SSH sessions do not.
+	run := e.runModalAPICommand
+	if run == nil {
+		run = e.runAPICommandInner
+	}
+	return run(ctx, EnvRunCommandInput{
 		Command: "/usr/local/bin/sidekick-snapshot",
 	})
 }
