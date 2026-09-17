@@ -184,7 +184,6 @@
               <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
                 <span class="subtask-meta">
                   <span v-if="task.title" class="subtask-title">{{ task.title }}</span>
-                  <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
                   <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
                 </span>
               </button>
@@ -211,7 +210,6 @@
                 <button type="button" class="subtask-row" @click="openSubtask(task.flowId)">
                   <span class="subtask-meta">
                     <span v-if="task.title" class="subtask-title">{{ task.title }}</span>
-                    <span class="subtask-commit">{{ task.commit ? task.commit.slice(0, 7) : 'pending' }}</span>
                     <span class="subtask-status" :class="statusClass(task.status)">{{ task.status || 'unknown' }}</span>
                   </span>
                 </button>
@@ -225,7 +223,7 @@
           <ul class="clarify-list">
             <li v-for="(item, idx) in clarifications" :key="`${item.subtaskFlowId}-${idx}`" class="clarify-card">
               <p class="clarify-question">{{ item.question }}</p>
-              <button type="button" class="clarify-link" @click="openSubtask(item.subtaskFlowId)">View sub-task</button>
+              <button type="button" class="clarify-link" @click="openSubtask(item.subtaskFlowId)">{{ item.subtaskFlowId === flowId ? 'View request' : 'View sub-task' }}</button>
             </li>
           </ul>
         </section>
@@ -296,7 +294,7 @@
               class="clarify-card"
             >
               <p class="clarify-question">{{ item.question }}</p>
-              <button type="button" class="clarify-link" @click="openSubtask(item.subtaskFlowId)">View sub-task</button>
+              <button type="button" class="clarify-link" @click="openSubtask(item.subtaskFlowId)">{{ item.subtaskFlowId === flowId ? 'View request' : 'View sub-task' }}</button>
             </li>
           </ul>
         </section>
@@ -344,7 +342,7 @@ import FlowView from './FlowView.vue'
 import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
 import DevRunControls from '../components/DevRunControls.vue'
 import { formatMarkdown } from '../lib/markdown_format'
-import type { Flow } from '../lib/models'
+import type { Flow, FlowAction } from '../lib/models'
 
 const FORMAT_WRAP_COLUMN = 80
 
@@ -361,7 +359,6 @@ interface FileNode extends IntentFileEntry {
 interface IddSubtask {
   flowId: string
   title?: string
-  commit: string
   status: string
   createdAt?: string
   updatedAt?: string
@@ -503,7 +500,7 @@ const fetchFlow = async () => {
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 const shortcutLabel = isMac ? '⌘I' : 'Ctrl+I'
 
-let iddStateTimer: ReturnType<typeof setInterval> | null = null
+let canvasStateTimer: ReturnType<typeof setInterval> | null = null
 
 const LEFT_DEFAULT_REM = 16
 const RIGHT_DEFAULT_REM = 18
@@ -686,27 +683,69 @@ const visibleSubtasks = computed(() =>
 )
 const showCollapsedCompleted = ref(false)
 
-const fetchIddState = async () => {
+type CanvasFlow = Omit<Flow, 'created' | 'updated'> & {
+  created?: string
+  updated?: string
+}
+
+let fetchingCanvasState = false
+const fetchCanvasState = async () => {
+  if (fetchingCanvasState) return
+  fetchingCanvasState = true
   try {
-    const res = await fetch(`${flowBase.value}/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: 'idd_state' }),
-    })
-    if (!res.ok) return
-    const data = await res.json()
-    const result = data.result ?? {}
-    subtasks.value = (result.subtasks ?? []) as IddSubtask[]
-    clarifications.value = (result.clarifications ?? []) as IddClarification[]
-    nudges.value = (result.nudges ?? []) as IddNudge[]
-    finishWorkflowError.value = (result.finishError ?? '') as string
-    const defaultTarget = (result.defaultTargetBranch ?? '') as string
-    if (defaultTarget) finishDefaultBranch.value = defaultTarget
-    if (typeof result.autoMode === 'boolean' && !autoModeUpdating.value) {
-      autoMode.value = result.autoMode
+    if (!flow.value?.parentId) await fetchFlow()
+    const taskId = flow.value?.parentId
+    if (!taskId) return
+    const res = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks/${taskId}/flows`)
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json() as { flows: CanvasFlow[] }
+    const flows = data.flows ?? []
+    const iddFlow = flows.find((item) => item.id === flowId.value)
+    subtasks.value = flows.filter((item) => item.id !== flowId.value).map((item) => ({
+      flowId: item.id,
+      title: item.title,
+      status: item.status,
+      createdAt: item.created,
+      updatedAt: item.updated,
+    }))
+    const metadata = iddFlow?.metadata
+    nudges.value = (metadata?.nudges ?? []) as IddNudge[]
+    if (typeof metadata?.autoMode === 'boolean' && !autoModeUpdating.value) {
+      autoMode.value = metadata.autoMode
     }
+
+    const questionFlowIds = [
+      flowId.value,
+      ...subtasks.value.filter((item) => item.status === 'blocked').map((item) => item.flowId),
+    ]
+    const questions = await Promise.all(questionFlowIds.map(async (id) => {
+      const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${id}/actions`)
+      if (!response.ok) throw new Error(await response.text())
+      const { flowActions = [] } = await response.json() as { flowActions: FlowAction[] }
+      if (id === flowId.value) {
+        const approval = flowActions.find((action) =>
+          action.actionType === 'user_request.approve.merge' && action.actionStatus === 'pending',
+        )
+        finishDefaultBranch.value = approval?.actionParams.mergeApprovalInfo?.defaultTargetBranch ?? ''
+        if (approval?.actionParams.mergeError) {
+          finishError.value = approval.actionParams.mergeError
+        }
+      }
+      return flowActions.filter((action) =>
+        action.actionStatus === 'pending'
+        && (action.isHumanAction || action.isCallbackAction)
+        && (action.actionType === 'user_request' || action.actionType.startsWith('user_request.'))
+        && action.actionType !== 'user_request.approve.merge',
+      ).map((action) => ({
+        subtaskFlowId: id,
+        question: String(action.actionParams.requestContent ?? ''),
+      }))
+    }))
+    clarifications.value = questions.flat()
   } catch (e) {
-    console.error('Failed to query intent state:', e)
+    console.error('Failed to fetch intent canvas state:', e)
+  } finally {
+    fetchingCanvasState = false
   }
 }
 
@@ -789,7 +828,7 @@ const startSubtask = async () => {
       body: JSON.stringify({ update: subtasks.value.length > 0 }),
     })
     if (!res.ok) throw new Error(await res.text())
-    await fetchIddState()
+    await fetchCanvasState()
     await refreshCommittedBaseline()
   } catch (e) {
     console.error('Failed to start intent sub-task:', e)
@@ -811,7 +850,7 @@ const cancelSubtask = async (task: IddSubtask) => {
       method: 'POST',
     })
     if (!res.ok) throw new Error(await res.text())
-    await fetchIddState()
+    await fetchCanvasState()
   } catch (e) {
     console.error('Failed to cancel intent sub-task:', e)
   }
@@ -832,11 +871,6 @@ const finishDiff = ref('')
 const finishLoading = ref(false)
 const finishing = ref(false)
 const finishError = ref('')
-// finishWorkflowError mirrors IddState.finishError: a failure raised by the IDD
-// workflow itself while finishing (merge conflicts, cleanup, etc.), which the
-// finish panel surfaces prominently like FlowView/SubflowContainer do for failed
-// flows. Distinct from finishError, which also covers client-side request errors.
-const finishWorkflowError = ref('')
 
 watch(finishTargetBranch, (value, prev) => {
   if (!showFinishDialog.value) return
@@ -869,7 +903,6 @@ const loadFinishDiff = async () => {
 
 const openFinishDialog = async () => {
   finishError.value = ''
-  finishWorkflowError.value = ''
   finishDiff.value = ''
   showFinishDialog.value = true
   if (finishDefaultBranch.value && !finishTargetBranch.value) {
@@ -889,7 +922,6 @@ const confirmFinish = async () => {
   if (!finishTargetBranch.value || finishing.value) return
   finishing.value = true
   finishError.value = ''
-  finishWorkflowError.value = ''
   try {
     const res = await fetch(`${apiBase.value}/finish`, {
       method: 'POST',
@@ -902,9 +934,8 @@ const confirmFinish = async () => {
     // either reports a finish error or the flow completes. On success the user
     // is redirected to the kanban board.
     while (showFinishDialog.value) {
-      await fetchIddState()
-      if (finishWorkflowError.value) {
-        finishError.value = finishWorkflowError.value
+      await fetchCanvasState()
+      if (finishError.value) {
         return
       }
       await fetchFlow()
@@ -1152,8 +1183,8 @@ onMounted(async () => {
   await fetchFiles()
   loading.value = false
   await focusFirstFile()
-  await fetchIddState()
-  iddStateTimer = setInterval(fetchIddState, 5000)
+  await fetchCanvasState()
+  canvasStateTimer = setInterval(fetchCanvasState, 5000)
   nowTickTimer = setInterval(() => {
     nowTick.value = Date.now()
   }, 60000)
@@ -1163,7 +1194,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
   if (savedTimer) clearTimeout(savedTimer)
-  if (iddStateTimer) clearInterval(iddStateTimer)
+  if (canvasStateTimer) clearInterval(canvasStateTimer)
   if (nowTickTimer) clearInterval(nowTickTimer)
   cancelOrchestratorIdleTimer()
   window.removeEventListener('keydown', handleShortcut)

@@ -35,10 +35,6 @@ const SignalNameSetIddAutoMode = "setIddAutoMode"
 // intent has settled, keeping the heuristic out of the workflow.
 const SignalNameRunIddOrchestrator = "runIddOrchestrator"
 
-// QueryNameIddState returns the current IddState, including ongoing sub-tasks
-// and any clarification questions surfaced by those sub-tasks.
-const QueryNameIddState = "idd_state"
-
 type IddOptions struct {
 	EnvType           env.EnvType            `json:"envType,omitempty" default:"local"`
 	RepoMode          env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
@@ -115,15 +111,6 @@ type IddSubtask struct {
 	DispatchedDiff string `json:"-"`
 }
 
-// IddClarification is a question raised by a sub-task that blocks its progress
-// until the user answers it. This is the legacy operational channel inherited
-// from the task workflow's RequestForUser flow; orchestrator-surfaced
-// non-blocking food-for-thought lives in IddState.Nudges instead.
-type IddClarification struct {
-	SubtaskFlowId string `json:"subtaskFlowId"`
-	Question      string `json:"question"`
-}
-
 // IddNudge is a short, non-blocking thought the background orchestrator
 // surfaces about the current intent: "have you considered…?", "this looks
 // underspecified", etc. Nudges never block work; they're advisory hints the
@@ -134,14 +121,13 @@ type IddNudge struct {
 	AnchorText string `json:"anchorText,omitempty"`
 }
 
-// IddState is the query response describing an IddWorkflow's progress.
+// IddState coordinates the IDD workflow's coroutines.
 type IddState struct {
 	// DefaultTargetBranch is the branch the idd worktree was created off of,
 	// surfaced so the finish-flow UI can default its merge target.
-	DefaultTargetBranch string             `json:"defaultTargetBranch"`
-	Subtasks            []IddSubtask       `json:"subtasks"`
-	Clarifications      []IddClarification `json:"clarifications"`
-	Nudges              []IddNudge         `json:"nudges"`
+	DefaultTargetBranch string       `json:"defaultTargetBranch"`
+	Subtasks            []IddSubtask `json:"subtasks"`
+	Nudges              []IddNudge   `json:"nudges"`
 	// AutoMode indicates whether the background orchestrator will auto-create
 	// sub-tasks when intent edits settle in the worktree.
 	AutoMode bool `json:"autoMode"`
@@ -206,19 +192,12 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	// Register the idd_state query handler eagerly so the canvas UI can poll
-	// state even before SetupDevContext finishes (or if it fails). The handler
-	// closes over a pointer so later mutations are visible.
 	autoModeDefaultVersion := workflow.GetVersion(ctx, "idd-auto-mode-default-on", workflow.DefaultVersion, 1)
 	state := &IddState{
-		Subtasks:       []IddSubtask{},
-		Clarifications: []IddClarification{},
-		Nudges:         []IddNudge{},
-		AutoMode:       autoModeDefaultVersion >= 1,
+		Subtasks: []IddSubtask{},
+		Nudges:   []IddNudge{},
+		AutoMode: autoModeDefaultVersion >= 1,
 	}
-	_ = workflow.SetQueryHandler(ctx, QueryNameIddState, func() (IddState, error) {
-		return *state, nil
-	})
 
 	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), string(input.RepoMode), input.StartBranch, input.Title, input.ConfigOverrides)
 	if err != nil {
@@ -248,17 +227,8 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 
 	state.DefaultTargetBranch = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 
-	// state is shared across the main selector loop, the orchestrator
-	// drainer coroutine, sub-task runner coroutines, and the query handler.
-	// This is safe because Temporal Go SDK coroutines are cooperatively
-	// scheduled — they only yield at workflow.* calls (Receive, Get, Sleep,
-	// etc.) — and query handlers run between workflow tasks, not concurrent
-	// with workflow code. A real mutex would break determinism; do not add
-	// one. Mutations to state must be single-statement (no yields mid-update)
-	// so concurrent readers always see a consistent snapshot.
-	_ = workflow.SetQueryHandler(dCtx, QueryNameIddState, func() (IddState, error) {
-		return *state, nil
-	})
+	// Temporal coroutines share state through cooperative scheduling. Avoid
+	// yielding midway through mutations so readers see a consistent snapshot.
 
 	// The canvas reads auto mode and nudges from the IDD flow record rather
 	// than from workflow state, so seed them as soon as the flow is set up.

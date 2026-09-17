@@ -133,6 +133,7 @@ export interface FlowAction {
   actionStatus: ActionStatus
   actionResult: string
   isHumanAction: boolean
+  isCallbackAction?: boolean
   streamingData?: StreamingData
 }
 
