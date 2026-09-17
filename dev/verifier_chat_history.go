@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -150,10 +151,7 @@ func prepareVerifierMessages(messages []llm2.Message, index *verifierChatHistory
 				record.IsTool = true
 				record.Name = block.McpCall.Server + "/" + block.McpCall.Tool
 				record.Request = block.McpCall.Arguments
-			case contextType == ContextTypeEditBlockReport ||
-				contextType == ContextTypeTestResult ||
-				contextType == ContextTypeSelfReviewFeedback ||
-				contextType == ContextTypeSummary:
+			case contextType != "" && slices.Contains(settings.ContextTypes, contextType):
 				record.Name = contextType
 				record.Request = block.Text
 			default:

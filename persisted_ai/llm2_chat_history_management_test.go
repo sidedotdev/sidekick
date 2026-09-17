@@ -74,7 +74,6 @@ func TestManageLlm2ChatHistory_InitialInstructions(t *testing.T) {
 	expected := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Hello", ContextTypeInitialInstructions),
 		textMsgWithCtx(llm2.RoleUser, "I am a user", ContextTypeUserFeedback),
-		textMsg(llm2.RoleAssistant, "Unmarked"),
 		textMsgWithCtx(llm2.RoleUser, "Another II", ContextTypeInitialInstructions),
 	}
 
@@ -108,7 +107,6 @@ func TestManageLlm2ChatHistory_UserFeedback(t *testing.T) {
 	}
 	expected := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
-		textMsg(llm2.RoleAssistant, "Unmarked1"),
 		textMsgWithCtx(llm2.RoleUser, "Marker", ContextTypeTestResult),
 		textMsg(llm2.RoleAssistant, "U_TR1"),
 		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
@@ -166,15 +164,15 @@ func TestManageLlm2ChatHistory_SupersededTypes(t *testing.T) {
 			},
 		},
 		{
-			name: "Latest SelfReviewFeedback kept",
+			name: "Latest AutoReviewFeedback kept",
 			messages: []llm2.Message{
-				textMsgWithCtx(llm2.RoleUser, "SRF1", ContextTypeSelfReviewFeedback),
+				textMsgWithCtx(llm2.RoleUser, "SRF1", ContextTypeAutoReviewFeedback),
 				textMsg(llm2.RoleAssistant, "U1"),
-				textMsgWithCtx(llm2.RoleUser, "SRF2", ContextTypeSelfReviewFeedback),
+				textMsgWithCtx(llm2.RoleUser, "SRF2", ContextTypeAutoReviewFeedback),
 				textMsg(llm2.RoleAssistant, "U2"),
 			},
 			expected: []llm2.Message{
-				textMsgWithCtx(llm2.RoleUser, "SRF2", ContextTypeSelfReviewFeedback),
+				textMsgWithCtx(llm2.RoleUser, "SRF2", ContextTypeAutoReviewFeedback),
 				textMsg(llm2.RoleAssistant, "U2"),
 			},
 		},
@@ -205,7 +203,6 @@ func TestManageLlm2ChatHistory_SupersededTypes(t *testing.T) {
 			},
 			expected: []llm2.Message{
 				textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
-				textMsg(llm2.RoleAssistant, "U_UF1"),
 				textMsgWithCtx(llm2.RoleUser, "TR2", ContextTypeTestResult),
 				textMsg(llm2.RoleAssistant, "U_TR2"),
 				textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
@@ -480,11 +477,13 @@ func TestManageLlm2ChatHistory_ParallelToolCalls_MissingOneResult(t *testing.T) 
 
 	// Use large maxLength to allow unretained messages to be kept, then cleanup removes orphans
 	result, err := ca.ManageLlm2ChatHistory(messages, 10000, common.ModelConfig{})
-	assert.NoError(t, err)
-	// Parallel tool calls with missing result get cleaned up (both call and partial result removed)
-	assert.Len(t, result, 2)
-	assert.Equal(t, "II", result[0].Content[0].Text)
-	assert.Equal(t, "Last", result[1].Content[0].Text)
+	require.NoError(t, err)
+	require.Equal(t, []llm2.Message{
+		messages[0],
+		toolUseMsg("call1", "tool1", "{}"),
+		messages[3],
+		messages[4],
+	}, result)
 }
 
 func TestManageLlm2ChatHistory_ParallelToolCalls_MissingOneResult_BelowTrigger(t *testing.T) {
@@ -510,8 +509,9 @@ func TestManageLlm2ChatHistory_ParallelToolCalls_MissingOneResult_BelowTrigger(t
 		Model:    "gpt-5.4-mini",
 	})
 	require.NoError(t, err)
-	require.Len(t, result, 1)
-	assert.Equal(t, "II", result[0].Content[0].Text)
+	expectedCalls := messages[1]
+	expectedCalls.Content = expectedCalls.Content[:2]
+	assert.Equal(t, []llm2.Message{messages[0], expectedCalls, messages[2], messages[3]}, result)
 }
 
 func TestManageLlm2ChatHistory_EditBlockReport_RetainsProposals(t *testing.T) {
@@ -542,11 +542,11 @@ func TestManageLlm2ChatHistory_MixedTypes_Complex(t *testing.T) {
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions), // Kept
 		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),        // Kept
-		textMsg(llm2.RoleAssistant, "U1 for UF1"),                            // Kept
-		textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),          // Superseded by TR2
-		textMsg(llm2.RoleAssistant, "U1 for TR1"),                            // Not kept
-		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),        // Kept
-		textMsg(llm2.RoleAssistant, "U1 for UF2"),                            // Kept
+		textMsg(llm2.RoleAssistant, "U1 for UF1"),
+		textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),   // Superseded by TR2
+		textMsg(llm2.RoleAssistant, "U1 for TR1"),                     // Not kept
+		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback), // Kept
+		textMsg(llm2.RoleAssistant, "U1 for UF2"),
 		textMsgWithCtx(llm2.RoleUser, "TR2", ContextTypeTestResult),          // Kept (latest TR)
 		textMsg(llm2.RoleAssistant, "U1 for TR2"),                            // Kept
 		textMsg(llm2.RoleAssistant, "Unmarked after TR2"),                    // Kept
@@ -555,9 +555,7 @@ func TestManageLlm2ChatHistory_MixedTypes_Complex(t *testing.T) {
 	expected := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions),
 		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
-		textMsg(llm2.RoleAssistant, "U1 for UF1"),
 		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
-		textMsg(llm2.RoleAssistant, "U1 for UF2"),
 		textMsgWithCtx(llm2.RoleUser, "TR2", ContextTypeTestResult),
 		textMsg(llm2.RoleAssistant, "U1 for TR2"),
 		textMsg(llm2.RoleAssistant, "Unmarked after TR2"),
@@ -603,21 +601,19 @@ func TestManageLlm2ChatHistory_NoMarkers_UnderLimit(t *testing.T) {
 func TestManageLlm2ChatHistory_BlockEndingConditions(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
-		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),        // UF1 Block Start
-		textMsg(llm2.RoleAssistant, "Unmarked after UF1"),                    // Part of UF1 Block
-		textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),          // TR1 Block Start (Latest TR), ends UF1 block
-		textMsg(llm2.RoleAssistant, "Unmarked after TR1"),                    // Part of TR1 Block
-		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),        // UF2 Block Start, ends TR1 block
-		textMsg(llm2.RoleAssistant, "Unmarked after UF2"),                    // Part of UF2 Block
-		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions), // II1, ends UF2 block
-	}
-	expected := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
 		textMsg(llm2.RoleAssistant, "Unmarked after UF1"),
 		textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),
 		textMsg(llm2.RoleAssistant, "Unmarked after TR1"),
 		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
 		textMsg(llm2.RoleAssistant, "Unmarked after UF2"),
+		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions),
+	}
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
+		textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),
+		textMsg(llm2.RoleAssistant, "Unmarked after TR1"),
+		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
 		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions),
 	}
 	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
@@ -679,15 +675,14 @@ func TestManageLlm2ChatHistory_OverlapHandling(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Unmarked after UF1"),
 		textMsg(llm2.RoleAssistant, testEditBlock),
 		textMsg(llm2.RoleUser, "Unmarked between proposal and report"),
-		textMsgWithCtx(llm2.RoleAssistant, "Report for Edit 1: Sequence 1 processed", ContextTypeEditBlockReport),
+		textMsgWithCtx(llm2.RoleAssistant, "- edit_block:1 application succeeded", ContextTypeEditBlockReport),
 		textMsg(llm2.RoleUser, "Unmarked after Report"),
 	}
 	expected := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
-		textMsg(llm2.RoleAssistant, "Unmarked after UF1"),
 		textMsg(llm2.RoleAssistant, testEditBlock),
 		textMsg(llm2.RoleUser, "Unmarked between proposal and report"),
-		textMsgWithCtx(llm2.RoleAssistant, "Report for Edit 1: Sequence 1 processed", ContextTypeEditBlockReport),
+		textMsgWithCtx(llm2.RoleAssistant, "- edit_block:1 application succeeded", ContextTypeEditBlockReport),
 		textMsg(llm2.RoleUser, "Unmarked after Report"),
 	}
 
@@ -1063,4 +1058,91 @@ func TestResolveKeepAndTrigger_WindowSplit(t *testing.T) {
 	keep, trigger := resolveKeepAndTrigger(10000, common.ModelConfig{})
 	assert.Equal(t, int(0.7*float64(maxInput)), keep)
 	assert.Equal(t, maxInput, trigger)
+}
+
+func TestManageLlm2ChatHistory_ProtectedHumanPairs(t *testing.T) {
+	t.Parallel()
+	for _, marker := range []string{ContextTypeInitialInstructions, ContextTypeUserFeedback} {
+		for _, nested := range []bool{false, true} {
+			name := marker + "/outer"
+			if nested {
+				name = marker + "/nested"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				question := toolUseMsg("human", "get_help_or_input", `{"question":"Choose 1 or 2","context":"`+strings.Repeat("q", 100000)+`"}`)
+				answer := toolResultMsg("human", "get_help_or_input", strings.Repeat("answer", 100000))
+				if nested {
+					SetContextType(&answer.Content[0].ToolResult.Content[0], marker)
+				} else {
+					SetContextType(&answer.Content[0], marker)
+				}
+				calls := question
+				calls.Content = append([]llm2.ContentBlock{}, question.Content...)
+				calls.Content = append(calls.Content, toolUseMsg("sibling", "other", "{}").Content...)
+				results := answer
+				results.Content = append([]llm2.ContentBlock{}, answer.Content...)
+				results.Content = append(results.Content, toolResultMsg("sibling", "other", "unrelated").Content...)
+				last := textMsg(llm2.RoleUser, "latest")
+				messages := []llm2.Message{
+					calls,
+					results,
+					textMsg(llm2.RoleAssistant, strings.Repeat("following response", 1000)),
+					toolUseMsg("automated", "get_help_or_input", "{}"),
+					toolResultMsg("automated", "get_help_or_input", "automated error"),
+					last,
+				}
+
+				got, err := (&ChatHistoryActivities{}).ManageLlm2ChatHistory(messages, 1, common.ModelConfig{})
+				require.NoError(t, err)
+				require.Equal(t, []llm2.Message{question, answer, last}, got)
+			})
+		}
+	}
+}
+
+func TestManageLlm2ChatHistory_MixedHumanMarkers(t *testing.T) {
+	t.Parallel()
+	first := textMsgWithCtx(llm2.RoleUser, "initial", ContextTypeInitialInstructions)
+	second := textMsgWithCtx(llm2.RoleUser, "human", ContextTypeUserFeedback)
+	mixed := textMsgWithCtx(llm2.RoleUser, "old status", ContextTypeTestResult)
+	mixed.Content = append(mixed.Content, first.Content...)
+	mixed.Content = append(mixed.Content, second.Content...)
+	latestStatus := textMsgWithCtx(llm2.RoleUser, "latest status", ContextTypeTestResult)
+	last := textMsg(llm2.RoleAssistant, "last")
+	messages := []llm2.Message{
+		first,
+		textMsg(llm2.RoleAssistant, "droppable"),
+		second,
+		mixed,
+		textMsg(llm2.RoleAssistant, "also droppable"),
+		latestStatus,
+		last,
+	}
+	wantMixed := llm2.Message{Role: llm2.RoleUser, Content: append(first.Content[:1:1], second.Content...)}
+	got, err := (&ChatHistoryActivities{}).ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []llm2.Message{first, second, wantMixed, latestStatus, last}, got)
+}
+
+func TestManageLlm2ChatHistory_IntentStartPairs(t *testing.T) {
+	t.Parallel()
+	var messages, expected []llm2.Message
+	for _, id := range []string{"first", "second"} {
+		call := toolUseMsg(id, "start_intent_subtask", `{"requirements":"do this"}`)
+		SetContextType(&call.Content[0], "IntentTaskStart")
+		result := toolResultMsg(id, "start_intent_subtask", strings.Repeat("started", 100000))
+		calls := call
+		calls.Content = append(call.Content[:1:1], toolUseMsg(id+"sibling", "other", "{}").Content...)
+		results := result
+		results.Content = append(result.Content[:1:1], toolResultMsg(id+"sibling", "other", "unrelated").Content...)
+		messages = append(messages, calls, results, textMsg(llm2.RoleAssistant, "droppable"))
+		expected = append(expected, call, result)
+	}
+	last := textMsg(llm2.RoleUser, "last")
+	messages = append(messages, last)
+	expected = append(expected, last)
+	got, err := (&ChatHistoryActivities{}).ManageLlm2ChatHistory(messages, 1, common.ModelConfig{})
+	require.NoError(t, err)
+	require.Equal(t, expected, got)
 }
