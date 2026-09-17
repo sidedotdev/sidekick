@@ -101,7 +101,16 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 	var failedCommands []indexedCommand
 	var activityErrors []string
 
+	hooksEnabled := workflow.GetVersion(dCtx, runTestsHooksVersion, workflow.DefaultVersion, 1) >= 1
 	for {
+		if hooksEnabled && len(pendingCommands) > 0 {
+			if _, err := WakeIfHibernated(dCtx); err != nil {
+				return nil, fmt.Errorf("failed to wake hibernated worktree: %w", err)
+			}
+			if err := dispatchRunTestsHooks(dCtx, dCtx.RepoConfig.Hooks, *dCtx.EnvContainer); err != nil {
+				return nil, err
+			}
+		}
 		// execute pending test commands in parallel
 		for _, ic := range pendingCommands {
 			ic := ic
@@ -274,9 +283,13 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 	}
 	err := activityFuture.Get(actionCtx, &runTestOutput)
 	if err != nil {
+		commandErr := fmt.Errorf("failed to run test command '%s': %v", fullCommand, err)
+		if workflow.GetVersion(actionCtx, runTestsHooksVersion, workflow.DefaultVersion, 1) >= 1 {
+			commandErr = fmt.Errorf("failed to run test command '%s': %w", fullCommand, err)
+		}
 		resultsCh.Send(actionCtx, singleTestResult{
 			commandIndex: commandIndex,
-			err:          fmt.Errorf("failed to run test command '%s': %v", fullCommand, err),
+			err:          commandErr,
 		})
 		return
 	}
