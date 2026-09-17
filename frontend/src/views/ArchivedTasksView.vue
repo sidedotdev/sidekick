@@ -63,6 +63,43 @@ onMounted(async () => {
 <style scoped>
 .archived-tasks {
   padding: 1rem;
+  min-width: 0;
+}
+
+.archived-tasks h1 {
+  margin-bottom: 1rem;
+}
+
+.archived-tasks :deep(.task-card-shell) {
+  height: 11rem;
+  min-width: 0;
+}
+
+.archived-tasks :deep(.task-card) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.archived-tasks :deep(.task-title),
+.archived-tasks :deep(.task-description) {
+  flex-shrink: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.archived-tasks :deep(.card-footer) {
+  position: static;
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.archived-tasks :deep(.card-meta) {
+  position: static;
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
 }
 
 </style>
