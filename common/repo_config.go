@@ -34,6 +34,8 @@ type RepoConfig struct {
 	 * is completa. */
 	IntegrationTestCommands []CommandConfig `toml:"integration_test_commands,omitempty"`
 
+	Hooks HooksConfig `toml:"hooks,omitempty" json:"hooks,omitempty"`
+
 	/** This is injected into prompts to give the LLM high-level context about
 	 * the purpose of your project. This is used especially when defining
 	 * requirements */

@@ -78,7 +78,7 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 			return common.RepoConfig{}, fmt.Errorf("failed to parse repo config %q: %w", discovery.ChosenPath, err)
 		}
 
-		if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+		if err := decodeRepoConfig(k, &config); err != nil {
 			return common.RepoConfig{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
 		}
 	}
@@ -161,7 +161,7 @@ func GetRepoConfigActivityV2(envContainer env.EnvContainer) (GetRepoConfigActivi
 			return GetRepoConfigActivityResult{}, fmt.Errorf("failed to parse repo config %q: %w", discovery.ChosenPath, err)
 		}
 
-		if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+		if err := decodeRepoConfig(k, &config); err != nil {
 			return GetRepoConfigActivityResult{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
 		}
 	}
