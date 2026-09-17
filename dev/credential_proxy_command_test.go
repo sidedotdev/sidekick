@@ -169,7 +169,9 @@ func TestCredentialProxyCommandSidePolicy(t *testing.T) {
 		active  []string
 		wantRun bool
 	}{
-		{"production", "production", "", []string{"api", "subscription"}, true},
+		{"production unavailable", "production", "", []string{"api", "subscription"}, false},
+		{"unset app environment unavailable", "", "", []string{"api"}, false},
+		{"production explicit disable", "production", "false", []string{"api", "subscription"}, true},
 		{"explicit disable", "development", "false", []string{"api", "subscription"}, true},
 		{"enabled unavailable", "development", "", []string{"api"}, false},
 		{"disabled mixed", "development", "false", []string{"api", "generic"}, false},

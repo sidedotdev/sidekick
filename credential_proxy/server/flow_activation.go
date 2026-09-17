@@ -27,7 +27,7 @@ func (c *Capabilities) ActivateFlow(flowID string, requested, trusted map[string
 	}
 	for _, definition := range selected {
 		if definition.Auth.Side != nil && !allowSideSources {
-			return Activation{}, errors.New("side credential proxy requires development mode")
+			return Activation{}, errors.New("side credential proxy access is disabled by host policy")
 		}
 	}
 	data, err := json.Marshal(struct {

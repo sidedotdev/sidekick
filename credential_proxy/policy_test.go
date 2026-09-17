@@ -12,9 +12,11 @@ func TestSideSourcesAllowed(t *testing.T) {
 		{"development defaults on", "development", "", true},
 		{"explicit enable", "development", "true", true},
 		{"explicit disable", "development", "false", false},
-		{"unset app environment", "", "", false},
-		{"production", "production", "", false},
-		{"cannot enable in production", "production", "true", false},
+		{"unset app environment", "", "", true},
+		{"production defaults on", "production", "", true},
+		{"explicit enable in production", "production", "true", true},
+		{"explicit disable in production", "production", "false", false},
+		{"explicit disable without app environment", "", "false", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("SIDE_APP_ENV", tc.appEnv)

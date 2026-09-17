@@ -34,22 +34,22 @@ func TestActivateAuthorizedProxies(t *testing.T) {
 	}{
 		{name: "inactive"},
 		{
-			name: "generic outside development", active: []string{"generic"},
+			name: "generic with side sources disabled", active: []string{"generic"},
 			trusted: definitions, wantToken: true,
 		},
 		{
-			name: "generic in development", active: []string{"generic"},
+			name: "generic with side sources allowed", active: []string{"generic"},
 			trusted: definitions, allowSideSources: true, wantToken: true,
 		},
 		{
 			name: "unapproved", active: []string{"generic"}, wantErr: true,
 		},
 		{
-			name: "provider outside development", active: []string{"openai"},
+			name: "provider disabled by host policy", active: []string{"openai"},
 			trusted: definitions, wantErr: true,
 		},
 		{
-			name: "provider in development", active: []string{"openai"},
+			name: "provider allowed by host policy", active: []string{"openai"},
 			trusted: definitions, allowSideSources: true, wantToken: true,
 		},
 		{
