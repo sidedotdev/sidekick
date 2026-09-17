@@ -162,6 +162,12 @@ type IddState struct {
 	// auto-merge, which can land after it reports closure, so only the runner
 	// returning proves that work has settled. Workflow-internal only.
 	InFlightSubtaskRunners int `json:"-"`
+
+	mergeApproval    *iddMergeApproval
+	reviewReady      bool
+	reviewGeneration uint64
+	intentTree       string
+	intentBaseTree   string
 }
 
 // beginSubtaskRunner registers a sub-task runner as in flight. It must be
@@ -621,6 +627,18 @@ func reservePendingSubtask(dCtx DevContext, input IddWorkflowInput, state *IddSt
 		UpdatedAt:   now,
 	}
 	state.Subtasks = append(state.Subtasks, subtask)
+	state.reviewGeneration++
+	if state.mergeApproval != nil {
+		state.reviewReady = false
+		var ima *DevAgentManagerActivities
+		err := workflow.ExecuteActivity(dCtx, ima.UpdateTaskByTaskId, input.WorkspaceId, input.TaskId, TaskUpdate{
+			Status:    domain.TaskStatusInProgress,
+			AgentType: domain.AgentTypeLLM,
+		}).Get(dCtx, nil)
+		if err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to mark IDD task in progress", "Error", err)
+		}
+	}
 	persistSubtaskFlow(dCtx, input, subtask)
 	return flowId
 }
@@ -648,6 +666,9 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			updateSubtaskStatus(dCtx, input, state, flowId, "failed")
 		}
 		return
+	}
+	if state.mergeApproval != nil {
+		state.mergeApproval.requestDiffRefresh()
 	}
 
 	reqInfo.ScopePrompt = sig.ScopePrompt
@@ -792,6 +813,9 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		}
 	}
 	updateSubtaskStatus(dCtx, input, state, we.ID, status)
+	if state.mergeApproval != nil {
+		state.mergeApproval.requestDiffRefresh()
+	}
 
 	// Prompt the orchestrator to re-evaluate remaining un-dispatched intent as
 	// soon as a sub-task lands (or fails/cancels) instead of waiting for the

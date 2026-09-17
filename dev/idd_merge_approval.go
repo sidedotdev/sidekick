@@ -75,6 +75,7 @@ func startIddMergeApproval(dCtx DevContext, input IddWorkflowInput, state *IddSt
 		refreshCh:    workflow.NewBufferedChannel(dCtx, 1),
 		finishedCh:   workflow.NewBufferedChannel(dCtx, 1),
 	}
+	state.mergeApproval = ma
 	workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
 		ma.run(dCtx.WithContext(goCtx))
 	})

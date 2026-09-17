@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
@@ -1162,11 +1163,8 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalReopensOnMergeFailure() {
 func (s *IddWorkflowTestSuite) TestRunOrchestratorTurn_EmptyDiffIsNoOp() {
 	const iddBranch = "side/idd-worktree"
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
-		return in.Command == "git" && len(in.Args) >= 2 && in.Args[0] == "diff"
-	})).Return(env.EnvRunCommandActivityOutput{Stdout: ""}, nil).Once()
-	s.env.OnActivity(git.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.Anything).
-		Return("", nil).Once()
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+		Return(env.EnvRunCommandActivityOutput{Stdout: "unchanged-tree\nincremental\noriginal-tree\n\nIDD_SNAPSHOT_COMPLETE\n"}, nil).Once()
 
 	miniIdd := func(ctx workflow.Context) (IddState, error) {
 		ctx = utils.NoRetryCtx(ctx)
@@ -1805,4 +1803,384 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalMergesWorkLandedDuringTheMerg
 	result := s.runIddFinishWithLateSubtaskWork(true)
 	s.Equal(2, result.MergeCalls, "a sub-task that settled during the merge must still be reconciled afterwards")
 	s.Contains(result.FinalDiff, "sub-task diff", "the completed request must show the work that landed during the merge")
+}
+
+func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRejectsIncompleteIntent() {
+	wrapper := func(ctx workflow.Context) error {
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		return markIddReadyForReview(dCtx, &IddState{}, MarkReadyForReviewArgs{
+			RemainingWork: "Implement the remaining authentication paths.",
+		})
+	}
+	s.env.ExecuteWorkflow(wrapper)
+	s.Require().Error(s.env.GetWorkflowError())
+	s.Contains(s.env.GetWorkflowError().Error(), "Implement the remaining authentication paths")
+}
+
+func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRejectsDirtyIntent() {
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return strings.Join(in.Args, " ") == "status --porcelain --untracked-files=all -- intent"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: " M intent/a.md\nA  intent/b.md\n?? intent/c.md\n"}, nil).Once()
+
+	wrapper := func(ctx workflow.Context) error {
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		return markIddReadyForReview(dCtx, &IddState{}, MarkReadyForReviewArgs{
+			AllIntentChangesFullySatisfied: true,
+			RemainingWork:                  "Nothing remains.",
+		})
+	}
+	s.env.ExecuteWorkflow(wrapper)
+	s.Require().Error(s.env.GetWorkflowError())
+	s.Contains(s.env.GetWorkflowError().Error(), "uncommitted intent")
+	s.Contains(s.env.GetWorkflowError().Error(), "intent/c.md")
+}
+
+func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRechecksConcurrentDispatch() {
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+		Return(env.EnvRunCommandActivityOutput{}, nil).After(2 * time.Second).Once()
+
+	wrapper := func(ctx workflow.Context) error {
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		state := &IddState{}
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			_ = workflow.Sleep(ctx, time.Second)
+			state.Subtasks = append(state.Subtasks, IddSubtask{FlowId: "new-subtask", Status: "pending"})
+		})
+		return markIddReadyForReview(dCtx, state, MarkReadyForReviewArgs{
+			AllIntentChangesFullySatisfied: true,
+			RemainingWork:                  "Nothing remains.",
+		})
+	}
+	s.env.ExecuteWorkflow(wrapper)
+	s.Require().Error(s.env.GetWorkflowError())
+	s.Contains(s.env.GetWorkflowError().Error(), "new-subtask")
+}
+
+func (s *IddWorkflowTestSuite) TestMarkReadyForReviewSignalsOnceAndRearms() {
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+		Return(env.EnvRunCommandActivityOutput{}, nil)
+	s.env.OnActivity(s.ima.PutWorkflow, mock.Anything, mock.Anything).Return(nil)
+	s.env.OnActivity(s.ima.UpdateTaskByTaskId, mock.Anything, "test-workspace", "task-1", TaskUpdate{
+		Status: domain.TaskStatusInProgress, AgentType: domain.AgentTypeLLM,
+	}).Return(nil).Once()
+
+	child := func(ctx workflow.Context) error {
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		state := &IddState{}
+		state.mergeApproval = &iddMergeApproval{
+			input: iddMergeApprovalInput(),
+			req: flow_action.RequestForUser{
+				FlowActionId: "approval", RequestKind: flow_action.RequestKindMergeApproval,
+			},
+		}
+		args := MarkReadyForReviewArgs{AllIntentChangesFullySatisfied: true, RemainingWork: "Nothing remains."}
+		for i := 0; i < 2; i++ {
+			if err := markIddReadyForReview(dCtx, state, args); err != nil {
+				return err
+			}
+		}
+		flowID := reservePendingSubtask(dCtx, iddMergeApprovalInput(), state, "")
+		if err := markIddReadyForReview(dCtx, state, args); err == nil {
+			return errors.New("pending work was marked ready")
+		}
+		updateSubtaskStatus(dCtx, iddMergeApprovalInput(), state, flowID, "completed")
+		return markIddReadyForReview(dCtx, state, args)
+	}
+	s.env.RegisterWorkflowWithOptions(child, workflow.RegisterOptions{Name: "review-child"})
+	parent := func(ctx workflow.Context) ([]flow_action.RequestForUser, error) {
+		var requests []flow_action.RequestForUser
+		ch := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			for {
+				var req flow_action.RequestForUser
+				ch.Receive(ctx, &req)
+				requests = append(requests, req)
+			}
+		})
+		err := workflow.ExecuteChildWorkflow(ctx, "review-child").Get(ctx, nil)
+		return requests, err
+	}
+	s.env.ExecuteWorkflow(parent)
+	s.Require().NoError(s.env.GetWorkflowError())
+	var requests []flow_action.RequestForUser
+	s.Require().NoError(s.env.GetWorkflowResult(&requests))
+	s.Require().Len(requests, 2)
+	for _, req := range requests {
+		s.Equal("approval", req.FlowActionId)
+		s.Equal(flow_action.RequestKindMergeApproval, req.RequestKind)
+	}
+}
+
+func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRejectsWorkCompletedDuringCheck() {
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+		Return(env.EnvRunCommandActivityOutput{}, nil).After(2 * time.Second).Once()
+	s.env.OnActivity(s.ima.PutWorkflow, mock.Anything, mock.Anything).Return(nil)
+
+	wrapper := func(ctx workflow.Context) error {
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		state := &IddState{}
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			_ = workflow.Sleep(ctx, time.Second)
+			goCtx := dCtx.WithContext(ctx)
+			id := reservePendingSubtask(goCtx, iddMergeApprovalInput(), state, "")
+			updateSubtaskStatus(goCtx, iddMergeApprovalInput(), state, id, "completed")
+		})
+		return markIddReadyForReview(dCtx, state, MarkReadyForReviewArgs{
+			AllIntentChangesFullySatisfied: true, RemainingWork: "Nothing remains.",
+		})
+	}
+	s.env.ExecuteWorkflow(wrapper)
+	s.Require().Error(s.env.GetWorkflowError())
+	s.Contains(s.env.GetWorkflowError().Error(), "reassess")
+}
+
+func (s *IddWorkflowTestSuite) TestIntentSubtaskRefreshesPersistedApproval() {
+	mu, actions := s.recordMergeApprovalActions()
+	s.mockIntentCommitActivities(1)
+	s.setupTitleGenerationMocks()
+	s.env.OnActivity(s.ima.PutWorkflow, mock.Anything, mock.Anything).Return(nil)
+	s.env.OnActivity(s.ima.UpdateTaskByTaskId, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	var diffMu sync.Mutex
+	calls := 0
+	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).
+		Return(func(context.Context, env.EnvContainer, git.GitDiffParams) (string, error) {
+			diffMu.Lock()
+			defer diffMu.Unlock()
+			calls++
+			switch {
+			case calls <= 2:
+				return "initial", nil
+			case calls <= 4:
+				return "intent committed", nil
+			default:
+				return "child merged", nil
+			}
+		})
+	hasPersisted := func(diff string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, action := range *actions {
+			if action.ActionStatus == domain.ActionStatusPending && mergeApprovalInfo(action)["diff"] == diff {
+				return true
+			}
+		}
+		return false
+	}
+	s.env.RegisterWorkflowWithOptions(func(ctx workflow.Context, input BasicDevWorkflowInput) (string, error) {
+		s.True(input.AutoMerge)
+		for !hasPersisted("intent committed") {
+			if err := workflow.Sleep(ctx, time.Millisecond); err != nil {
+				return "", err
+			}
+		}
+		return "merged", nil
+	}, workflow.RegisterOptions{Name: "BasicDevWorkflow"})
+
+	wrapper := func(ctx workflow.Context) error {
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		state := &IddState{DefaultTargetBranch: "main"}
+		startIddMergeApproval(dCtx, iddMergeApprovalInput(), state)
+		for !hasPersisted("initial") {
+			if err := workflow.Sleep(ctx, time.Millisecond); err != nil {
+				return err
+			}
+		}
+		id := reservePendingSubtask(dCtx, iddMergeApprovalInput(), state, "")
+		runIntentSubtask(dCtx, iddMergeApprovalInput(), StartIntentSubtaskSignal{}, state, id, nil)
+		for !hasPersisted("child merged") {
+			if err := workflow.Sleep(ctx, time.Millisecond); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	s.env.ExecuteWorkflow(wrapper)
+	s.Require().NoError(s.env.GetWorkflowError())
+	s.True(hasPersisted("intent committed"))
+	s.True(hasPersisted("child merged"))
+}
+
+func (s *IddWorkflowTestSuite) TestOrchestratorRetainsOnlyIncrementalIntentUpdates() {
+	var cha *persisted_ai.ChatHistoryActivities
+	s.env.OnActivity(cha.ManageV4, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input persisted_ai.ManageInput) (*persisted_ai.ManageOutput, error) {
+			return &persisted_ai.ManageOutput{ChatHistory: input.ChatHistory}, nil
+		})
+	var mu sync.Mutex
+	var updates []string
+	failed := false
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input persisted_ai.AppendMessageInput) (*persisted_ai.MessageRef, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, block := range input.Message.Content {
+				if persisted_ai.GetContextType(block) != persisted_ai.ContextTypeIntentUpdate {
+					continue
+				}
+				if strings.Contains(block.Text, "+second") && !failed {
+					failed = true
+					return nil, temporal.NewNonRetryableApplicationError("append failed", "test", nil)
+				}
+				updates = append(updates, block.Text)
+			}
+			return &persisted_ai.MessageRef{BlockKeys: []string{"block"}, Role: string(input.Message.Role)}, nil
+		})
+	s.setupTitleGenerationMocks()
+	snapshots := []struct {
+		base string
+		tree string
+		diff string
+	}{
+		{"main", "one", "+first\n"},
+		{"one", "one", ""},
+		{"one", "two", "+second\n"},
+		{"one", "two", "+second\n"},
+		{"two", "empty", "-first\n-second\n"},
+	}
+	for i, snapshot := range snapshots {
+		base := snapshot.base
+		original := "original-tree"
+		if i == 0 {
+			base = ""
+			original = "main"
+		}
+		s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+			return len(input.Args) == 5 && input.Args[3] == base && input.Args[4] == original
+		})).Return(env.EnvRunCommandActivityOutput{Stdout: snapshot.tree + "\nincremental\noriginal-tree\n" + snapshot.diff + "\nIDD_SNAPSHOT_COMPLETE\n"}, nil).Once()
+	}
+	wrapper := func(ctx workflow.Context) error {
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		state := &IddState{DefaultTargetBranch: "main"}
+		history := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		for i := range snapshots {
+			runIddOrchestratorTurn(dCtx, iddMergeApprovalInput(), state, history, true, nil)
+			if i == 2 && state.intentTree != "one" {
+				return fmt.Errorf("failed append advanced snapshot to %q", state.intentTree)
+			}
+		}
+		if state.intentTree != "empty" {
+			return fmt.Errorf("deletion was not recorded: %q", state.intentTree)
+		}
+		return nil
+	}
+	s.env.ExecuteWorkflow(wrapper)
+	s.Require().NoError(s.env.GetWorkflowError())
+	mu.Lock()
+	defer mu.Unlock()
+	s.Require().Len(updates, 3)
+	s.Contains(updates[0], "+first")
+	s.Contains(updates[1], "+second")
+	s.NotContains(updates[1], "+first")
+	s.Contains(updates[2], "-first\n-second")
+}
+
+func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRejectsDispatchDuringNotification() {
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+		Return(env.EnvRunCommandActivityOutput{}, nil)
+	s.env.OnActivity(s.ima.PutWorkflow, mock.Anything, mock.Anything).Return(nil)
+	s.env.OnActivity(s.ima.UpdateTaskByTaskId, mock.Anything, mock.Anything, mock.Anything, TaskUpdate{
+		Status: domain.TaskStatusInProgress, AgentType: domain.AgentTypeLLM,
+	}).Return(nil).Twice()
+	s.env.OnSignalExternalWorkflow(mock.Anything, "review-parent", "", flow_action.SignalNameRequestForUser, mock.Anything).
+		Return(nil).After(2 * time.Second).Once()
+	s.env.OnSignalExternalWorkflow(mock.Anything, "review-parent", "", flow_action.SignalNameRequestForUser, mock.Anything).
+		Return(nil).Once()
+
+	wrapper := func(ctx workflow.Context) error {
+		workflow.GetInfo(ctx).ParentWorkflowExecution = &workflow.Execution{ID: "review-parent"}
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		state := &IddState{}
+		state.mergeApproval = &iddMergeApproval{
+			input: iddMergeApprovalInput(),
+			req: flow_action.RequestForUser{
+				FlowActionId: "approval", RequestKind: flow_action.RequestKindMergeApproval,
+			},
+		}
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			_ = workflow.Sleep(ctx, time.Second)
+			goCtx := dCtx.WithContext(utils.NoRetryCtx(ctx))
+			id := reservePendingSubtask(goCtx, iddMergeApprovalInput(), state, "")
+			updateSubtaskStatus(goCtx, iddMergeApprovalInput(), state, id, "completed")
+		})
+		args := MarkReadyForReviewArgs{AllIntentChangesFullySatisfied: true, RemainingWork: "Nothing remains."}
+		err := markIddReadyForReview(dCtx, state, args)
+		if err == nil || !strings.Contains(err.Error(), "reassess") {
+			return fmt.Errorf("expected stale notification rejection, got %v", err)
+		}
+		if state.reviewReady {
+			return errors.New("stale notification latched readiness")
+		}
+		return markIddReadyForReview(dCtx, state, args)
+	}
+	s.env.ExecuteWorkflow(wrapper)
+	s.Require().NoError(s.env.GetWorkflowError())
+}
+
+func (s *IddWorkflowTestSuite) TestOrchestratorSnapshotRecovery() {
+	var cha *persisted_ai.ChatHistoryActivities
+	var mu sync.Mutex
+	var updates []string
+	failAppend := true
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input persisted_ai.AppendMessageInput) (*persisted_ai.MessageRef, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, block := range input.Message.Content {
+				if persisted_ai.GetContextType(block) == persisted_ai.ContextTypeIntentUpdate {
+					if failAppend {
+						failAppend = false
+						return nil, temporal.NewNonRetryableApplicationError("append failed", "test", nil)
+					}
+					updates = append(updates, block.Text)
+				}
+			}
+			return &persisted_ai.MessageRef{BlockKeys: []string{"block"}, Role: string(input.Message.Role)}, nil
+		})
+	s.env.OnActivity(cha.ManageV4, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input persisted_ai.ManageInput) (*persisted_ai.ManageOutput, error) {
+			return &persisted_ai.ManageOutput{ChatHistory: input.ChatHistory}, nil
+		})
+	s.setupTitleGenerationMocks()
+	for _, snapshot := range []struct{ base, tree, diff string }{
+		{"lost-tree", "restored", "+restored intent\n"},
+		{"lost-tree", "restored", "+restored intent\n"},
+		{"restored", "empty", ""},
+	} {
+		s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+			return len(input.Args) == 5 && input.Args[3] == snapshot.base && input.Args[4] == "original-tree"
+		})).Return(env.EnvRunCommandActivityOutput{
+			Stdout: snapshot.tree + "\nfull\noriginal-tree\n" + snapshot.diff + "\nIDD_SNAPSHOT_COMPLETE\n",
+		}, nil).Once()
+	}
+	wrapper := func(ctx workflow.Context) error {
+		dCtx := newIddMergeApprovalDevContext(utils.NoRetryCtx(ctx), "side/idd")
+		state := &IddState{
+			DefaultTargetBranch: "moved-branch", intentBaseTree: "original-tree", intentTree: "lost-tree",
+		}
+		history := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		runIddOrchestratorTurn(dCtx, iddMergeApprovalInput(), state, history, true, nil)
+		if state.intentTree != "lost-tree" {
+			return errors.New("failed recovery append advanced baseline")
+		}
+		runIddOrchestratorTurn(dCtx, iddMergeApprovalInput(), state, history, true, nil)
+		if state.intentTree != "restored" {
+			return errors.New("successful recovery did not advance baseline")
+		}
+		runIddOrchestratorTurn(dCtx, iddMergeApprovalInput(), state, history, true, nil)
+		if state.intentTree != "empty" {
+			return errors.New("empty recovery did not advance baseline")
+		}
+		return nil
+	}
+	s.env.ExecuteWorkflow(wrapper)
+	s.Require().NoError(s.env.GetWorkflowError())
+	mu.Lock()
+	defer mu.Unlock()
+	s.Require().Len(updates, 2)
+	for _, update := range updates {
+		s.Contains(update, "full intent diff")
+		s.Contains(update, "supersedes earlier intent diffs")
+	}
+	s.Contains(updates[0], "+restored intent")
+	s.NotContains(updates[1], "+restored intent")
 }

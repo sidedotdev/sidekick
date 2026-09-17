@@ -1064,3 +1064,26 @@ func TestResolveKeepAndTrigger_WindowSplit(t *testing.T) {
 	assert.Equal(t, int(0.7*float64(maxInput)), keep)
 	assert.Equal(t, maxInput, trigger)
 }
+
+func TestManageLlm2ChatHistory_RetainsAllIntentUpdates(t *testing.T) {
+	t.Parallel()
+
+	ca := &ChatHistoryActivities{}
+	first := textMsgWithCtx(llm2.RoleUser, "Initial intent: implement login.", "IntentUpdate")
+	second := textMsgWithCtx(llm2.RoleUser, "Intent update: remove login; implement logout instead.", "IntentUpdate")
+	last := textMsg(llm2.RoleAssistant, "Assessing remaining work.")
+	messages := []llm2.Message{
+		first,
+		oversizedFiller(34000),
+		second,
+		oversizedFiller(34000),
+		last,
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 1, common.ModelConfig{})
+	require.NoError(t, err)
+	assert.Contains(t, result, first)
+	assert.Contains(t, result, second)
+	assert.Contains(t, result, last)
+	assert.Less(t, len(result), len(messages))
+}

@@ -195,12 +195,24 @@ func pendingIntentDiff(dCtx DevContext, state *IddState) (string, error) {
 func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddState, chatHistory *persisted_ai.ChatHistoryContainer, nudgeOnly bool, requestOrchestratorTurn func()) {
 	log := workflow.GetLogger(dCtx)
 
-	diff, err := pendingIntentDiff(dCtx, state)
+	originalBase := state.intentBaseTree
+	if originalBase == "" {
+		originalBase = state.DefaultTargetBranch
+		if originalBase == "" {
+			originalBase = "HEAD"
+		}
+	}
+	snapshot, err := captureIddIntentSnapshot(dCtx, IddIntentSnapshotInput{
+		EnvContainer: *dCtx.EnvContainer,
+		Base:         state.intentTree,
+		OriginalBase: originalBase,
+	})
 	if err != nil {
-		log.Error("Orchestrator: failed to read pending intent diff", "Error", err)
+		log.Error("Orchestrator: failed to snapshot intent", "Error", err)
 		return
 	}
-	if strings.TrimSpace(diff) == "" {
+	state.intentBaseTree = snapshot.OriginalTree
+	if !snapshot.Full && strings.TrimSpace(snapshot.Diff) == "" && state.intentTree == "" && len(state.PendingSubtaskNotices) == 0 {
 		return
 	}
 
@@ -215,8 +227,24 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 		}
 	}
 
+	if snapshot.Full || strings.TrimSpace(snapshot.Diff) != "" {
+		content := "Incremental intent changes since the previous snapshot (compose with earlier updates):\n" + snapshot.Diff
+		if snapshot.Full {
+			content = "The previous intent snapshot is unavailable. This full intent diff against the original base supersedes earlier intent diffs; do not compose it as an incremental update. An empty diff means there are no current intent changes against that base:\n" + snapshot.Diff
+		}
+		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
+			Role:        llm.ChatMessageRoleUser,
+			Content:     content,
+			ContextType: persisted_ai.ContextTypeIntentUpdate,
+		}); err != nil {
+			log.Error("Orchestrator: failed to append intent update", "Error", err)
+			return
+		}
+	}
+	state.intentTree = snapshot.Tree
+
 	turnPrompt := fmt.Sprintf(iddOrchestratorTurnPromptTemplate,
-		diff,
+		"Use the retained incremental intent updates above.",
 		summarizeSubtasksForOrchestrator(state),
 		summarizeNudgesForOrchestrator(state),
 	)
@@ -229,8 +257,9 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 			"\n\n" + turnPrompt
 		state.PendingSubtaskNotices = nil
 	}
+	turnPrompt += "\n\nWhen every intent change is fully implemented, call mark_ready_for_review. Assess remaining work across ALL intent changes, not just the latest subtask. Never mark partial work ready. Supply remainingWork and allIntentChangesFullySatisfied honestly."
 	if nudgeOnly {
-		turnPrompt += "\n\nNOTE: Auto sub-task creation is disabled by the user this turn. Do NOT call start_intent_subtask; only call add_nudge if there is genuine ambiguity worth surfacing, otherwise stay silent."
+		turnPrompt += "\n\nNOTE: Auto sub-task creation is disabled. Do NOT call start_intent_subtask. You may call add_nudge or mark_ready_for_review."
 	}
 	if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 		Role:    llm.ChatMessageRoleUser,
@@ -243,7 +272,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	ManageChatHistory(dCtx.ExecContext, chatHistory, dCtx.WorkspaceId, iddOrchestratorMaxChatLength, modelConfig)
 
-	tools := []*llm.Tool{&addNudgeTool}
+	tools := []*llm.Tool{&addNudgeTool, &markReadyForReviewTool}
 	if !nudgeOnly {
 		tools = append([]*llm.Tool{&startIntentSubtaskTool}, tools...)
 	}
@@ -288,6 +317,24 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 	startedAny := false
 	for _, tc := range toolCalls {
 		switch tc.Name {
+		case markReadyForReviewTool.Name:
+			var args MarkReadyForReviewArgs
+			err := json.Unmarshal([]byte(tc.Arguments), &args)
+			if err == nil {
+				err = markIddReadyForReview(dCtx, state, args)
+			}
+			result := "All intent changes are ready for review."
+			if err != nil {
+				result = err.Error()
+			}
+			if appendErr := addToolCallResponse(dCtx.ExecContext, chatHistory, llm2.ToolResultBlock{
+				Name:       tc.Name,
+				ToolCallId: tc.Id,
+				IsError:    err != nil,
+				Content:    llm2.TextContentBlocks(result),
+			}); appendErr != nil {
+				log.Error("Orchestrator: failed to append review readiness result", "Error", appendErr)
+			}
 		case startIntentSubtaskTool.Name:
 			if nudgeOnly {
 				if err := addToolCallResponse(dCtx.ExecContext, chatHistory, llm2.ToolResultBlock{
