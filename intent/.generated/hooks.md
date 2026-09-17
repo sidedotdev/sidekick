@@ -2,61 +2,89 @@
 
 Repositories configure lifecycle hooks through `hooks` in `side.yml`. Each event
 maps to an ordered list of rules with optional `match` filters and typed actions.
+The implemented scope is the `run_tests` event and the `modal.refresh_volumes`
+action.
 
 ```yaml
 hooks:
-  before_tests:
+  run_tests:
     - match:
         env_types: [modal]
       actions:
         - type: modal.refresh_volumes
 ```
 
-## Matching and execution
+## Matching and validation
 
-Omitting `match` matches all invocations. The `env_types` filter matches any listed
-environment; entries must name supported environments and the list must not be
-empty.
+Omitting `match` matches all invocations. An empty `match` object also matches
+all invocations. When supplied, `match.env_types` must be nonempty and contain
+only supported environment names: `local`, `local_git_worktree`, `devpod`,
+`openshell`, and `modal`. It matches any listed type.
 
-Matching occurs once against the original event context. Matching rules and
-their actions run serially in configuration order. Unknown events, types,
-filters, fields, and invalid values are rejected before execution.
+Each rule requires an `actions` list. Empty rule and action lists are valid
+no-ops. Unknown events, action types (including `shell`), filters, fields, and
+invalid values are rejected before execution, including in rules that would
+not match the invocation.
 
-## Event
+Matching occurs once against the original invocation context. Matching rules
+and their actions run serially in configuration order. Action types own their
+validation and execution independently of event dispatch.
 
-`before_tests` runs after environment readiness, before a nonempty test batch
-launches its commands in parallel. Each retry emits it for pending commands.
+## Event: `run_tests`
+
+`run_tests` runs after environment readiness and before any commands in a
+nonempty test batch launch in parallel. It neither replaces nor wraps test
+execution. Every nonempty retry batch dispatches the event again, including
+automatic heartbeat retries and user-approved retries containing only pending
+commands. Completed command results are retained; those commands are not rerun
+as part of the pending batch.
+
 Empty batches emit no event. Individual command execution does not emit hooks,
-and hook actions do not emit nested events.
+and hook actions do not emit nested events. `before_tests` is not an alias and
+is rejected.
 
-## Actions
+## Action: `modal.refresh_volumes`
 
-- `shell` requires `command` and accepts a repository-relative `working_dir`.
-  It runs in the selected environment under ordinary command approval rules.
-  Versioned event context arrives as camelCase JSON on stdin: event, environment
-  type, repository working directory, and pending test commands.
-  Stdout and stderr are diagnostics, not payload replacements.
-- `modal.refresh_volumes` reloads the current Modal sandbox's volumes using host
-  credentials, takes no additional arguments, and fails outside Modal.
-  Credentials are never exposed to hook processes. Cache refresh runs at
-  `before_tests`, before that batch's parallel commands.
+`modal.refresh_volumes` reloads the current invocation's Modal sandbox volumes
+using host credentials. It does not recreate the sandbox, change environment
+identity, or update the event payload. Credentials are never exposed to sandbox
+or hook processes.
 
-Action types own their validation and execution independently of event dispatch.
-Results contain diagnostics and an optional validated payload update; shell and
-refresh actions leave the payload unchanged. Payload updates cannot change
-environment identity, trigger rematching, or bypass final command approval.
+Refresh accepts no action-specific arguments; only the common `type`,
+`timeout_seconds`, and `on_error` fields are supported. Execution outside Modal
+fails subject to the configured error policy. Host actions are explicitly
+allowlisted, not arbitrary host shell execution.
 
-## Failure and concurrency
+## Timeouts, errors, and diagnostics
 
 Actions accept a positive `timeout_seconds` (default 30), bounded by the parent
-operation's lifetime, and `on_error: fail | warn` (default `fail`). Failure stops
-dispatch; warning reports the error and proceeds. Cancellation always propagates.
-Errors identify the configuration location and action type; diagnostics record
-the event, duration, and outcome. Failed actions supply no payload update, and
-filesystem side effects are not rolled back.
+operation's lifetime. Fractional seconds are supported, provided the value is
+representable as a duration of at least one nanosecond. Actions also accept
+`on_error: fail | warn` (default `fail`).
 
-Hooks may repeat after retries or worker failure. Ordering is local to an
-invocation, not a sandbox-wide lock. Volume refresh may temporarily hide mounts
-or fail with open files; it neither coordinates independent commands nor makes
-concurrent cache writes safe. Host actions are allowlisted, not arbitrary shell
-execution.
+An action failure or timeout with `fail` stops dispatch and prevents that test
+batch from launching. With `warn`, the error is reported and dispatch continues;
+the batch may launch after the remaining actions finish. Cancellation always
+propagates, even with `warn`, and prevents the batch from launching.
+`on_error` does not suppress configuration validation errors.
+
+Action errors identify the configuration location and action type. Structured
+diagnostics record the event, duration, and outcome, with action diagnostics
+also identifying the location and type. Workflow replay does not duplicate
+these diagnostics. Filesystem side effects are not rolled back.
+
+## Retries and concurrency
+
+Hooks may repeat after test retries or worker failure; they are not an
+exactly-once side-effect mechanism. Each dispatched action uses a single-attempt
+activity rather than its own automatic activity retry policy.
+
+Ordering is local to an invocation, not a sandbox-wide lock. Volume refresh may
+temporarily hide mounts or fail with open files; it neither coordinates
+independent commands nor makes concurrent cache writes safe.
+
+## Deferred scope
+
+Shell actions and payload updates are deferred and are not supported
+configuration. `test_results` is only a possible future event: its timing and
+payload semantics are undefined, and configuring it is rejected.

@@ -204,6 +204,68 @@ You can optionally configure `integration_test_commands` separately from
 frequently than unit tests. Sidekick will run these tests only at the end of a
 task, instead of within each step or iteration.
 
+#### hooks
+
+Use `hooks.run_tests` to run ordered actions after environment readiness and
+before any commands in each nonempty test batch launch in parallel. Hooks do
+not replace or wrap test execution.
+
+The supported action, `modal.refresh_volumes`, reloads the current Modal
+sandbox's volumes using host credentials without exposing those credentials
+to sandbox or hook processes. It does not recreate the sandbox or change the
+event payload or environment identity.
+
+```yaml
+hooks:
+  run_tests:
+    - match:
+        env_types: [modal]
+      actions:
+        - type: modal.refresh_volumes
+```
+
+Rules and their actions execute serially in configuration order. Matching
+happens once against the original invocation context. Omit `match` (or use
+`match: {}`) to match all environments. When supplied, `match.env_types` must
+be a nonempty list of supported names: `local`, `local_git_worktree`, `devpod`,
+`openshell`, or `modal`; any listed type can match. Each rule requires an
+`actions` list; empty rule and action lists are valid no-ops.
+
+Refresh accepts no action-specific arguments. Each action supports these common
+options alongside `type`:
+
+- `timeout_seconds`: positive seconds, default `30`, bounded by the parent
+  operation's lifetime. Fractional seconds are allowed if representable as a
+  duration of at least one nanosecond.
+- `on_error`: `fail` (default) stops dispatch and prevents the batch from
+  launching on an action failure or timeout. `warn` reports the error and
+  continues with the remaining actions before allowing tests to launch.
+  Cancellation always propagates, including with `warn`.
+
+Refresh outside Modal fails subject to `on_error`, so use the Modal filter
+unless that failure is intentional. Unknown events, action types, filters,
+fields, and invalid values are rejected before execution, even in unmatched
+rules; `on_error: warn` does not bypass validation. Action errors identify the
+configuration location and action type. Structured diagnostics record the
+event, duration, and outcome.
+
+Every nonempty retry batch runs the hooks again, including automatic heartbeat
+retries and user-approved retries containing only pending commands. Completed
+command results are retained. Empty batches, individual command execution, and
+hook actions emit no hooks. Hooks may also repeat after worker failure; do not
+rely on exactly-once side effects.
+
+Ordering is per invocation only, with no sandbox-wide locking or rollback of
+filesystem side effects. Volume refresh may temporarily hide mounts or fail
+with open files. It does not coordinate independent commands or make concurrent
+cache writes safe.
+
+Host actions are explicitly allowlisted. Only `run_tests` and
+`modal.refresh_volumes` are implemented: `before_tests` is not an alias.
+Shell actions and payload updates are deferred. `test_results` is only a
+possible future event with undefined timing and payload semantics, not a
+supported configuration event.
+
 #### edit_code
 
 If you do not use a standard `AGENTS.md` file, you can configure Sidekick to load
