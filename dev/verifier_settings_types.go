@@ -7,15 +7,17 @@ const (
 	ReviewHelpResultMaxChars     = "review_help_result_max_chars"
 	ReviewRecentToolResultsCount = "review_recent_tool_results_count"
 	ReviewChatHistoryMaxSize     = "review_chat_history_max_size"
+	ReviewContextTypes           = "review_context_types"
 )
 
 type VerifierSettings struct {
-	Enabled                bool `json:"enabled"`
-	ReuseHistory           bool `json:"reuseHistory"`
-	ToolResultMaxChars     int  `json:"toolResultMaxChars"`
-	HelpResultMaxChars     int  `json:"helpResultMaxChars"`
-	RecentToolResultsCount int  `json:"recentToolResultsCount"`
-	ChatHistoryMaxSize     int  `json:"chatHistoryMaxSize"`
+	Enabled                bool     `json:"enabled"`
+	ReuseHistory           bool     `json:"reuseHistory"`
+	ToolResultMaxChars     int      `json:"toolResultMaxChars"`
+	HelpResultMaxChars     int      `json:"helpResultMaxChars"`
+	RecentToolResultsCount int      `json:"recentToolResultsCount"`
+	ChatHistoryMaxSize     int      `json:"chatHistoryMaxSize"`
+	ContextTypes           []string `json:"contextTypes"`
 }
 
 func DefaultVerifierSettings() VerifierSettings {
@@ -26,5 +28,6 @@ func DefaultVerifierSettings() VerifierSettings {
 		HelpResultMaxChars:     2000,
 		RecentToolResultsCount: 20,
 		ChatHistoryMaxSize:     40000,
+		ContextTypes:           []string{ContextTypeEditBlockReport, ContextTypeTestResult, ContextTypeSummary},
 	}
 }

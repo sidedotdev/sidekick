@@ -665,3 +665,54 @@ func TestVerifierChatHistoryHelpResultConfiguredLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifierChatHistoryDefaultExcludesAutoReview(t *testing.T) {
+	t.Parallel()
+
+	messages := []llm2.Message{
+		verifierTestText("previous automatic evaluation", ContextTypeAutoReviewFeedback),
+		verifierTestText("applied edits", ContextTypeEditBlockReport),
+		verifierTestText("workflow test results", ContextTypeTestResult),
+		verifierTestText("existing summary", ContextTypeSummary),
+	}
+	var index verifierChatHistoryIndex
+	history := prepareVerifierMessages(messages, &index, DefaultVerifierSettings(), "")
+
+	require.Len(t, history.Records, 3)
+	assert.NotContains(t, history.Text, "previous automatic evaluation")
+	assert.Empty(t, history.HumanMessages)
+	for _, record := range history.Records {
+		assert.NotEqual(t, ContextTypeAutoReviewFeedback, record.Name)
+	}
+	assert.Contains(t, history.Text, "applied edits")
+	assert.Contains(t, history.Text, "workflow test results")
+	assert.Contains(t, history.Text, "existing summary")
+}
+
+func TestVerifierChatHistoryConfiguredReports(t *testing.T) {
+	t.Parallel()
+	for _, contextTypes := range [][]string{
+		{},
+		{ContextTypeAutoReviewFeedback},
+		{ContextTypeEditBlockReport, ContextTypeTestResult, ContextTypeAutoReviewFeedback, ContextTypeSummary},
+	} {
+		t.Run(fmt.Sprint(contextTypes), func(t *testing.T) {
+			t.Parallel()
+			settings := DefaultVerifierSettings()
+			settings.ContextTypes = contextTypes
+			var messages []llm2.Message
+			for _, marker := range []string{
+				ContextTypeEditBlockReport, ContextTypeTestResult, ContextTypeAutoReviewFeedback, ContextTypeSummary,
+			} {
+				messages = append(messages, verifierTestText(marker, marker))
+			}
+			var index verifierChatHistoryIndex
+			history := prepareVerifierMessages(messages, &index, settings, "")
+			var names []string
+			for _, record := range history.Records {
+				names = append(names, record.Name)
+			}
+			require.ElementsMatch(t, contextTypes, names)
+		})
+	}
+}

@@ -141,7 +141,7 @@ onUnmounted(() => {
 
 .grid-row {
   display: grid;
-  grid-template-columns: repeat(v-bind(columns), 1fr);
+  grid-template-columns: repeat(v-bind(columns), minmax(0, 1fr));
   gap: 1rem;
 }
 </style>

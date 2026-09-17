@@ -2,8 +2,10 @@
   <div class="task-card-shell">
     <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
       <div class="actions">
-        <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
-        <button v-else class="action rename" title="Rename task" @click.stop="startRenaming">✎️</button>
+        <template v-if="canEdit">
+          <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
+          <button v-else class="action rename" title="Rename task" @click.stop="startRenaming">✎️</button>
+        </template>
         <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
         <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
         <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
@@ -149,6 +151,12 @@ const statusLabel = (status: string) => {
 const canArchive = computed(() => ['complete', 'failed', 'canceled'].includes(props.task.status) && !props.task.archived);
 const canDelete = computed(() => props.task.status === 'drafting' || props.task.archived);
 const canCancel = computed(() => ['to_do', 'in_progress', 'blocked', 'in_review'].includes(props.task.status) && !props.task.archived);
+
+const canEdit = computed(() =>
+  !props.task.archived &&
+  props.task.agentType !== 'none' &&
+  !['complete', 'failed', 'canceled'].includes(props.task.status),
+)
 
 // Edit/copy modals are owned by an ancestor (e.g. the kanban board) so that
 // background task updates that remount this card can't close an open modal.

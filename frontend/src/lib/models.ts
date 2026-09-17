@@ -69,8 +69,7 @@ export interface ActionData {
   actionType: string
 }
 
-// TODO add the rest
-export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'in_review' | 'complete' | 'failed'
+export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'in_review' | 'complete' | 'failed' | 'canceled'
 export type FlowStatus = 'in_progress' | 'paused' | 'completed' | 'failed' | 'canceled'
 export type AgentType = 'human' | 'llm' | 'none'
 
@@ -314,8 +313,8 @@ export interface CriteriaFulfillment {
   whatWasActuallyDone: string;
   analysis: string;
   isFulfilled: boolean;
-  confidence: number;
-  feedbackMessage?: string;
+  confidence?: number;
+  feedbackMessage?: string | null;
 }
 
 /**

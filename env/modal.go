@@ -1270,6 +1270,18 @@ func recycleModalSandbox(ctx context.Context, name string) error {
 	return nil
 }
 
+func modalLookupRestoreSource(name, source string, lookup func(string) (*modalSnapshotRecord, error)) (*modalSnapshotRecord, error) {
+	record, err := lookup(source)
+	if err != nil {
+		if source == name {
+			return nil, fmt.Errorf("cannot determine restore snapshot for modal sandbox %s: %w", name, err)
+		}
+		log.Warn().Err(err).Str("sandbox", source).Msg("failed to check for modal seed snapshot")
+		return nil, nil
+	}
+	return record, nil
+}
+
 func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
 	_, publicKey, err := ensureModalSSHKey(ctx)
 	if err != nil {
@@ -1306,10 +1318,11 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 			}
 		}
 		for _, snapName := range modalSnapshotSources(input, name) {
-			record, snapErr := modalLatestSnapshot(ctx, client, snapName)
+			record, snapErr := modalLookupRestoreSource(name, snapName, func(source string) (*modalSnapshotRecord, error) {
+				return modalLatestSnapshot(ctx, client, source)
+			})
 			if snapErr != nil {
-				log.Warn().Err(snapErr).Str("sandbox", snapName).Msg("failed to check for modal snapshot")
-				continue
+				return ModalCreateSandboxOutput{}, snapErr
 			}
 			if record == nil {
 				continue

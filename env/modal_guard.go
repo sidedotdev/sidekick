@@ -193,9 +193,11 @@ func E2ESandboxName(base string) string {
 	return base + modalGuardNamespaceSuffix()
 }
 
-// modalGuardAppName is the deployed guard app for this checkout.
+// modalGuardAppName isolates embedded guard revisions without moving their
+// durable records. Older binaries can still replace the legacy app.
 func modalGuardAppName() string {
-	return modalGuardAppBaseName + modalGuardNamespaceSuffix()
+	sum := sha256.Sum256([]byte(modalGuardScriptHash() + ":" + modalGuardNamespaceSuffix()))
+	return modalGuardAppBaseName + "-" + hex.EncodeToString(sum[:8])
 }
 
 // renderModalGuardSource stamps the namespace into the guard source so that
@@ -203,6 +205,8 @@ func modalGuardAppName() string {
 func renderModalGuardSource() string {
 	rendered := strings.Replace(modalGuardAppSource, `NAMESPACE = ""`,
 		fmt.Sprintf("NAMESPACE = %q", modalGuardNamespaceSuffix()), 1)
+	rendered = strings.Replace(rendered, `APP_NAME = "sidekick-guard" + NAMESPACE`,
+		fmt.Sprintf("APP_NAME = %q", modalGuardAppName()), 1)
 	return strings.Replace(rendered, `SOURCE_HASH = ""`,
 		fmt.Sprintf("SOURCE_HASH = %q", modalGuardScriptHash()), 1)
 }
@@ -240,6 +244,7 @@ func modalGuardIdentityFor(ctx context.Context, client *modal.Client) (modalGuar
 }
 
 type modalGuardState struct {
+	AppName      string `json:"appName"`
 	ScriptHash   string `json:"scriptHash"`
 	HibernateURL string `json:"hibernateUrl"`
 	// Namespace records which guard deployment the URL belongs to, so
@@ -278,14 +283,17 @@ func ensureModalGuard(ctx context.Context, client *modal.Client) (string, error)
 	namespace := modalGuardNamespaceSuffix()
 	if data, err := os.ReadFile(statePath); err == nil {
 		var state modalGuardState
-		if json.Unmarshal(data, &state) == nil && state.ScriptHash == wantHash &&
-			state.Namespace == namespace && state.HibernateURL != "" {
+		if json.Unmarshal(data, &state) == nil && state.AppName == modalGuardAppName() &&
+			state.ScriptHash == wantHash && state.Namespace == namespace && state.HibernateURL != "" {
 			// Local state only records what this host deployed, not what is
 			// live: anything else deploying under the same app name replaces
 			// it silently, and a mismatched guard reads a store this host
 			// never writes, making sandboxes look unrestorable.
 			identity, err := modalGuardIdentityFor(ctx, client)
-			if err == nil && identity.SourceHash == wantHash {
+			if err == nil && identity.SourceHash == wantHash &&
+				identity.AppName == modalGuardAppName() &&
+				identity.Namespace == namespace &&
+				identity.VolumeName == "sidekick-guard-snapshots"+namespace {
 				return state.HibernateURL, nil
 			}
 			log.Info().Str("app", modalGuardAppName()).Str("wantSourceHash", wantHash).
@@ -302,8 +310,18 @@ func ensureModalGuard(ctx context.Context, client *modal.Client) (string, error)
 	if err != nil {
 		return "", err
 	}
+	identity, err := modalGuardIdentityFor(ctx, client)
+	if err != nil {
+		return "", err
+	}
+	if identity.SourceHash != wantHash || identity.AppName != modalGuardAppName() ||
+		identity.Namespace != namespace || identity.VolumeName != "sidekick-guard-snapshots"+namespace {
+		return "", fmt.Errorf("unexpected modal guard identity after deployment: %+v", identity)
+	}
 
-	data, err := json.Marshal(modalGuardState{ScriptHash: wantHash, HibernateURL: url, Namespace: namespace})
+	data, err := json.Marshal(modalGuardState{
+		AppName: modalGuardAppName(), ScriptHash: wantHash, HibernateURL: url, Namespace: namespace,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -367,7 +385,10 @@ python -c "import modal; f = modal.Function.from_name('` + modalGuardAppName() +
 	if exitCode != 0 || !strings.HasPrefix(url, "https://") {
 		return "", fmt.Errorf("modal guard deploy failed (exit %d): %s%s", exitCode, stdout, stderr)
 	}
-	log.Info().Str("url", url).Msg("deployed sidekick guard app to modal")
+	log.Info().Str("url", url).Str("app", modalGuardAppName()).
+		Str("sourceHash", modalGuardScriptHash()).Str("namespace", modalGuardNamespaceSuffix()).
+		Str("volume", "sidekick-guard-snapshots"+modalGuardNamespaceSuffix()).
+		Msg("deployed sidekick guard app to modal")
 	return url, nil
 }
 
@@ -480,12 +501,11 @@ type modalSnapshotDeletion struct {
 // thing that keeps them from accumulating. Callers must be sure nothing will
 // be restored from the sandbox again.
 func modalDeleteSnapshots(ctx context.Context, client *modal.Client, sandboxName string) (modalSnapshotDeletion, error) {
+	if _, err := ensureModalGuard(ctx, client); err != nil {
+		return modalSnapshotDeletion{}, err
+	}
 	fn, err := client.Functions.FromName(ctx, modalGuardAppName(), "delete_snapshot", nil)
 	if err != nil {
-		var notFound modal.NotFoundError
-		if errors.As(err, &notFound) {
-			return modalSnapshotDeletion{}, nil
-		}
 		return modalSnapshotDeletion{}, fmt.Errorf("failed to look up modal guard: %w", err)
 	}
 	result, err := fn.Remote(ctx, []any{sandboxName}, nil)
@@ -504,14 +524,18 @@ func modalDeleteSnapshots(ctx context.Context, client *modal.Client, sandboxName
 }
 
 // modalLatestSnapshot returns the most recent watchdog snapshot record for a
-// sandbox name, or nil when the guard is not deployed or has no record.
+// sandbox name, or nil when the durable store has no record.
 func modalLatestSnapshot(ctx context.Context, client *modal.Client, sandboxName string) (*modalSnapshotRecord, error) {
+	// A new deployment name does not imply an empty snapshot volume.
+	if _, err := ensureModalGuard(ctx, client); err != nil {
+		return nil, err
+	}
+	return modalReadLatestSnapshot(ctx, client, sandboxName)
+}
+
+func modalReadLatestSnapshot(ctx context.Context, client *modal.Client, sandboxName string) (*modalSnapshotRecord, error) {
 	fn, err := client.Functions.FromName(ctx, modalGuardAppName(), "latest_snapshot", nil)
 	if err != nil {
-		var notFound modal.NotFoundError
-		if errors.As(err, &notFound) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("failed to look up modal guard: %w", err)
 	}
 	result, err := fn.Remote(ctx, []any{sandboxName}, nil)

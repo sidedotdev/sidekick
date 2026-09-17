@@ -80,3 +80,12 @@ review_chat_history_max_size:
     default: 40000
   defaultRule:
     variation: default
+review_context_types:
+  version: "1"
+  variations:
+    withoutAutoReview: [EditBlockReport, TestResult, Summary]
+    withAutoReview: [EditBlockReport, TestResult, AutoReviewFeedback, Summary]
+  defaultRule:
+    percentage:
+      withoutAutoReview: 50
+      withAutoReview: 50

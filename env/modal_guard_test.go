@@ -118,22 +118,21 @@ func TestModalGuardDiscardsSnapshotsOnDelete(t *testing.T) {
 		"the rolling keep-2 GC must retry previously failed deletions")
 }
 
-// TestModalGuardNamespaceIsolation covers the failure that let one checkout
-// redeploy its guard over another's: the app and its volume are workspace-wide
-// singletons, so a namespaced checkout must address a wholly separate
-// deployment while production keeps the stable names.
+// Namespaces isolate both deployment and storage; source revisions isolate
+// deployment only so upgrades can still restore existing snapshots.
 func TestModalGuardNamespaceIsolation(t *testing.T) {
 	t.Setenv("SIDE_E2E_TEST", "")
 	t.Setenv(modalGuardNamespaceEnvVar, "")
-	assert.Equal(t, "sidekick-guard", modalGuardAppName(), "production must keep the stable app name")
+	productionApp := modalGuardAppName()
+	assert.NotEqual(t, "sidekick-guard", productionApp)
 	assert.Contains(t, renderModalGuardSource(), `NAMESPACE = ""`)
 	assert.Equal(t, "side-e2e-modal-dev", E2ESandboxName("side-e2e-modal-dev"))
 
 	t.Setenv(modalGuardNamespaceEnvVar, "Side/Fix-SSH")
-	assert.True(t, strings.HasPrefix(modalGuardAppName(), "sidekick-guard-side-fix-ssh-"),
-		"got %q", modalGuardAppName())
+	assert.NotEqual(t, productionApp, modalGuardAppName())
 
 	rendered := renderModalGuardSource()
+	assert.Contains(t, rendered, `APP_NAME = "`+modalGuardAppName()+`"`)
 	assert.Contains(t, rendered, `NAMESPACE = "`+modalGuardNamespaceSuffix()+`"`)
 	assert.NotContains(t, rendered, `NAMESPACE = ""`,
 		"an unstamped namespace would silently share the production volume")

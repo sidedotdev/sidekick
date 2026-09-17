@@ -71,6 +71,9 @@ func verifierFlagValues(settings VerifierSettings) fflag.EvaluateFlagsOutput {
 			ReviewRecentToolResultsCount: settings.RecentToolResultsCount,
 			ReviewChatHistoryMaxSize:     settings.ChatHistoryMaxSize,
 		},
+		StringArrayValues: map[string][]string{
+			ReviewContextTypes: settings.ContextTypes,
+		},
 	}
 }
 
@@ -97,4 +100,23 @@ func TestVerifierHelpResultLimitFlag(t *testing.T) {
 		})
 	}
 	require.Equal(t, 2000, verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{}).HelpResultMaxChars)
+}
+
+func TestVerifierContextTypeFlags(t *testing.T) {
+	t.Parallel()
+	defaults := DefaultVerifierSettings()
+	input := verifierFlagsInput("flow", "coding", "judge")
+	require.Equal(t, defaults.ContextTypes, input.StringArrayFlags[ReviewContextTypes])
+
+	for _, contextTypes := range [][]string{
+		{},
+		{ContextTypeEditBlockReport, ContextTypeTestResult, ContextTypeSummary},
+		{ContextTypeEditBlockReport, ContextTypeTestResult, ContextTypeAutoReviewFeedback, ContextTypeSummary},
+	} {
+		settings := verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{
+			StringArrayValues: map[string][]string{ReviewContextTypes: contextTypes},
+		})
+		require.Equal(t, contextTypes, settings.ContextTypes)
+	}
+	require.Equal(t, defaults, verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{}))
 }
