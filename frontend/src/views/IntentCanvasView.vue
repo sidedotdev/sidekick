@@ -158,9 +158,8 @@
           class="finish-btn"
           type="button"
           @click="openFinishDialog"
-          :disabled="finishing || finishLoading"
         >
-          {{ finishing ? 'Finishing…' : 'Finish IDD' }}
+          Finish IDD
         </button>
 
         <label class="auto-mode-toggle">
@@ -264,26 +263,16 @@
         <button type="button" class="side-panel-close" @click="closeFinishDialog" aria-label="Cancel finish">×</button>
       </header>
       <div class="finish-body">
-        <div class="finish-field">
-          <span class="finish-label">Merge into branch</span>
-          <BranchSelector
-            v-if="store.workspaceId"
-            :workspace-id="store.workspaceId"
-            v-model="finishTargetBranch"
-            allow-create
-          />
-        </div>
-
-        <section class="finish-diff-section">
-          <span class="finish-label">Diff to be merged</span>
-          <UnifiedDiffViewer
-            v-if="finishDiff"
-            class="finish-diff"
-            :diff-string="finishDiff"
-          />
-          <p v-else-if="finishLoading" class="finish-empty">Loading diff…</p>
-          <p v-else class="finish-empty">No changes to merge.</p>
-        </section>
+        <p v-if="mergeApproval?.actionParams.mergeError" class="finish-error" role="alert">
+          {{ mergeApproval.actionParams.mergeError }}
+        </p>
+        <UserRequest
+          v-if="mergeApproval"
+          :key="mergeApproval.id"
+          :flow-action="mergeApproval"
+          :expand="true"
+        />
+        <p v-else class="finish-empty">Waiting for merge approval…</p>
 
         <section v-if="clarifications.length" class="finish-requests">
           <span class="finish-label">Pending user requests</span>
@@ -299,17 +288,7 @@
           </ul>
         </section>
 
-        <p v-if="finishError" class="finish-error">{{ finishError }}</p>
       </div>
-      <footer class="finish-actions">
-        <button type="button" class="text-btn" @click="closeFinishDialog" :disabled="finishing">Cancel</button>
-        <button
-          type="button"
-          class="primary-btn"
-          :disabled="!finishTargetBranch || finishing || finishLoading"
-          @click="confirmFinish"
-        >{{ finishing ? 'Merging…' : 'Confirm merge' }}</button>
-      </footer>
     </div>
 
     <div
@@ -330,16 +309,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
-import BranchSelector from '../components/BranchSelector.vue'
+import UserRequest from '../components/UserRequest.vue'
 import FlowEditorLinks from '../components/FlowEditorLinks.vue'
 import IntentMarkdownEditor from '../components/IntentMarkdownEditor.vue'
 import SubtaskSidePanel from '../components/SubtaskSidePanel.vue'
 import ShortcutHint from '../components/ShortcutHint.vue'
 import FlowView from './FlowView.vue'
-import UnifiedDiffViewer from '../components/UnifiedDiffViewer.vue'
 import DevRunControls from '../components/DevRunControls.vue'
 import { formatMarkdown } from '../lib/markdown_format'
 import type { Flow, FlowAction } from '../lib/models'
@@ -693,7 +671,12 @@ const fetchCanvasState = async () => {
   if (fetchingCanvasState) return
   fetchingCanvasState = true
   try {
-    if (!flow.value?.parentId) await fetchFlow()
+    await fetchFlow()
+    if (flow.value?.status === 'completed') {
+      showFinishDialog.value = false
+      await router.push({ name: 'kanban' })
+      return
+    }
     const taskId = flow.value?.parentId
     if (!taskId) return
     const res = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks/${taskId}/flows`)
@@ -723,13 +706,9 @@ const fetchCanvasState = async () => {
       if (!response.ok) throw new Error(await response.text())
       const { flowActions = [] } = await response.json() as { flowActions: FlowAction[] }
       if (id === flowId.value) {
-        const approval = flowActions.find((action) =>
+        mergeApproval.value = flowActions.find((action) =>
           action.actionType === 'user_request.approve.merge' && action.actionStatus === 'pending',
-        )
-        finishDefaultBranch.value = approval?.actionParams.mergeApprovalInfo?.defaultTargetBranch ?? ''
-        if (approval?.actionParams.mergeError) {
-          finishError.value = approval.actionParams.mergeError
-        }
+        ) ?? null
       }
       return flowActions.filter((action) =>
         action.actionStatus === 'pending'
@@ -865,93 +844,19 @@ const closeSubtask = () => {
 }
 
 const showFinishDialog = ref(false)
-const finishDefaultBranch = ref('')
-const finishTargetBranch = ref<string | null>('')
-const finishDiff = ref('')
-const finishLoading = ref(false)
-const finishing = ref(false)
-const finishError = ref('')
+const mergeApproval = ref<FlowAction | null>(null)
 
-watch(finishTargetBranch, (value, prev) => {
-  if (!showFinishDialog.value) return
-  if (value === prev) return
-  loadFinishDiff()
-})
 
-const loadFinishDiff = async () => {
-  if (!finishTargetBranch.value) {
-    finishDiff.value = ''
-    return
-  }
-  finishLoading.value = true
-  finishError.value = ''
-  try {
-    const res = await fetch(
-      `${apiBase.value}/finish_diff?target=${encodeURIComponent(finishTargetBranch.value)}`,
-    )
-    if (!res.ok) throw new Error(await res.text())
-    const data = await res.json()
-    finishDiff.value = (data.diff ?? '') as string
-  } catch (e) {
-    console.error('Failed to load finish IDD diff:', e)
-    finishError.value = 'Failed to load diff'
-    finishDiff.value = ''
-  } finally {
-    finishLoading.value = false
-  }
-}
 
 const openFinishDialog = async () => {
-  finishError.value = ''
-  finishDiff.value = ''
   showFinishDialog.value = true
-  if (finishDefaultBranch.value && !finishTargetBranch.value) {
-    finishTargetBranch.value = finishDefaultBranch.value
-  }
-  if (finishTargetBranch.value) {
-    await loadFinishDiff()
-  }
+  await fetchCanvasState()
 }
 
 const closeFinishDialog = () => {
-  if (finishing.value) return
   showFinishDialog.value = false
 }
 
-const confirmFinish = async () => {
-  if (!finishTargetBranch.value || finishing.value) return
-  finishing.value = true
-  finishError.value = ''
-  try {
-    const res = await fetch(`${apiBase.value}/finish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetBranch: finishTargetBranch.value }),
-    })
-    if (!res.ok) throw new Error(await res.text())
-    // The merge, worktree cleanup and sub-task cancellation run asynchronously
-    // in the IDD workflow, so keep the panel open and poll its state until it
-    // either reports a finish error or the flow completes. On success the user
-    // is redirected to the kanban board.
-    while (showFinishDialog.value) {
-      await fetchCanvasState()
-      if (finishError.value) {
-        return
-      }
-      await fetchFlow()
-      if (flow.value?.status === 'completed') {
-        router.push({ name: 'kanban' })
-        return
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-    }
-  } catch (e) {
-    console.error('Failed to finish IDD:', e)
-    finishError.value = e instanceof Error ? e.message : 'Failed to finish IDD'
-  } finally {
-    finishing.value = false
-  }
-}
 
 const handleShortcut = (event: KeyboardEvent) => {
   if ((event.key === 'i' || event.key === 'I') && (event.metaKey || event.ctrlKey)) {

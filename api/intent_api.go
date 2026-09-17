@@ -341,41 +341,6 @@ func (ctrl *Controller) ListIntentBranchesHandler(c *gin.Context) {
 	})
 }
 
-// FinishIntentDiffHandler returns the diff that would be merged from the idd
-// worktree branch into the given target branch.
-func (ctrl *Controller) FinishIntentDiffHandler(c *gin.Context) {
-	workspaceId := c.Param("workspaceId")
-	flowId := c.Param("id")
-
-	target := strings.TrimSpace(c.Query("target"))
-	if target == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "target branch is required"})
-		return
-	}
-
-	worktreeDir, status, err := ctrl.flowWorktreeDir(c.Request.Context(), workspaceId, flowId)
-	if err != nil {
-		c.JSON(status, gin.H{"error": err.Error()})
-		return
-	}
-
-	cmd := exec.CommandContext(c.Request.Context(), "git", "diff", target+"...HEAD")
-	cmd.Dir = worktreeDir
-	var out, errBuf bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errBuf
-	if runErr := cmd.Run(); runErr != nil {
-		log.Error().Err(runErr).Str("workspaceId", workspaceId).Str("flowId", flowId).Str("target", target).Str("stderr", errBuf.String()).Msg("Failed to compute intent finish diff")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to compute diff against %s", target)})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"target": target,
-		"diff":   out.String(),
-	})
-}
-
 // SetIddAutoModeHandler signals the IddWorkflow to enable or disable the
 // background orchestrator's auto sub-task creation.
 func (ctrl *Controller) SetIddAutoModeHandler(c *gin.Context) {

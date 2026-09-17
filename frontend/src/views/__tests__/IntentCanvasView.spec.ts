@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { config, mount, flushPromises } from '@vue/test-utils'
+import PrimeVue from 'primevue/config'
 import IntentCanvasView from '../IntentCanvasView.vue'
+
+config.global.plugins.push(PrimeVue)
 
 const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }))
 
@@ -461,88 +464,73 @@ describe('IntentCanvasView', () => {
     expect(window.localStorage.getItem('intent-canvas:last-file:flow-1')).toBe('intent/specs/auth.md')
   })
 
-  it('redirects to the kanban board after the IDD flow finishes successfully', async () => {
+  it.each([false, true])('submits merge approval through UserRequest (merge fails: %s)', async (fails) => {
+    vi.useFakeTimers()
     routerPush.mockClear()
-    installFetch((url, opts) => {
+    let submitted = false
+    let finished = false
+    const completeUrl = '/api/v1/workspaces/ws-1/flow_actions/approval-1/complete'
+    const fetchSpy = installFetch(async (url, opts) => {
       const u = url.toString()
-      if (u.endsWith('/intent/files')) {
-        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
-      }
-      if (u.includes('/intent/file?path=')) {
-        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
-      }
-      if (u === taskFlowsUrl) {
-        return Promise.resolve(
-          jsonResponse({ flows: [] }),
-        )
-      }
-      if (u.includes('/intent/finish_diff')) {
-        return Promise.resolve(jsonResponse({ diff: 'merge diff' }))
-      }
-      if (u.endsWith('/intent/finish') && opts?.method === 'POST') {
-        return Promise.resolve(jsonResponse({}))
+      if (u.endsWith('/intent/files')) return jsonResponse({ files: [] })
+      if (u === completeUrl && opts?.method === 'POST') {
+        submitted = true
+        return jsonResponse({})
       }
       if (u === flowBase) {
-        return Promise.resolve(jsonResponse({ flow: { id: 'flow-1', parentId: 'task-1', status: 'completed' } }))
+        return jsonResponse({
+          flow: { id: 'flow-1', parentId: 'task-1', status: finished && !fails ? 'completed' : 'in_progress' },
+        })
       }
-      return Promise.resolve(canvasFixture(u))
+      if (u === `${flowBase}/actions`) return jsonResponse({ flowActions: [{
+        id: 'approval-1', workspaceId: 'ws-1', flowId: 'flow-1',
+        created: new Date().toISOString(), actionResult: '',
+        actionType: 'user_request.approve.merge', actionStatus: 'pending', isHumanAction: true,
+        actionParams: {
+          requestKind: 'merge_approval',
+          mergeApprovalInfo: { defaultTargetBranch: 'main', diff: '' },
+          mergeError: finished && fails ? 'Merge conflict on main' : '',
+        },
+      }] })
+      return canvasFixture(u)
     })
 
     const wrapper = mount(IntentCanvasView)
-    await flushPromises()
+    try {
+      await flushPromises()
+      await wrapper.get('.finish-btn').trigger('click')
+      await flushPromises()
+      await wrapper.get('.finish-body form').trigger('keydown', { key: 'Enter', ctrlKey: true })
+      await flushPromises()
 
-    await wrapper.find('.finish-btn').trigger('click')
-    await flushPromises()
+      expect(submitted).toBe(true)
+      const submission = fetchSpy.mock.calls.find(([url]) => String(url) === completeUrl)
+      expect(JSON.parse(String(submission?.[1]?.body))).toMatchObject({
+        userResponse: { approved: true, params: { targetBranch: 'main', ignoreWhitespace: false } },
+      })
+      expect(routerPush).not.toHaveBeenCalled()
 
-    await wrapper.find('.finish-actions .primary-btn').trigger('click')
-    await flushPromises()
+      if (!fails) {
+        await wrapper.get('[aria-label="Cancel finish"]').trigger('click')
+        expect(wrapper.find('.finish-panel').exists()).toBe(false)
+      }
 
-    expect(routerPush).toHaveBeenCalledWith({ name: 'kanban' })
+      finished = true
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      if (fails) {
+        expect(wrapper.get('[role="alert"]').text()).toBe('Merge conflict on main')
+        expect(routerPush).not.toHaveBeenCalled()
+        expect(wrapper.find('.finish-body form').exists()).toBe(true)
+      } else {
+        expect(routerPush).toHaveBeenCalledWith({ name: 'kanban' })
+      }
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
   })
 
-  it('surfaces a workflow finish error in the finish panel and does not redirect', async () => {
-    routerPush.mockClear()
-    installFetch((url, opts) => {
-      const u = url.toString()
-      if (u.endsWith('/intent/files')) {
-        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
-      }
-      if (u.includes('/intent/file?path=')) {
-        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
-      }
-      if (u === taskFlowsUrl) {
-        return Promise.resolve(
-          jsonResponse({ flows: [] }),
-        )
-      }
-      if (u.includes('/intent/finish_diff')) {
-        return Promise.resolve(jsonResponse({ diff: 'merge diff' }))
-      }
-      if (u.endsWith('/intent/finish') && opts?.method === 'POST') {
-        return Promise.resolve(jsonResponse({}))
-      }
-      if (u === flowBase) {
-        return Promise.resolve(jsonResponse({ flow: { id: 'flow-1', parentId: 'task-1', status: 'in_progress' } }))
-      }
-      if (u === `${flowBase}/actions`) return Promise.resolve(jsonResponse({ flowActions: [{
-        actionType: 'user_request.approve.merge', actionStatus: 'pending',
-        actionParams: { mergeApprovalInfo: { defaultTargetBranch: 'main' }, mergeError: 'Merge conflict on main' },
-      }] }))
-      return Promise.resolve(canvasFixture(u))
-    })
-
-    const wrapper = mount(IntentCanvasView)
-    await flushPromises()
-
-    await wrapper.find('.finish-btn').trigger('click')
-    await flushPromises()
-
-    await wrapper.find('.finish-actions .primary-btn').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.find('.finish-error').text()).toBe('Merge conflict on main')
-    expect(routerPush).not.toHaveBeenCalled()
-  })
 })
 
 it('loads persisted canvas state and refreshes pending questions without querying workflow state', async () => {
@@ -596,4 +584,75 @@ it('loads persisted canvas state and refreshes pending questions without queryin
   } finally {
     wrapper.unmount()
   }
+})
+
+describe('IDD merge approval panel', () => {
+  it('renders the persisted approval, refreshes errors, and waits for flow completion before redirecting', async () => {
+    vi.useFakeTimers()
+    routerPush.mockClear()
+    let status = 'in_progress'
+    let mergeError = ''
+    const approval = () => ({
+      id: 'approval-1',
+      workspaceId: 'ws-1',
+      flowId: 'flow-1',
+      actionType: 'user_request.approve.merge',
+      actionStatus: 'pending',
+      isHumanAction: true,
+      actionParams: {
+        requestKind: 'merge_approval',
+        mergeApprovalInfo: { defaultTargetBranch: 'main', diff: 'persisted diff' },
+        mergeError,
+      },
+    })
+    const fetchSpy = installFetch(async (url) => {
+      const u = url.toString()
+      if (u === flowBase) {
+        return jsonResponse({ flow: { id: 'flow-1', parentId: 'task-1', status } })
+      }
+      if (u === `${flowBase}/actions`) return jsonResponse({ flowActions: [approval()] })
+      if (u.endsWith('/intent/files')) return jsonResponse({ files: [] })
+      return canvasFixture(u)
+    })
+    const wrapper = mount(IntentCanvasView, {
+      global: {
+        stubs: {
+          UserRequest: {
+            props: ['flowAction', 'expand'],
+            template: '<div class="approval-request">{{ flowAction.actionParams.mergeApprovalInfo.diff }}</div>',
+          },
+          DevRunControls: true,
+          IntentMarkdownEditor: true,
+          FlowView: true,
+        },
+      },
+    })
+    try {
+      await flushPromises()
+      await wrapper.get('.finish-btn').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.approval-request').text()).toBe('persisted diff')
+      expect(routerPush).not.toHaveBeenCalled()
+
+      mergeError = 'Merge conflict on main'
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(wrapper.get('[role="alert"]').text()).toBe(mergeError)
+      expect(routerPush).not.toHaveBeenCalled()
+
+      mergeError = ''
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+
+      status = 'completed'
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(routerPush).toHaveBeenCalledWith({ name: 'kanban' })
+      expect(fetchSpy.mock.calls.some(([url]) => /\/intent\/finish/.test(String(url)))).toBe(false)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
 })
