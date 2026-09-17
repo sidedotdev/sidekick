@@ -117,7 +117,13 @@ To try the app out as a developer, install a debug build on an Android device
 2. Enable **Developer options** and **USB debugging** on the device, connect it
    over USB (or use `adb pair` + `adb connect` for wireless debugging), and
    confirm it shows up in `adb devices`.
-3. Build and install the debug APK from `app/android`:
+3. From the repository root, run `just phone` to build, install, and launch the
+   debug app. This requires [Just](https://just.systems/) and selects the online
+   non-emulator device with the highest ADB transport ID (the most recently
+   registered connection in the current ADB server). Installation and launch
+   stay pinned to that connection even if another phone connects during the build.
+
+   Alternatively, build and install the debug APK from `app/android`:
 
    ```sh
    ./gradlew :app:installDebug
