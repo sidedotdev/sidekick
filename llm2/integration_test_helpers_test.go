@@ -34,9 +34,69 @@ func requireIntegrationAPIKey(t *testing.T, names ...string) secret_manager.Secr
 	return secretManager
 }
 
-func requireOpenAIIntegrationCredentials(t *testing.T) secret_manager.SecretManager {
+// IntegrationEnvironment is how an integration test must run in the
+// environment it finds itself in: with an adapted provider and the credentials
+// that belong to it, or skipped or failed when that environment is configured
+// but cannot serve the request.
+type IntegrationEnvironment struct {
+	Provider   Provider
+	Secrets    secret_manager.SecretManager
+	SkipReason string
+	Err        error
+}
+
+// IntegrationProviderAdapter adapts a provider, and the credentials it runs
+// with, to the environment integration tests run in. A sandbox provisioned
+// with a host credential proxy routes requests through it instead of reading
+// local secrets, which is how these tests exercise real providers where no
+// credentials exist. The adapter imports llm2, so the external test package
+// installs it here; it reports false when the environment offers nothing and
+// the test should use local credentials.
+var IntegrationProviderAdapter func(provider Provider, authType common.ProviderAuthType) (IntegrationEnvironment, bool)
+
+// requireOpenAIResponsesIntegration gates a built-in OpenAI Responses
+// integration test and returns the provider and secret manager to run it with.
+func requireOpenAIResponsesIntegration(t *testing.T, provider OpenAIResponsesProvider) (Provider, secret_manager.SecretManager) {
 	t.Helper()
-	return requireIntegrationAPIKey(t, "OPENAI_OAUTH", "OPENAI_API_KEY")
+	return requireOpenAIIntegrationProvider(t, provider, provider.AuthType)
+}
+
+// requireOpenAIChatIntegration is the chat completions counterpart, which only
+// ever authenticates with an API key.
+func requireOpenAIChatIntegration(t *testing.T, provider OpenAIProvider) (Provider, secret_manager.SecretManager) {
+	t.Helper()
+	return requireOpenAIIntegrationProvider(t, provider, common.ProviderAuthTypeAPI)
+}
+
+func requireOpenAIIntegrationProvider(t *testing.T, provider Provider, authType common.ProviderAuthType) (Provider, secret_manager.SecretManager) {
+	t.Helper()
+
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+	if IntegrationProviderAdapter != nil {
+		if environment, adapted := IntegrationProviderAdapter(provider, authType); adapted {
+			if environment.Err != nil {
+				t.Fatal(environment.Err)
+			}
+			if environment.SkipReason != "" {
+				t.Skip(environment.SkipReason)
+			}
+			return environment.Provider, environment.Secrets
+		}
+	}
+	return provider, requireIntegrationAPIKey(t, openAIIntegrationSecretNames(authType)...)
+}
+
+func openAIIntegrationSecretNames(authType common.ProviderAuthType) []string {
+	switch common.NormalizeProviderAuthType(string(authType)) {
+	case common.ProviderAuthTypeAPI:
+		return []string{"OPENAI_API_KEY"}
+	case common.ProviderAuthTypeSubscription:
+		return []string{"OPENAI_OAUTH"}
+	default:
+		return []string{"OPENAI_OAUTH", "OPENAI_API_KEY"}
+	}
 }
 
 func hasAnyIntegrationSecret(secretManager secret_manager.SecretManager, names ...string) bool {

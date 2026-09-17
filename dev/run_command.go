@@ -160,12 +160,23 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 
 	// Execute command through sh
 	var output env.EnvRunCommandActivityOutput
-	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	input := env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		Command:            "sh",
 		Args:               []string{"-c", params.Command},
 		RelativeWorkingDir: relWorkDir,
-	}).Get(dCtx.Context, &output)
+	}
+	version := workflow.GetVersion(dCtx.Context, "run-command-credential-proxy", workflow.DefaultVersion, 2)
+	if version >= 2 {
+		input.Provisioning = commandProvisioning(dCtx, input.EnvContainer.Env.GetType())
+		err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
+	} else if version >= 1 {
+		err = workflow.ExecuteActivity(dCtx.Context, CredentialProxyCommandActivity, CredentialProxyCommandInput{
+			Command: input, RepoConfig: dCtx.RepoConfig,
+		}).Get(dCtx.Context, &output)
+	} else {
+		err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to execute command: %v", err)
 	}

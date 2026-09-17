@@ -77,10 +77,25 @@ command_permissions:
     - pattern: '^(?:\./)?app/android/gradlew -p app/android(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
     - pattern: '^\./gradlew(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
 
+credential_proxies:
+  openai-api:
+    auth:
+      side:
+        provider: openai
+        auth_type: api
+  openai-subscription:
+    auth:
+      side:
+        provider: openai
+        auth_type: subscription
+
 openshell:
   from: "Dockerfile.openshell"
 
 modal:
+  credential_proxies:
+    - openai-api
+    - openai-subscription
   # VM memory is statically provisioned from the request and cannot burst to
   # memory_limit. The container runtime lets normal workloads keep a low billing
   # floor while accommodating concurrent test commands.
@@ -118,6 +133,12 @@ modal:
 port_forwards:
   - host_port: 21855
     container_port: 31855
+  # Reverse-forward the host's credential proxy so sandbox commands can reach
+  # provider APIs using host-held credentials. Forwarding is only
+  # connectivity: the listener runs in development only, and each command must
+  # still be granted a capability for the proxies it is authorized to use.
+  - host_port: 22855
+    container_port: 32855
 
 dev_run:
   supervisor:

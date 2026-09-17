@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sidekick/common"
+	"sidekick/credential_proxy/llmproxy"
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/llm2"
@@ -123,6 +124,9 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		log.Error().Err(err).Msg("failed to get llm2 provider")
 		return nil, err
 	}
+	// Sandboxes provisioned with host credential proxies stream through
+	// them, so provider credentials never have to exist there.
+	provider = llmproxy.Wrap(provider)
 
 	llm2History, ok := input.ChatHistory.History.(*Llm2ChatHistory)
 	if !ok {

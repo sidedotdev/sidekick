@@ -15,8 +15,8 @@ const (
 	googleWebSearchCallIdPrefix  = "google_ws_"
 )
 
-// webSearchToolName is the normalized builtin tool name used across providers.
-const webSearchToolName = "web_search"
+// WebSearchToolName is the normalized builtin tool name used across providers.
+const WebSearchToolName = "web_search"
 
 // builtinToolClientNamePrefix marks client-style tool pairs converted from
 // builtin tool blocks, so they can be recognized and reversed back into
@@ -25,7 +25,7 @@ const builtinToolClientNamePrefix = "builtin_"
 
 func clientNameForBuiltinTool(name string) string {
 	if name == "" {
-		name = webSearchToolName
+		name = WebSearchToolName
 	}
 	return builtinToolClientNamePrefix + name
 }

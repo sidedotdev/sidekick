@@ -14,12 +14,13 @@ import (
 
 // LocalConfig represents the local configuration file structure
 type LocalConfig struct {
-	Profiles           []ProfileConfig          `koanf:"profiles,omitempty"`
-	Providers          []ModelProviderConfig    `koanf:"providers,omitempty"`
-	LLM                map[string][]ModelConfig `koanf:"llm,omitempty"`
-	Embedding          map[string][]ModelConfig `koanf:"embedding,omitempty"`
-	CommandPermissions CommandPermissionConfig  `koanf:"command_permissions,omitempty"`
-	OffHours           OffHoursConfig           `koanf:"off_hours,omitempty"`
+	Profiles           []ProfileConfig                  `koanf:"profiles,omitempty"`
+	Providers          []ModelProviderConfig            `koanf:"providers,omitempty"`
+	LLM                map[string][]ModelConfig         `koanf:"llm,omitempty"`
+	Embedding          map[string][]ModelConfig         `koanf:"embedding,omitempty"`
+	CommandPermissions CommandPermissionConfig          `koanf:"command_permissions,omitempty"`
+	OffHours           OffHoursConfig                   `koanf:"off_hours,omitempty"`
+	CredentialProxies  map[string]CredentialProxyConfig `koanf:"credential_proxies,omitempty"`
 }
 
 // ResolveProfiles returns the declared profiles with display names resolved,
@@ -58,6 +59,11 @@ func (c LocalConfig) validateProvider(provider string, allowAnthropicProvider bo
 
 // Validate ensures the LocalConfig is valid
 func (c LocalConfig) Validate() error {
+	for _, proxy := range c.CredentialProxies {
+		if err := proxy.Validate(); err != nil {
+			return fmt.Errorf("invalid credential proxy: %w", err)
+		}
+	}
 	declaredProfiles := map[string]bool{profileIdKey(DefaultProfileId): true}
 	seenProfiles := map[string]bool{}
 	for _, p := range c.Profiles {

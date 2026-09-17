@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"sidekick/common"
+	"sidekick/credential_proxy/server"
 	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/env"
@@ -40,11 +41,16 @@ import (
 )
 
 type Server struct {
-	httpServer     *http.Server
-	shutdownTracer func(context.Context) error
+	httpServer      *http.Server
+	credentialProxy *server.Service
+	shutdownTracer  func(context.Context) error
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.credentialProxy != nil {
+		// In-flight proxied streams must not hold up application shutdown.
+		_ = s.credentialProxy.Close()
+	}
 	if s.shutdownTracer != nil {
 		if err := s.shutdownTracer(ctx); err != nil {
 			log.Error().Err(err).Msg("Error shutting down telemetry")
@@ -94,9 +100,15 @@ func RunServer() *Server {
 		}
 	}()
 
+	credentialProxy, err := startCredentialProxy()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to start credential proxy")
+	}
+
 	return &Server{
-		httpServer:     httpSrv,
-		shutdownTracer: shutdownTracer,
+		httpServer:      httpSrv,
+		credentialProxy: credentialProxy,
+		shutdownTracer:  shutdownTracer,
 	}
 }
 

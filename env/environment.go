@@ -1591,11 +1591,12 @@ func (ec *EnvContainer) UnmarshalJSON(data []byte) error {
 
 type EnvRunCommandActivityInput struct {
 	EnvContainer       EnvContainer
-	RelativeWorkingDir string   `json:"relativeWorkingDir"`
-	Command            string   `json:"command"`
-	Args               []string `json:"args"`
-	EnvVars            []string `json:"envVars,omitempty"`
-	SkipWaking         bool     `json:"skipWaking,omitempty"`
+	RelativeWorkingDir string               `json:"relativeWorkingDir"`
+	Command            string               `json:"command"`
+	Args               []string             `json:"args"`
+	EnvVars            []string             `json:"envVars,omitempty"`
+	SkipWaking         bool                 `json:"skipWaking,omitempty"`
+	Provisioning       *CommandProvisioning `json:"provisioning,omitempty"`
 }
 
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
@@ -1639,6 +1640,13 @@ func GetEnvironmentInfoActivity(ctx context.Context, input GetEnvironmentInfoInp
 
 // EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
 func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+	return runCommandActivity(ctx, input, nil)
+}
+
+func runCommandActivity(ctx context.Context, input EnvRunCommandActivityInput, redact func(string) string) (EnvRunCommandActivityOutput, error) {
+	if input.Provisioning != nil {
+		return EnvRunCommandActivityOutput{}, errors.New("command provisioning is not configured on this worker")
+	}
 	type result struct {
 		output EnvRunCommandActivityOutput
 		err    error
@@ -1653,6 +1661,15 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 			EnvVars:            input.EnvVars,
 			SkipWaking:         input.SkipWaking,
 		})
+		if redact != nil {
+			out.Stdout = redact(out.Stdout)
+			out.Stderr = redact(out.Stderr)
+			if err != nil {
+				if message := redact(err.Error()); message != err.Error() {
+					err = errors.New(message)
+				}
+			}
+		}
 		resultCh <- result{output: out, err: err}
 	}()
 

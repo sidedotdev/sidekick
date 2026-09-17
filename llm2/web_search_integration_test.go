@@ -126,8 +126,7 @@ func TestOpenAIResponsesProvider_WebSearchIntegration(t *testing.T) {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
 
-	provider := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI}
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	provider, secretManager := requireOpenAIResponsesIntegration(t, OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI})
 
 	request := StreamRequest{
 		Messages: []Message{{
@@ -248,8 +247,7 @@ func TestWebSearchCrossProviderIntegration(t *testing.T) {
 		},
 	}
 
-	provider := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI}
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	provider, secretManager := requireOpenAIResponsesIntegration(t, OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI})
 
 	request := StreamRequest{
 		Messages: anthropicHistory,

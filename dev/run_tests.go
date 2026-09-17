@@ -257,7 +257,21 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 		runTestInput.RelativeWorkingDir = workingDir
 	}
 	var runTestOutput env.EnvRunCommandActivityOutput
-	activityFuture := workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput)
+	var activityFuture workflow.Future
+	version := workflow.DefaultVersion
+	if len(activeCredentialProxies(envContainer.Env.GetType(), actionCtx.RepoConfig)) > 0 {
+		version = workflow.GetVersion(actionCtx, "verification-credential-proxy", workflow.DefaultVersion, 2)
+	}
+	if version >= 2 {
+		runTestInput.Provisioning = commandProvisioning(actionCtx.DevContext, envContainer.Env.GetType())
+		activityFuture = workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput)
+	} else if version >= 1 {
+		activityFuture = workflow.ExecuteActivity(actionCtx, CredentialProxyCommandActivity, CredentialProxyCommandInput{
+			Command: runTestInput, RepoConfig: actionCtx.RepoConfig,
+		})
+	} else {
+		activityFuture = workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput)
+	}
 	err := activityFuture.Get(actionCtx, &runTestOutput)
 	if err != nil {
 		resultsCh.Send(actionCtx, singleTestResult{

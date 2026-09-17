@@ -409,7 +409,7 @@ func googleGroundingToEvents(gm *genai.GroundingMetadata, state *googleStreamSta
 
 	result := &BuiltinToolResultBlock{
 		ToolCallId: id,
-		Name:       webSearchToolName,
+		Name:       WebSearchToolName,
 	}
 	for _, chunk := range gm.GroundingChunks {
 		if chunk != nil && chunk.Web != nil {
@@ -433,7 +433,7 @@ func googleGroundingToEvents(gm *genai.GroundingMetadata, state *googleStreamSta
 				Type: ContentBlockTypeBuiltinToolUse,
 				BuiltinToolUse: &BuiltinToolUseBlock{
 					Id:        id,
-					Name:      webSearchToolName,
+					Name:      WebSearchToolName,
 					Arguments: string(argsBytes),
 				},
 			},

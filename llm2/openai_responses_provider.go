@@ -29,13 +29,17 @@ type OpenAIResponsesProvider struct {
 	// BuiltinTools opts protocol-compatible proxy providers into specific
 	// provider-native tools (e.g. "web_search").
 	BuiltinTools []string
+	// AuthToken authenticates requests directly instead of resolving provider
+	// credentials from the secret manager, for callers that already hold a
+	// bearer credential for BaseURL.
+	AuthToken string
 }
 
 // webSearchToolEnabled reports whether the native web search tool may be sent.
 // A custom BaseURL indicates an openai_responses_compatible proxy, which is
 // opted out by default since its backend may not support hosted tools.
 func (p OpenAIResponsesProvider) webSearchToolEnabled() bool {
-	return p.BaseURL == "" || slices.Contains(p.BuiltinTools, webSearchToolName)
+	return p.BaseURL == "" || slices.Contains(p.BuiltinTools, WebSearchToolName)
 }
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
@@ -53,7 +57,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		}
 	}
 
-	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
+	credentials, err := openAIRequestAuth(p.AuthToken, request.SecretManager, providerNameNormalized, authType)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +73,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	} else if credentials.useOAuth {
 		clientOptions = append(clientOptions, option.WithBaseURL(openAIChatGPTResponsesBaseURL))
 	}
-	if credentials.useOAuth {
+	if credentials.useOAuth && credentials.accountID != "" {
 		clientOptions = append(clientOptions, option.WithHeader("ChatGPT-Account-Id", credentials.accountID))
 	}
 	for k, v := range p.CustomHeaders {
@@ -220,7 +224,7 @@ loop:
 								Type: ContentBlockTypeBuiltinToolUse,
 								BuiltinToolUse: &BuiltinToolUseBlock{
 									Id:        item.ID,
-									Name:      webSearchToolName,
+									Name:      WebSearchToolName,
 									Arguments: item.Action.RawJSON(),
 									Status:    string(item.Status),
 								},
@@ -351,7 +355,7 @@ loop:
 						Type: ContentBlockTypeBuiltinToolUse,
 						BuiltinToolUse: &BuiltinToolUseBlock{
 							Id:     item.ID,
-							Name:   webSearchToolName,
+							Name:   WebSearchToolName,
 							Status: string(item.Status),
 						},
 					},
@@ -398,7 +402,7 @@ loop:
 						Type: ContentBlockTypeBuiltinToolUse,
 						BuiltinToolUse: &BuiltinToolUseBlock{
 							Id:        item.ID,
-							Name:      webSearchToolName,
+							Name:      WebSearchToolName,
 							Arguments: item.Action.RawJSON(),
 							Status:    string(item.Status),
 						},
