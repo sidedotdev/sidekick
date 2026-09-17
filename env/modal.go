@@ -23,7 +23,7 @@ import (
 	"sidekick/utils"
 
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
-	modal "github.com/modal-labs/libmodal/modal-go"
+	modal "github.com/modal-labs/modal-client/go"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/temporal"
 	"golang.org/x/net/http/httpproxy"
@@ -128,7 +128,7 @@ func findModalSandbox(ctx context.Context, client *modal.Client, name string) (*
 		}
 		return nil, fmt.Errorf("failed to look up modal sandbox %s: %w", name, err)
 	}
-	exitCode, err := sb.Poll(ctx)
+	exitCode, err := sb.Poll(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to poll modal sandbox %s: %w", name, err)
 	}
@@ -188,7 +188,7 @@ func waitForModalSandboxGone(ctx context.Context, client *modal.Client, name str
 // tunnel. The port is exposed unencrypted at the tunnel level because SSH
 // provides its own encryption.
 func modalTunnelEndpoint(ctx context.Context, sb *modal.Sandbox) (string, int, error) {
-	tunnels, err := sb.Tunnels(ctx, time.Minute)
+	tunnels, err := sb.Tunnels(ctx, time.Minute, nil)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to get modal sandbox tunnels: %w", err)
 	}
@@ -211,7 +211,7 @@ func waitForModalSSHD(ctx context.Context, sb *modal.Sandbox) error {
 	if err != nil {
 		return fmt.Errorf("failed to exec sshd readiness check in modal sandbox: %w", err)
 	}
-	exitCode, err := proc.Wait(ctx)
+	exitCode, err := proc.Wait(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sshd readiness check failed in modal sandbox: %w", err)
 	}
@@ -574,7 +574,7 @@ func modalExecCommand(ctx context.Context, sandboxName, command string) (EnvRunC
 		return EnvRunCommandOutput{}, fmt.Errorf("failed to read output of command in modal sandbox %s: %w", sandboxName, readErr)
 	}
 
-	exitCode, err := process.Wait(ctx)
+	exitCode, err := process.Wait(ctx, nil)
 	if err != nil {
 		return EnvRunCommandOutput{}, fmt.Errorf("failed to wait for command in modal sandbox %s: %w", sandboxName, err)
 	}
@@ -607,7 +607,7 @@ func enableModalPerfCounters(ctx context.Context, sb *modal.Sandbox) {
 		log.Warn().Err(err).Msg("failed to enable perf counters in modal VM sandbox")
 		return
 	}
-	if _, err := proc.Wait(ctx); err != nil {
+	if _, err := proc.Wait(ctx, nil); err != nil {
 		log.Warn().Err(err).Msg("failed to enable perf counters in modal VM sandbox")
 	}
 }
@@ -955,7 +955,7 @@ func modalVolumes(ctx context.Context, client *modal.Client, config common.Modal
 			return nil, fmt.Errorf("failed to resolve modal volume %s: %w", mount.Name, err)
 		}
 		if mount.ReadOnly {
-			volume = volume.ReadOnly()
+			volume = volume.WithMountOptions(&modal.VolumeMountOptionsParams{ReadOnly: &mount.ReadOnly})
 		}
 		volumes[mount.MountPath] = volume
 	}
@@ -1100,7 +1100,7 @@ func modalFinishedSandboxInfo(ctx context.Context, client *modal.Client, name st
 	if err != nil || sb == nil {
 		return "", nil
 	}
-	exitCode, err := sb.Poll(ctx)
+	exitCode, err := sb.Poll(ctx, nil)
 	if err != nil {
 		return sb.SandboxID, nil
 	}
@@ -1312,7 +1312,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 		// sandbox for the same repo, or fall back to a clean current image.
 		var image *modal.Image
 		if input.SnapshotImageId != "" {
-			image, err = client.Images.FromID(ctx, input.SnapshotImageId)
+			image, err = client.Images.FromID(ctx, input.SnapshotImageId, nil)
 			if err != nil {
 				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to load pinned modal snapshot image %s: %w", input.SnapshotImageId, err)
 			}
@@ -1335,7 +1335,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 					Msg("skipping incompatible modal snapshot")
 				continue
 			}
-			snapImage, imgErr := client.Images.FromID(ctx, record.ImageId)
+			snapImage, imgErr := client.Images.FromID(ctx, record.ImageId, nil)
 			if imgErr != nil {
 				log.Warn().Err(imgErr).Str("sandbox", snapName).Msg("failed to load modal snapshot image")
 				continue
@@ -1382,7 +1382,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 			// The tag is the guard's auth record for this sandbox's token;
 			// hibernation requests are rejected without it, so failure here
 			// must fail creation (auto-hibernation is mandatory).
-			if tagErr := sb.SetTags(ctx, map[string]string{modalGuardTokenTagKey: guardTokenHash}); tagErr != nil {
+			if tagErr := sb.SetTags(ctx, map[string]string{modalGuardTokenTagKey: guardTokenHash}, nil); tagErr != nil {
 				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to set modal guard token tag on sandbox %s: %w", name, tagErr)
 			}
 		}
@@ -1440,7 +1440,7 @@ func modalCheckSandbox(ctx context.Context, sandboxName string) (ModalCheckSandb
 	if err != nil {
 		return ModalCheckSandboxOutput{}, nil
 	}
-	if code, waitErr := proc.Wait(ctx); waitErr != nil || code != 0 {
+	if code, waitErr := proc.Wait(ctx, nil); waitErr != nil || code != 0 {
 		return ModalCheckSandboxOutput{}, nil
 	}
 	sshHost, sshPort, err := modalTunnelEndpoint(ctx, sb)

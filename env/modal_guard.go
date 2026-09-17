@@ -20,7 +20,7 @@ import (
 	"sidekick/common"
 
 	"github.com/BurntSushi/toml"
-	modal "github.com/modal-labs/libmodal/modal-go"
+	modal "github.com/modal-labs/modal-client/go"
 	"github.com/rs/zerolog/log"
 )
 
@@ -403,7 +403,7 @@ func modalExecWithStdin(ctx context.Context, sb *modal.Sandbox, command, stdin s
 	if err := proc.Stdin.Close(); err != nil {
 		return err
 	}
-	exitCode, err := proc.Wait(ctx)
+	exitCode, err := proc.Wait(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -426,7 +426,7 @@ func modalExecCapture(ctx context.Context, sb *modal.Sandbox, script string) (st
 	}()
 	outBytes, readErr := io.ReadAll(proc.Stdout)
 	<-stderrDone
-	exitCode, err = proc.Wait(ctx)
+	exitCode, err = proc.Wait(ctx, nil)
 	if err != nil {
 		return "", "", 0, err
 	}

@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	modal "github.com/modal-labs/libmodal/modal-go"
+	modal "github.com/modal-labs/modal-client/go"
 )
 
 // DebugModalSandboxStatus prints how each Modal control-plane surface sees
@@ -30,7 +30,7 @@ func DebugModalSandboxStatus(ctx context.Context, w io.Writer, name string) {
 	}
 	fmt.Fprintf(w, "%s FromName ok: sandboxId=%s\n", now, sb.SandboxID)
 
-	exitCode, err := sb.Poll(ctx)
+	exitCode, err := sb.Poll(ctx, nil)
 	switch {
 	case err != nil:
 		fmt.Fprintf(w, "%s Poll error: %v\n", now, err)
@@ -43,7 +43,7 @@ func DebugModalSandboxStatus(ctx context.Context, w io.Writer, name string) {
 	proc, err := sb.Exec(ctx, []string{"true"}, &modal.SandboxExecParams{Stdout: modal.Ignore, Stderr: modal.Ignore})
 	if err != nil {
 		fmt.Fprintf(w, "%s Exec error: %v (terminatingOrTerminated=%v)\n", now, err, isModalSandboxTerminatingOrTerminated(err))
-	} else if code, werr := proc.Wait(ctx); werr != nil {
+	} else if code, werr := proc.Wait(ctx, nil); werr != nil {
 		fmt.Fprintf(w, "%s Exec wait error: %v\n", now, werr)
 	} else {
 		fmt.Fprintf(w, "%s Exec: ok (exit %d)\n", now, code)

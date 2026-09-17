@@ -14,7 +14,7 @@ import (
 
 	"sidekick/common"
 
-	modal "github.com/modal-labs/libmodal/modal-go"
+	modal "github.com/modal-labs/modal-client/go"
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

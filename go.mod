@@ -38,7 +38,7 @@ require (
 	github.com/knadh/koanf/providers/file v0.1.0
 	github.com/knadh/koanf/v2 v2.1.2
 	github.com/moby/buildkit v0.13.2
-	github.com/modal-labs/libmodal/modal-go v0.7.3
+	github.com/modal-labs/modal-client/go v0.9.0
 	github.com/nats-io/nats-server/v2 v2.10.27
 	github.com/nats-io/nats.go v1.39.1
 	github.com/openai/openai-go/v3 v3.1.0
@@ -296,7 +296,7 @@ require (
 	github.com/nikunjy/rules v1.5.0 // indirect
 	github.com/olivere/elastic/v7 v7.0.32 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/pjbgf/sha1cd v0.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -348,20 +348,20 @@ require (
 	golang.org/x/net v0.55.0
 	golang.org/x/oauth2 v0.34.0
 	golang.org/x/sync v0.21.0
-	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/text v0.38.0
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/api v0.256.0 // indirect
 	google.golang.org/genproto v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260120221211-b8f7ae30c516 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260128011058-8636f8732409 // indirect
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/validator.v2 v2.0.1 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

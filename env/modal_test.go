@@ -12,7 +12,7 @@ import (
 
 	"sidekick/common"
 
-	modal "github.com/modal-labs/libmodal/modal-go"
+	modal "github.com/modal-labs/modal-client/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/temporal"
