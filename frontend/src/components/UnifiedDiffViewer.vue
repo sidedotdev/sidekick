@@ -3,14 +3,25 @@
     <div v-if="parsedFiles.length === 0" class="no-diff-message">
       No diff content to display
     </div>
-    <DiffFile
+    <template
       v-for="(fileData, index) in parsedFiles"
       :key="`${fileData.oldFile.fileName || 'unknown'}-${fileData.newFile.fileName || 'unknown'}-${index}`"
-      :file-data="fileData"
-      :default-expanded="defaultExpanded"
-      :diff-mode="diffMode"
-      :level="level"
-    />
+    >
+      <div
+        v-if="!fileData.oldFile.fileName && !fileData.newFile.fileName"
+        class="no-diff-message"
+        role="status"
+      >
+        {{ fileData.hunks.join('\n') }}
+      </div>
+      <DiffFile
+        v-else
+        :file-data="fileData"
+        :default-expanded="defaultExpanded"
+        :diff-mode="diffMode"
+        :level="level"
+      />
+    </template>
   </div>
 </template>
 
