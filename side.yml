@@ -72,6 +72,7 @@ command_permissions:
     - pattern: "go run ./scripts/dump*"
     - pattern: "go run ./scripts/lint_.*"
     - pattern: "go run ./scripts/modal_sandbox_status"
+    - pattern: "go run ./scripts/modal_diagnostics"
     - pattern: "playwright-cli"
     - pattern: '^(?:SIDE_SERVER_PORT=[0-9]{1,5} +)?(?:\./)?scripts/android_phone_remote_e2e/run\.sh(?: +(?:-h|-t +[0-9]+|-s +(?:[A-Za-z0-9_.:-]+|''[A-Za-z0-9_.:() -]+''|"[A-Za-z0-9_.:() -]+")))*$'
     - pattern: '^(?:\./)?app/android/gradlew -p app/android(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
