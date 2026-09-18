@@ -37,6 +37,11 @@ func (si StreamInput) ActionParams() map[string]any {
 		params = map[string]any{}
 	}
 	params["messages"] = si.ChatHistory
+	if si.ChatHistory != nil {
+		// Activity metadata can repersist this action after the live history advances.
+		history := si.ChatHistory.Clone()
+		params["messages"] = &history
+	}
 	params["secretManagerType"] = si.Secrets.GetType()
 	return params
 }
