@@ -30,6 +30,7 @@ func TestBuildDevPlanRecordsBeforeFinishingAtLimit(t *testing.T) {
 			env := suite.NewTestWorkflowEnvironment()
 			env.SetWorkerOptions(utils.TestWorkerOptions())
 			env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
+			env.OnGetVersion("dev-plan-no-tool-help", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 
 			var flags *fflag.FFlagActivities
 			env.OnActivity(flags.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()

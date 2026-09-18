@@ -22,7 +22,15 @@ import (
 // TODO /gen/planned/req move this to RepoConfig
 const maxRetrieveCodeContextLength = 15000
 
+type toolCallOptions struct {
+	ForwardedAssistantResponse bool
+}
+
 func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *persisted_ai.ChatHistoryContainer, customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error)) ([]llm2.ToolResultBlock, error) {
+	return handleToolCallsWithOptions(dCtx, toolCalls, chatHistory, customHandlers, toolCallOptions{})
+}
+
+func handleToolCallsWithOptions(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *persisted_ai.ChatHistoryContainer, customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error), options toolCallOptions) ([]llm2.ToolResultBlock, error) {
 	// backward compatibility: handle-parallel-tool-calls
 	// if old version, only process the first tool call
 	version := workflow.GetVersion(dCtx, "handle-parallel-tool-calls", workflow.DefaultVersion, 1)
@@ -38,7 +46,7 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 		if handler, ok := customHandlers[tc.Name]; ok {
 			output.ToolResultBlock, err = handler(dCtx, tc)
 		} else {
-			output, err = handleToolCall(dCtx, tc)
+			output, err = handleToolCallWithOptions(dCtx, tc, options)
 		}
 
 		if err != nil {
@@ -73,7 +81,7 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 			if handler, ok := customHandlers[tc.Name]; ok {
 				output.ToolResultBlock, err = handler(localDCtx, tc)
 			} else {
-				output, err = handleToolCall(localDCtx, tc)
+				output, err = handleToolCallWithOptions(localDCtx, tc, options)
 			}
 
 			responseChannel.Send(ctx, struct {
@@ -152,8 +160,12 @@ type ToolCallOutput struct {
 	Ref *persisted_ai.MessageRef `json:"ref,omitempty"`
 }
 
-// TODO /gen/planned/req add a test for this function using WorkflowTestSuite
 func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, error) {
+	return handleToolCallWithOptions(dCtx, toolCall, toolCallOptions{})
+}
+
+// TODO /gen/planned/req add a test for this function using WorkflowTestSuite
+func handleToolCallWithOptions(dCtx DevContext, toolCall llm.ToolCall, options toolCallOptions) (ToolCallOutput, error) {
 	var toolCallResult llm2.ToolResultBlock
 	dCtx.Context = utils.NoRetryCtx(dCtx)
 	toolCallResult.Name = toolCall.Name
@@ -165,7 +177,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 		var wrapper GetHelpOrInputArguments
 		human := false
 		response, err := unmarshalAndInvoke(toolCall, &wrapper, func() (string, error) {
-			return getHelpOrInputWithProvenance(dCtx, wrapper.Requests, &human)
+			return getHelpOrInputWithProvenance(dCtx, wrapper.Requests, &human, options.ForwardedAssistantResponse)
 		})
 		if errors.Is(err, ErrEmptyHelpOrInputRequests) {
 			// Self-correctable: surface the error as tool result content so the
