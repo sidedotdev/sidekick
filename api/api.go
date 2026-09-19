@@ -106,8 +106,14 @@ type Controller struct {
 	temporalNamespace string
 	temporalTaskQueue string
 	secretManager     secret_manager.SecretManager
-	taskStartTimeout  time.Duration
-	allowedOrigins    *AllowedOrigins
+	// secretManagerForProfile resolves credentials stored under a specific
+	// profile. When nil, only the default-profile secretManager is available.
+	secretManagerForProfile func(profileId string) secret_manager.SecretManager
+	// loadLocalConfig reads the local sidekick config, defaulting to the config
+	// file discovered on disk.
+	loadLocalConfig  func() (common.LocalConfig, error)
+	taskStartTimeout time.Duration
+	allowedOrigins   *AllowedOrigins
 }
 
 type ModelConfigUpdateRequest struct {
@@ -116,6 +122,18 @@ type ModelConfigUpdateRequest struct {
 
 type ModalConfigUpdateRequest struct {
 	Config common.ModalEnvConfig `json:"config"`
+}
+
+// PortForwardsUpdateRequest replaces the full list of host→container port
+// mappings of a flow's environment; an empty list clears all forwards.
+type PortForwardsUpdateRequest struct {
+	PortForwards []common.PortForwardConfig `json:"portForwards"`
+}
+
+// PortForwardsResponse reports the mappings actually in effect after an
+// update, e.g. with container ports the environment defaulted.
+type PortForwardsResponse struct {
+	PortForwards []common.PortForwardConfig `json:"portForwards"`
 }
 
 // UserActionRequest defines the expected request body for user actions.
@@ -227,6 +245,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	ctrl.allowedOrigins = allowedOrigins
 
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
+	r.GET("/api/v1/profiles", ctrl.GetProfilesHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
 	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)
 	r.POST("/api/v1/open-in-ide", ctrl.OpenInIdeHandler)
@@ -264,6 +283,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
 	flowRoutes.PUT("/:id/model_config", ctrl.UpdateFlowModelConfigHandler)
 	flowRoutes.PUT("/:id/modal_config", ctrl.UpdateFlowModalConfigHandler)
+	flowRoutes.PUT("/:id/port_forwards", ctrl.UpdateFlowPortForwardsHandler)
 	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
 	flowRoutes.GET("/:id/history/:eventId", ctrl.GetFlowEventDetailHandler)
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
@@ -339,26 +359,61 @@ func NewController() (Controller, error) {
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
 		secretManager:     secretManager,
-		taskStartTimeout:  common.GetTaskStartTimeout(),
+		secretManagerForProfile: func(profileId string) secret_manager.SecretManager {
+			return secret_manager.NewProfileSecretManager(profileId)
+		},
+		taskStartTimeout: common.GetTaskStartTimeout(),
 	}, nil
 }
 
+// GetProvidersHandler returns providers available to a profile, resolved
+// directly from the profileId query param. This is a generic, non-workspace-
+// specific lookup used where no workspace has been persisted yet, e.g. while
+// configuring a workspace's profile before it's created.
 func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
+	profileId := common.NormalizeProfileId(c.Query("profileId"))
+	c.JSON(http.StatusOK, gin.H{"providers": ctrl.resolveProviders(profileId)})
+}
+
+// GetWorkspaceProvidersHandler returns providers available to a workspace,
+// with the profile derived authoritatively from the workspace's persisted
+// configuration rather than any client-supplied override.
+func (ctrl *Controller) GetWorkspaceProvidersHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+
+	workspace, err := ctrl.service.GetWorkspace(c.Request.Context(), workspaceId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get workspace"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"providers": ctrl.resolveProviders(workspace.EffectiveProfileId())})
+}
+
+// resolveProviders lists the providers available to a profile, combining
+// explicitly configured providers with builtin providers detected via
+// available credentials.
+func (ctrl *Controller) resolveProviders(profileId string) []string {
 	providers := []string{}
 	seen := make(map[string]bool)
 
-	config, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+	config, err := ctrl.localConfig()
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to load sidekick config")
 	} else {
 		for _, p := range config.Providers {
-			if p.Name != "" && !seen[p.Name] {
+			if p.Name != "" && !seen[p.Name] && p.MatchesProfile(profileId) {
 				providers = append(providers, p.Name)
 				seen[p.Name] = true
 			}
 		}
 	}
 
+	secretManager := ctrl.profileSecretManager(profileId)
 	for _, builtinProvider := range common.BuiltinProviders {
 		if seen[builtinProvider] {
 			continue
@@ -375,7 +430,7 @@ func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 		}
 
 		for _, secretName := range secretNames {
-			if _, err := ctrl.secretManager.GetSecret(secretName); err == nil {
+			if _, err := secretManager.GetSecret(secretName); err == nil {
 				if !slices.Contains(providers, builtinProvider) {
 					providers = append(providers, builtinProvider)
 				}
@@ -384,7 +439,38 @@ func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"providers": providers})
+	return providers
+}
+
+// GetProfilesHandler returns the declared profiles, always including the
+// default profile, so clients can display profile names derived from ids.
+func (ctrl *Controller) GetProfilesHandler(c *gin.Context) {
+	var declarations []common.ProfileConfig
+
+	config, err := ctrl.localConfig()
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to load sidekick config")
+	} else {
+		declarations = config.Profiles
+	}
+
+	c.JSON(http.StatusOK, gin.H{"profiles": common.ResolveProfiles(declarations)})
+}
+
+func (ctrl *Controller) localConfig() (common.LocalConfig, error) {
+	if ctrl.loadLocalConfig != nil {
+		return ctrl.loadLocalConfig()
+	}
+	return common.LoadSidekickConfig(common.GetSidekickConfigPath())
+}
+
+// profileSecretManager resolves credentials for the given profile, falling back
+// to the default-profile secret manager when no profile factory is configured.
+func (ctrl *Controller) profileSecretManager(profileId string) secret_manager.SecretManager {
+	if ctrl.secretManagerForProfile == nil {
+		return ctrl.secretManager
+	}
+	return ctrl.secretManagerForProfile(profileId)
 }
 
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
@@ -705,12 +791,7 @@ func (ctrl *Controller) UpdateFlowModalConfigHandler(c *gin.Context) {
 		return
 	}
 
-	_, err := ctrl.temporalClient.UpdateWorkflow(c.Request.Context(), client.UpdateWorkflowOptions{
-		WorkflowID:   flowId,
-		UpdateName:   dev.UpdateNameModalConfig,
-		Args:         []interface{}{req.Config},
-		WaitForStage: client.WorkflowUpdateStageCompleted,
-	})
+	err := ctrl.awaitFlowUpdate(c.Request.Context(), flowId, dev.UpdateNameModalConfig, req.Config, nil)
 	if err != nil {
 		var serviceErrNotFound *serviceerror.NotFound
 		if errors.As(err, &serviceErrNotFound) {
@@ -723,6 +804,71 @@ func (ctrl *Controller) UpdateFlowModalConfigHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Modal environment recreated"})
+}
+
+func (ctrl *Controller) UpdateFlowPortForwardsHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if _, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var req PortForwardsUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
+		return
+	}
+	if err := common.ValidatePortForwards(req.PortForwards); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid port forwards: " + err.Error()})
+		return
+	}
+
+	var applied dev.PortForwardsConfig
+	err := ctrl.awaitFlowUpdate(
+		c.Request.Context(),
+		flowId,
+		dev.UpdateNamePortForwards,
+		dev.PortForwardsConfig{PortForwards: req.PortForwards},
+		&applied,
+	)
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to update workflow port forwards")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update port forwards: " + err.Error()})
+		return
+	}
+
+	if applied.PortForwards == nil {
+		applied.PortForwards = []common.PortForwardConfig{}
+	}
+	c.JSON(http.StatusOK, PortForwardsResponse{PortForwards: applied.PortForwards})
+}
+
+// awaitFlowUpdate runs a workflow update to completion and decodes its
+// outcome into result (which may be nil). Waiting for the completed stage
+// alone is not enough: UpdateWorkflow still returns a handle when the update
+// handler itself failed, and that failure is only reported by the handle.
+func (ctrl *Controller) awaitFlowUpdate(ctx context.Context, flowId, updateName string, arg, result interface{}) error {
+	handle, err := ctrl.temporalClient.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   flowId,
+		UpdateName:   updateName,
+		Args:         []interface{}{arg},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	if err != nil {
+		return err
+	}
+	return handle.Get(ctx, result)
 }
 
 // QueryFlowHandler handles requests to query a workflow.
@@ -1142,6 +1288,7 @@ type EventDetail struct {
 	EventType string        `json:"eventType"`
 	Input     []interface{} `json:"input"`
 	Output    []interface{} `json:"output"`
+	Failure   *EventFailure `json:"failure,omitempty"`
 }
 
 // eventInputPayloads returns the input payloads carried by an event, if any.
@@ -1292,6 +1439,13 @@ func (ctrl *Controller) GetFlowEventDetailHandler(c *gin.Context) {
 		EventType: target.EventType.String(),
 		Input:     decodePayloads(dc, inputPayloads),
 		Output:    decodePayloads(dc, outputPayloads),
+	}
+	if attrs := target.GetWorkflowTaskFailedEventAttributes(); attrs != nil {
+		detail.Failure = &EventFailure{
+			Cause:      attrs.GetCause().String(),
+			Message:    attrs.GetFailure().GetMessage(),
+			StackTrace: attrs.GetFailure().GetStackTrace(),
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"event": detail})
@@ -1833,8 +1987,23 @@ func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
 func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	requestCtx := c.Request.Context()
 	workspaceId := c.Param("workspaceId")
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
+		return
+	}
+
+	// Field presence makes partial updates possible: omitted fields keep their
+	// persisted values rather than being reset to the zero value.
+	var providedFields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &providedFields); err != nil {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
+		return
+	}
+
 	var taskReq TaskRequest
-	if err := c.ShouldBindJSON(&taskReq); err != nil {
+	if err := json.Unmarshal(body, &taskReq); err != nil {
 		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
 		return
 	}
@@ -1848,6 +2017,23 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 		}
 		return
+	}
+
+	_, statusProvided := providedFields["status"]
+	if !statusProvided {
+		taskReq.Status = string(task.Status)
+	}
+	if _, ok := providedFields["agentType"]; !ok {
+		taskReq.AgentType = string(task.AgentType)
+		if task.Status == domain.TaskStatusDrafting && taskReq.Status == string(domain.TaskStatusToDo) {
+			taskReq.AgentType = string(domain.AgentTypeLLM)
+		}
+	}
+	if _, ok := providedFields["description"]; !ok {
+		taskReq.Description = task.Description
+	}
+	if _, ok := providedFields["flowOptions"]; !ok {
+		taskReq.FlowOptions = task.FlowOptions
 	}
 
 	agentType, status, err := validateTaskRequest(&taskReq)
@@ -1873,16 +2059,19 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 		task.FlowType = taskReq.FlowType
 	}
 
-	// If the task status is 'to_do' and there is no flow record, start the flow
-	flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
-	if err != nil {
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
-		return
-	}
-
-	if task.Status == domain.TaskStatusToDo && len(flows) == 0 {
-		if err := ctrl.startTaskWithTimeout(c, &task); err != nil {
+	// Starting a flow is a consequence of a client moving a task into the
+	// 'to_do' state, so updates leaving the status alone never start one.
+	if statusProvided && task.Status == domain.TaskStatusToDo {
+		flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
+		if err != nil {
+			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 			return
+		}
+
+		if len(flows) == 0 {
+			if err := ctrl.startTaskWithTimeout(c, &task); err != nil {
+				return
+			}
 		}
 	}
 
@@ -2225,4 +2414,10 @@ func (ctrl *Controller) WildcardHandler(c *gin.Context) {
 			log.Error().Err(err).Msg("Failed to serve index.html")
 		}
 	}
+}
+
+type EventFailure struct {
+	Cause      string `json:"cause"`
+	Message    string `json:"message"`
+	StackTrace string `json:"stackTrace"`
 }

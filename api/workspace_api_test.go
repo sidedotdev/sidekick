@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,11 +17,16 @@ import (
 
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/dev"
 	"sidekick/domain"
+	"sidekick/mocks"
+	"sidekick/secret_manager"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/api/serviceerror"
 )
 
 func TestUpdateWorkspaceHandler(t *testing.T) {
@@ -1077,5 +1083,320 @@ func TestCreateWorkspaceBranchHandler(t *testing.T) {
 	t.Run("not found - unknown workspace", func(t *testing.T) {
 		resp := postBranch(t, "ws-does-not-exist", CreateBranchRequest{Name: "whatever", BaseBranch: "main"})
 		assert.Equal(t, http.StatusNotFound, resp.Code)
+	})
+}
+
+func TestWorkspaceHandlersProfileId(t *testing.T) {
+	t.Parallel()
+
+	createWorkspace := func(t *testing.T, ctrl Controller, req WorkspaceRequest) (*httptest.ResponseRecorder, WorkspaceResponse) {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		jsonData, err := json.Marshal(req)
+		require.NoError(t, err)
+		c.Request = httptest.NewRequest("POST", "/v1/workspaces", bytes.NewBuffer(jsonData))
+		ctrl.CreateWorkspaceHandler(c)
+
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		if resp.Code == http.StatusOK {
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		}
+		return resp, responseBody.Workspace
+	}
+
+	updateWorkspace := func(t *testing.T, ctrl Controller, workspaceId string, req WorkspaceRequest) (*httptest.ResponseRecorder, WorkspaceResponse) {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		jsonData, err := json.Marshal(req)
+		require.NoError(t, err)
+		c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspaceId, bytes.NewBuffer(jsonData))
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspaceId}}
+		ctrl.UpdateWorkspaceHandler(c)
+
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		if resp.Code == http.StatusOK {
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		}
+		return resp, responseBody.Workspace
+	}
+
+	t.Run("create persists and returns the requested profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, created := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Work Workspace",
+			LocalRepoDir: "/path/to/work/repo",
+			ProfileId:    "work",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "work", created.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), created.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "work", persisted.ProfileId)
+		assert.Equal(t, "work", persisted.EffectiveProfileId())
+	})
+
+	t.Run("create without a profile leaves the workspace on the default profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, created := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Unassigned Workspace",
+			LocalRepoDir: "/path/to/repo",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Empty(t, created.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), created.Id)
+		require.NoError(t, err)
+		assert.Empty(t, persisted.ProfileId)
+		assert.Equal(t, common.DefaultProfileId, persisted.EffectiveProfileId())
+	})
+
+	t.Run("create rejects an invalid profile id", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+
+		resp, _ := createWorkspace(t, ctrl, WorkspaceRequest{
+			Name:         "Bad Profile Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ProfileId:    "not a profile",
+		})
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "invalid profile id")
+	})
+
+	t.Run("get returns the persisted profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_get",
+			Name:         "Personal Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+			ProfileId:    "personal",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+workspace.Id, nil)
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspace.Id}}
+		ctrl.GetWorkspaceHandler(c)
+
+		require.Equal(t, http.StatusOK, resp.Code)
+		var responseBody struct {
+			Workspace WorkspaceResponse `json:"workspace"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &responseBody))
+		assert.Equal(t, "personal", responseBody.Workspace.ProfileId)
+	})
+
+	t.Run("update sets and clears the profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_update",
+			Name:         "Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp, updated := updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+			ProfileId:    "work",
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "work", updated.ProfileId)
+
+		persisted, err := ctrl.service.GetWorkspace(context.Background(), workspace.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "work", persisted.ProfileId)
+
+		resp, updated = updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+		})
+		require.Equal(t, http.StatusOK, resp.Code)
+		assert.Empty(t, updated.ProfileId)
+
+		persisted, err = ctrl.service.GetWorkspace(context.Background(), workspace.Id)
+		require.NoError(t, err)
+		assert.Empty(t, persisted.ProfileId)
+		assert.Equal(t, common.DefaultProfileId, persisted.EffectiveProfileId())
+	})
+
+	t.Run("update rejects an invalid profile id", func(t *testing.T) {
+		t.Parallel()
+		ctrl := NewMockController(t)
+		workspace := domain.Workspace{
+			Id:           "ws_profile_update_invalid",
+			Name:         "Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+
+		resp, _ := updateWorkspace(t, ctrl, workspace.Id, WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+			ProfileId:    "not a profile",
+		})
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "invalid profile id")
+	})
+}
+
+func TestUpdateWorkspaceHandler_ProfileChangeSignalsFlows(t *testing.T) {
+	t.Parallel()
+
+	newSignalTestController := func(t *testing.T) (Controller, *mocks.Client) {
+		t.Helper()
+		mockTemporalClient := mocks.NewClient(t)
+		ctrl := Controller{
+			temporalClient:   mockTemporalClient,
+			service:          NewTestService(t),
+			secretManager:    secret_manager.MockSecretManager{},
+			loadLocalConfig:  func() (common.LocalConfig, error) { return common.LocalConfig{}, nil },
+			taskStartTimeout: 5 * time.Second,
+		}
+		return ctrl, mockTemporalClient
+	}
+
+	persistWorkspace := func(t *testing.T, ctrl Controller, profileId string) domain.Workspace {
+		t.Helper()
+		workspace := domain.Workspace{
+			Id:           "ws_profile_signal_" + strings.ReplaceAll(t.Name(), "/", "_"),
+			Name:         "Workspace",
+			LocalRepoDir: "/path/to/repo",
+			ConfigMode:   "merge",
+			ProfileId:    profileId,
+		}
+		require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), workspace))
+		return workspace
+	}
+
+	persistTaskWithFlow := func(t *testing.T, ctrl Controller, workspaceId, suffix string, taskStatus domain.TaskStatus, flowStatus string) domain.Flow {
+		t.Helper()
+		ctx := context.Background()
+		task := domain.Task{
+			WorkspaceId: workspaceId,
+			Id:          "task_" + suffix,
+			Title:       "Task " + suffix,
+			Status:      taskStatus,
+			AgentType:   domain.AgentTypeLLM,
+			FlowType:    domain.FlowTypeBasicDev,
+		}
+		require.NoError(t, ctrl.service.PersistTask(ctx, task))
+		flow := domain.Flow{
+			WorkspaceId: workspaceId,
+			Id:          "flow_" + suffix,
+			Type:        domain.FlowTypeBasicDev,
+			ParentId:    task.Id,
+			Status:      flowStatus,
+		}
+		require.NoError(t, ctrl.service.PersistFlow(ctx, flow))
+		return flow
+	}
+
+	updateWorkspace := func(t *testing.T, ctrl Controller, workspace domain.Workspace, profileId string) *httptest.ResponseRecorder {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		jsonData, err := json.Marshal(WorkspaceRequest{
+			Name:         workspace.Name,
+			LocalRepoDir: workspace.LocalRepoDir,
+			ProfileId:    profileId,
+		})
+		require.NoError(t, err)
+		c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspace.Id, bytes.NewBuffer(jsonData))
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspace.Id}}
+		ctrl.UpdateWorkspaceHandler(c)
+		return resp
+	}
+
+	t.Run("signals in-progress and paused flows when the profile changes", func(t *testing.T) {
+		t.Parallel()
+		ctrl, mockTemporalClient := newSignalTestController(t)
+		workspace := persistWorkspace(t, ctrl, "")
+
+		inProgressFlow := persistTaskWithFlow(t, ctrl, workspace.Id, "active", domain.TaskStatusInProgress, "in_progress")
+		pausedFlow := persistTaskWithFlow(t, ctrl, workspace.Id, "paused", domain.TaskStatusBlocked, domain.FlowStatusPaused)
+		persistTaskWithFlow(t, ctrl, workspace.Id, "done", domain.TaskStatusComplete, "completed")
+		persistTaskWithFlow(t, ctrl, workspace.Id, "failed_flow", domain.TaskStatusInProgress, "failed")
+
+		expectedSignal := dev.ProfileChangeSignal{ProfileId: "work"}
+		mockTemporalClient.On("SignalWorkflow", mock.Anything, inProgressFlow.Id, "", dev.SignalNameProfileChange, expectedSignal).Return(nil).Once()
+		mockTemporalClient.On("SignalWorkflow", mock.Anything, pausedFlow.Id, "", dev.SignalNameProfileChange, expectedSignal).Return(nil).Once()
+
+		resp := updateWorkspace(t, ctrl, workspace, "work")
+		require.Equal(t, http.StatusOK, resp.Code)
+
+		mockTemporalClient.AssertNotCalled(t, "SignalWorkflow", mock.Anything, "flow_done", mock.Anything, mock.Anything, mock.Anything)
+		mockTemporalClient.AssertNotCalled(t, "SignalWorkflow", mock.Anything, "flow_failed_flow", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("does not signal when the profile is unchanged", func(t *testing.T) {
+		t.Parallel()
+		ctrl, mockTemporalClient := newSignalTestController(t)
+		workspace := persistWorkspace(t, ctrl, "work")
+		persistTaskWithFlow(t, ctrl, workspace.Id, "active", domain.TaskStatusInProgress, "in_progress")
+
+		resp := updateWorkspace(t, ctrl, workspace, "work")
+		require.Equal(t, http.StatusOK, resp.Code)
+
+		mockTemporalClient.AssertNotCalled(t, "SignalWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("does not signal when clearing an unset profile keeps the default", func(t *testing.T) {
+		t.Parallel()
+		ctrl, mockTemporalClient := newSignalTestController(t)
+		workspace := persistWorkspace(t, ctrl, "")
+		persistTaskWithFlow(t, ctrl, workspace.Id, "active", domain.TaskStatusInProgress, "in_progress")
+
+		resp := updateWorkspace(t, ctrl, workspace, "")
+		require.Equal(t, http.StatusOK, resp.Code)
+
+		mockTemporalClient.AssertNotCalled(t, "SignalWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("clearing a profile signals the default profile", func(t *testing.T) {
+		t.Parallel()
+		ctrl, mockTemporalClient := newSignalTestController(t)
+		workspace := persistWorkspace(t, ctrl, "work")
+		flow := persistTaskWithFlow(t, ctrl, workspace.Id, "active", domain.TaskStatusInProgress, "in_progress")
+
+		mockTemporalClient.On("SignalWorkflow", mock.Anything, flow.Id, "", dev.SignalNameProfileChange, dev.ProfileChangeSignal{ProfileId: common.DefaultProfileId}).Return(nil).Once()
+
+		resp := updateWorkspace(t, ctrl, workspace, "")
+		require.Equal(t, http.StatusOK, resp.Code)
+	})
+
+	t.Run("closed or missing workflows do not fail the request", func(t *testing.T) {
+		t.Parallel()
+		ctrl, mockTemporalClient := newSignalTestController(t)
+		workspace := persistWorkspace(t, ctrl, "")
+
+		missingFlow := persistTaskWithFlow(t, ctrl, workspace.Id, "missing", domain.TaskStatusInProgress, "in_progress")
+		closedFlow := persistTaskWithFlow(t, ctrl, workspace.Id, "closed", domain.TaskStatusInProgress, "in_progress")
+
+		expectedSignal := dev.ProfileChangeSignal{ProfileId: "work"}
+		mockTemporalClient.On("SignalWorkflow", mock.Anything, missingFlow.Id, "", dev.SignalNameProfileChange, expectedSignal).
+			Return(serviceerror.NewNotFound("workflow not found")).Once()
+		mockTemporalClient.On("SignalWorkflow", mock.Anything, closedFlow.Id, "", dev.SignalNameProfileChange, expectedSignal).
+			Return(errors.New("workflow execution already completed")).Once()
+
+		resp := updateWorkspace(t, ctrl, workspace, "work")
+		require.Equal(t, http.StatusOK, resp.Code)
 	})
 }

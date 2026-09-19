@@ -115,3 +115,27 @@ func TestRemoteDeviceStorage(t *testing.T) {
 		assert.ErrorIs(t, err, common.ErrNotFound)
 	})
 }
+
+func TestRemoteDeviceAcrossStorageInstances(t *testing.T) {
+	t.Setenv("SIDE_DATA_HOME", t.TempDir())
+	first, err := NewStorage()
+	require.NoError(t, err)
+	defer first.Close()
+	second, err := NewStorage()
+	require.NoError(t, err)
+	defer second.Close()
+
+	ctx := context.Background()
+	device := domain.RemoteDevice{
+		Id:        "cross-instance-device",
+		Name:      "Phone",
+		TokenHash: "cross-instance-hash",
+	}
+	require.NoError(t, first.CreateRemoteDevice(ctx, device))
+	loaded, err := second.GetRemoteDeviceByTokenHash(ctx, device.TokenHash)
+	require.NoError(t, err)
+	require.Equal(t, device.Id, loaded.Id)
+	require.NoError(t, first.DeleteRemoteDevice(ctx, device.Id))
+	_, err = second.GetRemoteDeviceByTokenHash(ctx, device.TokenHash)
+	require.ErrorIs(t, err, common.ErrNotFound)
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
 )
 
@@ -361,18 +362,27 @@ func TestGoogleProvider_ReasoningIntegration(t *testing.T) {
 		t.Fatalf("Stream returned an error: %v", err)
 	}
 
-	assert.NotNil(t, response)
-	assert.True(t, sawReasoning, "Expected at least one reasoning block event")
+	require.NotNil(t, response)
 
-	var foundReasoning bool
+	// Thought summaries are optional in Google's API even when thinking runs,
+	// so reasoning blocks cannot be required here; conversion of supplied
+	// summaries is covered by TestGoogleStreamedReasoningResponse.
+	assert.Equal(t, "low", response.ReasoningEffort, "Expected the requested reasoning effort to be applied")
+	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should count generated and thinking tokens")
+
+	var reasoningBlocks int
 	for _, block := range response.Output.Content {
 		if block.Type == ContentBlockTypeReasoning {
-			foundReasoning = true
+			reasoningBlocks++
+			require.NotNil(t, block.Reasoning, "Reasoning block should carry reasoning content")
 			assert.NotEmpty(t, block.Reasoning.Text, "Reasoning text should not be empty")
 			t.Logf("Reasoning text length: %d", len(block.Reasoning.Text))
 		}
 	}
-	assert.True(t, foundReasoning, "Expected a reasoning block in the output")
+	assert.Equal(t, sawReasoning, reasoningBlocks > 0, "Streamed reasoning events must match reasoning blocks in the output")
+	if reasoningBlocks == 0 {
+		t.Log("Google returned no thought summaries for this request")
+	}
 
 	var foundText bool
 	for _, block := range response.Output.Content {
@@ -826,18 +836,23 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 
 		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
-		assert.Len(t, contents, 1)
+		// Function responses never share a turn with regular parts (Gemini
+		// returns empty candidates for mixed turns), so the fallback image
+		// lands in a follow-up user content.
+		assert.Len(t, contents, 2)
 		assert.Equal(t, "user", contents[0].Role)
 
-		// First part: function response (text-only, no Parts)
+		// First content: function response (text-only, no Parts)
+		assert.Len(t, contents[0].Parts, 1)
 		frPart := contents[0].Parts[0]
 		assert.NotNil(t, frPart.FunctionResponse)
 		assert.Equal(t, "call-img-2", frPart.FunctionResponse.ID)
 		assert.Len(t, frPart.FunctionResponse.Parts, 0)
 
-		// Second part: fallback inline image
-		assert.Len(t, contents[0].Parts, 2)
-		assert.NotNil(t, contents[0].Parts[1].InlineData)
+		// Second content: fallback inline image
+		assert.Equal(t, "user", contents[1].Role)
+		assert.Len(t, contents[1].Parts, 1)
+		assert.NotNil(t, contents[1].Parts[0].InlineData)
 	})
 
 	t.Run("error tool result", func(t *testing.T) {
@@ -1023,11 +1038,83 @@ func TestGoogleFromLlm2Tools(t *testing.T) {
 		},
 	}
 
-	result := googleFromLlm2Tools(tools)
+	result, err := googleFromLlm2Tools(tools)
+	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Len(t, result[0].FunctionDeclarations, 1)
 	assert.Equal(t, "get_weather", result[0].FunctionDeclarations[0].Name)
 	assert.Equal(t, "Get weather for a location", result[0].FunctionDeclarations[0].Description)
+}
+
+func googleStreamChunk(parts ...*genai.Part) *genai.GenerateContentResponse {
+	return &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{{Content: &genai.Content{Parts: parts}}},
+	}
+}
+
+// googleReplayStream runs streamed chunks through the same conversion,
+// finalization and accumulation path GoogleProvider.Stream uses.
+func googleReplayStream(chunks []*genai.GenerateContentResponse) ([]Event, Message) {
+	state := &googleStreamState{}
+	var events []Event
+	for _, chunk := range chunks {
+		events = append(events, googleResultToEvents(chunk, state)...)
+	}
+	events = append(events, googleFinalizeStream(state)...)
+	return events, accumulateGoogleEventsToMessage(events)
+}
+
+func TestGoogleStreamedReasoningResponse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("thought summary parts become a reasoning block", func(t *testing.T) {
+		t.Parallel()
+
+		events, output := googleReplayStream([]*genai.GenerateContentResponse{
+			googleStreamChunk(&genai.Part{Text: "Breaking 127 * 349 down: ", Thought: true}),
+			googleStreamChunk(&genai.Part{Text: "127 * 350 - 127.", Thought: true}),
+			googleStreamChunk(&genai.Part{Text: "The answer is 44323."}),
+			googleStreamChunk(&genai.Part{ThoughtSignature: []byte("answer-sig")}),
+		})
+
+		var reasoningStarted int
+		for _, event := range events {
+			if event.Type == EventBlockStarted && event.ContentBlock != nil && event.ContentBlock.Type == ContentBlockTypeReasoning {
+				reasoningStarted++
+			}
+		}
+		assert.Equal(t, 1, reasoningStarted, "Expected a single streamed reasoning block")
+
+		require.Len(t, output.Content, 2)
+		require.Equal(t, ContentBlockTypeReasoning, output.Content[0].Type)
+		require.NotNil(t, output.Content[0].Reasoning)
+		assert.Equal(t, "Breaking 127 * 349 down: 127 * 350 - 127.", output.Content[0].Reasoning.Text)
+		assert.Equal(t, ContentBlockTypeText, output.Content[1].Type)
+		assert.Equal(t, "The answer is 44323.", output.Content[1].Text)
+		assert.Equal(t, []byte("answer-sig"), output.Content[1].Signature)
+	})
+
+	// Thinking can occur without Google emitting any thought summary parts, in
+	// which case the signature-only part must still reach the answer block.
+	t.Run("omitted thought summaries keep the answer and its signature", func(t *testing.T) {
+		t.Parallel()
+
+		events, output := googleReplayStream([]*genai.GenerateContentResponse{
+			googleStreamChunk(&genai.Part{Text: "44323"}),
+			googleStreamChunk(&genai.Part{ThoughtSignature: []byte("answer-sig")}),
+		})
+
+		for _, event := range events {
+			if event.ContentBlock != nil {
+				assert.NotEqual(t, ContentBlockTypeReasoning, event.ContentBlock.Type)
+			}
+		}
+
+		require.Len(t, output.Content, 1)
+		assert.Equal(t, ContentBlockTypeText, output.Content[0].Type)
+		assert.Equal(t, "44323", output.Content[0].Text)
+		assert.Equal(t, []byte("answer-sig"), output.Content[0].Signature)
+	})
 }
 
 func TestGoogleResultToEvents(t *testing.T) {

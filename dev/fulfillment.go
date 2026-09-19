@@ -3,6 +3,7 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
+	"sidekick/coding"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/fflag"
@@ -30,10 +31,73 @@ type CriteriaFulfillment struct {
 	FeedbackMessage string `json:"feedbackMessage,omitempty" jsonschema:"description=Provide this only when the criteria is not fulfilled. It is a short message containing salient details to help someone else doing the work understand and figure out how to fulfill the criteria."`
 }
 
+// criteriaFulfillmentReviewDiff generates the diff the auto-reviewer judges:
+// what changed since the last review when there was one, otherwise everything
+// since the start point.
+//
+// The activity degrades comparison trouble internally, so an error here means
+// git itself failed, which user-prompted retries can't resolve. We therefore
+// skip such retries and fall back to the full diff so review keeps progressing.
+// It also reports the full diff since the start point, which callers reviewing
+// the same work repeatedly carry forward as the baseline of the next round.
+func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ignoreWhitespace bool) (reviewDiff string, fullDiff string, incremental bool, err error) {
+	startPoint := promptInfo.StartPoint
+	if startPoint == "" {
+		startPoint = promptInfo.BaseBranch
+	}
+	fallbackBase := promptInfo.BaseBranch
+	if fallbackBase == "" {
+		fallbackBase = startPoint
+	}
+
+	var ca *coding.CodingActivities
+	var diffs coding.GenerateReviewDiffsResult
+	err = workflow.ExecuteActivity(dCtx, ca.GenerateReviewDiffsActivity, coding.GenerateReviewDiffsParams{
+		EnvContainer:     *dCtx.EnvContainer,
+		StartPoint:       startPoint,
+		BaseBranch:       promptInfo.BaseBranch,
+		PriorReviewDiff:  promptInfo.LastReviewDiff,
+		IgnoreWhitespace: ignoreWhitespace,
+	}).Get(dCtx, &diffs)
+	if err != nil {
+		workflow.GetLogger(dCtx).Warn("Failed to generate review diffs, falling back to base branch diff", "error", err)
+		fallbackDiff, fallbackErr := GetGitDiff(dCtx, fallbackBase, ignoreWhitespace)
+		if fallbackErr != nil {
+			return "", "", false, fmt.Errorf("failed to get fallback base branch diff: %v", fallbackErr)
+		}
+		return fallbackDiff, fallbackDiff, false, nil
+	}
+
+	if promptInfo.LastReviewDiff != "" && diffs.SinceDiffError == "" {
+		return diffs.SinceDiff, diffs.FullDiff, true, nil
+	}
+	return diffs.FullDiff, diffs.FullDiff, false, nil
+}
+
 // TODO /gen add a test for this function
 func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
-	// Use GlobalState as single source of truth for base branch, falling back to caller-provided value
-	if v := workflow.GetVersion(dCtx, "check-work-global-base-branch", workflow.DefaultVersion, 1); v >= 1 {
+	return checkWorkMeetsCriteria(dCtx, promptInfo, nil)
+}
+
+// CheckWorkMeetsCriteriaWithDiff additionally reports the full diff since the
+// start point that the review was based on. Flows that review the same work over
+// several rounds carry it forward so the next round only covers what changed
+// after this one.
+func CheckWorkMeetsCriteriaWithDiff(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, string, error) {
+	var reviewedFullDiff string
+	fulfillment, err := checkWorkMeetsCriteria(dCtx, promptInfo, &reviewedFullDiff)
+	return fulfillment, reviewedFullDiff, err
+}
+
+// reviewedFullDiff, when non-nil, receives the full diff since the start point
+// that the review was based on, which is only available once review diffs are
+// generated rather than derived from legacy git object comparisons.
+func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedFullDiff *string) (CriteriaFulfillment, error) {
+	// Use GlobalState as single source of truth for base branch, falling back
+	// to caller-provided value. A caller that pinned a start point already
+	// decided what the work is compared against, including whether the base
+	// branch says anything about it at all, so its choice stands.
+	if v := workflow.GetVersion(dCtx, "check-work-global-base-branch", workflow.DefaultVersion, 1); v >= 1 && promptInfo.StartPoint == "" {
 		if globalBase := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); globalBase != "" {
 			promptInfo.BaseBranch = globalBase
 		}
@@ -41,20 +105,38 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 
 	var diff string
 	var err error
+	var incremental bool
 
 	ignoreWhitespace := true
 
-	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 6)
-	if v >= 6 && fflag.IsEnabled(dCtx, fflag.CheckEdits) {
-		// When CheckEdits is enabled, all current-step work is staged, so
-		// git diff --staged captures exactly the relevant changes without
-		// including prior committed steps or merged upstream changes.
+	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 7)
+	if v >= 7 {
+		if promptInfo.StartPoint == "" && promptInfo.BaseBranch == "" {
+			// nothing to diff against, so the current working state is the work
+			err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
+			if err != nil {
+				return CriteriaFulfillment{}, fmt.Errorf("failed to get git diff: %v", err)
+			}
+		} else {
+			var fullDiff string
+			diff, fullDiff, incremental, err = criteriaFulfillmentReviewDiff(dCtx, promptInfo, ignoreWhitespace)
+			if err != nil {
+				return CriteriaFulfillment{}, err
+			}
+			if reviewedFullDiff != nil {
+				*reviewedFullDiff = fullDiff
+			}
+		}
+	} else if v == 6 && fflag.IsEnabled(dCtx, fflag.CheckEdits) {
+		// Legacy path: reviews relied on CheckEdits staging the current step's
+		// work, which misses anything the agent committed and anything merged
+		// in from the target branch. Generated review diffs cover those cases,
+		// so this remains only to keep older workflows replay-deterministic.
 		//
 		// We deliberately re-evaluate the CheckEdits flag below to preserve
 		// the exact activity command sequence previously emitted by
 		// git.GitDiff (which internally checks the flag again before
-		// running GitDiffActivity). This keeps in-flight and completed
-		// workflows replay-deterministic with the prior implementation.
+		// running GitDiffActivity).
 		_ = fflag.IsEnabled(dCtx, fflag.CheckEdits)
 		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
 		if err != nil {
@@ -110,11 +192,24 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 	}
 
 	// Summarize diff to fit within 50% of the judging model's context capacity
+	reviewContextVersion := workflow.GetVersion(dCtx, "criteria-user-review-context", workflow.DefaultVersion, 2)
+	pairedReview := reviewContextVersion == 1 && promptInfo.LastReviewDiff != ""
 	summarizeVersion := workflow.GetVersion(dCtx, "summarize-diff-for-fulfillment", workflow.DefaultVersion, 1)
-	if summarizeVersion >= 1 && len(diff) > 0 {
+	if reviewContextVersion >= 2 {
+		promptInfo.IncrementalReview = incremental
+		if !incremental {
+			promptInfo.Requirements = requirementsWithoutPriorWork(promptInfo.Requirements)
+		}
+	}
+	if pairedReview {
+		diff = prepareUserReviewWork(dCtx, promptInfo, diff)
+	} else if summarizeVersion >= 1 && len(diff) > 0 {
 		modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
 		metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
 		maxDiffChars := metadata.MaxChars() / 2
+		if promptInfo.IncrementalReview {
+			maxDiffChars = metadata.MaxChars() / 4
+		}
 		if len(diff) > maxDiffChars {
 			embeddingModelConfig := dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize")
 			var summarizedDiff string
@@ -126,7 +221,14 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 				SecretManagerContainer: *dCtx.Secrets,
 				MaxChars:               maxDiffChars,
 			}).Get(dCtx, &summarizedDiff)
-			if err == nil {
+			if reviewContextVersion >= 2 {
+				if err == nil && strings.TrimSpace(summarizedDiff) != "" {
+					diff = summarizedDiff
+				}
+				if len(diff) > maxDiffChars {
+					diff = diff[:maxDiffChars]
+				}
+			} else if err == nil {
 				diff = summarizedDiff
 			} else {
 				diff = diff[:maxDiffChars]
@@ -136,7 +238,11 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 
 	promptInfo.Work = diff
 	if strings.TrimSpace(diff) == "" {
-		promptInfo.Work = "git diff is empty: no changes were made."
+		if promptInfo.IncrementalReview {
+			promptInfo.Work = "No changes since the last review."
+		} else {
+			promptInfo.Work = "git diff is empty: no changes were made."
+		}
 	}
 	fulfillment, err := CheckIfCriteriaFulfilled(dCtx, promptInfo)
 	if err == nil {
@@ -152,11 +258,16 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 }
 
 func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
-	// new chat history so we can fit a lot of git diff in the context
-	// FIXME /gen/req this fails in cases where we figured out that no changes
-	// were required to fulfill the requirements (eg already done in previous
-	// step), in which case we need more info in the chat history, eg summary of
-	// chat, and include that in the CheckWorkInfo struct.
+	if workflow.GetVersion(dCtx, "criteria-review-chat-history", workflow.DefaultVersion, 1) >= 1 &&
+		workflow.GetVersion(dCtx, "chat-history-llm2", workflow.DefaultVersion, 1) >= 1 {
+		modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+		settings := resolveVerifierSettings(dCtx, modelConfig.Model)
+		if settings.Enabled {
+			return reviewWithChatHistory(dCtx, promptInfo, modelConfig, settings)
+		}
+	}
+	promptInfo.PreparedChatHistory = nil
+	// A fresh history reserves context capacity for the diff in legacy reviews.
 	chatHistory, err := getCriteriaFulfillmentPrompt(dCtx.ExecContext, dCtx.WorkspaceId, dCtx.RepoConfig.EditCode.Hints, promptInfo)
 	if err != nil {
 		return CriteriaFulfillment{}, err
@@ -208,35 +319,70 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 
 func getCriteriaFulfillmentPrompt(eCtx flow_action.ExecContext, workspaceId string, editCodeHints string, promptInfo CheckWorkInfo) (*persisted_ai.ChatHistoryContainer, error) {
 	chatHistory := NewVersionedChatHistory(eCtx, workspaceId)
-
-	data := map[string]interface{}{
-		"editCodeHints":  editCodeHints,
-		"requirements":   promptInfo.Requirements,
-		"previousReview": promptInfo.PreviousReview,
-		"work":           promptInfo.Work,
-		"autoChecks":     promptInfo.AutoChecks,
-	}
-
-	var content string
-	switch {
-	case promptInfo.ResolvingMergeConflicts:
-		content = RenderPrompt(FulfillmentConflictResolution, data)
-	case promptInfo.Step.Definition != "":
-		data["planContext"] = promptInfo.PlanExecution.String()
-		data["currentStep"] = promptInfo.Step.Definition
-		data["completionCriteria"] = promptInfo.Step.CompletionAnalysis
-		content = RenderPrompt(FulfillmentInitialWithPlan, data)
-	default:
-		content = RenderPrompt(FulfillmentInitial, data)
-	}
-
-	newMessage := llm.ChatMessage{
-		Role:        llm.ChatMessageRoleUser,
-		Content:     content,
-		ContextType: ContextTypeInitialInstructions,
-	}
-	if err := AppendChatHistory(eCtx, chatHistory, newMessage); err != nil {
-		return nil, err
+	for _, message := range criteriaFulfillmentMessages(promptInfo, editCodeHints) {
+		if err := AppendChatHistory(eCtx, chatHistory, &message); err != nil {
+			return nil, err
+		}
 	}
 	return chatHistory, nil
+}
+
+// Each component has its own budget because an interdiff is not meaningful
+// without the work the user originally reviewed.
+func prepareUserReviewWork(dCtx DevContext, info CheckWorkInfo, reviewDiff string) string {
+	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+	metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
+	budget := metadata.MaxChars() / 4
+	summarize := func(diff string) string {
+		if len(diff) <= budget {
+			return diff
+		}
+		var summary string
+		err := workflow.ExecuteActivity(dCtx, SummarizeDiffActivity, SummarizeDiffActivityInput{
+			GitDiff:                diff,
+			ReviewFeedback:         info.Requirements,
+			EnvContainer:           *dCtx.EnvContainer,
+			ModelConfig:            dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize"),
+			SecretManagerContainer: *dCtx.Secrets,
+			MaxChars:               budget,
+		}).Get(dCtx, &summary)
+		if err == nil && strings.TrimSpace(summary) != "" {
+			diff = summary
+		}
+		if len(diff) > budget {
+			diff = diff[:budget]
+		}
+		return diff
+	}
+	original := summarize(info.LastReviewDiff)
+	current := "No changes since the rejected user review."
+	if strings.TrimSpace(reviewDiff) != "" {
+		current = summarize(reviewDiff)
+	}
+	return "# Original diff from rejected user review\n\n" + original +
+		"\n\n# Review changes (full current diff if incremental generation was unavailable)\n\n" + current
+}
+
+// Unmarked context is ambiguous: quoted headings cannot identify generated work.
+func requirementsWithoutPriorWork(requirements string) string {
+	header, context, ok := strings.Cut(requirements, "\n")
+	if !ok {
+		return requirements
+	}
+	var start, end int
+	if _, err := fmt.Sscanf(header, "<!-- sidekick-review-work: %d %d -->", &start, &end); err != nil {
+		return requirements
+	}
+	if header != fmt.Sprintf("<!-- sidekick-review-work: %d %d -->", start, end) ||
+		start < 0 || end < start || end > len(context) {
+		return requirements
+	}
+	const workHeading = "\n\nWork Done So Far:\n\n"
+	const feedbackIntro = "\n\nGiven the above context, please address the following latest user feedback:\n\n"
+	if !strings.HasPrefix(context, "#START Original Requirements\n\n") ||
+		!strings.HasPrefix(context[start:end], workHeading) ||
+		!strings.HasPrefix(context[end:], feedbackIntro) {
+		return requirements
+	}
+	return context[:start] + context[end:]
 }

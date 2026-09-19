@@ -1,10 +1,12 @@
 package persisted_ai
 
 import (
+	"encoding/json"
 	"testing"
 
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/secret_manager"
 )
@@ -542,5 +544,150 @@ func TestConvertLlm2EventToFlowEvent_TextFollowedByToolCall(t *testing.T) {
 	}
 	if argumentsDelta.ChatMessageDelta.ToolCalls[0].Arguments != `{"path":"README.md"}` {
 		t.Fatalf("tool arguments = %q", argumentsDelta.ChatMessageDelta.ToolCalls[0].Arguments)
+	}
+}
+
+func TestNewStreamResponseStampsResolvedProfile(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		secrets       secret_manager.SecretManager
+		wantProfileId string
+	}{
+		{
+			name:          "profile-scoped secrets",
+			secrets:       secret_manager.KeyringSecretManager{ProfileId: "work"},
+			wantProfileId: "work",
+		},
+		{
+			name:          "non-profile-scoped secrets fall back to the default profile",
+			secrets:       secret_manager.MockSecretManager{},
+			wantProfileId: common.DefaultProfileId,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			input := StreamInput{
+				Secrets: secret_manager.SecretManagerContainer{SecretManager: tt.secrets},
+			}
+			response := newStreamResponse(llm2.MessageResponse{Provider: "openai"}, input)
+			if response.ProfileId != tt.wantProfileId {
+				t.Errorf("expected profileId %q, got %q", tt.wantProfileId, response.ProfileId)
+			}
+
+			// The response is what gets persisted as the flow action result, so
+			// the profile and the embedded provider response fields must both
+			// appear at the top level of the serialized JSON.
+			serialized, err := json.Marshal(response)
+			if err != nil {
+				t.Fatalf("failed to marshal response: %v", err)
+			}
+			var result map[string]any
+			if err := json.Unmarshal(serialized, &result); err != nil {
+				t.Fatalf("failed to unmarshal serialized response: %v", err)
+			}
+			if result["profileId"] != tt.wantProfileId {
+				t.Errorf("expected serialized profileId %q, got %v", tt.wantProfileId, result["profileId"])
+			}
+			if result["provider"] != "openai" {
+				t.Errorf("expected flattened provider field %q, got %v", "openai", result["provider"])
+			}
+		})
+	}
+}
+
+func TestNewLegacyStreamResponseStampsResolvedProfile(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		secrets       secret_manager.SecretManager
+		wantProfileId string
+	}{
+		{
+			name:          "profile-scoped secrets",
+			secrets:       secret_manager.KeyringSecretManager{ProfileId: "work"},
+			wantProfileId: "work",
+		},
+		{
+			name:          "non-profile-scoped secrets fall back to the default profile",
+			secrets:       secret_manager.MockSecretManager{},
+			wantProfileId: common.DefaultProfileId,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			options := ChatStreamOptions{
+				ToolChatOptions: llm.ToolChatOptions{
+					Secrets: secret_manager.SecretManagerContainer{SecretManager: tt.secrets},
+				},
+			}
+			response := newLegacyStreamResponse(llm.ChatMessageResponse{Provider: "openai"}, options)
+			if response.ProfileId != tt.wantProfileId {
+				t.Errorf("expected profileId %q, got %q", tt.wantProfileId, response.ProfileId)
+			}
+
+			// The response is what gets persisted as the flow action result, so
+			// the profile and the embedded provider response fields must both
+			// appear at the top level of the serialized JSON.
+			serialized, err := json.Marshal(response)
+			if err != nil {
+				t.Fatalf("failed to marshal response: %v", err)
+			}
+			var result map[string]any
+			if err := json.Unmarshal(serialized, &result); err != nil {
+				t.Fatalf("failed to unmarshal serialized response: %v", err)
+			}
+			if result["profileId"] != tt.wantProfileId {
+				t.Errorf("expected serialized profileId %q, got %v", tt.wantProfileId, result["profileId"])
+			}
+			if result["provider"] != "openai" {
+				t.Errorf("expected flattened provider field %q, got %v", "openai", result["provider"])
+			}
+		})
+	}
+}
+
+func TestStreamInputActionParamsSnapshotsHistory(t *testing.T) {
+	t.Parallel()
+
+	history := NewLlm2ChatHistory("flow", "workspace")
+	history.AppendRef(MessageRef{Role: "user", BlockKeys: []string{"request"}})
+	input := StreamInput{
+		Secrets:     secret_manager.SecretManagerContainer{SecretManager: secret_manager.MockSecretManager{}},
+		ChatHistory: &ChatHistoryContainer{History: history},
+	}
+	params := input.ActionParams()
+	before, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	history.AppendRef(MessageRef{Role: "assistant", BlockKeys: []string{"response"}})
+	history.AppendRef(MessageRef{Role: "user", BlockKeys: []string{"tool-result"}})
+
+	after, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("request parameters changed after appending response:\nbefore: %s\nafter: %s", before, after)
+	}
+
+	next, err := json.Marshal(input.ActionParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := json.Marshal(input.ChatHistory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nextParams map[string]json.RawMessage
+	if err := json.Unmarshal(next, &nextParams); err != nil {
+		t.Fatal(err)
+	}
+	if string(nextParams["messages"]) != string(current) {
+		t.Fatalf("next request does not contain current history: %s", next)
 	}
 }

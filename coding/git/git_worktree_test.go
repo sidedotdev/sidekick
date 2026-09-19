@@ -193,6 +193,23 @@ func (e *gitRefSyncerEnv) SyncGitRefToLocal(ctx context.Context, ref string) err
 	return nil
 }
 
+// hostRepoRefSyncerEnv propagates synced refs into a separate host repository,
+// simulating an environment whose repo is an independent clone of the host
+// repo (e.g. a remote sandbox with a reserved flow branch on the host).
+type hostRepoRefSyncerEnv struct {
+	env.Env
+	t           *testing.T
+	envRepoDir  string
+	hostRepoDir string
+	syncedRefs  []string
+}
+
+func (e *hostRepoRefSyncerEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
+	e.syncedRefs = append(e.syncedRefs, ref)
+	runGitCommandInTestRepo(e.t, e.hostRepoDir, "fetch", e.envRepoDir, "+"+ref+":"+ref)
+	return nil
+}
+
 func TestCleanupWorktreeActivity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -274,6 +291,42 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 
 		require.Len(t, syncerEnv.syncedRefs, 1, "Archive tag should be synced to local exactly once")
 		assert.Equal(t, "refs/tags/archive/"+branchName, syncerEnv.syncedRefs[0])
+	})
+
+	t.Run("Archive Tag Reaches Host Repo With Reserved Flow Branch", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit on main")
+
+		hostRepoDir := t.TempDir()
+		runGitCommandInTestRepo(t, hostRepoDir, "clone", repoDir, ".")
+
+		uniqueId := ksuid.New().String()
+		branchName := fmt.Sprintf("side/cleanup-reserved-%s", uniqueId)
+
+		// The flow branch is reserved on the host when the remote worktree is
+		// created, so cleanup must tolerate it already existing there.
+		runGitCommandInTestRepo(t, hostRepoDir, "branch", branchName, "main")
+
+		worktree := domain.Worktree{
+			Name:        branchName,
+			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
+		}
+		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		worktreePath := devEnv.GetWorkingDirectory()
+		createCommit(t, worktreePath, "Flow commit")
+		flowCommit := runGitCommandInTestRepo(t, worktreePath, "rev-parse", "HEAD")
+
+		syncerEnv := &hostRepoRefSyncerEnv{Env: devEnv, t: t, envRepoDir: repoDir, hostRepoDir: hostRepoDir}
+		err = CleanupWorktreeActivity(ctx, env.EnvContainer{Env: syncerEnv}, worktreePath, branchName, "archive")
+		require.NoError(t, err, "Cleanup should succeed with a reserved host branch of the same name")
+
+		expectedTag := "archive/" + branchName
+		assert.Equal(t, []string{"refs/tags/" + expectedTag}, syncerEnv.syncedRefs)
+		hostTags := runGitCommandInTestRepo(t, hostRepoDir, "tag", "-l", expectedTag)
+		assert.Contains(t, hostTags, expectedTag, "Archive tag should land in the host repo")
+		assert.Equal(t, flowCommit, runGitCommandInTestRepo(t, hostRepoDir, "rev-parse", expectedTag+"^{commit}"))
 	})
 
 	t.Run("Cleanup Succeeds With Only Untracked Binary", func(t *testing.T) {
@@ -580,4 +633,58 @@ func TestLockExistingSidekickWorktrees(t *testing.T) {
 	// Running again must be a no-op that tolerates the already-locked state.
 	lockWorktreesUnder(ctx, worktreesRoot)
 	assert.True(t, hasLockedWorktreeLine(runGitCommandInTestRepo(t, repoDir, "worktree", "list", "--porcelain")), "startup pass should remain idempotent")
+}
+
+type conflictingArchiveSyncerEnv struct {
+	env.Env
+	syncedRefs []string
+	syncError  error
+}
+
+func (e *conflictingArchiveSyncerEnv) SyncGitRefToLocal(ctx context.Context, ref string) error {
+	e.syncedRefs = append(e.syncedRefs, ref)
+	if len(e.syncedRefs) <= 2 {
+		return e.syncError
+	}
+	return nil
+}
+
+func TestCleanupWorktreeArchiveSyncConflicts(t *testing.T) {
+	t.Parallel()
+	for _, conflict := range []bool{true, false} {
+		t.Run(fmt.Sprintf("conflict=%t", conflict), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			repoDir := setupTestGitRepo(t)
+			createCommit(t, repoDir, "Initial commit")
+			branchName := "side/archive-" + ksuid.New().String()
+			devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, domain.Worktree{
+				Name:        branchName,
+				WorkspaceId: "test-" + ksuid.New().String(),
+			})
+			require.NoError(t, err)
+			worktreePath := devEnv.GetWorkingDirectory()
+			t.Cleanup(func() { _ = os.RemoveAll(worktreePath) })
+			tip := runGitCommandInTestRepo(t, repoDir, "rev-parse", branchName)
+			syncErr := fmt.Errorf("transport unavailable")
+			if conflict {
+				syncErr = fmt.Errorf("fetch rejected: %w", env.ErrGitTagConflict)
+			}
+			syncer := &conflictingArchiveSyncerEnv{Env: devEnv, syncError: syncErr}
+			err = CleanupWorktreeActivity(ctx, env.EnvContainer{Env: syncer}, worktreePath, branchName, "archive message")
+			if !conflict {
+				require.ErrorIs(t, err, syncErr)
+				require.Len(t, syncer.syncedRefs, 1)
+				assert.DirExists(t, worktreePath)
+				assert.Equal(t, tip, runGitCommandInTestRepo(t, repoDir, "rev-parse", branchName))
+				return
+			}
+			require.NoError(t, err)
+			baseRef := "refs/tags/archive/" + branchName
+			assert.Equal(t, []string{baseRef, baseRef + "-2", baseRef + "-3"}, syncer.syncedRefs)
+			assert.NoDirExists(t, worktreePath)
+			assert.Equal(t, tip, runGitCommandInTestRepo(t, repoDir, "rev-parse", baseRef+"-3^{commit}"))
+			assert.Contains(t, runGitCommandInTestRepo(t, repoDir, "tag", "-l", "-n1", "archive/"+branchName+"-3"), "archive message")
+		})
+	}
 }

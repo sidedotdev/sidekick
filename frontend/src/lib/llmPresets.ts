@@ -1,4 +1,20 @@
-import type { LLMConfig } from './models'
+import type { LLMConfig, ModelConfig } from './models'
+
+export const llmConfigProviders = (config: LLMConfig): string[] => {
+  const providers = new Set<string>()
+  const collect = (modelConfigs?: ModelConfig[]) => {
+    for (const modelConfig of modelConfigs || []) {
+      if (modelConfig?.provider) providers.add(modelConfig.provider)
+    }
+  }
+
+  collect(config.defaults)
+  for (const modelConfigs of Object.values(config.useCaseConfigs || {})) {
+    collect(modelConfigs)
+  }
+
+  return [...providers]
+}
 
 export const capitalizeProvider = (provider: string): string => {
   if (provider === 'openai') return 'OpenAI'

@@ -141,7 +141,7 @@ func TestRemoteServerEndToEnd(t *testing.T) {
 	// letting the same-machine client connect without a relay or discovery.
 	loopback := netip.MustParseAddrPort("127.0.0.1:0")
 
-	rs, err := serveRemote(ctx, ctrl, TestAllowedOrigins(), irohlib.WithBindAddr(loopback))
+	rs, err := serveRemote(ctx, ctrl, TestAllowedOrigins(), irohlib.WithBindAddr(loopback), irohlib.WithoutRelayTransports())
 	require.NoError(t, err)
 	defer rs.Shutdown(context.Background())
 

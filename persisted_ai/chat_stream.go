@@ -181,6 +181,36 @@ func ExecuteChatStreamWithAttemptResolver(
 	}
 }
 
+// StreamResponse is the persisted flow action result for an LLM stream. It
+// augments the provider response with application-level attribution that
+// providers themselves are unaware of.
+type StreamResponse struct {
+	llm2.MessageResponse
+	// ProfileId identifies the profile whose credentials served the request.
+	ProfileId string `json:"profileId,omitempty"`
+}
+
+func newStreamResponse(response llm2.MessageResponse, input StreamInput) *StreamResponse {
+	return &StreamResponse{
+		MessageResponse: response,
+		ProfileId:       input.Secrets.GetProfileId(),
+	}
+}
+
+// LegacyStreamResponse is the LegacyChatHistory counterpart of StreamResponse.
+type LegacyStreamResponse struct {
+	llm.ChatMessageResponse
+	// ProfileId identifies the profile whose credentials served the request.
+	ProfileId string `json:"profileId,omitempty"`
+}
+
+func newLegacyStreamResponse(response llm.ChatMessageResponse, options ChatStreamOptions) *LegacyStreamResponse {
+	return &LegacyStreamResponse{
+		ChatMessageResponse: response,
+		ProfileId:           options.Secrets.GetProfileId(),
+	}
+}
+
 // executeChatStreamV1 handles the Llm2ChatHistory path.
 // All messages are already persisted to KV via activity-backed appends,
 // so the Stream activity can hydrate the full history from refs.
@@ -227,7 +257,7 @@ func executeChatStreamV1(
 		}
 	}
 
-	return &response, nil
+	return newStreamResponse(response, streamInput), nil
 }
 
 // executeChatStreamLegacy handles the LegacyChatHistory path.
@@ -293,7 +323,7 @@ func executeChatStreamLegacy(
 		}
 	}
 
-	return &chatResponse, nil
+	return newLegacyStreamResponse(chatResponse, options), nil
 }
 
 // repairActivityOptions configures the short, retried activity that repairs

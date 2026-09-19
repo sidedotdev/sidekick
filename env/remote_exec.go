@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"sidekick/common"
 	"sidekick/sideagent"
 
 	"github.com/rs/zerolog/log"
@@ -120,18 +118,6 @@ func getPooledAgentExecConn(key string) *agentExecConn {
 	ac := &agentExecConn{key: key, lastUsed: time.Now()}
 	agentExecPool.conns[key] = ac
 	return ac
-}
-
-// agentExecConnKey includes reverse-forward configuration because those
-// listeners are established when the long-lived SSH channel is dialed. The
-// order of equivalent configuration does not create duplicate channels.
-func agentExecConnKey(remoteKey string, forwards []common.PortForwardConfig) string {
-	specs := make([]string, 0, len(forwards))
-	for _, forward := range forwards {
-		specs = append(specs, fmt.Sprintf("%d:%d", forward.HostPort, forward.ContainerPortOrDefault()))
-	}
-	sort.Strings(specs)
-	return remoteKey + "|reverse-forwards=" + strings.Join(specs, ",")
 }
 
 // reapIdleAgentExecConns closes and evicts entries unused since cutoff.
@@ -343,20 +329,13 @@ func teardownAgentExecTransport(client *sideagent.Client, cmd *exec.Cmd) {
 }
 
 // channelSSHArgs returns ssh args for the long-lived exec channel: like other
-// helper-channel connections it must not share the multiplexing master (a
-// wedged channel is killed outright, see independentSSHArgs), but unlike
-// short-lived independent connections it keeps the reverse port forwards,
-// which must stay up while remote commands that dial back to the host run.
-func channelSSHArgs(sshArgs []string) []string {
-	return filterSSHArgs(sshArgs, false)
-}
-
 // sshDialTransportError marks a dial that failed at the ssh transport layer
 // before the agent protocol answered, so the remote command provably never
-// ran. It is detected from the ssh client's exit status because OpenSSH can
-// exit 255 with empty stderr under LogLevel=ERROR when the peer drops the
-// connection before the banner exchange, leaving no diagnostics text to
-// classify.
+// ran. Both transports report it: the legacy one detects it from the ssh
+// client's exit status, because OpenSSH can exit 255 with empty stderr under
+// LogLevel=ERROR when the peer drops the connection before the banner
+// exchange, leaving no diagnostics text to classify; the native one knows
+// directly that its dial never produced a connection.
 type sshDialTransportError struct {
 	cause error
 }
@@ -403,7 +382,11 @@ func (ac *agentExecConn) dialWithArgsLocked(ctx context.Context, sshArgs []strin
 // (login shell "command not found"), which the caller resolves by installing
 // and redialing.
 func (ac *agentExecConn) tryDialLocked(ctx context.Context, sshArgs []string, remotePath string) (bool, error) {
-	runArgs := append(channelSSHArgs(sshArgs), remotePath+" exec")
+	// Reverse forwards are deliberately excluded: they belong to the
+	// dedicated holder connection, whose lifetime is the environment's rather
+	// than this channel's, so remote processes backgrounded by a command keep
+	// their route home after the channel is replaced or reaped.
+	runArgs := append(independentSSHArgs(sshArgs), remotePath+" exec")
 	cmd := exec.Command("ssh", runArgs...)
 	sshDiagnostics := &synchronizedBuffer{}
 	cmd.Stderr = sshDiagnostics

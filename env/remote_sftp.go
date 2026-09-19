@@ -69,13 +69,12 @@ var remoteBinaryOpTimeout = 60 * time.Second
 // sftpConn manages a persistent SFTP client connection over SSH.
 // It is safe for concurrent use; the underlying sftp.Client multiplexes requests.
 type sftpConn struct {
-	mu                sync.Mutex
-	key               string
-	client            *sftp.Client
-	cmd               *exec.Cmd
-	latency           time.Duration
-	idleTimer         *time.Timer
-	lastActivityTouch time.Time
+	mu        sync.Mutex
+	key       string
+	client    *sftp.Client
+	cmd       *exec.Cmd
+	latency   time.Duration
+	idleTimer *time.Timer
 	// lastUsed and evicted are maintained by lockLive, the idle reaper and
 	// CloseAllSharedSFTPConns.
 	lastUsed time.Time
@@ -215,29 +214,7 @@ func (sc *sftpConn) getOrDial(ctx context.Context, sshEnv SSHCapableEnv) (*sftp.
 		}
 	}
 	sc.resetIdleTimerLocked()
-	sc.touchActivityLocked()
 	return sc.client, nil
-}
-
-// touchActivityLocked asynchronously refreshes the in-sandbox idle-watchdog
-// activity marker: command execution touches it via a shell wrapper, but pure
-// file operations would otherwise be invisible to the watchdog between its
-// polls. Best-effort, and throttled since every touch costs a round trip.
-func (sc *sftpConn) touchActivityLocked() {
-	if time.Since(sc.lastActivityTouch) < 10*time.Second {
-		return
-	}
-	sc.lastActivityTouch = time.Now()
-	client := sc.client
-	go func() {
-		now := time.Now()
-		if err := client.Chtimes(remoteActivityMarker, now, now); err != nil {
-			if f, createErr := client.Create(remoteActivityMarker); createErr == nil {
-				f.Close()
-				_ = client.Chtimes(remoteActivityMarker, now, now)
-			}
-		}
-	}()
 }
 
 // Close tears down the connection and its remote process chain, reaping the
@@ -475,63 +452,79 @@ func boundedSFTPOp[T any](ctx context.Context, conn *sftpConn, client *sftp.Clie
 	}
 }
 
-// boundedSFTPErrOp is boundedSFTPOp for operations that only return an error.
-func boundedSFTPErrOp(ctx context.Context, conn *sftpConn, client *sftp.Client, opName, path string, op func() error) error {
-	_, err := boundedSFTPOp(ctx, conn, client, opName, path, func() (struct{}, error) {
-		return struct{}{}, op()
+// withSFTPRetry runs op over the pooled SFTP connection, bounded by ctx and
+// sftpOpTimeout, retrying once on a fresh connection when the failure looks
+// like a dropped session.
+func withSFTPRetry(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, op SFTPOp) (any, error) {
+	client, err := conn.getOrDial(ctx, sshEnv)
+	if _, modalRecovery := sshEnv.(interface{ waitForSFTPRecovery(context.Context) error }); err != nil && !modalRecovery {
+		return nil, err
+	}
+	var value any
+	if err == nil {
+		value, err = boundedSFTPOp(ctx, conn, client, op.Name, op.Path, func() (any, error) {
+			return op.Run(client)
+		})
+	}
+	if err == nil || !sftpFailureWarrantsReconnect(ctx, err, op) {
+		return value, err
+	}
+	if waitErr := waitForSFTPRecovery(ctx, sshEnv); waitErr != nil {
+		return nil, waitErr
+	}
+
+	retryClient, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
+	if retryErr != nil {
+		return nil, fmt.Errorf("%s %s: %w (reconnect: %v)", op.Name, op.Path, err, retryErr)
+	}
+	return boundedSFTPOp(ctx, conn, retryClient, op.Name, op.Path, func() (any, error) {
+		return op.Run(retryClient)
 	})
+}
+
+// sftpFailureWarrantsReconnect separates a dead session from an answer about
+// the remote path, which reconnecting cannot change.
+func sftpFailureWarrantsReconnect(ctx context.Context, err error, op SFTPOp) bool {
+	if ctx.Err() != nil || errors.Is(err, os.ErrPermission) {
+		return false
+	}
+	return op.RetryOnNotExist || !errors.Is(err, os.ErrNotExist)
+}
+
+// sftpValue runs a value-producing op and restores its static type.
+func sftpValue[T any](ctx context.Context, transport SSHTransport, op SFTPOp) (T, error) {
+	var zero T
+	value, err := transport.WithSFTP(ctx, op)
+	if err != nil {
+		return zero, err
+	}
+	typed, ok := value.(T)
+	if !ok {
+		return zero, fmt.Errorf("sftp %s %s: unexpected result of type %T", op.Name, op.Path, value)
+	}
+	return typed, nil
+}
+
+// sftpErrOp runs an op whose only outcome is success or failure.
+func sftpErrOp(ctx context.Context, transport SSHTransport, op SFTPOp) error {
+	_, err := transport.WithSFTP(ctx, op)
 	return err
 }
 
-// sftpReadFile reads a file via the SFTP connection, reconnecting once on failure.
-func sftpReadFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, path string) ([]byte, error) {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := boundedSFTPOp(ctx, conn, client, "read", path, func() ([]byte, error) {
+// sftpReadFile reads a file via the transport's SFTP channel.
+func sftpReadFile(ctx context.Context, transport SSHTransport, path string) ([]byte, error) {
+	return sftpValue[[]byte](ctx, transport, SFTPOp{Name: "read", Path: path, Run: func(client *sftp.Client) (any, error) {
+		defer touchRemoteActivityForRead(client)
 		return doSFTPRead(client, path)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return nil, err
-		}
-		// Connection may have dropped; retry once with a fresh connection.
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return nil, fmt.Errorf("read %s: %w (reconnect: %v)", path, err, retryErr)
-		}
-		return boundedSFTPOp(ctx, conn, client, "read", path, func() ([]byte, error) {
-			return doSFTPRead(client, path)
-		})
-	}
-	return data, nil
+	}})
 }
 
-// sftpReadDir lists a directory via the SFTP connection, reconnecting once on failure.
-func sftpReadDir(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, path string) ([]fs.DirEntry, error) {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return nil, err
-	}
-
-	entries, err := boundedSFTPOp(ctx, conn, client, "readdir", path, func() ([]fs.DirEntry, error) {
+// sftpReadDir lists a directory via the transport's SFTP channel.
+func sftpReadDir(ctx context.Context, transport SSHTransport, path string) ([]fs.DirEntry, error) {
+	return sftpValue[[]fs.DirEntry](ctx, transport, SFTPOp{Name: "readdir", Path: path, Run: func(client *sftp.Client) (any, error) {
+		defer touchRemoteActivityForRead(client)
 		return doSFTPReadDir(client, path)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return nil, err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return nil, fmt.Errorf("readdir %s: %w (reconnect: %v)", path, err, retryErr)
-		}
-		return boundedSFTPOp(ctx, conn, client, "readdir", path, func() ([]fs.DirEntry, error) {
-			return doSFTPReadDir(client, path)
-		})
-	}
-	return entries, nil
+	}})
 }
 
 func doSFTPReadDir(client *sftp.Client, path string) ([]fs.DirEntry, error) {
@@ -552,140 +545,154 @@ func doSFTPRead(client *sftp.Client, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return io.ReadAll(f)
-}
-
-// sftpWriteFile writes data to a file via SFTP, reconnecting once on failure.
-func sftpWriteFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string, data []byte, perm fs.FileMode) error {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return err
-	}
-
-	err = boundedSFTPErrOp(ctx, conn, client, "write", p, func() error {
-		return doSFTPWrite(client, p, data, perm)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return fmt.Errorf("write %s: %w (reconnect: %v)", p, err, retryErr)
-		}
-		return boundedSFTPErrOp(ctx, conn, client, "write", p, func() error {
-			return doSFTPWrite(client, p, data, perm)
-		})
-	}
-	return nil
-}
-
-// sftpMkdirAll creates directories via SFTP, reconnecting once on failure.
-func sftpMkdirAll(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string, perm fs.FileMode) error {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return err
-	}
-
-	err = boundedSFTPErrOp(ctx, conn, client, "mkdirall", p, func() error {
-		return doSFTPMkdirAll(client, p, perm)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return fmt.Errorf("mkdirall %s: %w (reconnect: %v)", p, err, retryErr)
-		}
-		return boundedSFTPErrOp(ctx, conn, client, "mkdirall", p, func() error {
-			return doSFTPMkdirAll(client, p, perm)
-		})
-	}
-	return nil
-}
-
-// sftpStat stats a path via SFTP, reconnecting once on failure.
-func sftpStat(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string) (fs.FileInfo, error) {
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
+	// io.Copy dispatches to *sftp.File.WriteTo, which sizes the file once and
+	// pipelines concurrent chunk requests, keeping round trips per read
+	// constant. io.ReadAll would instead pay one synchronous round trip per
+	// growing buffer chunk, making read latency scale with file size.
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, f); err != nil {
 		return nil, err
 	}
-
-	info, err := boundedSFTPOp(ctx, conn, client, "stat", p, func() (fs.FileInfo, error) {
-		return client.Stat(p)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return nil, err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return nil, fmt.Errorf("stat %s: %w (reconnect: %v)", p, err, retryErr)
-		}
-		return boundedSFTPOp(ctx, conn, client, "stat", p, func() (fs.FileInfo, error) {
-			return client.Stat(p)
-		})
-	}
-	return info, nil
+	return buf.Bytes(), nil
 }
 
-// sftpRemove deletes a file or empty directory via SFTP, reconnecting once on failure.
-func sftpRemove(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string) error {
-	client, err := conn.getOrDial(ctx, sshEnv)
+// touchRemoteActivity renews the in-sandbox idle-watchdog marker on the
+// channel an operation just used. Command execution touches the marker via
+// its shell wrapper, but file operations would otherwise be invisible to the
+// watchdog. Mutations call this unconditionally, before the caller learns
+// they succeeded: an edit with no command following it must still count as
+// activity, or an idle shutdown can discard it. Truncating (rather than
+// Chtimes with the host clock) stamps the marker with the sandbox's own
+// clock, which is the one the watchdog compares against. Best effort: a
+// failure here must not fail the operation.
+func touchRemoteActivity(client *sftp.Client) {
+	f, err := client.OpenFile(remoteActivityMarker, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 	if err != nil {
-		return err
+		return
 	}
+	_ = f.Close()
+}
 
-	err = boundedSFTPErrOp(ctx, conn, client, "remove", p, func() error {
-		return client.Remove(p)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return err
-		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return fmt.Errorf("remove %s: %w (reconnect: %v)", p, err, retryErr)
-		}
-		return boundedSFTPErrOp(ctx, conn, client, "remove", p, func() error {
-			return client.Remove(p)
-		})
+// remoteReadTouchInterval bounds how often reads renew the marker per SFTP
+// client. Reads create nothing a lost snapshot could discard; they only need
+// to keep an agent that is browsing code from idling its sandbox out, and one
+// round trip per interval is enough for that.
+const remoteReadTouchInterval = 10 * time.Second
+
+// remoteReadTouchClients caps the throttle's memory of clients. Clients are
+// not told when they are closed here, so the oldest reservation is evicted
+// instead; a spurious extra touch for an evicted-but-live client is harmless.
+const remoteReadTouchClients = 64
+
+// readTouchThrottle records, per SFTP client, when a read last renewed the
+// activity marker, so concurrent reads on one connection collapse into a
+// single touch per interval.
+type readTouchThrottle struct {
+	mu   sync.Mutex
+	last map[*sftp.Client]time.Time
+}
+
+var remoteReadTouches readTouchThrottle
+
+// reserve reports whether the caller should touch the marker for client now,
+// recording the reservation atomically so concurrent callers cannot all win.
+func (r *readTouchThrottle) reserve(client *sftp.Client, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last, known := r.last[client]
+	if known && now.Sub(last) < remoteReadTouchInterval {
+		return false
 	}
-	return nil
+	if r.last == nil {
+		r.last = make(map[*sftp.Client]time.Time)
+	}
+	if !known && len(r.last) >= remoteReadTouchClients {
+		var oldest *sftp.Client
+		for candidate, at := range r.last {
+			if oldest == nil || at.Before(r.last[oldest]) {
+				oldest = candidate
+			}
+		}
+		delete(r.last, oldest)
+	}
+	r.last[client] = now
+	return true
+}
+
+// touchRemoteActivityForRead is touchRemoteActivity throttled per client.
+func touchRemoteActivityForRead(client *sftp.Client) {
+	if remoteReadTouches.reserve(client, time.Now()) {
+		touchRemoteActivity(client)
+	}
+}
+
+// sftpWriteFile writes data to a file via the transport's SFTP channel.
+func sftpWriteFile(ctx context.Context, transport SSHTransport, p string, data []byte, perm fs.FileMode) error {
+	return sftpErrOp(ctx, transport, SFTPOp{Name: "write", Path: p, Run: func(client *sftp.Client) (any, error) {
+		if err := doSFTPWrite(client, p, data, perm); err != nil {
+			return nil, err
+		}
+		touchRemoteActivity(client)
+		return nil, nil
+	}})
+}
+
+// sftpMkdirAll creates directories via the transport's SFTP channel. Missing
+// paths are what it exists to create, so they never end the retry.
+func sftpMkdirAll(ctx context.Context, transport SSHTransport, p string, perm fs.FileMode) error {
+	return sftpErrOp(ctx, transport, SFTPOp{Name: "mkdirall", Path: p, RetryOnNotExist: true, Run: func(client *sftp.Client) (any, error) {
+		if err := doSFTPMkdirAll(client, p, perm); err != nil {
+			return nil, err
+		}
+		touchRemoteActivity(client)
+		return nil, nil
+	}})
+}
+
+// sftpStat stats a path via the transport's SFTP channel.
+func sftpStat(ctx context.Context, transport SSHTransport, p string) (fs.FileInfo, error) {
+	info, err := sftpValue[fs.FileInfo](ctx, transport, SFTPOp{Name: "stat", Path: p, Run: func(client *sftp.Client) (any, error) {
+		defer touchRemoteActivityForRead(client)
+		return client.Stat(p)
+	}})
+	if err != nil && errors.Is(err, fs.ErrNotExist) {
+		// Transports wrap errors with %w, which errors.Is unwraps but
+		// os.IsNotExist does not, so callers relying on the os predicate
+		// need the canonical *os.PathError shape.
+		return nil, &os.PathError{Op: "stat", Path: p, Err: fs.ErrNotExist}
+	}
+	return info, err
+}
+
+// sftpRemove deletes a file or empty directory via the transport's SFTP channel.
+func sftpRemove(ctx context.Context, transport SSHTransport, p string) error {
+	return sftpErrOp(ctx, transport, SFTPOp{Name: "remove", Path: p, Run: func(client *sftp.Client) (any, error) {
+		if err := client.Remove(p); err != nil {
+			return nil, err
+		}
+		touchRemoteActivity(client)
+		return nil, nil
+	}})
 }
 
 // sftpCreateTemp creates a uniquely-named file under dir via SFTP, returning
 // its full path. The pattern follows os.CreateTemp semantics: the last "*" in
 // pattern is replaced with a random string (or appended if absent). The dir
 // must be absolute; the caller is responsible for resolving relative dirs.
-func sftpCreateTemp(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, dir, pattern string) (string, error) {
+func sftpCreateTemp(ctx context.Context, transport SSHTransport, dir, pattern string) (string, error) {
 	prefix, suffix := pattern, ""
 	if i := strings.LastIndex(pattern, "*"); i >= 0 {
 		prefix, suffix = pattern[:i], pattern[i+1:]
 	}
 
-	client, err := conn.getOrDial(ctx, sshEnv)
-	if err != nil {
-		return "", err
-	}
-
-	name, err := boundedSFTPOp(ctx, conn, client, "createtemp", dir, func() (string, error) {
-		return doSFTPCreateTemp(client, dir, prefix, suffix)
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || ctx.Err() != nil {
-			return "", err
+	return sftpValue[string](ctx, transport, SFTPOp{Name: "createtemp", Path: dir, Run: func(client *sftp.Client) (any, error) {
+		name, err := doSFTPCreateTemp(client, dir, prefix, suffix)
+		if err != nil {
+			return nil, err
 		}
-		client, retryErr := conn.reconnectAfterFailure(ctx, sshEnv, client)
-		if retryErr != nil {
-			return "", fmt.Errorf("createtemp %s/%s: %w (reconnect: %v)", dir, pattern, err, retryErr)
-		}
-		return boundedSFTPOp(ctx, conn, client, "createtemp", dir, func() (string, error) {
-			return doSFTPCreateTemp(client, dir, prefix, suffix)
-		})
-	}
-	return name, nil
+		touchRemoteActivity(client)
+		return name, nil
+	}})
 }
 
 func doSFTPWrite(client *sftp.Client, p string, data []byte, perm fs.FileMode) error {
@@ -866,32 +873,68 @@ const remoteInstallCompleteMarker = "side-agent-install-complete"
 // sent. Verification failures are hard errors; a non-zero session exit after
 // a verified checksum (the trailing GC failing) is not.
 func installRemoteAgent(ctx context.Context, sshArgs []string, remotePath string) error {
+	return installRemoteAgentOverSession(ctx, remotePath, func(installCtx context.Context, command string) (remoteInstallSession, error) {
+		cmd := exec.CommandContext(installCtx, "ssh", append(independentSSHArgs(sshArgs), command)...)
+		stderr := &bytes.Buffer{}
+		cmd.Stderr = stderr
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return remoteInstallSession{}, fmt.Errorf("create stdin pipe: %w", err)
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return remoteInstallSession{}, fmt.Errorf("create stdout pipe: %w", err)
+		}
+		if err := cmd.Start(); err != nil {
+			return remoteInstallSession{}, fmt.Errorf("start install session: %w", err)
+		}
+		return remoteInstallSession{
+			Stdin:  stdin,
+			Stdout: stdout,
+			Wait:   cmd.Wait,
+			Abort: func() {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			},
+			Diagnostics: stderr.String,
+		}, nil
+	})
+}
+
+// remoteInstallSession is one remote shell command and its streams, so the
+// install protocol is written once regardless of which transport carries it.
+type remoteInstallSession struct {
+	Stdin  io.WriteCloser
+	Stdout io.Reader
+	// Wait reports the command's exit status once its output is consumed.
+	Wait func() error
+	// Abort tears the session down after a protocol failure.
+	Abort func()
+	// Diagnostics returns whatever the transport captured on stderr.
+	Diagnostics func() string
+}
+
+// installRemoteAgentOverSession drives the install protocol over a session
+// opened by openSession: read the megacommand's uname output, stream the
+// matching local binary into dd, then compare the remote checksum read-back
+// against the sha256 of the bytes sent.
+func installRemoteAgentOverSession(ctx context.Context, remotePath string, openSession func(ctx context.Context, command string) (remoteInstallSession, error)) error {
 	installCtx, cancel := context.WithTimeout(ctx, remoteBinaryOpTimeout)
 	defer cancel()
 
 	command := remoteAgentInstallCommand(remotePath, randomTempSuffix())
-	cmd := exec.CommandContext(installCtx, "ssh", append(independentSSHArgs(sshArgs), command)...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdin, err := cmd.StdinPipe()
+	session, err := openSession(installCtx, command)
 	if err != nil {
-		return fmt.Errorf("create stdin pipe: %w", err)
+		return err
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("create stdout pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start install session: %w", err)
-	}
+	stdin, stdout := session.Stdin, session.Stdout
 
 	fail := func(err error) error {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		session.Abort()
 		if errors.Is(installCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 			err = fmt.Errorf("install timed out after %s: %w", remoteBinaryOpTimeout, err)
 		}
-		if diagnostics := strings.TrimSpace(stderr.String()); diagnostics != "" {
+		if diagnostics := strings.TrimSpace(session.Diagnostics()); diagnostics != "" {
 			return fmt.Errorf("%w: ssh diagnostics: %s", err, diagnostics)
 		}
 		return err
@@ -945,8 +988,8 @@ func installRemoteAgent(ctx context.Context, sshArgs []string, remotePath string
 	// read-back, so a non-zero session exit still indicates a genuine
 	// install/session failure and must not be accepted.
 	_, _ = io.Copy(io.Discard, br)
-	if waitErr := cmd.Wait(); waitErr != nil {
-		if diagnostics := strings.TrimSpace(stderr.String()); diagnostics != "" {
+	if waitErr := session.Wait(); waitErr != nil {
+		if diagnostics := strings.TrimSpace(session.Diagnostics()); diagnostics != "" {
 			return fmt.Errorf("install session failed after checksum verification: %w: ssh diagnostics: %s", waitErr, diagnostics)
 		}
 		return fmt.Errorf("install session failed after checksum verification: %w", waitErr)

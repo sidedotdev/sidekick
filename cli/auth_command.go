@@ -11,10 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/erikgeiser/promptkit/selection"
-	"github.com/erikgeiser/promptkit/textinput"
+	"github.com/charmbracelet/huh"
 	"github.com/urfave/cli/v3"
-	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
 )
 
@@ -22,12 +20,15 @@ const (
 	AnthropicOAuthSecretName = "ANTHROPIC_OAUTH"
 	keyringService           = "sidekick"
 
-	anthropicClientID       = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	anthropicRedirectURI    = "https://console.anthropic.com/oauth/code/callback"
-	anthropicTokenEndpoint  = "https://console.anthropic.com/v1/oauth/token"
-	anthropicCreateKeyURL   = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key"
-	anthropicConsoleScopes  = "org:create_api_key user:profile user:inference"
-	anthropicClaudeAIScopes = "user:profile user:inference"
+	anthropicClientID              = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	anthropicRedirectURI           = "https://console.anthropic.com/oauth/code/callback"
+	anthropicTokenEndpoint         = "https://console.anthropic.com/v1/oauth/token"
+	anthropicClaudeAITokenEndpoint = "https://platform.claude.com/v1/oauth/token"
+	anthropicCreateKeyURL          = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key"
+	anthropicConsoleScopes         = "org:create_api_key user:profile user:inference"
+	// Matches current Claude Code scopes; user:sessions:claude_code entitles
+	// subscription tokens to newer models.
+	anthropicClaudeAIScopes = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 	claudeProMaxAuthURL     = "https://claude.ai/oauth/authorize"
 	consoleAuthURL          = "https://console.anthropic.com/oauth/authorize"
 )
@@ -60,8 +61,7 @@ func NewAuthCommand() *cli.Command {
 }
 
 func handleAuthCommand() error {
-	providerSelection := selection.New("Select your LLM API provider", []string{"OpenAI", "Google", "Anthropic"})
-	provider, err := providerSelection.RunPrompt()
+	provider, err := selectOption("Select your LLM API provider", []string{"OpenAI", "Google", "Anthropic"})
 	if err != nil {
 		return fmt.Errorf("provider selection failed: %w", err)
 	}
@@ -79,11 +79,10 @@ func handleAuthCommand() error {
 }
 
 func handleOpenAIAuth() error {
-	methodSelection := selection.New("Select authentication method", []string{
+	method, err := selectOption("Select authentication method", []string{
 		"ChatGPT/Codex subscription (OAuth)",
 		"Manually enter API Key",
 	})
-	method, err := methodSelection.RunPrompt()
 	if err != nil {
 		return fmt.Errorf("authentication method selection failed: %w", err)
 	}
@@ -103,12 +102,11 @@ func handleGoogleAuth() error {
 }
 
 func handleAnthropicAuth() error {
-	methodSelection := selection.New("Select authentication method", []string{
+	method, err := selectOption("Select authentication method", []string{
 		"Claude Pro/Max (OAuth subscription)",
 		"Create an API Key (OAuth)",
 		"Manually enter API Key",
 	})
-	method, err := methodSelection.RunPrompt()
 	if err != nil {
 		return fmt.Errorf("authentication method selection failed: %w", err)
 	}
@@ -126,24 +124,18 @@ func handleAnthropicAuth() error {
 }
 
 func handleAnthropicOAuthSubscription() error {
-	existingCreds, err := keyring.Get(keyringService, AnthropicOAuthSecretName)
-	if err != nil && err != keyring.ErrNotFound {
-		return fmt.Errorf("error checking existing OAuth credentials: %w", err)
+	profileIds, err := selectCredentialProfiles("Anthropic")
+	if err != nil {
+		return err
 	}
 
-	if existingCreds != "" {
-		overwriteSelection := selection.New(
-			"Existing Anthropic OAuth credentials found. What would you like to do?",
-			[]string{"Keep existing credentials", "Overwrite with new credentials"},
-		)
-		choice, err := overwriteSelection.RunPrompt()
-		if err != nil {
-			return fmt.Errorf("selection failed: %w", err)
-		}
-		if choice == "Keep existing credentials" {
-			fmt.Println("✔ Keeping existing Anthropic OAuth credentials.")
-			return nil
-		}
+	targetProfileIds, err := resolveTargetProfiles(profileIds, AnthropicOAuthSecretName, "Anthropic OAuth credentials")
+	if err != nil {
+		return err
+	}
+	if len(targetProfileIds) == 0 {
+		fmt.Println("✔ Keeping existing Anthropic OAuth credentials.")
+		return nil
 	}
 
 	tokens, err := performOAuthFlow(claudeProMaxAuthURL)
@@ -161,13 +153,17 @@ func handleAnthropicOAuthSubscription() error {
 		RefreshToken: tokens.RefreshToken,
 		ExpiresAt:    expiresAt,
 	}
+
+	return saveAnthropicOAuthCredentials(creds, targetProfileIds)
+}
+
+func saveAnthropicOAuthCredentials(creds OAuthCredentials, profileIds []string) error {
 	credsJSON, err := json.Marshal(creds)
 	if err != nil {
 		return fmt.Errorf("failed to marshal OAuth credentials: %w", err)
 	}
 
-	err = keyring.Set(keyringService, AnthropicOAuthSecretName, string(credsJSON))
-	if err != nil {
+	if err := storeSecretForProfiles(profileIds, AnthropicOAuthSecretName, string(credsJSON)); err != nil {
 		return fmt.Errorf("error storing OAuth credentials in keyring: %w", err)
 	}
 
@@ -176,24 +172,18 @@ func handleAnthropicOAuthSubscription() error {
 }
 
 func handleAnthropicOAuthCreateKey() error {
-	existingKey, err := keyring.Get(keyringService, llm.AnthropicApiKeySecretName)
-	if err != nil && err != keyring.ErrNotFound {
-		return fmt.Errorf("error checking existing API key: %w", err)
+	profileIds, err := selectCredentialProfiles("Anthropic")
+	if err != nil {
+		return err
 	}
 
-	if existingKey != "" {
-		overwriteSelection := selection.New(
-			"An existing Anthropic API key was found. What would you like to do?",
-			[]string{"Keep existing key", "Overwrite with new key"},
-		)
-		choice, err := overwriteSelection.RunPrompt()
-		if err != nil {
-			return fmt.Errorf("selection failed: %w", err)
-		}
-		if choice == "Keep existing key" {
-			fmt.Println("✔ Keeping existing Anthropic API key.")
-			return nil
-		}
+	targetProfileIds, err := resolveTargetProfiles(profileIds, llm.AnthropicApiKeySecretName, "Anthropic API key")
+	if err != nil {
+		return err
+	}
+	if len(targetProfileIds) == 0 {
+		fmt.Println("✔ Keeping existing Anthropic API key.")
+		return nil
 	}
 
 	tokens, err := performOAuthFlow(consoleAuthURL)
@@ -206,8 +196,7 @@ func handleAnthropicOAuthCreateKey() error {
 		return err
 	}
 
-	err = keyring.Set(keyringService, llm.AnthropicApiKeySecretName, apiKey)
-	if err != nil {
+	if err := storeSecretForProfiles(targetProfileIds, llm.AnthropicApiKeySecretName, apiKey); err != nil {
 		return fmt.Errorf("error storing API key in keyring: %w", err)
 	}
 
@@ -218,7 +207,26 @@ func handleAnthropicOAuthCreateKey() error {
 func performOAuthFlow(authBaseURL string) (*oauthTokenResponse, error) {
 	verifier := oauth2.GenerateVerifier()
 
-	authURL := buildAuthorizationURL(authBaseURL, verifier)
+	// The claude.ai subscription flow supports an RFC 8252 loopback redirect,
+	// so completing login in the browser finishes auth without copy-pasting.
+	// The console flow only supports the hosted callback page, which requires
+	// pasting the displayed code.
+	redirectURI := anthropicRedirectURI
+	var callbackServer *http.Server
+	var callbackResults <-chan anthropicOAuthCallbackResult
+	if authBaseURL == claudeProMaxAuthURL {
+		server, callbackRedirectURI, results, err := startAnthropicOAuthCallbackServer(verifier)
+		if err != nil {
+			fmt.Printf("Could not start the OAuth callback server, falling back to manual code entry: %v\n", err)
+		} else {
+			callbackServer = server
+			callbackResults = results
+			redirectURI = callbackRedirectURI
+			defer callbackServer.Close()
+		}
+	}
+
+	authURL := buildAuthorizationURL(authBaseURL, redirectURI, verifier)
 
 	fmt.Println("\nOpening browser for authentication...")
 	fmt.Println("If the browser doesn't open, please visit this URL manually:")
@@ -229,27 +237,12 @@ func performOAuthFlow(authBaseURL string) (*oauthTokenResponse, error) {
 		fmt.Printf("Warning: Could not open browser automatically: %v\n", err)
 	}
 
-	codeInput := textinput.New("Paste the authorization code from the callback page: ")
-	codeWithState, err := codeInput.RunPrompt()
+	code, err := waitForAnthropicAuthorizationCode(verifier, callbackResults)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get authorization code: %w", err)
+		return nil, err
 	}
 
-	if codeWithState == "" {
-		return nil, fmt.Errorf("authorization code not provided")
-	}
-
-	// Parse the code which contains state appended after #
-	parts := strings.Split(codeWithState, "#")
-	code := parts[0]
-	if len(parts) > 1 {
-		state := parts[1]
-		if state != verifier {
-			return nil, fmt.Errorf("state mismatch: expected verifier but got different state")
-		}
-	}
-
-	tokens, err := exchangeCodeForTokens(code, verifier)
+	tokens, err := exchangeCodeForTokens(authBaseURL, redirectURI, code, verifier)
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange code for tokens: %w", err)
 	}
@@ -257,12 +250,97 @@ func performOAuthFlow(authBaseURL string) (*oauthTokenResponse, error) {
 	return tokens, nil
 }
 
-func buildAuthorizationURL(baseURL, verifier string) string {
+// waitForAnthropicAuthorizationCode races the loopback callback (when
+// available) against manual paste of the code or callback URL.
+func waitForAnthropicAuthorizationCode(verifier string, callbackResults <-chan anthropicOAuthCallbackResult) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	type manualInputResult struct {
+		value string
+		err   error
+	}
+
+	manualResults := make(chan manualInputResult, 1)
+	go func() {
+		var input string
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Complete login in your browser, or paste the authorization code or callback URL here").
+					Value(&input),
+			),
+		).RunWithContext(ctx)
+		manualResults <- manualInputResult{value: input, err: err}
+	}()
+
+	if callbackResults == nil {
+		manual := <-manualResults
+		if manual.err != nil {
+			return "", fmt.Errorf("failed to get authorization code: %w", manual.err)
+		}
+		return parseAnthropicAuthorizationInput(manual.value, verifier)
+	}
+
+	select {
+	case callback := <-callbackResults:
+		cancel()
+		<-manualResults
+		if callback.err != nil {
+			return "", callback.err
+		}
+		if callback.state != verifier {
+			return "", fmt.Errorf("state mismatch: expected verifier but got different state")
+		}
+		return callback.code, nil
+	case manual := <-manualResults:
+		if manual.err != nil {
+			return "", fmt.Errorf("failed to get authorization code: %w", manual.err)
+		}
+		return parseAnthropicAuthorizationInput(manual.value, verifier)
+	case <-ctx.Done():
+		return "", fmt.Errorf("timed out waiting for authorization")
+	}
+}
+
+// parseAnthropicAuthorizationInput extracts the authorization code from
+// user-pasted input, validating state against the PKCE verifier when present.
+// Accepted formats: a full callback URL with code & state query params, a
+// "code#state" combined string, or a raw authorization code.
+func parseAnthropicAuthorizationInput(input, verifier string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", fmt.Errorf("authorization code not provided")
+	}
+
+	if u, parseErr := url.Parse(input); parseErr == nil && u.Scheme != "" && u.Host != "" {
+		q := u.Query()
+		if c := q.Get("code"); c != "" {
+			if state := q.Get("state"); state != "" && state != verifier {
+				return "", fmt.Errorf("state mismatch: expected verifier but got different state")
+			}
+			return c, nil
+		}
+		return "", fmt.Errorf("callback URL missing authorization code")
+	}
+
+	parts := strings.Split(input, "#")
+	code := parts[0]
+	if len(parts) > 1 {
+		state := parts[1]
+		if state != verifier {
+			return "", fmt.Errorf("state mismatch: expected verifier but got different state")
+		}
+	}
+	return code, nil
+}
+
+func buildAuthorizationURL(baseURL, redirectURI, verifier string) string {
 	challenge := oauth2.S256ChallengeFromVerifier(verifier)
 
 	params := url.Values{}
 	params.Set("client_id", anthropicClientID)
-	params.Set("redirect_uri", anthropicRedirectURI)
+	params.Set("redirect_uri", redirectURI)
 	params.Set("response_type", "code")
 	params.Set("code_challenge", challenge)
 	params.Set("code_challenge_method", "S256")
@@ -280,13 +358,13 @@ func buildAuthorizationURL(baseURL, verifier string) string {
 	return baseURL + "?" + params.Encode()
 }
 
-func exchangeCodeForTokens(code, verifier string) (*oauthTokenResponse, error) {
+func buildTokenExchangeRequest(authBaseURL, redirectURI, code, verifier string) (*http.Request, error) {
 	requestBody := map[string]string{
 		"code":          code,
 		"state":         verifier,
 		"grant_type":    "authorization_code",
 		"client_id":     anthropicClientID,
-		"redirect_uri":  anthropicRedirectURI,
+		"redirect_uri":  redirectURI,
 		"code_verifier": verifier,
 	}
 
@@ -295,11 +373,23 @@ func exchangeCodeForTokens(code, verifier string) (*oauthTokenResponse, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", anthropicTokenEndpoint, strings.NewReader(string(jsonBody)))
+	tokenEndpoint := anthropicTokenEndpoint
+	if authBaseURL == claudeProMaxAuthURL {
+		tokenEndpoint = anthropicClaudeAITokenEndpoint
+	}
+	req, err := http.NewRequest("POST", tokenEndpoint, strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	return req, nil
+}
+
+func exchangeCodeForTokens(authBaseURL, redirectURI, code, verifier string) (*oauthTokenResponse, error) {
+	req, err := buildTokenExchangeRequest(authBaseURL, redirectURI, code, verifier)
+	if err != nil {
+		return nil, err
+	}
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -362,30 +452,21 @@ func createAPIKeyWithOAuth(accessToken string) (string, error) {
 }
 
 func handleManualAPIKeyAuth(providerName, secretName string) error {
-	existingKey, err := keyring.Get(keyringService, secretName)
-	if err != nil && err != keyring.ErrNotFound {
-		return fmt.Errorf("error checking existing API key: %w", err)
+	profileIds, err := selectCredentialProfiles(providerName)
+	if err != nil {
+		return err
 	}
 
-	if existingKey != "" {
-		overwriteSelection := selection.New(
-			fmt.Sprintf("An existing %s API key was found. What would you like to do?", providerName),
-			[]string{"Keep existing key", "Overwrite with new key"},
-		)
-		choice, err := overwriteSelection.RunPrompt()
-		if err != nil {
-			return fmt.Errorf("selection failed: %w", err)
-		}
-		if choice == "Keep existing key" {
-			fmt.Printf("✔ Keeping existing %s API key.\n", providerName)
-			return nil
-		}
+	targetProfileIds, err := resolveTargetProfiles(profileIds, secretName, fmt.Sprintf("%s API key", providerName))
+	if err != nil {
+		return err
+	}
+	if len(targetProfileIds) == 0 {
+		fmt.Printf("✔ Keeping existing %s API key.\n", providerName)
+		return nil
 	}
 
-	apiKeyInput := textinput.New(fmt.Sprintf("Enter your %s API Key: ", providerName))
-	apiKeyInput.Hidden = true
-
-	apiKey, err := apiKeyInput.RunPrompt()
+	apiKey, err := promptAPIKey(providerName)
 	if err != nil {
 		return fmt.Errorf("failed to get %s API Key: %w", providerName, err)
 	}
@@ -394,8 +475,7 @@ func handleManualAPIKeyAuth(providerName, secretName string) error {
 		return fmt.Errorf("%s API Key not provided", providerName)
 	}
 
-	err = keyring.Set(keyringService, secretName, apiKey)
-	if err != nil {
+	if err := storeSecretForProfiles(targetProfileIds, secretName, apiKey); err != nil {
 		return fmt.Errorf("error storing API key in keyring: %w", err)
 	}
 

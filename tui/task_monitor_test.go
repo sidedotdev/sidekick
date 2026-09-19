@@ -154,13 +154,14 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(wsHandler))
 	defer s.Close()
 	testTask := newTestTask()
-	mockClient := &mockClient{baseURL: s.URL}
-	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
-	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	polling := &pollingClient{mockClient: mockClient{baseURL: s.URL}}
+	polling.publish(testTask, nil)
+	m := NewTaskMonitor(polling, "workspace1", "task1")
 	m.TaskPollInterval = 1 * time.Millisecond
 	m.FlowPollInterval = 1 * time.Millisecond
 
 	statusChan, progressChan, _, _ := m.Start(context.Background())
+	defer m.Stop()
 
 	// Verify initial task status
 	status := <-statusChan
@@ -170,8 +171,7 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 
 	// Verify flow gets updated
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
-	mockCall.Unset()
-	mockCall = mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	polling.publish(testTask, nil)
 	status = <-statusChan
 	assert.Equal(t, testTask.Flows, status.Task.Flows)
 	assert.Equal(t, testTask.Status, status.Task.Status)
@@ -184,8 +184,7 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 
 	// Verify final status after marking as complete
 	testTask.Status = domain.TaskStatusComplete
-	mockCall.Unset()
-	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	polling.publish(testTask, nil)
 	status = <-statusChan
 	assert.NoError(t, status.Error)
 	assert.Equal(t, testTask.Status, status.Task.Status)
@@ -205,13 +204,14 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	}))
 	defer s.Close()
 	testTask := newTestTask()
-	mockClient := &mockClient{baseURL: s.URL}
-	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
-	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	polling := &pollingClient{mockClient: mockClient{baseURL: s.URL}}
+	polling.publish(testTask, nil)
+	m := NewTaskMonitor(polling, "workspace1", "task1")
 	m.TaskPollInterval = 1 * time.Millisecond
 	m.FlowPollInterval = 1 * time.Millisecond
 
 	statusChan, progressChan, _, _ := m.Start(context.Background())
+	defer m.Stop()
 
 	// First status update should be the initial task
 	status := <-statusChan
@@ -220,8 +220,7 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 
 	// Update mock to return task with flows
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
-	mockCall.Unset()
-	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	polling.publish(testTask, nil)
 
 	// Wait for at least one WebSocket error, then drain remaining messages
 	var sawWebSocketError bool
@@ -324,13 +323,14 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(wsHandler))
 	defer s.Close()
 	testTask := newTestTask()
-	mockClient := &mockClient{baseURL: s.URL}
-	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
-	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	polling := &pollingClient{mockClient: mockClient{baseURL: s.URL}}
+	polling.publish(testTask, nil)
+	m := NewTaskMonitor(polling, "workspace1", "task1")
 	m.TaskPollInterval = 1 * time.Millisecond
 	m.FlowPollInterval = 1 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	statusChan, progressChan, _, _ := m.Start(ctx)
 
@@ -341,8 +341,7 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 
 	// Verify flow gets updated
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
-	mockCall.Unset()
-	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	polling.publish(testTask, nil)
 	status = <-statusChan
 	assert.Equal(t, testTask.Flows, status.Task.Flows)
 	assert.Equal(t, testTask.Status, status.Task.Status)
@@ -368,13 +367,14 @@ func TestTaskMonitor_Start_ExternalTaskCancellation(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(wsHandler))
 	defer s.Close()
 	testTask := newTestTask()
-	mockClient := &mockClient{baseURL: s.URL}
-	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
-	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	polling := &pollingClient{mockClient: mockClient{baseURL: s.URL}}
+	polling.publish(testTask, nil)
+	m := NewTaskMonitor(polling, "workspace1", "task1")
 	m.TaskPollInterval = 1 * time.Millisecond
 	m.FlowPollInterval = 1 * time.Millisecond
 
 	statusChan, progressChan, _, _ := m.Start(context.Background())
+	defer m.Stop()
 
 	// Verify initial task status
 	status := <-statusChan
@@ -383,8 +383,7 @@ func TestTaskMonitor_Start_ExternalTaskCancellation(t *testing.T) {
 
 	// Verify flow gets updated
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
-	mockCall.Unset()
-	mockCall = mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	polling.publish(testTask, nil)
 	status = <-statusChan
 	assert.Equal(t, testTask.Flows, status.Task.Flows)
 	assert.NoError(t, status.Error)
@@ -396,8 +395,7 @@ func TestTaskMonitor_Start_ExternalTaskCancellation(t *testing.T) {
 
 	// Simulate external cancellation
 	testTask.Status = domain.TaskStatusCanceled
-	mockCall.Unset()
-	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	polling.publish(testTask, nil)
 	status = <-statusChan
 	assert.NoError(t, status.Error)
 	assert.Equal(t, domain.TaskStatusCanceled, status.Task.Status)

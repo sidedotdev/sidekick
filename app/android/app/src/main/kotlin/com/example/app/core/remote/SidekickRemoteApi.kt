@@ -44,7 +44,7 @@ data class TaskListResponse(
 )
 
 interface SidekickRemoteApi {
-    @GET("api/v1/workspaces/")
+    @GET("api/v1/workspaces")
     suspend fun getWorkspaces(): WorkspaceListResponse
 
     @GET("api/v1/workspaces/{workspaceId}/tasks/")

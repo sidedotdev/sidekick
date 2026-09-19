@@ -28,6 +28,8 @@ type GetConfigsTestSuite struct {
 type GetConfigsResult struct {
 	LLMConfig       common.LLMConfig
 	EmbeddingConfig common.EmbeddingConfig
+	Providers       []common.ModelProviderPublicConfig
+	ProfileId       string
 }
 
 func (s *GetConfigsTestSuite) SetupTest() {
@@ -40,10 +42,12 @@ func (s *GetConfigsTestSuite) SetupTest() {
 
 	s.wrapperWorkflow = func(ctx workflow.Context, workspaceId string) (GetConfigsResult, error) {
 		ctx = utils.NoRetryCtx(ctx)
-		_, _, llmConfig, embeddingConfig, err := getConfigs(ctx, workspaceId)
+		resolved, err := getConfigs(ctx, workspaceId)
 		return GetConfigsResult{
-			LLMConfig:       llmConfig,
-			EmbeddingConfig: embeddingConfig,
+			LLMConfig:       resolved.LLMConfig,
+			EmbeddingConfig: resolved.EmbeddingConfig,
+			Providers:       resolved.LocalConfig.Providers,
+			ProfileId:       resolved.ProfileId,
 		}, err
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)

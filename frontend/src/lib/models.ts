@@ -16,6 +16,11 @@ export interface ModalVolumeMount {
   readOnly?: boolean
 }
 
+export interface PortForwardConfig {
+  hostPort: number
+  containerPort?: number
+}
+
 export interface ModalEnvConfig {
   vm?: boolean
   image?: string
@@ -34,11 +39,17 @@ export interface EmbeddingConfig {
   useCaseConfigs: { [key: string]: ModelConfig[] }
 }
 
+export interface Profile {
+  id: string
+  name: string
+}
+
 export interface Workspace {
   id?: string
   name: string
   localRepoDir: string
   configMode?: string
+  profileId?: string
   llmConfig?: LLMConfig | null
   embeddingConfig?: EmbeddingConfig | null
 }
@@ -58,8 +69,7 @@ export interface ActionData {
   actionType: string
 }
 
-// TODO add the rest
-export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'in_review' | 'complete' | 'failed'
+export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'in_review' | 'complete' | 'failed' | 'canceled'
 export type FlowStatus = 'in_progress' | 'paused' | 'completed' | 'failed' | 'canceled'
 export type AgentType = 'human' | 'llm' | 'none'
 
@@ -284,6 +294,7 @@ export type Llm2ContentBlock =
   | Llm2ToolResultBlock
   | Llm2ReasoningBlock
   | Llm2RefusalBlock
+  | Llm2BuiltinToolUseBlock
 
 export type Llm2Message = {
   role: string
@@ -308,8 +319,8 @@ export interface CriteriaFulfillment {
   whatWasActuallyDone: string;
   analysis: string;
   isFulfilled: boolean;
-  confidence: number;
-  feedbackMessage?: string;
+  confidence?: number;
+  feedbackMessage?: string | null;
 }
 
 /**
@@ -372,4 +383,14 @@ export interface ScriptPermissionEvaluation {
   outcome: PermissionResult
   commands?: CommandPermissionEvaluation[]
   factors?: PermissionFactor[]
+}
+
+export type Llm2BuiltinToolUseBlock = Llm2ContentBlockBase & {
+  type: 'builtin_tool_use'
+  builtinToolUse: {
+    id: string
+    name: string
+    arguments: string
+    status?: string
+  }
 }

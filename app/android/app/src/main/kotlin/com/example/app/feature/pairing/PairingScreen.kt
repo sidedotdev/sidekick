@@ -8,12 +8,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -41,6 +44,12 @@ fun PairingRoute(
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result.contents?.let(viewModel::onPairingPayload)
     }
+
+    PairingNavigationEffect(
+        workspace = state.workspaceToOpen,
+        onConsumed = viewModel::onWorkspaceOpened,
+        onWorkspaceSelected = onWorkspaceSelected,
+    )
 
     PairingScreen(
         state = state,
@@ -73,6 +82,7 @@ fun PairingScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -150,6 +160,20 @@ fun PairingScreen(
                     Text(workspace.name)
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun PairingNavigationEffect(
+    workspace: Workspace?,
+    onConsumed: () -> Unit,
+    onWorkspaceSelected: (Workspace) -> Unit,
+) {
+    LaunchedEffect(workspace) {
+        workspace?.let {
+            onConsumed()
+            onWorkspaceSelected(it)
         }
     }
 }

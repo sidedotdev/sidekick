@@ -571,7 +571,7 @@ func TestEnsureWorkspaceConfig(t *testing.T) {
 
 	handler := NewInitCommandHandler(testDB)
 
-	workspace, err := handler.findOrCreateWorkspace(ctx, "test", "/tmp/test")
+	workspace, err := handler.findOrCreateWorkspace(ctx, "test", "/tmp/test", "")
 	require.NoError(t, err)
 	workspaceID := workspace.Id
 
@@ -622,4 +622,30 @@ func TestEnsureWorkspaceConfig(t *testing.T) {
 		assert.Empty(t, config.LLM.Defaults)
 		assert.Empty(t, config.Embedding.Defaults)
 	})
+}
+
+func TestFindOrCreateWorkspaceProfile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	testDB := sqlite.NewTestSqliteStorage(t, "cli_test")
+	handler := NewInitCommandHandler(testDB)
+
+	created, err := handler.findOrCreateWorkspace(ctx, "test", "/tmp/profile-test", "work")
+	require.NoError(t, err)
+	assert.Equal(t, "work", created.ProfileId)
+
+	stored, err := testDB.GetWorkspace(ctx, created.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "work", stored.ProfileId)
+
+	existing, err := handler.findOrCreateWorkspace(ctx, "test", "/tmp/profile-test", "other")
+	require.NoError(t, err)
+	assert.Equal(t, created.Id, existing.Id)
+	assert.Equal(t, "work", existing.ProfileId)
+
+	defaultWorkspace, err := handler.findOrCreateWorkspace(ctx, "test", "/tmp/profile-default", common.DefaultProfileId)
+	require.NoError(t, err)
+	assert.Empty(t, defaultWorkspace.ProfileId)
+	assert.Equal(t, common.DefaultProfileId, defaultWorkspace.EffectiveProfileId())
 }

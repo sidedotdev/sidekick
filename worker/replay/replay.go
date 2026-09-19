@@ -43,13 +43,13 @@ func main() {
 	// store subcommand
 	storeCmd := flag.NewFlagSet("store", flag.ExitOnError)
 	var storeHostPort, storeWorkflowId, storeSidekickVersion string
-	storeCmd.StringVar(&storeHostPort, "hostPort", common.GetTemporalServerHostPort(), "Host and port for the Temporal server (for store command)")
+	storeCmd.StringVar(&storeHostPort, "hostPort", common.GetTemporalDiagnosticHostPort(), "Host and port for the Temporal server (for store command)")
 	storeCmd.StringVar(&storeWorkflowId, "id", "", "Workflow ID to store (mandatory for store command)")
 	storeCmd.StringVar(&storeSidekickVersion, "sidekick-version", "", "Sidekick version (mandatory for store command)")
 
 	// Default command flags
 	var defaultHostPort, defaultWorkflowId string
-	flag.StringVar(&defaultHostPort, "hostPort", common.GetTemporalServerHostPort(), "Host and port for the Temporal server, eg localhost:18855 (default command)")
+	flag.StringVar(&defaultHostPort, "hostPort", common.GetTemporalDiagnosticHostPort(), "Host and port for the Temporal server, eg localhost:18855 (default command)")
 	flag.StringVar(&defaultWorkflowId, "id", "", "Workflow ID to replay (default command, mandatory if no subcommand)")
 
 	// Custom usage messages

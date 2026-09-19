@@ -13,6 +13,7 @@ import (
 
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/srv"
@@ -20,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	"go.temporal.io/api/serviceerror"
 )
 
 // BranchInfo represents basic information about a git branch.
@@ -45,6 +47,7 @@ type WorkspaceRequest struct {
 	Name            string                 `json:"name"`
 	LocalRepoDir    string                 `json:"localRepoDir"`
 	ConfigMode      string                 `json:"configMode,omitempty"`
+	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
 }
@@ -56,6 +59,7 @@ type WorkspaceResponse struct {
 	Name            string                 `json:"name"`
 	LocalRepoDir    string                 `json:"localRepoDir"`
 	ConfigMode      string                 `json:"configMode"`
+	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
 }
@@ -73,6 +77,15 @@ func (w WorkspaceResponse) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// validateRequestedProfileId allows an unset profile id, which means the
+// workspace belongs to the default profile.
+func validateRequestedProfileId(profileId string) error {
+	if profileId == "" {
+		return nil
+	}
+	return common.ValidateProfileId(profileId)
+}
+
 // isValidConfigMode validates that the configMode is one of the allowed values
 func isValidConfigMode(mode string) bool {
 	return mode == "local" || mode == "workspace" || mode == "merge"
@@ -84,6 +97,7 @@ func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup 
 	workspaceApiRoutes.GET("", ctrl.GetWorkspacesHandler)
 	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceHandler)
 	workspaceApiRoutes.PUT(":workspaceId", ctrl.UpdateWorkspaceHandler)
+	workspaceApiRoutes.GET(":workspaceId/providers", ctrl.GetWorkspaceProvidersHandler)
 	workspaceApiRoutes.GET(":workspaceId/branches", ctrl.GetWorkspaceBranchesHandler)
 	workspaceApiRoutes.POST(":workspaceId/branches", ctrl.CreateWorkspaceBranchHandler)
 	workspaceApiRoutes.GET(":workspaceId/task_config", ctrl.GetTaskConfigHandler)
@@ -248,11 +262,17 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	if err := validateRequestedProfileId(workspaceReq.ProfileId); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	workspace := domain.Workspace{
 		Id:           "ws_" + ksuid.New().String(),
 		Name:         workspaceReq.Name,
 		LocalRepoDir: workspaceReq.LocalRepoDir,
 		ConfigMode:   configMode,
+		ProfileId:    workspaceReq.ProfileId,
 		Created:      time.Now().UTC(),
 		Updated:      time.Now().UTC(),
 	}
@@ -285,6 +305,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		Name:            workspace.Name,
 		LocalRepoDir:    workspace.LocalRepoDir,
 		ConfigMode:      workspace.ConfigMode,
+		ProfileId:       workspace.ProfileId,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
 	}
@@ -350,6 +371,7 @@ func (ctrl *Controller) GetWorkspaceHandler(c *gin.Context) {
 		Name:         workspace.Name,
 		LocalRepoDir: workspace.LocalRepoDir,
 		ConfigMode:   workspace.ConfigMode,
+		ProfileId:    workspace.ProfileId,
 	}
 
 	config, err := ctrl.service.GetWorkspaceConfig(c, workspaceId)
@@ -403,6 +425,11 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	if err := validateRequestedProfileId(workspaceReq.ProfileId); err != nil {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, err)
+		return
+	}
+
 	workspaceConfig, err := ctrl.service.GetWorkspaceConfig(c, workspaceId)
 	if err != nil {
 		if !errors.Is(err, srv.ErrNotFound) {
@@ -412,10 +439,13 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		workspaceConfig = domain.WorkspaceConfig{}
 	}
 
+	previousProfileId := workspace.EffectiveProfileId()
+
 	// Update fields directly without preserving unspecified values
 	workspace.Name = workspaceReq.Name
 	workspace.LocalRepoDir = workspaceReq.LocalRepoDir
 	workspace.ConfigMode = configMode
+	workspace.ProfileId = workspaceReq.ProfileId
 	workspaceConfig.LLM = workspaceReq.LLMConfig
 	workspaceConfig.Embedding = workspaceReq.EmbeddingConfig
 	workspace.Updated = time.Now().UTC()
@@ -430,6 +460,10 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	if newProfileId := workspace.EffectiveProfileId(); newProfileId != previousProfileId {
+		ctrl.notifyFlowsOfProfileChange(c.Request.Context(), workspaceId, newProfileId)
+	}
+
 	response := WorkspaceResponse{
 		Id:              workspace.Id,
 		Created:         workspace.Created,
@@ -437,11 +471,52 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		Name:            workspace.Name,
 		LocalRepoDir:    workspace.LocalRepoDir,
 		ConfigMode:      workspace.ConfigMode,
+		ProfileId:       workspace.ProfileId,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})
+}
+
+// notifyFlowsOfProfileChange signals every in-progress flow in the workspace so
+// mid-flow profile resolution picks up the new workspace profile. Flows whose
+// workflows are already closed or not found are skipped, and failures never
+// fail the workspace update itself.
+func (ctrl *Controller) notifyFlowsOfProfileChange(ctx context.Context, workspaceId, profileId string) {
+	unfinishedStatuses := []domain.TaskStatus{
+		domain.TaskStatusToDo,
+		domain.TaskStatusInProgress,
+		domain.TaskStatusBlocked,
+		domain.TaskStatusInReview,
+	}
+	tasks, err := ctrl.service.GetTasks(ctx, workspaceId, unfinishedStatuses)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to list tasks for profile change notification")
+		return
+	}
+
+	signal := dev.ProfileChangeSignal{ProfileId: profileId}
+	for _, task := range tasks {
+		flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
+		if err != nil {
+			log.Error().Err(err).Str("workspaceId", workspaceId).Str("taskId", task.Id).Msg("Failed to list flows for profile change notification")
+			continue
+		}
+		for _, flow := range flows {
+			if flow.Status != "in_progress" && flow.Status != domain.FlowStatusPaused {
+				continue
+			}
+			err := ctrl.temporalClient.SignalWorkflow(ctx, flow.Id, "", dev.SignalNameProfileChange, signal)
+			if err != nil {
+				var notFoundErr *serviceerror.NotFound
+				if errors.As(err, &notFoundErr) || strings.Contains(err.Error(), "workflow execution already completed") {
+					continue
+				}
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flow.Id).Msg("Failed to signal flow about profile change")
+			}
+		}
+	}
 }
 
 // GetTaskConfigHandler returns task-creation UI defaults/config for a workspace.

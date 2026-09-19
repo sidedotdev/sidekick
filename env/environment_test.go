@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/sideagent"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -119,6 +122,7 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	}
 
 	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
+	require.NoError(t, err)
 	defer func() {
 		// Sidekick worktrees are created locked, so removal requires --force twice.
 		cmd := exec.Command("git", "worktree", "remove", "--force", "--force", env.GetWorkingDirectory())
@@ -129,13 +133,13 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 		}
 	}()
 
-	assert.NoError(t, err)
 	assert.Equal(t, EnvType("local_git_worktree"), env.GetType())
 
 	sidekickDataHome, _ := common.GetSidekickDataHome()
 	expectedDirName := filepath.Base(repoDir) + "-" + branchName
 	expectedWorkingDir := filepath.Join(sidekickDataHome, "worktrees", worktree.WorkspaceId, expectedDirName)
 	assert.Equal(t, expectedWorkingDir, env.GetWorkingDirectory())
+	assertSideTmpReady(t, expectedWorkingDir)
 
 	// Test RunCommand
 	cmdInput := EnvRunCommandInput{
@@ -440,6 +444,7 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 		assert.Equal(t, filepath.Join(filepath.Dir(repoDir), "sidekick-worktrees"),
 			filepath.Dir(filepath.Dir(output.WorktreePath)))
 		assert.DirExists(t, output.WorktreePath)
+		assertSideTmpReady(t, output.WorktreePath)
 
 		// Verify the branch was created inside the worktree
 		cmd := exec.Command("git", "branch", "--show-current")
@@ -778,7 +783,45 @@ func TestModalRunCommandFallsBackToAPIWhenRefreshFails(t *testing.T) {
 	assert.Equal(t, 1, apiAttempts)
 }
 
-func TestModalRunCommandKeepsSSHResultWhenAPIFallbackFails(t *testing.T) {
+// TestModalRunCommandReportsUnreachableSandbox reproduces a long-running flow
+// whose sandbox is gone: every attempt dies in the ssh transport, the endpoint
+// refresh cannot restore it, and the API fallback fails too. The command never
+// ran, so reporting a 255 exit would masquerade as the command itself failing
+// and leave callers (e.g. the test-running loop) chasing phantom failures.
+func TestModalRunCommandReportsUnreachableSandbox(t *testing.T) {
+	t.Parallel()
+
+	const diagnostics = "ssh transport failure before agent channel established: start agent exec channel: " +
+		"agent exec channel closed: EOF: ssh diagnostics: ssh: connect to host r447.modal.host port 45113: Connection refused"
+	attempts := 0
+	apiAttempts := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "r447.modal.host",
+		SSHPort:     45113,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{ExitStatus: 255}, diagnostics, nil
+		},
+		runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+			apiAttempts++
+			return EnvRunCommandOutput{}, errors.New("sandbox is not running")
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			return "r447.modal.host", 45113, nil
+		},
+	}
+
+	_, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true, Command: "go"})
+
+	require.Error(t, err, "an unreachable sandbox must not look like a failed command")
+	assert.Contains(t, err.Error(), "sandbox")
+	assert.Contains(t, err.Error(), diagnostics, "ssh diagnostics must survive in the error")
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, 1, apiAttempts)
+}
+
+func TestModalRunCommandErrorsWhenAPIFallbackFails(t *testing.T) {
 	t.Parallel()
 
 	const diagnostics = "kex_exchange_identification: Connection closed by remote host"
@@ -799,10 +842,10 @@ func TestModalRunCommandKeepsSSHResultWhenAPIFallbackFails(t *testing.T) {
 		},
 	}
 
-	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
-	require.NoError(t, err)
-	assert.Equal(t, 255, output.ExitStatus)
-	assert.Equal(t, "nc: proxy read: Broken pipe\n"+diagnostics, output.Stderr)
+	_, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sandbox is not running")
+	assert.Contains(t, err.Error(), diagnostics)
 	assert.Equal(t, 1, apiAttempts)
 }
 func TestModalRunCommandPreservesDiagnosticsWhenRefreshFails(t *testing.T) {
@@ -831,10 +874,9 @@ func TestModalRunCommandPreservesDiagnosticsWhenRefreshFails(t *testing.T) {
 		},
 	}
 
-	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
-	require.NoError(t, err)
-	assert.Equal(t, 255, output.ExitStatus)
-	assert.Equal(t, "remote stderr\n"+diagnostics, output.Stderr)
+	_, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), diagnostics)
 	assert.Equal(t, 1, attempts)
 	assert.Equal(t, 1, refreshes)
 }
@@ -1021,6 +1063,7 @@ func TestHibernateEnvIsNoOpForModal(t *testing.T) {
 	assert.Equal(t, HibernationMetadata{}, metadata)
 	assert.Zero(t, commands, "modal hibernation must not touch the sandbox")
 }
+
 func TestModalRunCommandDoesNotRetryEstablishedChannelFailure(t *testing.T) {
 	t.Parallel()
 
@@ -1051,4 +1094,447 @@ func TestModalRunCommandDoesNotRetryEstablishedChannelFailure(t *testing.T) {
 	assert.Equal(t, 1, attempts, "unknown execution state must not be retried")
 	assert.Equal(t, 0, refreshes, "unknown execution state must not refresh and rerun")
 	assert.Contains(t, output.Stderr, diagnostics)
+}
+
+// A stale tunnel endpoint surfaces as a dial failure wrapping the
+// channel-bootstrap error; the command provably never ran, so RunCommand must
+// refresh the endpoint and retry instead of surfacing a permanent error.
+func TestModalRunCommandRecoversFromStaleEndpointDialFailure(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	refreshes := 0
+	apiCalls := 0
+	dialErr := &sshDialTransportError{cause: &agentExecTransportError{
+		cause:       errors.New("start agent exec channel: agent exec channel closed: EOF"),
+		diagnostics: "ssh: connect to host old.modal.host port 1234: Connection refused",
+	}}
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "old.modal.host",
+		SSHPort:     1234,
+	}
+	modalEnv.runModalCommand = func(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+		attempts++
+		if modalEnv.SSHHost == "old.modal.host" {
+			return classifyModalExecFailure(ctx, dialErr)
+		}
+		return EnvRunCommandOutput{Stdout: "ok"}, "", nil
+	}
+	modalEnv.runModalAPICommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+		apiCalls++
+		return EnvRunCommandOutput{}, errors.New("api fallback should not be needed")
+	}
+	modalEnv.refreshModalEndpoint = func(context.Context, string) (string, int, error) {
+		refreshes++
+		return "new.modal.host", 5678, nil
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{Command: "true"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok", output.Stdout)
+	assert.Equal(t, 0, output.ExitStatus)
+	assert.Equal(t, 2, attempts, "the command must be retried once after refreshing the endpoint")
+	assert.Equal(t, 1, refreshes)
+	assert.Equal(t, 0, apiCalls, "SSH succeeded after refresh; the API fallback must not be used")
+	assert.Equal(t, "new.modal.host", modalEnv.SSHHost)
+	assert.Equal(t, 5678, modalEnv.SSHPort)
+}
+
+// The idle watchdog can terminate the sandbox between an endpoint refresh and
+// the SSH retry against the refreshed endpoint. The API fallback then proves
+// the sandbox is gone without having run anything, so recovery must refresh
+// again (restoring from snapshot) instead of failing the command.
+func TestModalRunCommandRecoversWhenSandboxVanishesAfterRefresh(t *testing.T) {
+	t.Parallel()
+
+	const diagnostics = "ssh transport failure before agent channel established: ssh handshake with r432.modal.host:36435 timed out after 10s"
+	attempts := 0
+	refreshes := 0
+	apiAttempts := 0
+	var attemptEndpoints []string
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "r436.modal.host",
+		SSHPort:     33175,
+	}
+	modalEnv.runModalCommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+		attempts++
+		attemptEndpoints = append(attemptEndpoints, fmt.Sprintf("%s:%d", modalEnv.SSHHost, modalEnv.SSHPort))
+		if modalEnv.SSHHost == "r450.modal.host" {
+			return EnvRunCommandOutput{ExitStatus: 0, Stdout: "ok"}, "", nil
+		}
+		return EnvRunCommandOutput{ExitStatus: 255}, diagnostics, nil
+	}
+	modalEnv.runModalAPICommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+		apiAttempts++
+		return EnvRunCommandOutput{}, fmt.Errorf("%w: sandbox", errModalSandboxNotRunning)
+	}
+	modalEnv.refreshModalEndpoint = func(context.Context, string) (string, int, error) {
+		refreshes++
+		if refreshes == 1 {
+			return "r432.modal.host", 36435, nil
+		}
+		return "r450.modal.host", 40001, nil
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true, Command: "go"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok", output.Stdout)
+	assert.Equal(t, 0, output.ExitStatus)
+	assert.Equal(t, []string{"r436.modal.host:33175", "r432.modal.host:36435", "r450.modal.host:40001"}, attemptEndpoints)
+	assert.Equal(t, 3, attempts)
+	assert.Equal(t, 2, refreshes)
+	assert.Equal(t, 1, apiAttempts)
+}
+
+func TestModalRunCommandBoundsRecoveryWhenSandboxKeepsVanishing(t *testing.T) {
+	t.Parallel()
+
+	const diagnostics = "ssh transport failure before agent channel established: ssh handshake timed out"
+	attempts := 0
+	refreshes := 0
+	apiAttempts := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "r436.modal.host",
+		SSHPort:     33175,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{ExitStatus: 255}, diagnostics, nil
+		},
+		runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+			apiAttempts++
+			return EnvRunCommandOutput{}, fmt.Errorf("%w: sandbox", errModalSandboxNotRunning)
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			return fmt.Sprintf("r%d.modal.host", refreshes), 40000 + refreshes, nil
+		},
+	}
+
+	_, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true, Command: "go"})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errModalSandboxNotRunning)
+	assert.Contains(t, err.Error(), diagnostics)
+	assert.Equal(t, maxModalRecoveryRounds, refreshes)
+	assert.Equal(t, maxModalRecoveryRounds+1, attempts)
+	assert.Equal(t, maxModalRecoveryRounds, apiAttempts)
+}
+
+func TestModalRunCommandSurfacesRefreshErrorWhenAPIFallbackFails(t *testing.T) {
+	t.Parallel()
+
+	const diagnostics = "kex_exchange_identification: Connection closed by remote host"
+	refreshErr := errors.New("modal sandbox sandbox no longer exists and has no snapshot to restore from")
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "r442.modal.host",
+		SSHPort:     46157,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			return EnvRunCommandOutput{ExitStatus: 255}, diagnostics, nil
+		},
+		runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+			return EnvRunCommandOutput{}, fmt.Errorf("%w: sandbox", errModalSandboxNotRunning)
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			return "", 0, refreshErr
+		},
+	}
+
+	_, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errModalSandboxNotRunning)
+	assert.Contains(t, err.Error(), refreshErr.Error(), "a failed refresh must not be hidden by the API fallback failure")
+	assert.Contains(t, err.Error(), diagnostics)
+}
+
+// After the API proves the sandbox vanished, the next round's own API attempt
+// must decide the outcome even when that round's refresh fails; the earlier
+// "not running" lookup is stale evidence by then.
+func TestModalRunCommandRetriesAPIFallbackAfterLaterRefreshFailure(t *testing.T) {
+	t.Parallel()
+
+	const diagnostics = "ssh transport failure before agent channel established: ssh handshake timed out"
+	attempts := 0
+	refreshes := 0
+	apiAttempts := 0
+	modalEnv := &ModalEnv{
+		SandboxName: "sandbox",
+		SSHHost:     "r436.modal.host",
+		SSHPort:     33175,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			attempts++
+			return EnvRunCommandOutput{ExitStatus: 255}, diagnostics, nil
+		},
+		runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+			apiAttempts++
+			if apiAttempts == 1 {
+				return EnvRunCommandOutput{}, fmt.Errorf("%w: sandbox", errModalSandboxNotRunning)
+			}
+			return EnvRunCommandOutput{Stdout: "via api"}, nil
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			if refreshes == 1 {
+				return "r432.modal.host", 36435, nil
+			}
+			return "", 0, errors.New("modal sandbox sandbox is still shutting down after 2m0s")
+		},
+	}
+
+	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true, Command: "go"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "via api", output.Stdout)
+	assert.Equal(t, 2, refreshes)
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, 2, apiAttempts)
+}
+
+// Negative controls: once a retry against a refreshed endpoint fails in a way
+// that does not prove the command never started, recovery must stop there.
+func TestModalRunCommandDoesNotRetryAmbiguousFailureAfterRefresh(t *testing.T) {
+	t.Parallel()
+
+	const dialDiagnostics = "ssh transport failure before agent channel established: ssh handshake timed out"
+	establishedErr := errors.New("agent exec channel closed after command was sent: EOF")
+	tests := []struct {
+		name         string
+		retryOutput  EnvRunCommandOutput
+		retryDiag    string
+		retryErr     error
+		wantErr      error
+		wantExitCode int
+	}{
+		{
+			name:     "established channel failure",
+			retryErr: establishedErr,
+			wantErr:  establishedErr,
+		},
+		{
+			name:         "remote command itself exited 255",
+			retryOutput:  EnvRunCommandOutput{ExitStatus: 255, Stderr: "ssh: connect to host example port 22: command output, not diagnostics"},
+			wantExitCode: 255,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			attempts := 0
+			refreshes := 0
+			apiAttempts := 0
+			modalEnv := &ModalEnv{
+				SandboxName: "sandbox",
+				SSHHost:     "r436.modal.host",
+				SSHPort:     33175,
+				runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+					attempts++
+					if attempts == 1 {
+						return EnvRunCommandOutput{ExitStatus: 255}, dialDiagnostics, nil
+					}
+					return tc.retryOutput, tc.retryDiag, tc.retryErr
+				},
+				runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+					apiAttempts++
+					return EnvRunCommandOutput{Stdout: "must not run"}, nil
+				},
+				refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+					refreshes++
+					return "r432.modal.host", 36435, nil
+				},
+			}
+
+			output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{SkipWaking: true, Command: "go"})
+
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantExitCode, output.ExitStatus)
+				assert.Equal(t, tc.retryOutput.Stderr, output.Stderr)
+			}
+			assert.Equal(t, 2, attempts, "the command must not be re-run after a possibly-executed attempt")
+			assert.Equal(t, 1, refreshes)
+			assert.Equal(t, 0, apiAttempts, "the API fallback must not re-run a possibly-executed command")
+		})
+	}
+}
+
+// TestModalRunCommandReportsRestoreWhenRecoveryFails covers the rollback that
+// is hardest to notice: recovery restored the sandbox and then still failed.
+// The restore is only ever reported by the refresh that performed it, so a
+// notice dropped here is lost for good, and a later successful command finds
+// the sandbox running with no sign its filesystem moved backwards.
+func TestModalRunCommandReportsRestoreWhenRecoveryFails(t *testing.T) {
+	prev := refreshModalEndpointDetailed
+	t.Cleanup(func() { refreshModalEndpointDetailed = prev })
+	exitCode := 137
+	refreshModalEndpointDetailed = func(context.Context, string) (modalEndpointRefresh, error) {
+		return modalEndpointRefresh{
+			SSHHost:           "new.host",
+			SSHPort:           2222,
+			Restored:          true,
+			SnapshotImageId:   "im-restored",
+			PreviousSandboxID: "sb-dead",
+			PreviousExitCode:  &exitCode,
+		}, nil
+	}
+
+	e := &ModalEnv{
+		SandboxName: "side--test",
+		SSHHost:     "old.host",
+		SSHPort:     1,
+		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			return EnvRunCommandOutput{ExitStatus: 255},
+				"ssh transport failure before agent channel established: ssh handshake with old.host:1 timed out after 10s", nil
+		},
+		runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+			return EnvRunCommandOutput{}, errModalSandboxNotRunning
+		},
+	}
+
+	_, err := e.RunCommand(context.Background(), EnvRunCommandInput{Command: "true"})
+	require.Error(t, err)
+	for _, want := range []string{"im-restored", "sb-dead", "137", "lost"} {
+		assert.Contains(t, err.Error(), want, "the failure must still report the rollback")
+	}
+}
+
+// TestModalRunCommandReportsSnapshotRestore covers the silent-rollback case:
+// when the sandbox died and had to be restored from its last snapshot before
+// the command could run, the command's caller must be told, because every
+// filesystem change made after that snapshot is gone.
+func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
+	transportFailure := "ssh transport failure before agent channel established: ssh handshake with old.host:1 timed out after 10s"
+	exitCode := 137
+	restored := modalEndpointRefresh{
+		SSHHost:           "new.host",
+		SSHPort:           2222,
+		Restored:          true,
+		SnapshotImageId:   "im-restored",
+		PreviousSandboxID: "sb-dead",
+		PreviousExitCode:  &exitCode,
+	}
+	cases := []struct {
+		name         string
+		refresh      modalEndpointRefresh
+		wantNotice   bool
+		wantContains []string
+	}{
+		{
+			name:       "endpoint refreshed without restore",
+			refresh:    modalEndpointRefresh{SSHHost: "new.host", SSHPort: 2222},
+			wantNotice: false,
+		},
+		{
+			name:         "restored from snapshot",
+			refresh:      restored,
+			wantNotice:   true,
+			wantContains: []string{"side--test", "im-restored", "sb-dead", "137", "lost"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := refreshModalEndpointDetailed
+			t.Cleanup(func() { refreshModalEndpointDetailed = prev })
+			refreshModalEndpointDetailed = func(context.Context, string) (modalEndpointRefresh, error) {
+				return tc.refresh, nil
+			}
+
+			calls := 0
+			e := &ModalEnv{
+				SandboxName: "side--test",
+				SSHHost:     "old.host",
+				SSHPort:     1,
+				runModalCommand: func(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+					calls++
+					if calls == 1 {
+						return EnvRunCommandOutput{ExitStatus: 255}, transportFailure, nil
+					}
+					return EnvRunCommandOutput{Stdout: "ok\n", Stderr: "warn\n", ExitStatus: 0}, "", nil
+				},
+			}
+			output, err := e.RunCommand(context.Background(), EnvRunCommandInput{Command: "true"})
+			if err != nil {
+				t.Fatalf("RunCommand: %v", err)
+			}
+			if output.ExitStatus != 0 || output.Stdout != "ok\n" {
+				t.Fatalf("unexpected output %+v", output)
+			}
+			if e.SSHHost != "new.host" || e.SSHPort != 2222 {
+				t.Fatalf("endpoint not refreshed: %s:%d", e.SSHHost, e.SSHPort)
+			}
+			if !tc.wantNotice {
+				if output.Stderr != "warn\n" {
+					t.Fatalf("stderr altered without a restore: %q", output.Stderr)
+				}
+				return
+			}
+			if !strings.HasSuffix(output.Stderr, "\nwarn\n") {
+				t.Fatalf("command stderr must follow the notice, got %q", output.Stderr)
+			}
+			for _, want := range tc.wantContains {
+				if !strings.Contains(output.Stderr, want) {
+					t.Errorf("restore notice missing %q: %q", want, output.Stderr)
+				}
+			}
+		})
+	}
+}
+
+// TestAgentExecOutput_SealedIsNeverSuccess: a sealed sandbox runs nothing, so
+// reporting success would let a caller build on state about to be discarded.
+func TestAgentExecOutput_SealedIsNeverSuccess(t *testing.T) {
+	t.Parallel()
+	output := agentExecOutput(sideagent.ExecResponse{Sealed: true})
+	assert.NotEqual(t, 0, output.ExitStatus, "a refused command must not look successful")
+	assert.Contains(t, output.Stderr, sideagent.SealedMessage)
+}
+
+func TestEnsureSideTmp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+
+	cmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	cmd.Dir = repoDir
+	excludePathOutput, err := cmd.CombinedOutput()
+	require.NoError(t, err)
+	excludePath := strings.TrimSpace(string(excludePathOutput))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(repoDir, excludePath)
+	}
+	require.NoError(t, os.WriteFile(excludePath, []byte("existing-pattern"), 0644))
+
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+
+	require.NoError(t, ensureSideTmp(ctx, localEnv))
+	require.NoError(t, ensureSideTmp(ctx, localEnv))
+	assertSideTmpReady(t, repoDir)
+
+	excludeContent, err := os.ReadFile(excludePath)
+	require.NoError(t, err)
+	assert.Equal(t, "existing-pattern\n/.side/tmp/\n", string(excludeContent))
+
+	cmd = exec.Command("grep", "-Fxc", "/.side/tmp/", excludePath)
+	countOutput, err := cmd.CombinedOutput()
+	require.NoError(t, err)
+	assert.Equal(t, "1", strings.TrimSpace(string(countOutput)))
+}
+
+func assertSideTmpReady(t *testing.T, worktreePath string) {
+	t.Helper()
+	assert.DirExists(t, filepath.Join(worktreePath, ".side", "tmp"))
+
+	cmd := exec.Command("git", "check-ignore", "--no-index", ".side/tmp/probe")
+	cmd.Dir = worktreePath
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "expected .side/tmp to be excluded from Git: %s", output)
 }

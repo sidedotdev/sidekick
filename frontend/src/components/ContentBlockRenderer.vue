@@ -11,6 +11,7 @@
       <ContentBlockRenderer :block="nested" />
     </template>
   </div>
+  <BuiltinToolBlock v-else-if="block.type === 'builtin_tool_use'" :block="block" :json-tree-depth="0" />
   <JsonTree v-else :deep="0" :data="block" />
 </template>
 
@@ -18,6 +19,7 @@
 import type { Llm2ContentBlock } from '../lib/models'
 import ImagePreview from './ImagePreview.vue'
 import JsonTree from './JsonTree.vue'
+import BuiltinToolBlock from './BuiltinToolBlock.vue'
 
 defineProps<{
   block: Llm2ContentBlock

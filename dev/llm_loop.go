@@ -91,7 +91,18 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 		iteration.ExecCtx = dCtx.WithCancelOnPause()
 
 		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
-		if iteration.Num > config.maxIterations && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
+
+		finalizing := false
+		if finalizer, ok := iteration.State.(interface {
+			prepareFinalization(*LlmIteration) (bool, error)
+		}); ok {
+			var err error
+			finalizing, err = finalizer.prepareFinalization(iteration)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !finalizing && iteration.Num > config.maxIterations && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return nil, ErrMaxAttemptsReached
 		}
 
@@ -102,8 +113,9 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 		}
 		if response != nil && response.Content != "" {
 			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
-				Role:    "user",
-				Content: renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
+				Role:        "user",
+				ContextType: ContextTypeUserFeedback,
+				Content:     renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
 			}); err != nil {
 				return nil, err
 			}
@@ -121,7 +133,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 		}
 
 		// Get user feedback every N iterations
-		if iteration.AutoIterationCount >= config.autoIterations {
+		if !finalizing && iteration.AutoIterationCount >= config.autoIterations {
 			if config.giveUpQuietly {
 				workflow.GetLogger(dCtx).Warn("LlmLoop exceeded threshold, returning empty result", "iterations", iteration.Num)
 				return new(T), nil
@@ -133,9 +145,14 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 			}
 
 			// Add feedback to chat history
+			contextType := ""
+			if !dCtx.ExecContext.DisableHumanInTheLoop {
+				contextType = ContextTypeUserFeedback
+			}
 			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
-				Role:    "user",
-				Content: userResponse.Content,
+				Role:        "user",
+				ContextType: contextType,
+				Content:     userResponse.Content,
 			}); err != nil {
 				return nil, err
 			}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sidekick/common"
 	"sidekick/secret_manager"
 	"strings"
 	"time"
@@ -34,13 +35,27 @@ type Credentials struct {
 	AccountID    string `json:"accountId"`
 }
 
-// StoreFn persists refreshed credentials. Override in tests to avoid OS keyring.
+// StoreFn persists credentials for the default profile. Override in tests to
+// avoid OS keyring.
 var StoreFn = func(creds *Credentials) error {
+	return storeCredentials(common.DefaultProfileId, creds)
+}
+
+// StoreForProfileFn persists credentials under a profile's derived secret key,
+// delegating to StoreFn for the default profile.
+var StoreForProfileFn = func(profileId string, creds *Credentials) error {
+	if common.NormalizeProfileId(profileId) == common.DefaultProfileId {
+		return StoreFn(creds)
+	}
+	return storeCredentials(profileId, creds)
+}
+
+func storeCredentials(profileId string, creds *Credentials) error {
 	data, err := json.Marshal(creds)
 	if err != nil {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
-	return keyring.Set(keyringService, SecretName, string(data))
+	return keyring.Set(keyringService, secret_manager.ProfileSecretName(profileId, SecretName), string(data))
 }
 
 // TokenEndpoint and HTTPClient are overridable for testing.
@@ -240,7 +255,7 @@ func GetAndMaybeRefresh(ctx context.Context, secretManager interface{ GetSecret(
 		if refreshErr != nil {
 			return nil, false, fmt.Errorf("failed to refresh OpenAI OAuth token: %w", refreshErr)
 		}
-		if storeErr := StoreFn(newCreds); storeErr != nil {
+		if storeErr := StoreForProfileFn(secret_manager.ProfileIdOf(secretManager), newCreds); storeErr != nil {
 			return nil, false, fmt.Errorf("failed to store refreshed OpenAI OAuth credentials: %w", storeErr)
 		}
 		return newCreds, true, nil

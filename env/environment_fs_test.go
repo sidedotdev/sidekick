@@ -420,25 +420,50 @@ func runRemoteEnvFilesystemSubtests(t *testing.T, ctx context.Context, env Env) 
 		assert.True(t, byName["sub"].IsDir())
 	})
 
-	t.Run("reconnects after losing the shared SFTP session", func(t *testing.T) {
+	t.Run("reconnects after losing the live SSH session", func(t *testing.T) {
 		relPath := path.Join(base, "reconnect.txt")
 		want := []byte("reconnect-" + ksuid.New().String())
 		require.NoError(t, env.WriteFile(ctx, relPath, want, 0o644))
 
-		sshEnv, ok := env.(interface{ sharedSFTP() *sftpConn })
-		require.True(t, ok, "remote env must expose a shared SFTP connection")
-
-		// Kill the session's ssh transport to simulate the container being
-		// restarted or recreated under the same name.
-		conn := sshEnv.sharedSFTP().lockLive()
-		require.NotNil(t, conn.cmd, "expected a dialed SFTP session")
-		_ = conn.cmd.Process.Kill()
-		conn.mu.Unlock()
+		dropLiveSSHSession(t, ctx, env)
 
 		got, err := env.ReadFile(ctx, relPath)
 		require.NoError(t, err, "filesystem ops must transparently re-dial after the session dies")
 		assert.Equal(t, want, got)
 	})
+}
+
+// dropLiveSSHSession severs whatever live session the env's selected transport
+// holds, the way a container restarted under the same name would, so the next
+// filesystem operation has to re-dial. Each transport keeps its session in its
+// own shape: an ssh child process for the legacy one, a pooled ssh client for
+// the native one.
+func dropLiveSSHSession(t *testing.T, ctx context.Context, env Env) {
+	t.Helper()
+
+	sshEnv, ok := env.(interface{ sharedSFTP() *sftpConn })
+	require.True(t, ok, "remote env must expose a shared SFTP connection")
+	conn := sshEnv.sharedSFTP().lockLive()
+	cmd := conn.cmd
+	conn.mu.Unlock()
+
+	if cmd != nil {
+		_ = cmd.Process.Kill()
+		return
+	}
+
+	transportEnv, ok := env.(interface{ transport() SSHTransport })
+	require.True(t, ok, "remote env must expose its transport")
+	transport := transportEnv.transport()
+	defer transport.Close()
+	dropper, ok := transport.(interface {
+		dropLiveSession(ctx context.Context) (bool, error)
+	})
+	require.True(t, ok, "the selected transport must be able to drop its live session")
+
+	dropped, err := dropper.dropLiveSession(ctx)
+	require.NoError(t, err)
+	require.True(t, dropped, "expected a dialed SSH session to sever")
 }
 
 // runRemoteEnvStdinSubtests verifies that commands run over SSH get stdin

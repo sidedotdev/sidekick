@@ -117,7 +117,13 @@ To try the app out as a developer, install a debug build on an Android device
 2. Enable **Developer options** and **USB debugging** on the device, connect it
    over USB (or use `adb pair` + `adb connect` for wireless debugging), and
    confirm it shows up in `adb devices`.
-3. Build and install the debug APK from `app/android`:
+3. From the repository root, run `just phone` to build, install, and launch the
+   debug app. This requires [Just](https://just.systems/) and selects the online
+   non-emulator device with the highest ADB transport ID (the most recently
+   registered connection in the current ADB server). Installation and launch
+   stay pinned to that connection even if another phone connects during the build.
+
+   Alternatively, build and install the debug APK from `app/android`:
 
    ```sh
    ./gradlew :app:installDebug
@@ -151,6 +157,47 @@ into the pairing entry screen on a real device/emulator:
 Do **not** run this in the container — it requires `/dev/kvm` and a
 device/emulator. For CI, use nested virtualization or a device farm such as
 Firebase Test Lab or Gradle Managed Devices.
+
+### Live remote-access test on a real phone
+
+`RemoteWorkspaceIrohInstrumentedTest` dials a running sidekick server over iroh
+from the device and loads the workspace list, first stage by stage over a raw
+iroh stream (connect → open stream → write → first response chunk → EOF) and
+then through the full Retrofit + `IrohHttpCallFactory` stack. It needs live
+pairing credentials, so it is skipped unless they are supplied as
+instrumentation arguments.
+
+The runner script mints a throwaway pairing, targets a connected phone, bounds
+the whole run, prints the on-device stage diagnostics, and revokes the pairing
+afterwards:
+
+```sh
+side start   # server incl. the remote (iroh) component
+bash -o pipefail -c 'scripts/android_phone_remote_e2e/run.sh 2>&1 | tee REPRO.txt'
+```
+
+`pipefail` matters: without it `tee` masks the runner's exit status and a hung
+phone looks like a pass.
+
+Options: `-s SERIAL` (or `ANDROID_SERIAL`) selects among several attached
+devices, `-t SECONDS` overrides the default 900s hard timeout. The pairing
+ticket and token are redacted from everything the script and the test print, so
+the captured output is safe to share.
+
+Debugging a hang: each stage is logged to logcat under the `SidekickPhoneE2E`
+tag when it starts and again when it settles, so a stage logged as `START`
+without a matching outcome is the one that stalled. Follow it live from another
+shell with:
+
+```sh
+adb logcat -s SidekickPhoneE2E:V
+```
+
+The runner itself is covered by stub-driven tests (no device needed):
+
+```sh
+scripts/android_phone_remote_e2e/run_test.sh
+```
 
 ## Deferred / add later
 

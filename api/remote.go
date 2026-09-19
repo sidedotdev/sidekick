@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/iroh"
 	"sidekick/srv"
@@ -81,6 +83,16 @@ func DeviceAuthMiddleware(service srv.Service) gin.HandlerFunc {
 
 		device, err := service.GetRemoteDeviceByTokenHash(c.Request.Context(), hashDeviceToken(token))
 		if err != nil {
+			category := "storage"
+			switch {
+			case errors.Is(err, common.ErrNotFound):
+				category = "not-found"
+			case errors.Is(err, context.Canceled):
+				category = "context-canceled"
+			case errors.Is(err, context.DeadlineExceeded):
+				category = "deadline-exceeded"
+			}
+			log.Warn().Str("category", category).Msg("Remote device authentication lookup failed")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid device token"})
 			return
 		}

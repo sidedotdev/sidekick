@@ -429,8 +429,8 @@ index 1234567..abcdefg 100644
         }
       })
 
-      expect(wrapper.findAllComponents(DiffFile)).toHaveLength(1)
-      // Should not throw an error when generating keys with null file names
+      expect(wrapper.findAllComponents(DiffFile)).toHaveLength(0)
+      expect(wrapper.find('[role="status"]').text()).toBe('diff content')
     })
   })
 

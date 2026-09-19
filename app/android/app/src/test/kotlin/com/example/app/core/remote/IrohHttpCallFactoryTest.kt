@@ -41,7 +41,7 @@ class IrohHttpCallFactoryTest {
         assertTrue(sent.startsWith("GET /api/v1/workspaces/?status=active HTTP/1.1\r\n"))
         assertTrue(sent.contains("Authorization: Bearer token\r\n"))
         assertTrue(sent.contains("Connection: close\r\n"))
-        assertTrue(stream.finished)
+        assertFalse(stream.finished)
         assertTrue(stream.closed)
         assertTrue(connector.connection.closed)
     }
@@ -604,8 +604,12 @@ class IrohHttpCallFactoryTest {
             finished = true
         }
 
-        override suspend fun read(): ByteArray? =
-            if (responses.isEmpty()) null else responses.removeFirst()
+        override suspend fun read(): ByteArray? {
+            if (finished) {
+                throw IOException("Request EOF canceled server processing")
+            }
+            return if (responses.isEmpty()) null else responses.removeFirst()
+        }
 
         override fun close() {
             closed = true

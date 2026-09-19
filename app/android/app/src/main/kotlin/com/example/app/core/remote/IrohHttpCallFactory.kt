@@ -70,8 +70,8 @@ private class IrohHttpCall(
                     throw IOException("Canceled")
                 }
 
+                // HTTP framing ends the request; FIN can cancel the server's request context.
                 openedStream.write(encodeRequest(originalRequest))
-                openedStream.finish()
 
                 val responseBytes = ByteArrayOutputStream()
                 while (!canceled.get()) {

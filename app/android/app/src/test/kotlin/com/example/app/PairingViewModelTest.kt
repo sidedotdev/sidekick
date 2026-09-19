@@ -173,6 +173,49 @@ class PairingViewModelTest {
         assertEquals(PairingCredentials("scanned-ticket", "scanned-token"), api.receivedCredentials)
     }
 
+    @Test
+    fun `scan selects only an available hinted workspace`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        for (hint in listOf("two", "missing", null)) {
+            val viewModel = createViewModel(
+                FakeCredentialStore(),
+                FakeRemoteApi(workspaces = listOf(
+                    Workspace(id = "one", name = "One"),
+                    Workspace(id = "two", name = "Two"),
+                )),
+                dispatcher,
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val payload = if (hint == null) {
+                """{"ticket":"ticket","token":"token"}"""
+            } else {
+                """{"ticket":"ticket","token":"token","workspaceId":"$hint"}"""
+            }
+            viewModel.onPairingPayload(payload)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(
+                hint.takeIf { it == "two" },
+                viewModel.uiState.value.selectedWorkspaceId,
+            )
+            assertEquals(
+                hint.takeIf { it == "two" },
+                viewModel.uiState.value.workspaceToOpen?.id,
+            )
+
+            viewModel.onWorkspaceOpened()
+            assertNull(viewModel.uiState.value.workspaceToOpen)
+            viewModel.onRetry()
+            dispatcher.scheduler.advanceUntilIdle()
+            assertNull(viewModel.uiState.value.workspaceToOpen)
+
+            viewModel.onWorkspaceSelected("one")
+            assertEquals("one", viewModel.uiState.value.selectedWorkspaceId)
+            assertNull(viewModel.uiState.value.workspaceToOpen)
+        }
+    }
+
     private fun createViewModel(
         store: FakeCredentialStore,
         api: FakeRemoteApi,

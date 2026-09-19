@@ -37,7 +37,7 @@ const (
 	ContextTypeUserFeedback        string = "UserFeedback"
 	ContextTypeTestResult          string = "TestResult"
 	ContextTypeEditBlockReport     string = "EditBlockReport"
-	ContextTypeSelfReviewFeedback  string = "SelfReviewFeedback"
+	ContextTypeAutoReviewFeedback  string = "AutoReviewFeedback"
 	ContextTypeSummary             string = "Summary"
 	ContextTypeIntentUpdate        string = "IntentUpdate"
 )
@@ -217,10 +217,11 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 	// Incremental intent updates depend on every preceding update surviving.
 	for i, msg := range messages {
 		switch getLlm2ContextType(msg) {
-		case ContextTypeInitialInstructions, ContextTypeIntentUpdate:
+		case ContextTypeIntentUpdate:
 			isRetained[i] = true
 		}
 	}
+	protected := protectedHistoryBlocks(messages)
 
 	// Track latest indices for superseded types
 	latestIndices := make(map[string]int)
@@ -228,7 +229,7 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 	for i, msg := range messages {
 		contextType := getLlm2ContextType(msg)
 		switch contextType {
-		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
+		case ContextTypeTestResult, ContextTypeAutoReviewFeedback, ContextTypeSummary:
 			latestIndices[contextType] = i
 		case ContextTypeEditBlockReport:
 			latestIndices[contextType] = i
@@ -236,15 +237,13 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 		}
 	}
 
-	// Mark UserFeedback and latest superseded types with their response blocks
+	// Generated status markers also protect their following response blocks.
 	for i, msg := range messages {
 		shouldMarkAndExtendBlock := false
 		contextType := getLlm2ContextType(msg)
 
 		switch contextType {
-		case ContextTypeUserFeedback:
-			shouldMarkAndExtendBlock = true
-		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
+		case ContextTypeTestResult, ContextTypeAutoReviewFeedback, ContextTypeSummary:
 			if latestIdx, ok := latestIndices[contextType]; ok && i == latestIdx {
 				shouldMarkAndExtendBlock = true
 			}
@@ -306,26 +305,45 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 	messages, isRetained = truncateLargeLlm2ToolResponses(messages, isRetained, keepLength, provider, modelConfig)
 
 	totalLength = 0
+	protectedLengths := make([]int, len(messages))
 	for i, msg := range messages {
+		for j, block := range msg.Content {
+			if protected[i][j] {
+				protectedLengths[i] += contentBlockLength(provider, block)
+			}
+		}
 		if isRetained[i] {
 			totalLength += llm2MessageLength(provider, msg)
+		} else {
+			totalLength += protectedLengths[i]
 		}
 	}
 
-	// Drop all older unretained messages once limit is exceeded
+	// Drop all older unretained content once the budget is exhausted.
 	var newMessages []llm2.Message
 	limitExceeded := false
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		if isRetained[i] {
 			newMessages = append(newMessages, msg)
-		} else if !limitExceeded {
-			if llm2MessageLength(provider, msg)+totalLength <= keepLength {
-				newMessages = append(newMessages, msg)
-				totalLength += llm2MessageLength(provider, msg)
-			} else {
-				limitExceeded = true
+			continue
+		}
+		extraLength := llm2MessageLength(provider, msg) - protectedLengths[i]
+		if !limitExceeded && extraLength+totalLength <= keepLength {
+			newMessages = append(newMessages, msg)
+			totalLength += extraLength
+			continue
+		}
+		limitExceeded = true
+		content := make([]llm2.ContentBlock, 0, len(msg.Content))
+		for j, block := range msg.Content {
+			if protected[i][j] {
+				content = append(content, block)
 			}
+		}
+		if len(content) > 0 {
+			msg.Content = content
+			newMessages = append(newMessages, msg)
 		}
 	}
 
@@ -362,12 +380,17 @@ func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, 
 		result[i] = llm2.Message{Role: msg.Role, Content: newContent}
 	}
 
+	protected := protectedHistoryBlocks(messages)
+
 	// Truncate any retained tool response that exceeds the threshold
 	for i := range result {
 		if !isRetained[i] {
 			continue
 		}
 		for j, block := range result[i].Content {
+			if protected[i][j] {
+				continue
+			}
 			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
 				oldText := block.ToolResult.TextContent()
 				if len(oldText) > threshold {
@@ -384,6 +407,9 @@ func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, 
 			continue
 		}
 		for j, block := range msg.Content {
+			if protected[i][j] {
+				continue
+			}
 			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
 				blockLen := len(block.ToolResult.TextContent())
 				if blockLen > threshold {
@@ -472,86 +498,110 @@ func truncateToolResultMiddle(block *llm2.ContentBlock, oldText string, maxChars
 
 // cleanLlm2ToolCallsAndResponses removes orphaned tool calls and tool results.
 func cleanLlm2ToolCallsAndResponses(messages *[]llm2.Message) {
-	// First pass: identify which messages with tool use blocks have ALL their responses
-	toolCallsToKeep := make(map[int]bool)
+	validCalls := make(map[string]bool)
 	for i, msg := range *messages {
-		toolUseBlocks := getToolUseBlocks(msg)
-		if len(toolUseBlocks) == 0 {
+		calls := getToolUseBlocks(msg)
+		if len(calls) == 0 {
 			continue
 		}
-
-		toolCallIds := make(map[string]bool)
-		for _, tu := range toolUseBlocks {
-			toolCallIds[tu.Id] = true
+		ids := make(map[string]bool)
+		for _, call := range calls {
+			ids[call.Id] = true
 		}
-
-		// Look at subsequent messages for tool responses
-		responseCount := 0
 		for j := i + 1; j < len(*messages); j++ {
-			toolResultBlocks := getToolResultBlocks((*messages)[j])
-			if len(toolResultBlocks) == 0 {
-				// If message has no tool results, check if it's a different type of message
-				if len(getToolUseBlocks((*messages)[j])) > 0 || (*messages)[j].Role != llm2.RoleUser {
-					break
-				}
-				continue
+			next := (*messages)[j]
+			if len(getToolUseBlocks(next)) > 0 || next.Role != llm2.RoleUser {
+				break
 			}
-			for _, tr := range toolResultBlocks {
-				if toolCallIds[tr.ToolCallId] {
-					responseCount++
+			for _, result := range getToolResultBlocks(next) {
+				if ids[result.ToolCallId] {
+					validCalls[result.ToolCallId] = true
 				}
 			}
-		}
-
-		// Only keep if ALL tool calls have responses
-		if responseCount == len(toolUseBlocks) {
-			toolCallsToKeep[i] = true
 		}
 	}
 
-	// Second pass: build new message list, skipping orphaned tool calls and their partial responses
-	newMessages := make([]llm2.Message, 0)
-	validToolCallIds := make(map[string]bool)
-
-	for i, msg := range *messages {
-		toolUseBlocks := getToolUseBlocks(msg)
-		toolResultBlocks := getToolResultBlocks(msg)
-
-		if len(toolUseBlocks) > 0 {
-			if !toolCallsToKeep[i] {
-				// Remove tool use blocks but keep other content
-				newContent := make([]llm2.ContentBlock, 0)
-				for _, block := range msg.Content {
-					if block.Type != llm2.ContentBlockTypeToolUse {
-						newContent = append(newContent, block)
-					}
+	cleaned := make([]llm2.Message, 0, len(*messages))
+	seenCalls := make(map[string]bool)
+	for _, msg := range *messages {
+		content := make([]llm2.ContentBlock, 0, len(msg.Content))
+		for _, block := range msg.Content {
+			if block.ToolUse != nil {
+				if !validCalls[block.ToolUse.Id] {
+					continue
 				}
-				if len(newContent) > 0 {
-					newMessages = append(newMessages, llm2.Message{Role: msg.Role, Content: newContent})
-				}
+				seenCalls[block.ToolUse.Id] = true
+			}
+			if block.ToolResult != nil && !seenCalls[block.ToolResult.ToolCallId] {
 				continue
 			}
-			for _, tu := range toolUseBlocks {
-				validToolCallIds[tu.Id] = true
-			}
-			newMessages = append(newMessages, msg)
-		} else if len(toolResultBlocks) > 0 {
-			// Filter out tool results that don't have matching tool calls
-			newContent := make([]llm2.ContentBlock, 0)
-			for _, block := range msg.Content {
-				if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
-					if !validToolCallIds[block.ToolResult.ToolCallId] {
-						continue
-					}
-				}
-				newContent = append(newContent, block)
-			}
-			if len(newContent) > 0 {
-				newMessages = append(newMessages, llm2.Message{Role: msg.Role, Content: newContent})
-			}
-		} else {
-			newMessages = append(newMessages, msg)
+			content = append(content, block)
+		}
+		if len(content) == len(msg.Content) {
+			cleaned = append(cleaned, msg)
+		} else if len(content) > 0 {
+			msg.Content = content
+			cleaned = append(cleaned, msg)
 		}
 	}
-	*messages = newMessages
+	*messages = cleaned
+}
+
+// MeasureLlm2Messages uses the same provider-aware sizing as history management.
+func MeasureLlm2Messages(provider string, messages []llm2.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += llm2MessageLength(provider, message)
+	}
+	return total
+}
+
+func hasHumanContext(block llm2.ContentBlock) bool {
+	switch GetContextType(block) {
+	case ContextTypeInitialInstructions, ContextTypeUserFeedback:
+		return true
+	}
+	if block.ToolResult != nil {
+		for _, nested := range block.ToolResult.Content {
+			if hasHumanContext(nested) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func protectedHistoryBlocks(messages []llm2.Message) [][]bool {
+	pairs := make(map[string]bool)
+	for _, msg := range messages {
+		intentStart := false
+		for _, block := range msg.Content {
+			if GetContextType(block) == "IntentTaskStart" {
+				intentStart = true
+			}
+			if block.ToolResult != nil && hasHumanContext(block) {
+				pairs[block.ToolResult.ToolCallId] = true
+			}
+		}
+		for _, block := range msg.Content {
+			if block.ToolUse != nil && (hasHumanContext(block) ||
+				(intentStart && block.ToolUse.Name == "start_intent_subtask")) {
+				pairs[block.ToolUse.Id] = true
+			}
+		}
+	}
+	protected := make([][]bool, len(messages))
+	for i, msg := range messages {
+		protected[i] = make([]bool, len(msg.Content))
+		for j, block := range msg.Content {
+			protected[i][j] = hasHumanContext(block)
+			if block.ToolUse != nil && pairs[block.ToolUse.Id] {
+				protected[i][j] = true
+			}
+			if block.ToolResult != nil && pairs[block.ToolResult.ToolCallId] {
+				protected[i][j] = true
+			}
+		}
+	}
+	return protected
 }

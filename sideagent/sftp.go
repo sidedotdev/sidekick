@@ -14,11 +14,17 @@ import (
 // so a dropped SSH connection reaps this process. Signals also trigger a
 // clean shutdown in case EOF is never delivered.
 func ServeSFTP(rw io.ReadWriteCloser) error {
-	server, err := sftp.NewServer(rw)
+	return serveSFTP(rw, DefaultSeal())
+}
+
+func serveSFTP(rw io.ReadWriteCloser, seal *Seal) error {
+	guard := newSFTPGuard(rw, seal)
+	server, err := sftp.NewServer(guard)
 	if err != nil {
 		return err
 	}
 	defer server.Close()
+	defer guard.finish()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGPIPE)

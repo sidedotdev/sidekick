@@ -226,9 +226,10 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	// type internally in the embedder implementation
 	taskType := embedding.TaskTypeRetrievalQuery
 
-	// Embed all chunks
-	// TODO /gen/basic cache query vectors in memory, for when the same query is rerun twice
-	queryVectors, err := BatchEmbed(ctx, options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
+	// Embed all chunks, memoized in-process: embedding providers are not
+	// bit-deterministic across requests, and near-tied rankings must not
+	// flip when the same query is rerun.
+	queryVectors, err := cachedBatchEmbedQueries(ctx, options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
 	}

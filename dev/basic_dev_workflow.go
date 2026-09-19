@@ -158,6 +158,37 @@ func getOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTree
 	return result, err
 }
 
+// generateReviewDiffs produces both the full diff since the start point and the
+// diff since the last review in a single activity call. Comparing against the
+// last review degrades within the activity, so an error here always means git
+// itself failed, which stays user-retryable.
+func generateReviewDiffs(dCtx DevContext, startPoint, baseBranch, priorReviewDiff string, ignoreWhitespace bool) (coding.GenerateReviewDiffsResult, error) {
+	var result coding.GenerateReviewDiffsResult
+	var ca *coding.CodingActivities
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate review diffs", ca.GenerateReviewDiffsActivity, &result, coding.GenerateReviewDiffsParams{
+		EnvContainer:     *dCtx.EnvContainer,
+		StartPoint:       startPoint,
+		BaseBranch:       baseBranch,
+		PriorReviewDiff:  priorReviewDiff,
+		IgnoreWhitespace: ignoreWhitespace,
+	})
+	return result, err
+}
+
+// reviewDiffsForApproval generates the diffs shown for review, surfacing a
+// failed comparison against the last review in place of that section so
+// reviewers know it is unavailable rather than mistaking the full diff for it.
+func reviewDiffsForApproval(dCtx DevContext, defaultTarget, lastReviewDiff string) (string, string, error) {
+	diffs, err := generateReviewDiffs(dCtx, defaultTarget, defaultTarget, lastReviewDiff, false)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate review diffs: %w", err)
+	}
+	if diffs.SinceDiffError != "" {
+		return diffs.FullDiff, fmt.Sprintf("Failed to generate diff since last review: %s", diffs.SinceDiffError), nil
+	}
+	return diffs.FullDiff, diffs.SinceDiff, nil
+}
+
 // legacyOwnChangesSinceReviewV3 preserves the three-activity call pattern for
 // workflow replay determinism (version 3 of "diff-since-last-review").
 // FIXME remove once all v==3 workflows have completed
@@ -214,7 +245,7 @@ func getBaseSinceReviewDiff(dCtx DevContext, baseBranch string, lastReviewTreeHa
 
 // formatRequirementsWithReview combines original requirements with review history and work done
 // to create comprehensive requirements for the next iteration
-func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
+func legacyFormatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
 	var b strings.Builder
 	b.WriteString("#START Original Requirements\n\n")
 	b.WriteString(originalReqs)
@@ -287,6 +318,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	if err = SetupModalConfigHandlers(dCtx); err != nil {
 		return "", err
 	}
+	SetupProfileChangeHandler(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	hibernateVersion := workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3)
@@ -313,13 +345,19 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		requirements = devRequirements.String()
 	}
 
+	// pinned once here so every round of this flow measures its work from the
+	// same starting state
+	if err = pinInPlaceReviewStart(dCtx); err != nil {
+		return "", fmt.Errorf("failed to pin the review start point: %w", err)
+	}
+
 	v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
 	if v == 1 {
 		result, err = RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
-			return codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "")
+			return codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "", "")
 		})
 	} else {
-		result, err = codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "")
+		result, err = codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "", "")
 	}
 
 	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
@@ -397,7 +435,74 @@ func prepareBasicCodingContext(
 	return codeContext, len(fullCodeContext) - len(codeContext), nil
 }
 
-func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
+// pinInPlaceReviewStart records in global state what work done without a
+// worktree is compared against. The branch such work lands on is also its base,
+// so it can't tell our changes apart from anything else there: without a pin,
+// review would only ever see staged changes and anything the flow committed
+// would go unreviewed.
+//
+// It must be pinned once per flow, since every later round's diffs are measured
+// from it. Concurrent flows sharing a checkout still see each other's changes;
+// only a worktree isolates that.
+func pinInPlaceReviewStart(dCtx DevContext) error {
+	if workflow.GetVersion(dCtx, "in-place-start-point", workflow.DefaultVersion, 1) < 1 {
+		return nil
+	}
+	if dCtx.Worktree != nil || dCtx.EnvContainer == nil {
+		return nil
+	}
+
+	var revParsed git.GitRevParseResult
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Pin review start point", git.GitRevParseActivity, &revParsed, git.GitRevParseParams{
+		EnvContainer: *dCtx.EnvContainer,
+		Ref:          "HEAD",
+	})
+	if err != nil {
+		return err
+	}
+
+	// rendered the same way later review diffs are, so the two compare cleanly
+	alreadyStaged, err := generateReviewDiffs(dCtx, revParsed.CommitHash, "", "", true)
+	if err != nil {
+		return err
+	}
+
+	var workingTreeDiff string
+	err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &workingTreeDiff, *dCtx.EnvContainer, git.GitDiffParams{IgnoreWhitespace: true})
+	if err != nil {
+		return err
+	}
+
+	var priorParts []string
+	for _, part := range []string{alreadyStaged.FullDiff, workingTreeDiff} {
+		if strings.TrimSpace(part) != "" {
+			priorParts = append(priorParts, part)
+		}
+	}
+
+	dCtx.ExecContext.GlobalState.SetValue(common.KeyReviewStartPoint, revParsed.CommitHash)
+	dCtx.ExecContext.GlobalState.SetValue(common.KeyReviewStartPriorDiff, strings.Join(priorParts, "\n"))
+	return nil
+}
+
+// applyPinnedReviewStart anchors a criteria check to the review start point
+// pinned in global state, if any. The work then sits on the very branch it
+// targets, so nothing there can be attributed to that branch and only the pin
+// bounds the work.
+func applyPinnedReviewStart(dCtx DevContext, info CheckWorkInfo) CheckWorkInfo {
+	startPoint := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyReviewStartPoint)
+	if startPoint == "" {
+		return info
+	}
+	info.StartPoint = startPoint
+	info.BaseBranch = ""
+	if info.LastReviewDiff == "" {
+		info.LastReviewDiff = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyReviewStartPriorDiff)
+	}
+	return info
+}
+
+func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string, lastReviewDiff string, weightedRankQueries ...persisted_ai.WeightedRankQuery) (result string, err error) {
 	var chatHistory *persisted_ai.ChatHistoryContainer
 	gatherHandoff := false
 	if shouldGatherContext(dCtx.ContextGatherType, true) {
@@ -440,6 +545,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
 		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
+	reviewer := &verifierSession{}
 
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig
@@ -576,12 +682,15 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		if baseBranch == "" && startBranch != nil {
 			baseBranch = *startBranch
 		}
-		fulfillment, err = CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
+		fulfillment, err = CheckWorkMeetsCriteria(dCtx, applyPinnedReviewStart(dCtx, CheckWorkInfo{
 			Requirements:       requirements,
 			AutoChecks:         testOutput,
 			LastReviewTreeHash: lastReviewTreeHash,
+			LastReviewDiff:     lastReviewDiff,
 			BaseBranch:         baseBranch,
-		})
+			ChatHistory:        chatHistory,
+			VerifierSession:    reviewer,
+		}))
 		if err != nil {
 			return "", fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
 		}
@@ -666,7 +775,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			Requirements:   requirements,
 			StartBranch:    startBranch,
 		}
-		_, _, _, err = mergeWorktreeIfApproved(dCtx, params, "")
+		_, _, _, err = mergeWorktreeIfApproved(dCtx, params, "", "")
 		if err != nil {
 			return "", fmt.Errorf("failed to merge if approved: %w", err)
 		}
@@ -681,53 +790,80 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool, lastReviewTreeHash string, autoMerge bool) (MergeApprovalResponse, string, string, error) {
-	v := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
+func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool, lastReviewTreeHash string, lastReviewDiff string, autoMerge bool) (MergeApprovalResponse, string, string, error) {
+	// The diff mechanism has to be chosen before any diff work happens, but
+	// legacy executions recorded the "diff-since-last-review" marker only after
+	// their full-diff activity, so reading that marker first would break their
+	// replay. This extra marker is absent from legacy histories and is therefore
+	// safe to resolve up front.
+	useReviewDiffsActivity := false
+	if workflow.GetVersion(dCtx, "review-diffs-v6-gate", workflow.DefaultVersion, 1) >= 1 {
+		useReviewDiffsActivity = workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 6) >= 6
+	}
 
 	var gitDiff string
+	var diffSinceLastReview string
+	// Only used by legacy versions, which identify the last review by a tree
+	// hash rather than by the diff that was reviewed.
+	var currentTreeHash string
 	var err error
 
-	if v == workflow.DefaultVersion && commitRequired {
-		gitDiff, err = git.GitDiff(dCtx.ExecContext)
+	if useReviewDiffsActivity {
+		gitDiff, diffSinceLastReview, err = reviewDiffsForApproval(dCtx, defaultTarget, lastReviewDiff)
 		if err != nil {
-			return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate git diff: %w", err)
+			return MergeApprovalResponse{}, "", "", err
 		}
 	} else {
-		gitDiff, err = GetGitDiff(dCtx, defaultTarget, false)
-		if err != nil {
-			return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate git diff: %w", err)
+		v := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
+
+		if v == workflow.DefaultVersion && commitRequired {
+			gitDiff, err = git.GitDiff(dCtx.ExecContext)
+			if err != nil {
+				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate git diff: %w", err)
+			}
+		} else {
+			gitDiff, err = GetGitDiff(dCtx, defaultTarget, false)
+			if err != nil {
+				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate git diff: %w", err)
+			}
+		}
+
+		diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 5)
+		if diffSinceLastReviewVersion >= 1 {
+			// Capture current tree hash before getting approval
+			err = workflow.ExecuteActivity(dCtx, git.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
+			if err != nil {
+				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to get current tree hash: %w", err)
+			}
+
+			// Generate diff since last review if we have a previous tree hash
+			if lastReviewTreeHash != "" {
+				if diffSinceLastReviewVersion >= 4 {
+					diffSinceLastReview, err = getOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
+				} else if diffSinceLastReviewVersion >= 3 {
+					diffSinceLastReview, err = legacyOwnChangesSinceReviewV3(dCtx, defaultTarget, lastReviewTreeHash, false)
+				} else if diffSinceLastReviewVersion >= 2 {
+					diffSinceLastReview, err = legacyOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
+				} else {
+					diffSinceLastReview, err = getDiffSinceLastReview(dCtx, lastReviewTreeHash, false, nil)
+				}
+				if err != nil {
+					workflow.GetLogger(dCtx).Warn("Failed to generate diff since last review, continuing without it", "error", err)
+					// Surface the failure to reviewers instead of silently dropping
+					// the section, so they know the since-review diff is unavailable.
+					diffSinceLastReview = fmt.Sprintf("Failed to generate diff since last review: %v", err)
+				}
+			}
 		}
 	}
 
-	// Track tree hash and diff since last review for new workflow versions
-	var currentTreeHash string
-	var diffSinceLastReview string
-	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 5)
-	if diffSinceLastReviewVersion >= 1 {
-		// Capture current tree hash before getting approval
-		err = workflow.ExecuteActivity(dCtx, git.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
-		if err != nil {
-			return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to get current tree hash: %w", err)
-		}
-
-		// Generate diff since last review if we have a previous tree hash
-		if lastReviewTreeHash != "" {
-			if diffSinceLastReviewVersion >= 4 {
-				diffSinceLastReview, err = getOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
-			} else if diffSinceLastReviewVersion >= 3 {
-				diffSinceLastReview, err = legacyOwnChangesSinceReviewV3(dCtx, defaultTarget, lastReviewTreeHash, false)
-			} else if diffSinceLastReviewVersion >= 2 {
-				diffSinceLastReview, err = legacyOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
-			} else {
-				diffSinceLastReview, err = getDiffSinceLastReview(dCtx, lastReviewTreeHash, false, nil)
-			}
-			if err != nil {
-				workflow.GetLogger(dCtx).Warn("Failed to generate diff since last review, continuing without it", "error", err)
-				// Surface the failure to reviewers instead of silently dropping
-				// the section, so they know the since-review diff is unavailable.
-				diffSinceLastReview = fmt.Sprintf("Failed to generate diff since last review: %v", err)
-			}
-		}
+	// Newer versions identify the last review by the diff that was reviewed,
+	// which, unlike a tree hash, cannot be garbage collected.
+	lastReviewParamKey := "lastReviewTreeHash"
+	lastReviewParamValue := lastReviewTreeHash
+	if useReviewDiffsActivity {
+		lastReviewParamKey = "lastReviewDiff"
+		lastReviewParamValue = lastReviewDiff
 	}
 
 	// Auto-merge bypasses human review, merging straight into the chosen target.
@@ -750,7 +886,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 						DiffSinceLastReview:  diffSinceLastReview,
 						DefaultMergeStrategy: MergeStrategySquash,
 					},
-					"lastReviewTreeHash": lastReviewTreeHash,
+					lastReviewParamKey: lastReviewParamValue,
 				},
 				RequestKind: flow_action.RequestKindMergeApproval,
 			}
@@ -779,11 +915,20 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 	}
 
 	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
-		"mergeApprovalInfo":  mergeParams,
-		"lastReviewTreeHash": lastReviewTreeHash,
+		"mergeApprovalInfo": mergeParams,
+		lastReviewParamKey:  lastReviewParamValue,
 	})
 	if err != nil {
 		return MergeApprovalResponse{}, "", "", err
+	}
+
+	// The user may have changed the target branch or whitespace handling
+	// mid-review, in which case what they actually reviewed is the regenerated
+	// diff, and that is what later rounds must compare against. An empty diff
+	// is a valid review outcome, e.g. when the new target already contains
+	// everything.
+	if useReviewDiffsActivity {
+		gitDiff = approvalResponse.Diff
 	}
 
 	return approvalResponse, gitDiff, currentTreeHash, nil
@@ -797,12 +942,16 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 		originalRequirements := params.Requirements
 		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
 		feedbackRagVersion := workflow.GetVersion(dCtx, "review-feedback-rag-weighting", workflow.DefaultVersion, 1)
-		// Used to generate "diff since last review" on subsequent iterations
+		// Used to generate "diff since last review" on subsequent iterations.
+		// The tree hash is only meaningful to legacy versions, so both forms of
+		// the last review are carried here and selected deeper down, where the
+		// diffs are actually generated.
 		lastReviewTreeHash := ""
+		lastReviewDiff := ""
 
 		for {
 			// Ensure any auto-formatted changes are staged for new workflow versions
-			gitDiff, mergeInfo, treeHash, err := mergeWorktreeIfApproved(dCtx, params, lastReviewTreeHash)
+			gitDiff, mergeInfo, treeHash, err := mergeWorktreeIfApproved(dCtx, params, lastReviewTreeHash, lastReviewDiff)
 
 			if err != nil {
 				if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
@@ -822,6 +971,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				params.StartBranch = &mergeInfo.TargetBranch
 				dCtx.ExecContext.GlobalState.SetValue(common.KeyCurrentTargetBranch, mergeInfo.TargetBranch)
 				lastReviewTreeHash = treeHash
+				lastReviewDiff = gitDiff
 
 				// Summarize diff if it exceeds the character budget
 				diffForRequirements := gitDiff
@@ -845,7 +995,11 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				}
 
 				// Format new requirements with review history + latest rejection message
-				requirements := formatRequirementsWithReview(
+				formatReview := legacyFormatRequirementsWithReview
+				if workflow.GetVersion(dCtx, "review-context-work-boundaries", workflow.DefaultVersion, 1) >= 1 {
+					formatReview = formatRequirementsWithReview
+				}
+				requirements := formatReview(
 					originalRequirements,
 					reviewMessages,
 					diffForRequirements,
@@ -883,7 +1037,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				// must commit before merge at this point, as codingSubflow
 				// doesn't do so inherently
 				params.CommitRequired = true
-				_, err = codingSubflow(dCtx, requirements, params.StartBranch, lastReviewTreeHash, feedbackRankQueries...)
+				_, err = codingSubflow(dCtx, requirements, params.StartBranch, lastReviewTreeHash, lastReviewDiff, feedbackRankQueries...)
 
 				if err != nil {
 					if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
@@ -931,7 +1085,7 @@ func shortenCommitMessage(message string) string {
 	return message
 }
 
-func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string) (string, MergeApprovalResponse, string, error) {
+func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string, lastReviewDiff string) (string, MergeApprovalResponse, string, error) {
 	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 	case 2:
 		clearHibernationGlobalState(dCtx)
@@ -964,7 +1118,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
-	mergeInfo, gitDiff, currentTreeHash, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired, lastReviewTreeHash, params.AutoMerge)
+	mergeInfo, gitDiff, currentTreeHash, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired, lastReviewTreeHash, lastReviewDiff, params.AutoMerge)
 	if err != nil {
 		return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get merge approval: %w", err)
 	}
@@ -1075,6 +1229,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				Requirements:       params.Requirements,
 				PreviousReview:     params.PreviousReview,
 				LastReviewTreeHash: lastReviewTreeHash,
+				LastReviewDiff:     lastReviewDiff,
 				BaseBranch:         mergeInfo.TargetBranch,
 				CommitterName:      committerName,
 				CommitterEmail:     committerEmail,
@@ -1102,7 +1257,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				}
 
 				if assessment.Substantial {
-					reapproval, reDiff, reTreeHash, err := getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, lastReviewTreeHash, params.AutoMerge)
+					reapproval, reDiff, reTreeHash, err := getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, lastReviewTreeHash, lastReviewDiff, params.AutoMerge)
 					if err != nil {
 						return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get post-resolution merge approval: %w", err)
 					}
@@ -1206,7 +1361,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 					break
 				}
 
-				mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "", params.AutoMerge)
+				mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "", "", params.AutoMerge)
 				if err != nil {
 					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get final merge approval: %w", err)
 				}
@@ -1302,4 +1457,18 @@ func handleCodingTestError(dCtx DevContext, err error, integration bool) bool {
 		Bool("integration", integration).
 		Msg("Ignoring test error while paused")
 	return true
+}
+
+func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
+	context := legacyFormatRequirementsWithReview(originalReqs, reviewMsgs, workDone, latestReview)
+	if workDone == "" {
+		return context
+	}
+	const feedbackIntro = "\n\nGiven the above context, please address the following latest user feedback:\n\n"
+	const workHeading = "\n\nWork Done So Far:\n\n"
+	withoutWork := legacyFormatRequirementsWithReview(originalReqs, reviewMsgs, "", latestReview)
+	start := len(withoutWork) - len(feedbackIntro) - len(latestReview)
+	end := start + len(workHeading) + len(workDone)
+	// Byte ranges distinguish generated context from arbitrary quoted headings.
+	return fmt.Sprintf("<!-- sidekick-review-work: %d %d -->\n", start, end) + context
 }

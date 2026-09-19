@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
+	"sidekick/coding"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
@@ -41,6 +42,9 @@ func (s *AutoMergeApprovalTestSuite) AfterTest(suiteName, testName string) {
 func (s *AutoMergeApprovalTestSuite) setupCommonMocks() {
 	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("diff content", nil).Maybe()
 	s.env.OnActivity(git.WriteTreeActivity, mock.Anything, mock.Anything).Return("tree-hash", nil).Maybe()
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{FullDiff: "diff content"}, nil).Maybe()
 	var meta *temporalmeta.TemporalMetaActivities
 	s.env.OnActivity(meta.FetchFlowActionActivities, mock.Anything, mock.Anything).
 		Return([]domain.TemporalActivityRef{}, nil).Maybe()
@@ -66,7 +70,7 @@ func (s *AutoMergeApprovalTestSuite) approvalWorkflow(target string, autoMerge b
 			},
 			RepoConfig: common.RepoConfig{},
 		}
-		response, _, _, err := getMergeApproval(dCtx, target, true, "", autoMerge)
+		response, _, _, err := getMergeApproval(dCtx, target, true, "", "", autoMerge)
 		return response, err
 	}
 }
@@ -120,6 +124,9 @@ func (s *AutoMergeApprovalTestSuite) setupMergeMocks() {
 	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("diff content", nil).Maybe()
 	s.env.OnActivity(git.WriteTreeActivity, mock.Anything, mock.Anything).Return("tree-hash", nil).Maybe()
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
+		Return(coding.GenerateReviewDiffsResult{FullDiff: "diff content"}, nil).Maybe()
 	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil).Maybe()
 	s.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 }
@@ -151,7 +158,7 @@ func (s *AutoMergeApprovalTestSuite) mergeWorkflow(autoMerge bool, startBranch *
 			Requirements:   "Implement the thing",
 			StartBranch:    startBranch,
 			AutoMerge:      autoMerge,
-		}, "")
+		}, "", "")
 		return mergeInfo, err
 	}
 }

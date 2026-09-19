@@ -13,6 +13,105 @@ describe('model configuration presets', () => {
     localStorage.clear()
     invalidatePresetsCache()
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('hides presets whose providers belong to another profile', async () => {
+    savePresets([
+      {
+        id: 'work',
+        name: 'Work models',
+        config: {
+          defaults: [{ provider: 'work_openai', model: 'gpt' }],
+          useCaseConfigs: {},
+        },
+      },
+      {
+        id: 'personal',
+        name: 'Personal models',
+        config: {
+          defaults: [{ provider: 'work_openai', model: 'gpt' }],
+          useCaseConfigs: {
+            planning: [{ provider: 'personal_anthropic', model: 'claude' }],
+          },
+        },
+      },
+    ])
+
+    const jsonResponse = (body: unknown) => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(body),
+    })
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url === '/api/v1/workspaces/workspace-work') {
+        return jsonResponse({ workspace: { id: 'workspace-work', profileId: 'work' } })
+      }
+      if (url === '/api/v1/workspaces/workspace-default') {
+        return jsonResponse({ workspace: { id: 'workspace-default' } })
+      }
+      if (url === '/api/v1/providers?profileId=work') {
+        return jsonResponse({ providers: ['work_openai'] })
+      }
+      return jsonResponse({ providers: ['work_openai', 'personal_anthropic'] })
+    }))
+
+    const workEditor = useModelConfigPresets(undefined, { workspaceId: 'workspace-work' })
+    const defaultEditor = useModelConfigPresets(undefined, { workspaceId: 'workspace-default' })
+
+    await vi.waitFor(() => {
+      expect(workEditor.presetOptions.value.map((option) => option.label)).toEqual([
+        'Default',
+        'Work models',
+        'Custom',
+      ])
+      expect(defaultEditor.presetOptions.value.map((option) => option.label)).toEqual([
+        'Default',
+        'Personal models',
+        'Work models',
+        'Custom',
+      ])
+    })
+  })
+
+  it('drops a restored selection whose providers are outside the workspace profile', async () => {
+    savePresets([
+      {
+        id: 'personal',
+        name: 'Personal models',
+        config: {
+          defaults: [{ provider: 'personal_anthropic', model: 'claude' }],
+          useCaseConfigs: {},
+        },
+      },
+      {
+        id: 'work',
+        name: 'Work models',
+        config: {
+          defaults: [{ provider: 'work_openai', model: 'gpt' }],
+          useCaseConfigs: {},
+        },
+      },
+    ])
+    localStorage.setItem('sidekick_last_model_preset_selection_workspace-work', 'personal')
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      const body = url === '/api/v1/workspaces/workspace-work'
+        ? { workspace: { id: 'workspace-work', profileId: 'work' } }
+        : { providers: ['work_openai'] }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
+    }))
+
+    const editor = useModelConfigPresets(undefined, { workspaceId: 'workspace-work' })
+    expect(editor.selectedPresetValue.value).toBe('personal')
+
+    await vi.waitFor(() => {
+      expect(editor.selectedPresetValue.value).toBe('default')
+    })
+    expect(editor.presetOptions.value.map((option) => option.label)).toEqual([
+      'Default',
+      'Work models',
+      'Custom',
+    ])
   })
 
   it('validates defaults and every configured use case', () => {

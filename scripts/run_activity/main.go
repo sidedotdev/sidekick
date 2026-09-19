@@ -90,7 +90,7 @@ func buildActivityRegistry() map[string]interface{} {
 	}
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
 
-	hostPort := common.GetTemporalServerHostPort()
+	hostPort := common.GetTemporalClientHostPort()
 	tracingInterceptor, _ := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
 	temporalClient, err := client.Dial(client.Options{
 		HostPort:     hostPort,
@@ -202,6 +202,7 @@ func buildActivityRegistry() map[string]interface{} {
 		git.GetDefaultBranch,
 		git.ListLocalBranches,
 		git.WriteTreeActivity,
+		git.GitRevParseActivity,
 		dev.GetRepoConfigActivity,
 		dev.GetRepoConfigActivityV2,
 		dev.GetSymbolsActivity,
@@ -452,13 +453,13 @@ func decodeActivityInvocation(
 	return invocation, nil
 }
 
-func loadActivityInvocation(ctx context.Context, flowID string, identifier string) (activityInvocation, error) {
+func loadActivityInvocation(ctx context.Context, flowID string, runID string, identifier string) (activityInvocation, error) {
 	service, err := sidekick.GetService()
 	if err != nil {
 		return activityInvocation{}, fmt.Errorf("error initializing storage: %w", err)
 	}
 
-	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalDiagnosticHostPort())
 	if err != nil {
 		return activityInvocation{}, fmt.Errorf("error creating Temporal client options: %w", err)
 	}
@@ -469,7 +470,7 @@ func loadActivityInvocation(ctx context.Context, flowID string, identifier strin
 	}
 	defer temporalClient.Close()
 
-	iter := temporalClient.GetWorkflowHistory(ctx, flowID, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+	iter := temporalClient.GetWorkflowHistory(ctx, flowID, runID, false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 	return findActivityInvocation(iter, clientOptions.DataConverter, buildActivityRegistry(), identifier)
 }
 
@@ -516,11 +517,13 @@ func main() {
 
 	var timeout time.Duration
 	var direct bool
+	var runID string
 	flag.DurationVar(&timeout, "timeout", 180*time.Second, "Timeout for the activity execution")
 	flag.BoolVar(&direct, "direct", true, "Execute activity directly without Temporal workflow")
+	flag.StringVar(&runID, "run-id", "", "select a specific workflow RunID when loading an activity from history")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] <flow-id> <activity-id-or-scheduled-started-completed-event-id>\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] [--run-id id] <flow-id> <activity-id-or-scheduled-started-completed-event-id>\n", os.Args[0])
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] json <activity-name> <json-file-path>\n", os.Args[0])
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] <activity-name> <existing-json-file-path>\n", os.Args[0])
 		flag.PrintDefaults()
@@ -536,7 +539,10 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	invocation, err := resolveActivityInvocation(ctx, args, loadActivityInvocation, os.ReadFile, os.Stat)
+	loadFromHistory := func(ctx context.Context, flowID string, identifier string) (activityInvocation, error) {
+		return loadActivityInvocation(ctx, flowID, runID, identifier)
+	}
+	invocation, err := resolveActivityInvocation(ctx, args, loadFromHistory, os.ReadFile, os.Stat)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading activity: %v\n", err)
 		os.Exit(1)
@@ -574,7 +580,7 @@ func main() {
 }
 
 func executeActivityViaWorkflow(activityName string, activityArgs []json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
-	hostPort := common.GetTemporalServerHostPort()
+	hostPort := common.GetTemporalClientHostPort()
 	service, err := sidekick.GetService()
 	if err != nil {
 		return nil, fmt.Errorf("error initializing storage: %w", err)

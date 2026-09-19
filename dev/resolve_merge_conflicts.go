@@ -43,6 +43,11 @@ type ResolveMergeConflictsParams struct {
 	// when downstream checks rely on it.
 	LastReviewTreeHash string
 
+	// LastReviewDiff is the diff shown at the last review round, used by
+	// criteria-fulfillment checks to derive what changed since then without
+	// relying on a gc-prunable git object.
+	LastReviewDiff string
+
 	// BaseBranch is the merge target (used purely to enrich the
 	// criteria-fulfillment prompt context).
 	BaseBranch string
@@ -217,6 +222,7 @@ func checkConflictResolutionFulfillment(dCtx DevContext, params ResolveMergeConf
 		Work:                    work,
 		BaseBranch:              params.BaseBranch,
 		LastReviewTreeHash:      params.LastReviewTreeHash,
+		LastReviewDiff:          params.LastReviewDiff,
 	})
 }
 
@@ -244,12 +250,12 @@ func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) er
 		msg = fmt.Sprintf("Merge branch %s\n\n%s", params.SourceBranchName, msg)
 	}
 
-	return workflow.ExecuteActivity(dCtx, git.GitCommitMergeActivity, *dCtx.EnvContainer, git.GitCommitMergeParams{
+	return flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitMergeActivity, nil, *dCtx.EnvContainer, git.GitCommitMergeParams{
 		WorktreePath:   params.WorktreePath,
 		CommitMessage:  msg,
 		CommitterName:  params.CommitterName,
 		CommitterEmail: params.CommitterEmail,
-	}).Get(dCtx, nil)
+	})
 }
 
 // recreateConflictOnOwnWorktree resets a target-side conflict situation:

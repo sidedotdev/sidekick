@@ -12,11 +12,18 @@ import (
 // top-level configuration, eg the repo directory
 type Workspace struct {
 	Id           string    `json:"id"`
-	Name         string    `json:"name"`         // name of the workspace
-	LocalRepoDir string    `json:"localRepoDir"` // local code repository directory
-	ConfigMode   string    `json:"configMode"`   // configuration mode: 'local', 'workspace', or 'merge'
-	Created      time.Time `json:"created"`      // creation timestamp of the workspace
-	Updated      time.Time `json:"updated"`      // last update timestamp of the workspace
+	Name         string    `json:"name"`                // name of the workspace
+	LocalRepoDir string    `json:"localRepoDir"`        // local code repository directory
+	ConfigMode   string    `json:"configMode"`          // configuration mode: 'local', 'workspace', or 'merge'
+	ProfileId    string    `json:"profileId,omitempty"` // profile the workspace belongs to, empty meaning the default profile
+	Created      time.Time `json:"created"`             // creation timestamp of the workspace
+	Updated      time.Time `json:"updated"`             // last update timestamp of the workspace
+}
+
+// EffectiveProfileId resolves the profile a workspace belongs to, where a
+// workspace without an associated profile belongs to the default profile.
+func (w Workspace) EffectiveProfileId() string {
+	return common.NormalizeProfileId(w.ProfileId)
 }
 
 func (w Workspace) MarshalJSON() ([]byte, error) {

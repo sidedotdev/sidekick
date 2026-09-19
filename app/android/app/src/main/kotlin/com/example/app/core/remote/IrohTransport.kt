@@ -27,16 +27,23 @@ interface IrohStream : AutoCloseable {
     suspend fun read(): ByteArray?
 }
 
-class FfiIrohConnector : IrohConnector {
+class FfiIrohConnector(
+    private val onStage: (String) -> Unit = {},
+) : IrohConnector {
     override suspend fun connect(ticket: String): IrohConnection {
+        onStage("native-bind | START")
         val endpoint = Endpoint.bind(EndpointOptions())
         try {
+            onStage("native-bind | OK")
+            onStage("ticket-decode | START")
             val endpointTicket = EndpointTicket.fromString(ticket)
             val endpointAddress = try {
                 endpointTicket.endpointAddr()
             } finally {
                 endpointTicket.close()
             }
+            onStage("ticket-decode | OK")
+            onStage("native-connect | START")
             val connection = endpoint.connect(
                 endpointAddress,
                 SIDEKICK_ALPN.encodeToByteArray(),

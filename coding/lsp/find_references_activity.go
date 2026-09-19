@@ -35,6 +35,11 @@ type FindReferencesActivityInput struct {
 	RelativeFilePath string
 	SymbolText       string
 	Range            *Range // Optional
+
+	// PreloadedFileContent, when non-nil, is used as RelativeFilePath's
+	// content instead of reading it from the environment. It is intentionally
+	// not serialized: activity invocations always read from the env.
+	PreloadedFileContent []byte `json:"-"`
 }
 
 // FindReferencesActivity finds references for the given input using the LSP client.
@@ -49,9 +54,12 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 		return nil, fmt.Errorf("failed to find or initialize lsp client: %w", err)
 	}
 
-	fileBytes, err := input.EnvContainer.Env.ReadFile(ctx, input.RelativeFilePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+	fileBytes := input.PreloadedFileContent
+	if fileBytes == nil {
+		fileBytes, err = input.EnvContainer.Env.ReadFile(ctx, input.RelativeFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file: %w", err)
+		}
 	}
 	reader := bufio.NewReader(bytes.NewReader(fileBytes))
 

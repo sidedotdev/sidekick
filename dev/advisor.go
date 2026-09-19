@@ -187,15 +187,27 @@ func (a *Advisor) MaybeAdvise(
 		}
 	}
 
+	deduplicateInitialInstructions := workflow.GetVersion(dCtx, "advisor-deduplicate-initial-instructions", workflow.DefaultVersion, 1) == 1
+	requirementsSeeded := manageAdvisorHistory && deduplicateInitialInstructions && a.requirementsLength > 0
 	if llm2Hist, ok := a.ChatHistory.History.(*persisted_ai.Llm2ChatHistory); ok {
-		ref, err := summarizeExecutorHistory(dCtx, executorHistory, llm2Hist.FlowId(), llm2Hist.WorkspaceId())
+		var ref *persisted_ai.MessageRef
+		var err error
+		if requirementsSeeded {
+			ref, err = summarizeExecutorHistory(dCtx, executorHistory, llm2Hist.FlowId(), llm2Hist.WorkspaceId())
+		} else {
+			ref, err = summarizeExecutorHistoryIncludingInitialInstructions(dCtx, executorHistory, llm2Hist.FlowId(), llm2Hist.WorkspaceId())
+		}
 		if err != nil {
 			return fmt.Errorf("advisor: failed to summarize executor history: %w", err)
 		}
 		llm2Hist.AppendRef(*ref)
 	} else {
+		recentHistory := legacyExecutorTranscriptIncludingInitialInstructions(executorHistory)
+		if requirementsSeeded {
+			recentHistory = legacyExecutorTranscript(executorHistory)
+		}
 		turnPrompt := RenderPrompt(AdvisorTurn, map[string]string{
-			"recentHistory": legacyExecutorTranscript(executorHistory),
+			"recentHistory": recentHistory,
 		})
 		if err := AppendChatHistory(dCtx.ExecContext, a.ChatHistory, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleUser,
@@ -211,10 +223,34 @@ func (a *Advisor) MaybeAdvise(
 	}
 
 	tools := append([]*llm.Tool{&advisorProceedTool, &advisorGuideTool}, executorTools...)
+	unsupportedSearchVersion := workflow.GetVersion(dCtx, "advisor-filter-unsupported-web-search", workflow.DefaultVersion, 1)
+	filterVersion := workflow.GetVersion(dCtx, "advisor-filter-web-search", workflow.DefaultVersion, 2)
+	resolveTools := func(modelConfig common.ModelConfig) []*llm.Tool {
+		if providerSupportsWebSearch(modelConfig, dCtx.GetProviders()) {
+			return tools
+		}
+		filtered := make([]*llm.Tool, 0, len(tools))
+		for _, tool := range tools {
+			if tool.Type != common.ToolTypeWebSearch {
+				filtered = append(filtered, tool)
+			}
+		}
+		return filtered
+	}
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.advise")
-	response, err := persisted_ai.ForceParallelToolCallWithModelConfigResolver(actionCtx, func() common.ModelConfig {
+	resolveModel := func() common.ModelConfig {
 		return resolveAdvisorModelConfig(dCtx)
-	}, a.ChatHistory, tools...)
+	}
+	var response common.MessageResponse
+	var err error
+	if filterVersion >= 2 {
+		response, err = persisted_ai.ForceParallelToolCallWithToolsResolver(actionCtx, resolveModel, resolveTools, a.ChatHistory)
+	} else {
+		if filterVersion == 1 || unsupportedSearchVersion == 1 {
+			tools = resolveTools(resolveModel())
+		}
+		response, err = persisted_ai.ForceParallelToolCallWithModelConfigResolver(actionCtx, resolveModel, a.ChatHistory, tools...)
+	}
 	if err != nil {
 		// Treat a refusal like "proceed": skip advising this turn so the
 		// executor continues unchanged rather than failing the workflow.
@@ -375,6 +411,21 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 func summarizeExecutorHistory(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, flowId, workspaceId string) (*persisted_ai.MessageRef, error) {
 	var aa *AdvisorActivities
 	var ref *persisted_ai.MessageRef
+	err := workflow.ExecuteActivity(dCtx, aa.SummarizeExecutorRecentHistoryActivity, SummarizeExecutorHistoryInput{
+		ExecutorHistory:   executorHistory,
+		MaxRecentMessages: advisorMaxRecentMessages,
+		FlowId:            flowId,
+		WorkspaceId:       workspaceId,
+	}).Get(dCtx, &ref)
+	if err != nil {
+		return nil, fmt.Errorf("failed to summarize executor history: %w", err)
+	}
+	return ref, nil
+}
+
+func summarizeExecutorHistoryIncludingInitialInstructions(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, flowId, workspaceId string) (*persisted_ai.MessageRef, error) {
+	var aa *AdvisorActivities
+	var ref *persisted_ai.MessageRef
 	err := workflow.ExecuteActivity(dCtx, aa.SummarizeExecutorHistoryActivity, SummarizeExecutorHistoryInput{
 		ExecutorHistory:   executorHistory,
 		MaxRecentMessages: advisorMaxRecentMessages,
@@ -391,6 +442,16 @@ func summarizeExecutorHistory(dCtx DevContext, executorHistory *persisted_ai.Cha
 // directly, since legacy content lives in-memory in the workflow and does not
 // require hydration.
 func legacyExecutorTranscript(history *persisted_ai.ChatHistoryContainer) string {
+	if history == nil {
+		return "(no executor history yet)"
+	}
+	if rendered := renderExecutorRecentTranscript(history.Messages(), advisorMaxRecentMessages); rendered != "" {
+		return rendered
+	}
+	return "(no executor history yet)"
+}
+
+func legacyExecutorTranscriptIncludingInitialInstructions(history *persisted_ai.ChatHistoryContainer) string {
 	if history == nil {
 		return "(no executor history yet)"
 	}

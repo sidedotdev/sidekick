@@ -317,26 +317,29 @@ func ensureLocalHasCommit(ctx context.Context, sshEnv SSHCapableEnv, localRepo, 
 }
 
 func sshFetchCommitDefault(ctx context.Context, sshEnv SSHCapableEnv, localRepo, sha, remoteRoot string) error {
-	sshArgs, err := sshEnv.SSHArgs(ctx)
-	if err != nil {
-		return fmt.Errorf("ssh args: %w", err)
-	}
-	dest, opts := splitSSHDestination(sshArgs)
-	if dest == "" {
-		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
-	}
-	gitSSH := "ssh"
-	for _, a := range opts {
-		gitSSH += " " + shellQuote(a)
-	}
-	fetchURL := dest + ":" + remoteRoot
-	cmd := exec.CommandContext(ctx, "git", "-C", localRepo,
-		"fetch", "--no-tags", "--no-write-fetch-head", fetchURL, sha)
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch %s %s: %w: %s", fetchURL, sha, err, string(out))
-	}
-	return nil
+	HoldReverseForwards(ctx, sshEnv)
+	return RunWithSSHTransportRecovery(ctx, sshEnv, func() error {
+		sshArgs, err := sshEnv.SSHArgs(ctx)
+		if err != nil {
+			return fmt.Errorf("ssh args: %w", err)
+		}
+		dest, opts := splitSSHDestination(sshArgs)
+		if dest == "" {
+			return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
+		}
+		gitSSH := "ssh"
+		for _, a := range opts {
+			gitSSH += " " + shellQuote(a)
+		}
+		fetchURL := dest + ":" + remoteRoot
+		cmd := exec.CommandContext(ctx, "git", "-C", localRepo,
+			"fetch", "--no-tags", "--no-write-fetch-head", fetchURL, sha)
+		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git fetch %s %s: %w: %s", fetchURL, sha, err, string(out))
+		}
+		return nil
+	})
 }
 
 // splitSSHDestination returns the trailing destination token and the

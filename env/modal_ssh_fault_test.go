@@ -172,9 +172,11 @@ func TestModalEnvRunCommandRecoversWithoutFallbackAfterRefresh(t *testing.T) {
 	assert.Equal(t, 0, output.ExitStatus)
 }
 
-// TestModalEnvRunCommandKeepsSSHResultWhenFallbackFails asserts that a failing
-// fallback leaves the caller with the original ssh result instead of masking it.
-func TestModalEnvRunCommandKeepsSSHResultWhenFallbackFails(t *testing.T) {
+// TestModalEnvRunCommandErrorsWhenFallbackFails asserts that an environment
+// reachable by neither ssh nor the Modal API fails loudly: the command never
+// ran, so a synthetic exit status would be indistinguishable from the command
+// itself failing.
+func TestModalEnvRunCommandErrorsWhenFallbackFails(t *testing.T) {
 	t.Parallel()
 	skipWithoutSSHBinary(t)
 
@@ -194,11 +196,63 @@ func TestModalEnvRunCommandKeepsSSHResultWhenFallbackFails(t *testing.T) {
 		},
 	}
 
-	output, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{Command: "echo", Args: []string{"hi"}})
+	_, err := modalEnv.RunCommand(context.Background(), EnvRunCommandInput{Command: "echo", Args: []string{"hi"}})
 
-	require.NoError(t, err, "a transport failure must not surface as an activity error")
+	require.Error(t, err, "an unreachable environment must surface as an activity error")
 	assert.Equal(t, 1, apiCalls, "the fallback should have been attempted")
-	assert.Equal(t, 255, output.ExitStatus, "the original ssh exit status must be preserved")
-	assert.Empty(t, output.Stdout)
-	assert.NotEmpty(t, output.Stderr, "ssh diagnostics must be reported to the caller")
+	assert.Contains(t, err.Error(), modalEnv.SandboxName, "the error must name the unreachable sandbox")
+	assert.Contains(t, err.Error(), "modal api unavailable", "the fallback failure must be reported")
+}
+func TestRunWithSSHTransportRecovery(t *testing.T) {
+	t.Parallel()
+
+	const liveHost, livePort = "live.modal.test", 43210
+	modalEnv := &ModalEnv{
+		SandboxName: "side--git-sync-refresh",
+		SSHHost:     "dead.modal.test",
+		SSHPort:     12345,
+		refreshModalEndpoint: func(ctx context.Context, sandboxName string) (string, int, error) {
+			return liveHost, livePort, nil
+		},
+	}
+
+	var attemptedEndpoints []string
+	err := RunWithSSHTransportRecovery(context.Background(), modalEnv, func() error {
+		attemptedEndpoints = append(attemptedEndpoints, net.JoinHostPort(modalEnv.SSHHost, strconv.Itoa(modalEnv.SSHPort)))
+		if modalEnv.SSHHost != liveHost {
+			return errors.New("ssh: connect to host dead.modal.test port 12345: Connection refused")
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		net.JoinHostPort("dead.modal.test", "12345"),
+		net.JoinHostPort(liveHost, strconv.Itoa(livePort)),
+	}, attemptedEndpoints)
+}
+func TestRunDeepenWithSSHTransportRecoveryPreservesShallowObservation(t *testing.T) {
+	t.Parallel()
+
+	modalEnv := &ModalEnv{
+		SandboxName: "side--deepen-refresh",
+		SSHHost:     "dead.modal.test",
+		SSHPort:     12345,
+		refreshModalEndpoint: func(ctx context.Context, sandboxName string) (string, int, error) {
+			return "live.modal.test", 43210, nil
+		},
+	}
+
+	attempts := 0
+	deepened, err := runDeepenWithSSHTransportRecovery(context.Background(), modalEnv, func() (bool, error) {
+		attempts++
+		if attempts == 1 {
+			return true, errors.New("ssh: connect to host dead.modal.test port 12345: Connection refused")
+		}
+		return false, nil
+	})
+
+	require.NoError(t, err)
+	assert.True(t, deepened)
+	assert.Equal(t, 2, attempts)
 }

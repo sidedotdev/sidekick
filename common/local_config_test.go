@@ -158,6 +158,193 @@ embedding:
 		assert.Equal(t, "custom_llm", config.Embedding["defaults"][1].Provider)
 	})
 
+	t.Run("profile declarations and provider associations", func(t *testing.T) {
+		profileConfigPath := filepath.Join(tmpDir, "profiles.yaml")
+		configYAML := `
+profiles:
+  - id: work
+    name: Work
+  - id: side_project
+providers:
+  - type: openai
+    key: work-key
+    profiles:
+      - work
+  - name: unassociated
+    type: openai_compatible
+    base_url: https://example.com
+    key: abc123
+    profiles: []
+  - type: anthropic
+    key: personal-key
+llm:
+  defaults:
+    - provider: openai
+`
+		require.NoError(t, os.WriteFile(profileConfigPath, []byte(configYAML), 0644))
+
+		config, err := LoadSidekickConfig(profileConfigPath)
+		require.NoError(t, err)
+
+		assert.Equal(t, []Profile{
+			{Id: "default", Name: "Default"},
+			{Id: "work", Name: "Work"},
+			{Id: "side_project", Name: "side_project"},
+		}, config.ResolveProfiles())
+
+		require.Len(t, config.Providers, 3)
+		assert.Equal(t, []string{"work"}, config.Providers[0].EffectiveProfiles())
+		assert.NotNil(t, config.Providers[1].Profiles, "an explicitly empty profile list must not fall back to default")
+		assert.Empty(t, config.Providers[1].EffectiveProfiles())
+		assert.Nil(t, config.Providers[2].Profiles)
+		assert.Equal(t, []string{"default"}, config.Providers[2].EffectiveProfiles())
+	})
+
+	t.Run("profiles in TOML config file", func(t *testing.T) {
+		tomlProfileConfigPath := filepath.Join(tmpDir, "profiles.toml")
+		configTOML := `
+[[profiles]]
+id = "default"
+name = "Personal"
+
+[[profiles]]
+id = "work"
+
+[[providers]]
+type = "openai"
+key = "personal-key"
+
+[[providers]]
+name = "unassociated"
+type = "openai_compatible"
+base_url = "https://example.com"
+key = "abc123"
+profiles = []
+
+[[providers]]
+type = "anthropic"
+key = "work-key"
+profiles = ["work"]
+`
+		require.NoError(t, os.WriteFile(tomlProfileConfigPath, []byte(configTOML), 0644))
+
+		config, err := LoadSidekickConfig(tomlProfileConfigPath)
+		require.NoError(t, err)
+
+		assert.Equal(t, []Profile{
+			{Id: "default", Name: "Personal"},
+			{Id: "work", Name: "work"},
+		}, config.ResolveProfiles())
+
+		require.Len(t, config.Providers, 3)
+		assert.Nil(t, config.Providers[0].Profiles)
+		assert.Equal(t, []string{DefaultProfileId}, config.Providers[0].EffectiveProfiles())
+		require.NotNil(t, config.Providers[1].Profiles, "an explicitly empty profile list must not fall back to default")
+		assert.Empty(t, config.Providers[1].EffectiveProfiles())
+		assert.Equal(t, []string{"work"}, config.Providers[2].EffectiveProfiles())
+	})
+
+	t.Run("profiles in JSON config file", func(t *testing.T) {
+		jsonProfileConfigPath := filepath.Join(tmpDir, "profiles.json")
+		configJSON := `{
+  "profiles": [
+    {"id": "default", "name": "Personal"},
+    {"id": "work"}
+  ],
+  "providers": [
+    {"type": "openai", "key": "personal-key"},
+    {
+      "name": "unassociated",
+      "type": "openai_compatible",
+      "base_url": "https://example.com",
+      "key": "abc123",
+      "profiles": []
+    },
+    {"type": "anthropic", "key": "work-key", "profiles": ["work"]}
+  ]
+}`
+		require.NoError(t, os.WriteFile(jsonProfileConfigPath, []byte(configJSON), 0644))
+
+		config, err := LoadSidekickConfig(jsonProfileConfigPath)
+		require.NoError(t, err)
+
+		assert.Equal(t, []Profile{
+			{Id: "default", Name: "Personal"},
+			{Id: "work", Name: "work"},
+		}, config.ResolveProfiles())
+
+		require.Len(t, config.Providers, 3)
+		assert.Nil(t, config.Providers[0].Profiles)
+		assert.Equal(t, []string{DefaultProfileId}, config.Providers[0].EffectiveProfiles())
+		require.NotNil(t, config.Providers[1].Profiles, "an explicitly empty profile list must not fall back to default")
+		assert.Empty(t, config.Providers[1].EffectiveProfiles())
+		assert.Equal(t, []string{"work"}, config.Providers[2].EffectiveProfiles())
+	})
+
+	t.Run("invalid config - duplicate profile id", func(t *testing.T) {
+		duplicateConfigPath := filepath.Join(tmpDir, "duplicate_profiles.yaml")
+		configYAML := `
+profiles:
+  - id: work
+  - id: work
+    name: Work Again
+`
+		require.NoError(t, os.WriteFile(duplicateConfigPath, []byte(configYAML), 0644))
+
+		_, err := LoadSidekickConfig(duplicateConfigPath)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate profile id: work")
+	})
+
+	t.Run("invalid config - profile id with disallowed characters", func(t *testing.T) {
+		invalidIdConfigPath := filepath.Join(tmpDir, "invalid_profile_id.yaml")
+		configYAML := `
+profiles:
+  - id: acme-corp
+`
+		require.NoError(t, os.WriteFile(invalidIdConfigPath, []byte(configYAML), 0644))
+
+		_, err := LoadSidekickConfig(invalidIdConfigPath)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid config")
+		assert.Contains(t, err.Error(), `invalid profile id "acme-corp"`)
+	})
+
+	t.Run("invalid config - provider association with disallowed characters", func(t *testing.T) {
+		invalidAssociationConfigPath := filepath.Join(tmpDir, "invalid_profile_association.yaml")
+		configYAML := `
+profiles:
+  - id: acme_corp
+providers:
+  - type: openai
+    key: abc123
+    profiles:
+      - acme corp
+`
+		require.NoError(t, os.WriteFile(invalidAssociationConfigPath, []byte(configYAML), 0644))
+
+		_, err := LoadSidekickConfig(invalidAssociationConfigPath)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid config")
+		assert.Contains(t, err.Error(), `invalid profile id "acme corp"`)
+	})
+
+	t.Run("invalid config - provider references undeclared profile", func(t *testing.T) {
+		undeclaredConfigPath := filepath.Join(tmpDir, "undeclared_profile.yaml")
+		configYAML := `
+providers:
+  - type: openai
+    key: abc123
+    profiles:
+      - work
+`
+		require.NoError(t, os.WriteFile(undeclaredConfigPath, []byte(configYAML), 0644))
+
+		_, err := LoadSidekickConfig(undeclaredConfigPath)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `profile "work" is not declared`)
+	})
+
 	t.Run("invalid config - anthropic for embedding", func(t *testing.T) {
 		configYAML := `
 embedding:

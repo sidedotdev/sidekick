@@ -664,8 +664,14 @@ func (e *OpenShellEnv) WakeIfHibernated(ctx context.Context) error {
 	return wakeIfHibernatedRemote(ctx, e)
 }
 
+// Hibernate is a no-op: worktree hibernation reclaims local disk for
+// environments whose filesystem outlives idleness, whereas an idle Modal
+// sandbox is snapshotted and terminated wholesale by its watchdog.
+//
+// TODO: stop scheduling HibernateWorktreeActivity for Modal environments
+// instead of no-opping the work here.
 func (e *ModalEnv) Hibernate(ctx context.Context, branchName string) (HibernationMetadata, error) {
-	return HibernateEnv(ctx, e, branchName)
+	return HibernationMetadata{}, nil
 }
 
 // WakeIfHibernated is a no-op: worktree hibernation is not used on Modal, so

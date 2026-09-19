@@ -1,6 +1,7 @@
 package flow_action
 
 import (
+	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -91,9 +92,12 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
 			if err == nil {
 				modelConfig.Model = provider.SmallModel()
+				if provider == common.OpenaiToolChatProviderType && eCtx.useHistoricalOpenAISmallModel() {
+					modelConfig.Model = "gpt-5.4-mini"
+				}
 			} else {
 				// Try to find provider in configured providers
-				for _, p := range eCtx.Providers {
+				for _, p := range eCtx.GetProviders() {
 					if p.Name == modelConfig.Provider {
 						if p.SmallLLM != "" {
 							modelConfig.Model = p.SmallLLM
@@ -137,7 +141,7 @@ func (eCtx *ExecContext) FetchModelMetadata(provider, model string) common.Model
 }
 
 func (eCtx *ExecContext) GetEmbeddingModelConfig(key string) common.ModelConfig {
-	modelConfig := eCtx.EmbeddingConfig.GetModelConfig(key)
+	modelConfig := eCtx.GetEmbeddingConfig().GetModelConfig(key)
 	return modelConfig
 }
 
@@ -156,4 +160,90 @@ func (eCtx *ExecContext) GetLLMConfig() common.LLMConfig {
 	}
 	llmConfig, _ := eCtx.GlobalState.GetValue(GlobalStateKeyLLMConfig).(common.LLMConfig)
 	return llmConfig
+}
+
+const GlobalStateKeyProfileId = "profileId"
+
+// SetProfileId records the profile that scopes secret resolution and model
+// provider selection in global state, so it can be live-updated mid-flow. An
+// empty value means the default profile.
+func (eCtx *ExecContext) SetProfileId(profileId string) {
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	eCtx.GlobalState.SetValue(GlobalStateKeyProfileId, profileId)
+}
+
+// GetProfileId reads the current profile id from global state. An empty value
+// means the default profile.
+func (eCtx *ExecContext) GetProfileId() string {
+	if eCtx.GlobalState == nil {
+		return ""
+	}
+	return eCtx.GlobalState.GetStringValue(GlobalStateKeyProfileId)
+}
+
+const GlobalStateKeyProviders = "providers"
+
+// SetProviders replaces the effective provider catalog in global state so it
+// can be live-updated mid-flow, e.g. on a workspace profile change.
+func (eCtx *ExecContext) SetProviders(providers []common.ModelProviderPublicConfig) {
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	eCtx.GlobalState.SetValue(GlobalStateKeyProviders, providers)
+}
+
+// GetProviders returns the effective provider catalog, preferring a live value
+// from global state over the one captured at setup time.
+func (eCtx *ExecContext) GetProviders() []common.ModelProviderPublicConfig {
+	if eCtx.GlobalState != nil {
+		if providers, ok := eCtx.GlobalState.GetValue(GlobalStateKeyProviders).([]common.ModelProviderPublicConfig); ok {
+			return providers
+		}
+	}
+	return eCtx.Providers
+}
+
+const GlobalStateKeyEmbeddingConfig = "embeddingConfig"
+
+// SetEmbeddingConfig replaces the effective embedding configuration in global
+// state so it can be live-updated mid-flow, e.g. on a workspace profile change.
+func (eCtx *ExecContext) SetEmbeddingConfig(embeddingConfig common.EmbeddingConfig) {
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	eCtx.GlobalState.SetValue(GlobalStateKeyEmbeddingConfig, embeddingConfig)
+}
+
+// GetEmbeddingConfig returns the effective embedding configuration, preferring
+// a live value from global state over the one captured at setup time.
+func (eCtx *ExecContext) GetEmbeddingConfig() common.EmbeddingConfig {
+	if eCtx.GlobalState != nil {
+		if embeddingConfig, ok := eCtx.GlobalState.GetValue(GlobalStateKeyEmbeddingConfig).(common.EmbeddingConfig); ok {
+			return embeddingConfig
+		}
+	}
+	return eCtx.EmbeddingConfig
+}
+
+func (eCtx *ExecContext) useHistoricalOpenAISmallModel() bool {
+	const stateKey = "openai-small-model-migration"
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	state, _ := eCtx.GlobalState.GetValue(stateKey).(int)
+	if state < 0 {
+		return false
+	}
+	state++
+	eCtx.GlobalState.SetValue(stateKey, state)
+	// Each historical invocation needs its own check: GetVersion caches
+	// DefaultVersion for a change ID for the remainder of the run.
+	version := workflow.GetVersion(eCtx, fmt.Sprintf("%s-%d", stateKey, state), workflow.DefaultVersion, 1)
+	if version == workflow.DefaultVersion {
+		return true
+	}
+	eCtx.GlobalState.SetValue(stateKey, -1)
+	return false
 }

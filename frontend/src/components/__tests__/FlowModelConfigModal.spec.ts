@@ -22,6 +22,24 @@ const EditorStub = {
   data: () => ({ config: updatedConfig }),
 }
 
+// The preset editor resolves the workspace profile on its own and port
+// mappings are covered by their own suite, so both are answered outside the
+// flow config sequence these tests set up.
+const withProfileRequests = (
+  fetchMock: (url: string, options?: RequestInit) => unknown,
+) => (url: string, options?: RequestInit) => {
+  if (url === '/api/v1/workspaces/workspace-1') {
+    return Promise.resolve({ ok: true, json: async () => ({ workspace: { id: 'workspace-1' } }) })
+  }
+  if (url.startsWith('/api/v1/providers')) {
+    return Promise.resolve({ ok: true, json: async () => ({ providers: ['anthropic', 'openai'] }) })
+  }
+  if (typeof options?.body === 'string' && options.body.includes('port_forwards')) {
+    return Promise.resolve({ ok: false })
+  }
+  return fetchMock(url, options)
+}
+
 const mountModal = () => mount(FlowModelConfigModal, {
   props: {
     workspaceId: 'workspace-1',
@@ -55,7 +73,7 @@ describe('FlowModelConfigModal', () => {
       .mockResolvedValueOnce({
         ok: false,
       })
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withProfileRequests(fetchMock))
 
     const wrapper = mountModal()
     await flushPromises()
@@ -88,7 +106,7 @@ describe('FlowModelConfigModal', () => {
         ok: true,
         json: async () => ({ result: updatedConfig }),
       })
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withProfileRequests(fetchMock))
     vi.useFakeTimers()
 
     const wrapper = mountModal()
@@ -134,7 +152,7 @@ describe('FlowModelConfigModal', () => {
         statusText: 'Unavailable',
         json: async () => ({ error: 'query failed' }),
       })
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withProfileRequests(fetchMock))
 
     const wrapper = mountModal()
     await flushPromises()
@@ -162,7 +180,7 @@ describe('FlowModelConfigModal', () => {
         statusText: 'Conflict',
         json: async () => ({ error: 'update rejected' }),
       })
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withProfileRequests(fetchMock))
 
     const wrapper = mountModal()
     await flushPromises()
@@ -196,7 +214,7 @@ describe('FlowModelConfigModal', () => {
         json: async () => ({ message: 'accepted' }),
       })
       .mockReturnValueOnce(pendingQuery)
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withProfileRequests(fetchMock))
 
     const wrapper = mountModal()
     await flushPromises()
@@ -236,7 +254,7 @@ describe('FlowModelConfigModal', () => {
         ok: true,
         json: async () => ({ result: initialConfig }),
       })
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', withProfileRequests(fetchMock))
     vi.useFakeTimers()
 
     const wrapper = mountModal()

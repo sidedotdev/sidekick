@@ -43,8 +43,19 @@ agent_config:
     auto_iterations: 27
 
 command_permissions:
+  require_approval:
+    - pattern: 'JAVA_TOOL_OPTIONS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'JDK_JAVA_OPTIONS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: '_JAVA_OPTIONS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'JAVA_OPTS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'GRADLE_OPTS=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'GRADLE_USER_HOME=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'JAVA_HOME=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'GRADLEW=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
+    - pattern: 'ANDROID_PROJECT=[^\n]*(?:gradlew|android_phone_remote_e2e/run\.sh)'
   auto_approve:
     - pattern: "gotestreport"
+    - pattern: "go run ./cmd/gotestreport"
     - pattern: "go run ./scripts/affected_tests"
     - pattern: "docker build"
     - pattern: "docker logs"
@@ -58,8 +69,14 @@ command_permissions:
     - pattern: "bun test:unit.*--run"
     - pattern: "go run ./worker/replay"
     - pattern: "go run ./scripts/run_activity"
+    - pattern: "go run ./scripts/dump*"
     - pattern: "go run ./scripts/lint_.*"
+    - pattern: "go run ./scripts/modal_sandbox_status"
+    - pattern: "go run ./scripts/modal_diagnostics"
     - pattern: "playwright-cli"
+    - pattern: '^(?:SIDE_SERVER_PORT=[0-9]{1,5} +)?(?:\./)?scripts/android_phone_remote_e2e/run\.sh(?: +(?:-h|-t +[0-9]+|-s +(?:[A-Za-z0-9_.:-]+|''[A-Za-z0-9_.:() -]+''|"[A-Za-z0-9_.:() -]+")))*$'
+    - pattern: '^(?:\./)?app/android/gradlew -p app/android(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
+    - pattern: '^\./gradlew(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
 
 openshell:
   from: "Dockerfile.openshell"
@@ -71,13 +88,17 @@ modal:
   vm: false
   dockerfile_path: "Dockerfile.modal"
   # Requests are billing floors; usage bursts freely up to the limits (CPU is
-  # left unlimited at Modal's minimum 0.125-core request). Memory measured via
-  # scripts/modal_mem_measure: sampled peak ~2.9 GiB running test_commands
-  # concurrently and ~4.2 GiB for integration_test_commands, so an 8 GiB limit
-  # leaves ~2x headroom against OOM while the 1 GiB floor minimizes cost.
+  # left unlimited at Modal's minimum 0.125-core request). Memory: an 8 GiB
+  # limit repeatedly OOM-killed the whole sandbox (exit 137) when the
+  # integration_test_commands ran concurrently without affected-test skips;
+  # that workload's sampled peak measured 8.6 GiB with a warm build cache
+  # (see TEST_TIMING_MODAL.md; the previously measured ~4.2 GiB covered only
+  # the lighter affected-tests workload), so the limit is sized with ~2x
+  # headroom over it. Only usage above the 1 GiB floor is billed, so the
+  # higher limit is free when memory stays low.
   cpu: 0.125
   memory: 1024
-  memory_limit: 8192
+  memory_limit: 16384
   # Sandbox filesystem snapshots only follow a single sandbox lineage, so a
   # replacement sandbox starts with a cold affected-test cache and recompiles
   # and reruns every Go package. Keeping the cache on a volume lets any sandbox

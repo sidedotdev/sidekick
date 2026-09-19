@@ -3,10 +3,12 @@ package llm2
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sidekick/common"
 	"sidekick/utils"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,6 +26,16 @@ type OpenAIResponsesProvider struct {
 	DefaultModel  string
 	AuthType      common.ProviderAuthType
 	CustomHeaders map[string]string
+	// BuiltinTools opts protocol-compatible proxy providers into specific
+	// provider-native tools (e.g. "web_search").
+	BuiltinTools []string
+}
+
+// webSearchToolEnabled reports whether the native web search tool may be sent.
+// A custom BaseURL indicates an openai_responses_compatible proxy, which is
+// opted out by default since its backend may not support hosted tools.
+func (p OpenAIResponsesProvider) webSearchToolEnabled() bool {
+	return p.BaseURL == "" || slices.Contains(p.BuiltinTools, webSearchToolName)
 }
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
@@ -50,6 +62,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
+		option.WithMaxRetries(0),
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
@@ -73,6 +86,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		}
 	}
 
+	messages = convertForeignBuiltinToolBlocks(messages, isOpenAINativeBuiltinToolBlock)
 	inputItems, err := messageToResponsesInput(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build input: %w", err)
@@ -106,17 +120,23 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.ServiceTier)
 	}
 
+	webSearchIncluded := false
 	if len(options.Tools) > 0 {
 		toolsToUse := options.Tools
 		if options.ToolChoice.Type == common.ToolChoiceTypeTool {
 			toolsToUse = filterToolsByName(options.Tools, options.ToolChoice.Name)
 		}
 
-		tools, err := openaiResponsesFromTools(toolsToUse)
+		tools, err := openaiResponsesFromTools(toolsToUse, p.webSearchToolEnabled())
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert tools: %w", err)
 		}
 		params.Tools = tools
+		for _, tool := range tools {
+			if tool.OfWebSearch != nil {
+				webSearchIncluded = true
+			}
+		}
 
 		toolChoice := openaiResponsesFromToolChoice(options.ToolChoice, toolsToUse)
 		if toolChoice != nil {
@@ -134,7 +154,12 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		if resolved != "" {
 			actualReasoningEffort = resolved
 			params.Reasoning.Effort = shared.ReasoningEffort(actualReasoningEffort)
-			params.Reasoning.Summary = shared.ReasoningSummaryAuto
+			// gpt-5-codex rejects requests that combine reasoning summaries
+			// with the web search tool; later codex models (gpt-5.3-codex+)
+			// accept the combination.
+			if !(webSearchIncluded && strings.HasPrefix(model, "gpt-5-codex")) {
+				params.Reasoning.Summary = shared.ReasoningSummaryAuto
+			}
 		}
 	}
 
@@ -149,6 +174,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	var stopReason string
 	var usage Usage
 	reasoningItemIndexByID := make(map[string]int)
+	webSearchItemIndexByID := make(map[string]int)
 
 loop:
 	for stream.Next() {
@@ -183,6 +209,26 @@ loop:
 
 			for _, output := range response.Output {
 				switch output.AsAny().(type) {
+				case responses.ResponseFunctionWebSearch:
+					item := output.AsWebSearchCall()
+					if idx, ok := webSearchItemIndexByID[item.ID]; ok {
+						evt := Event{
+							Type:  EventBlockDone,
+							Index: idx,
+							ContentBlock: &ContentBlock{
+								Id:   item.ID,
+								Type: ContentBlockTypeBuiltinToolUse,
+								BuiltinToolUse: &BuiltinToolUseBlock{
+									Id:        item.ID,
+									Name:      webSearchToolName,
+									Arguments: item.Action.RawJSON(),
+									Status:    string(item.Status),
+								},
+							},
+						}
+						eventChan <- evt
+						events = append(events, evt)
+					}
 				case responses.ResponseReasoningItem:
 					item := output.AsReasoning()
 					if idx, ok := reasoningItemIndexByID[item.ID]; ok {
@@ -293,6 +339,26 @@ loop:
 				eventChan <- evt
 				events = append(events, evt)
 
+			case responses.ResponseFunctionWebSearch:
+				item := openaiEvent.Item.AsWebSearchCall()
+				blockIndex := int(openaiEvent.OutputIndex)
+				webSearchItemIndexByID[item.ID] = blockIndex
+				evt := Event{
+					Type:  EventBlockStarted,
+					Index: blockIndex,
+					ContentBlock: &ContentBlock{
+						Id:   item.ID,
+						Type: ContentBlockTypeBuiltinToolUse,
+						BuiltinToolUse: &BuiltinToolUseBlock{
+							Id:     item.ID,
+							Name:   webSearchToolName,
+							Status: string(item.Status),
+						},
+					},
+				}
+				eventChan <- evt
+				events = append(events, evt)
+
 			case responses.ResponseReasoningItem:
 				item := openaiEvent.Item.AsReasoning()
 				blockIndex := int(openaiEvent.OutputIndex)
@@ -307,6 +373,34 @@ loop:
 						Reasoning: &ReasoningBlock{
 							Text:    reasoningTextFromOpenaiContent(item.Content),
 							Summary: reasoningSummaryFromOpenaiContent(item.Summary),
+						},
+					},
+				}
+				eventChan <- evt
+				events = append(events, evt)
+			}
+
+		case responses.ResponseOutputItemDoneEvent:
+			openaiEvent := data.AsResponseOutputItemDone()
+			switch openaiEvent.Item.AsAny().(type) {
+			case responses.ResponseFunctionWebSearch:
+				// The web search action only becomes available once the item
+				// is done. It is also captured from the final output on
+				// response.completed, but the ChatGPT codex backend sends an
+				// empty output array there, so this event is the only source
+				// of the action when using subscription (OAuth) auth.
+				item := openaiEvent.Item.AsWebSearchCall()
+				evt := Event{
+					Type:  EventBlockDone,
+					Index: int(openaiEvent.OutputIndex),
+					ContentBlock: &ContentBlock{
+						Id:   item.ID,
+						Type: ContentBlockTypeBuiltinToolUse,
+						BuiltinToolUse: &BuiltinToolUseBlock{
+							Id:        item.ID,
+							Name:      webSearchToolName,
+							Arguments: item.Action.RawJSON(),
+							Status:    string(item.Status),
 						},
 					},
 				}
@@ -561,6 +655,32 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 					responses.EasyInputMessageRoleAssistant,
 				))
 
+			case ContentBlockTypeBuiltinToolUse:
+				if msg.Role != RoleAssistant {
+					return nil, fmt.Errorf("builtin_tool_use blocks must be in assistant messages, got role %s", msg.Role)
+				}
+				if block.BuiltinToolUse == nil {
+					return nil, fmt.Errorf("builtin_tool_use block missing BuiltinToolUse data")
+				}
+				action, err := openaiWebSearchActionFromJSON(block.BuiltinToolUse.Arguments)
+				if err != nil {
+					return nil, err
+				}
+				webSearchCall := responses.ResponseFunctionWebSearchParam{
+					ID:     block.BuiltinToolUse.Id,
+					Action: action,
+					Status: responses.ResponseFunctionWebSearchStatusCompleted,
+				}
+				if block.BuiltinToolUse.Status != "" {
+					webSearchCall.Status = responses.ResponseFunctionWebSearchStatus(block.BuiltinToolUse.Status)
+				}
+				items = append(items, responses.ResponseInputItemUnionParam{OfWebSearchCall: &webSearchCall})
+
+			case ContentBlockTypeBuiltinToolResult:
+				// OpenAI never emits builtin tool results; foreign ones are
+				// converted to client tool results before reaching here.
+				return nil, fmt.Errorf("unsupported content block type: %s", block.Type)
+
 			case ContentBlockTypeImage, ContentBlockTypeFile, ContentBlockTypeMcpCall:
 				return nil, fmt.Errorf("unsupported content block type: %s", block.Type)
 
@@ -592,6 +712,9 @@ func accumulateOpenaiEventsToMessage(events []Event) Message {
 				} else if blockCopy.Type == ContentBlockTypeReasoning && blockCopy.Reasoning != nil {
 					reasoningCopy := *blockCopy.Reasoning
 					blockCopy.Reasoning = &reasoningCopy
+				} else if blockCopy.Type == ContentBlockTypeBuiltinToolUse && blockCopy.BuiltinToolUse != nil {
+					builtinToolUseCopy := *blockCopy.BuiltinToolUse
+					blockCopy.BuiltinToolUse = &builtinToolUseCopy
 				}
 				blocks[evt.Index] = &blockCopy
 			}
@@ -628,6 +751,10 @@ func accumulateOpenaiEventsToMessage(events []Event) Message {
 		case EventBlockDone:
 			if evt.ContentBlock != nil {
 				if block, ok := blocks[evt.Index]; ok {
+					if block.Type == ContentBlockTypeBuiltinToolUse && evt.ContentBlock.Type == ContentBlockTypeBuiltinToolUse && evt.ContentBlock.BuiltinToolUse != nil {
+						builtinToolUseCopy := *evt.ContentBlock.BuiltinToolUse
+						block.BuiltinToolUse = &builtinToolUseCopy
+					}
 					if block.Type == ContentBlockTypeReasoning && evt.ContentBlock.Type == ContentBlockTypeReasoning {
 						if evt.ContentBlock.Reasoning != nil {
 							if block.Reasoning == nil {
@@ -662,10 +789,30 @@ func accumulateOpenaiEventsToMessage(events []Event) Message {
 	}
 }
 
-func openaiResponsesFromTools(tools []*common.Tool) ([]responses.ToolUnionParam, error) {
+func openaiResponsesFromTools(tools []*common.Tool, includeWebSearch bool) ([]responses.ToolUnionParam, error) {
 	result := make([]responses.ToolUnionParam, 0, len(tools))
 
 	for _, tool := range tools {
+		if tool.Type == common.ToolTypeWebSearch {
+			if !includeWebSearch {
+				return nil, fmt.Errorf("web_search tool requested, but this openai-responses-compatible provider is not opted into builtin tools")
+			}
+			webSearchTool := responses.WebSearchToolParam{
+				Type: responses.WebSearchToolTypeWebSearch,
+			}
+			if tool.WebSearch != nil && len(tool.WebSearch.AllowedDomains) > 0 {
+				webSearchTool.Filters = responses.WebSearchToolFiltersParam{
+					AllowedDomains: tool.WebSearch.AllowedDomains,
+				}
+			}
+			result = append(result, responses.ToolUnionParam{
+				OfWebSearch: &webSearchTool,
+			})
+			continue
+		}
+		if !tool.IsFunction() {
+			return nil, fmt.Errorf("provider-native tool type %q is not supported by the openai responses provider", tool.Type)
+		}
 		params, err := jsonSchemaToMap(tool.Parameters)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert parameters for tool %s: %w", tool.Name, err)
@@ -687,6 +834,43 @@ func openaiResponsesFromTools(tools []*common.Tool) ([]responses.ToolUnionParam,
 
 func jsonSchemaToMap(schema interface{}) (map[string]any, error) {
 	return common.JSONSchemaWithRequiredNullableOptionals(schema)
+}
+
+// openaiWebSearchActionFromJSON rebuilds a web search call's action union from
+// the JSON arguments persisted at stream time.
+func openaiWebSearchActionFromJSON(arguments string) (responses.ResponseFunctionWebSearchActionUnionParam, error) {
+	var action responses.ResponseFunctionWebSearchActionUnionParam
+	var raw struct {
+		Type    string `json:"type"`
+		Query   string `json:"query"`
+		URL     string `json:"url"`
+		Pattern string `json:"pattern"`
+		Sources []struct {
+			URL string `json:"url"`
+		} `json:"sources"`
+	}
+	if arguments != "" {
+		if err := json.Unmarshal([]byte(arguments), &raw); err != nil {
+			return action, fmt.Errorf("failed to parse web search action: %w", err)
+		}
+	}
+	switch raw.Type {
+	case "open_page":
+		action.OfOpenPage = &responses.ResponseFunctionWebSearchActionOpenPageParam{URL: raw.URL}
+	case "find", "find_in_page":
+		findParam := responses.ResponseFunctionWebSearchActionFindParam{Pattern: raw.Pattern, URL: raw.URL}
+		// The SDK serializes this action type as "find", but the API only
+		// accepts "find_in_page".
+		findParam.SetExtraFields(map[string]any{"type": "find_in_page"})
+		action.OfFind = &findParam
+	default:
+		search := responses.ResponseFunctionWebSearchActionSearchParam{Query: raw.Query}
+		for _, source := range raw.Sources {
+			search.Sources = append(search.Sources, responses.ResponseFunctionWebSearchActionSearchSourceParam{URL: source.URL})
+		}
+		action.OfSearch = &search
+	}
+	return action, nil
 }
 
 func openaiResponsesFromToolChoice(toolChoice common.ToolChoice, tools []*common.Tool) *responses.ResponseNewParamsToolChoiceUnion {

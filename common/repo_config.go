@@ -276,6 +276,12 @@ func (c ModalEnvConfig) Validate() error {
 // GlobalState keys for workflow-specific state
 const (
 	KeyCurrentTargetBranch = "currentTargetBranch"
+	// KeyReviewStartPoint is the commit that bounds the work under review for
+	// flows without a worktree, where the branch itself can't isolate the work.
+	KeyReviewStartPoint = "reviewStartPoint"
+	// KeyReviewStartPriorDiff is what was already modified in the checkout when
+	// the review start point was pinned, treated as already reviewed.
+	KeyReviewStartPriorDiff = "reviewStartPriorDiff"
 )
 
 // DevRunConfig maps command IDs to their configurations.
@@ -330,7 +336,22 @@ type CommandConfig struct {
 
 // AgentUseCaseConfig contains configuration for a specific agent use case.
 type AgentUseCaseConfig struct {
+	// AutoIterations is the number of iterations run before human feedback is
+	// requested.
 	AutoIterations int `toml:"auto_iterations,omitempty"`
+
+	// RemindAfter is the iteration at which a long-running loop is first
+	// reminded to wrap up. No human is involved. Zero uses the use case default.
+	RemindAfter int `toml:"remind_after,omitempty"`
+
+	// EscalateReminderEvery is the interval, in iterations after RemindAfter,
+	// at which those reminders escalate and repeat. Zero uses the use case
+	// default.
+	EscalateReminderEvery int `toml:"escalate_reminder_every,omitempty"`
+
+	// MaxIterations is the iteration at which a loop is restricted to wrapping
+	// up. Zero uses the use case default.
+	MaxIterations int `toml:"max_iterations,omitempty"`
 }
 
 type EditCodeConfig struct {

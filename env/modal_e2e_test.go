@@ -263,12 +263,13 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 	if common.IsActiveEnvNonLocal() {
 		t.Skip("skipping Modal e2e test; credentials are unavailable in non-local sidekick environments")
 	}
-	ctx := context.Background()
-	if deadline, ok := t.Deadline(); ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
-		defer cancel()
+	testDeadline := time.Now().Add(5 * time.Minute)
+	if deadline, ok := t.Deadline(); ok && deadline.Before(testDeadline) {
+		testDeadline = deadline
 	}
+	// Reserve time for diagnostics and reclamation even if a Modal call stalls.
+	ctx, cancel := context.WithDeadline(context.Background(), testDeadline.Add(-40*time.Second))
+	defer cancel()
 
 	client, err := getModalClient()
 	if err != nil {
@@ -279,6 +280,28 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 	}
 
 	sandboxName := "side-e2e-snap-" + strings.ToLower(ksuid.New().String()[:10])
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithDeadline(context.Background(), testDeadline.Add(-5*time.Second))
+		defer cleanupCancel()
+		if t.Failed() {
+			var diagnostics strings.Builder
+			eventsCtx, eventsCancel := context.WithTimeout(cleanupCtx, 10*time.Second)
+			eventsErr := DebugModalSnapshotEvents(eventsCtx, &diagnostics, sandboxName, 100)
+			eventsCancel()
+			if eventsErr != nil {
+				t.Logf("snapshot events unavailable: %v", eventsErr)
+			}
+			statusCtx, statusCancel := context.WithTimeout(cleanupCtx, 10*time.Second)
+			DebugModalSandboxStatus(statusCtx, &diagnostics, sandboxName)
+			statusCancel()
+			t.Logf("pre-cleanup diagnostics for %s:\n%s", sandboxName, diagnostics.String())
+		}
+		_, cleanupErr := DeleteSandboxActivity(cleanupCtx, DeleteSandboxInput{EnvType: EnvTypeModal, SandboxName: sandboxName})
+		if cleanupErr != nil {
+			t.Errorf("cleanup modal sandbox %s: %v", sandboxName, cleanupErr)
+		}
+	})
+
 	// Minimal image and sizing keep this billed sandbox cheap; the sandbox
 	// itself only runs sshd plus one sleep. IdleSeconds is high so the idle
 	// shutdown cannot interfere and any snapshot must come from the active
@@ -294,9 +317,6 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 		},
 	})
 	require.NoError(t, err, "modalCreateSandbox failed")
-	t.Cleanup(func() {
-		_, _ = DeleteSandboxActivity(context.Background(), DeleteSandboxInput{EnvType: EnvTypeModal, SandboxName: sandboxName})
-	})
 
 	modalEnv := &ModalEnv{
 		SandboxName:      sandboxName,
@@ -306,11 +326,13 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 	}
 	// A long-running command keeps the activity heartbeat fresh across
 	// watchdog polls while the guard record is polled below.
+	commandCtx, cancelCommand := context.WithCancel(ctx)
+	defer cancelCommand()
 	commandDone := make(chan error, 1)
 	go func() {
-		output, runErr := modalEnv.RunCommand(ctx, EnvRunCommandInput{
+		output, runErr := modalEnv.RunCommand(commandCtx, EnvRunCommandInput{
 			Command: "sleep",
-			Args:    []string{"120"},
+			Args:    []string{"240"},
 		})
 		if runErr != nil {
 			commandDone <- fmt.Errorf("run long-lived command: %w", runErr)
@@ -319,30 +341,46 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 		commandDone <- fmt.Errorf("long-lived command ended unexpectedly with exit %d: %s", output.ExitStatus, output.Stderr)
 	}()
 
-	// The watchdog polls every 15s and snapshots on the first busy poll once
-	// the 5s interval has elapsed, so the bound is one poll cycle plus a few
-	// seconds of guard latency.
-	pollDeadline := time.Now().Add(25 * time.Second)
+	// Snapshot creation allows 140s, in addition to the watchdog poll and
+	// guard startup. The parent deadline still reserves cleanup time.
+	pollCtx, cancelPoll := context.WithTimeout(ctx, 180*time.Second)
+	defer cancelPoll()
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
 	var record *modalSnapshotRecord
-	for time.Now().Before(pollDeadline) {
+	for record == nil {
 		select {
 		case commandErr := <-commandDone:
 			require.NoError(t, commandErr)
 		default:
 		}
-		record, err = modalLatestSnapshot(ctx, client, sandboxName)
+		record, err = modalLatestSnapshot(pollCtx, client, sandboxName)
 		require.NoError(t, err)
 		if record != nil {
 			break
 		}
-		time.Sleep(3 * time.Second)
+		select {
+		case <-pollCtx.Done():
+			t.Fatalf("expected an active snapshot while sandbox %s was busy: %v", sandboxName, pollCtx.Err())
+		case commandErr := <-commandDone:
+			require.NoError(t, commandErr)
+		case <-ticker.C:
+		}
 	}
-	require.NotNil(t, record, "expected an active snapshot to appear while the sandbox was busy")
 	assert.NotEmpty(t, record.ImageId)
 
 	sb, err := findModalSandbox(ctx, client, sandboxName)
 	require.NoError(t, err)
-	assert.NotNil(t, sb, "sandbox must remain alive after an active snapshot")
+	require.NotNil(t, sb, "sandbox must remain alive after an active snapshot")
+	cancelCommand()
+
+	// Snapshots are retained indefinitely, so deleting the sandbox is the only
+	// thing that ever reclaims them.
+	_, err = DeleteSandboxActivity(ctx, DeleteSandboxInput{EnvType: EnvTypeModal, SandboxName: sandboxName})
+	require.NoError(t, err)
+	discarded, err := modalLatestSnapshot(ctx, client, sandboxName)
+	require.NoError(t, err)
+	assert.Nil(t, discarded, "deleting a sandbox must discard its snapshot record")
 }
 
 // TestModalSnapshotVolumeRestoreIntegration covers adding a volume mount to a

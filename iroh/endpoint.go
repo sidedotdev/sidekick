@@ -11,12 +11,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"sidekick/common"
 
 	"github.com/tmc/go-iroh/endpointticket"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
+	"github.com/tmc/go-iroh/relay"
 )
 
 // ALPN is the Application-Layer Protocol Negotiation value identifying
@@ -41,10 +44,22 @@ func NewEndpoint(ctx context.Context, opts ...iroh.Option) (*Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	bindOpts := append([]iroh.Option{iroh.WithSecretKey(sk), iroh.WithALPNs(ALPN)}, opts...)
+	bindOpts := append([]iroh.Option{
+		iroh.WithSecretKey(sk),
+		iroh.WithALPNs(ALPN),
+		iroh.WithRelayMode(relay.ModeDefault()),
+	}, opts...)
 	ep, err := iroh.Bind(ctx, bindOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to bind iroh endpoint: %w", err)
+	}
+	readyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := ep.Online(readyCtx); err != nil && !errors.Is(err, iroh.ErrNoRelay) {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		ep.Shutdown(cleanupCtx)
+		return nil, fmt.Errorf("failed to bring iroh relay online: %w", err)
 	}
 	return &Endpoint{ep: ep}, nil
 }
@@ -52,7 +67,7 @@ func NewEndpoint(ctx context.Context, opts ...iroh.Option) (*Endpoint, error) {
 // Ticket returns the connection ticket string that a remote peer uses to dial
 // this endpoint over iroh.
 func (e *Endpoint) Ticket() string {
-	return endpointticket.Encode(e.ep.Addr())
+	return endpointticket.Encode(reachableAddress(e.ep.Addr()))
 }
 
 // NodeID returns the stable ed25519-derived identifier of this endpoint.
@@ -100,4 +115,15 @@ func loadOrCreateSecretKey() (key.SecretKey, error) {
 		return key.SecretKey{}, fmt.Errorf("failed to persist iroh secret key: %w", err)
 	}
 	return sk, nil
+}
+
+func reachableAddress(address netaddr.EndpointAddr) netaddr.EndpointAddr {
+	reachable := netaddr.NewEndpointAddr(address.ID)
+	for _, transport := range address.Addrs() {
+		if direct, ok := transport.(netaddr.IPAddr); ok && direct.Addr.Addr().IsUnspecified() {
+			continue
+		}
+		reachable = reachable.WithAddrs(transport)
+	}
+	return reachable
 }

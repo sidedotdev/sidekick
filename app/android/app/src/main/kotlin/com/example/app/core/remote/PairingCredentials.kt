@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 data class PairingCredentials(
     val ticket: String,
     val token: String,
+    val workspaceId: String? = null,
 )
 
 class PairingPayloadParser(
@@ -28,6 +29,7 @@ class PairingPayloadParser(
         return PairingCredentials(
             ticket = credentials.ticket.trim(),
             token = credentials.token.trim(),
+            workspaceId = credentials.workspaceId?.trim()?.takeIf { it.isNotEmpty() },
         )
     }
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sidekick/common"
 	"sidekick/llm"
@@ -1239,4 +1241,52 @@ func TestAnthropicProvider_CrossProviderReasoningHandoffIntegration(t *testing.T
 
 	assert.NotEmpty(t, anthropicResponse.Output.Content)
 	assert.Greater(t, anthropicResponse.Usage.InputTokens, 0)
+}
+
+func TestAnthropicProvider_RateLimitDoesNotWaitForRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "3600")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"Usage limit reached"}}`))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	provider := AnthropicProvider{
+		BaseURL:  server.URL,
+		AuthType: common.ProviderAuthTypeAPI,
+	}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{
+			ModelConfig: common.ModelConfig{
+				Provider: "anthropic",
+				Model:    "claude-fable-5",
+			},
+			MaxTokens: 16,
+		},
+		SecretManager: anthropicAuthTestSecretManager{
+			secrets: map[string]string{"ANTHROPIC_API_KEY": "test-api-key"},
+		},
+	}
+
+	startedAt := time.Now()
+	_, err := provider.Stream(ctx, request, make(chan Event, 1))
+	elapsed := time.Since(startedAt)
+
+	if err == nil {
+		t.Fatal("expected rate-limit error")
+	}
+	t.Logf("Anthropic rate-limit response returned after %s: %v", elapsed, err)
+	assert.Contains(t, err.Error(), "429")
+	assert.Contains(t, err.Error(), "rate_limit_error")
+	assert.NotContains(t, err.Error(), context.DeadlineExceeded.Error())
 }

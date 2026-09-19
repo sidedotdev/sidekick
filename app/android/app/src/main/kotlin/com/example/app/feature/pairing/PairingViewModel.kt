@@ -103,7 +103,11 @@ class PairingViewModel(
 
     fun onWorkspaceSelected(workspaceId: String) {
         if (_uiState.value.workspaces.none { it.id == workspaceId }) return
-        _uiState.update { it.copy(selectedWorkspaceId = workspaceId) }
+        _uiState.update { it.copy(selectedWorkspaceId = workspaceId, workspaceToOpen = null) }
+    }
+
+    fun onWorkspaceOpened() {
+        _uiState.update { it.copy(workspaceToOpen = null) }
     }
 
     private suspend fun restorePairing() {
@@ -145,12 +149,15 @@ class PairingViewModel(
     private suspend fun fetchWorkspaces(credentials: PairingCredentials) {
         try {
             val workspaces = remoteApiFactory(credentials).getWorkspaces().workspaces
+            val hintedWorkspace = workspaces.find { it.id == credentials.workspaceId }
+            this.credentials = credentials.copy(workspaceId = null)
             _uiState.update { state ->
                 state.copy(
+                    workspaceToOpen = hintedWorkspace,
                     isPaired = true,
                     isLoading = false,
                     workspaces = workspaces,
-                    selectedWorkspaceId = state.selectedWorkspaceId
+                    selectedWorkspaceId = (state.selectedWorkspaceId ?: credentials.workspaceId)
                         ?.takeIf { selectedId -> workspaces.any { it.id == selectedId } },
                     errorMessage = null,
                 )

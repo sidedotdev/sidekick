@@ -1779,6 +1779,67 @@ func TestEvaluateCommandPermission_GitDiffRelativePath(t *testing.T) {
 	}
 }
 
+func TestBasePermissions_GitCheckout(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	tests := []struct {
+		name           string
+		command        string
+		expectedResult PermissionResult
+	}{
+		{
+			name:           "discard changes to a single file",
+			command:        "git checkout -- someFile.whatever",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "discard changes to multiple files",
+			command:        "git checkout -- coding/git/git_diff.go common/command_permission.go",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "missing path after separator",
+			command:        "git checkout --",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "switch to a different branch",
+			command:        "git checkout main",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "create a new branch",
+			command:        "git checkout -b new-branch",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "force switch branches",
+			command:        "git checkout --force main",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "restore file from another tree-ish",
+			command:        "git checkout main -- someFile.whatever",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "absolute path escalates",
+			command:        "git checkout -- /etc/passwd",
+			expectedResult: PermissionRequireApproval,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, _ := EvaluateCommandPermission(config, tt.command)
+			assert.Equal(t, tt.expectedResult, result, "command: %s", tt.command)
+		})
+	}
+}
+
 func TestBasePermissions_RmRfPatterns(t *testing.T) {
 	t.Parallel()
 	config := BaseCommandPermissions()

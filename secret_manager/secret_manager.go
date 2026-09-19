@@ -31,15 +31,18 @@ const (
 	InterceptingSecretManagerType SecretManagerType = "intercepting"
 )
 
-type EnvSecretManager struct{}
+type EnvSecretManager struct {
+	ProfileId string `json:"profileId,omitempty"`
+}
 
 func (e EnvSecretManager) GetSecret(secretName string) (string, error) {
-	preferredSecretName := fmt.Sprintf("SIDE_%s", secretName)
+	envSecretName := ProfileEnvSecretName(e.ProfileId, secretName)
+	preferredSecretName := fmt.Sprintf("SIDE_%s", envSecretName)
 	secret := os.Getenv(preferredSecretName)
 	if secret == "" {
-		secret = os.Getenv(secretName)
+		secret = os.Getenv(envSecretName)
 		if secret == "" {
-			return "", fmt.Errorf("%w: %s not found in environment", ErrSecretNotFound, secretName)
+			return "", fmt.Errorf("%w: %s not found in environment", ErrSecretNotFound, envSecretName)
 		}
 	}
 	return secret, nil
@@ -49,15 +52,18 @@ func (e EnvSecretManager) GetType() SecretManagerType {
 	return EnvSecretManagerType
 }
 
-type KeyringSecretManager struct{}
+type KeyringSecretManager struct {
+	ProfileId string `json:"profileId,omitempty"`
+}
 
 func (k KeyringSecretManager) GetSecret(secretName string) (string, error) {
-	secret, err := keyring.Get("sidekick", secretName)
+	keyringSecretName := ProfileSecretName(k.ProfileId, secretName)
+	secret, err := keyring.Get("sidekick", keyringSecretName)
 	if err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
-			return "", fmt.Errorf("%w: %s not found in keyring", ErrSecretNotFound, secretName)
+			return "", fmt.Errorf("%w: %s not found in keyring", ErrSecretNotFound, keyringSecretName)
 		}
-		return "", fmt.Errorf("error retrieving %s from keyring: %w", secretName, err)
+		return "", fmt.Errorf("error retrieving %s from keyring: %w", keyringSecretName, err)
 	}
 	return secret, nil
 }
@@ -66,7 +72,9 @@ func (k KeyringSecretManager) GetType() SecretManagerType {
 	return KeyringSecretManagerType
 }
 
-type LocalConfigSecretManager struct{}
+type LocalConfigSecretManager struct {
+	ProfileId string `json:"profileId,omitempty"`
+}
 
 type CompositeSecretManager struct {
 	managers []SecretManager
@@ -176,6 +184,9 @@ func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, nam
 	var matches []common.ModelProviderConfig
 
 	for _, provider := range config.Providers {
+		if !provider.MatchesProfile(l.ProfileId) {
+			continue
+		}
 		if providerType != "" && provider.Type == providerType {
 			matches = append(matches, provider)
 		} else if name != "" {

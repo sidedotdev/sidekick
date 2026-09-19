@@ -9,7 +9,7 @@
       <div v-if="!criteriaFulfillment.isFulfilled && criteriaFulfillment.feedbackMessage" class="feedback">
         <pre><strong>Feedback:</strong> {{ criteriaFulfillment.feedbackMessage }}</pre>
       </div>
-      <div v-if="expand && criteriaFulfillment.confidence <= 3" class="confidence">
+      <div v-if="expand && criteriaFulfillment.confidence != null && criteriaFulfillment.confidence <= 3" class="confidence">
         <pre><strong>Confidence:</strong> {{ criteriaFulfillment.confidence }}/5</pre>
       </div>
       <div v-if="expand && diffString" class="diff-section">
@@ -30,7 +30,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { FlowAction, CriteriaFulfillment } from '@/lib/models';
-import { extractToolCallArguments } from '@/lib/models';
+import { parseCriteriaFulfillment } from '@/lib/criteriaFulfillment';
 import VueMarkdown from 'vue-markdown-render';
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue';
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
@@ -43,9 +43,7 @@ const props = defineProps<{
 
 const criteriaFulfillment = computed<CriteriaFulfillment | null>(() => {
   try {
-    const parsedResult = JSON.parse(props.flowAction.actionResult);
-    const args = extractToolCallArguments(parsedResult);
-    return JSON.parse(args || "null") as CriteriaFulfillment | null;
+    return parseCriteriaFulfillment(JSON.parse(props.flowAction.actionResult));
   } catch (error) {
     if (props.flowAction.actionStatus === 'complete') {
       console.error('Error parsing criteria fulfillment data:', error);

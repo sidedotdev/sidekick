@@ -59,8 +59,10 @@ func TestOpenAIProvider_WrapErrorBodyOnly(t *testing.T) {
 	t.Parallel()
 
 	responseBody := `{"message":"Tokens per day limit exceeded - too many tokens processed.","type":"too_many_tokens_error","param":"quota","code":"token_quota_exceeded"}`
+	requestCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Retry-After", "86399")
 		w.Header().Set("Strict-Transport-Security", "max-age=3600; includeSubDomains")
@@ -102,6 +104,7 @@ func TestOpenAIProvider_WrapErrorBodyOnly(t *testing.T) {
 	assert.Error(t, err)
 	errStr := err.Error()
 
+	assert.Equal(t, 1, requestCount)
 	assert.Contains(t, errStr, "429")
 	assert.Contains(t, errStr, "response body:")
 	assert.Contains(t, errStr, "too_many_tokens_error")

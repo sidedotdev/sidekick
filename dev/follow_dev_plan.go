@@ -202,6 +202,54 @@ func preparePlannedCodingContext(
 	return codeContext, len(fullCodeContext) - len(codeContext), nil
 }
 
+// stepReviewState pins what a single plan step's work is compared against.
+type stepReviewState struct {
+	startPoint string
+}
+
+// pinStepReviewState resolves the commit the step starts from. A commit reachable
+// from the flow's branch stays available for the whole flow, unlike the
+// unreferenced tree objects earlier review-diff mechanisms depended on.
+func pinStepReviewState(dCtx DevContext) (stepReviewState, error) {
+	if workflow.GetVersion(dCtx, "step-start-pin", workflow.DefaultVersion, 1) < 1 {
+		return stepReviewState{}, nil
+	}
+	if dCtx.EnvContainer == nil {
+		return stepReviewState{}, nil
+	}
+
+	var revParsed git.GitRevParseResult
+	err := workflow.ExecuteActivity(dCtx, git.GitRevParseActivity, git.GitRevParseParams{
+		EnvContainer: *dCtx.EnvContainer,
+		Ref:          "HEAD",
+	}).Get(dCtx, &revParsed)
+	if err != nil {
+		return stepReviewState{}, err
+	}
+	return stepReviewState{startPoint: revParsed.CommitHash}, nil
+}
+
+func (s *stepReviewState) checkWorkInfo(dCtx DevContext, info CheckWorkInfo) CheckWorkInfo {
+	if s == nil || s.startPoint == "" {
+		return info
+	}
+	info.StartPoint = s.startPoint
+
+	// a pinned start point alone can't tell our own changes apart from changes
+	// merged in from the target branch, which only the target branch identifies
+	targetBranch := info.BaseBranch
+	if dCtx.GlobalState != nil {
+		if current := dCtx.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); current != "" {
+			targetBranch = current
+		}
+	}
+	if targetBranch == "" {
+		workflow.GetLogger(dCtx).Warn("No target branch known while reviewing a step: changes merged in from it will be reviewed as our own")
+	}
+	info.BaseBranch = targetBranch
+	return info
+}
+
 func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution DevPlanExecution, step DevStep) (result DevStepResult, err error) {
 	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 	case 2:
@@ -210,6 +258,11 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		if _, wakeErr := WakeIfHibernated(dCtx); wakeErr != nil {
 			return result, fmt.Errorf("failed to wake hibernated worktree: %w", wakeErr)
 		}
+	}
+
+	stepReview, err := pinStepReviewState(dCtx)
+	if err != nil {
+		return result, fmt.Errorf("failed to pin step start commit: %w", err)
 	}
 
 	var chatHistory *persisted_ai.ChatHistoryContainer
@@ -270,6 +323,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 	if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 {
 		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
+	reviewer := &verifierSession{}
 
 	modelAttemptCount := 0
 	modelIndex := 0
@@ -335,6 +389,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			// TODO /gen capture the git checkout head all in a "Revert Edits" flow action
 			promptInfo = initialPromptInfo
 			chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+			reviewer.resetHistory()
 			err := git.GitCheckoutHeadAll(dCtx.ExecContext)
 			if err != nil {
 				return fmt.Errorf("failed to reset working directory via git checkout: %v", err)
@@ -438,7 +493,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			}
 		}
 		if executeNormalStepEvaluation {
-			result, err = checkIfDevStepCompleted(dCtx, requirements, step, planExecution)
+			result, err = checkIfDevStepCompleted(dCtx, requirements, step, planExecution, &stepReview, chatHistory, reviewer)
 			if err != nil {
 				if errors.Is(err, flow_action.PendingActionError) {
 					pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
@@ -509,7 +564,7 @@ This newer version ignores completion criteria and instead forces the same
 criteria for a given step type since that is more reliable and less error prone
 than having the LLM specify criteria and miss things at that step
 */
-func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step DevStep, planExecution DevPlanExecution) (result DevStepResult, err error) {
+func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step DevStep, planExecution DevPlanExecution, reviewState *stepReviewState, chatHistory *persisted_ai.ChatHistoryContainer, reviewer *verifierSession) (result DevStepResult, err error) {
 	// FIXME support step.Type set to "other"
 	switch step.Type {
 	case "edit":
@@ -539,13 +594,15 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 				}
 			}
 		}
-		fulfillment, err := CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
-			CodeContext:   "", // TODO providing the code context will help with checking for criteria fulfillment
-			Requirements:  overallRequirements,
-			Step:          step,
-			PlanExecution: planExecution,
-			AutoChecks:    autoChecks,
-		})
+		fulfillment, err := CheckWorkMeetsCriteria(dCtx, reviewState.checkWorkInfo(dCtx, CheckWorkInfo{
+			CodeContext:     "", // TODO providing the code context will help with checking for criteria fulfillment
+			Requirements:    overallRequirements,
+			Step:            step,
+			PlanExecution:   planExecution,
+			AutoChecks:      autoChecks,
+			ChatHistory:     chatHistory,
+			VerifierSession: reviewer,
+		}))
 		if err != nil {
 			return result, fmt.Errorf("error checking if criteria are fulfilled: %w", err)
 		}

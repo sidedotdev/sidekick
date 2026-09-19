@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"sidekick/common"
@@ -110,6 +110,10 @@ type ApplyEditBlockActivityInput struct {
 	CheckCommands []common.CommandConfig
 }
 
+func (input ApplyEditBlockActivityInput) goBuildCheckEnabled() bool {
+	return slices.Contains(input.EnabledFlags, fflag.CheckGoBuild)
+}
+
 // DEPRECATED: use DevActivities.ApplyEditBlocks instead
 // needed for backcompat, avoiding non-deterministic temporal workflow runs
 func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
@@ -149,6 +153,18 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 
 	checksEnabled := slices.Contains(input.EnabledFlags, fflag.CheckEdits)
 
+	// Applied edits are staged so that diffs of staged changes, which is what
+	// reviews are based on, cover all of the work. Editing a directory that is
+	// not version controlled remains supported, and skips staging.
+	stageEdits := checksEnabled
+	if !checksEnabled {
+		insideWorkTree, err := git.IsInsideWorkTree(ctx, input.EnvContainer)
+		if err != nil {
+			log.Warn().Err(err).Msg("Failed to determine whether edits are inside a git work tree")
+		}
+		stageEdits = insideWorkTree
+	}
+
 	// Git operations (add, restore, diff) lock the repo index, so we
 	// serialize them across all file groups sharing the same working directory.
 	var gitMu sync.Mutex
@@ -166,7 +182,7 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 		wg.Add(1)
 		go func(fi int, blocks []indexedBlock) {
 			defer wg.Done()
-			iReports := da.applyEditBlocksForFile(ctx, input, blocks, checksEnabled, &gitMu)
+			iReports := da.applyEditBlocksForFile(ctx, input, blocks, checksEnabled, stageEdits, &gitMu)
 			mu.Lock()
 			fileResults[fi] = fileResult{fileIndex: fi, reports: iReports}
 			mu.Unlock()
@@ -209,6 +225,7 @@ func (da *DevActivities) applyEditBlocksForFile(
 	input ApplyEditBlockActivityInput,
 	blocks []indexedBlock,
 	checksEnabled bool,
+	stageEdits bool,
 	gitMu *sync.Mutex,
 ) []indexedReport {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
@@ -216,7 +233,7 @@ func (da *DevActivities) applyEditBlocksForFile(
 	// Try batch mode: apply all blocks, check once, fall back to sequential
 	// if the check fails.
 	if len(blocks) > 1 {
-		batchReports := da.tryBatchApply(ctx, input, blocks, baseDir, checksEnabled, gitMu)
+		batchReports := da.tryBatchApply(ctx, input, blocks, baseDir, checksEnabled, stageEdits, gitMu)
 		if batchReports != nil {
 			return batchReports
 		}
@@ -224,7 +241,7 @@ func (da *DevActivities) applyEditBlocksForFile(
 	}
 
 	// Sequential mode: apply and check each block individually.
-	return da.applyBlocksSequentially(ctx, input, blocks, baseDir, checksEnabled, gitMu)
+	return da.applyBlocksSequentially(ctx, input, blocks, baseDir, checksEnabled, stageEdits, gitMu)
 }
 
 // tryBatchApply applies all edit blocks for a file, then runs checks once. If
@@ -236,6 +253,7 @@ func (da *DevActivities) tryBatchApply(
 	blocks []indexedBlock,
 	baseDir string,
 	checksEnabled bool,
+	stageEdits bool,
 	gitMu *sync.Mutex,
 ) []indexedReport {
 	filePath := blocks[0].block.FilePath
@@ -244,7 +262,9 @@ func (da *DevActivities) tryBatchApply(
 	preEditFileHadErrors := false
 	firstEditType := blocks[0].block.EditType
 	if firstEditType == "update" || firstEditType == "append" {
-		preEditValid, _, preEditErr := check.CheckFileValidity(ctx, input.EnvContainer, filePath)
+		preEditValid, _, preEditErr := check.CheckFileValidityWithOptions(ctx, input.EnvContainer, filePath, check.CheckFileValidityOptions{
+			EnableGoBuildCheck: input.goBuildCheckEnabled(),
+		})
 		preEditFileHadErrors = !preEditValid && preEditErr == nil
 	}
 
@@ -371,7 +391,7 @@ func (da *DevActivities) tryBatchApply(
 
 	if checksEnabled {
 		checkResult, checkErr := checkAndStageOrRestoreFile(
-			ctx, input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors,
+			ctx, input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors, input.goBuildCheckEnabled(),
 		)
 
 		if !checkResult.Success {
@@ -401,7 +421,10 @@ func (da *DevActivities) tryBatchApply(
 		}
 	} else {
 		// Checks disabled — just stage the file and populate diffs.
-		gitAddErr := gitAdd(input.EnvContainer, filePath)
+		var gitAddErr error
+		if stageEdits {
+			gitAddErr = gitAdd(input.EnvContainer, filePath)
+		}
 		gitMu.Unlock()
 
 		batchReport.FinalDiff = combinedDiff
@@ -451,6 +474,7 @@ func (da *DevActivities) applyBlocksSequentially(
 	blocks []indexedBlock,
 	baseDir string,
 	checksEnabled bool,
+	stageEdits bool,
 	gitMu *sync.Mutex,
 ) []indexedReport {
 	editBlockSlice := make([]EditBlock, len(blocks))
@@ -471,7 +495,9 @@ func (da *DevActivities) applyBlocksSequentially(
 
 		preEditFileHadErrors := false
 		if block.EditType == "update" || block.EditType == "append" {
-			preEditValid, _, preEditErr := check.CheckFileValidity(ctx, input.EnvContainer, block.FilePath)
+			preEditValid, _, preEditErr := check.CheckFileValidityWithOptions(ctx, input.EnvContainer, block.FilePath, check.CheckFileValidityOptions{
+				EnableGoBuildCheck: input.goBuildCheckEnabled(),
+			})
 			preEditFileHadErrors = !preEditValid && preEditErr == nil
 		}
 
@@ -504,7 +530,7 @@ func (da *DevActivities) applyBlocksSequentially(
 		}
 		report.DidApply = true
 
-		if report.Error == "" && checksEnabled {
+		if report.Error == "" && stageEdits {
 			gitMu.Lock()
 			var currentBlockError string
 			pathForDiff := filepath.Join(baseDir, block.FilePath)
@@ -527,13 +553,15 @@ func (da *DevActivities) applyBlocksSequentially(
 			}
 			report.FinalDiff = unstagedChangesDiff
 
-			if block.EditType == "delete" {
-				// Stage the deletion directly instead of using
-				// checkAndStageOrRestoreFile, since checking the file is not
-				// possible after deleting it.
+			if block.EditType == "delete" || !checksEnabled {
+				// Stage directly instead of using checkAndStageOrRestoreFile:
+				// checking a deleted file is not possible, and with checks
+				// disabled there is nothing to check before staging. Staging
+				// every applied edit keeps the review diffs, which are based on
+				// staged changes, complete.
 				gitAddErr := gitAdd(input.EnvContainer, block.FilePath)
 				if gitAddErr != nil {
-					errMsg := fmt.Sprintf("Failed to git add deleted file: %v", gitAddErr)
+					errMsg := fmt.Sprintf("Failed to git add file: %v", gitAddErr)
 					if currentBlockError == "" {
 						currentBlockError = errMsg
 					} else {
@@ -544,7 +572,7 @@ func (da *DevActivities) applyBlocksSequentially(
 					report.CheckResult.Message = "Skipped"
 				}
 			} else {
-				checkResult, checkErr := checkAndStageOrRestoreFile(ctx, input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors)
+				checkResult, checkErr := checkAndStageOrRestoreFile(ctx, input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors, input.goBuildCheckEnabled())
 				report.CheckResult = checkResult
 				if preEditFileHadErrors {
 					report.CheckWarning = "file had pre-existing syntax errors; base file validity check was skipped"
@@ -816,7 +844,7 @@ func countUnbalanced(lines []string, openingDelimiter, closingDelimiter string) 
 // restored, otherwise it is staged, so that future restores don't affect this
 // change. When preEditFileHadErrors is true, the built-in syntax check is
 // skipped since the file was already invalid before the edit.
-func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool) (CheckResult, error) {
+func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool, enableGoBuildCheck bool) (CheckResult, error) {
 	ctx, span := applyEditBlocksTracer.Start(ctx, "checkAndStageOrRestoreFile")
 	defer span.End()
 	span.SetAttributes(
@@ -831,6 +859,7 @@ func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContain
 		FilePath:                  filePath,
 		CheckCommands:             checkCommands,
 		SkipBaseFileValidityCheck: preEditFileHadErrors,
+		EnableGoBuildCheck:        enableGoBuildCheck,
 	})
 	checkSpan.SetAttributes(attribute.Bool("allPassed", checkOutput.AllPassed))
 	if checkErr != nil {
@@ -903,7 +932,7 @@ func ApplyCreateEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 	if _, err := envContainer.Env.Stat(ctx, block.FilePath); err == nil {
 		report.Error = fmt.Sprintf("file already exists: %s", absoluteFilePath)
 		return report, errors.New(report.Error)
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		report.Error = fmt.Sprintf("failed to check if file exists %s: %v", absoluteFilePath, err)
 		return report, errors.New(report.Error)
 	}
@@ -1045,6 +1074,10 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		enabledFlags := make([]string, 0)
 		if fflag.IsEnabled(trackedCtx, fflag.CheckEdits) {
 			enabledFlags = append(enabledFlags, fflag.CheckEdits)
+		}
+		goBuildCheckVersion := workflow.GetVersion(trackedCtx, "check-go-build", workflow.DefaultVersion, 1)
+		if goBuildCheckVersion >= 1 && fflag.IsEnabled(trackedCtx, fflag.CheckGoBuild) {
+			enabledFlags = append(enabledFlags, fflag.CheckGoBuild)
 		}
 
 		applyEditBlockInput := ApplyEditBlockActivityInput{
@@ -1287,7 +1320,7 @@ func singleAcceptableMatch(lines []string, originalLines []string) bool {
 func ApplyDeleteEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	originalContents, err := envContainer.Env.ReadFile(ctx, block.FilePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return ApplyEditBlockReport{
 				OriginalEditBlocks: []EditBlock{block},
 				Error:              fmt.Sprintf("File does not exist: %s", block.FilePath),

@@ -160,12 +160,26 @@ editLoop:
 			switch info := promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
 				// Flush initial instructions into chat history before replacing with pause feedback
-				if _, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan, environmentContext); err != nil {
+				if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan, environmentContext); err != nil {
 					return err
 				}
 				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+			case ConflictResolutionInfo:
+				if workflow.GetVersion(dCtx, "preserve-paused-conflict-instructions", workflow.DefaultVersion, 1) >= 1 {
+					if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan, environmentContext); err != nil {
+						return err
+					}
+				}
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			case FeedbackInfo:
-				promptInfo = FeedbackInfo{Feedback: info.Feedback + "\n\n" + response.Content, Type: FeedbackTypePause}
+				if workflow.GetVersion(dCtx, "human-feedback-provenance", workflow.DefaultVersion, 1) >= 1 {
+					if err := appendEditFeedback(dCtx.ExecContext, chatHistory, info.Feedback, info.Type); err != nil {
+						return err
+					}
+					promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+				} else {
+					promptInfo = FeedbackInfo{Feedback: info.Feedback + "\n\n" + response.Content, Type: FeedbackTypePause}
+				}
 			default:
 				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			}
@@ -308,12 +322,26 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 			switch info := promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
 				// Flush initial instructions into chat history before replacing with pause feedback
-				if _, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext); err != nil {
+				if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext); err != nil {
 					return nil, err
 				}
 				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+			case ConflictResolutionInfo:
+				if workflow.GetVersion(dCtx, "preserve-paused-conflict-instructions", workflow.DefaultVersion, 1) >= 1 {
+					if _, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext); err != nil {
+						return nil, err
+					}
+				}
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			case FeedbackInfo:
-				promptInfo = FeedbackInfo{Feedback: info.Feedback + "\n\n" + response.Content, Type: FeedbackTypePause}
+				if workflow.GetVersion(dCtx, "human-feedback-provenance", workflow.DefaultVersion, 1) >= 1 {
+					if err := appendEditFeedback(dCtx.ExecContext, chatHistory, info.Feedback, info.Type); err != nil {
+						return nil, err
+					}
+					promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+				} else {
+					promptInfo = FeedbackInfo{Feedback: info.Feedback + "\n\n" + response.Content, Type: FeedbackTypePause}
+				}
 			default:
 				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			}
@@ -324,7 +352,14 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		// with any existing pending feedback to avoid overwriting it.
 		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
 			if existing, isFeedback := promptInfo.(FeedbackInfo); isFeedback {
-				promptInfo = FeedbackInfo{Feedback: existing.Feedback + "\n\n" + msg, Type: existing.Type}
+				if workflow.GetVersion(dCtx, "human-feedback-provenance", workflow.DefaultVersion, 1) >= 1 {
+					if err := appendEditFeedback(dCtx.ExecContext, chatHistory, existing.Feedback, existing.Type); err != nil {
+						return nil, err
+					}
+					promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
+				} else {
+					promptInfo = FeedbackInfo{Feedback: existing.Feedback + "\n\n" + msg, Type: existing.Type}
+				}
 			} else {
 				promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
 			}
@@ -356,7 +391,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		}
 
 		// Flush any pending FeedbackInfo to chat history before building LLM input.
-		// This replaces buildAuthorEditBlockInput's handling of FeedbackInfo,
+		// This replaces buildCodingInput's handling of FeedbackInfo,
 		// producing the same single AppendChatHistory activity.
 		if feedbackInfo, ok := promptInfo.(FeedbackInfo); ok {
 			if err := appendEditFeedback(dCtx.ExecContext, chatHistory, feedbackInfo.Feedback, feedbackInfo.Type); err != nil {
@@ -366,7 +401,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
-		authorEditBlockInput, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext)
+		authorEditBlockInput, err := buildCodingInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext)
 		if err != nil {
 			return nil, err
 		}
@@ -394,7 +429,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		}
 
 		if v := workflow.GetVersion(dCtx, "edit-code-advisor", workflow.DefaultVersion, 1); v == 1 && advisor != nil {
-			if err := advisor.MaybeAdvise(dCtx, chatHistory, authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan), nil); err != nil {
+			if err := advisor.MaybeAdvise(dCtx, chatHistory, codingTools(dCtx, codingModelConfig, doneRequired, hasPlan), nil); err != nil {
 				if advisor.handlePauseInterruption(dCtx) {
 					continue
 				}
@@ -407,10 +442,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		attemptsSinceLastEditBlockOrFeedback++
 
 		resolveOptions := func() llm2.Options {
-			attemptOptions := authorEditBlockInput
-			attemptOptions.ModelConfig = resolveModelConfig()
-			attemptOptions.Tools = authorEditBlockTools(dCtx, attemptOptions.ModelConfig, doneRequired, hasPlan)
-			return attemptOptions
+			return resolveCodingOptions(dCtx, authorEditBlockInput, resolveModelConfig(), doneRequired, hasPlan)
 		}
 
 		// call Open AI to get back messages that contain edit blocks
@@ -581,21 +613,18 @@ func IsDoneRequiredProtocol(ctx workflow.Context) bool {
 
 // appendEditFeedback renders feedback and appends it directly to chat history.
 func appendEditFeedback(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, feedback string, feedbackType string) error {
-	content := renderAuthorEditBlockFeedbackPrompt(feedback, feedbackType)
-	contextType := ""
-	if feedbackType == FeedbackTypeApplyError {
-		contextType = ContextTypeEditBlockReport
-	}
 	return AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
 		Role:        llm.ChatMessageRoleUser,
-		Content:     content,
-		ContextType: contextType,
+		Content:     renderAuthorEditBlockFeedbackPrompt(feedback, feedbackType),
+		ContextType: feedbackContextType(feedbackType, eCtx.DisableHumanInTheLoop),
 	})
 }
 
-// authorEditBlockTools builds the tool slice shared by the coding executor and
+// codingTools builds the tool slice shared by the coding executor and
 // its advisor so both operate over an identical tool set each turn.
-func authorEditBlockTools(dCtx DevContext, codingModelConfig common.ModelConfig, doneRequired bool, hasPlan bool) []*llm.Tool {
+// It includes the env-gated web search tool, so it must be used everywhere
+// coding tools are resolved, including per-attempt option resolution.
+func codingTools(dCtx DevContext, codingModelConfig common.ModelConfig, doneRequired bool, hasPlan bool) []*llm.Tool {
 	tools := []*llm.Tool{
 		&bulkSearchRepositoryTool,
 		currentGetSymbolDefinitionsTool(),
@@ -623,12 +652,22 @@ func authorEditBlockTools(dCtx DevContext, codingModelConfig common.ModelConfig,
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	return tools
+	return appendWebSearchToolIfNonLocal(dCtx, tools, codingModelConfig)
 }
 
-// buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
+// resolveCodingOptions rebuilds the LLM options for a single stream
+// attempt, so retries pick up the current model config and its matching tool
+// list.
+func resolveCodingOptions(dCtx DevContext, baseOptions llm2.Options, modelConfig common.ModelConfig, doneRequired bool, hasPlan bool) llm2.Options {
+	attemptOptions := baseOptions
+	attemptOptions.ModelConfig = modelConfig
+	attemptOptions.Tools = codingTools(dCtx, modelConfig, doneRequired, hasPlan)
+	return attemptOptions
+}
+
+// buildCodingInput builds the LLM options for authoring edit blocks.
 // Returns the options and the visible messages (for edit block extraction).
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, doneRequired bool, hasPlan bool, environmentContext string) (llm2.Options, error) {
+func buildCodingInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, doneRequired bool, hasPlan bool, environmentContext string) (llm2.Options, error) {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser
@@ -652,9 +691,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		skip = true
 	case FeedbackInfo:
 		content = renderAuthorEditBlockFeedbackPrompt(info.Feedback, info.Type)
-		if info.Type == FeedbackTypeApplyError {
-			contextType = ContextTypeEditBlockReport
-		}
+		contextType = feedbackContextType(info.Type, dCtx.ExecContext.DisableHumanInTheLoop)
 	case ConflictResolutionInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
@@ -681,7 +718,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		}
 	}
 
-	tools := authorEditBlockTools(dCtx, codingModelConfig, doneRequired, hasPlan)
+	tools := codingTools(dCtx, codingModelConfig, doneRequired, hasPlan)
 
 	options := llm2.Options{
 		Tools: tools,
@@ -1000,4 +1037,19 @@ func mergedRangesForFile(filePath string, visibleFileRanges []FileRange) []FileR
 		}
 	}
 	return mergedRanges
+}
+func feedbackContextType(feedbackType string, disableHumanInTheLoop bool) string {
+	switch feedbackType {
+	case FeedbackTypeApplyError:
+		return ContextTypeEditBlockReport
+	case FeedbackTypeTestFailure:
+		return ContextTypeTestResult
+	case FeedbackTypeAutoReview:
+		return ContextTypeAutoReviewFeedback
+	case FeedbackTypePause, FeedbackTypeUserGuidance:
+		if !disableHumanInTheLoop {
+			return ContextTypeUserFeedback
+		}
+	}
+	return ""
 }

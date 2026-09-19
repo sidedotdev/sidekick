@@ -18,8 +18,7 @@
         class="model-input-wrapper"
         inputClass="model-input-inner"
         :suggestions="filteredModels"
-        :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
-        :overlay-style="overlayStyle"
+        overlay-class="llm-config-editor-overlay"
         @complete="(e) => searchModels(e, defaultConfig.provider)"
         @item-select="emitUpdate"
         @change="emitUpdate"
@@ -68,8 +67,7 @@
           inputClass="model-input-inner"
           :disabled="!useCaseStates[useCase].enabled"
           :suggestions="filteredModels"
-          :overlay-class="{ 'model-config-editor-overlay': overlayBaseZIndex > 0 }"
-          :overlay-style="overlayStyle"
+          overlay-class="llm-config-editor-overlay"
           @complete="(e) => searchModels(e, useCaseStates[useCase].config.provider)"
           @item-select="emitUpdate"
           @change="emitUpdate"
@@ -104,18 +102,11 @@ import AutoComplete from 'primevue/autocomplete'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
 
-const props = withDefaults(defineProps<{
+const props = defineProps<{
   modelValue?: LLMConfig | null
-  overlayBaseZIndex?: number
-}>(), {
-  overlayBaseZIndex: 0,
-})
-
-const overlayStyle = computed(() => (
-  props.overlayBaseZIndex > 0
-    ? { '--model-config-editor-overlay-z-index': props.overlayBaseZIndex }
-    : undefined
-))
+  profileId?: string
+  workspaceId?: string
+}>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: LLMConfig): void
@@ -147,20 +138,44 @@ const providerOptions = ref<string[]>([])
 const providersError = ref(false)
 const reasoningEffortOptions = ['', 'lowest', 'low', 'medium', 'high', 'highest'] as const
 
+// When a workspaceId is provided, providers are filtered authoritatively by
+// that workspace's persisted profile; otherwise the profileId prop (if any)
+// is used, e.g. while a workspace's profile is still being chosen.
+const providersUrl = (): string => {
+  if (props.workspaceId) {
+    return `/api/v1/workspaces/${encodeURIComponent(props.workspaceId)}/providers`
+  }
+  return props.profileId
+    ? `/api/v1/providers?profileId=${encodeURIComponent(props.profileId)}`
+    : '/api/v1/providers'
+}
+
+// Profile changes can leave earlier requests in flight, so only the most
+// recently issued response is applied.
+let latestProvidersRequestId = 0
+
 const fetchProviders = async () => {
+  const requestId = ++latestProvidersRequestId
   try {
-    const response = await fetch('/api/v1/providers')
+    const response = await fetch(providersUrl())
+    if (requestId !== latestProvidersRequestId) return
     if (response.ok) {
       const data = await response.json()
+      if (requestId !== latestProvidersRequestId) return
       providerOptions.value = data.providers || []
       providersError.value = false
     } else {
       providersError.value = true
     }
   } catch {
+    if (requestId !== latestProvidersRequestId) return
     providersError.value = true
   }
 }
+
+watch(() => [props.profileId, props.workspaceId], () => {
+  fetchProviders()
+})
 
 const modelsData = ref<ModelsData>({})
 const filteredModels = ref<string[]>([])
@@ -300,10 +315,6 @@ watch(() => props.modelValue, (newValue) => {
 </script>
 
 <style scoped>
-:global(.model-config-editor-overlay) {
-  z-index: var(--model-config-editor-overlay-z-index) !important;
-}
-
 :disabled, :deep(.p-disabled), :deep(:disabled) {
   opacity: 0.5;
   cursor: not-allowed;
@@ -395,5 +406,14 @@ watch(() => props.modelValue, (newValue) => {
   background-color: var(--color-error-bg, rgba(220, 53, 69, 0.1));
   color: var(--color-error, #dc3545);
   font-size: 0.875rem;
+}
+</style>
+
+<!-- PrimeVue teleports the autocomplete overlay to the body, out of reach of
+     scoped styles, so it needs an explicit stack level above the modals hosting
+     this editor, the topmost of which is .model-config-modal at 1101 -->
+<style>
+.llm-config-editor-overlay {
+  z-index: 1102 !important;
 }
 </style>

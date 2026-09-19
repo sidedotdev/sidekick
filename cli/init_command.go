@@ -26,7 +26,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/huh"
-	"github.com/erikgeiser/promptkit/selection"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
@@ -52,7 +51,7 @@ func NewInitCommandHandler(storage srv.Storage) *InitCommandHandler {
 	}
 }
 
-func (h *InitCommandHandler) handleInitCommand() error {
+func (h *InitCommandHandler) handleInitCommand(requestedProfileId string) error {
 	fmt.Println("Initializing new workspace...")
 
 	baseDir, err := getGitBaseDirectory()
@@ -134,19 +133,32 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	if err != nil {
 		return fmt.Errorf("error retrieving existing workspace: %w", err)
 	}
+
+	// The profile only applies when creating a workspace; existing workspaces
+	// keep their stored profile.
+	profileId := ""
+	if existingWorkspace == nil {
+		profileId, err = resolveWorkspaceProfileId(requestedProfileId)
+		if err != nil {
+			return fmt.Errorf("error resolving workspace profile: %w", err)
+		}
+		if !strings.EqualFold(profileId, common.DefaultProfileId) {
+			fmt.Printf("✔ Workspace profile: %s\n", profileId)
+		}
+	}
+
 	dirName := filepath.Base(baseDir)
 	workspaceName := dirName
 	repoName, err := getRepoName(baseDir)
 	if err == nil && repoName != dirName && existingWorkspace == nil {
-		workspaceNameSelection := selection.New("Which workspace name do you prefer?", []string{dirName, repoName})
-		selectedWorkspaceName, err := workspaceNameSelection.RunPrompt()
+		selectedWorkspaceName, err := selectOption("Which workspace name do you prefer?", []string{dirName, repoName})
 		if err != nil {
 			return fmt.Errorf("workspace name selection failed: %w", err)
 		}
 		workspaceName = selectedWorkspaceName
 	}
 
-	workspace, err := h.findOrCreateWorkspace(ctx, workspaceName, baseDir)
+	workspace, err := h.findOrCreateWorkspace(ctx, workspaceName, baseDir, profileId)
 	if err != nil {
 		return fmt.Errorf("error finding or creating workspace: %w", err)
 	}
@@ -169,12 +181,11 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		fmt.Println("ℹ Sidekick server is not running")
 
 		startServer := true // default to "Yes"
-		err := huh.NewConfirm().
+		err := runPrompt(huh.NewConfirm().
 			Title("Would you like to start the server now?").
 			Value(&startServer).
 			Affirmative("Yes").
-			Negative("No").
-			Run()
+			Negative("No"))
 
 		if err != nil {
 			return fmt.Errorf("error prompting to start server: %w", err)
@@ -285,7 +296,7 @@ func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspac
 // FIXME make a call to an API instead of directly using a database. this may
 // require running the server locally as a daemon if not already running or
 // configured to be remote
-func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir string) (*domain.Workspace, error) {
+func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir, profileId string) (*domain.Workspace, error) {
 	existingWorkspace, err := h.getWorkspaceByRepoDir(ctx, repoDir)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving workspace by repo dir: %w", err)
@@ -294,10 +305,17 @@ func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspac
 		return existingWorkspace, err
 	}
 
+	// An empty ProfileId already means the default profile, so store the
+	// default that way for consistency with workspaces created elsewhere.
+	if strings.EqualFold(profileId, common.DefaultProfileId) {
+		profileId = ""
+	}
+
 	workspace := domain.Workspace{
 		Name:         workspaceName,
 		Id:           "ws_" + ksuid.New().String(),
 		LocalRepoDir: repoDir,
+		ProfileId:    profileId,
 		Created:      time.Now(),
 		Updated:      time.Now(),
 	}
@@ -616,31 +634,17 @@ func getConfiguredBuiltinLLMProviders() []string {
 	var providers []string
 
 	// Check OpenAI (either API key or OAuth)
-	hasOpenAI := false
-	if key, err := keyringGet(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
-		hasOpenAI = true
-	}
-	if creds, err := keyringGet(keyringService, openai_oauth.SecretName); err == nil && creds != "" {
-		hasOpenAI = true
-	}
-	if hasOpenAI {
+	if configuredSecretExists(llm.OpenaiApiKeySecretName) || configuredSecretExists(openai_oauth.SecretName) {
 		providers = append(providers, "openai")
 	}
 
 	// Check Google
-	if key, err := keyringGet(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+	if configuredSecretExists(llm.GoogleApiKeySecretName) {
 		providers = append(providers, "google")
 	}
 
 	// Check Anthropic (either API key or OAuth)
-	hasAnthropicKey := false
-	if key, err := keyringGet(keyringService, llm.AnthropicApiKeySecretName); err == nil && key != "" {
-		hasAnthropicKey = true
-	}
-	if creds, err := keyringGet(keyringService, AnthropicOAuthSecretName); err == nil && creds != "" {
-		hasAnthropicKey = true
-	}
-	if hasAnthropicKey {
+	if configuredSecretExists(llm.AnthropicApiKeySecretName) || configuredSecretExists(AnthropicOAuthSecretName) {
 		providers = append(providers, "anthropic")
 	}
 
@@ -651,12 +655,11 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	// Check if LLM is already configured
 	if len(localConfig.LLM) > 0 {
 		useExisting := true
-		err := huh.NewConfirm().
+		err := runPrompt(huh.NewConfirm().
 			Title("Found existing LLM configuration. Use existing?").
 			Value(&useExisting).
 			Affirmative("Use existing").
-			Negative("Customize").
-			Run()
+			Negative("Customize"))
 		if err != nil {
 			return "", fmt.Errorf("error prompting for LLM configuration: %w", err)
 		}
@@ -696,8 +699,7 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	// Add "Add new provider" option
 	options = append(options, "Add new provider")
 
-	providerSelection := selection.New("Select your LLM provider", options)
-	selected, err := providerSelection.RunPrompt()
+	selected, err := selectOption("Select your LLM provider", options)
 	if err != nil {
 		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
@@ -721,12 +723,12 @@ func getConfiguredBuiltinEmbeddingProviders() []string {
 	var providers []string
 
 	// Check OpenAI
-	if key, err := keyringGet(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
+	if configuredSecretExists(llm.OpenaiApiKeySecretName) {
 		providers = append(providers, "openai")
 	}
 
 	// Check Google
-	if key, err := keyringGet(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+	if configuredSecretExists(llm.GoogleApiKeySecretName) {
 		providers = append(providers, "google")
 	}
 
@@ -737,12 +739,11 @@ func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
 	// Check if embedding is already configured
 	if len(localConfig.Embedding) > 0 {
 		useExisting := true
-		err := huh.NewConfirm().
+		err := runPrompt(huh.NewConfirm().
 			Title("Found existing embedding configuration. Use existing?").
 			Value(&useExisting).
 			Affirmative("Use existing").
-			Negative("Customize").
-			Run()
+			Negative("Customize"))
 		if err != nil {
 			return "", fmt.Errorf("error prompting for embedding configuration: %w", err)
 		}
@@ -776,8 +777,7 @@ func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
 	// Add "Add new provider" option
 	options = append(options, "Add new provider")
 
-	providerSelection := selection.New("Select your embedding provider", options)
-	selected, err := providerSelection.RunPrompt()
+	selected, err := selectOption("Select your embedding provider", options)
 	if err != nil {
 		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
@@ -791,8 +791,7 @@ func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
 
 func selectAndAuthEmbeddingProvider() (string, error) {
 	embeddingOptions := []string{"OpenAI", "Google"}
-	providerSelection := selection.New("Select embedding provider to configure", embeddingOptions)
-	selected, err := providerSelection.RunPrompt()
+	selected, err := selectOption("Select embedding provider to configure", embeddingOptions)
 	if err != nil {
 		return "", fmt.Errorf("provider selection failed: %w", err)
 	}

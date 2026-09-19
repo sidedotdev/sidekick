@@ -80,6 +80,12 @@ type MergeApprovalResponse struct {
 	TargetBranch  string        `json:"targetBranch"`  // actual target branch selected by the user
 	Message       string        `json:"message"`       // feedback message when not approved
 	MergeStrategy MergeStrategy `json:"mergeStrategy"` // selected merge strategy (squash or merge)
+
+	// Diffs as last shown to the user, which differ from the diffs the request
+	// started with when the user changed the target branch or whitespace
+	// handling mid-review. Empty when no human reviewed the request.
+	Diff                string `json:"diff"`
+	DiffSinceLastReview string `json:"diffSinceLastReview"`
 }
 
 func GetUserMergeApproval(
@@ -132,10 +138,22 @@ func GetUserMergeApproval(
 	}
 	ignoreWhitespace := false
 
-	// Extract tree hash for regenerating diffSinceLastReview (internal implementation detail)
+	// Extract the last review's identity for regenerating diffSinceLastReview
+	// when the user changes params (internal implementation detail)
 	var lastReviewTreeHash string
 	if hash, ok := req.RequestParams["lastReviewTreeHash"].(string); ok {
 		lastReviewTreeHash = hash
+	}
+	var lastReviewDiff string
+	if diff, ok := req.RequestParams["lastReviewDiff"].(string); ok {
+		lastReviewDiff = diff
+	}
+	// Gated by the same extra marker as getMergeApproval so that legacy
+	// executions never read "diff-since-last-review" at a new point in their
+	// history, which replay would reject.
+	useReviewDiffsActivity := false
+	if workflow.GetVersion(dCtx, "review-diffs-v6-gate", workflow.DefaultVersion, 1) >= 1 {
+		useReviewDiffsActivity = workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 6) >= 6
 	}
 
 	// Ensure tracking of the flow action within the guidance request
@@ -181,7 +199,21 @@ func GetUserMergeApproval(
 					var newDiff string
 					var newDiffSinceLastReview string
 
-					if v >= 2 {
+					if useReviewDiffsActivity {
+						// Comparison against the last review degrades within the
+						// activity, so an error means there is no full diff for
+						// the new target: the previous target's diff must not
+						// stand in for it, since that would invite approving
+						// content nobody reviewed against this target.
+						diffs, diffErr := generateReviewDiffs(trackedCtx.DevContext, finalTarget, finalTarget, lastReviewDiff, ignoreWhitespace)
+						if diffErr != nil {
+							return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, diffErr)
+						}
+						newDiff = diffs.FullDiff
+						if diffs.SinceDiffError == "" {
+							newDiffSinceLastReview = diffs.SinceDiff
+						}
+					} else if v >= 2 {
 						newDiff, err = GetGitDiff(trackedCtx.DevContext, finalTarget, ignoreWhitespace)
 						if err != nil {
 							return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
@@ -266,10 +298,12 @@ func GetUserMergeApproval(
 	}
 
 	return MergeApprovalResponse{
-		Approved:      *userResponse.Approved,
-		TargetBranch:  finalTarget,
-		MergeStrategy: finalMergeStrategy,
-		Message:       userResponse.Content,
+		Approved:            *userResponse.Approved,
+		TargetBranch:        finalTarget,
+		MergeStrategy:       finalMergeStrategy,
+		Message:             userResponse.Content,
+		Diff:                mergeApprovalInfo.Diff,
+		DiffSinceLastReview: mergeApprovalInfo.DiffSinceLastReview,
 	}, nil
 }
 
@@ -288,7 +322,12 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 
 	switch info := currentPromptInfo.(type) {
 	case FeedbackInfo:
-
+		if workflow.GetVersion(dCtx, "human-feedback-provenance", workflow.DefaultVersion, 1) >= 1 {
+			if err := appendEditFeedback(dCtx.ExecContext, chatHistory, info.Feedback, info.Type); err != nil {
+				return FeedbackInfo{}, err
+			}
+			return FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}, nil
+		}
 		info.Feedback += "\n\n" + userResponse.Content
 		info.Type = FeedbackTypeUserGuidance
 		return info, nil
