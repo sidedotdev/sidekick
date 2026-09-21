@@ -14,22 +14,22 @@ const (
 )
 
 type HooksConfig struct {
-	RunTests []HookRuleConfig `toml:"run_tests,omitempty" json:"runTests,omitempty"`
+	RunTests []HookRuleConfig `koanf:"run_tests,omitempty" json:"runTests,omitempty"`
 }
 
 type HookRuleConfig struct {
-	Match   *HookMatchConfig   `toml:"match,omitempty" json:"match,omitempty"`
-	Actions []HookActionConfig `toml:"actions" json:"actions"`
+	Match   *HookMatchConfig   `koanf:"match,omitempty" json:"match,omitempty"`
+	Actions []HookActionConfig `koanf:"actions" json:"actions"`
 }
 
 type HookMatchConfig struct {
-	EnvTypes []string `toml:"env_types,omitempty" json:"envTypes,omitempty"`
+	EnvTypes []string `koanf:"env_types,omitempty" json:"envTypes,omitempty"`
 }
 
 type HookActionConfig struct {
-	Type           string   `toml:"type" json:"type"`
-	TimeoutSeconds *float64 `toml:"timeout_seconds,omitempty" json:"timeoutSeconds,omitempty"`
-	OnError        *string  `toml:"on_error,omitempty" json:"onError,omitempty"`
+	Type           string   `koanf:"type" json:"type"`
+	TimeoutSeconds *float64 `koanf:"timeout_seconds,omitempty" json:"timeoutSeconds,omitempty"`
+	OnError        *string  `koanf:"on_error,omitempty" json:"onError,omitempty"`
 }
 
 func (c HooksConfig) Validate() error {

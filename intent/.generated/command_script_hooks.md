@@ -7,16 +7,31 @@ intent_links:
       - side.yml
   - intent: "#execution"
     code:
-      - env/environment.go
-      - dev/run_command.go
-      - dev/run_tests.go
-      - worker/worker.go
+      - scripting/runner.go
+      - scripting/command.go
+      - scripting/runner_test.go
+      - scripting/command_test.go
+  - intent: "#standalone-api"
+    code:
+      - scripting/runner.go
+      - scripting/command.go
+      - credential_proxy/access/access.go
+      - go.mod
+      - go.sum
   - intent: "#credential-proxy-access"
     code:
+      - credential_proxy/access/access.go
+      - credential_proxy/access/access_test.go
       - credential_proxy/authorization.go
       - credential_proxy/provisioning.go
       - credential_proxy/server/control.go
       - credential_proxy/server/flow_activation.go
+  - intent: "#security"
+    code:
+      - credential_proxy/policy.go
+      - api/credential_proxy.go
+      - api/credential_proxy_test.go
+      - credential_proxy/server/service.go
 ---
 
 # Command script hooks
@@ -31,6 +46,24 @@ Provider credentials remain on the host.
 This specification extends [Lifecycle hooks](hooks.md) with a `script` action
 and a `before_command` event. Its per-command event extends the base design's
 batch-only event scope. Hook actions do not recursively emit command events.
+
+## Implementation status
+
+The standalone goja runner, transactional command-environment emissions,
+invocation-bound credential-proxy access, and focused
+component tests are implemented. The compatible goja revision is pinned in
+`go.mod` and `go.sum`. Proxy startup and Side credential access are
+configuration-driven, independent of development mode.
+
+Hook configuration, matching, dispatch, command-activity integration, command
+output policy, and `side.yml` activation migration remain deferred to
+the parallel hooks work. Existing command wrappers, provisioners, worker
+registrations, workflow compatibility paths, and legacy keepalive plumbing
+remain in use pending that integration and subsequent cleanup.
+
+The configuration example, command-activity execution, and sequence diagram
+below describe the target integration, not an already wired command path.
+[PLAN.md](../../PLAN.md) tracks only remaining work.
 
 ## Requirements
 
@@ -85,13 +118,31 @@ hooks:
             });
 ```
 
-`source` contains a JavaScript function body. Scripts receive a data-only
+`source` contains a JavaScript or TypeScript function body. The runner uses
+esbuild's in-memory transform API before Goja execution. Type annotations are
+not checked; type checking is deferred to future development tooling.
+Transformation errors fail the action before execution. No module loader or
+import resolution is supplied. Scripts receive a data-only
 `context` snapshot, including `envType` and non-secret repository configuration
 under `repoConfig`, using camelCase property names.
 
 Existing reverse-port-forward configuration supplies connectivity. Scripts do
-not repeat ports or select arbitrary upstream URLs. Trusted host-local proxy
-authorization and development-mode policy remain authoritative.
+not repeat ports or select arbitrary upstream URLs. Retain the existing host
+22855 to container 32855 credential-proxy reverse forward and ordinary forwards
+when migrating activation lists.
+
+The host service independently loads and merges host user configuration and its
+startup repository configuration. Repository definitions may expand authorized
+access through that service-loaded configuration; conflicting definitions are
+rejected. Arbitrary definitions supplied by scripts or activation requests do not
+become trusted. Requested definitions must match the service-loaded definitions.
+
+Startup requires at least one configured, permitted proxy. `SIDE_APP_ENV` does
+not gate startup or access. `SIDE_CREDENTIAL_PROXY_SIDE_AUTH_ENABLED=false`
+remains an emergency host-side opt-out for Sidekick-managed credentials; generic
+environment-variable and command credential sources are unaffected. Private
+host control access, scoped bearer-token authentication, and expiry remain
+authoritative.
 
 ## Execution
 
@@ -129,6 +180,62 @@ winning collisions. They augment command variables without bypassing normal
 environment setup, changing environment identity, rematching hooks, or altering
 the approved command.
 
+## Standalone API
+
+The reusable Go API is independent of hook configuration and command lifecycle:
+
+- `scripting.Run(parent, scripting.Input{...})` transpiles `Source` as a JavaScript
+  or TypeScript function body, executes it in a fresh VM, and ignores its return
+  value. Transformation is synchronous; cancellation is checked before executing
+  the transformed code. Runtime error locations refer to generated JavaScript,
+  and transformation error locations include the two-line function wrapper.
+  `Context` must be
+  non-secret data. Context and host-operation results are serialized using
+  standard Go JSON encoding and parsed inside the VM into detached JavaScript
+  data. Types supplied to the VM define their property names through explicit
+  JSON tags; dictionary keys remain unchanged. Custom JSON serialization is
+  honored. TOML tags are not interpreted, and names are not automatically
+  converted. Serialization is not secret removal: callers must exclude credentials.
+- `Input.Host` installs `host.<namespace>.<operation>` and `Input.Functions`
+  installs explicit event-specific globals. Each `scripting.Operation` takes
+  `(context.Context, json.RawMessage)` and returns `(any, error)`. Operations
+  receive the bounded action context, must honor cancellation, and return only
+  data. There is no implicit filesystem, process, network, Go capability, plugin
+  loader, or general module system.
+- `Input.Timeout` defaults to 30 seconds when zero and is bounded by the parent
+  context; negative durations fail. Hook configuration must validate positive
+  `timeout_seconds`. Cancellation interrupts JavaScript and reaches host calls.
+  Public errors retain `errors.Is` classification for cancellation/deadline
+  expiry. Error text includes script exceptions and host-operation failures.
+- `scripting.RunCommand(parent, input)` additionally installs
+  `emitCommandEnvironment`. Its `CommandResult.EnvVars` contains assignments
+  only on success and is excluded from JSON serialization. Call
+  `result.ApplyTo(envVars)` on a non-nil destination map for successful actions
+  in dispatch order. The runner does not implement fail/warn policy, retries,
+  matching, command approval, or command execution.
+- `access.New(invocationCtx, access.Input{RepoConfig, WorkspaceID, WorkflowID,
+  Socket})` from `credential_proxy/access` captures trusted invocation
+  data. Pass its `binding.Host()` as `scripting.Input.Host`. The optional
+  `Socket` defaults to the private host control socket. Temporal activity
+  metadata supplies workflow identity; `WorkflowID` is required outside
+  Temporal and ignored inside an activity.
+- `binding.Acquire(actionCtx, names)` exposes the same operation directly to Go
+  callers. It is bounded by both the action and captured invocation contexts.
+  Its token, RFC 3339 expiry, and client metadata are runtime-only values, not
+  activity results.
+
+The runner returns buffered console diagnostics and error text without automatic
+masking or truncation. It does not track secrets or classify emitted values as
+sensitive. Output policy belongs to the invocation/logging boundary, equally for
+Go and JavaScript. Automatic masking is deferred; any future masking must run
+before truncation or persistence. The runner is not a defense against trusted
+scripts deliberately disclosing credentials.
+
+Keep access results and environment assignments inside the activity/invocation.
+JSON exclusion of `CommandResult.EnvVars` is not permission to serialize other
+secret-bearing values: never place them in Temporal inputs/results or log an
+access result. Diagnostics are not guaranteed safe for persistence.
+
 ## Credential-proxy access
 
 The reusable host operation is:
@@ -156,6 +263,11 @@ host.credentialProxies.acquireAccess({
 by credential-proxy clients. Access acquisition returns access data, not a
 command environment. Scripts decide whether and how to emit that data.
 
+`names` must be a nonempty array of configured proxy names. Duplicate names are
+normalized. Empty selections, unknown names, malformed arguments, missing
+forwarding, and unavailable or denied control operations fail explicitly.
+Scripts cannot supply configuration, scope, identity, or forwarding overrides.
+
 The binding captures the activity context, original configuration, forwarded-port
 mapping, workspace identity, and workflow identity. Scope and context are not
 JavaScript arguments. Script mutations cannot change the trusted invocation data.
@@ -165,25 +277,25 @@ ID, activity ID, or retry attempt. Workflow identity is obtained from activity
 execution metadata; required workspace identity travels as non-secret invocation
 metadata. Non-Temporal callers must supply an explicit equivalent identity.
 
-Acquisition authorizes the selected definitions against trusted host configuration.
-It reuses valid access or obtains refreshed access before command execution.
-Refreshing an authorized flow lease may retain the same bearer token and extend
-its expiry by one hour; renewal does not imply rotation. Different definitions or
+Each acquisition calls the private control service's flow activation endpoint,
+which reauthorizes selected definitions against independently loaded host user
+and startup-repository configuration before reuse. Valid access retains its
+bearer token while extending expiry by one hour. Missing, revoked, expired, or
+restarted-service access is replaced on acquisition. Different definitions or
 flows cannot share broader access through a cache hit.
 
-The proxy service remains available across commands and flows. Commands do not
-start or tear it down, revoke access on completion, or renew access in the
-background. Expiry remains enforced for subsequent requests.
+The access binding has no client cache, background renewal, command-end
+revocation, or service teardown. The proxy service remains available across
+commands and flows, and expiry remains enforced for subsequent requests. The
+target command integration acquires access before use; still-used legacy
+command lease plumbing is removed only after that integration lands.
 
 ## Security
 
 - Provider credentials are never returned to scripts or remote commands.
 - Capability tokens authorize only the selected, host-approved proxies.
-- Host bindings track returned tokens for redaction immediately, even if a
-  script fails before emitting an environment.
-- All emitted environment values are treated as sensitive. Script diagnostics,
-  exceptions, command output, and errors are redacted before logging,
-  truncation, or inclusion in workflow results.
+- Automatic output masking is deferred to invocation/logging integration, not
+  implemented by the scripting runtime or access binding.
 - Emission is not a way to publish secrets through workflow payload updates.
 - Repository scripts are trusted automation with restricted host capabilities,
   not a general security sandbox for hostile JavaScript.
@@ -210,7 +322,7 @@ sequenceDiagram
     A->>A: Validate and apply successful emissions
     A->>C: Execute with runtime environment
     C-->>A: Output
-    A-->>W: Redacted command result
+    A-->>W: Command result (output policy deferred)
     Note over A,P: No background renewal or command-end teardown
 ```
 

@@ -3,9 +3,13 @@ intent_links:
   - intent: "#access-and-configuration"
     code:
       - common/credential_proxy_config.go
+      - credential_proxy/access/access.go
+      - credential_proxy/access/access_test.go
       - credential_proxy/authorization.go
       - credential_proxy/policy.go
+      - credential_proxy/policy_test.go
       - api/credential_proxy.go
+      - api/credential_proxy_test.go
       - common/local_config.go:LocalConfig
       - common/repo_config.go:RepoConfig
       - side.yml
@@ -27,11 +31,12 @@ intent_links:
       - persisted_ai/llm2_activities.go:Stream
   - intent: "#flow"
     code:
+      - credential_proxy/access/access.go
       - credential_proxy/server/activation.go
       - credential_proxy/server/flow_activation.go
-      - env/environment.go
-      - dev/run_command.go:RunCommand
-      - dev/run_tests.go
+      - credential_proxy/server/flow_activation_test.go
+      - credential_proxy/server/flow_control_test.go
+      - scripting/command.go
 ---
 # Credential Proxy
 
@@ -45,26 +50,51 @@ The credential proxy lets a sandbox use authorized host credentials without
 receiving them. The host retains responsibility for secret storage and OAuth
 refresh.
 
+## Implementation status
+
+Configuration-driven startup/access and the standalone invocation-bound
+`credential_proxy/access` operation are implemented. The `scripting` runner
+supports transactional emissions; automatic output masking is deferred.
+[Command script hooks](command_script_hooks.md#standalone-api)
+documents their Go API and caller responsibilities.
+
+Hook schema, matching, dispatch, command-activity integration, command-output
+output policy, and `side.yml` activation migration remain deferred. Existing
+wrappers, provisioners, worker registrations, workflow paths, and legacy command
+keepalive remain functional pending integration and subsequent cleanup. The hook
+selection and command flow below describe that target integration;
+[PLAN.md](../../PLAN.md) tracks the remaining work.
+
 ## Requirements
 
 ### Access and configuration
 
-- Trusted host configuration authorizes named proxies, their upstream
-  destinations, and their credential sources. Repository definitions cannot
-  expand that authorization.
-- Repository `before_command` hook rules select when commands receive access,
-  including automatically for Modal. Rules replace environment-specific proxy
-  activation lists; named definitions remain under `credential_proxies`.
+- The host service independently loads and merges host user configuration and
+  its startup repository configuration to authorize named proxies, upstreams,
+  and credential sources. Repository definitions may expand authorization when
+  loaded by the service. Conflicting definitions fail. Arbitrary script/request
+  definitions are not trusted: activation must match service-loaded definitions,
+  and activation/renewal reload authorization.
+- Repository `before_command` hook rules will select when commands receive
+  access, including automatically for Modal. After integration, rules replace
+  environment-specific activation lists; named definitions remain under
+  `credential_proxies`. Do not migrate activation lists before that integration.
 - Scripts acquire access through a reusable host operation and explicitly emit
-  command environment additions. The sandbox receives proxy addresses, a scoped
-  access token, and the metadata needed to select and use them.
+  command environment additions. Acquisition returns only a scoped token,
+  RFC 3339 expiry, and client-compatible proxy metadata, not environment
+  assignments or provider credentials. Empty selections and malformed arguments
+  fail; repeated names are normalized.
 - Existing reverse-port-forward configuration supplies connectivity. Scripts
   do not choose arbitrary destinations or repeat forwarding configuration.
-- Sidekick-managed credentials are available only in development
-  (`SIDE_APP_ENV=development`). This access is enabled by default there and can
-  be disabled. Explicitly configured environment-variable and command-based
-  credential sources are not subject to the development-only restriction.
-- No listener starts when all configured proxies are prohibited by policy.
+  Preserve ordinary forwards and the existing credential-proxy host 22855 to
+  container 32855 reverse forward during migration.
+- Startup and Sidekick-managed credential access do not depend on
+  `SIDE_APP_ENV`. `SIDE_CREDENTIAL_PROXY_SIDE_AUTH_ENABLED=false` remains an
+  emergency host-side opt-out for Side sources. Generic environment-variable
+  and command-based credential sources are unaffected by that opt-out.
+- Startup requires at least one configured, permitted definition. No idle
+  listener starts merely because development mode is enabled; unconfigured or
+  entirely prohibited definitions require no control socket/cache setup.
 
 ### Security
 
@@ -74,21 +104,25 @@ refresh.
   Scope is the workspace ID plus workflow ID, not a run ID, activity ID, or
   retry attempt. Invocation-bound host functions supply this identity implicitly;
   scripts cannot select or override it.
-- Flow access has a one-hour lease. Before command execution, acquisition reuses
-  valid access or refreshes expired or near-expiry access. Refresh rechecks host
-  authorization and may retain the token while extending expiry by one hour.
-  Token rotation is not required for lease renewal.
-- Commands recover lost or revoked access before starting, including after a
-  proxy restart. Acquisition failure follows the hook's failure policy and
-  supplies no command environment additions.
-- There is no background keepalive or command-end revocation. The shared proxy
-  service remains available across commands and flows; expiry continues to be
-  enforced for subsequent requests.
-- Runtime tokens remain outside workflow inputs and results. Acquired tokens
-  are tracked for redaction even if a script fails before emitting anything.
-  All emitted environment values are treated as sensitive. Script diagnostics,
-  exceptions, command output, and errors are redacted before logging,
-  truncation, or inclusion in workflow results.
+- Flow access has a one-hour lease. Every acquisition invokes server-side flow
+  activation and rechecks authorization before reuse. A valid lease retains its
+  token and extends expiry by one hour. Missing, revoked, expired, or
+  restarted-service access is replaced before use. Different flows or selected
+  definitions remain isolated.
+- The binding captures original configuration, forwarding, and workspace plus
+  workflow identity. Temporal activity metadata supplies the workflow ID;
+  non-Temporal callers must supply an explicit equivalent identity. Acquisition
+  honors both invocation and action cancellation.
+- The standalone binding has no cache, background keepalive, command-end
+  revocation, or service teardown. The shared proxy service remains available
+  across commands and flows; expiry remains enforced for subsequent requests.
+  Legacy command lease plumbing remains until hook integration replaces it.
+- Runtime tokens must remain outside workflow inputs and results. The standalone
+  runner and access binding do not track secrets or mask output. Automatic
+  masking is deferred to invocation/logging integration, which must apply any
+  such policy before truncation or persistence for Go and JavaScript alike.
+- Hook dispatch must apply fail/warn policy without accepting failed-action
+  assignments and must always propagate cancellation.
 - Proxy authentication is separate from upstream authentication. The proxy
   removes caller credentials and identity headers, attaches host credentials,
   and never forwards the proxy token upstream.
@@ -119,6 +153,9 @@ refresh.
   package aware of credential proxies.
 
 ## Flow
+
+This is the target command integration; standalone acquisition and emissions
+are implemented, but hook dispatch and command wiring remain deferred.
 
 Workflow code matches hook rules against the original invocation context. The
 ordinary command activity runs the selected scripts through generic hook support.
@@ -153,7 +190,7 @@ sequenceDiagram
     Provider-->>Proxy: Streaming response
     Proxy-->>Sandbox: Unchanged streaming response
     Sandbox-->>Activity: Command ends
-    Activity-->>Workflow: Redacted command result
+    Activity-->>Workflow: Command result (output policy deferred)
     Note over Activity,Proxy: No background renewal or command-end teardown
 ```
 

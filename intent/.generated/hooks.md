@@ -5,6 +5,12 @@ maps to an ordered list of rules with optional `match` filters and typed actions
 The implemented scope is the `run_tests` event and the `modal.refresh_volumes`
 action.
 
+[Command script hooks](command_script_hooks.md) extends this design with `script`
+actions and the per-command `before_command` event. Its standalone runner,
+environment emissions, and credential-proxy binding are implemented; hook
+configuration/dispatch and command integration remain separate work. That
+extension does not change the `before_tests` batch semantics specified here.
+
 ```yaml
 hooks:
   run_tests:

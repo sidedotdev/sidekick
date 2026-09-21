@@ -20,6 +20,7 @@ require (
 	github.com/charmbracelet/huh v0.6.0
 	github.com/cohere-ai/cohere-go/v2 v2.18.0
 	github.com/denormal/go-gitignore v0.0.0-20180930084346-ae8ad1d07817
+	github.com/dop251/goja v0.0.0-20260917113740-793a2a65c13b
 	github.com/ehsanul/anthropic-go/v3 v3.0.0-20240726013241-16f67db96235
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gin-gonic/gin v1.11.0
@@ -89,7 +90,7 @@ require (
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.53.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.53.0 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
-	github.com/Masterminds/semver/v3 v3.4.0 // indirect
+	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/aristanetworks/gomap v0.0.0-20230726210543-f4e41046dced // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13 // indirect
@@ -123,17 +124,21 @@ require (
 	github.com/containerd/typeurl/v2 v2.1.1 // indirect
 	github.com/djherbis/buffer v1.2.0 // indirect
 	github.com/djherbis/nio/v3 v3.0.1 // indirect
+	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/emicklei/go-restful/v3 v3.12.2 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.36.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+	github.com/evanw/esbuild v0.28.2
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
-	github.com/goccy/go-yaml v1.19.0 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
+	github.com/google/pprof v0.0.0-20250820193118-f64d9cf942d6 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/kisielk/og-rek v1.3.0 // indirect

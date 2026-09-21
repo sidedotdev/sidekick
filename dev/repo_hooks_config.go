@@ -24,7 +24,7 @@ func decodeRepoConfig(k *koanf.Koanf, config *common.RepoConfig) error {
 			return err
 		}
 	}
-	if err := k.UnmarshalWithConf("", config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+	if err := k.Unmarshal("", config); err != nil {
 		return err
 	}
 	config.Hooks = hooks

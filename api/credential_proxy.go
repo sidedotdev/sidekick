@@ -63,13 +63,12 @@ func startCredentialProxyServiceWithRepo(configPath, repoPath string, port int, 
 	if err != nil {
 		return nil, err
 	}
-	// Generic proxies are explicitly authorized configuration and run in every
-	// app environment; side proxies alone only justify a listener when policy
-	// allows them.
-	start := credential_proxy.SideSourcesAllowed()
+	start := false
+	allowSideSources := credential_proxy.SideSourcesAllowed()
 	for _, definition := range definitions {
-		if definition.Auth.Side == nil {
+		if definition.Auth.Side == nil || allowSideSources {
 			start = true
+			break
 		}
 	}
 	if !start {

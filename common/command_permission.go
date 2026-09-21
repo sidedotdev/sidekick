@@ -19,22 +19,22 @@ const (
 
 // CommandPattern represents a pattern for matching commands
 type CommandPattern struct {
-	Pattern string `toml:"pattern" json:"pattern" koanf:"pattern"`
-	Message string `toml:"message,omitempty" json:"message,omitempty" koanf:"message,omitempty"`
+	Pattern string `json:"pattern" koanf:"pattern"`
+	Message string `json:"message,omitempty" koanf:"message,omitempty"`
 	// Source attributes the pattern to a merged config layer (see
 	// CommandPatternSource* constants). It is populated programmatically at
 	// merge time for evaluation metadata, never by users, so it is excluded
 	// from config file serialization.
-	Source string `toml:"-" json:"source,omitempty" koanf:"-"`
+	Source string `json:"source,omitempty" koanf:"-"`
 }
 
 // CommandPermissionConfig defines permission rules for shell commands
 type CommandPermissionConfig struct {
-	AutoApprove          []CommandPattern `toml:"auto_approve,omitempty" json:"autoApprove" koanf:"auto_approve"`
-	RequireApproval      []CommandPattern `toml:"require_approval,omitempty" json:"requireApproval" koanf:"require_approval"`
-	Deny                 []CommandPattern `toml:"deny,omitempty" json:"deny" koanf:"deny"`
-	ResetAutoApprove     bool             `toml:"reset_auto_approve,omitempty" json:"resetAutoApprove" koanf:"reset_auto_approve"`
-	ResetRequireApproval bool             `toml:"reset_require_approval,omitempty" json:"resetRequireApproval" koanf:"reset_require_approval"`
+	AutoApprove          []CommandPattern `json:"autoApprove" koanf:"auto_approve"`
+	RequireApproval      []CommandPattern `json:"requireApproval" koanf:"require_approval"`
+	Deny                 []CommandPattern `json:"deny" koanf:"deny"`
+	ResetAutoApprove     bool             `json:"resetAutoApprove" koanf:"reset_auto_approve"`
+	ResetRequireApproval bool             `json:"resetRequireApproval" koanf:"reset_require_approval"`
 }
 
 // BaseCommandPermissionsInput selects which base permission policy

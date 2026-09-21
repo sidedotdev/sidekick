@@ -36,12 +36,17 @@ credential_proxies:
 		enabled   string
 		wantStart bool
 	}{
-		{name: "development starts idle endpoint", appEnv: "development", wantStart: true},
-		{name: "side outside development", config: providerConfig, appEnv: "production"},
+		{name: "unconfigured development", appEnv: "development"},
+		{name: "unconfigured production", appEnv: "production"},
+		{name: "unconfigured explicitly enabled", enabled: "true"},
+		{name: "side outside development", config: providerConfig, appEnv: "production", wantStart: true},
+		{name: "side without app environment", config: providerConfig, wantStart: true},
 		{name: "side explicitly disabled", config: providerConfig, appEnv: "development", enabled: "false"},
+		{name: "side disabled in production", config: providerConfig, appEnv: "production", enabled: "false"},
 		{name: "side in development", config: providerConfig, appEnv: "development", wantStart: true},
 		{name: "generic outside development", config: genericConfig, appEnv: "production", wantStart: true},
 		{name: "generic explicitly disabled", config: genericConfig, appEnv: "development", enabled: "false", wantStart: true},
+		{name: "generic with side opt-out in production", config: genericConfig, appEnv: "production", enabled: "false", wantStart: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("SIDE_APP_ENV", tc.appEnv)
@@ -72,7 +77,7 @@ credential_proxies:
 }
 
 func TestRepositoryCredentialProxyAuthorization(t *testing.T) {
-	t.Setenv("SIDE_APP_ENV", "development")
+	t.Setenv("SIDE_APP_ENV", "production")
 	t.Setenv("SIDE_CREDENTIAL_PROXY_SIDE_AUTH_ENABLED", "")
 	dir := t.TempDir()
 	repoPath := filepath.Join(dir, "side.yml")
@@ -95,7 +100,7 @@ modal:
 		t.Fatal(err)
 	}
 	if service == nil {
-		t.Fatal("development endpoint did not start")
+		t.Fatal("configured endpoint did not start")
 	}
 	defer service.Close()
 	config, err := common.LoadSidekickConfig(repoPath)

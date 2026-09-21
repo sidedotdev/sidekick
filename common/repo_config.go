@@ -13,85 +13,85 @@ type RepoConfig struct {
 	 * err, after an edit to determine if it is a good edit. A failed check
 	 * results in rolling back the edit entirely, so is intended for cases where
 	 * GenAI is not able to easily self-repair iteratively after a mistake. */
-	CheckCommands []CommandConfig `toml:"check_commands,omitempty"`
+	CheckCommands []CommandConfig `koanf:"check_commands,omitempty" json:"checkCommands,omitempty"`
 
 	/** A set of commands to run to fix the code after applying an edit. This
 	 * helps avoid checks reverting code for simple issues. Ideal for things
 	 * like auto-importing for example. */
-	AutofixCommands []CommandConfig `toml:"autofix_commands,omitempty"`
+	AutofixCommands []CommandConfig `koanf:"autofix_commands,omitempty" json:"autofixCommands,omitempty"`
 
 	/** A set of commands to run to test the code after good/checked edits that
 	 * were already fully applied. Typically expected to run a project's unit
 	 * tests. Test failure is typically provided as feedback in the next edit
 	 * iteration or used to determine whether a given step in a plan is
 	 * completa. */
-	TestCommands []CommandConfig `toml:"test_commands,omitempty"`
+	TestCommands []CommandConfig `koanf:"test_commands,omitempty" json:"testCommands,omitempty"`
 
 	/** A set of commands to run to test the code after good/checked edits that
 	 * were already fully applied. Typically expected to run a project's
 	 * integration tests. Test failure is typically provided as feedback in the
 	 * next edit iteration or used to determine whether a given step in a plan
 	 * is completa. */
-	IntegrationTestCommands []CommandConfig `toml:"integration_test_commands,omitempty"`
+	IntegrationTestCommands []CommandConfig `koanf:"integration_test_commands,omitempty" json:"integrationTestCommands,omitempty"`
 
-	Hooks HooksConfig `toml:"hooks,omitempty" json:"hooks,omitempty"`
+	Hooks HooksConfig `koanf:"hooks,omitempty" json:"hooks,omitempty"`
 
 	/** This is injected into prompts to give the LLM high-level context about
 	 * the purpose of your project. This is used especially when defining
 	 * requirements */
-	Mission string `toml:"mission,omitempty"`
+	Mission string `koanf:"mission,omitempty" json:"mission,omitempty"`
 
 	/** Usage of this flag is NOT RECOMMENDED. This flag is intended to be used
 	 * for benchmarking purposes ONLY. Turning this on makes it so a human will
 	 * never be asked for input, help/guidance or to review. Human intelligence
 	 * and quality control is essential to leverage GenAI effectively. */
-	DisableHumanInTheLoop bool `toml:"disable_human_in_the_loop,omitempty"`
+	DisableHumanInTheLoop bool `koanf:"disable_human_in_the_loop,omitempty" json:"disableHumanInTheLoop,omitempty"`
 
 	/** The maximum number of iterations that GenAI will run for. This is a
 	 * safety measure to prevent infinite loops. Defaults to 17 if unspecified. */
-	MaxIterations int `toml:"max_iterations,omitempty"`
+	MaxIterations int `koanf:"max_iterations,omitempty" json:"maxIterations,omitempty"`
 
 	/** The maximum number of planning iterations that GenAI will run for. This is
 	 * a safety measure to prevent infinite loops. Defaults to 17 if unspecified. */
-	MaxPlanningIterations int `toml:"max_planning_iterations,omitempty"`
+	MaxPlanningIterations int `koanf:"max_planning_iterations,omitempty" json:"maxPlanningIterations,omitempty"`
 
-	EditCode EditCodeConfig `toml:"edit_code,omitempty"`
+	EditCode EditCodeConfig `koanf:"edit_code,omitempty" json:"editCode,omitempty"`
 
 	/** A script that will be executed in the working directory of a local git
 	 * worktree environment when setting up the dev context. This is useful for
 	 * performing any necessary setup steps specific to worktree environments.
 	 * The script is executed using /usr/bin/env sh -c and must return a zero
 	 * exit code to be considered successful. */
-	WorktreeSetup string `toml:"worktree_setup,omitempty"`
+	WorktreeSetup string `koanf:"worktree_setup,omitempty" json:"worktreeSetup,omitempty"`
 
 	// AgentConfig contains per-use-case configuration for agent loops.
 	// Keys are use case names (e.g., "planning", "coding", "coding_and_verification",
 	// "step_execution_and_verification").
-	AgentConfig map[string]AgentUseCaseConfig `toml:"agent_config,omitempty"`
+	AgentConfig map[string]AgentUseCaseConfig `koanf:"agent_config,omitempty" json:"agentConfig,omitempty"`
 
-	CommandPermissions CommandPermissionConfig `toml:"command_permissions,omitempty"`
+	CommandPermissions CommandPermissionConfig `koanf:"command_permissions,omitempty" json:"commandPermissions,omitempty"`
 
 	// DevRun configures commands for running a dev server or supervisor
 	// for pre-approval manual QA in the worktree environment.
-	DevRun DevRunConfig `toml:"dev_run,omitempty"`
+	DevRun DevRunConfig `koanf:"dev_run,omitempty" json:"devRun,omitempty"`
 
 	// EnvType specifies the default environment type for this repo (e.g., "local", "devpod", "openshell", "modal").
-	EnvType string `toml:"env_type,omitempty"`
+	EnvType string `koanf:"env_type,omitempty" json:"envType,omitempty"`
 
 	// RepoMode specifies the default repo mode for this repo (e.g., "worktree", "in_place").
-	RepoMode string `toml:"repo_mode,omitempty"`
+	RepoMode string `koanf:"repo_mode,omitempty" json:"repoMode,omitempty"`
 
 	// PortForwards declares host ports to reverse-forward into remote
 	// container environments (devpod/openshell) over SSH, making services
 	// bound to the host's loopback interface reachable from inside the
 	// container.
-	PortForwards []PortForwardConfig `toml:"port_forwards,omitempty"`
+	PortForwards []PortForwardConfig `koanf:"port_forwards,omitempty" json:"portForwards,omitempty"`
 
-	CredentialProxies map[string]CredentialProxyConfig `toml:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
+	CredentialProxies map[string]CredentialProxyConfig `koanf:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
 
-	DevPodConfig    DevPodEnvConfig    `toml:"devpod,omitempty"`
-	OpenShellConfig OpenShellEnvConfig `toml:"openshell,omitempty"`
-	ModalConfig     ModalEnvConfig     `toml:"modal,omitempty"`
+	DevPodConfig    DevPodEnvConfig    `koanf:"devpod,omitempty" json:"devPodConfig,omitempty"`
+	OpenShellConfig OpenShellEnvConfig `koanf:"openshell,omitempty" json:"openShellConfig,omitempty"`
+	ModalConfig     ModalEnvConfig     `koanf:"modal,omitempty" json:"modalConfig,omitempty"`
 }
 
 // PortForwardConfig declares a single host port to reverse-forward into a
@@ -99,11 +99,11 @@ type RepoConfig struct {
 // host's 127.0.0.1 to the container's 127.0.0.1.
 type PortForwardConfig struct {
 	// HostPort is the port on the host (bound to 127.0.0.1) to forward.
-	HostPort int `toml:"host_port" json:"hostPort"`
+	HostPort int `koanf:"host_port" json:"hostPort"`
 
 	// ContainerPort is the loopback port inside the container on which the
 	// forwarded host port is exposed. Defaults to HostPort when zero.
-	ContainerPort int `toml:"container_port,omitempty" json:"containerPort,omitempty"`
+	ContainerPort int `koanf:"container_port,omitempty" json:"containerPort,omitempty"`
 }
 
 // ContainerPortOrDefault returns ContainerPort, defaulting to HostPort when
@@ -120,17 +120,17 @@ type DevPodEnvConfig struct {
 	// WorkspaceId overrides the workspace name DevPod derives from the
 	// repo directory basename. When empty, the repo directory's basename is
 	// used, matching DevPod's default behavior.
-	WorkspaceId       string   `toml:"workspace_id,omitempty"`
-	CredentialProxies []string `toml:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
+	WorkspaceId       string   `koanf:"workspace_id,omitempty" json:"workspaceId,omitempty"`
+	CredentialProxies []string `koanf:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
 }
 
 // OpenShellEnvConfig holds configuration specific to the OpenShell environment type.
 type OpenShellEnvConfig struct {
 	// PrebuildCommand is a shell command executed locally before sandbox creation.
-	PrebuildCommand string `toml:"prebuild_command,omitempty"`
+	PrebuildCommand string `koanf:"prebuild_command,omitempty" json:"prebuildCommand,omitempty"`
 	// From is passed as the --from flag to "openshell sandbox create".
-	From              string   `toml:"from,omitempty"`
-	CredentialProxies []string `toml:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
+	From              string   `koanf:"from,omitempty" json:"from,omitempty"`
+	CredentialProxies []string `koanf:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
 }
 
 // ModalVolumeMount attaches a named Modal Volume at an absolute path inside
@@ -140,11 +140,11 @@ type OpenShellEnvConfig struct {
 // the place for caches that are expensive to rebuild, such as compiler,
 // package-manager or test-selection caches.
 type ModalVolumeMount struct {
-	Name      string `toml:"name" json:"name"`
-	MountPath string `toml:"mount_path" json:"mountPath"`
+	Name      string `koanf:"name" json:"name"`
+	MountPath string `koanf:"mount_path" json:"mountPath"`
 	// ReadOnly mounts the volume without write access, which is how a volume
 	// populated elsewhere can be consumed safely by many sandboxes at once.
-	ReadOnly bool `toml:"read_only,omitempty" json:"readOnly,omitempty"`
+	ReadOnly bool `koanf:"read_only,omitempty" json:"readOnly,omitempty"`
 }
 
 // Validate reports whether the mount can be attached to a sandbox. Mount paths
@@ -170,44 +170,44 @@ type ModalEnvConfig struct {
 	// instead of gVisor — enabling tools that need kernel features (e.g.
 	// perf). Memory is statically provisioned from Memory on the VM runtime,
 	// so MemoryLimit does not provide burst capacity.
-	VM bool `toml:"vm,omitempty" json:"vm,omitempty"`
+	VM bool `koanf:"vm,omitempty" json:"vm,omitempty"`
 	// Image is the base container image reference. It must be Debian-based and
 	// run as root, since sidekick layers its remote-access dependencies on top.
-	Image string `toml:"image,omitempty" json:"image,omitempty"`
+	Image string `koanf:"image,omitempty" json:"image,omitempty"`
 	// DockerfilePath selects a single-stage, context-free Dockerfile relative
 	// to the repository root. Its FROM supplies the base image, so Image must
 	// be unset. COPY, ADD, and BuildKit context mounts are unsupported.
-	DockerfilePath string `toml:"dockerfile_path,omitempty" json:"dockerfilePath,omitempty"`
+	DockerfilePath string `koanf:"dockerfile_path,omitempty" json:"dockerfilePath,omitempty"`
 	// CPU is the number of fractional physical CPU cores reserved for the
 	// sandbox. Unset defaults to 0.125, Modal's minimum; usage above the
 	// request bursts freely unless CPULimit is set.
-	CPU float64 `toml:"cpu,omitempty" json:"cpu,omitempty"`
+	CPU float64 `koanf:"cpu,omitempty" json:"cpu,omitempty"`
 	// CPULimit is a hard cap in fractional physical CPU cores. Zero means no
 	// limit.
-	CPULimit float64 `toml:"cpu_limit,omitempty" json:"cpuLimit,omitempty"`
+	CPULimit float64 `koanf:"cpu_limit,omitempty" json:"cpuLimit,omitempty"`
 	// Memory is the sandbox memory reservation in MiB. Unset defaults to
 	// 1024; usage above the request bursts freely unless MemoryLimit is set.
-	Memory int `toml:"memory,omitempty" json:"memory,omitempty"`
+	Memory int `koanf:"memory,omitempty" json:"memory,omitempty"`
 	// MemoryLimit is a hard memory cap in MiB. Zero means no limit.
-	MemoryLimit int `toml:"memory_limit,omitempty" json:"memoryLimit,omitempty"`
+	MemoryLimit int `koanf:"memory_limit,omitempty" json:"memoryLimit,omitempty"`
 	// IdleSeconds arms the in-sandbox idle watchdog: after this many seconds
 	// without activity the sandbox snapshots its filesystem and terminates
 	// itself (via the sidekick guard app), stopping billing even when the
 	// sidekick host is offline. It is restored from the snapshot on next
 	// use. Unset defaults to 30 seconds; negative values are rejected.
-	IdleSeconds int `toml:"idle_seconds,omitempty" json:"idleSeconds,omitempty"`
+	IdleSeconds int `koanf:"idle_seconds,omitempty" json:"idleSeconds,omitempty"`
 	// ActiveSnapshotSeconds sets how often the in-sandbox watchdog takes a
 	// best-effort filesystem snapshot while the sandbox is busy, bounding
 	// the work lost if the sandbox is forcefully killed before the idle
 	// shutdown can run. Unset defaults to 180 seconds; negative values
 	// disable active snapshots (idle snapshots are unaffected).
-	ActiveSnapshotSeconds int `toml:"active_snapshot_seconds,omitempty" json:"activeSnapshotSeconds,omitempty"`
+	ActiveSnapshotSeconds int `koanf:"active_snapshot_seconds,omitempty" json:"activeSnapshotSeconds,omitempty"`
 	// Volumes mounts named, persistent Modal Volumes into the sandbox. Unlike
 	// the sandbox filesystem, whose snapshots are tied to a single sandbox
 	// lineage, volumes are reachable from any sandbox that mounts them, so
 	// data placed there survives sandbox recreation.
-	Volumes           []ModalVolumeMount `toml:"volumes,omitempty" json:"volumes,omitempty"`
-	CredentialProxies []string           `toml:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
+	Volumes           []ModalVolumeMount `koanf:"volumes,omitempty" json:"volumes,omitempty"`
+	CredentialProxies []string           `koanf:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
 }
 
 // ModalDefaultCPU and ModalDefaultMemoryMiB are the effective resource
@@ -298,12 +298,12 @@ type DevRunConfig map[string]DevRunCommandConfig
 
 // DevRunCommandConfig configures a single named dev-run command.
 type DevRunCommandConfig struct {
-	WorkingDir string `toml:"working_dir,omitempty" json:"workingDir,omitempty"`
-	Command    string `toml:"command" json:"command"`
+	WorkingDir string `koanf:"working_dir,omitempty" json:"workingDir,omitempty"`
+	Command    string `koanf:"command" json:"command"`
 
 	// StopTimeoutSeconds is the time to wait after SIGINT before sending SIGKILL.
 	// Defaults to 10 seconds if not specified.
-	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty" json:"stopTimeoutSeconds,omitempty"`
+	StopTimeoutSeconds int `koanf:"stop_timeout_seconds,omitempty" json:"stopTimeoutSeconds,omitempty"`
 }
 
 // UnmarshalJSON supports both the current camelCase keys and the legacy
@@ -337,35 +337,35 @@ func (c *DevRunCommandConfig) UnmarshalJSON(data []byte) error {
 }
 
 type CommandConfig struct {
-	WorkingDir string `toml:"working_dir,omitempty"`
-	Command    string `toml:"command"`
+	WorkingDir string `koanf:"working_dir,omitempty" json:"workingDir,omitempty"`
+	Command    string `koanf:"command" json:"command"`
 }
 
 // AgentUseCaseConfig contains configuration for a specific agent use case.
 type AgentUseCaseConfig struct {
 	// AutoIterations is the number of iterations run before human feedback is
 	// requested.
-	AutoIterations int `toml:"auto_iterations,omitempty"`
+	AutoIterations int `koanf:"auto_iterations,omitempty" json:"autoIterations,omitempty"`
 
 	// RemindAfter is the iteration at which a long-running loop is first
 	// reminded to wrap up. No human is involved. Zero uses the use case default.
-	RemindAfter int `toml:"remind_after,omitempty"`
+	RemindAfter int `koanf:"remind_after,omitempty" json:"remindAfter,omitempty"`
 
 	// EscalateReminderEvery is the interval, in iterations after RemindAfter,
 	// at which those reminders escalate and repeat. Zero uses the use case
 	// default.
-	EscalateReminderEvery int `toml:"escalate_reminder_every,omitempty"`
+	EscalateReminderEvery int `koanf:"escalate_reminder_every,omitempty" json:"escalateReminderEvery,omitempty"`
 
 	// MaxIterations is the iteration at which a loop is restricted to wrapping
 	// up. Zero uses the use case default.
-	MaxIterations int `toml:"max_iterations,omitempty"`
+	MaxIterations int `koanf:"max_iterations,omitempty" json:"maxIterations,omitempty"`
 }
 
 type EditCodeConfig struct {
 	/** This is injected into the edit code prompt in order to provide hints to the LLM
 	 * for how to edit code in your particular code base. */
-	Hints string `toml:"hints,omitempty"`
+	Hints string `koanf:"hints,omitempty" json:"hints,omitempty"`
 	/** Alternatively, specify a path relative to the repo root to load hints from.
 	 * If Hints is empty and HintsPath is set, the content of the file will be loaded into Hints. */
-	HintsPath string `toml:"hints_path,omitempty"`
+	HintsPath string `koanf:"hints_path,omitempty" json:"hintsPath,omitempty"`
 }

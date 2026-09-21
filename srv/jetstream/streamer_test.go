@@ -155,32 +155,53 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	flowActionChan, errChan := s.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, "")
 
 	receivedActions := make([]domain.FlowAction, 0)
-	done := make(chan bool)
+	done := make(chan struct{})
+	ready := make(chan struct{})
+	var readyOnce sync.Once
 
 	go func() {
+		defer close(done)
 		for {
 			select {
 			case action, ok := <-flowActionChan:
 				if !ok {
-					done <- true
 					return
+				}
+				if action.Id == "ready" {
+					readyOnce.Do(func() { close(ready) })
+					continue
 				}
 				receivedActions = append(receivedActions, action)
 			case err, ok := <-errChan:
-				if ok {
-					s.T().Errorf("Received error: %v", err)
-					done <- true
-					return
+				if !ok {
+					errChan = nil
+					continue
 				}
+				s.T().Errorf("Received error: %v", err)
+				return
 			case <-ctx.Done():
-				done <- true
 				return
 			}
 		}
 	}()
 
-	// Add flow action changes after subscription is established
-	time.Sleep(100 * time.Millisecond)
+	// New-only consumers can discard probes published before their creation.
+	probe := domain.FlowAction{WorkspaceId: workspaceId, FlowId: flowId, Id: "ready"}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+readiness:
+	for {
+		s.Require().NoError(s.streamer.AddFlowActionChange(ctx, probe))
+		select {
+		case <-ready:
+			break readiness
+		case <-ticker.C:
+		case <-done:
+			s.T().Fatal("Stream closed before subscription was ready")
+		case <-ctx.Done():
+			s.T().Fatal("Subscription readiness timed out")
+		}
+	}
 
 	// Use non-UTC timezone with nanosecond precision to verify UTC normalization
 	loc, err := time.LoadLocation("America/Los_Angeles")
@@ -219,60 +240,58 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		Id:          "end",
 	}
 
-	// Publish concurrently on purpose (see the test's doc comment). Sleeps
-	// stagger the publishes so the expected ordering usually holds.
+	// Publishers race with each other and with the active stream consumer.
 	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		if err := s.streamer.AddFlowActionChange(context.Background(), flowAction); err != nil {
-			s.T().Errorf("Failed to add flow action change: %v", err)
-		}
-	}()
+	start := make(chan struct{})
+	publishErrors := make(chan error, 2)
+	for _, action := range []domain.FlowAction{flowAction, newAction} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			publishErrors <- s.streamer.AddFlowActionChange(ctx, action)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(publishErrors)
+	for err := range publishErrors {
+		s.Require().NoError(err)
+	}
 
-	go func() {
-		defer wg.Done()
-		time.Sleep(50 * time.Millisecond)
-		if err := s.streamer.AddFlowActionChange(context.Background(), newAction); err != nil {
-			s.T().Errorf("Failed to add new flow action change: %v", err)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		time.Sleep(100 * time.Millisecond)
-		if err := s.streamer.AddFlowActionChange(context.Background(), endAction); err != nil {
-			s.T().Errorf("Failed to add end flow action change: %v", err)
-		}
-	}()
+	// The terminal marker must follow every acknowledged action publish.
+	s.Require().NoError(s.streamer.AddFlowActionChange(ctx, endAction))
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
 		s.T().Fatal("Test timed out")
 	}
 
-	wg.Wait()
-
 	s.Require().Len(receivedActions, 3)
-	// Verify first action with timestamp checks
-	s.Equal(flowAction.Id, receivedActions[0].Id)
-	s.Equal(flowAction.SubflowName, receivedActions[0].SubflowName)
-	s.Equal(flowAction.ActionType, receivedActions[0].ActionType)
-	s.Equal(time.UTC, receivedActions[0].Created.Location())
-	s.Equal(time.UTC, receivedActions[0].Updated.Location())
-	s.True(receivedActions[0].Created.Equal(flowAction.Created))
-	s.True(receivedActions[0].Updated.Equal(flowAction.Updated))
-	s.Equal(flowAction.Created.Nanosecond(), receivedActions[0].Created.Nanosecond())
-	s.Equal(flowAction.Updated.Nanosecond(), receivedActions[0].Updated.Nanosecond())
-	// Verify second action with timestamp checks
-	s.Equal(newAction.Id, receivedActions[1].Id)
-	s.Equal(time.UTC, receivedActions[1].Created.Location())
-	s.Equal(time.UTC, receivedActions[1].Updated.Location())
-	s.True(receivedActions[1].Created.Equal(newAction.Created))
-	s.True(receivedActions[1].Updated.Equal(newAction.Updated))
-	// Verify end action
 	s.Equal(endAction.Id, receivedActions[2].Id)
+	s.ElementsMatch(
+		[]string{flowAction.Id, newAction.Id},
+		[]string{receivedActions[0].Id, receivedActions[1].Id},
+	)
+
+	expected := map[string]domain.FlowAction{
+		flowAction.Id: flowAction,
+		newAction.Id:  newAction,
+	}
+	for _, received := range receivedActions[:2] {
+		action, ok := expected[received.Id]
+		s.Require().True(ok)
+		s.Equal(time.UTC, received.Created.Location())
+		s.Equal(time.UTC, received.Updated.Location())
+		s.True(received.Created.Equal(action.Created))
+		s.True(received.Updated.Equal(action.Updated))
+		s.Equal(action.Created.Nanosecond(), received.Created.Nanosecond())
+		s.Equal(action.Updated.Nanosecond(), received.Updated.Nanosecond())
+		action.Created = action.Created.UTC()
+		action.Updated = action.Updated.UTC()
+		s.Equal(action, received)
+	}
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming() {
