@@ -3,13 +3,34 @@
 Implement the lifecycle-hook extension in
 [intent/.generated/command_script_hooks.md](intent/.generated/command_script_hooks.md),
 using [the base hooks design](intent/.generated/hooks.md).
-Keep this file limited to unfinished work; delete it when complete.
+Track completed components alongside deferred integration and cleanup.
+
+## Completed standalone components
+
+- [x] Pin a compatible goja revision in module files and implement a fresh,
+      invocation-local runner for JavaScript function bodies with ignored returns.
+- [x] Provide detached camelCase data-only context and explicit host operations,
+      with no implicit filesystem, process, network, or general module access.
+- [x] Implement parent-bounded action timeouts, JavaScript interruption, and
+      context propagation into host operations; cancellation cannot succeed.
+- [x] Implement validated, transactional command-environment emissions and
+      ordered composition, discarding assignments from failed actions.
+- [x] Implement invocation-bound credential-proxy access with captured configuration,
+      forwarding, workspace identity, and Temporal or explicit workflow identity.
+- [x] Reuse authorized flow activation for scoped leases, token-preserving
+      extension, isolation, and recovery without a new client renewal lifecycle.
+- [x] Remove development-mode startup/access restrictions while preserving
+      configured authorization, private control access, authentication, and expiry.
+- [x] Add focused runner, emission, access, and configuration-driven policy tests.
+- [x] Document the standalone API and deferred integration responsibilities.
+- [x] Remove automatic masking and secret tracking from scripting and access;
+      output policy belongs to a future invocation/logging integration.
 
 ## Configuration and event selection
 
 This remaining work belongs to the parallel hooks integration and subsequent
 cleanup. The completed standalone components and their handoff are documented in
-[Command script hooks](intent/.generated/command_script_hooks.md#standalone-api-and-redaction-handoff).
+[Command script hooks](intent/.generated/command_script_hooks.md#standalone-api).
 Keep current command execution functional until that integration lands.
 
 - [ ] Add validated hook rules, matching, and script-action configuration to
@@ -33,19 +54,20 @@ Keep current command execution functional until that integration lands.
 - [ ] Remove the superseded activation fields from Modal, DevPod, and OpenShell
       configuration and update configuration tests only after migration.
 
-## Script integration and redaction handoff
+## Script integration and output policy
 
 - [ ] Dispatch script actions through `scripting.RunCommand`, supplying detached
       non-secret context and explicit invocation-bound operations from
       `credential_proxy/access`. Do not duplicate the runner or access lifecycle.
       Keep runtime authorization and secret resolution outside `common`, `env`,
       and `llm2`.
-- [ ] Share one invocation-local `scripting.Redactor` across access bindings,
-      actions, and command-output handling. Wire `Redactor.Redact` into stdout,
-      stderr, and error handling before logging, truncation, or serialization.
+- [ ] Define output policy at the invocation/logging boundary for Go and JavaScript
+      alike. Automatic masking is deferred, not a scripting responsibility.
+      Apply any future masking before truncation, logging, or serialization;
+      standalone diagnostics and errors are neither masked nor truncated.
       Never place access results or environment assignments in Temporal payloads.
 - [ ] Apply successful `CommandResult` assignments in configured order. Implement
-      fail/warn dispatch around safe runner results; failed actions contribute
+      fail/warn dispatch around runner results; failed actions contribute
       no assignments, and cancellation always propagates.
 
 ## Command execution cleanup

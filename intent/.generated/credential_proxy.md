@@ -37,7 +37,6 @@ intent_links:
       - credential_proxy/server/flow_activation_test.go
       - credential_proxy/server/flow_control_test.go
       - scripting/command.go
-      - scripting/redactor.go
 ---
 # Credential Proxy
 
@@ -55,12 +54,12 @@ refresh.
 
 Configuration-driven startup/access and the standalone invocation-bound
 `credential_proxy/access` operation are implemented. The `scripting` runner
-supports transactional emissions and shared sensitive-value redaction.
-[Command script hooks](command_script_hooks.md#standalone-api-and-redaction-handoff)
+supports transactional emissions; automatic output masking is deferred.
+[Command script hooks](command_script_hooks.md#standalone-api)
 documents their Go API and caller responsibilities.
 
 Hook schema, matching, dispatch, command-activity integration, command-output
-redaction wiring, and `side.yml` activation migration remain deferred. Existing
+output policy, and `side.yml` activation migration remain deferred. Existing
 wrappers, provisioners, worker registrations, workflow paths, and legacy command
 keepalive remain functional pending integration and subsequent cleanup. The hook
 selection and command flow below describe that target integration;
@@ -118,13 +117,10 @@ selection and command flow below describe that target integration;
   revocation, or service teardown. The shared proxy service remains available
   across commands and flows; expiry remains enforced for subsequent requests.
   Legacy command lease plumbing remains until hook integration replaces it.
-- Runtime tokens must remain outside workflow inputs and results. Acquired
-  tokens are tracked for redaction before lease/metadata validation, including
-  on later failure. Emitted environment values remain sensitive even when
-  failed-action assignments are discarded. The runner redacts diagnostics and
-  exceptions before truncation and publication. Command integration must share
-  the same invocation-local redactor and redact command output/errors before
-  logging, truncation, or serialization; that wiring is deferred.
+- Runtime tokens must remain outside workflow inputs and results. The standalone
+  runner and access binding do not track secrets or mask output. Automatic
+  masking is deferred to invocation/logging integration, which must apply any
+  such policy before truncation or persistence for Go and JavaScript alike.
 - Hook dispatch must apply fail/warn policy without accepting failed-action
   assignments and must always propagate cancellation.
 - Proxy authentication is separate from upstream authentication. The proxy
@@ -194,7 +190,7 @@ sequenceDiagram
     Provider-->>Proxy: Streaming response
     Proxy-->>Sandbox: Unchanged streaming response
     Sandbox-->>Activity: Command ends
-    Activity-->>Workflow: Redacted command result
+    Activity-->>Workflow: Command result (output policy deferred)
     Note over Activity,Proxy: No background renewal or command-end teardown
 ```
 

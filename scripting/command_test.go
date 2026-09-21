@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 func TestCommandEmissionsCompose(t *testing.T) {
 	t.Parallel()
 	envVars := map[string]string{"BASE": "retained", "VALUE": "initial"}
-	redactor := &Redactor{}
 	for _, action := range []struct {
 		source string
 		fail   bool
@@ -28,7 +26,7 @@ func TestCommandEmissionsCompose(t *testing.T) {
 		{source: `emitCommandEnvironment({envVars: {VALUE: "discarded-secret"}}); throw Error("failure");`, fail: true},
 		{source: `emitCommandEnvironment({envVars: {EXTRA: "last-secret"}});`},
 	} {
-		result, err := RunCommand(context.Background(), Input{Source: action.source, Redactor: redactor})
+		result, err := RunCommand(context.Background(), Input{Source: action.source})
 		if action.fail {
 			require.Error(t, err)
 			require.Nil(t, result.EnvVars)
@@ -44,9 +42,6 @@ func TestCommandEmissionsCompose(t *testing.T) {
 	require.Equal(t, map[string]string{
 		"BASE": "retained", "VALUE": "second-secret", "EMPTY": "", "EXTRA": "last-secret",
 	}, envVars)
-	for _, value := range []string{"first-secret", "second-secret", "extra-secret", "discarded-secret", "last-secret"} {
-		require.Equal(t, "[REDACTED]", redactor.Redact(value))
-	}
 }
 
 func TestCommandEmissionsAreExplicitAndDetached(t *testing.T) {
@@ -147,12 +142,10 @@ func TestCommandEmissionsDiscardOnCancellationAndHostFailure(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			redactor := &Redactor{}
 			calls := 0
 			result, err := RunCommand(ctx, Input{
-				Source:   `emitCommandEnvironment({envVars: {TOKEN: "emitted-secret"}}); host.test.fail({});`,
-				Timeout:  30 * time.Millisecond,
-				Redactor: redactor,
+				Source:  `emitCommandEnvironment({envVars: {TOKEN: "emitted-secret"}}); host.test.fail({});`,
+				Timeout: 30 * time.Millisecond,
 				Host: map[string]map[string]Operation{"test": {
 					"fail": func(ctx context.Context, _ json.RawMessage) (any, error) {
 						calls++
@@ -174,8 +167,6 @@ func TestCommandEmissionsDiscardOnCancellationAndHostFailure(t *testing.T) {
 			require.Error(t, err)
 			require.Nil(t, result.EnvVars)
 			require.Equal(t, 1, calls)
-			require.NotContains(t, err.Error(), "emitted-secret")
-			require.Equal(t, "[REDACTED]", redactor.Redact("emitted-secret"))
 			if failure == "cancel" {
 				require.ErrorIs(t, err, context.Canceled)
 			}
@@ -184,34 +175,4 @@ func TestCommandEmissionsDiscardOnCancellationAndHostFailure(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestCommandEmissionsRedactBeforePublication(t *testing.T) {
-	t.Parallel()
-	const secret = "emission-sensitive-value"
-	for _, emission := range []string{
-		`emitCommandEnvironment({envVars: {TOKEN: "emission-sensitive-value"}});`,
-		`emitCommandEnvironment({envVars: {"BAD-NAME": "emission-sensitive-value"}});`,
-	} {
-		redactor := &Redactor{}
-		result, err := RunCommand(context.Background(), Input{
-			Redactor: redactor,
-			Source:   `console.log("emission-sensitive-value");` + emission + `throw Error("emission-sensitive-value");`,
-		})
-		require.Error(t, err)
-		require.Nil(t, result.EnvVars)
-		require.Equal(t, "[REDACTED]", result.Diagnostics)
-		require.NotContains(t, err.Error(), secret)
-		require.Equal(t, "[REDACTED]", redactor.Redact(secret))
-	}
-	prefix := strings.Repeat("x", diagnosticLimit-len(secret)/2)
-	logged, err := json.Marshal(prefix + secret + strings.Repeat("z", 100))
-	require.NoError(t, err)
-	result, err := RunCommand(context.Background(), Input{
-		Source: `console.log(` + string(logged) + `); emitCommandEnvironment({envVars: {TOKEN: "` + secret + `"}});`,
-	})
-	require.NoError(t, err)
-	require.LessOrEqual(t, len(result.Diagnostics), diagnosticLimit)
-	require.NotContains(t, result.Diagnostics, secret[:len(secret)/2])
-	require.Contains(t, result.Diagnostics, "[truncated]")
 }

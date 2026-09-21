@@ -22,8 +22,8 @@ func TestRunnerIsolationAndData(t *testing.T) {
 	}
 	input := Input{
 		Context: struct {
-			EnvType    string
-			RepoConfig common.RepoConfig
+			EnvType    string            `json:"envType"`
+			RepoConfig common.RepoConfig `json:"repoConfig"`
 		}{"modal", config},
 		Source: `
 			if (context.envType !== "modal") throw Error("env type");
@@ -119,47 +119,26 @@ func TestRunnerCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
-func TestRunnerRedaction(t *testing.T) {
+func TestRunnerDiagnosticsAndErrors(t *testing.T) {
 	t.Parallel()
-	secret := "capability-sensitive-value"
-	redactor := &Redactor{}
-	host := map[string]map[string]Operation{"test": {
-		"acquire": func(context.Context, json.RawMessage) (any, error) {
-			redactor.Add(secret)
-			return map[string]string{"token": secret}, nil
-		},
-		"fail": func(context.Context, json.RawMessage) (any, error) {
-			redactor.Add(secret)
-			return nil, errors.New("upstream failed with " + secret)
-		},
-	}}
-	for _, source := range []string{
-		`console.log("capability-sensitive-value"); const access = host.test.acquire({}); throw Error(access.token);`,
-		`host.test.fail({});`,
-	} {
-		result, err := Run(context.Background(), Input{Source: source, Host: host, Redactor: redactor})
-		require.Error(t, err)
-		require.NotContains(t, err.Error(), secret)
-		require.Contains(t, err.Error(), "[REDACTED]")
-		require.Nil(t, errors.Unwrap(err))
-		require.NotContains(t, result.Diagnostics, secret)
-		serialized, marshalErr := json.Marshal(result)
-		require.NoError(t, marshalErr)
-		require.NotContains(t, string(serialized), secret)
-	}
-	require.Equal(t, "[REDACTED]", redactor.Redact(secret))
-
-	prefix := strings.Repeat("x", diagnosticLimit-len(secret)/2)
-	encoded, err := json.Marshal(prefix + secret + strings.Repeat("z", 100))
+	message := strings.Repeat("diagnostic-value", 8192)
+	encoded, err := json.Marshal(message)
 	require.NoError(t, err)
 	result, err := Run(context.Background(), Input{
-		Source: "console.log(" + string(encoded) + "); host.test.acquire({});",
-		Host:   host, Redactor: redactor,
+		Source: "console.log(" + string(encoded) + "); throw Error(\"script failure\");",
 	})
-	require.NoError(t, err)
-	require.LessOrEqual(t, len(result.Diagnostics), diagnosticLimit)
-	require.NotContains(t, result.Diagnostics, secret[:len(secret)/2])
-	require.Contains(t, result.Diagnostics, "[truncated]")
+	require.ErrorContains(t, err, "script failure")
+	require.Equal(t, message, result.Diagnostics)
+
+	_, err = Run(context.Background(), Input{
+		Source: `host.test.fail({});`,
+		Host: map[string]map[string]Operation{"test": {
+			"fail": func(context.Context, json.RawMessage) (any, error) {
+				return nil, errors.New("host failure details")
+			},
+		}},
+	})
+	require.ErrorContains(t, err, "host failure details")
 }
 
 func TestRunnerRejectsInvalidDataAndBindings(t *testing.T) {
@@ -176,13 +155,46 @@ func TestRunnerRejectsInvalidDataAndBindings(t *testing.T) {
 	}
 	cycle := map[string]any{}
 	cycle["self"] = cycle
-	_, err := Snapshot(cycle)
+	_, err := Run(context.Background(), Input{Context: cycle})
 	require.Error(t, err)
 }
 
-func TestRedactorOverlappingValues(t *testing.T) {
+func TestRunnerUsesJSONSerialization(t *testing.T) {
 	t.Parallel()
-	redactor := &Redactor{}
-	redactor.Add("", "token", "token-long")
-	require.Equal(t, "[REDACTED] [REDACTED]", redactor.Redact("token-long token"))
+	data := struct {
+		Value   string            `json:"chosenName" koanf:"other_name"`
+		Hidden  string            `json:"-"`
+		Omitted string            `json:"omitted,omitempty"`
+		When    time.Time         `json:"when"`
+		Raw     json.RawMessage   `json:"raw"`
+		Keys    map[string]string `json:"keys"`
+	}{
+		Value:  "original",
+		Hidden: "private",
+		When:   time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+		Raw:    json.RawMessage(`{"nestedValue":true}`),
+		Keys:   map[string]string{"My_Key": "original"},
+	}
+	result, err := Run(context.Background(), Input{
+		Context: data,
+		Host: map[string]map[string]Operation{"test": {
+			"data": func(context.Context, json.RawMessage) (any, error) {
+				return data, nil
+			},
+		}},
+		Source: `
+			for (const value of [context, host.test.data({})]) {
+				if (value.chosenName !== "original") throw Error("JSON name");
+				if ("other_name" in value || "Value" in value) throw Error("unexpected name");
+				if ("Hidden" in value || "omitted" in value) throw Error("excluded field");
+				if (value.when !== "2026-01-02T03:04:05Z") throw Error("custom serialization");
+				if (value.raw.nestedValue !== true) throw Error("raw JSON");
+				if (value.keys.My_Key !== "original") throw Error("dictionary key");
+				value.keys.My_Key = "mutated";
+			}
+		`,
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Diagnostics)
+	require.Equal(t, "original", data.Keys["My_Key"])
 }

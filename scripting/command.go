@@ -22,15 +22,10 @@ func (r CommandResult) ApplyTo(envVars map[string]string) {
 }
 
 // RunCommand enables emitCommandEnvironment for one action. Failed actions
-// discard assignments, but retain sensitive values in the shared Redactor.
-// External host-operation side effects are not rolled back.
+// discard assignments. External host-operation side effects are not rolled back.
 func RunCommand(parent context.Context, input Input) (CommandResult, error) {
-	if input.Redactor == nil {
-		input.Redactor = &Redactor{}
-	}
 	emissions := &commandEmissions{
-		redactor: input.Redactor,
-		envVars:  make(map[string]string),
+		envVars: make(map[string]string),
 	}
 	input.commandEmissions = emissions
 	result, err := Run(parent, input)
@@ -42,8 +37,7 @@ func RunCommand(parent context.Context, input Input) (CommandResult, error) {
 }
 
 type commandEmissions struct {
-	redactor *Redactor
-	envVars  map[string]string
+	envVars map[string]string
 }
 
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -70,7 +64,6 @@ func (e *commandEmissions) bind(vm *goja.Runtime) func(goja.FunctionCall) goja.V
 				valid = false
 				continue
 			}
-			e.redactor.Add(value)
 			if !environmentName.MatchString(name) || strings.ContainsRune(value, '\x00') {
 				valid = false
 			}

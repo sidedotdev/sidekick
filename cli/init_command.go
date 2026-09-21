@@ -415,7 +415,7 @@ func checkConfig(baseDir string) (common.RepoConfig, configCheckResult, error) {
 		return config, result, fmt.Errorf("error loading config file: %w", err)
 	}
 
-	if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+	if err := k.Unmarshal("", &config); err != nil {
 		return config, result, fmt.Errorf("error decoding config file: %w", err)
 	}
 
@@ -437,7 +437,7 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 		data, err = marshalConfigWithKoanf(config, yaml.Parser())
 	case ".toml":
 		var buf bytes.Buffer
-		err = toml.NewEncoder(&buf).Encode(config)
+		err = toml.NewEncoder(&buf).Encode(structToMap(config))
 		data = buf.Bytes()
 	case ".json":
 		data, err = marshalConfigWithKoanf(config, json.Parser())
@@ -494,36 +494,13 @@ func structToMap(v interface{}) map[string]interface{} {
 }
 
 func parseKoanfTag(field reflect.StructField) (name string, omitEmpty bool) {
-	// Check koanf tag for name, fall back to toml tag
-	koanfTag := field.Tag.Get("koanf")
-	tomlTag := field.Tag.Get("toml")
-
-	// Get name from koanf tag first, then toml tag
-	if koanfTag != "" {
-		parts := strings.Split(koanfTag, ",")
-		name = parts[0]
-		for _, opt := range parts[1:] {
-			if opt == "omitempty" {
-				omitEmpty = true
-			}
+	parts := strings.Split(field.Tag.Get("koanf"), ",")
+	name = parts[0]
+	for _, option := range parts[1:] {
+		if option == "omitempty" {
+			omitEmpty = true
 		}
 	}
-	if name == "" && tomlTag != "" {
-		parts := strings.Split(tomlTag, ",")
-		name = parts[0]
-	}
-
-	// Check toml tag for omitempty as well (merge from both tags)
-	if !omitEmpty && tomlTag != "" {
-		parts := strings.Split(tomlTag, ",")
-		for _, opt := range parts[1:] {
-			if opt == "omitempty" {
-				omitEmpty = true
-				break
-			}
-		}
-	}
-
 	return name, omitEmpty
 }
 

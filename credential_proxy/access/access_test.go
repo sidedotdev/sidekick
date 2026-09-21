@@ -50,8 +50,7 @@ func testActivation() server.Activation {
 func TestBindingCapturesInvocationAndReturnsMetadata(t *testing.T) {
 	t.Parallel()
 	input := testInput()
-	redactor := &scripting.Redactor{}
-	binding, err := New(context.Background(), input, redactor)
+	binding, err := New(context.Background(), input)
 	require.NoError(t, err)
 	input.RepoConfig.CredentialProxies["test"].Auth.Bearer.Env = "MUTATED"
 	input.RepoConfig.PortForwards[0].ContainerPort = 12345
@@ -75,7 +74,7 @@ func TestBindingCapturesInvocationAndReturnsMetadata(t *testing.T) {
 		return result, nil
 	}
 	result, err := scripting.RunCommand(context.Background(), scripting.Input{
-		Redactor: redactor, Host: binding.Host(),
+		Host:    binding.Host(),
 		Context: map[string]any{"workspaceId": "untrusted", "repoConfig": input.RepoConfig},
 		Source: `
 			context.workspaceId = "other";
@@ -95,7 +94,7 @@ func TestBindingCapturesInvocationAndReturnsMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, result.EnvVars)
 	require.Equal(t, 2, calls)
-	require.Equal(t, "[REDACTED]", result.Diagnostics)
+	require.Equal(t, testActivation().Token, result.Diagnostics)
 }
 
 func TestBindingRejectsMalformedRequests(t *testing.T) {
@@ -108,7 +107,7 @@ func TestBindingRejectsMalformedRequests(t *testing.T) {
 	} {
 		t.Run(payload, func(t *testing.T) {
 			t.Parallel()
-			binding, err := New(context.Background(), testInput(), &scripting.Redactor{})
+			binding, err := New(context.Background(), testInput())
 			require.NoError(t, err)
 			binding.activate = func(context.Context, server.ActivationRequest) (server.Activation, error) {
 				t.Error("invalid request reached activation")
@@ -125,20 +124,17 @@ func TestBindingRejectsMalformedRequests(t *testing.T) {
 
 func TestBindingRequiresIdentityAndForwarding(t *testing.T) {
 	t.Parallel()
-	for _, field := range []string{"workspace", "workflow", "redactor"} {
+	for _, field := range []string{"workspace", "workflow"} {
 		t.Run(field, func(t *testing.T) {
 			t.Parallel()
 			input := testInput()
-			redactor := &scripting.Redactor{}
 			switch field {
 			case "workspace":
 				input.WorkspaceID = ""
 			case "workflow":
 				input.WorkflowID = ""
-			case "redactor":
-				redactor = nil
 			}
-			_, err := New(context.Background(), input, redactor)
+			_, err := New(context.Background(), input)
 			require.Error(t, err)
 		})
 	}
@@ -151,7 +147,7 @@ func TestBindingRequiresIdentityAndForwarding(t *testing.T) {
 	} {
 		input := testInput()
 		input.RepoConfig.PortForwards = forwards
-		binding, err := New(context.Background(), input, &scripting.Redactor{})
+		binding, err := New(context.Background(), input)
 		require.NoError(t, err)
 		binding.activate = func(context.Context, server.ActivationRequest) (server.Activation, error) {
 			t.Error("missing forwarding reached activation")
@@ -162,7 +158,7 @@ func TestBindingRequiresIdentityAndForwarding(t *testing.T) {
 	}
 	input := testInput()
 	input.RepoConfig.PortForwards[0].ContainerPort = 0
-	binding, err := New(context.Background(), input, &scripting.Redactor{})
+	binding, err := New(context.Background(), input)
 	require.NoError(t, err)
 	binding.activate = func(context.Context, server.ActivationRequest) (server.Activation, error) {
 		return testActivation(), nil
@@ -172,15 +168,13 @@ func TestBindingRequiresIdentityAndForwarding(t *testing.T) {
 	require.Equal(t, "http://127.0.0.1:22855/credential-proxies/test", result.Proxies["test"].URL)
 }
 
-func TestBindingTracksTokensBeforeFailure(t *testing.T) {
+func TestBindingRejectsInvalidActivation(t *testing.T) {
 	t.Parallel()
-	for _, failure := range []string{"script", "expired", "metadata", "transport"} {
+	for _, failure := range []string{"expired", "metadata", "transport"} {
 		t.Run(failure, func(t *testing.T) {
 			t.Parallel()
-			redactor := &scripting.Redactor{}
-			binding, err := New(context.Background(), testInput(), redactor)
+			binding, err := New(context.Background(), testInput())
 			require.NoError(t, err)
-			token := testActivation().Token
 			binding.activate = func(context.Context, server.ActivationRequest) (server.Activation, error) {
 				result := testActivation()
 				switch failure {
@@ -189,24 +183,14 @@ func TestBindingTracksTokensBeforeFailure(t *testing.T) {
 				case "metadata":
 					result.Proxies = nil
 				case "transport":
-					return result, errors.New(token)
+					return result, errors.New("transport failed")
 				}
 				return result, nil
 			}
-			result, err := scripting.RunCommand(context.Background(), scripting.Input{
-				Redactor: redactor, Host: binding.Host(),
-				Source: `console.log("` + token + `");
-					const access = host.credentialProxies.acquireAccess({names: ["test"]});
-					throw Error(access.token);`,
-			})
+			result, err := binding.Acquire(context.Background(), []string{"test"})
 			require.Error(t, err)
-			require.Nil(t, result.EnvVars)
-			require.NotContains(t, err.Error(), token)
-			require.Equal(t, "[REDACTED]", result.Diagnostics)
-			require.Equal(t, "[REDACTED]", redactor.Redact(token))
-			encoded, marshalErr := json.Marshal(result)
-			require.NoError(t, marshalErr)
-			require.NotContains(t, string(encoded), token)
+			require.Empty(t, result.Token)
+			require.Empty(t, result.Proxies)
 		})
 	}
 }
@@ -218,8 +202,7 @@ func TestBindingHonorsActionAndInvocationCancellation(t *testing.T) {
 			t.Parallel()
 			parent, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			redactor := &scripting.Redactor{}
-			binding, err := New(parent, testInput(), redactor)
+			binding, err := New(parent, testInput())
 			require.NoError(t, err)
 			binding.activate = func(ctx context.Context, _ server.ActivationRequest) (server.Activation, error) {
 				if cancelInvocation {
@@ -229,7 +212,7 @@ func TestBindingHonorsActionAndInvocationCancellation(t *testing.T) {
 				return testActivation(), ctx.Err()
 			}
 			result, err := scripting.RunCommand(parent, scripting.Input{
-				Redactor: redactor, Host: binding.Host(), Timeout: 30 * time.Millisecond,
+				Host: binding.Host(), Timeout: 30 * time.Millisecond,
 				Source: `try { host.credentialProxies.acquireAccess({names: ["test"]}); } catch (_) {}
 					emitCommandEnvironment({envVars: {MUST_NOT_ESCAPE: "value"}});`,
 			})
@@ -239,7 +222,6 @@ func TestBindingHonorsActionAndInvocationCancellation(t *testing.T) {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			}
 			require.Nil(t, result.EnvVars)
-			require.Equal(t, "[REDACTED]", redactor.Redact(testActivation().Token))
 		})
 	}
 }
@@ -251,7 +233,7 @@ func TestBindingUsesTemporalWorkflowIdentity(t *testing.T) {
 	run := func(ctx context.Context) (string, error) {
 		input := testInput()
 		input.WorkflowID = "must-not-override-activity"
-		binding, err := New(ctx, input, &scripting.Redactor{})
+		binding, err := New(ctx, input)
 		if err != nil {
 			return "", err
 		}
@@ -283,7 +265,7 @@ func TestBindingAcquiresThroughAuthorizedControlService(t *testing.T) {
 	defer service.Close()
 
 	acquire := func(input Input) (Result, error) {
-		binding, err := New(context.Background(), input, &scripting.Redactor{})
+		binding, err := New(context.Background(), input)
 		if err != nil {
 			return Result{}, err
 		}

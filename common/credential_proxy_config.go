@@ -34,25 +34,25 @@ type CredentialProxyConfig struct {
 	// Upstream is the trusted base URL for every request through the proxy.
 	// For side authentication it is optional and, when set, applies to every
 	// mode the proxy may resolve to.
-	Upstream string `toml:"upstream,omitempty" koanf:"upstream,omitempty" json:"upstream,omitempty"`
+	Upstream string `koanf:"upstream,omitempty" json:"upstream,omitempty"`
 	// Upstreams overrides the built-in per-mode destination of a side proxy.
-	Upstreams map[string]string         `toml:"upstreams,omitempty" koanf:"upstreams,omitempty" json:"upstreams,omitempty"`
-	Auth      CredentialProxyAuthConfig `toml:"auth" koanf:"auth" json:"auth"`
+	Upstreams map[string]string         `koanf:"upstreams,omitempty" json:"upstreams,omitempty"`
+	Auth      CredentialProxyAuthConfig `koanf:"auth" json:"auth"`
 }
 
 type CredentialProxyAuthConfig struct {
-	Bearer  *CredentialSource              `toml:"bearer,omitempty" koanf:"bearer,omitempty" json:"bearer,omitempty"`
-	Headers map[string]CredentialSource    `toml:"headers,omitempty" koanf:"headers,omitempty" json:"headers,omitempty"`
-	Side    *CredentialProxySideAuthConfig `toml:"side,omitempty" koanf:"side,omitempty" json:"side,omitempty"`
+	Bearer  *CredentialSource              `koanf:"bearer,omitempty" json:"bearer,omitempty"`
+	Headers map[string]CredentialSource    `koanf:"headers,omitempty" json:"headers,omitempty"`
+	Side    *CredentialProxySideAuthConfig `koanf:"side,omitempty" json:"side,omitempty"`
 }
 
 // CredentialProxySideAuthConfig selects credentials Sidekick itself manages on the host.
 type CredentialProxySideAuthConfig struct {
-	Provider string `toml:"provider" koanf:"provider" json:"provider"`
-	Profile  string `toml:"profile,omitempty" koanf:"profile,omitempty" json:"profile,omitempty"`
+	Provider string `koanf:"provider" json:"provider"`
+	Profile  string `koanf:"profile,omitempty" json:"profile,omitempty"`
 	// AuthType is api, subscription, or empty for the provider's usual
 	// subscription-then-API fallback.
-	AuthType string `toml:"auth_type,omitempty" koanf:"auth_type,omitempty" json:"authType,omitempty"`
+	AuthType string `koanf:"auth_type,omitempty" json:"authType,omitempty"`
 }
 
 // NormalizedAuthType maps the omitted auth type to CredentialProxyAuthTypeAny.
@@ -255,6 +255,6 @@ func validAuthHeader(name string) bool {
 }
 
 type CredentialSource struct {
-	Env     string `toml:"env,omitempty" json:"env,omitempty"`
-	Command string `toml:"command,omitempty" json:"command,omitempty"`
+	Env     string `koanf:"env,omitempty" json:"env,omitempty"`
+	Command string `koanf:"command,omitempty" json:"command,omitempty"`
 }

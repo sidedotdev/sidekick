@@ -12,15 +12,13 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
+	"github.com/evanw/esbuild/pkg/api"
 )
 
 const DefaultTimeout = 30 * time.Second
-const diagnosticLimit = 64 * 1024
-const errorLimit = 8 * 1024
 
 // Operation receives the action context and one JSON argument. Implementations
-// must honor cancellation and register secrets with the invocation's Redactor.
-// Returned values must be data, not Go capabilities.
+// must honor cancellation. Returned values must be data, not Go capabilities.
 type Operation func(context.Context, json.RawMessage) (any, error)
 
 type Input struct {
@@ -32,7 +30,6 @@ type Input struct {
 	Host map[string]map[string]Operation
 	// Functions supplies explicit event-specific global operations.
 	Functions map[string]Operation
-	Redactor  *Redactor
 
 	commandEmissions *commandEmissions
 }
@@ -42,8 +39,7 @@ type Result struct {
 	Duration    time.Duration `json:"duration"`
 }
 
-// Error retains cancellation classification without wrapping secret-bearing
-// VM exceptions or host errors.
+// Error retains cancellation classification without exposing VM exception objects.
 type Error struct {
 	message string
 	cause   error
@@ -54,15 +50,12 @@ func (e *Error) Unwrap() error { return e.cause }
 
 var bindingName = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 
-// Run executes a JavaScript function body in a fresh VM. Return values are
-// ignored. No dispatch, retries, warning policy, or command lifecycle is owned
-// here; callers decide policy from the safe result and error.
+// Run transpiles a TypeScript or JavaScript function body into a fresh VM.
+// Return values are ignored. Callers own dispatch, retries, output policy,
+// and command lifecycle. Diagnostics and errors are returned without masking
+// or truncation. Type checking is not performed.
 func Run(parent context.Context, input Input) (result Result, runErr error) {
 	started := time.Now()
-	redactor := input.Redactor
-	if redactor == nil {
-		redactor = &Redactor{}
-	}
 	var diagnostics []string
 	var failure string
 	var cause error
@@ -71,9 +64,9 @@ func Run(parent context.Context, input Input) (result Result, runErr error) {
 			failure = "script runtime failed"
 		}
 		result.Duration = time.Since(started)
-		result.Diagnostics = safeText(redactor, strings.Join(diagnostics, "\n"), diagnosticLimit)
+		result.Diagnostics = strings.Join(diagnostics, "\n")
 		if failure != "" {
-			runErr = &Error{message: safeText(redactor, failure, errorLimit), cause: cause}
+			runErr = &Error{message: failure, cause: cause}
 		}
 	}()
 
@@ -104,7 +97,7 @@ func Run(parent context.Context, input Input) (result Result, runErr error) {
 	parse, _ := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
 	stringify, _ := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("stringify"))
 	toValue := func(data any) (goja.Value, error) {
-		encoded, err := encodeData(data)
+		encoded, err := json.Marshal(data)
 		if err != nil {
 			return nil, errors.New("invalid script data")
 		}
@@ -137,7 +130,7 @@ func Run(parent context.Context, input Input) (result Result, runErr error) {
 				panic(vm.NewTypeError("script action canceled"))
 			}
 			if err != nil {
-				panic(vm.NewTypeError("host operation failed: %s", redactor.Redact(err.Error())))
+				panic(vm.NewTypeError("host operation failed: %s", err.Error()))
 			}
 			result, err := toValue(value)
 			if err != nil {
@@ -206,7 +199,27 @@ func Run(parent context.Context, input Input) (result Result, runErr error) {
 			return
 		}
 	}
-	_, err = vm.RunString("(function() {\n\"use strict\";\n" + input.Source + "\n}).call(undefined);")
+	transformed := api.Transform("(function() {\n\"use strict\";\n"+input.Source+"\n}).call(undefined);", api.TransformOptions{
+		Loader:     api.LoaderTS,
+		Target:     api.ES2020,
+		Sourcefile: "script.ts",
+		LogLevel:   api.LogLevelSilent,
+	})
+	for _, warning := range api.FormatMessages(transformed.Warnings, api.FormatMessagesOptions{
+		Kind: api.WarningMessage,
+	}) {
+		diagnostics = append(diagnostics, strings.TrimSpace(warning))
+	}
+	if err := ctx.Err(); err != nil {
+		failure, cause = "script canceled: "+err.Error(), err
+		return
+	}
+	if len(transformed.Errors) != 0 {
+		failure = "script transformation failed: " + strings.TrimSpace(strings.Join(
+			api.FormatMessages(transformed.Errors, api.FormatMessagesOptions{Kind: api.ErrorMessage}), "\n"))
+		return
+	}
+	_, err = vm.RunString(string(transformed.Code))
 	if err != nil {
 		failure = fmt.Sprintf("script failed: %s", err)
 	}

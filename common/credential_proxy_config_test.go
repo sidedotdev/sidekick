@@ -54,7 +54,7 @@ func TestRepositoryCredentialProxyConfiguration(t *testing.T) {
 		}
 	}
 	var config RepoConfig
-	if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+	if err := k.Unmarshal("", &config); err != nil {
 		t.Fatal(err)
 	}
 	proxy, ok := config.CredentialProxies["internal"]

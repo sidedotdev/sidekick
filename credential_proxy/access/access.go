@@ -34,21 +34,19 @@ type Result struct {
 	Proxies   map[string]credential_proxy.ProvisionedProxy `json:"proxies"`
 }
 
-// Binding belongs to one invocation and shares its redactor with script execution.
+// Binding captures trusted configuration and identity for one invocation.
 type Binding struct {
 	parent      context.Context
 	definitions []byte
 	scope       string
 	port        int
-	redactor    *scripting.Redactor
 	activate    func(context.Context, server.ActivationRequest) (server.Activation, error)
 }
 
 // New captures configuration and identity before scripts can mutate their context.
-// The caller must also pass redactor to scripting.Input and subsequent output handling.
-func New(ctx context.Context, input Input, redactor *scripting.Redactor) (*Binding, error) {
-	if ctx == nil || redactor == nil {
-		return nil, errors.New("credential proxy access requires an invocation context and redactor")
+func New(ctx context.Context, input Input) (*Binding, error) {
+	if ctx == nil {
+		return nil, errors.New("credential proxy access requires an invocation context")
 	}
 	workflowID := input.WorkflowID
 	if activity.IsActivity(ctx) {
@@ -80,7 +78,7 @@ func New(ctx context.Context, input Input, redactor *scripting.Redactor) (*Bindi
 	socket := input.Socket
 	return &Binding{
 		parent: ctx, definitions: definitions, scope: string(scope),
-		port: port, redactor: redactor,
+		port: port,
 		activate: func(ctx context.Context, request server.ActivationRequest) (server.Activation, error) {
 			address := socket
 			if address == "" {
@@ -155,7 +153,6 @@ func (b *Binding) Acquire(actionCtx context.Context, names []string) (Result, er
 	activation, err := b.activate(ctx, server.ActivationRequest{
 		Definitions: selected, Active: active, FlowID: b.scope,
 	})
-	b.redactor.Add(activation.Token)
 	if parentErr := b.parent.Err(); parentErr != nil {
 		return Result{}, parentErr
 	}
