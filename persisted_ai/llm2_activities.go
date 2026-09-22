@@ -50,6 +50,17 @@ func (si StreamInput) ActionParams() map[string]any {
 type Llm2Activities struct {
 	Streamer srv.Streamer
 	Storage  common.KeyValueStorage
+
+	// providerFactory overrides provider resolution; tests use it to drive
+	// Stream with scripted output. Nil means resolve from model config.
+	providerFactory func(common.ModelConfig, []common.ModelProviderPublicConfig) (llm2.Provider, error)
+}
+
+func (la *Llm2Activities) resolveProvider(config common.ModelConfig, providers []common.ModelProviderPublicConfig) (llm2.Provider, error) {
+	if la.providerFactory != nil {
+		return la.providerFactory(config, providers)
+	}
+	return getLlm2Provider(config, providers)
 }
 
 // Stream executes an LLM streaming request and sends events to the flow event stream.
@@ -122,7 +133,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		}
 	}()
 
-	provider, err := getLlm2Provider(input.Options.ModelConfig, input.Providers)
+	provider, err := la.resolveProvider(input.Options.ModelConfig, input.Providers)
 	if err != nil {
 		close(eventChan)
 		log.Error().Err(err).Msg("failed to get llm2 provider")
@@ -150,7 +161,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		SecretManager: secretManager,
 	}
 
-	response, err := provider.Stream(ctx, request, eventChan)
+	response, err := streamWithRetry(ctx, provider, request, eventChan)
 	close(eventChan)
 
 	if response != nil {

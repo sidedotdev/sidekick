@@ -454,7 +454,7 @@ loop:
 		return nil, wrapOpenAIError(err)
 	}
 
-	outputMessage := accumulateOpenaiEventsToMessage(events)
+	outputMessage := AccumulateEventsToMessage(events)
 
 	return &MessageResponse{
 		Id:              "",
@@ -693,7 +693,11 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 	return items, nil
 }
 
-func accumulateOpenaiEventsToMessage(events []Event) Message {
+// AccumulateEventsToMessage assembles the streamed events of a response into
+// a single assistant message. It only relies on the provider-agnostic event
+// contract, so callers can also use it to recover partial output from a
+// stream that was aborted before the provider produced a response.
+func AccumulateEventsToMessage(events []Event) Message {
 	blocks := make(map[int]*ContentBlock)
 	maxIndex := -1
 
