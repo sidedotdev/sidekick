@@ -58,12 +58,11 @@ supports transactional emissions; automatic output masking is deferred.
 [Command script hooks](command_script_hooks.md#standalone-api)
 documents their Go API and caller responsibilities.
 
-Hook schema, matching, dispatch, command-activity integration, command-output
-output policy, and `side.yml` activation migration remain deferred. Existing
-wrappers, provisioners, worker registrations, workflow paths, and legacy command
-keepalive remain functional pending integration and subsequent cleanup. The hook
-selection and command flow below describe that target integration;
-[PLAN.md](../../PLAN.md) tracks the remaining work.
+Hook schema, matching, dispatch, command-activity integration, and the
+`side.yml` migration to a `hooks.run_command` script rule are implemented. The
+legacy command wrappers, provisioners, worker registrations, workflow
+compatibility paths, and command keepalive have been removed. Command-output
+policy (masking of hook-emitted values) remains deferred.
 
 ## Requirements
 
@@ -75,10 +74,9 @@ selection and command flow below describe that target integration;
   loaded by the service. Conflicting definitions fail. Arbitrary script/request
   definitions are not trusted: activation must match service-loaded definitions,
   and activation/renewal reload authorization.
-- Repository `before_command` hook rules will select when commands receive
-  access, including automatically for Modal. After integration, rules replace
-  environment-specific activation lists; named definitions remain under
-  `credential_proxies`. Do not migrate activation lists before that integration.
+- Repository `run_command` hook rules select when commands receive access,
+  including automatically for Modal. Rules replace environment-specific
+  activation lists; named definitions remain under `credential_proxies`.
 - Scripts acquire access through a reusable host operation and explicitly emit
   command environment additions. Acquisition returns only a scoped token,
   RFC 3339 expiry, and client-compatible proxy metadata, not environment
@@ -154,9 +152,6 @@ selection and command flow below describe that target integration;
 
 ## Flow
 
-This is the target command integration; standalone acquisition and emissions
-are implemented, but hook dispatch and command wiring remain deferred.
-
 Workflow code matches hook rules against the original invocation context. The
 ordinary command activity runs the selected scripts through generic hook support.
 An invocation-bound host function captures activity context, configuration,
@@ -179,7 +174,7 @@ sequenceDiagram
     participant Proxy as Credential proxy (host)
     participant Provider as Provider API
 
-    Workflow->>Workflow: Match before_command rules
+    Workflow->>Workflow: Match run_command rules
     Workflow->>Activity: Command, scripts, non-secret context
     Activity->>Proxy: Acquire authorized access for implicit flow scope
     Proxy-->>Activity: Reused or refreshed token, metadata, expiry

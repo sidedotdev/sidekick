@@ -2,14 +2,13 @@
 
 Repositories configure lifecycle hooks through `hooks` in `side.yml`. Each event
 maps to an ordered list of rules with optional `match` filters and typed actions.
-The implemented scope is the `run_tests` event and the `modal.refresh_volumes`
-action.
+The implemented events are `run_tests` and `run_command`; the implemented
+actions are `modal.refresh_volumes` and `script`.
 
 [Command script hooks](command_script_hooks.md) extends this design with `script`
-actions and the per-command `before_command` event. Its standalone runner,
-environment emissions, and credential-proxy binding are implemented; hook
-configuration/dispatch and command integration remain separate work. That
-extension does not change the `before_tests` batch semantics specified here.
+actions and the per-command `run_command` event, both implemented. Both events
+accept both action types. That extension does not change the `run_tests` batch
+semantics specified here.
 
 ```yaml
 hooks:
@@ -45,9 +44,9 @@ automatic heartbeat retries and user-approved retries containing only pending
 commands. Completed command results are retained; those commands are not rerun
 as part of the pending batch.
 
-Empty batches emit no event. Individual command execution does not emit hooks,
-and hook actions do not emit nested events. `before_tests` is not an alias and
-is rejected.
+Empty batches emit no event. Individual test commands emit `run_command`, not
+`run_tests`, and hook actions do not emit nested events. `before_tests` is not
+an alias and is rejected.
 
 ## Action: `modal.refresh_volumes`
 

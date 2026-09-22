@@ -177,6 +177,64 @@ func (s *RunTestsTestSuite) TestRunTestsUsesLongTestCommandTimeout() {
 	s.Equal(testCommandStartToCloseTimeout, startToClose)
 }
 
+func (s *RunTestsTestSuite) TestRunTestsDispatchesRunCommandHooksForMatchingEnvType() {
+	hooks := common.HooksConfig{RunCommand: []common.HookRuleConfig{{
+		Match:   &common.HookMatchConfig{EnvTypes: []string{"modal"}},
+		Actions: []common.HookActionConfig{{Type: common.HookActionScript, Source: "emitCommandEnvironment({envVars: {A: '1'}})"}},
+	}}}
+	s.devContext.WorkspaceId = "ws-hooks"
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{{WorkingDir: ".", Command: "go test ./..."}},
+		Hooks:        hooks,
+	}
+	s.envContainer = env.EnvContainer{Env: &env.ModalEnv{WorkingDirectory: "/workspace", SandboxName: "sb-1"}}
+
+	var input env.EnvRunCommandActivityInput
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, in env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			input = in
+			return env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil
+		},
+	).Times(1)
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	s.Require().Len(input.Hooks, 1)
+	s.Equal("hooks.run_command[0].actions[0]", input.Hooks[0].Location)
+	s.Equal(common.HookActionScript, input.Hooks[0].Type)
+	s.Equal("emitCommandEnvironment({envVars: {A: '1'}})", input.Hooks[0].Source)
+	s.Equal("ws-hooks", input.HookContext.WorkspaceId)
+	s.Equal(hooks, input.HookContext.RepoConfig.Hooks)
+}
+
+func (s *RunTestsTestSuite) TestRunTestsSkipsRunCommandHooksForNonMatchingEnvType() {
+	s.devContext.WorkspaceId = "ws-hooks"
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{{WorkingDir: ".", Command: "go test ./..."}},
+		Hooks: common.HooksConfig{RunCommand: []common.HookRuleConfig{{
+			Match:   &common.HookMatchConfig{EnvTypes: []string{"modal"}},
+			Actions: []common.HookActionConfig{{Type: common.HookActionScript, Source: "1"}},
+		}}},
+	}
+
+	var input env.EnvRunCommandActivityInput
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, in env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			input = in
+			return env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil
+		},
+	).Times(1)
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	s.Empty(input.Hooks)
+	s.Equal(env.CommandHookContext{}, input.HookContext)
+}
+
 func (s *RunTestsTestSuite) TestRunTestsWithFailingTests() {
 	s.devContext.RepoConfig = common.RepoConfig{
 		TestCommands: []common.CommandConfig{

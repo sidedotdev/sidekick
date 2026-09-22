@@ -19,6 +19,7 @@ import (
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	"sidekick/credential_proxy/access"
 	sidekicklogger "sidekick/logger"
 	"sidekick/srv"
 	"sidekick/telemetry"
@@ -31,6 +32,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/persisted_ai"
 	"sidekick/poll_failures"
+	"sidekick/scripting"
 )
 
 // Worker wraps a Temporal worker with telemetry shutdown
@@ -181,6 +183,19 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		},
 	})
 	RegisterWorkflows(w)
+
+	// Host bindings for run_command script hooks are wired here so that env
+	// stays independent of credential-proxy packages.
+	env.CommandScriptHost = func(ctx context.Context, input env.EnvRunCommandActivityInput) (map[string]map[string]scripting.Operation, error) {
+		binding, err := access.New(ctx, access.Input{
+			RepoConfig:  input.HookContext.RepoConfig,
+			WorkspaceID: input.HookContext.WorkspaceId,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return binding.Host(), nil
+	}
 
 	w.RegisterActivity(env.NewLocalGitWorktreeActivity)
 	w.RegisterActivity(env.CreateDevPodWorktreeActivity)

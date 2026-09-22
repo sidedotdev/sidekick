@@ -166,6 +166,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		Args:               []string{"-c", params.Command},
 		RelativeWorkingDir: relWorkDir,
 	}
+	input.Hooks, input.HookContext = runCommandHooks(dCtx, dCtx.EnvContainer.Env.GetType())
 	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute command: %v", err)

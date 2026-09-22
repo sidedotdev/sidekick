@@ -19,6 +19,56 @@ type matchedHookAction struct {
 	config   common.HookActionConfig
 }
 
+// matchHookActions selects the actions of every rule matching envType,
+// preserving configuration order. A rule without match filters matches all
+// environments.
+func matchHookActions(event string, rules []common.HookRuleConfig, envType string) []matchedHookAction {
+	var actions []matchedHookAction
+	for i, rule := range rules {
+		matches := rule.Match == nil || rule.Match.EnvTypes == nil
+		if rule.Match != nil {
+			for _, candidate := range rule.Match.EnvTypes {
+				if candidate == envType {
+					matches = true
+				}
+			}
+		}
+		if matches {
+			for j, action := range rule.Actions {
+				actions = append(actions, matchedHookAction{
+					location: fmt.Sprintf("hooks.%s[%d].actions[%d]", event, i, j),
+					config:   action,
+				})
+			}
+		}
+	}
+	return actions
+}
+
+// runCommandHooks matches run_command rules against envType and returns the
+// non-secret hook data to place on an EnvRunCommandActivityInput. Call sites
+// that skip this helper run no command hooks.
+func runCommandHooks(dCtx DevContext, envType env.EnvType) ([]env.CommandHookAction, env.CommandHookContext) {
+	matched := matchHookActions(common.HookEventRunCommand, dCtx.RepoConfig.Hooks.RunCommand, string(envType))
+	if len(matched) == 0 {
+		return nil, env.CommandHookContext{}
+	}
+	hooks := make([]env.CommandHookAction, 0, len(matched))
+	for _, action := range matched {
+		hooks = append(hooks, env.CommandHookAction{
+			Location:       action.location,
+			Type:           action.config.Type,
+			Source:         action.config.Source,
+			TimeoutSeconds: action.config.TimeoutSeconds,
+			OnError:        action.config.OnError,
+		})
+	}
+	return hooks, env.CommandHookContext{
+		WorkspaceId: dCtx.WorkspaceId,
+		RepoConfig:  dCtx.RepoConfig,
+	}
+}
+
 func dispatchRunTestsHooks(ctx workflow.Context, config common.HooksConfig, environment env.EnvContainer) error {
 	started := workflow.Now(ctx)
 	outcome := "success"
@@ -44,26 +94,7 @@ func dispatchRunTestsHooks(ctx workflow.Context, config common.HooksConfig, envi
 		outcome = "failure"
 		return fmt.Errorf("hooks.run_tests: missing invocation environment")
 	}
-	envType := string(environment.Env.GetType())
-	var actions []matchedHookAction
-	for i, rule := range config.RunTests {
-		matches := rule.Match == nil || rule.Match.EnvTypes == nil
-		if rule.Match != nil {
-			for _, candidate := range rule.Match.EnvTypes {
-				if candidate == envType {
-					matches = true
-				}
-			}
-		}
-		if matches {
-			for j, action := range rule.Actions {
-				actions = append(actions, matchedHookAction{
-					location: fmt.Sprintf("hooks.run_tests[%d].actions[%d]", i, j),
-					config:   action,
-				})
-			}
-		}
-	}
+	actions := matchHookActions(common.HookEventRunTests, config.RunTests, string(environment.Env.GetType()))
 	for _, action := range actions {
 		actionStarted := workflow.Now(ctx)
 		err := executeHookAction(ctx, action.config, environment)

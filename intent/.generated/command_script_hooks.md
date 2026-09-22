@@ -2,11 +2,17 @@
 intent_links:
   - intent: "#configuration"
     code:
+      - common/hooks.go
       - common/repo_config.go
       - common/credential_proxy_config.go
       - side.yml
   - intent: "#execution"
     code:
+      - dev/hooks.go
+      - dev/run_command.go
+      - dev/run_tests.go
+      - env/environment.go
+      - worker/worker.go
       - scripting/runner.go
       - scripting/command.go
       - scripting/runner_test.go
@@ -44,26 +50,27 @@ integration. Scripts connect reusable host operations to event-specific effects.
 Provider credentials remain on the host.
 
 This specification extends [Lifecycle hooks](hooks.md) with a `script` action
-and a `before_command` event. Its per-command event extends the base design's
+and a `run_command` event. Its per-command event extends the base design's
 batch-only event scope. Hook actions do not recursively emit command events.
+Both events accept both action types: `script` and `modal.refresh_volumes`.
 
 ## Implementation status
 
-The standalone goja runner, transactional command-environment emissions,
-invocation-bound credential-proxy access, and focused
-component tests are implemented. The compatible goja revision is pinned in
-`go.mod` and `go.sum`. Proxy startup and Side credential access are
-configuration-driven, independent of development mode.
+Hook configuration, matching, dispatch, command-activity integration, and the
+`side.yml` migration from `modal.credential_proxies` activation lists to a
+`hooks.run_command` script rule are implemented. The standalone goja runner,
+transactional command-environment emissions, and invocation-bound
+credential-proxy access are implemented and reused by that integration. The
+compatible goja revision is pinned in `go.mod` and `go.sum`. Proxy startup and
+Side credential access are configuration-driven, independent of development
+mode.
 
-Hook configuration, matching, dispatch, command-activity integration, command
-output policy, and `side.yml` activation migration remain deferred to
-the parallel hooks work. Existing command wrappers, provisioners, worker
-registrations, workflow compatibility paths, and legacy keepalive plumbing
-remain in use pending that integration and subsequent cleanup.
-
-The configuration example, command-activity execution, and sequence diagram
-below describe the target integration, not an already wired command path.
-[PLAN.md](../../PLAN.md) tracks only remaining work.
+Only the LLM `run_command` tool and verification/test commands currently
+dispatch `run_command` hooks; every other command execution leaves the hook
+fields empty and runs no hooks. Adding a call site is a single helper call.
+The legacy credential-proxy command wrappers, provisioners, keepalive plumbing,
+and workflow compatibility paths have been removed. Command output policy
+(masking of hook-emitted values) remains deferred.
 
 ## Requirements
 
@@ -100,7 +107,7 @@ credential_proxies:
         auth_type: subscription
 
 hooks:
-  before_command:
+  run_command:
     - match:
         env_types: [modal]
       actions:
@@ -146,10 +153,15 @@ authoritative.
 
 ## Execution
 
-`before_command` runs after environment readiness and before the approved command
+`run_command` runs after environment readiness and before the approved command
 executes. Its scripts run inside the ordinary command activity, not in separate
 activities that return runtime values through workflow history. Activity retries
-can execute hooks again.
+can execute hooks again. Workflow code matches rules once against the original
+environment type and passes only matched actions plus non-secret invocation
+data (workspace identity and repository configuration) to the activity; call
+sites that pass no hooks run none. The worker injects host bindings into the
+activity through a single package-level function so that `env` never depends on
+credential-proxy packages.
 
 Each action has a fresh VM and an invocation-local set of host bindings.
 Bindings are closures capturing the activity context and required invocation
@@ -287,8 +299,7 @@ flows cannot share broader access through a cache hit.
 The access binding has no client cache, background renewal, command-end
 revocation, or service teardown. The proxy service remains available across
 commands and flows, and expiry remains enforced for subsequent requests. The
-target command integration acquires access before use; still-used legacy
-command lease plumbing is removed only after that integration lands.
+command integration acquires access before use.
 
 ## Security
 

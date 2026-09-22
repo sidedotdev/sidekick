@@ -171,3 +171,74 @@ func TestRunTestsHookDeadline(t *testing.T) {
 		t.Fatal("action context deadline was not enforced")
 	}
 }
+
+func TestMatchHookActions(t *testing.T) {
+	t.Parallel()
+	action := func(source string) common.HookActionConfig {
+		return common.HookActionConfig{Type: common.HookActionScript, Source: source}
+	}
+	rules := []common.HookRuleConfig{
+		{Match: &common.HookMatchConfig{EnvTypes: []string{"local"}}, Actions: []common.HookActionConfig{action("local-only")}},
+		{Actions: []common.HookActionConfig{action("nil-match-1"), action("nil-match-2")}},
+		{Match: &common.HookMatchConfig{}, Actions: []common.HookActionConfig{action("empty-match")}},
+		{Match: &common.HookMatchConfig{EnvTypes: []string{"devpod", "modal"}}, Actions: []common.HookActionConfig{action("sandbox")}},
+	}
+	for _, tc := range []struct {
+		name          string
+		envType       string
+		wantLocations []string
+		wantSources   []string
+	}{
+		{
+			name:          "modal",
+			envType:       "modal",
+			wantLocations: []string{"hooks.run_command[1].actions[0]", "hooks.run_command[1].actions[1]", "hooks.run_command[2].actions[0]", "hooks.run_command[3].actions[0]"},
+			wantSources:   []string{"nil-match-1", "nil-match-2", "empty-match", "sandbox"},
+		},
+		{
+			name:          "local",
+			envType:       "local",
+			wantLocations: []string{"hooks.run_command[0].actions[0]", "hooks.run_command[1].actions[0]", "hooks.run_command[1].actions[1]", "hooks.run_command[2].actions[0]"},
+			wantSources:   []string{"local-only", "nil-match-1", "nil-match-2", "empty-match"},
+		},
+		{
+			name:          "openshell matches only unfiltered rules",
+			envType:       "openshell",
+			wantLocations: []string{"hooks.run_command[1].actions[0]", "hooks.run_command[1].actions[1]", "hooks.run_command[2].actions[0]"},
+			wantSources:   []string{"nil-match-1", "nil-match-2", "empty-match"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			matched := matchHookActions(common.HookEventRunCommand, rules, tc.envType)
+			var locations, sources []string
+			for _, m := range matched {
+				locations = append(locations, m.location)
+				sources = append(sources, m.config.Source)
+			}
+			require.Equal(t, tc.wantLocations, locations)
+			require.Equal(t, tc.wantSources, sources)
+		})
+	}
+	require.Empty(t, matchHookActions(common.HookEventRunTests, nil, "modal"))
+}
+
+func TestRunCommandHooksReturnsZeroContextWhenNothingMatches(t *testing.T) {
+	t.Parallel()
+	dCtx := DevContext{RepoConfig: common.RepoConfig{Hooks: common.HooksConfig{RunCommand: []common.HookRuleConfig{
+		{Match: &common.HookMatchConfig{EnvTypes: []string{"modal"}}, Actions: []common.HookActionConfig{{Type: common.HookActionScript, Source: "1"}}},
+	}}}}
+	dCtx.WorkspaceId = "ws-1"
+
+	hooks, hookCtx := runCommandHooks(dCtx, env.EnvTypeLocal)
+	require.Empty(t, hooks)
+	require.Equal(t, env.CommandHookContext{}, hookCtx)
+
+	hooks, hookCtx = runCommandHooks(dCtx, env.EnvTypeModal)
+	require.Len(t, hooks, 1)
+	require.Equal(t, "hooks.run_command[0].actions[0]", hooks[0].Location)
+	require.Equal(t, common.HookActionScript, hooks[0].Type)
+	require.Equal(t, "1", hooks[0].Source)
+	require.Equal(t, "ws-1", hookCtx.WorkspaceId)
+	require.Equal(t, dCtx.RepoConfig, hookCtx.RepoConfig)
+}

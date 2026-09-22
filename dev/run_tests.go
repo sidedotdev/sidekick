@@ -265,6 +265,7 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 	if workingDir != "" {
 		runTestInput.RelativeWorkingDir = workingDir
 	}
+	runTestInput.Hooks, runTestInput.HookContext = runCommandHooks(actionCtx.DevContext, envContainer.Env.GetType())
 	var runTestOutput env.EnvRunCommandActivityOutput
 	err := workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput).Get(actionCtx, &runTestOutput)
 	if err != nil {
