@@ -33,26 +33,38 @@ func decodeRepoConfig(k *koanf.Koanf, config *common.RepoConfig) error {
 
 func decodeRepoHooks(data []byte) (common.HooksConfig, error) {
 	var config common.HooksConfig
-	fields, err := hookObject(data, "hooks", "run_tests")
+	fields, err := hookObject(data, "hooks", common.HookEventRunTests, common.HookEventRunCommand)
 	if err != nil {
 		return config, err
 	}
-	if raw, exists := fields["run_tests"]; exists {
-		var rules []json.RawMessage
-		if err := hookValue(raw, &rules, "hooks.run_tests"); err != nil {
-			return config, err
-		}
-		config.RunTests = make([]common.HookRuleConfig, len(rules))
-		for i, rawRule := range rules {
-			location := fmt.Sprintf("hooks.run_tests[%d]", i)
-			rule, err := decodeHookRule(rawRule, location)
-			if err != nil {
-				return config, err
-			}
-			config.RunTests[i] = rule
-		}
+	if config.RunTests, err = decodeHookRules(fields, common.HookEventRunTests); err != nil {
+		return config, err
+	}
+	if config.RunCommand, err = decodeHookRules(fields, common.HookEventRunCommand); err != nil {
+		return config, err
 	}
 	return config, config.Validate()
+}
+
+func decodeHookRules(fields map[string]json.RawMessage, event string) ([]common.HookRuleConfig, error) {
+	raw, exists := fields[event]
+	if !exists {
+		return nil, nil
+	}
+	location := "hooks." + event
+	var rawRules []json.RawMessage
+	if err := hookValue(raw, &rawRules, location); err != nil {
+		return nil, err
+	}
+	rules := make([]common.HookRuleConfig, len(rawRules))
+	for i, rawRule := range rawRules {
+		rule, err := decodeHookRule(rawRule, fmt.Sprintf("%s[%d]", location, i))
+		if err != nil {
+			return nil, err
+		}
+		rules[i] = rule
+	}
+	return rules, nil
 }
 
 func decodeHookRule(data []byte, location string) (common.HookRuleConfig, error) {
@@ -98,8 +110,13 @@ func decodeHookAction(data []byte, location string) (common.HookActionConfig, er
 		return action, err
 	}
 	actionLocation := fmt.Sprintf("%s (%s)", location, action.Type)
-	if _, err := hookObject(data, actionLocation, "type", "timeout_seconds", "on_error"); err != nil {
+	if _, err := hookObject(data, actionLocation, "type", "source", "timeout_seconds", "on_error"); err != nil {
 		return action, err
+	}
+	if raw, exists := fields["source"]; exists {
+		if err := hookValue(raw, &action.Source, actionLocation+".source"); err != nil {
+			return action, err
+		}
 	}
 	if raw, exists := fields["timeout_seconds"]; exists {
 		action.TimeoutSeconds = new(float64)
