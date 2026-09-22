@@ -43,7 +43,9 @@ func Resolve(ctx context.Context, s common.CredentialSource) (string, error) {
 			}
 			return err
 		}
-		cmd.WaitDelay = 100 * time.Millisecond
+		// Bounds waiting on stray pipe holders after exit or kill; generous
+		// enough that a starved pipe-copy goroutine does not fail resolution.
+		cmd.WaitDelay = 2 * time.Second
 		output := &credentialOutput{}
 		cmd.Stdout = output
 		cmd.Stderr = io.Discard

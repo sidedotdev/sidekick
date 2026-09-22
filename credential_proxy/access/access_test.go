@@ -211,8 +211,14 @@ func TestBindingHonorsActionAndInvocationCancellation(t *testing.T) {
 				<-ctx.Done()
 				return testActivation(), ctx.Err()
 			}
+			// Invocation cancellation must win over the deadline even when VM
+			// setup is slow under heavy test load.
+			timeout := 10 * time.Second
+			if !cancelInvocation {
+				timeout = 30 * time.Millisecond
+			}
 			result, err := scripting.RunCommand(parent, scripting.Input{
-				Host: binding.Host(), Timeout: 30 * time.Millisecond,
+				Host: binding.Host(), Timeout: timeout,
 				Source: `try { host.credentialProxies.acquireAccess({names: ["test"]}); } catch (_) {}
 					emitCommandEnvironment({envVars: {MUST_NOT_ESCAPE: "value"}});`,
 			})

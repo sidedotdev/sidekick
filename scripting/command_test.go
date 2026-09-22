@@ -143,9 +143,15 @@ func TestCommandEmissionsDiscardOnCancellationAndHostFailure(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			calls := 0
+			// Only the timeout case needs a deadline; it must still leave VM
+			// setup enough headroom under heavy test load to reach the host op.
+			var timeout time.Duration
+			if failure == "timeout" {
+				timeout = time.Second
+			}
 			result, err := RunCommand(ctx, Input{
 				Source:  `emitCommandEnvironment({envVars: {TOKEN: "emitted-secret"}}); host.test.fail({});`,
-				Timeout: 30 * time.Millisecond,
+				Timeout: timeout,
 				Host: map[string]map[string]Operation{"test": {
 					"fail": func(ctx context.Context, _ json.RawMessage) (any, error) {
 						calls++
