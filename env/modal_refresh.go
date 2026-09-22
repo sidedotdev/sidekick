@@ -42,21 +42,11 @@ func lookupModalRefreshSandbox(ctx context.Context, name string) (modalVolumeRel
 	return sandbox, nil
 }
 
+// ModalRefreshVolumesActivity is the run_tests hook form of
+// modal.refresh_volumes; run_command hooks call modalRefreshVolumes directly
+// from inside the command activity.
 func ModalRefreshVolumesActivity(ctx context.Context, input ModalRefreshVolumesInput) (ModalRefreshVolumesOutput, error) {
 	output := ModalRefreshVolumesOutput{}
-	if err := ctx.Err(); err != nil {
-		return output, fmt.Errorf("modal.refresh_volumes: %w", err)
-	}
-	environment, ok := input.EnvContainer.Env.(*ModalEnv)
-	if !ok || environment == nil {
-		return output, temporal.NewNonRetryableApplicationError(
-			"modal.refresh_volumes requires a Modal environment", "UnsupportedModalRefresh", nil)
-	}
-	name := environment.SandboxName
-	if strings.TrimSpace(name) == "" {
-		return output, temporal.NewNonRetryableApplicationError(
-			"modal.refresh_volumes requires a sandbox name", "InvalidModalRefresh", nil)
-	}
 
 	// Temporal delivers activity cancellation through heartbeat responses.
 	if activity.IsActivity(ctx) {
@@ -84,29 +74,49 @@ func ModalRefreshVolumesActivity(ctx context.Context, input ModalRefreshVolumesI
 		}()
 	}
 
+	return output, modalRefreshVolumes(ctx, input.EnvContainer)
+}
+
+// modalRefreshVolumes reloads the volumes of the running Modal sandbox backing
+// the environment, honoring the deadline of ctx for the reload itself.
+func modalRefreshVolumes(ctx context.Context, container EnvContainer) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("modal.refresh_volumes: %w", err)
+	}
+	environment, ok := container.Env.(*ModalEnv)
+	if !ok || environment == nil {
+		return temporal.NewNonRetryableApplicationError(
+			"modal.refresh_volumes requires a Modal environment", "UnsupportedModalRefresh", nil)
+	}
+	name := environment.SandboxName
+	if strings.TrimSpace(name) == "" {
+		return temporal.NewNonRetryableApplicationError(
+			"modal.refresh_volumes requires a sandbox name", "InvalidModalRefresh", nil)
+	}
+
 	sandbox, err := modalRefreshLookup(ctx, name)
 	if ctx.Err() != nil {
-		return output, fmt.Errorf("modal.refresh_volumes sandbox %q: %w", name, ctx.Err())
+		return fmt.Errorf("modal.refresh_volumes sandbox %q: %w", name, ctx.Err())
 	}
 	if err != nil {
-		return output, fmt.Errorf("modal.refresh_volumes lookup sandbox %q: %w", name, err)
+		return fmt.Errorf("modal.refresh_volumes lookup sandbox %q: %w", name, err)
 	}
 	if sandbox == nil {
-		return output, fmt.Errorf("modal.refresh_volumes sandbox %q is not running", name)
+		return fmt.Errorf("modal.refresh_volumes sandbox %q is not running", name)
 	}
 	params := &modal.SandboxReloadVolumesParams{}
 	if deadline, ok := ctx.Deadline(); ok {
 		params.Timeout = time.Until(deadline)
 		if params.Timeout <= 0 {
-			return output, fmt.Errorf("modal.refresh_volumes sandbox %q: %w", name, context.DeadlineExceeded)
+			return fmt.Errorf("modal.refresh_volumes sandbox %q: %w", name, context.DeadlineExceeded)
 		}
 	}
 	err = modalRefreshReload(ctx, sandbox, params)
 	if ctx.Err() != nil {
-		return output, fmt.Errorf("modal.refresh_volumes sandbox %q: %w", name, ctx.Err())
+		return fmt.Errorf("modal.refresh_volumes sandbox %q: %w", name, ctx.Err())
 	}
 	if err != nil {
-		return output, fmt.Errorf("modal.refresh_volumes reload sandbox %q: %w", name, err)
+		return fmt.Errorf("modal.refresh_volumes reload sandbox %q: %w", name, err)
 	}
-	return output, nil
+	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/scripting"
 	"sidekick/sideagent"
 	"sidekick/utils"
 
@@ -1696,6 +1698,34 @@ func (ec *EnvContainer) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// CommandHookAction is a run_command hook action matched by workflow code. It
+// carries configuration only; access results and emitted assignments stay
+// inside the activity and never enter Temporal payloads.
+type CommandHookAction struct {
+	Location       string   `json:"location,omitempty"`
+	Type           string   `json:"type,omitempty"`
+	Source         string   `json:"source,omitempty"`
+	TimeoutSeconds *float64 `json:"timeoutSeconds,omitempty"`
+	OnError        *string  `json:"onError,omitempty"`
+}
+
+func (a CommandHookAction) config() common.HookActionConfig {
+	return common.HookActionConfig{
+		Type:           a.Type,
+		Source:         a.Source,
+		TimeoutSeconds: a.TimeoutSeconds,
+		OnError:        a.OnError,
+	}
+}
+
+// CommandHookContext is the non-secret invocation data exposed to run_command
+// hooks. Workflow identity is intentionally absent: host bindings derive it
+// from the activity context.
+type CommandHookContext struct {
+	WorkspaceId string            `json:"workspaceId,omitempty"`
+	RepoConfig  common.RepoConfig `json:"repoConfig"`
+}
+
 type EnvRunCommandActivityInput struct {
 	EnvContainer       EnvContainer
 	RelativeWorkingDir string   `json:"relativeWorkingDir"`
@@ -1703,6 +1733,22 @@ type EnvRunCommandActivityInput struct {
 	Args               []string `json:"args"`
 	EnvVars            []string `json:"envVars,omitempty"`
 	SkipWaking         bool     `json:"skipWaking,omitempty"`
+	// Hooks are run_command actions already matched against the environment
+	// type by the caller; an empty list runs no hooks.
+	Hooks       []CommandHookAction `json:"hooks,omitempty"`
+	HookContext CommandHookContext  `json:"hookContext,omitempty"`
+}
+
+// CommandScriptHost supplies the host.* namespaces available to run_command
+// script actions. The worker assigns it once so that env never depends on
+// credential-proxy packages; nil leaves scripts without host bindings.
+var CommandScriptHost func(ctx context.Context, input EnvRunCommandActivityInput) (map[string]map[string]scripting.Operation, error)
+
+// commandHookScriptContext is exposed to scripts as the read-only `context`
+// global and must only contain non-secret data.
+type commandHookScriptContext struct {
+	EnvType    EnvType           `json:"envType"`
+	RepoConfig common.RepoConfig `json:"repoConfig"`
 }
 
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
@@ -1753,11 +1799,28 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 	resultCh := make(chan result, 1)
 
 	go func() {
+		envVars := input.EnvVars
+		if len(input.Hooks) > 0 {
+			// Hooks may act on the environment itself (e.g. volume refresh),
+			// so it must be awake before they run.
+			if !input.SkipWaking {
+				if err := input.EnvContainer.Env.WakeIfHibernated(ctx); err != nil {
+					resultCh <- result{err: err}
+					return
+				}
+			}
+			hookEnvVars, err := runCommandHooks(ctx, input)
+			if err != nil {
+				resultCh <- result{err: err}
+				return
+			}
+			envVars = appendCommandHookEnvVars(input.EnvVars, hookEnvVars)
+		}
 		out, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 			RelativeWorkingDir: input.RelativeWorkingDir,
 			Command:            input.Command,
 			Args:               input.Args,
-			EnvVars:            input.EnvVars,
+			EnvVars:            envVars,
 			SkipWaking:         input.SkipWaking,
 		})
 		resultCh <- result{output: out, err: err}
@@ -1782,6 +1845,102 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 			return EnvRunCommandActivityOutput{}, ctx.Err()
 		}
 	}
+}
+
+// runCommandHooks executes the matched run_command actions serially and
+// composes the environment assignments emitted by successful script actions,
+// later actions winning on collisions. Failed actions contribute nothing and
+// are handled per their on_error policy, except that cancellation of ctx
+// always propagates.
+func runCommandHooks(ctx context.Context, input EnvRunCommandActivityInput) (map[string]string, error) {
+	envVars := make(map[string]string)
+	var host map[string]map[string]scripting.Operation
+	hostResolved := false
+	for _, action := range input.Hooks {
+		config := action.config()
+		started := time.Now()
+		var scriptResult scripting.CommandResult
+		var err error
+		switch action.Type {
+		case common.HookActionScript:
+			if !hostResolved && CommandScriptHost != nil {
+				host, err = CommandScriptHost(ctx, input)
+				hostResolved = err == nil
+			}
+			if err == nil {
+				scriptResult, err = scripting.RunCommand(ctx, scripting.Input{
+					Source: action.Source,
+					Context: commandHookScriptContext{
+						EnvType:    input.EnvContainer.Env.GetType(),
+						RepoConfig: input.HookContext.RepoConfig,
+					},
+					Timeout: config.Timeout(),
+					Host:    host,
+				})
+			}
+		case common.HookActionModalRefreshVolumes:
+			refreshCtx, cancel := context.WithTimeout(ctx, config.Timeout())
+			err = modalRefreshVolumes(refreshCtx, input.EnvContainer)
+			cancel()
+		default:
+			err = fmt.Errorf("unsupported hook action %q", action.Type)
+		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+
+		outcome := "success"
+		if err != nil {
+			err = fmt.Errorf("%s (%s): %w", action.Location, action.Type, err)
+			switch {
+			case ctx.Err() != nil:
+				outcome = "canceled"
+			case config.ErrorPolicy() == common.HookOnErrorWarn:
+				outcome = "warning"
+			default:
+				outcome = "failure"
+			}
+		}
+		entry := log.Info()
+		if err != nil {
+			entry = log.Warn().Err(err)
+		}
+		if scriptResult.Diagnostics != "" {
+			entry = entry.Str("diagnostics", scriptResult.Diagnostics)
+		}
+		entry.Str("event", common.HookEventRunCommand).
+			Str("location", action.Location).Str("actionType", action.Type).
+			Dur("duration", time.Since(started)).
+			Str("outcome", outcome).Msg("Hook action completed")
+
+		if err != nil {
+			if outcome != "warning" {
+				return nil, err
+			}
+			continue
+		}
+		scriptResult.ApplyTo(envVars)
+	}
+	return envVars, nil
+}
+
+// appendCommandHookEnvVars places hook assignments after caller-provided env
+// vars in a stable order.
+func appendCommandHookEnvVars(envVars []string, hookEnvVars map[string]string) []string {
+	if len(hookEnvVars) == 0 {
+		return envVars
+	}
+	names := make([]string, 0, len(hookEnvVars))
+	for name := range hookEnvVars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	combined := make([]string, 0, len(envVars)+len(names))
+	combined = append(combined, envVars...)
+	for _, name := range names {
+		combined = append(combined, name+"="+hookEnvVars[name])
+	}
+	return combined
 }
 
 func truncateMiddle(s string, maxBytes int) string {
