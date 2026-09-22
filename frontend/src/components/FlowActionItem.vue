@@ -34,7 +34,7 @@ import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue'
 import RunTestsFlowAction from './RunTestsFlowAction.vue'
 import JsonTree from './JsonTree.vue'
 import CheckCriteriaFulfillmentFlowAction from './CheckCriteriaFulfillmentFlowAction.vue'
-import { parseCriteriaFulfillment } from '@/lib/criteriaFulfillment';
+import { parseCriteriaFulfillment, parseCriteriaExpansionCount } from '@/lib/criteriaFulfillment';
 import ApplyEditBlocksFlowAction, { type ApplyEditBlockResult } from './ApplyEditBlocksFlowAction.vue';
 import PlaintextResultFlowAction from './PlaintextResultFlowAction.vue';
 import ToolFlowAction from './ToolFlowAction.vue';
@@ -290,7 +290,11 @@ const summary = computed<Summary | null>(() => {
       try {
         const criteriaFulfillment = parseCriteriaFulfillment(actionResult.value);
         if (criteriaFulfillment === null) {
-          return null;
+          const count = parseCriteriaExpansionCount(actionResult.value);
+          return count === null ? null : {
+            text: `View ${count} tool call${count === 1 ? '' : 's'}`,
+            emoji: '',
+          };
         }
         return {
           text: criteriaFulfillment.isFulfilled ? 'Yes' : 'No',
