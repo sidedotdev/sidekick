@@ -1361,6 +1361,9 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 		// Marker emitted by sshDialTransportError: the ssh client exited 255
 		// before the agent protocol answered, sometimes with no stderr at all.
 		"transport failure before agent channel established",
+		// Marker emitted by sshScriptTransportError: a one-off ssh session
+		// exited 255, which only ssh itself does, possibly with no stderr.
+		"transport failure before remote script ran",
 	} {
 		if strings.Contains(diagnostics, fragment) {
 			return true

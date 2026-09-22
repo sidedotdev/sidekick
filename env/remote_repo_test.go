@@ -3,9 +3,11 @@ package env
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -763,4 +765,91 @@ exec sh -c "$cmd"
 	err = syncGitRefToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, "refs/tags/missing")
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrGitTagConflict)
+}
+
+// TestRunSSHScriptClassifiesSilentTransportFailure reproduces the failure
+// seen in production: ssh exits 255 with empty stderr before the remote
+// script runs, which must be reported as a transport failure that Modal's
+// endpoint recovery recognizes rather than as the script itself failing.
+func TestRunSSHScriptClassifiesSilentTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	// Accept and immediately close connections so the ssh client dies in the
+	// identification exchange; with quiet logging it prints nothing.
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	t.Cleanup(func() { listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	sshArgs := []string{
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=QUIET",
+		"-o", "ConnectTimeout=5",
+		"-p", strconv.Itoa(port),
+		"nobody@127.0.0.1",
+	}
+	output, err := runSSHScript(context.Background(), sshArgs, "echo EXISTS")
+
+	require.Error(t, err)
+	assert.Equal(t, 255, output.ExitStatus)
+	assert.Empty(t, strings.TrimSpace(output.Stderr), "test premise: quiet ssh leaves no diagnostics")
+	var transportErr *sshScriptTransportError
+	assert.ErrorAs(t, err, &transportErr)
+	assert.True(t, isModalSSHTransportFailure(err.Error()),
+		"a silent exit 255 must trigger ssh transport recovery: %v", err)
+
+	wrapped := fmt.Errorf("failed to check for remote repo: %w", err)
+	assert.True(t, isModalSSHTransportFailure(wrapped.Error()),
+		"classification must survive the wrapping callers add")
+}
+
+// TestSSHScriptFailureClassification pins the boundary between a remote
+// script failing (a real error the caller must surface) and ssh itself
+// failing (worth an endpoint refresh and retry).
+func TestSSHScriptFailureClassification(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "silent exit 255",
+			err:  fmt.Errorf("failed to check for remote repo: %w", &sshScriptTransportError{}),
+			want: true,
+		},
+		{
+			name: "exit 255 with diagnostics",
+			err:  fmt.Errorf("failed to fsck remote repo: %w", &sshScriptTransportError{stderr: "Connection closed by UNKNOWN port 65535"}),
+			want: true,
+		},
+		{
+			name: "script exit status",
+			err:  fmt.Errorf("checking for remote repo failed (exit 1): fatal: not a git repository"),
+			want: false,
+		},
+		{
+			name: "script exit 255 text without marker",
+			err:  fmt.Errorf("realigning remote repo after push failed (exit 255): "),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isModalSSHTransportFailure(tt.err.Error()))
+		})
+	}
 }
