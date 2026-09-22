@@ -120,8 +120,7 @@ type DevPodEnvConfig struct {
 	// WorkspaceId overrides the workspace name DevPod derives from the
 	// repo directory basename. When empty, the repo directory's basename is
 	// used, matching DevPod's default behavior.
-	WorkspaceId       string   `koanf:"workspace_id,omitempty" json:"workspaceId,omitempty"`
-	CredentialProxies []string `koanf:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
+	WorkspaceId string `koanf:"workspace_id,omitempty" json:"workspaceId,omitempty"`
 }
 
 // OpenShellEnvConfig holds configuration specific to the OpenShell environment type.
@@ -129,8 +128,7 @@ type OpenShellEnvConfig struct {
 	// PrebuildCommand is a shell command executed locally before sandbox creation.
 	PrebuildCommand string `koanf:"prebuild_command,omitempty" json:"prebuildCommand,omitempty"`
 	// From is passed as the --from flag to "openshell sandbox create".
-	From              string   `koanf:"from,omitempty" json:"from,omitempty"`
-	CredentialProxies []string `koanf:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
+	From string `koanf:"from,omitempty" json:"from,omitempty"`
 }
 
 // ModalVolumeMount attaches a named Modal Volume at an absolute path inside
@@ -206,8 +204,7 @@ type ModalEnvConfig struct {
 	// the sandbox filesystem, whose snapshots are tied to a single sandbox
 	// lineage, volumes are reachable from any sandbox that mounts them, so
 	// data placed there survives sandbox recreation.
-	Volumes           []ModalVolumeMount `koanf:"volumes,omitempty" json:"volumes,omitempty"`
-	CredentialProxies []string           `koanf:"credential_proxies,omitempty" json:"credentialProxies,omitempty"`
+	Volumes []ModalVolumeMount `koanf:"volumes,omitempty" json:"volumes,omitempty"`
 }
 
 // ModalDefaultCPU and ModalDefaultMemoryMiB are the effective resource

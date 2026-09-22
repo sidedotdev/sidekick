@@ -266,22 +266,7 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 		runTestInput.RelativeWorkingDir = workingDir
 	}
 	var runTestOutput env.EnvRunCommandActivityOutput
-	var activityFuture workflow.Future
-	version := workflow.DefaultVersion
-	if len(activeCredentialProxies(envContainer.Env.GetType(), actionCtx.RepoConfig)) > 0 {
-		version = workflow.GetVersion(actionCtx, "verification-credential-proxy", workflow.DefaultVersion, 2)
-	}
-	if version >= 2 {
-		runTestInput.Provisioning = commandProvisioning(actionCtx.DevContext, envContainer.Env.GetType())
-		activityFuture = workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput)
-	} else if version >= 1 {
-		activityFuture = workflow.ExecuteActivity(actionCtx, CredentialProxyCommandActivity, CredentialProxyCommandInput{
-			Command: runTestInput, RepoConfig: actionCtx.RepoConfig,
-		})
-	} else {
-		activityFuture = workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput)
-	}
-	err := activityFuture.Get(actionCtx, &runTestOutput)
+	err := workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput).Get(actionCtx, &runTestOutput)
 	if err != nil {
 		commandErr := fmt.Errorf("failed to run test command '%s': %v", fullCommand, err)
 		if workflow.GetVersion(actionCtx, runTestsHooksVersion, workflow.DefaultVersion, 1) >= 1 {

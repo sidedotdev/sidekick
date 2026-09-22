@@ -27,9 +27,9 @@ func TestRepoConfigLegacyTemporalPayload(t *testing.T) {
 		"EnvType":"modal",
 		"RepoMode":"worktree",
 		"PortForwards":[{"hostPort":22855,"containerPort":32855}],
-		"DevPodConfig":{"WorkspaceId":"workspace","credentialProxies":["test"]},
-		"OpenShellConfig":{"PrebuildCommand":"build","From":"image","credentialProxies":["test"]},
-		"ModalConfig":{"image":"image","credentialProxies":["test"]}
+		"DevPodConfig":{"WorkspaceId":"workspace"},
+		"OpenShellConfig":{"PrebuildCommand":"build","From":"image"},
+		"ModalConfig":{"image":"image"}
 	}`)
 	expected := RepoConfig{
 		CheckCommands:           []CommandConfig{{WorkingDir: "src", Command: "check"}},
@@ -48,15 +48,13 @@ func TestRepoConfigLegacyTemporalPayload(t *testing.T) {
 		CommandPermissions: CommandPermissionConfig{
 			AutoApprove: []CommandPattern{{Pattern: "go test"}},
 		},
-		DevRun:       DevRunConfig{"server": {Command: "serve", WorkingDir: "web"}},
-		EnvType:      "modal",
-		RepoMode:     "worktree",
-		PortForwards: []PortForwardConfig{{HostPort: 22855, ContainerPort: 32855}},
-		DevPodConfig: DevPodEnvConfig{WorkspaceId: "workspace", CredentialProxies: []string{"test"}},
-		OpenShellConfig: OpenShellEnvConfig{
-			PrebuildCommand: "build", From: "image", CredentialProxies: []string{"test"},
-		},
-		ModalConfig: ModalEnvConfig{Image: "image", CredentialProxies: []string{"test"}},
+		DevRun:          DevRunConfig{"server": {Command: "serve", WorkingDir: "web"}},
+		EnvType:         "modal",
+		RepoMode:        "worktree",
+		PortForwards:    []PortForwardConfig{{HostPort: 22855, ContainerPort: 32855}},
+		DevPodConfig:    DevPodEnvConfig{WorkspaceId: "workspace"},
+		OpenShellConfig: OpenShellEnvConfig{PrebuildCommand: "build", From: "image"},
+		ModalConfig:     ModalEnvConfig{Image: "image"},
 	}
 	dc := converter.GetDefaultDataConverter()
 	payload, err := dc.ToPayload(legacy)

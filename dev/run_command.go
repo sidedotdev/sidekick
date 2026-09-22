@@ -166,17 +166,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		Args:               []string{"-c", params.Command},
 		RelativeWorkingDir: relWorkDir,
 	}
-	version := workflow.GetVersion(dCtx.Context, "run-command-credential-proxy", workflow.DefaultVersion, 2)
-	if version >= 2 {
-		input.Provisioning = commandProvisioning(dCtx, input.EnvContainer.Env.GetType())
-		err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
-	} else if version >= 1 {
-		err = workflow.ExecuteActivity(dCtx.Context, CredentialProxyCommandActivity, CredentialProxyCommandInput{
-			Command: input, RepoConfig: dCtx.RepoConfig,
-		}).Get(dCtx.Context, &output)
-	} else {
-		err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
-	}
+	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute command: %v", err)
 	}

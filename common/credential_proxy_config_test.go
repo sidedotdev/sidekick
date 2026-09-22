@@ -45,9 +45,6 @@ func TestRepositoryCredentialProxyConfiguration(t *testing.T) {
 	for key, value := range map[string]interface{}{
 		"credential_proxies.internal.upstream":            "https://api.example.com",
 		"credential_proxies.internal.auth.bearer.command": "touch '" + marker + "'",
-		"modal.credential_proxies":                        []string{"internal"},
-		"devpod.credential_proxies":                       []string{"internal"},
-		"openshell.credential_proxies":                    []string{"internal"},
 	} {
 		if err := k.Set(key, value); err != nil {
 			t.Fatal(err)
@@ -61,15 +58,6 @@ func TestRepositoryCredentialProxyConfiguration(t *testing.T) {
 	if !ok || proxy.Auth.Bearer == nil ||
 		proxy.Auth.Bearer.Command != "touch '"+marker+"'" {
 		t.Fatal("repository proxy definition was not preserved")
-	}
-	for name, active := range map[string][]string{
-		"modal":     config.ModalConfig.CredentialProxies,
-		"devpod":    config.DevPodConfig.CredentialProxies,
-		"openshell": config.OpenShellConfig.CredentialProxies,
-	} {
-		if len(active) != 1 || active[0] != "internal" {
-			t.Fatalf("%s activation names were not preserved", name)
-		}
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("loading repository configuration executed a credential command")

@@ -204,7 +204,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(treeSitterActivities)
 	w.RegisterActivity(codingActivities)
 	w.RegisterActivity(ragActivities)
-	w.RegisterActivity(dev.NewCommandActivities().EnvRunCommandActivity)
+	w.RegisterActivity(env.EnvRunCommandActivity)
 	w.RegisterActivity(env.GetEnvironmentInfoActivity)
 	w.RegisterActivity(git.GitDiffActivity)
 	w.RegisterActivity(git.DiffUntrackedFilesActivity)
@@ -265,7 +265,6 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(common.GetLocalConfig)
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)
 	w.RegisterActivity(dev.CheckCommandPermissionActivity)
-	w.RegisterActivity(dev.CredentialProxyCommandActivity)
 
 	w.RegisterActivity(temporalMetaActivities)
 	codecCleanupActivities := &common.CodecCleanupActivities{

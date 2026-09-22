@@ -168,7 +168,7 @@ func RevokeCapability(ctx context.Context, socket, token string) error {
 	return updateCapability(ctx, socket, token, "/revoke")
 }
 
-func updateCapability(ctx context.Context, socket, token, path string, expiry ...*time.Time) error {
+func updateCapability(ctx context.Context, socket, token, path string) error {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
@@ -198,18 +198,5 @@ func updateCapability(ctx context.Context, socket, token, path string, expiry ..
 	if response.StatusCode != http.StatusNoContent {
 		return errors.New("capability operation denied")
 	}
-	if len(expiry) > 0 {
-		value, err := time.Parse(time.RFC3339Nano, response.Header.Get("X-Capability-Expires-At"))
-		if err != nil || value.IsZero() {
-			return errors.New("invalid capability expiry")
-		}
-		*expiry[0] = value
-	}
 	return nil
-}
-
-func RenewCapabilityExpiry(ctx context.Context, socket, token string) (time.Time, error) {
-	var expiry time.Time
-	err := updateCapability(ctx, socket, token, "/renew", &expiry)
-	return expiry, err
 }

@@ -93,10 +93,25 @@ credential_proxies:
 openshell:
   from: "Dockerfile.openshell"
 
+hooks:
+  run_command:
+    - match:
+        env_types: [modal]
+      actions:
+        - type: script
+          source: |
+            const access = host.credentialProxies.acquireAccess({
+              names: ["openai-api", "openai-subscription"],
+            });
+
+            emitCommandEnvironment({
+              envVars: {
+                SIDE_CREDENTIAL_PROXY_TOKEN: access.token,
+                SIDE_CREDENTIAL_PROXIES: JSON.stringify(access.proxies),
+              },
+            });
+
 modal:
-  credential_proxies:
-    - openai-api
-    - openai-subscription
   # VM memory is statically provisioned from the request and cannot burst to
   # memory_limit. The container runtime lets normal workloads keep a low billing
   # floor while accommodating concurrent test commands.
@@ -136,8 +151,9 @@ port_forwards:
     container_port: 31855
   # Reverse-forward the host's credential proxy so sandbox commands can reach
   # provider APIs using host-held credentials. Forwarding is only
-  # connectivity: the listener runs in development only, and each command must
-  # still be granted a capability for the proxies it is authorized to use.
+  # connectivity: the listener starts when credential proxies are configured,
+  # and each command must still be granted a capability (via the run_command
+  # hook above) for the proxies it is authorized to use.
   - host_port: 22855
     container_port: 32855
 
