@@ -70,7 +70,7 @@ describe('criteria fulfillment streaming completion', () => {
 })
 
 describe('criteria tool response selection', () => {
-  it('does not report an expansion call as an unfulfilled verdict', () => {
+  it.each([false, true])('summarizes expansion requests without a verdict error (expanded: %s)', (expanded) => {
     const flowAction = action()
     flowAction.actionStatus = 'complete'
     flowAction.actionResult = JSON.stringify({
@@ -85,11 +85,14 @@ describe('criteria tool response selection', () => {
       },
     })
     const wrapper = mount(FlowActionItem, {
-      props: { flowAction },
-      global: { stubs: { CheckCriteriaFulfillmentFlowAction: true } },
+      props: { flowAction, defaultExpanded: expanded },
+      global: { stubs: { ChatCompletionFlowAction: true, UnifiedDiffViewer: true } },
     })
     try {
-      expect(wrapper.find('.action-summary').exists()).toBe(false)
+      expect(wrapper.get('.action-summary').text()).toContain('View 3 tool calls')
+      expect(wrapper.text()).not.toContain('Unable to parse criteria fulfillment data')
+      expect(wrapper.find('.analysis').exists()).toBe(false)
+      expect(wrapper.findComponent({ name: 'ChatCompletionFlowAction' }).exists()).toBe(expanded)
     } finally {
       wrapper.unmount()
     }

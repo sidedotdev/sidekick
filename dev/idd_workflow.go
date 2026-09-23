@@ -22,10 +22,6 @@ import (
 // state in its worktree and launch a sub-task that implements it.
 const SignalNameStartIntentSubtask = "startIntentSubtask"
 
-// SignalNameFinishIdd asks an IddWorkflow to merge its worktree into the
-// requested target branch, cleanup the worktree, and exit cleanly.
-const SignalNameFinishIdd = "finishIdd"
-
 // SignalNameSetIddAutoMode toggles the background orchestrator's auto
 // task-creation mode. Other orchestrator behaviors (e.g. surfacing
 // clarifications) are unaffected by this toggle.
@@ -38,10 +34,6 @@ const SignalNameSetIddAutoMode = "setIddAutoMode"
 // frontend fires this after its own idle/edit-activity heuristic decides
 // intent has settled, keeping the heuristic out of the workflow.
 const SignalNameRunIddOrchestrator = "runIddOrchestrator"
-
-// QueryNameIddState returns the current IddState, including ongoing sub-tasks
-// and any clarification questions surfaced by those sub-tasks.
-const QueryNameIddState = "idd_state"
 
 type IddOptions struct {
 	EnvType           env.EnvType            `json:"envType,omitempty" default:"local"`
@@ -85,12 +77,6 @@ type StartIntentSubtaskSignal struct {
 	PromptOnly bool
 }
 
-// FinishIddSignal is the payload for SignalNameFinishIdd, asking the workflow
-// to merge the idd worktree branch into TargetBranch and exit.
-type FinishIddSignal struct {
-	TargetBranch string `json:"targetBranch"`
-}
-
 // SetIddAutoModeSignal toggles whether the background orchestrator will
 // automatically launch sub-tasks when prompted by RunIddOrchestratorSignal.
 type SetIddAutoModeSignal struct {
@@ -125,15 +111,6 @@ type IddSubtask struct {
 	DispatchedDiff string `json:"-"`
 }
 
-// IddClarification is a question raised by a sub-task that blocks its progress
-// until the user answers it. This is the legacy operational channel inherited
-// from the task workflow's RequestForUser flow; orchestrator-surfaced
-// non-blocking food-for-thought lives in IddState.Nudges instead.
-type IddClarification struct {
-	SubtaskFlowId string `json:"subtaskFlowId"`
-	Question      string `json:"question"`
-}
-
 // IddNudge is a short, non-blocking thought the background orchestrator
 // surfaces about the current intent: "have you considered…?", "this looks
 // underspecified", etc. Nudges never block work; they're advisory hints the
@@ -144,23 +121,16 @@ type IddNudge struct {
 	AnchorText string `json:"anchorText,omitempty"`
 }
 
-// IddState is the query response describing an IddWorkflow's progress.
+// IddState coordinates the IDD workflow's coroutines.
 type IddState struct {
 	// DefaultTargetBranch is the branch the idd worktree was created off of,
 	// surfaced so the finish-flow UI can default its merge target.
-	DefaultTargetBranch string             `json:"defaultTargetBranch"`
-	Subtasks            []IddSubtask       `json:"subtasks"`
-	Clarifications      []IddClarification `json:"clarifications"`
-	Nudges              []IddNudge         `json:"nudges"`
+	DefaultTargetBranch string       `json:"defaultTargetBranch"`
+	Subtasks            []IddSubtask `json:"subtasks"`
+	Nudges              []IddNudge   `json:"nudges"`
 	// AutoMode indicates whether the background orchestrator will auto-create
 	// sub-tasks when intent edits settle in the worktree.
 	AutoMode bool `json:"autoMode"`
-	// FinishError records the most recent failure encountered while finishing
-	// the IDD flow (e.g. missing target branch or merge conflicts) so the
-	// canvas finish panel can surface it prominently rather than leaving the
-	// user staring at a silently still-running workflow. It is cleared at the
-	// start of each finish attempt.
-	FinishError string `json:"finishError,omitempty"`
 	// PendingSubtaskNotices queues human-readable notices about sub-tasks
 	// that reached a terminal status since the last orchestrator turn. The
 	// next turn that actually runs drains them into its prompt so the
@@ -168,6 +138,35 @@ type IddState struct {
 	// instead of inferring it from the sub-task summary. Workflow-internal
 	// only; never surfaced on the canvas.
 	PendingSubtaskNotices []string `json:"-"`
+	// Finishing is set once the merge approval starts finishing the flow. Work
+	// dispatched after that would merge into a branch that is about to be
+	// archived, so sub-task dispatch is refused until the finish completes or
+	// fails. Workflow-internal only.
+	Finishing bool `json:"-"`
+	// InFlightSubtaskRunners counts the coroutines dispatching or supervising a
+	// sub-task. A sub-task's work reaches the idd branch through its own
+	// auto-merge, which can land after it reports closure, so only the runner
+	// returning proves that work has settled. Workflow-internal only.
+	InFlightSubtaskRunners int `json:"-"`
+
+	mergeApproval    *iddMergeApproval
+	reviewReady      bool
+	reviewGeneration uint64
+	intentTree       string
+	intentBaseTree   string
+}
+
+// beginSubtaskRunner registers a sub-task runner as in flight. It must be
+// called before the dispatch yields (reservation included), so a finish
+// starting in that window still waits for the runner.
+func (s *IddState) beginSubtaskRunner() {
+	s.InFlightSubtaskRunners++
+}
+
+// endSubtaskRunner marks a sub-task runner as settled, including runners that
+// refused to start their sub-task, so a finish's drain always completes.
+func (s *IddState) endSubtaskRunner() {
+	s.InFlightSubtaskRunners--
 }
 
 // iddParentSetupOptions returns the env type and repo mode used to provision
@@ -210,19 +209,12 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	// Register the idd_state query handler eagerly so the canvas UI can poll
-	// state even before SetupDevContext finishes (or if it fails). The handler
-	// closes over a pointer so later mutations are visible.
 	autoModeDefaultVersion := workflow.GetVersion(ctx, "idd-auto-mode-default-on", workflow.DefaultVersion, 1)
 	state := &IddState{
-		Subtasks:       []IddSubtask{},
-		Clarifications: []IddClarification{},
-		Nudges:         []IddNudge{},
-		AutoMode:       autoModeDefaultVersion >= 1,
+		Subtasks: []IddSubtask{},
+		Nudges:   []IddNudge{},
+		AutoMode: autoModeDefaultVersion >= 1,
 	}
-	_ = workflow.SetQueryHandler(ctx, QueryNameIddState, func() (IddState, error) {
-		return *state, nil
-	})
 
 	parentEnvType, parentRepoMode := iddParentSetupOptions(ctx, input.IddOptions)
 
@@ -255,17 +247,12 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 
 	state.DefaultTargetBranch = dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 
-	// state is shared across the main selector loop, the orchestrator
-	// drainer coroutine, sub-task runner coroutines, and the query handler.
-	// This is safe because Temporal Go SDK coroutines are cooperatively
-	// scheduled — they only yield at workflow.* calls (Receive, Get, Sleep,
-	// etc.) — and query handlers run between workflow tasks, not concurrent
-	// with workflow code. A real mutex would break determinism; do not add
-	// one. Mutations to state must be single-statement (no yields mid-update)
-	// so concurrent readers always see a consistent snapshot.
-	_ = workflow.SetQueryHandler(dCtx, QueryNameIddState, func() (IddState, error) {
-		return *state, nil
-	})
+	// Temporal coroutines share state through cooperative scheduling. Avoid
+	// yielding midway through mutations so readers see a consistent snapshot.
+
+	// The canvas reads auto mode and nudges from the IDD flow record rather
+	// than from workflow state, so seed them as soon as the flow is set up.
+	persistIddFlowMetadata(dCtx, input, state)
 
 	// Background orchestrator setup (persisted chat history, coalescing
 	// trigger channel, drainer coroutine) is version-gated because older
@@ -385,10 +372,31 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		startEditWatcher()
 	}
 
+	// The merge-approval request is how the user finishes the flow, and how
+	// they see what would be merged as work lands, so it is raised up front and
+	// kept pending until approved.
+	mergeApproval := startIddMergeApproval(dCtx, input, state)
+
+	if err = runIddMainLoop(dCtx, input, state, mergeApproval, requestOrchestratorTurn); err != nil {
+		return err
+	}
+
+	if closureErr := signalWorkflowClosure(dCtx, "completed"); closureErr != nil {
+		workflow.GetLogger(dCtx).Error("Failed to signal idd workflow closure", "Error", closureErr)
+	}
+	return nil
+}
+
+// runIddMainLoop handles the signals an IDD flow lives on — sub-task starts,
+// sub-task user requests and closures, auto-mode and orchestrator triggers —
+// until the merge approval reports the flow finished or the workflow is
+// canceled. It is the only consumer of the sub-task closure channel, so every
+// sub-task status transition observed by waiters (e.g. cancelPendingSubtasks)
+// flows through here.
+func runIddMainLoop(dCtx DevContext, input IddWorkflowInput, state *IddState, mergeApproval *iddMergeApproval, requestOrchestratorTurn func()) error {
 	startSubtaskCh := workflow.GetSignalChannel(dCtx, SignalNameStartIntentSubtask)
 	requestForUserCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameRequestForUser)
 	subtaskUnblockedCh := workflow.GetSignalChannel(dCtx, flow_action.SignalNameSubtaskUnblocked)
-	finishIddCh := workflow.GetSignalChannel(dCtx, SignalNameFinishIdd)
 	setAutoModeCh := workflow.GetSignalChannel(dCtx, SignalNameSetIddAutoMode)
 	runOrchestratorCh := workflow.GetSignalChannel(dCtx, SignalNameRunIddOrchestrator)
 	workflowClosedCh := workflow.GetSignalChannel(dCtx, SignalNameWorkflowClosed)
@@ -403,6 +411,11 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(startSubtaskCh, func(c workflow.ReceiveChannel, _ bool) {
 			var sig StartIntentSubtaskSignal
 			c.Receive(dCtx, &sig)
+			if state.Finishing {
+				workflow.GetLogger(dCtx).Info("Ignoring start intent sub-task signal: the idd flow is finishing")
+				return
+			}
+			state.beginSubtaskRunner()
 			// Pre-reserve the sub-task entry synchronously so the canvas (and
 			// any subsequent orchestrator turn) sees it immediately, before
 			// the commit and child-workflow start yields complete. Version-
@@ -412,11 +425,12 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			// rather than before the receive returns.
 			var flowId string
 			if workflow.GetVersion(dCtx, "idd-prereserve-subtask", workflow.DefaultVersion, 1) >= 1 {
-				flowId = reservePendingSubtask(dCtx, state, sig.ScopePrompt)
+				flowId = reservePendingSubtask(dCtx, input, state, sig.ScopePrompt)
 			}
 			// Spawn a coroutine so committing and running the sub-task to
 			// completion doesn't block the selector from handling more signals.
 			workflow.Go(dCtx.Context, func(goCtx workflow.Context) {
+				defer state.endSubtaskRunner()
 				runIntentSubtask(dCtx.WithContext(goCtx), input, sig, state, flowId, requestOrchestratorTurn)
 			})
 		})
@@ -436,7 +450,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			// TODO have the orchestrator attempt to resolve clarifications from
 			// intent itself before falling back to asking the user, and surface
 			// unresolved ones on the canvas.
-			setSubtaskStatus(state, req.OriginWorkflowId, "blocked", workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, req.OriginWorkflowId, "blocked")
 			parent := workflow.GetInfo(dCtx).ParentWorkflowExecution
 			if parent == nil {
 				workflow.GetLogger(dCtx).Error("Cannot forward intent sub-task user request: no parent workflow")
@@ -450,18 +464,11 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(subtaskUnblockedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var sig flow_action.SubtaskUnblocked
 			c.Receive(dCtx, &sig)
-			setSubtaskStatus(state, sig.FlowId, "in_progress", workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, sig.FlowId, "in_progress")
 		})
 
-		selector.AddReceive(finishIddCh, func(c workflow.ReceiveChannel, _ bool) {
-			var sig FinishIddSignal
-			c.Receive(dCtx, &sig)
-			state.FinishError = ""
-			if err := finishIdd(dCtx, input, sig, state); err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to finish idd flow", "Error", err)
-				state.FinishError = err.Error()
-				return
-			}
+		selector.AddReceive(mergeApproval.finishedCh, func(c workflow.ReceiveChannel, _ bool) {
+			c.Receive(dCtx, nil)
 			finished = true
 		})
 
@@ -469,6 +476,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 			var sig SetIddAutoModeSignal
 			c.Receive(dCtx, &sig)
 			state.AutoMode = sig.Enabled
+			persistIddFlowMetadata(dCtx, input, state)
 		})
 
 		selector.AddReceive(runOrchestratorCh, func(c workflow.ReceiveChannel, _ bool) {
@@ -484,15 +492,12 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 		selector.AddReceive(workflowClosedCh, func(c workflow.ReceiveChannel, _ bool) {
 			var closure WorkflowClosure
 			c.Receive(dCtx, &closure)
-			setSubtaskStatus(state, closure.FlowId, closure.Reason, workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, closure.FlowId, closure.Reason)
 		})
 
 		selector.Select(dCtx)
 
 		if finished {
-			if closureErr := signalWorkflowClosure(dCtx, "completed"); closureErr != nil {
-				workflow.GetLogger(dCtx).Error("Failed to signal idd workflow closure", "Error", closureErr)
-			}
 			return nil
 		}
 
@@ -502,13 +507,95 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	}
 }
 
-func setSubtaskStatus(state *IddState, flowId, status string, now time.Time) {
+// setSubtaskStatus records a sub-task status transition in workflow state,
+// returning the updated sub-task when one matched the given flow id.
+func setSubtaskStatus(state *IddState, flowId, status string, now time.Time) (IddSubtask, bool) {
 	for i := range state.Subtasks {
 		if state.Subtasks[i].FlowId == flowId {
 			state.Subtasks[i].Status = status
 			state.Subtasks[i].UpdatedAt = now
-			return
+			return state.Subtasks[i], true
 		}
+	}
+	return IddSubtask{}, false
+}
+
+func subtaskByFlowId(state *IddState, flowId string) (IddSubtask, bool) {
+	for _, subtask := range state.Subtasks {
+		if subtask.FlowId == flowId {
+			return subtask, true
+		}
+	}
+	return IddSubtask{}, false
+}
+
+// updateSubtaskStatus records a sub-task status transition and persists the
+// matching flow record.
+func updateSubtaskStatus(dCtx DevContext, input IddWorkflowInput, state *IddState, flowId, status string) {
+	if subtask, ok := setSubtaskStatus(state, flowId, status, workflow.Now(dCtx)); ok {
+		persistSubtaskFlow(dCtx, input, subtask)
+	}
+}
+
+// persistSubtaskFlow writes the sub-task's flow record so the canvas can list
+// sub-tasks and their statuses without querying workflow state, and so the
+// sub-task's flow view (including any pending user requests it raises when
+// intent is ambiguous) can be opened from the canvas and answered. Records are
+// parented to the IDD task rather than the IDD flow, which lets the existing
+// completion handler block and then unblock that task.
+// FIXME: the IDD flow needs a redesign from scratch rather than further
+// incremental patching. Sub-task state is mirrored across in-memory workflow
+// state, flow records and flow actions, and those mirror writes are issued
+// from several coroutines that each yield mid-write, so statuses can land out
+// of order — a finished sub-task can end up recorded as still running. A
+// simpler design with a single source of truth and a single owner driving the
+// sub-task lifecycle would remove this whole class of races.
+func persistSubtaskFlow(dCtx DevContext, input IddWorkflowInput, subtask IddSubtask) {
+	var ima *DevAgentManagerActivities
+	actCtx := setActivityOptions(dCtx)
+	flow := domain.Flow{
+		WorkspaceId: input.WorkspaceId,
+		Id:          subtask.FlowId,
+		Type:        domain.FlowTypeBasicDev,
+		ParentId:    input.TaskId,
+		Status:      subtask.Status,
+		Title:       subtask.Title,
+		Created:     subtask.CreatedAt,
+		Updated:     subtask.UpdatedAt,
+	}
+	if err := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, flow).Get(actCtx, nil); err != nil {
+		workflow.GetLogger(dCtx).Error("Failed to persist intent sub-task flow record", "Error", err, "FlowId", subtask.FlowId)
+	}
+}
+
+// Keys under which runtime IDD state the canvas polls is stored on the IDD
+// flow record's metadata.
+const (
+	IddMetadataKeyAutoMode = "autoMode"
+	IddMetadataKeyNudges   = "nudges"
+)
+
+// persistIddFlowMetadata mirrors the runtime state the canvas needs — auto
+// mode and nudges — onto the IDD flow's own record.
+func persistIddFlowMetadata(dCtx DevContext, input IddWorkflowInput, state *IddState) {
+	log := workflow.GetLogger(dCtx)
+	var ima *DevAgentManagerActivities
+	actCtx := setActivityOptions(dCtx)
+	flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
+
+	var flow domain.Flow
+	if err := workflow.ExecuteActivity(actCtx, ima.GetWorkflow, input.WorkspaceId, flowId).Get(actCtx, &flow); err != nil {
+		log.Error("Failed to read idd flow record for metadata update", "Error", err)
+		return
+	}
+	if flow.Metadata == nil {
+		flow.Metadata = map[string]any{}
+	}
+	flow.Metadata[IddMetadataKeyAutoMode] = state.AutoMode
+	flow.Metadata[IddMetadataKeyNudges] = state.Nudges
+	flow.Updated = workflow.Now(dCtx)
+	if err := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, flow).Get(actCtx, nil); err != nil {
+		log.Error("Failed to persist idd flow metadata", "Error", err)
 	}
 }
 
@@ -521,13 +608,30 @@ func setSubtaskStatus(state *IddState, flowId, status string, now time.Time) {
 // Without this synchronous reservation the orchestrator could re-decide to
 // dispatch for the same pending intent diff, and len(state.Subtasks) would
 // mis-classify multiple concurrent first-time starts as "initial".
-func reservePendingSubtask(dCtx DevContext, state *IddState, scopePrompt string) string {
+func reservePendingSubtask(dCtx DevContext, input IddWorkflowInput, state *IddState, scopePrompt string) string {
 	flowId := "flow_" + ksuidSideEffect(dCtx)
-	state.Subtasks = append(state.Subtasks, IddSubtask{
+	now := workflow.Now(dCtx)
+	subtask := IddSubtask{
 		FlowId:      flowId,
 		Status:      "pending",
 		ScopePrompt: scopePrompt,
-	})
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	state.Subtasks = append(state.Subtasks, subtask)
+	state.reviewGeneration++
+	if state.mergeApproval != nil {
+		state.reviewReady = false
+		var ima *DevAgentManagerActivities
+		err := workflow.ExecuteActivity(dCtx, ima.UpdateTaskByTaskId, input.WorkspaceId, input.TaskId, TaskUpdate{
+			Status:    domain.TaskStatusInProgress,
+			AgentType: domain.AgentTypeLLM,
+		}).Get(dCtx, nil)
+		if err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to mark IDD task in progress", "Error", err)
+		}
+	}
+	persistSubtaskFlow(dCtx, input, subtask)
 	return flowId
 }
 
@@ -551,9 +655,12 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	if err != nil {
 		log.Error("Failed to commit intent for sub-task", "Error", err)
 		if preReserved {
-			setSubtaskStatus(state, flowId, "failed", workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, flowId, "failed")
 		}
 		return
+	}
+	if state.mergeApproval != nil {
+		state.mergeApproval.requestDiffRefresh()
 	}
 
 	reqInfo.ScopePrompt = sig.ScopePrompt
@@ -586,6 +693,18 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		} else {
 			title = generatedTitle
 		}
+	}
+
+	// Committing and title generation yielded, so a finish may have begun since
+	// this runner was dispatched. Starting the child now would produce work on a
+	// branch that is about to be archived, and the finish could merge before
+	// that work lands.
+	if state.Finishing {
+		log.Info("Not starting intent sub-task: the idd flow is finishing", "FlowId", flowId)
+		if preReserved {
+			updateSubtaskStatus(dCtx, input, state, flowId, "canceled")
+		}
+		return
 	}
 
 	branch := dCtx.Worktree.Name
@@ -644,7 +763,7 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 	if startErr := childFuture.GetChildWorkflowExecution().Get(childCtx, &we); startErr != nil {
 		log.Error("Intent sub-task failed to start", "Error", startErr)
 		if preReserved {
-			setSubtaskStatus(state, flowId, "failed", workflow.Now(dCtx))
+			updateSubtaskStatus(dCtx, input, state, flowId, "failed")
 		}
 		return
 	}
@@ -657,7 +776,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 				state.Subtasks[i].Commit = reqInfo.Commit
 				state.Subtasks[i].Status = "in_progress"
 				state.Subtasks[i].DispatchedDiff = reqInfo.Diff
-				state.Subtasks[i].CreatedAt = now
 				state.Subtasks[i].UpdatedAt = now
 				break
 			}
@@ -675,21 +793,8 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		})
 	}
 
-	// Persist a flow record for the sub-task, parented to the IDD task, so its
-	// flow view (and any pending user requests it raises when intent is
-	// ambiguous) can be opened from the canvas and answered. Parenting to the
-	// task lets the existing completion handler block and then unblock that task.
-	var ima *DevAgentManagerActivities
-	actCtx := setActivityOptions(dCtx)
-	subtaskFlow := domain.Flow{
-		WorkspaceId: input.WorkspaceId,
-		Id:          we.ID,
-		Type:        domain.FlowTypeBasicDev,
-		Status:      "in_progress",
-		ParentId:    input.TaskId,
-	}
-	if putErr := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, subtaskFlow).Get(actCtx, nil); putErr != nil {
-		log.Error("Failed to persist intent sub-task flow record", "Error", putErr)
+	if subtask, ok := subtaskByFlowId(state, we.ID); ok {
+		persistSubtaskFlow(dCtx, input, subtask)
 	}
 
 	status := "completed"
@@ -711,7 +816,10 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 			log.Error("Intent sub-task failed", "Error", childErr)
 		}
 	}
-	setSubtaskStatus(state, we.ID, status, workflow.Now(dCtx))
+	updateSubtaskStatus(dCtx, input, state, we.ID, status)
+	if state.mergeApproval != nil {
+		state.mergeApproval.requestDiffRefresh()
+	}
 
 	// Prompt the orchestrator to re-evaluate remaining un-dispatched intent as
 	// soon as a sub-task lands (or fails/cancels) instead of waiting for the
@@ -725,11 +833,6 @@ func runIntentSubtask(dCtx DevContext, input IddWorkflowInput, sig StartIntentSu
 		state.PendingSubtaskNotices = append(state.PendingSubtaskNotices,
 			subtaskTerminalNotice(title, we.ID, status, childResult, childErr))
 		requestOrchestratorTurn()
-	}
-
-	subtaskFlow.Status = status
-	if putErr := workflow.ExecuteActivity(actCtx, ima.PutWorkflow, subtaskFlow).Get(actCtx, nil); putErr != nil {
-		log.Error("Failed to update intent sub-task flow record", "Error", putErr)
 	}
 }
 
@@ -876,73 +979,27 @@ func pendingSubtaskFlowIds(state *IddState) []string {
 }
 
 // cancelPendingSubtasks requests cancellation of every in-flight sub-task and
-// waits for each to reach a terminal status. This stops sub-tasks from racing
-// the finish-merge against the idd worktree branch, and lets their own
-// cleanup/auto-merge logic settle so the worktree is in a consistent state
-// before we merge it elsewhere.
+// waits for the work they were doing to settle, so nothing lands on the idd
+// worktree branch after the caller is done with it.
+//
+// Reaching a terminal status is not enough to prove that: a canceled sub-task
+// reports its closure before running its own cleanup, and its auto-merge into
+// the idd branch can complete after that. The runner coroutine supervising the
+// child only returns once the child workflow has actually closed, so the drain
+// waits for the runners too — including those that refuse to start a sub-task
+// while finishing, which settle immediately.
 func cancelPendingSubtasks(dCtx DevContext, state *IddState) error {
-	pending := pendingSubtaskFlowIds(state)
-	for _, flowId := range pending {
+	for _, flowId := range pendingSubtaskFlowIds(state) {
+		// A sub-task reserved but not yet started has no workflow to cancel;
+		// its runner sees the flow finishing and closes the reservation out.
 		if err := workflow.RequestCancelExternalWorkflow(dCtx, flowId, "").Get(dCtx, nil); err != nil {
 			workflow.GetLogger(dCtx).Warn("Failed to request cancel of intent sub-task", "FlowId", flowId, "Error", err)
 		}
 	}
-	if len(pending) == 0 {
-		return nil
-	}
 	if err := workflow.Await(dCtx, func() bool {
-		return len(pendingSubtaskFlowIds(state)) == 0
+		return len(pendingSubtaskFlowIds(state)) == 0 && state.InFlightSubtaskRunners == 0
 	}); err != nil {
 		return fmt.Errorf("waiting for intent sub-tasks to finish: %w", err)
 	}
-	return nil
-}
-
-// finishIdd commits any pending intent in the worktree, merges the idd
-// worktree branch into the requested target branch, and cleans up the
-// worktree. A clean exit lets the parent task workflow mark the IDD task
-// completed via the closure signal sent by the caller.
-func finishIdd(dCtx DevContext, input IddWorkflowInput, sig FinishIddSignal, state *IddState) error {
-	target := strings.TrimSpace(sig.TargetBranch)
-	if target == "" {
-		target = state.DefaultTargetBranch
-	}
-	if target == "" {
-		return fmt.Errorf("finish idd: no target branch specified")
-	}
-	if dCtx.Worktree == nil {
-		return fmt.Errorf("finish idd: no worktree associated with idd workflow")
-	}
-	if target == dCtx.Worktree.Name {
-		return fmt.Errorf("finish idd: target branch %q is the idd worktree branch", target)
-	}
-
-	if err := cancelPendingSubtasks(dCtx, state); err != nil {
-		return err
-	}
-
-	if _, err := commitIntent(dCtx, input.Title, true); err != nil {
-		return fmt.Errorf("failed to commit pending intent before merge: %w", err)
-	}
-
-	var mergeResult git.MergeActivityResult
-	err := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, *dCtx.EnvContainer, git.GitMergeParams{
-		SourceBranch:  dCtx.Worktree.Name,
-		TargetBranch:  target,
-		CommitMessage: fmt.Sprintf("Finish IDD: %s", input.Title),
-		MergeStrategy: git.MergeStrategyMerge,
-	}).Get(dCtx, &mergeResult)
-	if err != nil {
-		return fmt.Errorf("failed to merge idd worktree into %s: %w", target, err)
-	}
-	if mergeResult.HasConflicts {
-		return fmt.Errorf("merge conflicts encountered while finishing idd into %s; resolve them manually", target)
-	}
-
-	cleanupErr := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, *dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "IDD flow finished").Get(dCtx, nil)
-	if cleanupErr != nil {
-		workflow.GetLogger(dCtx).Warn("Failed to cleanup IDD worktree after finish merge", "Error", cleanupErr)
-	}
-
 	return nil
 }

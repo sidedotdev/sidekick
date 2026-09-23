@@ -96,7 +96,11 @@ func exactInterdiff(priorFiles, currentFiles []FileDiff) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("interdiff for %s: %w", path, err)
 		}
-		out.WriteString(withGitFileHeader(dropEmptyFileSections(section), current))
+		section = withGitFileHeader(dropEmptyFileSections(section), current)
+		if _, err := parseForInterdiff(section); err != nil {
+			section = restoreInterdiffTrailingContext(section, prior, current)
+		}
+		out.WriteString(section)
 	}
 	for _, prior := range priorFiles {
 		if _, ok := priorByPath[filePathKey(prior)]; ok {
@@ -314,4 +318,81 @@ func alignInterdiffBase(prior, current FileDiff) FileDiff {
 	}
 	prior.RawContent = strings.Join(lines, "\n")
 	return prior
+}
+
+// The interdiff library can count common trailing additions without emitting
+// them as context. Recover only lines proven identical in both post-images.
+func restoreInterdiffTrailingContext(section string, prior, current FileDiff) string {
+	if strings.Contains(section+prior.RawContent+current.RawContent, "\\ No newline at end of file") {
+		return section
+	}
+	files, err := ParseUnifiedDiff(section)
+	if err != nil || len(files) != 1 {
+		return section
+	}
+	postImage := func(file FileDiff) map[int]string {
+		lines := make(map[int]string)
+		for _, hunk := range file.Hunks {
+			for _, line := range hunk.Lines {
+				if line.Type != LineRemoved {
+					lines[line.NewLine] = line.Content
+				}
+			}
+		}
+		return lines
+	}
+	oldLines, newLines := postImage(prior), postImage(current)
+	var out strings.Builder
+	hunkIndex := -1
+	oldPos, newPos, oldEnd, newEnd := 0, 0, 0, 0
+	finish := func() bool {
+		for oldPos < oldEnd && newPos < newEnd {
+			old, oldOK := oldLines[oldPos]
+			new, newOK := newLines[newPos]
+			if !oldOK || !newOK || old != new {
+				return false
+			}
+			out.WriteString(" " + old + "\n")
+			oldPos++
+			newPos++
+		}
+		return oldPos == oldEnd && newPos == newEnd
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(section, "\n"), "\n") {
+		if hunkHeaderRegex.MatchString(line) {
+			if !finish() {
+				return section
+			}
+			hunkIndex++
+			if hunkIndex >= len(files[0].Hunks) {
+				return section
+			}
+			hunk := files[0].Hunks[hunkIndex]
+			oldPos, newPos = hunk.OldStart, hunk.NewStart
+			oldEnd, newEnd = oldPos+hunk.OldCount, newPos+hunk.NewCount
+		} else if hunkIndex >= 0 {
+			if len(line) == 0 {
+				return section
+			}
+			if line[0] == ' ' || line[0] == '-' {
+				content, ok := oldLines[oldPos]
+				if !ok || content != line[1:] {
+					return section
+				}
+				oldPos++
+			}
+			if line[0] == ' ' || line[0] == '+' {
+				content, ok := newLines[newPos]
+				if !ok || content != line[1:] {
+					return section
+				}
+				newPos++
+			}
+		}
+		out.WriteString(line + "\n")
+	}
+	if !finish() {
+		return section
+	}
+	return out.String()
 }

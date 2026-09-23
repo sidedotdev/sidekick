@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { config, mount, flushPromises } from '@vue/test-utils'
+import PrimeVue from 'primevue/config'
 import IntentCanvasView from '../IntentCanvasView.vue'
+
+config.global.plugins.push(PrimeVue)
 
 const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }))
 
@@ -66,6 +69,7 @@ vi.mock('../../components/BranchSelector.vue', () => ({
 
 const intentBase = '/api/v1/workspaces/ws-1/flows/flow-1/intent'
 const flowBase = '/api/v1/workspaces/ws-1/flows/flow-1'
+const taskFlowsUrl = '/api/v1/workspaces/ws-1/tasks/task-1/flows'
 
 type FetchImpl = (url: string, opts?: RequestInit) => Promise<Response>
 
@@ -77,6 +81,17 @@ const installFetch = (impl: FetchImpl) => {
 
 const jsonResponse = (body: unknown): Response =>
   ({ ok: true, json: () => Promise.resolve(body), text: () => Promise.resolve('') } as Response)
+
+
+const canvasFixture = (url: string): Response => {
+  if (url === flowBase) return jsonResponse({ flow: { id: 'flow-1', parentId: 'task-1' } })
+  if (url === taskFlowsUrl) return jsonResponse({ flows: [] })
+  if (url === `${flowBase}/actions`) return jsonResponse({ flowActions: [{
+    actionType: 'user_request.approve.merge', actionStatus: 'pending',
+    actionParams: { mergeApprovalInfo: { defaultTargetBranch: 'main' } },
+  }] })
+  return jsonResponse({})
+}
 
 describe('IntentCanvasView', () => {
   beforeEach(() => {
@@ -106,7 +121,7 @@ describe('IntentCanvasView', () => {
       if (u.includes('/intent/file?path=')) {
         return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -140,7 +155,7 @@ describe('IntentCanvasView', () => {
       if (u.includes('/intent/file?path=')) {
         return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -173,7 +188,7 @@ describe('IntentCanvasView', () => {
       if (u.includes('/intent/file?path=')) {
         return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '' }))
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -190,7 +205,7 @@ describe('IntentCanvasView', () => {
     expect(wrapper.find('.crumb').text()).toBe('intent/overview.md')
   })
 
-  it('renders ongoing sub-tasks and clarifications from the idd state query', async () => {
+  it('renders ongoing sub-tasks and clarifications from persisted flows', async () => {
     installFetch((url, opts) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
@@ -199,20 +214,21 @@ describe('IntentCanvasView', () => {
       if (u.includes('/intent/file?path=')) {
         return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
       }
-      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+      if (u === taskFlowsUrl) {
         return Promise.resolve(
           jsonResponse({
-            result: {
-              subtasks: [
-                { flowId: 'sub-1', commit: 'abcdef1234567', status: 'in_progress' },
-                { flowId: 'sub-2', commit: 'fedcba7654321', status: 'completed' },
+            flows: [
+                { id: 'sub-1', title: 'abcdef1234567', status: 'blocked' },
+                { id: 'sub-2', title: 'fedcba7654321', status: 'completed' },
               ],
-              clarifications: [{ subtaskFlowId: 'sub-1', question: 'Which auth provider?' }],
-            },
           })
         )
       }
-      return Promise.resolve(jsonResponse({}))
+      if (u.endsWith('/sub-1/actions')) return Promise.resolve(jsonResponse({ flowActions: [{
+        actionType: 'user_request', actionStatus: 'pending', isHumanAction: true,
+        actionParams: { requestContent: 'Which auth provider?' },
+      }] }))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -220,8 +236,8 @@ describe('IntentCanvasView', () => {
 
     const rows = wrapper.findAll('.subtask-row')
     expect(rows).toHaveLength(2)
-    expect(rows[0].find('.subtask-commit').text()).toBe('abcdef1')
-    expect(rows[0].find('.subtask-status').text()).toBe('in_progress')
+    expect(rows[0].find('.subtask-title').text()).toBe('abcdef1234567')
+    expect(rows[0].find('.subtask-status').text()).toBe('blocked')
     expect(rows[1].find('.subtask-status').classes()).toContain('done')
 
     expect(wrapper.find('.clarify-question').text()).toBe('Which auth provider?')
@@ -248,22 +264,19 @@ describe('IntentCanvasView', () => {
       if (u.includes('/intent/file?path=')) {
         return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
       }
-      if (u === `${flowBase}/query` && opts?.method === 'POST') {
+      if (u === taskFlowsUrl) {
         return Promise.resolve(
           jsonResponse({
-            result: {
-              subtasks: [
-                { flowId: 'done-new', commit: 'aaa0000', status: 'completed', updatedAt: iso(1000) },
-                { flowId: 'active-old', commit: 'bbb0000', status: 'in_progress', updatedAt: iso(5000) },
-                { flowId: 'active-new', commit: 'ccc0000', status: 'in_progress', updatedAt: iso(1000) },
-                { flowId: 'blocked-1', commit: 'ddd0000', status: 'blocked', updatedAt: iso(9000) },
+            flows: [
+                { id: 'done-new', title: 'aaa0000', status: 'completed', updated: iso(1000) },
+                { id: 'active-old', title: 'bbb0000', status: 'in_progress', updated: iso(5000) },
+                { id: 'active-new', title: 'ccc0000', status: 'in_progress', updated: iso(1000) },
+                { id: 'blocked-1', title: 'ddd0000', status: 'blocked', updated: iso(9000) },
               ],
-              clarifications: [],
-            },
           })
         )
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -272,8 +285,8 @@ describe('IntentCanvasView', () => {
     const statuses = wrapper.findAll('.subtask-row .subtask-status').map((s) => s.text())
     expect(statuses).toEqual(['blocked', 'in_progress', 'in_progress', 'completed'])
 
-    const commits = wrapper.findAll('.subtask-row .subtask-commit').map((c) => c.text())
-    expect(commits).toEqual(['ddd0000', 'ccc0000', 'bbb0000', 'aaa0000'])
+    const titles = wrapper.findAll('.subtask-row .subtask-title').map((c) => c.text())
+    expect(titles).toEqual(['ddd0000', 'ccc0000', 'bbb0000', 'aaa0000'])
   })
 
   it('collapses stale completed sub-tasks only once the list is long enough to scroll', async () => {
@@ -282,14 +295,14 @@ describe('IntentCanvasView', () => {
     const recent = new Date(now - 1000).toISOString()
     const makeSubtasks = (count: number) =>
       Array.from({ length: count }, (_, i) => ({
-        flowId: `done-${i}`,
-        commit: `c${String(i).padStart(6, '0')}`,
+        id: `done-${i}`,
+        title: `c${String(i).padStart(6, '0')}`,
         status: 'completed',
-        updatedAt: twoHoursAgo,
+        updated: twoHoursAgo,
       }))
 
     let subtasks = [
-      { flowId: 'active', commit: 'active0', status: 'in_progress', updatedAt: recent },
+      { id: 'active', title: 'active0', status: 'in_progress', updated: recent },
       ...makeSubtasks(2),
     ]
     installFetch((url, opts) => {
@@ -300,10 +313,10 @@ describe('IntentCanvasView', () => {
       if (u.includes('/intent/file?path=')) {
         return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
       }
-      if (u === `${flowBase}/query` && opts?.method === 'POST') {
-        return Promise.resolve(jsonResponse({ result: { subtasks, clarifications: [] } }))
+      if (u === taskFlowsUrl) {
+        return Promise.resolve(jsonResponse({ flows: subtasks }))
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -315,10 +328,10 @@ describe('IntentCanvasView', () => {
 
     // Long list: stale completed sub-tasks fold behind a collapse toggle.
     subtasks = [
-      { flowId: 'active', commit: 'active0', status: 'in_progress', updatedAt: recent },
+      { id: 'active', title: 'active0', status: 'in_progress', updated: recent },
       ...makeSubtasks(10),
     ]
-    await (wrapper.vm as unknown as { fetchIddState: () => Promise<void> }).fetchIddState()
+    await (wrapper.vm as unknown as { fetchCanvasState: () => Promise<void> }).fetchCanvasState()
     await flushPromises()
 
     const toggle = wrapper.find('.subtask-collapse-toggle')
@@ -344,7 +357,7 @@ describe('IntentCanvasView', () => {
         startBodies.push(String(opts.body))
         return Promise.resolve(jsonResponse({ message: 'Intent sub-task started' }))
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -372,7 +385,7 @@ describe('IntentCanvasView', () => {
         startBodies.push(String(opts.body))
         return Promise.resolve(jsonResponse({ message: 'Intent sub-task started' }))
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -407,7 +420,7 @@ describe('IntentCanvasView', () => {
         fileReads.push(path)
         return Promise.resolve(jsonResponse({ path, content: `# ${path}` }))
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     window.localStorage.setItem('intent-canvas:last-file:flow-1', 'intent/specs/auth.md')
@@ -437,7 +450,7 @@ describe('IntentCanvasView', () => {
         const path = decodeURIComponent(fileMatch[1])
         return Promise.resolve(jsonResponse({ path, content: `# ${path}` }))
       }
-      return Promise.resolve(jsonResponse({}))
+      return Promise.resolve(canvasFixture(u))
     })
 
     const wrapper = mount(IntentCanvasView)
@@ -451,89 +464,195 @@ describe('IntentCanvasView', () => {
     expect(window.localStorage.getItem('intent-canvas:last-file:flow-1')).toBe('intent/specs/auth.md')
   })
 
-  it('redirects to the kanban board after the IDD flow finishes successfully', async () => {
+  it.each([false, true])('submits merge approval through UserRequest (merge fails: %s)', async (fails) => {
+    vi.useFakeTimers()
     routerPush.mockClear()
-    installFetch((url, opts) => {
+    let submitted = false
+    let finished = false
+    const completeUrl = '/api/v1/workspaces/ws-1/flow_actions/approval-1/complete'
+    const fetchSpy = installFetch(async (url, opts) => {
       const u = url.toString()
-      if (u.endsWith('/intent/files')) {
-        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
-      }
-      if (u.includes('/intent/file?path=')) {
-        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
-      }
-      if (u === `${flowBase}/query` && opts?.method === 'POST') {
-        return Promise.resolve(
-          jsonResponse({ result: { subtasks: [], clarifications: [], defaultTargetBranch: 'main' } }),
-        )
-      }
-      if (u.includes('/intent/finish_diff')) {
-        return Promise.resolve(jsonResponse({ diff: 'merge diff' }))
-      }
-      if (u.endsWith('/intent/finish') && opts?.method === 'POST') {
-        return Promise.resolve(jsonResponse({}))
+      if (u.endsWith('/intent/files')) return jsonResponse({ files: [] })
+      if (u === completeUrl && opts?.method === 'POST') {
+        submitted = true
+        return jsonResponse({})
       }
       if (u === flowBase) {
-        return Promise.resolve(jsonResponse({ flow: { status: 'completed' } }))
+        return jsonResponse({
+          flow: { id: 'flow-1', parentId: 'task-1', status: finished && !fails ? 'completed' : 'in_progress' },
+        })
       }
-      return Promise.resolve(jsonResponse({}))
+      if (u === `${flowBase}/actions`) return jsonResponse({ flowActions: [{
+        id: 'approval-1', workspaceId: 'ws-1', flowId: 'flow-1',
+        created: new Date().toISOString(), actionResult: '',
+        actionType: 'user_request.approve.merge', actionStatus: 'pending', isHumanAction: true,
+        actionParams: {
+          requestKind: 'merge_approval',
+          mergeApprovalInfo: { defaultTargetBranch: 'main', diff: '' },
+          mergeError: finished && fails ? 'Merge conflict on main' : '',
+        },
+      }] })
+      return canvasFixture(u)
     })
 
     const wrapper = mount(IntentCanvasView)
-    await flushPromises()
+    try {
+      await flushPromises()
+      await wrapper.get('.finish-btn').trigger('click')
+      await flushPromises()
+      await wrapper.get('.finish-body form').trigger('keydown', { key: 'Enter', ctrlKey: true })
+      await flushPromises()
 
-    await wrapper.find('.finish-btn').trigger('click')
-    await flushPromises()
+      expect(submitted).toBe(true)
+      const submission = fetchSpy.mock.calls.find(([url]) => String(url) === completeUrl)
+      expect(JSON.parse(String(submission?.[1]?.body))).toMatchObject({
+        userResponse: { approved: true, params: { targetBranch: 'main', ignoreWhitespace: false } },
+      })
+      expect(routerPush).not.toHaveBeenCalled()
 
-    await wrapper.find('.finish-actions .primary-btn').trigger('click')
-    await flushPromises()
+      if (!fails) {
+        await wrapper.get('[aria-label="Cancel finish"]').trigger('click')
+        expect(wrapper.find('.finish-panel').exists()).toBe(false)
+      }
 
-    expect(routerPush).toHaveBeenCalledWith({ name: 'kanban' })
+      finished = true
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      if (fails) {
+        expect(wrapper.get('[role="alert"]').text()).toBe('Merge conflict on main')
+        expect(routerPush).not.toHaveBeenCalled()
+        expect(wrapper.find('.finish-body form').exists()).toBe(true)
+      } else {
+        expect(routerPush).toHaveBeenCalledWith({ name: 'kanban' })
+      }
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
   })
 
-  it('surfaces a workflow finish error in the finish panel and does not redirect', async () => {
-    routerPush.mockClear()
-    installFetch((url, opts) => {
-      const u = url.toString()
-      if (u.endsWith('/intent/files')) {
-        return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
-      }
-      if (u.includes('/intent/file?path=')) {
-        return Promise.resolve(jsonResponse({ path: 'intent/overview.md', content: '# Overview' }))
-      }
-      if (u === `${flowBase}/query` && opts?.method === 'POST') {
-        return Promise.resolve(
-          jsonResponse({
-            result: {
-              subtasks: [],
-              clarifications: [],
-              defaultTargetBranch: 'main',
-              finishError: 'Merge conflict on main',
-            },
-          }),
-        )
-      }
-      if (u.includes('/intent/finish_diff')) {
-        return Promise.resolve(jsonResponse({ diff: 'merge diff' }))
-      }
-      if (u.endsWith('/intent/finish') && opts?.method === 'POST') {
-        return Promise.resolve(jsonResponse({}))
-      }
-      if (u === flowBase) {
-        return Promise.resolve(jsonResponse({ flow: { status: 'in_progress' } }))
-      }
-      return Promise.resolve(jsonResponse({}))
+})
+
+it('loads persisted canvas state and refreshes pending questions without querying workflow state', async () => {
+  let answered = false
+  const request = (question: string, overrides = {}) => ({
+    actionType: 'user_request',
+    actionStatus: 'pending',
+    isHumanAction: true,
+    actionParams: { requestContent: question },
+    ...overrides,
+  })
+  const fetchSpy = installFetch(async (url) => {
+    if (url === flowBase) return jsonResponse({ flow: { id: 'flow-1', parentId: 'task-1' } })
+    if (url.endsWith('/tasks/task-1/flows')) return jsonResponse({
+      flows: [
+        { id: 'flow-1', metadata: { autoMode: !answered, nudges: [{ text: 'Consider retries' }] } },
+        { id: 'sub-1', title: 'Authentication', status: 'blocked' },
+        { id: 'sub-2', title: 'Storage', status: 'completed' },
+      ],
     })
-
-    const wrapper = mount(IntentCanvasView)
+    if (url === `${flowBase}/actions`) return jsonResponse({
+      flowActions: [
+        request('Which region?'),
+        request('Review changes', { actionType: 'user_request.approve.merge' }),
+        request('Old question', { actionStatus: 'complete' }),
+        request('Not human', { isHumanAction: false }),
+      ],
+    })
+    if (url.endsWith('/sub-1/actions')) return jsonResponse({
+      flowActions: answered ? [] : [
+        request('Which provider?', { isHumanAction: false, isCallbackAction: true }),
+      ],
+    })
+    return jsonResponse({})
+  })
+  const wrapper = mount(IntentCanvasView)
+  try {
     await flushPromises()
+    expect(wrapper.findAll('.subtask-title').map((row) => row.text())).toEqual(['Authentication', 'Storage'])
+    expect(wrapper.text()).toContain('Consider retries')
+    expect(wrapper.get<HTMLInputElement>('.auto-mode-toggle input').element.checked).toBe(true)
+    expect(wrapper.findAll('.clarify-question').map((row) => row.text())).toEqual(['Which region?', 'Which provider?', 'Consider retries'])
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/sub-2/actions'))).toBe(false)
+    expect(fetchSpy.mock.calls.some(([, opts]) => String(opts?.body).includes('idd_state'))).toBe(false)
 
-    await wrapper.find('.finish-btn').trigger('click')
+    answered = true
+    await (wrapper.vm as unknown as { fetchCanvasState: () => Promise<void> }).fetchCanvasState()
     await flushPromises()
+    expect(wrapper.findAll('.clarify-question').map((row) => row.text())).toEqual(['Which region?', 'Consider retries'])
+    expect(wrapper.get<HTMLInputElement>('.auto-mode-toggle input').element.checked).toBe(false)
+  } finally {
+    wrapper.unmount()
+  }
+})
 
-    await wrapper.find('.finish-actions .primary-btn').trigger('click')
-    await flushPromises()
+describe('IDD merge approval panel', () => {
+  it('renders the persisted approval, refreshes errors, and waits for flow completion before redirecting', async () => {
+    vi.useFakeTimers()
+    routerPush.mockClear()
+    let status = 'in_progress'
+    let mergeError = ''
+    const approval = () => ({
+      id: 'approval-1',
+      workspaceId: 'ws-1',
+      flowId: 'flow-1',
+      actionType: 'user_request.approve.merge',
+      actionStatus: 'pending',
+      isHumanAction: true,
+      actionParams: {
+        requestKind: 'merge_approval',
+        mergeApprovalInfo: { defaultTargetBranch: 'main', diff: 'persisted diff' },
+        mergeError,
+      },
+    })
+    const fetchSpy = installFetch(async (url) => {
+      const u = url.toString()
+      if (u === flowBase) {
+        return jsonResponse({ flow: { id: 'flow-1', parentId: 'task-1', status } })
+      }
+      if (u === `${flowBase}/actions`) return jsonResponse({ flowActions: [approval()] })
+      if (u.endsWith('/intent/files')) return jsonResponse({ files: [] })
+      return canvasFixture(u)
+    })
+    const wrapper = mount(IntentCanvasView, {
+      global: {
+        stubs: {
+          UserRequest: {
+            props: ['flowAction', 'expand'],
+            template: '<div class="approval-request">{{ flowAction.actionParams.mergeApprovalInfo.diff }}</div>',
+          },
+          DevRunControls: true,
+          IntentMarkdownEditor: true,
+          FlowView: true,
+        },
+      },
+    })
+    try {
+      await flushPromises()
+      await wrapper.get('.finish-btn').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.approval-request').text()).toBe('persisted diff')
+      expect(routerPush).not.toHaveBeenCalled()
 
-    expect(wrapper.find('.finish-error').text()).toBe('Merge conflict on main')
-    expect(routerPush).not.toHaveBeenCalled()
+      mergeError = 'Merge conflict on main'
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(wrapper.get('[role="alert"]').text()).toBe(mergeError)
+      expect(routerPush).not.toHaveBeenCalled()
+
+      mergeError = ''
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+
+      status = 'completed'
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(routerPush).toHaveBeenCalledWith({ name: 'kanban' })
+      expect(fetchSpy.mock.calls.some(([url]) => /\/intent\/finish/.test(String(url)))).toBe(false)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
   })
 })

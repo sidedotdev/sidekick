@@ -648,3 +648,46 @@ func TestNewLegacyStreamResponseStampsResolvedProfile(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamInputActionParamsSnapshotsHistory(t *testing.T) {
+	t.Parallel()
+
+	history := NewLlm2ChatHistory("flow", "workspace")
+	history.AppendRef(MessageRef{Role: "user", BlockKeys: []string{"request"}})
+	input := StreamInput{
+		Secrets:     secret_manager.SecretManagerContainer{SecretManager: secret_manager.MockSecretManager{}},
+		ChatHistory: &ChatHistoryContainer{History: history},
+	}
+	params := input.ActionParams()
+	before, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	history.AppendRef(MessageRef{Role: "assistant", BlockKeys: []string{"response"}})
+	history.AppendRef(MessageRef{Role: "user", BlockKeys: []string{"tool-result"}})
+
+	after, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("request parameters changed after appending response:\nbefore: %s\nafter: %s", before, after)
+	}
+
+	next, err := json.Marshal(input.ActionParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := json.Marshal(input.ChatHistory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nextParams map[string]json.RawMessage
+	if err := json.Unmarshal(next, &nextParams); err != nil {
+		t.Fatal(err)
+	}
+	if string(nextParams["messages"]) != string(current) {
+		t.Fatalf("next request does not contain current history: %s", next)
+	}
+}

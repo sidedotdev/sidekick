@@ -86,6 +86,8 @@
                 <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
               </div>
 
+              <BuiltinToolBlock v-else-if="block.type === 'builtin_tool_use'" :block="block" :json-tree-depth="jsonTreeDepth" />
+
               <!-- unknown block fallback -->
               <div v-else class="llm2-unknown-block">
                 <p class="unknown-block-header">Unknown Block ({{ block.type }}):</p>
@@ -172,6 +174,7 @@
               <p v-else class="reasoning-redacted"><em>Reasoning (content not available)</em></p>
               <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
             </div>
+            <BuiltinToolBlock v-else-if="block.type === 'builtin_tool_use'" :block="block" :json-tree-depth="jsonTreeDepth" />
             <div v-else-if="block.type !== 'text'" class="llm2-unknown-block">
               <JsonTree :deep="jsonTreeDepth" :data="block"/>
             </div>
@@ -211,6 +214,7 @@ import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
 import ImagePreview from './ImagePreview.vue'
 import VueMarkdown from 'vue-markdown-render'
+import BuiltinToolBlock from './BuiltinToolBlock.vue'
 
 const props = defineProps({
   flowAction: {

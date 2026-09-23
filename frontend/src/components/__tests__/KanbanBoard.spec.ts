@@ -273,6 +273,7 @@ describe('KanbanBoard', () => {
       expect(headings.text()).toContain('You')
       expect(headings.text()).toContain('AI Sidekick')
       expect(headings.text()).toContain('Finished')
+
       expect(wrapper.findAll('.kanban-column h2').length).toBe(0)
     })
 

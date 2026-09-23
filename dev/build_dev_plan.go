@@ -27,6 +27,7 @@ type buildDevPlanState struct {
 	planningPrompt              string
 	reproduceIssue              bool
 	advisor                     *Advisor
+	toolFreeResponseUserInput   toolFreeResponseUserInputState
 }
 
 var recordDevPlanTool = llm.Tool{
@@ -424,12 +425,22 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		return nil, fmt.Errorf("error generating dev plan: %w", err)
 	}
 
-	if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, chatResponse.GetMessage()); err != nil {
+	message := chatResponse.GetMessage()
+	if workflow.GetVersion(iteration.ExecCtx, "dev-plan-no-tool-help", workflow.DefaultVersion, 1) == 1 {
+		message, err = state.toolFreeResponseUserInput.convertToHelpRequest(message)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, message); err != nil {
 		return nil, err
 	}
 
-	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
-		toolCallResponses, err := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
+	if len(message.GetToolCalls()) > 0 {
+		options := toolCallOptions{
+			ForwardedAssistantResponse: len(chatResponse.GetMessage().GetToolCalls()) == 0,
+		}
+		toolCallResponses, err := handleToolCallsWithOptions(iteration.ExecCtx, message.GetToolCalls(), iteration.ChatHistory, customHandlers, options)
 		if err != nil {
 			return nil, err
 		}

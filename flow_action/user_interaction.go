@@ -57,6 +57,17 @@ type RequestForUser struct {
 	SubflowId        string
 	RequestParams    map[string]interface{}
 	RequestKind      RequestKind
+
+	// SkipPauseFlow leaves the origin flow's status untouched while the request
+	// is pending. Long-lived requests (e.g. an always-available merge approval)
+	// don't mean the flow is paused: work continues while it awaits a response.
+	SkipPauseFlow bool
+
+	// SkipParentSignal defers notifying the parent workflow about this request,
+	// leaving the caller to send it when appropriate via
+	// SignalParentRequestForUser. Until then the parent (and hence the task
+	// status) is unaware of the pending request.
+	SkipParentSignal bool
 }
 
 func (r RequestForUser) ActionParams() map[string]any {
@@ -68,6 +79,23 @@ func (r RequestForUser) ActionParams() map[string]any {
 		params[k] = v
 	}
 	return params
+}
+
+// SignalParentRequestForUser notifies the parent workflow of a pending user
+// request. Requests made with SkipParentSignal use this to control when the
+// parent (and thus the task status) learns about the request, and to re-notify
+// it later, e.g. once the flow becomes ready for the user's attention again.
+func SignalParentRequestForUser(ctx ExecContext, req RequestForUser) error {
+	workflowInfo := workflow.GetInfo(ctx.Context)
+	parentWorkflow := workflowInfo.ParentWorkflowExecution
+	if parentWorkflow == nil {
+		return fmt.Errorf("failed to signal external workflow: no parent workflow found")
+	}
+	req.OriginWorkflowId = workflowInfo.WorkflowExecution.ID
+	if err := workflow.SignalExternalWorkflow(ctx.Context, parentWorkflow.ID, "", SignalNameRequestForUser, req).Get(ctx.Context, nil); err != nil {
+		return fmt.Errorf("failed to signal external workflow: %v", err)
+	}
+	return nil
 }
 
 // Generic function for all user request kinds (free-form, multiple-choice,
@@ -85,13 +113,14 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 		return nil, fmt.Errorf("failed to signal external workflow: no parent workflow found")
 	}
 	req.OriginWorkflowId = workflowInfo.WorkflowExecution.ID
-	workflowErr := workflow.SignalExternalWorkflow(ctx.Context, parentWorkflow.ID, "", SignalNameRequestForUser, req).Get(ctx.Context, nil)
-	if workflowErr != nil {
-		return nil, fmt.Errorf("failed to signal external workflow: %v", workflowErr)
+	if !req.SkipParentSignal {
+		if err := SignalParentRequestForUser(ctx, req); err != nil {
+			return nil, err
+		}
 	}
 
 	v := workflow.GetVersion(ctx.Context, "pause-flow", workflow.DefaultVersion, 1)
-	if v == 1 {
+	if v == 1 && !req.SkipPauseFlow {
 		// update the flow status as paused. required if user feedback was requested from
 		// within the flow rather than via user intervention to pause it from
 		// the outside (both cases flow through this code path), otherwise the

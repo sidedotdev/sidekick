@@ -39,6 +39,7 @@ const (
 	ContextTypeEditBlockReport     string = "EditBlockReport"
 	ContextTypeAutoReviewFeedback  string = "AutoReviewFeedback"
 	ContextTypeSummary             string = "Summary"
+	ContextTypeIntentUpdate        string = "IntentUpdate"
 )
 
 // llm2MessageLength calculates the total length of a message by summing
@@ -213,6 +214,13 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 		}
 	}
 
+	// Incremental intent updates depend on every preceding update surviving.
+	for i, msg := range messages {
+		switch getLlm2ContextType(msg) {
+		case ContextTypeIntentUpdate:
+			isRetained[i] = true
+		}
+	}
 	protected := protectedHistoryBlocks(messages)
 
 	// Track latest indices for superseded types

@@ -522,7 +522,7 @@ func TestVerifierChatHistoryOuterOnlyHumanToolMarker(t *testing.T) {
 	require.Len(t, chatHistory.HumanMessages[0].Content, 1)
 	assert.Nil(t, chatHistory.HumanMessages[0].Content[0].ToolResult)
 	assert.Equal(t, "Preserve compatibility.", chatHistory.HumanMessages[0].GetContentString())
-	assert.Empty(t, chatHistory.Records[0].Result)
+	assert.Equal(t, "Preserve compatibility.", chatHistory.Records[0].Result)
 	assert.Empty(t, chatHistory.Text)
 }
 
@@ -566,6 +566,102 @@ func TestVerifierChatHistoryFiltersAssistantCommentary(t *testing.T) {
 			after, err := json.Marshal(messages)
 			require.NoError(t, err)
 			assert.Equal(t, string(before), string(after))
+		})
+	}
+}
+
+func TestVerifierChatHistoryHelpResultPreview(t *testing.T) {
+	t.Parallel()
+
+	for _, marker := range []string{"none", "inner", "outer", "both"} {
+		t.Run(marker, func(t *testing.T) {
+			t.Parallel()
+			answer := "Keep the Git configuration scoped to this repository."
+			messages := verifierTestCall("help", "get_help_or_input", "{}", answer)
+			if marker == "inner" || marker == "both" {
+				persisted_ai.SetContextType(&messages[1].Content[0].ToolResult.Content[0], ContextTypeUserFeedback)
+			}
+			if marker == "outer" || marker == "both" {
+				persisted_ai.SetContextType(&messages[1].Content[0], ContextTypeUserFeedback)
+			}
+			messages = append(messages, verifierTestCall("read", "read_file", "{}", "ordinary result")...)
+			settings := DefaultVerifierSettings()
+			settings.RecentToolResultsCount = 0
+			settings.ToolResultMaxChars = 0
+			var index verifierChatHistoryIndex
+			history := prepareVerifierMessages(messages, &index, settings, "")
+
+			assert.Contains(t, history.Text, "Result: "+answer)
+			assert.NotContains(t, history.Text, "Result preview unavailable; expand 1")
+			assert.NotContains(t, history.Text, "ordinary result")
+			record, err := history.Lookup("1")
+			require.NoError(t, err)
+			assert.Equal(t, messages[:2], record.Messages)
+			if marker == "none" {
+				assert.Empty(t, history.HumanMessages)
+			} else {
+				require.Len(t, history.HumanMessages, 1)
+				assert.Equal(t, answer, history.HumanMessages[0].GetContentString())
+			}
+		})
+	}
+}
+
+func TestVerifierChatHistoryHelpResultPreviewLimit(t *testing.T) {
+	t.Parallel()
+
+	answer := "Start of answer. " + strings.Repeat("important guidance ", 200) + " End of answer."
+	messages := verifierTestCall("help", "get_help_or_input", "{}", answer)
+	persisted_ai.SetContextType(&messages[1].Content[0].ToolResult.Content[0], ContextTypeUserFeedback)
+	var index verifierChatHistoryIndex
+	history := prepareVerifierMessages(messages, &index, DefaultVerifierSettings(), "")
+
+	parts := strings.SplitN(history.Text, "\nResult: ", 2)
+	require.Len(t, parts, 2)
+	assert.Contains(t, parts[1], "Start of answer.")
+	assert.Contains(t, parts[1], "End of answer.")
+	assert.Contains(t, parts[1], "bytes omitted; expand 1")
+	assert.LessOrEqual(t, len(parts[1]), 2000)
+	assert.Greater(t, len(parts[1]), 1000)
+	require.Len(t, history.HumanMessages, 1)
+	assert.Equal(t, answer, history.HumanMessages[0].GetContentString())
+	record, err := history.Lookup("1")
+	require.NoError(t, err)
+	assert.Equal(t, messages, record.Messages)
+}
+
+func TestVerifierChatHistoryHelpResultConfiguredLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, limit := range []int{0, 300, 3000} {
+		t.Run(fmt.Sprintf("limit %d", limit), func(t *testing.T) {
+			t.Parallel()
+			answer := "Answer begins. " + strings.Repeat("guidance ", 500) + " Answer ends."
+			messages := verifierTestCall("help", "get_help_or_input", "{}", answer)
+			persisted_ai.SetContextType(&messages[1].Content[0].ToolResult.Content[0], ContextTypeUserFeedback)
+			settings := DefaultVerifierSettings()
+			settings.HelpResultMaxChars = limit
+			var index verifierChatHistoryIndex
+			history := prepareVerifierMessages(messages, &index, settings, "")
+			parts := strings.SplitN(history.Text, "\nResult: ", 2)
+			require.Len(t, parts, 2)
+			assert.Contains(t, parts[1], "bytes omitted; expand 1")
+			if limit == 0 {
+				assert.NotContains(t, parts[1], "Answer begins.")
+			} else {
+				assert.Contains(t, parts[1], "Answer begins.")
+				assert.Contains(t, parts[1], "Answer ends.")
+				assert.LessOrEqual(t, len(parts[1]), limit)
+				assert.Greater(t, len(parts[1]), limit-20)
+			}
+			require.Len(t, history.HumanMessages, 1)
+			assert.Equal(t, answer, history.HumanMessages[0].GetContentString())
+
+			settings.ChatHistoryMaxSize = 250
+			history = prepareVerifierMessages(messages, &index, settings, "")
+			assert.LessOrEqual(t, history.Size, 250)
+			require.Len(t, history.HumanMessages, 1)
+			assert.Equal(t, answer, history.HumanMessages[0].GetContentString())
 		})
 	}
 }

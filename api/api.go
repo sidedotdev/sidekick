@@ -262,6 +262,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	taskRoutes.POST("/", ctrl.CreateTaskHandler)
 	taskRoutes.GET("/", ctrl.GetTasksHandler)
 	taskRoutes.GET("/:id", ctrl.GetTaskHandler)
+	taskRoutes.GET("/:id/flows", ctrl.GetTaskFlowsHandler)
 	taskRoutes.PUT("/:id", ctrl.UpdateTaskHandler)
 	taskRoutes.DELETE("/:id", ctrl.DeleteTaskHandler)
 	taskRoutes.POST("/:id/archive", ctrl.ArchiveTaskHandler)
@@ -294,8 +295,6 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.PUT("/:id/intent/file", ctrl.WriteIntentFileHandler)
 	flowRoutes.POST("/:id/intent/start_subtask", ctrl.StartIntentSubtaskHandler)
 	flowRoutes.GET("/:id/intent/branches", ctrl.ListIntentBranchesHandler)
-	flowRoutes.GET("/:id/intent/finish_diff", ctrl.FinishIntentDiffHandler)
-	flowRoutes.POST("/:id/intent/finish", ctrl.FinishIntentHandler)
 	flowRoutes.POST("/:id/intent/auto_mode", ctrl.SetIddAutoModeHandler)
 	flowRoutes.POST("/:id/intent/run_orchestrator", ctrl.RunIddOrchestratorHandler)
 
@@ -1111,6 +1110,40 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"task": response})
+}
+
+// GetTaskFlowsHandler returns all flows belonging to a task, including child
+// flows such as IDD subtask flows.
+func (ctrl *Controller) GetTaskFlowsHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	taskId := c.Param("id")
+
+	if workspaceId == "" || taskId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Task ID are required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	_, err := ctrl.service.GetTask(ctx, workspaceId, taskId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, taskId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if flows == nil {
+		flows = []domain.Flow{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"flows": flows})
 }
 
 // FlowWithWorktrees represents a Flow with its associated Worktrees

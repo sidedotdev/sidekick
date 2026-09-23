@@ -65,6 +65,11 @@ review_tool_result_max_chars:
     default: 1000
   defaultRule:
     variation: default
+review_help_result_max_chars:
+  variations:
+    default: 2000
+  defaultRule:
+    variation: default
 review_recent_tool_results_count:
   variations:
     default: 20

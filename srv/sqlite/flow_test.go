@@ -150,6 +150,8 @@ func TestGetFlow(t *testing.T) {
 			Type:        domain.FlowTypeBasicDev,
 			ParentId:    "parent1",
 			Status:      "active",
+			Title:       "Add title column",
+			Metadata:    map[string]any{"autoMode": true, "nudges": []any{"keep going"}},
 			Created:     created,
 			Updated:     updated,
 		}
@@ -164,8 +166,71 @@ func TestGetFlow(t *testing.T) {
 		assert.Equal(t, expectedFlow.Type, retrievedFlow.Type)
 		assert.Equal(t, expectedFlow.ParentId, retrievedFlow.ParentId)
 		assert.Equal(t, expectedFlow.Status, retrievedFlow.Status)
+		assert.Equal(t, expectedFlow.Title, retrievedFlow.Title)
+		assert.Equal(t, expectedFlow.Metadata, retrievedFlow.Metadata)
 		assert.True(t, retrievedFlow.Created.Equal(created))
 		assert.True(t, retrievedFlow.Updated.Equal(updated))
+	})
+
+	t.Run("Get flow without title or metadata", func(t *testing.T) {
+		t.Parallel()
+		storage := NewTestSqliteStorage(t, "flow_test")
+		flow := domain.Flow{
+			WorkspaceId: "workspace_get_bare",
+			Id:          "flow_get_bare",
+			Type:        domain.FlowTypeBasicDev,
+			ParentId:    "parent_bare",
+			Status:      "active",
+		}
+
+		require.NoError(t, storage.PersistFlow(ctx, flow))
+
+		retrievedFlow, err := storage.GetFlow(ctx, flow.WorkspaceId, flow.Id)
+		require.NoError(t, err)
+		assert.Empty(t, retrievedFlow.Title)
+		assert.Nil(t, retrievedFlow.Metadata)
+	})
+
+	t.Run("Empty metadata map round-trips as empty rather than nil", func(t *testing.T) {
+		t.Parallel()
+		storage := NewTestSqliteStorage(t, "flow_test")
+		flow := domain.Flow{
+			WorkspaceId: "workspace_get_empty_meta",
+			Id:          "flow_get_empty_meta",
+			Type:        domain.FlowTypeIdd,
+			ParentId:    "parent_empty_meta",
+			Status:      "in_progress",
+			Metadata:    map[string]any{},
+		}
+		require.NoError(t, storage.PersistFlow(ctx, flow))
+
+		retrievedFlow, err := storage.GetFlow(ctx, flow.WorkspaceId, flow.Id)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{}, retrievedFlow.Metadata)
+	})
+
+	t.Run("Metadata is replaced on update", func(t *testing.T) {
+		t.Parallel()
+		storage := NewTestSqliteStorage(t, "flow_test")
+		flow := domain.Flow{
+			WorkspaceId: "workspace_get_update",
+			Id:          "flow_get_update",
+			Type:        domain.FlowTypeIdd,
+			ParentId:    "parent_update",
+			Status:      "in_progress",
+			Title:       "original title",
+			Metadata:    map[string]any{"autoMode": false},
+		}
+		require.NoError(t, storage.PersistFlow(ctx, flow))
+
+		flow.Title = "updated title"
+		flow.Metadata = map[string]any{"autoMode": true, "nudges": []any{"focus on tests"}}
+		require.NoError(t, storage.PersistFlow(ctx, flow))
+
+		retrievedFlow, err := storage.GetFlow(ctx, flow.WorkspaceId, flow.Id)
+		require.NoError(t, err)
+		assert.Equal(t, "updated title", retrievedFlow.Title)
+		assert.Equal(t, flow.Metadata, retrievedFlow.Metadata)
 	})
 
 	t.Run("Get non-existent flow", func(t *testing.T) {
@@ -225,8 +290,8 @@ func TestGetFlowsForTask(t *testing.T) {
 		updated2 := time.Date(2025, 2, 11, 11, 0, 0, 123123123, time.UTC)
 
 		expectedFlows := []domain.Flow{
-			{WorkspaceId: workspaceId, Id: "flow_task1", Type: domain.FlowTypeBasicDev, ParentId: taskId, Status: "active", Created: created1, Updated: updated1},
-			{WorkspaceId: workspaceId, Id: "flow_task2", Type: domain.FlowTypePlannedDev, ParentId: taskId, Status: "completed", Created: created2, Updated: updated2},
+			{WorkspaceId: workspaceId, Id: "flow_task1", Type: domain.FlowTypeBasicDev, ParentId: taskId, Status: "active", Title: "first subtask", Created: created1, Updated: updated1},
+			{WorkspaceId: workspaceId, Id: "flow_task2", Type: domain.FlowTypePlannedDev, ParentId: taskId, Status: "completed", Title: "second subtask", Metadata: map[string]any{"autoMode": true}, Created: created2, Updated: updated2},
 		}
 
 		for _, flow := range expectedFlows {
@@ -244,6 +309,8 @@ func TestGetFlowsForTask(t *testing.T) {
 			assert.Equal(t, expectedFlows[i].Type, flow.Type)
 			assert.Equal(t, expectedFlows[i].ParentId, flow.ParentId)
 			assert.Equal(t, expectedFlows[i].Status, flow.Status)
+			assert.Equal(t, expectedFlows[i].Title, flow.Title)
+			assert.Equal(t, expectedFlows[i].Metadata, flow.Metadata)
 			assert.True(t, flow.Created.Equal(expectedFlows[i].Created))
 			assert.True(t, flow.Updated.Equal(expectedFlows[i].Updated))
 			assert.Equal(t, time.UTC, flow.Created.Location())
