@@ -1,0 +1,5 @@
+Partition the integers below into two groups of exactly 12 numbers whose sums are as close as possible. Find an optimal partition and establish optimality using the total sum and the achieved difference. Check that every input appears exactly once. Do not write code or describe an algorithm; return the two groups, their sums, and a short verification.
+
+1837, 2903, 4159, 5279, 6361, 7487, 8599, 9677,
+10831, 11939, 12097, 13217, 14341, 15443, 16561, 17669,
+18787, 19891, 20903, 22027, 23131, 24239, 25349, 26459
