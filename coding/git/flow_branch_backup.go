@@ -20,7 +20,7 @@ func isActivityRetry(ctx context.Context) bool {
 // host repository, for environments whose repository is an independent clone.
 // dir may be empty to use the environment's working directory. Environments
 // without the backup capability run no commands at all.
-func syncFlowBranchBackup(ctx context.Context, envContainer env.EnvContainer, dir string) error {
+func (a *Activities) syncFlowBranchBackup(ctx context.Context, envContainer env.EnvContainer, dir string) error {
 	syncer, ok := envContainer.Env.(env.FlowBranchBackupSyncer)
 	if !ok {
 		return nil
@@ -30,7 +30,7 @@ func syncFlowBranchBackup(ctx context.Context, envContainer env.EnvContainer, di
 	if dir != "" {
 		args = append([]string{"-C", dir}, args...)
 	}
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",

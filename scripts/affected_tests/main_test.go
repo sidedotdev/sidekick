@@ -681,7 +681,7 @@ func TestComputePackageHashIncludesTestVariantFiles(t *testing.T) {
 // TestActivityFunctionReferenceCapturedInClosure confirms that activities
 // invoked by function reference (workflow.ExecuteActivity(ctx, Activity, ...))
 // still create a captured dependency edge. sidekick/dev calls
-// env.EnvRunCommandActivity this way, so sidekick/env must appear in dev's
+// env.Activities.RunCommand this way, so sidekick/env must appear in dev's
 // hashed dependency closure; otherwise changes to that activity could be
 // skipped (a recall gap).
 func TestActivityFunctionReferenceCapturedInClosure(t *testing.T) {

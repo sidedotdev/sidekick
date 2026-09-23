@@ -35,7 +35,7 @@ type MergeActivityResult struct {
 	// merged result. The conflict markers are relocated into ConflictDirPath
 	// (the flow's own worktree) so the resolution agent can edit them; the
 	// resolved changes must then be transferred back to this base worktree as
-	// uncommitted changes via GitTransferWorktreeChangesActivity.
+	// uncommitted changes via TransferWorktreeChanges.
 	BaseStashWorktreePath string `json:"baseStashWorktreePath"`
 
 	// BaseStashSha is the commit SHA of the base worktree's preserved stash
@@ -43,7 +43,7 @@ type MergeActivityResult struct {
 	// dropped during relocation so the user's original changes remain
 	// recoverable if resolution fails or is cancelled; it is dropped only
 	// after the resolved changes are safely transferred back, via
-	// GitTransferWorktreeChangesActivity.
+	// TransferWorktreeChanges.
 	BaseStashSha string `json:"baseStashSha"`
 }
 
@@ -63,12 +63,12 @@ func syncTargetBranchFromLocal(ctx context.Context, envContainer env.EnvContaine
 	return nil
 }
 
-// GitMergeActivity performs a git merge operation from a source branch into a target branch.
+// Merge performs a git merge operation from a source branch into a target branch.
 // If a worktree exists for the target branch, the merge will be performed there.
 // Otherwise, a temporary checkout of the target branch will be used.
 // It returns MergeActivityResult indicating if conflicts occurred, and an error if any operational failure happened.
-func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params GitMergeParams) (MergeActivityResult, error) {
-	return newMergeCoordinator(envContainer).Merge(ctx, params)
+func (a *Activities) Merge(ctx context.Context, envContainer env.EnvContainer, params GitMergeParams) (MergeActivityResult, error) {
+	return newMergeCoordinator(a, envContainer).Merge(ctx, params)
 }
 
 func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (result MergeActivityResult, resultErr error) {
@@ -122,7 +122,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 	if committerName == "" || committerEmail == "" {
 		envType := envContainer.Env.GetType()
 		if envType == env.EnvTypeLocal || envType == env.EnvTypeLocalGitWorktree {
-			name, email, err := getGitUserConfig(ctx, envContainer)
+			name, email, err := c.repository.git.getGitUserConfig(ctx, envContainer)
 			if err == nil {
 				if committerName == "" {
 					committerName = name
@@ -159,7 +159,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 		}
 		baseDirty := stashSha != ""
 		restoreWorktreeStash := func(ctx context.Context, container env.EnvContainer, dir string, vars []string) (bool, error) {
-			return restoreOwnedMergeStash(ctx, container, dir, stashSha, stashRef, vars)
+			return c.repository.git.restoreOwnedMergeStash(ctx, container, dir, stashSha, stashRef, vars)
 		}
 
 		if refreshErr := syncTargetBranchFromLocal(ctx, envContainer, params.TargetBranch); refreshErr != nil {
@@ -176,7 +176,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 			mergeArgs = "--squash " + shellQuote(params.SourceBranch)
 		}
 		mergeCmd := fmt.Sprintf("cd %s && git merge %s", shellQuote(targetWorktree.Path), mergeArgs)
-		mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		mergeOutput, mergeErr := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "sh",
 			Args:         []string{"-c", mergeCmd},
@@ -195,7 +195,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 		if mergeOutput.ExitStatus != 0 {
 			isConflict := strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict")
 			if fromHost {
-				if err := GitMergeAbortActivity(ctx, envContainer, GitMergeAbortParams{WorktreePath: targetWorktree.Path}); err != nil {
+				if err := c.repository.git.MergeAbort(ctx, envContainer, GitMergeAbortParams{WorktreePath: targetWorktree.Path}); err != nil {
 					return result, err
 				}
 			}
@@ -204,7 +204,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 				// restore the user's stashed changes. A conflict is still
 				// reported below and gets resolved on the flow's own worktree,
 				// so nothing is lost by aborting here.
-				abortWorktreeMerge(ctx, envContainer, targetWorktree.Path)
+				c.repository.git.abortWorktreeMerge(ctx, envContainer, targetWorktree.Path)
 				if _, restoreErr := restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars); restoreErr != nil {
 					resultErr = fmt.Errorf("merge failed in worktree and restoring stash failed: %w", restoreErr)
 					return
@@ -232,7 +232,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 				commitMsg = fmt.Sprintf("Squash merge branch %s", shellQuote(params.SourceBranch))
 			}
 			commitCmd := fmt.Sprintf("cd %s && git commit -m %s", shellQuote(targetWorktree.Path), shellQuote(commitMsg))
-			commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			commitOutput, commitErr := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
 				Command:      "sh",
 				Args:         []string{"-c", commitCmd},
@@ -260,7 +260,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 		// resolution agent only edits the flow's own worktree. So we relocate
 		// the stashed changes onto the own worktree, resolve the conflict
 		// there, and later transfer the resolved changes back to the base
-		// worktree (see GitTransferWorktreeChangesActivity).
+		// worktree (see TransferWorktreeChanges).
 		if baseDirty {
 			popConflicted, restoreErr := restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars)
 			if restoreErr != nil {
@@ -293,7 +293,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 	}
 
 	// Checkout the target branch before merging
-	checkoutOutput, checkoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	checkoutOutput, checkoutErr := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         []string{"checkout", shellQuote(params.TargetBranch)},
@@ -313,7 +313,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 		mergeArgs = append(mergeArgs, "--squash")
 	}
 	mergeArgs = append(mergeArgs, shellQuote(params.SourceBranch))
-	mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	mergeOutput, mergeErr := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         mergeArgs,
@@ -327,7 +327,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 		if strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict") {
 			result.HasConflicts = true
 			// Attempt to abort the merge to clean up the repository state.
-			abortOutput, abortErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			abortOutput, abortErr := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
 				Command:      "git",
 				Args:         []string{"merge", "--abort"},
@@ -343,7 +343,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 
 			// undo the temporary checkout
 			originalBranch := params.SourceBranch
-			restoreCheckoutOutput, restoreCheckoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			restoreCheckoutOutput, restoreCheckoutErr := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
 				Command:      "git",
 				Args:         []string{"checkout", originalBranch},
@@ -363,7 +363,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 			// Perform reverse merge in source worktree
 			reverseMergeCmd := fmt.Sprintf("cd %s && git merge %s", shellQuote(sourceWorktreePath), shellQuote(params.TargetBranch))
 
-			reverseMergeOutput, reverseMergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			reverseMergeOutput, reverseMergeErr := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
 				Command:      "sh",
 				Args:         []string{"-c", reverseMergeCmd},
@@ -400,7 +400,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 		if commitMsg == "" {
 			commitMsg = fmt.Sprintf("Squash merge branch %s", shellQuote(params.SourceBranch))
 		}
-		commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		commitOutput, commitErr := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "git",
 			Args:         []string{"commit", "-m", commitMsg},
@@ -423,9 +423,9 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 // restoreWorktreeStash pops the most recent stash in the given worktree. It
 // reports whether the restore produced conflicts; a non-conflict failure is
 // returned as an error.
-func restoreWorktreeStash(ctx context.Context, envContainer env.EnvContainer, worktreePath string, envVars []string) (conflicted bool, err error) {
+func (a *Activities) restoreWorktreeStash(ctx context.Context, envContainer env.EnvContainer, worktreePath string, envVars []string) (conflicted bool, err error) {
 	popCmd := fmt.Sprintf("cd %s && git stash pop", shellQuote(worktreePath))
-	popOutput, popErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	popOutput, popErr := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", popCmd},
@@ -447,9 +447,9 @@ func restoreWorktreeStash(ctx context.Context, envContainer env.EnvContainer, wo
 // given worktree. The stash list is repository-wide, so the SHA lets callers
 // reference a specific entry robustly rather than relying on a positional
 // `stash@{0}` that other stash operations could shift.
-func topStashSha(ctx context.Context, envContainer env.EnvContainer, worktreePath string, envVars []string) (string, error) {
+func (a *Activities) topStashSha(ctx context.Context, envContainer env.EnvContainer, worktreePath string, envVars []string) (string, error) {
 	cmd := fmt.Sprintf("cd %s && git rev-parse 'stash@{0}'", shellQuote(worktreePath))
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", cmd},
@@ -468,9 +468,9 @@ func topStashSha(ctx context.Context, envContainer env.EnvContainer, worktreePat
 // it by scanning the stash list rather than assuming a positional index. This
 // avoids dropping an unrelated entry if the repository-wide stash list contains
 // other (e.g. pre-existing user) stashes.
-func dropStashBySha(ctx context.Context, envContainer env.EnvContainer, worktreePath, sha string, envVars []string) error {
+func (a *Activities) dropStashBySha(ctx context.Context, envContainer env.EnvContainer, worktreePath, sha string, envVars []string) error {
 	script := fmt.Sprintf("cd %s && ref=$(git stash list --format='%%gd %%H' | awk -v sha=%s '$2==sha{print $1; exit}') && if [ -n \"$ref\" ]; then git stash drop \"$ref\"; fi", shellQuote(worktreePath), shellQuote(sha))
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", script},
@@ -489,8 +489,8 @@ func dropStashBySha(ctx context.Context, envContainer env.EnvContainer, worktree
 // given worktree on a best-effort basis; it is used to clear a conflicted
 // merge before restoring a stash. Errors are ignored because there may be no
 // merge in progress.
-func abortWorktreeMerge(ctx context.Context, envContainer env.EnvContainer, worktreePath string) {
-	_, _ = env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+func (a *Activities) abortWorktreeMerge(ctx context.Context, envContainer env.EnvContainer, worktreePath string) {
+	_, _ = a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", mergeAbortCommand(worktreePath)},
@@ -499,9 +499,9 @@ func abortWorktreeMerge(ctx context.Context, envContainer env.EnvContainer, work
 
 // worktreeHasUncommittedChanges reports whether the given worktree path has any
 // staged, unstaged, or untracked changes.
-func worktreeHasUncommittedChanges(ctx context.Context, envContainer env.EnvContainer, worktreePath string) (bool, error) {
+func (a *Activities) worktreeHasUncommittedChanges(ctx context.Context, envContainer env.EnvContainer, worktreePath string) (bool, error) {
 	statusCmd := fmt.Sprintf("cd %s && git status --porcelain", shellQuote(worktreePath))
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", statusCmd},
@@ -523,12 +523,12 @@ func worktreeHasUncommittedChanges(ctx context.Context, envContainer env.EnvCont
 // the SHA of the preserved stash entry; the entry is intentionally left in
 // place (not dropped) so the original changes stay recoverable until the
 // resolved changes have been transferred back to the base worktree.
-func relocateStashConflictToSourceWorktree(ctx context.Context, envContainer env.EnvContainer, baseWorktreePath, sourceWorktreePath string, envVars []string) (string, error) {
-	stashSha, err := topStashSha(ctx, envContainer, baseWorktreePath, envVars)
+func (a *Activities) relocateStashConflictToSourceWorktree(ctx context.Context, envContainer env.EnvContainer, baseWorktreePath, sourceWorktreePath string, envVars []string) (string, error) {
+	stashSha, err := a.topStashSha(ctx, envContainer, baseWorktreePath, envVars)
 	if err != nil {
 		return "", err
 	}
-	repository := mergeRepository{envContainer: envContainer}
+	repository := mergeRepository{git: a, envContainer: envContainer}
 	coordinator := &mergeCoordinator{repository: repository}
 	err = coordinator.relocateStashConflict(ctx, sameRepositoryMergeTransport{repository: repository}, repository, baseWorktreePath, sourceWorktreePath, stashSha, false)
 	return stashSha, err
@@ -547,13 +547,13 @@ type GitTransferWorktreeChangesParams struct {
 	BaseStashSha string
 }
 
-// GitTransferWorktreeChangesActivity moves the uncommitted changes from the
+// TransferWorktreeChanges moves the uncommitted changes from the
 // source worktree onto the target worktree as uncommitted changes, leaving the
 // source worktree clean. It is used after conflict resolution to carry resolved
 // base-worktree changes (resolved on the flow's own worktree) back to the base
 // worktree where the merge already completed.
-func GitTransferWorktreeChangesActivity(ctx context.Context, envContainer env.EnvContainer, params GitTransferWorktreeChangesParams) error {
-	return newMergeCoordinator(envContainer).ReturnResolution(ctx, params)
+func (a *Activities) TransferWorktreeChanges(ctx context.Context, envContainer env.EnvContainer, params GitTransferWorktreeChangesParams) error {
+	return newMergeCoordinator(a, envContainer).ReturnResolution(ctx, params)
 }
 
 func (c *mergeCoordinator) ReturnResolution(ctx context.Context, params GitTransferWorktreeChangesParams) error {

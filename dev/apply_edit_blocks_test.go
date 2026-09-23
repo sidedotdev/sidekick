@@ -225,6 +225,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 
 	for _, tt := range tests {
 		devActivities := &DevActivities{
+			Git: testGitActivities(),
 			LSPActivities: &lsp.LSPActivities{
 				LSPClientProvider: func(languageName string) lsp.LSPClient {
 					return &lsp.Jsonrpc2LSPClient{
@@ -495,6 +496,7 @@ func getValue() int {
 
 	for _, tt := range tests {
 		devActivities := &DevActivities{
+			Git: testGitActivities(),
 			LSPActivities: &lsp.LSPActivities{
 				LSPClientProvider: func(languageName string) lsp.LSPClient {
 					return &lsp.Jsonrpc2LSPClient{
@@ -563,6 +565,7 @@ func TestApplyEditBlocks_StagesAppliedEditsWithoutChecks(t *testing.T) {
 		Env: &env.LocalEnv{WorkingDirectory: tmpDir},
 	}
 	devActivities := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
@@ -665,6 +668,7 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 	}
 
 	devActivities := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
@@ -1287,6 +1291,7 @@ func main() {
 	}
 
 	devActivities := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
@@ -1364,6 +1369,7 @@ func getCommitHashes(t *testing.T, dir string, filePath string) []string {
 func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 	t.Parallel()
 	da := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
@@ -1659,6 +1665,7 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 			}
 
 			devActivities := &DevActivities{
+				Git: testGitActivities(),
 				LSPActivities: &lsp.LSPActivities{
 					LSPClientProvider: func(languageName string) lsp.LSPClient {
 						return &lsp.Jsonrpc2LSPClient{
@@ -1764,6 +1771,7 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 	}
 
 	devActivities := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
@@ -1844,6 +1852,7 @@ func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
 	}
 
 	devActivities := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
@@ -2114,6 +2123,7 @@ func DoSomething() {
 		EnabledFlags: []string{fflag.CheckEdits},
 	}
 	devActivities := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
@@ -2239,6 +2249,7 @@ func TestApplyEditBlocks_BatchByFile_AllPass(t *testing.T) {
 	}
 
 	da := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
@@ -2346,6 +2357,7 @@ func TestApplyEditBlocks_BatchByFile_SomeFailCheck(t *testing.T) {
 	}
 
 	da := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
@@ -2457,6 +2469,7 @@ func TestApplyEditBlocks_BatchByFile_ParallelExecution(t *testing.T) {
 	}
 
 	da := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
@@ -2520,6 +2533,7 @@ func TestApplyEditBlocks_BatchByFile_SingleBlockPerFile_NoFallback(t *testing.T)
 	}
 
 	da := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}

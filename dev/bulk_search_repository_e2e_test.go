@@ -68,10 +68,11 @@ func (s *BulkSearchRepositoryE2ETestSuite) ResetWorkflowEnvironment() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.env.SetTestTimeout(30 * time.Second)
-	s.env.RegisterActivity(env.EnvRunCommandActivity)
+	registerRunCommandActivity(s.env)
 	s.env.RegisterActivity(GetSymbolsActivity)
 	s.env.RegisterActivity(EnsureCoreIgnoreFileActivity)
-	s.env.RegisterActivity(BulkSearchRepositoryActivity)
+	searchActivities := &SearchActivities{Env: &env.Activities{}}
+	s.env.RegisterActivity(searchActivities.BulkSearchRepositoryActivity)
 
 	s.wrapperWorkflow = func(ctx workflow.Context, envContainer env.EnvContainer, params BulkSearchRepositoryParams) (string, error) {
 		ctx1 := utils.NoRetryCtx(ctx)

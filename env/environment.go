@@ -1739,10 +1739,17 @@ type EnvRunCommandActivityInput struct {
 	HookContext CommandHookContext  `json:"hookContext,omitempty"`
 }
 
-// CommandScriptHost supplies the host.* namespaces available to run_command
-// script actions. The worker assigns it once so that env never depends on
-// credential-proxy packages; nil leaves scripts without host bindings.
-var CommandScriptHost func(ctx context.Context, input EnvRunCommandActivityInput) (map[string]map[string]scripting.Operation, error)
+// HookScriptHostProvider supplies the host.* namespaces available to
+// run_command script actions. It is injected so that env never depends on
+// credential-proxy packages.
+type HookScriptHostProvider interface {
+	HookScriptHost(ctx context.Context, hookCtx CommandHookContext) (scripting.Host, error)
+}
+
+type Activities struct {
+	// HookScriptHost may be nil, leaving hook scripts without host bindings.
+	HookScriptHost HookScriptHostProvider
+}
 
 // commandHookScriptContext is exposed to scripts as the read-only `context`
 // global and must only contain non-secret data.
@@ -1790,8 +1797,16 @@ func GetEnvironmentInfoActivity(ctx context.Context, input GetEnvironmentInfoInp
 	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
 }
 
-// EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
-func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+// EnvRunCommandActivity is the registered Temporal activity for RunCommand.
+// Its name is the historical activity type name that workflows schedule and
+// existing histories record; Temporal's WorkflowReplayer cannot apply
+// registration aliases, so the scheduled method name must match it.
+func (a *Activities) EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+	return a.RunCommand(ctx, input)
+}
+
+// RunCommand runs a command in the environment contained in the provided EnvContainer.
+func (a *Activities) RunCommand(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
 	type result struct {
 		output EnvRunCommandActivityOutput
 		err    error
@@ -1809,7 +1824,7 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 					return
 				}
 			}
-			hookEnvVars, err := runCommandHooks(ctx, input)
+			hookEnvVars, err := a.runCommandHooks(ctx, input)
 			if err != nil {
 				resultCh <- result{err: err}
 				return
@@ -1852,9 +1867,9 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 // later actions winning on collisions. Failed actions contribute nothing and
 // are handled per their on_error policy, except that cancellation of ctx
 // always propagates.
-func runCommandHooks(ctx context.Context, input EnvRunCommandActivityInput) (map[string]string, error) {
+func (a *Activities) runCommandHooks(ctx context.Context, input EnvRunCommandActivityInput) (map[string]string, error) {
 	envVars := make(map[string]string)
-	var host map[string]map[string]scripting.Operation
+	var host scripting.Host
 	hostResolved := false
 	for _, action := range input.Hooks {
 		config := action.config()
@@ -1863,8 +1878,8 @@ func runCommandHooks(ctx context.Context, input EnvRunCommandActivityInput) (map
 		var err error
 		switch action.Type {
 		case common.HookActionScript:
-			if !hostResolved && CommandScriptHost != nil {
-				host, err = CommandScriptHost(ctx, input)
+			if !hostResolved && a.HookScriptHost != nil {
+				host, err = a.HookScriptHost.HookScriptHost(ctx, input.HookContext)
 				hostResolved = err == nil
 			}
 			if err == nil {
@@ -1958,7 +1973,7 @@ func truncateMiddle(s string, maxBytes int) string {
 }
 
 // EnsureSideTmpScript is shared with workflow code that schedules the same
-// setup through EnvRunCommandActivity in the final execution environment.
+// setup through Activities.RunCommand in the final execution environment.
 const EnsureSideTmpScript = `set -eu
 mkdir -p .side/tmp
 exclude_file=$(git rev-parse --git-path info/exclude)

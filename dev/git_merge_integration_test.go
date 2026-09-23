@@ -65,13 +65,13 @@ func runGitMergeIntegration(t *testing.T, ctx context.Context, mergeEnvContainer
 		})
 	})
 
-	result, err := git.GitMergeActivity(ctx, mergeEnvContainer, git.GitMergeParams{
+	result, err := testGitActivities().Merge(ctx, mergeEnvContainer, git.GitMergeParams{
 		SourceBranch:   featureBranch,
 		TargetBranch:   "main",
 		CommitterName:  "Test",
 		CommitterEmail: "test@test.com",
 	})
-	require.NoError(t, err, "GitMergeActivity failed")
+	require.NoError(t, err, "git merge activity failed")
 	require.False(t, result.HasConflicts, "unexpected merge conflicts")
 
 	// Verify on the host repo via a local env: this is what the merge is for.

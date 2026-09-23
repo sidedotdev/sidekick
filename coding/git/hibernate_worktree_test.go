@@ -52,7 +52,6 @@ func TestHibernateWorktreeActivities(t *testing.T) {
 
 	testSuite := &testsuite.WorkflowTestSuite{}
 	actEnv := testSuite.NewTestActivityEnvironment()
-	actEnv.RegisterActivity(env.EnvRunCommandActivity)
 	actEnv.RegisterActivity(HibernateWorktreeActivity)
 	actEnv.RegisterActivity(WakeWorktreeActivity)
 

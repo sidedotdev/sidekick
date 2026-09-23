@@ -248,6 +248,7 @@ func isHeartbeatError(err error) bool {
 const testCommandStartToCloseTimeout = 15 * time.Minute
 
 func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir string, fullCommand string, envContainer env.EnvContainer, resultsCh workflow.Channel) {
+	var ea *env.Activities
 	// Failed commands surface for user-initiated retry, so no automatic
 	// retries here.
 	if workflow.GetVersion(actionCtx, "long-test-command-timeout", workflow.DefaultVersion, 1) >= 1 {
@@ -267,7 +268,7 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 	}
 	runTestInput.Hooks, runTestInput.HookContext = runCommandHooks(actionCtx.DevContext, envContainer.Env.GetType())
 	var runTestOutput env.EnvRunCommandActivityOutput
-	err := workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput).Get(actionCtx, &runTestOutput)
+	err := workflow.ExecuteActivity(actionCtx, ea.EnvRunCommandActivity, runTestInput).Get(actionCtx, &runTestOutput)
 	if err != nil {
 		commandErr := fmt.Errorf("failed to run test command '%s': %v", fullCommand, err)
 		if workflow.GetVersion(actionCtx, runTestsHooksVersion, workflow.DefaultVersion, 1) >= 1 {

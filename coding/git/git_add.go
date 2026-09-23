@@ -15,16 +15,16 @@ type GitAddActivityInput struct {
 	Path         string
 }
 
-func GitAddActivity(ctx context.Context, input GitAddActivityInput) error {
+func (a *Activities) Add(ctx context.Context, input GitAddActivityInput) error {
 	// "Add all" must not stage newly introduced binary files, which are usually
 	// build artifacts; if they should be tracked, the agent stages them
 	// explicitly via a specific-path add, which is left as-is.
 	if input.Path == "." {
-		return gitAddAllExceptUntrackedBinaries(ctx, input.EnvContainer)
+		return a.gitAddAllExceptUntrackedBinaries(ctx, input.EnvContainer)
 	}
 
 	args := []string{"add", input.Path}
-	gitAddOutput, err := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
+	gitAddOutput, err := a.runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       input.EnvContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -42,23 +42,23 @@ func GitAddActivity(ctx context.Context, input GitAddActivityInput) error {
 // gitAddAllExceptUntrackedBinaries stages all tracked changes (modifications
 // and deletions) along with non-binary untracked files, while leaving untracked
 // binary files untracked on disk. Already-tracked binaries are unaffected.
-func gitAddAllExceptUntrackedBinaries(ctx context.Context, envContainer env.EnvContainer) error {
-	untracked, err := listUntrackedFiles(ctx, envContainer, nil)
+func (a *Activities) gitAddAllExceptUntrackedBinaries(ctx context.Context, envContainer env.EnvContainer) error {
+	untracked, err := a.listUntrackedFiles(ctx, envContainer, nil)
 	if err != nil {
 		return err
 	}
-	nonBinary, binary, err := partitionUntrackedBinaries(ctx, envContainer, untracked)
+	nonBinary, binary, err := a.partitionUntrackedBinaries(ctx, envContainer, untracked)
 	if err != nil {
 		return err
 	}
 
 	// `git add -u` stages modifications and deletions of tracked files without
 	// adding untracked files, letting us selectively add non-binary ones below.
-	if err := runGitAdd(ctx, envContainer, []string{"-u"}); err != nil {
+	if err := a.runGitAdd(ctx, envContainer, []string{"-u"}); err != nil {
 		return err
 	}
 	if len(nonBinary) > 0 {
-		if err := runGitAdd(ctx, envContainer, append([]string{"--"}, nonBinary...)); err != nil {
+		if err := a.runGitAdd(ctx, envContainer, append([]string{"--"}, nonBinary...)); err != nil {
 			return err
 		}
 	}
@@ -68,9 +68,9 @@ func gitAddAllExceptUntrackedBinaries(ctx context.Context, envContainer env.EnvC
 	return nil
 }
 
-func runGitAdd(ctx context.Context, envContainer env.EnvContainer, addArgs []string) error {
+func (a *Activities) runGitAdd(ctx context.Context, envContainer env.EnvContainer, addArgs []string) error {
 	args := append([]string{"add"}, addArgs...)
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -86,9 +86,10 @@ func runGitAdd(ctx context.Context, envContainer env.EnvContainer, addArgs []str
 }
 
 func GitAddAll(eCtx flow_action.ExecContext) error {
+	var ga *Activities
 	var gitAddOutput env.EnvRunCommandOutput
 	input := GitAddActivityInput{EnvContainer: *eCtx.EnvContainer, Path: "."}
-	err := workflow.ExecuteActivity(eCtx, GitAddActivity, input).Get(eCtx, &gitAddOutput)
+	err := workflow.ExecuteActivity(eCtx, ga.GitAddActivity, input).Get(eCtx, &gitAddOutput)
 	if err != nil {
 		return fmt.Errorf("failed to git add all: %v", err)
 	}

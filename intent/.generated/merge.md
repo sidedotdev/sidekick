@@ -12,13 +12,13 @@ intent_links:
       - dev/prompt_info.go:ConflictResolutionInfo
       - dev/edit_code.go:renderConflictResolutionPrompt
       - dev/prompts/conflict_resolution/initial.mustache
-      - coding/git/git_conflict_resolution.go:GitMergeAbortActivity
-      - coding/git/git_conflict_resolution.go:GitMergeInProgressActivity
-      - coding/git/git_conflict_resolution.go:GitListUnmergedActivity
-      - coding/git/git_conflict_resolution.go:GitSnapshotConflictMarkersActivity
-      - coding/git/git_conflict_resolution.go:GitConflictResolutionDiffActivity
-      - coding/git/git_conflict_resolution.go:GitCommitMergeActivity
-      - coding/git/git_conflict_resolution.go:GitMergeIntoWorktreeActivity
+      - coding/git/git_conflict_resolution.go:Activities.MergeAbort
+      - coding/git/git_conflict_resolution.go:Activities.MergeInProgress
+      - coding/git/git_conflict_resolution.go:Activities.ListUnmerged
+      - coding/git/git_conflict_resolution.go:Activities.SnapshotConflictMarkers
+      - coding/git/git_conflict_resolution.go:Activities.ConflictResolutionDiff
+      - coding/git/git_conflict_resolution.go:Activities.CommitMerge
+      - coding/git/git_conflict_resolution.go:Activities.MergeIntoWorktree
       - dev/basic_dev_workflow.go:MergeWithReviewParams
       - worker/worker.go:StartWorker
       - scripts/run_activity/main.go:buildActivityRegistry
@@ -31,12 +31,12 @@ intent_links:
 ## Conflicts
 
 Conflict resolution v3 is gated by the workflow version
-`conflict-resolution-v3`. For new executions, when `GitMergeActivity` reports
+`conflict-resolution-v3`. For new executions, when `git.Activities.Merge` reports
 conflicts:
 
 - Conflicts that landed on the target-branch worktree are aborted there and
   recreated on the flow's own worktree by merging the target branch in via
-  `GitMergeIntoWorktreeActivity`, so the resolver always operates on the
+  `git.Activities.MergeIntoWorktree`, so the resolver always operates on the
   flow-owned worktree regardless of where the conflict was first observed.
 - A `ConflictMarkerSnapshot` (a temporary tree built from the unmerged index
   entries) is captured before any edits. The temp index file lives under
@@ -59,10 +59,10 @@ conflicts:
   on failure), and runs
   `CheckIfCriteriaFulfilled` with the snapshot-based diff as `Work` (loop
   on negative fulfillment). The resolver is explicitly told not to commit;
-  the orchestrator finalizes the merge commit via `GitCommitMergeActivity`,
+  the orchestrator finalizes the merge commit via `git.Activities.CommitMerge`,
   which stages with `git add -A` so newly created/renamed files in the
   resolution are captured too. Finalization first calls
-  `GitMergeInProgressActivity` so it no-ops when `MERGE_HEAD` is absent
+  `git.Activities.MergeInProgress` so it no-ops when `MERGE_HEAD` is absent
   (e.g. the conflict recreation merge actually fast-forwarded cleanly),
   avoiding a spurious single-parent commit on top of HEAD.
 - Accumulated reviewer feedback is forwarded into
@@ -72,7 +72,7 @@ conflicts:
   fulfillment check include this so the resolver doesn't undo edits made
   specifically to satisfy reviewers.
 - After the merge commit is finalized on the flow's own worktree, a final
-  `GitMergeActivity` fast-forwards the target branch onto source. This step
+  `git.Activities.Merge` fast-forwards the target branch onto source. This step
   is correct as a fast-forward because target is now an ancestor of source
   (the target tip is the second parent of the resolution merge commit). The
   final merge always uses the regular `merge` strategy, overriding any

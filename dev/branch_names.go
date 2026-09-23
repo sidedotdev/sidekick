@@ -40,8 +40,9 @@ var generateBranchNamesPrompt = panicParseMustache(promptsFS, "branch_names/gene
 // GenerateBranchName generates a unique branch name using LLM-generated candidates or falls back
 // to a name derived from requirements if generation fails. The returned name includes the 'side/' prefix.
 func GenerateBranchName(eCtx flow_action.ExecContext, req BranchNameRequest) (string, error) {
+	var ea *env.Activities
 	var output env.EnvRunCommandActivityOutput
-	err := workflow.ExecuteActivity(eCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err := workflow.ExecuteActivity(eCtx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer: *eCtx.EnvContainer,
 		Command:      "git",
 		Args:         []string{"branch", "--list", "--format=%(refname:short)"},

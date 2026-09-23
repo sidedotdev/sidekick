@@ -9,8 +9,10 @@ import (
 	"os"
 	"time"
 
+	"sidekick/coding/git"
 	"sidekick/coding/lsp"
 	"sidekick/dev"
+	"sidekick/env"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -78,6 +80,7 @@ func main() {
 
 	devActivities := &dev.DevActivities{
 		LSPActivities: lspActivities,
+		Git:           &git.Activities{Env: &env.Activities{}},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)

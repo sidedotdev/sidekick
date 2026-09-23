@@ -15,12 +15,12 @@ import (
 // acts when untracked binaries are the sole blocking changes; if any tracked
 // changes or non-binary untracked files are present, the working tree is left
 // untouched so genuine changes continue to block cleanup.
-func removeBlockingUntrackedBinaries(ctx context.Context, envContainer env.EnvContainer) error {
-	untracked, err := listUntrackedFiles(ctx, envContainer, nil)
+func (a *Activities) removeBlockingUntrackedBinaries(ctx context.Context, envContainer env.EnvContainer) error {
+	untracked, err := a.listUntrackedFiles(ctx, envContainer, nil)
 	if err != nil {
 		return err
 	}
-	nonBinary, binary, err := partitionUntrackedBinaries(ctx, envContainer, untracked)
+	nonBinary, binary, err := a.partitionUntrackedBinaries(ctx, envContainer, untracked)
 	if err != nil {
 		return err
 	}
@@ -28,7 +28,7 @@ func removeBlockingUntrackedBinaries(ctx context.Context, envContainer env.EnvCo
 		return nil
 	}
 
-	hasTrackedChanges, err := hasUncommittedTrackedChanges(ctx, envContainer)
+	hasTrackedChanges, err := a.hasUncommittedTrackedChanges(ctx, envContainer)
 	if err != nil {
 		return err
 	}
@@ -36,7 +36,7 @@ func removeBlockingUntrackedBinaries(ctx context.Context, envContainer env.EnvCo
 		return nil
 	}
 
-	rmOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	rmOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "rm",
@@ -55,8 +55,8 @@ func removeBlockingUntrackedBinaries(ctx context.Context, envContainer env.EnvCo
 
 // hasUncommittedTrackedChanges reports whether there are any staged or unstaged
 // changes to tracked files (untracked files are ignored).
-func hasUncommittedTrackedChanges(ctx context.Context, envContainer env.EnvContainer) (bool, error) {
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+func (a *Activities) hasUncommittedTrackedChanges(ctx context.Context, envContainer env.EnvContainer) (bool, error) {
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -71,18 +71,18 @@ func hasUncommittedTrackedChanges(ctx context.Context, envContainer env.EnvConta
 	return strings.TrimSpace(output.Stdout) != "", nil
 }
 
-// CleanupWorktreeActivity removes a git worktree and deletes the associated branch.
+// CleanupWorktree removes a git worktree and deletes the associated branch.
 // Before deletion, it creates an archive tag with format "archive/<branchName>" pointing to the branch.
 // This should be called after successful merges to clean up temporary worktrees.
 // The function must be run from within the worktree directory that needs to be removed.
-func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer, worktreePath, branchName, archiveMessage string) error {
+func (a *Activities) CleanupWorktree(ctx context.Context, envContainer env.EnvContainer, worktreePath, branchName, archiveMessage string) error {
 	if branchName == "" {
 		return fmt.Errorf("branch name is required for cleanup")
 	}
 
 	// First, checkout the HEAD commit SHA to detach from the branch
 	// This is necessary because we can't delete a branch that is currently checked out
-	headResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	headResult, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         []string{"rev-parse", "HEAD"},
@@ -95,7 +95,7 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	}
 
 	headSHA := strings.TrimSpace(headResult.Stdout)
-	checkoutResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	checkoutResult, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         []string{"checkout", headSHA},
@@ -110,7 +110,7 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	// Create archive tag before deleting the branch
 	// Try with incrementing suffix if tag already exists
 	baseTagName := fmt.Sprintf("archive/%s", branchName)
-	tagName, err := createArchiveTag(ctx, envContainer, baseTagName, branchName, archiveMessage)
+	tagName, err := a.createArchiveTag(ctx, envContainer, baseTagName, branchName, archiveMessage)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 			// The host may retain archives absent from the sandbox clone.
 			// Retaining the conflicting sandbox tag reserves its name so the
 			// next attempt selects a suffix without overwriting either archive.
-			tagName, err = createArchiveTag(ctx, envContainer, baseTagName, branchName, archiveMessage)
+			tagName, err = a.createArchiveTag(ctx, envContainer, baseTagName, branchName, archiveMessage)
 			if err != nil {
 				return err
 			}
@@ -143,7 +143,7 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 
 	// Delete the branch before removing the worktree
 	// Use -D to force delete even if not fully merged
-	deleteBranchResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	deleteBranchResult, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         []string{"branch", "-D", branchName},
@@ -159,14 +159,14 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	// the non-forced worktree removal below. Remove them so cleanup can proceed,
 	// but only when they are the sole blocking changes so that genuine
 	// uncommitted/untracked changes still block cleanup.
-	if err := removeBlockingUntrackedBinaries(ctx, envContainer); err != nil {
+	if err := a.removeBlockingUntrackedBinaries(ctx, envContainer); err != nil {
 		return err
 	}
 
 	// Sidekick worktrees are created locked (to survive "git worktree prune"),
 	// so they must be unlocked before removal. Tolerate a "not locked" failure
 	// for worktrees created before locking was introduced.
-	unlockResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	unlockResult, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         []string{"worktree", "unlock", "."},
@@ -180,7 +180,7 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 
 	// Remove the current worktree using "." since we're running from within the worktree
 	// The working directory is the same as the worktree path that needs to be removed
-	removeResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	removeResult, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         []string{"worktree", "remove", "."},
@@ -197,9 +197,9 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 
 // createArchiveTag creates an archive tag, using a suffixed name if the base tag already exists.
 // Returns the name of the successfully created tag.
-func createArchiveTag(ctx context.Context, envContainer env.EnvContainer, baseTagName, branchName, archiveMessage string) (string, error) {
+func (a *Activities) createArchiveTag(ctx context.Context, envContainer env.EnvContainer, baseTagName, branchName, archiveMessage string) (string, error) {
 	// List existing tags matching the pattern
-	listResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	listResult, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         []string{"tag", "--list", baseTagName + "*"},
@@ -220,7 +220,7 @@ func createArchiveTag(ctx context.Context, envContainer env.EnvContainer, baseTa
 		tagArgs = []string{"tag", tagName, branchName}
 	}
 
-	tagResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	tagResult, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         tagArgs,

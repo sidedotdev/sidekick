@@ -185,24 +185,27 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 }
 
 func captureConflictSnapshot(dCtx DevContext, worktreePath string) (git.ConflictMarkerSnapshot, error) {
+	var ga *git.Activities
 	var snapshot git.ConflictMarkerSnapshot
-	err := workflow.ExecuteActivity(dCtx, git.GitSnapshotConflictMarkersActivity, *dCtx.EnvContainer, git.GitSnapshotConflictMarkersParams{
+	err := workflow.ExecuteActivity(dCtx, ga.GitSnapshotConflictMarkersActivity, *dCtx.EnvContainer, git.GitSnapshotConflictMarkersParams{
 		WorktreePath: worktreePath,
 	}).Get(dCtx, &snapshot)
 	return snapshot, err
 }
 
 func listUnmerged(dCtx DevContext, worktreePath string) ([]string, error) {
+	var ga *git.Activities
 	var paths []string
-	err := workflow.ExecuteActivity(dCtx, git.GitListUnmergedActivity, *dCtx.EnvContainer, git.GitListUnmergedParams{
+	err := workflow.ExecuteActivity(dCtx, ga.GitListUnmergedActivity, *dCtx.EnvContainer, git.GitListUnmergedParams{
 		WorktreePath: worktreePath,
 	}).Get(dCtx, &paths)
 	return paths, err
 }
 
 func computeConflictResolutionDiff(dCtx DevContext, worktreePath string, snapshot git.ConflictMarkerSnapshot) (string, error) {
+	var ga *git.Activities
 	var diff string
-	err := workflow.ExecuteActivity(dCtx, git.GitConflictResolutionDiffActivity, *dCtx.EnvContainer, git.GitConflictResolutionDiffParams{
+	err := workflow.ExecuteActivity(dCtx, ga.GitConflictResolutionDiffActivity, *dCtx.EnvContainer, git.GitConflictResolutionDiffParams{
 		WorktreePath: worktreePath,
 		Snapshot:     snapshot,
 	}).Get(dCtx, &diff)
@@ -233,8 +236,9 @@ func checkConflictResolutionFulfillment(dCtx DevContext, params ResolveMergeConf
 // final state and we do nothing — finalizing here would otherwise
 // create a spurious single-parent commit on top of HEAD.
 func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) error {
+	var ga *git.Activities
 	var mergeInProgress bool
-	if err := workflow.ExecuteActivity(dCtx, git.GitMergeInProgressActivity, *dCtx.EnvContainer, git.GitMergeInProgressParams{
+	if err := workflow.ExecuteActivity(dCtx, ga.GitMergeInProgressActivity, *dCtx.EnvContainer, git.GitMergeInProgressParams{
 		WorktreePath: params.WorktreePath,
 	}).Get(dCtx, &mergeInProgress); err != nil {
 		return fmt.Errorf("failed to check merge state before finalizing: %w", err)
@@ -250,7 +254,7 @@ func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) er
 		msg = fmt.Sprintf("Merge branch %s\n\n%s", params.SourceBranchName, msg)
 	}
 
-	return flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitMergeActivity, nil, *dCtx.EnvContainer, git.GitCommitMergeParams{
+	return flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", ga.GitCommitMergeActivity, nil, *dCtx.EnvContainer, git.GitCommitMergeParams{
 		WorktreePath:   params.WorktreePath,
 		CommitMessage:  msg,
 		CommitterName:  params.CommitterName,
@@ -265,14 +269,15 @@ func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) er
 // On return, on success the flow's own worktree has `MERGE_HEAD` set and
 // conflict markers present.
 func recreateConflictOnOwnWorktree(dCtx DevContext, targetWorktreePath, ownWorktreePath, targetBranch string, committerName, committerEmail string) error {
-	if err := workflow.ExecuteActivity(dCtx, git.GitMergeAbortActivity, *dCtx.EnvContainer, git.GitMergeAbortParams{
+	var ga *git.Activities
+	if err := workflow.ExecuteActivity(dCtx, ga.GitMergeAbortActivity, *dCtx.EnvContainer, git.GitMergeAbortParams{
 		WorktreePath: targetWorktreePath,
 	}).Get(dCtx, nil); err != nil {
 		return fmt.Errorf("failed to abort target-worktree merge: %w", err)
 	}
 
 	var result git.GitMergeIntoWorktreeResult
-	if err := workflow.ExecuteActivity(dCtx, git.GitMergeIntoWorktreeActivity, *dCtx.EnvContainer, git.GitMergeIntoWorktreeParams{
+	if err := workflow.ExecuteActivity(dCtx, ga.GitMergeIntoWorktreeActivity, *dCtx.EnvContainer, git.GitMergeIntoWorktreeParams{
 		WorktreePath:   ownWorktreePath,
 		SourceBranch:   targetBranch,
 		CommitterName:  committerName,

@@ -8,6 +8,7 @@ import (
 )
 
 func AutoFormatCode(dCtx DevContext) error {
+	var ea *env.Activities
 	// TODO /gen take in a list of files/directories to format
 
 	// TODO /gen make this configurable via repo config list of autoformat_commands
@@ -16,7 +17,7 @@ func AutoFormatCode(dCtx DevContext) error {
 	// the repo, and use the appropriate formatter (for languages that have a
 	// standard formatter). Or if the repo has a .editorconfig, .prettierrc,
 	// rustfmt.toml or .rustfmt.toml etc, use that to determine the formatter
-	err := workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err := workflow.ExecuteActivity(dCtx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		RelativeWorkingDir: "./",
 		Command:            "go",

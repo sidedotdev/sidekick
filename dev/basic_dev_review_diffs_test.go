@@ -41,7 +41,7 @@ func (m *repoMutator) dir() string {
 func (m *repoMutator) stage(filename, content string) {
 	m.t.Helper()
 	require.NoError(m.t, os.WriteFile(filepath.Join(m.dir(), filename), []byte(content), 0644))
-	require.NoError(m.t, git.GitAddActivity(context.Background(), git.GitAddActivityInput{
+	require.NoError(m.t, testGitActivities().Add(context.Background(), git.GitAddActivityInput{
 		EnvContainer: m.envContainer,
 		Path:         filename,
 	}))
@@ -51,7 +51,7 @@ func (m *repoMutator) stage(filename, content string) {
 func (m *repoMutator) commit(filename, content, message string) {
 	m.t.Helper()
 	m.stage(filename, content)
-	_, err := git.GitCommitActivity(context.Background(), m.envContainer, git.GitCommitParams{
+	_, err := testGitActivities().Commit(context.Background(), m.envContainer, git.GitCommitParams{
 		CommitMessage: message,
 	})
 	require.NoError(m.t, err)
@@ -63,7 +63,7 @@ func (m *repoMutator) commit(filename, content, message string) {
 func (m *repoMutator) mergeBase() git.MergeActivityResult {
 	m.t.Helper()
 	m.branch = m.currentBranch()
-	result, err := git.GitMergeActivity(context.Background(), m.envContainer, git.GitMergeParams{
+	result, err := testGitActivities().Merge(context.Background(), m.envContainer, git.GitMergeParams{
 		SourceBranch: m.baseBranch,
 		TargetBranch: m.branch,
 	})
@@ -77,7 +77,7 @@ func (m *repoMutator) mergeBase() git.MergeActivityResult {
 // through the corresponding git activity instead.
 func (m *repoMutator) runGit(args ...string) env.EnvRunCommandActivityOutput {
 	m.t.Helper()
-	output, err := env.EnvRunCommandActivity(context.Background(), env.EnvRunCommandActivityInput{
+	output, err := (&env.Activities{}).RunCommand(context.Background(), env.EnvRunCommandActivityInput{
 		EnvContainer:       m.envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",

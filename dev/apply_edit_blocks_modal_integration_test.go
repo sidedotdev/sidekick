@@ -46,6 +46,7 @@ func TestModalApplyEditBlocksIntegration(t *testing.T) {
 	envContainer := env.EnvContainer{Env: repoEnv}
 
 	devActivities := &DevActivities{
+		Git: testGitActivities(),
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}

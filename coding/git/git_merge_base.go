@@ -8,8 +8,8 @@ import (
 )
 
 // MergeBase returns the best common ancestor commit of two refs.
-func MergeBase(ctx context.Context, envContainer env.EnvContainer, refA, refB string) (string, error) {
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+func (a *Activities) MergeBase(ctx context.Context, envContainer env.EnvContainer, refA, refB string) (string, error) {
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",

@@ -21,13 +21,16 @@ const DefaultTimeout = 30 * time.Second
 // must honor cancellation. Returned values must be data, not Go capabilities.
 type Operation func(context.Context, json.RawMessage) (any, error)
 
+// Host maps namespace to operation name, exposed to scripts as
+// host.<namespace>.<operation>.
+type Host map[string]map[string]Operation
+
 type Input struct {
 	Source string
 	// Context must contain only non-secret invocation data.
 	Context any
 	Timeout time.Duration
-	// Host is exposed as host.<namespace>.<operation>.
-	Host map[string]map[string]Operation
+	Host    Host
 	// Functions supplies explicit event-specific global operations.
 	Functions map[string]Operation
 

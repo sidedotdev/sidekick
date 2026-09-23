@@ -21,12 +21,13 @@ type mergeCoordinator struct {
 // mergeRepository keeps repository paths coupled to the environment in which
 // they are valid; a remote path must not be interpreted on the host.
 type mergeRepository struct {
+	git          *Activities
 	envContainer env.EnvContainer
 }
 
-func newMergeCoordinator(envContainer env.EnvContainer) MergeCoordinator {
+func newMergeCoordinator(git *Activities, envContainer env.EnvContainer) MergeCoordinator {
 	return &mergeCoordinator{
-		repository: mergeRepository{envContainer: envContainer},
+		repository: mergeRepository{git: git, envContainer: envContainer},
 	}
 }
 
@@ -59,7 +60,7 @@ func (c *mergeCoordinator) recreateHostConflict(ctx context.Context, transport m
 		return result, fmt.Errorf("failed to transport host target for conflict resolution: %w", err)
 	}
 	sourceDir := c.repository.envContainer.Env.GetWorkingDirectory()
-	_, err = GitMergeIntoWorktreeActivity(ctx, c.repository.envContainer, GitMergeIntoWorktreeParams{
+	_, err = c.repository.git.MergeIntoWorktree(ctx, c.repository.envContainer, GitMergeIntoWorktreeParams{
 		WorktreePath: sourceDir, SourceBranch: sha,
 		CommitterName: params.CommitterName, CommitterEmail: params.CommitterEmail,
 	})

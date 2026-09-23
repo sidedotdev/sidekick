@@ -242,7 +242,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		assert.Contains(t, branches, branchName, "Feature branch should exist before cleanup")
 
 		// Perform cleanup from within the worktree
-		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "Test cleanup with archive message")
+		err = testActivities().CleanupWorktree(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "Test cleanup with archive message")
 		require.NoError(t, err, "Cleanup should succeed")
 
 		// Verify the worktree was removed
@@ -286,7 +286,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		syncerEnv := &gitRefSyncerEnv{Env: devEnv}
 		envContainer := env.EnvContainer{Env: syncerEnv}
 
-		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
+		err = testActivities().CleanupWorktree(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
 		require.NoError(t, err, "Cleanup should succeed")
 
 		require.Len(t, syncerEnv.syncedRefs, 1, "Archive tag should be synced to local exactly once")
@@ -319,7 +319,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		flowCommit := runGitCommandInTestRepo(t, worktreePath, "rev-parse", "HEAD")
 
 		syncerEnv := &hostRepoRefSyncerEnv{Env: devEnv, t: t, envRepoDir: repoDir, hostRepoDir: hostRepoDir}
-		err = CleanupWorktreeActivity(ctx, env.EnvContainer{Env: syncerEnv}, worktreePath, branchName, "archive")
+		err = testActivities().CleanupWorktree(ctx, env.EnvContainer{Env: syncerEnv}, worktreePath, branchName, "archive")
 		require.NoError(t, err, "Cleanup should succeed with a reserved host branch of the same name")
 
 		expectedTag := "archive/" + branchName
@@ -349,7 +349,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		err = os.WriteFile(filepath.Join(devEnv.GetWorkingDirectory(), "image.bin"), []byte{0x00, 0x01, 0x02, 0x00, 0xff}, 0o644)
 		require.NoError(t, err)
 
-		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
+		err = testActivities().CleanupWorktree(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
 		require.NoError(t, err, "Cleanup should succeed when only untracked binaries block removal")
 
 		_, err = os.Stat(devEnv.GetWorkingDirectory())
@@ -376,7 +376,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		err = os.WriteFile(filepath.Join(devEnv.GetWorkingDirectory(), "notes.txt"), []byte("real changes\n"), 0o644)
 		require.NoError(t, err)
 
-		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
+		err = testActivities().CleanupWorktree(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "archive")
 		require.Error(t, err, "Cleanup should fail when genuine untracked changes are present")
 
 		// Clean up the leftover worktree directory manually.
@@ -390,7 +390,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "", "")
+		err = testActivities().CleanupWorktree(ctx, envContainer, repoDir, "", "")
 		require.Error(t, err, "Should fail with empty branch name")
 		assert.Contains(t, err.Error(), "branch name is required", "Error should mention missing branch name")
 	})
@@ -404,7 +404,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "non-existent-branch", "")
+		err = testActivities().CleanupWorktree(ctx, envContainer, repoDir, "non-existent-branch", "")
 		require.Error(t, err, "Should fail with non-existent branch")
 		assert.Contains(t, err.Error(), "failed to create archive tag", "Error should mention archive tag creation failure")
 	})
@@ -429,7 +429,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		envContainer := env.EnvContainer{Env: devEnv}
 
 		// Perform cleanup with empty archive message
-		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "")
+		err = testActivities().CleanupWorktree(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "")
 		require.NoError(t, err, "Cleanup should succeed with empty archive message")
 
 		// Verify the worktree was removed
@@ -484,7 +484,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		envContainer := env.EnvContainer{Env: devEnv}
 
 		// Perform cleanup - should succeed with fallback tag name
-		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "Fallback test")
+		err = testActivities().CleanupWorktree(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "Fallback test")
 		require.NoError(t, err, "Cleanup should succeed with fallback tag name")
 
 		// Verify both tags exist (original and fallback)
@@ -526,7 +526,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		envContainer := env.EnvContainer{Env: devEnv}
 
 		// Perform cleanup - should succeed with next available fallback tag name
-		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "")
+		err = testActivities().CleanupWorktree(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "")
 		require.NoError(t, err, "Cleanup should succeed with next available fallback tag name")
 
 		// Verify the new tag was created with suffix -4
@@ -671,7 +671,7 @@ func TestCleanupWorktreeArchiveSyncConflicts(t *testing.T) {
 				syncErr = fmt.Errorf("fetch rejected: %w", env.ErrGitTagConflict)
 			}
 			syncer := &conflictingArchiveSyncerEnv{Env: devEnv, syncError: syncErr}
-			err = CleanupWorktreeActivity(ctx, env.EnvContainer{Env: syncer}, worktreePath, branchName, "archive message")
+			err = testActivities().CleanupWorktree(ctx, env.EnvContainer{Env: syncer}, worktreePath, branchName, "archive message")
 			if !conflict {
 				require.ErrorIs(t, err, syncErr)
 				require.Len(t, syncer.syncedRefs, 1)

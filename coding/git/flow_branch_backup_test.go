@@ -102,7 +102,7 @@ func TestGitCommitActivityFlowBranchBackup(t *testing.T) {
 		require.NoError(t, err)
 		backupEnv := &flowBranchBackupEnv{Env: devEnv}
 
-		_, err = GitCommitActivity(ctx, env.EnvContainer{Env: backupEnv}, GitCommitParams{CommitMessage: "work in progress"})
+		_, err = testActivities().Commit(ctx, env.EnvContainer{Env: backupEnv}, GitCommitParams{CommitMessage: "work in progress"})
 		require.NoError(t, err)
 
 		assert.Equal(t, []string{"side/foo"}, backupEnv.syncedBranches)
@@ -117,7 +117,7 @@ func TestGitCommitActivityFlowBranchBackup(t *testing.T) {
 		require.NoError(t, err)
 		backupEnv := &flowBranchBackupEnv{Env: devEnv, syncErr: errors.New("ssh transport failed")}
 
-		_, err = GitCommitActivity(ctx, env.EnvContainer{Env: backupEnv}, GitCommitParams{CommitMessage: "work in progress"})
+		_, err = testActivities().Commit(ctx, env.EnvContainer{Env: backupEnv}, GitCommitParams{CommitMessage: "work in progress"})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to sync flow branch to local repo")
 		assert.Contains(t, err.Error(), "ssh transport failed")
@@ -135,7 +135,7 @@ func TestGitCommitActivityFlowBranchBackup(t *testing.T) {
 		require.NoError(t, err)
 		backupEnv := &flowBranchBackupEnv{Env: devEnv}
 
-		_, err = GitCommitActivity(ctx, env.EnvContainer{Env: backupEnv}, GitCommitParams{CommitMessage: "detached work"})
+		_, err = testActivities().Commit(ctx, env.EnvContainer{Env: backupEnv}, GitCommitParams{CommitMessage: "detached work"})
 		require.NoError(t, err)
 
 		assert.Empty(t, backupEnv.syncedBranches)
@@ -152,7 +152,7 @@ func TestGitCommitActivityFlowBranchBackup(t *testing.T) {
 		envContainer := env.EnvContainer{Env: backupEnv}
 
 		err = runActivityWithRetries(t, func(activityCtx context.Context) error {
-			_, activityErr := GitCommitActivity(activityCtx, envContainer, GitCommitParams{CommitMessage: "work in progress"})
+			_, activityErr := testActivities().Commit(activityCtx, envContainer, GitCommitParams{CommitMessage: "work in progress"})
 			return activityErr
 		})
 		require.NoError(t, err, "the retry should succeed once the backup sync recovers")
@@ -175,10 +175,10 @@ func TestGitCommitActivityFlowBranchBackup(t *testing.T) {
 			IgnoreNothingToCommit: true,
 		}
 
-		_, err = GitCommitActivity(ctx, envContainer, params)
+		_, err = testActivities().Commit(ctx, envContainer, params)
 		require.ErrorContains(t, err, "failed to sync flow branch to local repo")
 
-		_, err = GitCommitActivity(ctx, envContainer, params)
+		_, err = testActivities().Commit(ctx, envContainer, params)
 		require.NoError(t, err, "a direct rerun should complete the previously failed backup")
 
 		assert.Equal(t, []string{"side/direct-retry", "side/direct-retry"}, backupEnv.syncedBranches)
@@ -193,7 +193,7 @@ func TestGitCommitActivityFlowBranchBackup(t *testing.T) {
 		require.NoError(t, err)
 		recorderEnv := &commandRecorderEnv{Env: devEnv}
 
-		_, err = GitCommitActivity(ctx, env.EnvContainer{Env: recorderEnv}, GitCommitParams{CommitMessage: "plain commit"})
+		_, err = testActivities().Commit(ctx, env.EnvContainer{Env: recorderEnv}, GitCommitParams{CommitMessage: "plain commit"})
 		require.NoError(t, err)
 
 		for _, command := range recorderEnv.commands {
@@ -218,7 +218,7 @@ func TestGitCommitMergeActivityFlowBranchBackup(t *testing.T) {
 		require.NoError(t, err)
 		backupEnv := &flowBranchBackupEnv{Env: devEnv}
 
-		err = GitCommitMergeActivity(ctx, env.EnvContainer{Env: backupEnv}, GitCommitMergeParams{
+		err = testActivities().CommitMerge(ctx, env.EnvContainer{Env: backupEnv}, GitCommitMergeParams{
 			WorktreePath:  repoDir,
 			CommitMessage: "Merge feature",
 		})
@@ -239,7 +239,7 @@ func TestGitCommitMergeActivityFlowBranchBackup(t *testing.T) {
 		require.NoError(t, err)
 		backupEnv := &flowBranchBackupEnv{Env: devEnv, syncErr: errors.New("ssh transport failed")}
 
-		err = GitCommitMergeActivity(ctx, env.EnvContainer{Env: backupEnv}, GitCommitMergeParams{
+		err = testActivities().CommitMerge(ctx, env.EnvContainer{Env: backupEnv}, GitCommitMergeParams{
 			WorktreePath:  repoDir,
 			CommitMessage: "Merge feature",
 		})
@@ -263,7 +263,7 @@ func TestGitCommitMergeActivityFlowBranchBackup(t *testing.T) {
 		envContainer := env.EnvContainer{Env: backupEnv}
 
 		err = runActivityWithRetries(t, func(activityCtx context.Context) error {
-			return GitCommitMergeActivity(activityCtx, envContainer, GitCommitMergeParams{
+			return testActivities().CommitMerge(activityCtx, envContainer, GitCommitMergeParams{
 				WorktreePath:  repoDir,
 				CommitMessage: "Merge feature",
 			})

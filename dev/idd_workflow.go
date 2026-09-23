@@ -769,6 +769,8 @@ func subtaskTerminalNotice(title, flowId, status, childResult string, childErr e
 // clean tree is not an error: the sub-task then re-implements the current intent
 // state at the existing HEAD.
 func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirementsInfo, error) {
+	var ea *env.Activities
+	var ga *git.Activities
 	commitMessage := fmt.Sprintf("Intent: %s", title)
 	if update {
 		commitMessage = fmt.Sprintf("Intent update: %s", title)
@@ -782,7 +784,7 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 	// recorded before this fix replay against the original command sequence.
 	stageIntentVersion := workflow.GetVersion(dCtx, "idd-commit-intent-stage-untracked", workflow.DefaultVersion, 1)
 	if stageIntentVersion >= 1 {
-		err := workflow.ExecuteActivity(dCtx, git.GitAddActivity, git.GitAddActivityInput{
+		err := workflow.ExecuteActivity(dCtx, ga.GitAddActivity, git.GitAddActivityInput{
 			EnvContainer: *dCtx.EnvContainer,
 			Path:         ".",
 		}).Get(dCtx, nil)
@@ -791,7 +793,7 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		}
 	}
 
-	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitActivity, nil, *dCtx.EnvContainer, git.GitCommitParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", ga.GitCommitActivity, nil, *dCtx.EnvContainer, git.GitCommitParams{
 		CommitMessage:         commitMessage,
 		CommitAll:             true,
 		IgnoreNothingToCommit: true,
@@ -801,7 +803,7 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 	}
 
 	var headOutput env.EnvRunCommandActivityOutput
-	err = workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err = workflow.ExecuteActivity(dCtx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -813,7 +815,7 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 	commit := strings.TrimSpace(headOutput.Stdout)
 
 	var showOutput env.EnvRunCommandActivityOutput
-	err = workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err = workflow.ExecuteActivity(dCtx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -831,7 +833,7 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 	cleanDiffVersion := workflow.GetVersion(dCtx, "idd-commit-intent-clean-diff", workflow.DefaultVersion, 1)
 	if cleanDiffVersion >= 1 {
 		var cleanOutput env.EnvRunCommandActivityOutput
-		err = workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		err = workflow.ExecuteActivity(dCtx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer:       *dCtx.EnvContainer,
 			RelativeWorkingDir: "./",
 			Command:            "git",
@@ -903,6 +905,7 @@ func cancelPendingSubtasks(dCtx DevContext, state *IddState) error {
 // worktree. A clean exit lets the parent task workflow mark the IDD task
 // completed via the closure signal sent by the caller.
 func finishIdd(dCtx DevContext, input IddWorkflowInput, sig FinishIddSignal, state *IddState) error {
+	var ga *git.Activities
 	target := strings.TrimSpace(sig.TargetBranch)
 	if target == "" {
 		target = state.DefaultTargetBranch
@@ -926,7 +929,7 @@ func finishIdd(dCtx DevContext, input IddWorkflowInput, sig FinishIddSignal, sta
 	}
 
 	var mergeResult git.MergeActivityResult
-	err := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, *dCtx.EnvContainer, git.GitMergeParams{
+	err := workflow.ExecuteActivity(dCtx, ga.GitMergeActivity, *dCtx.EnvContainer, git.GitMergeParams{
 		SourceBranch:  dCtx.Worktree.Name,
 		TargetBranch:  target,
 		CommitMessage: fmt.Sprintf("Finish IDD: %s", input.Title),
@@ -939,7 +942,7 @@ func finishIdd(dCtx DevContext, input IddWorkflowInput, sig FinishIddSignal, sta
 		return fmt.Errorf("merge conflicts encountered while finishing idd into %s; resolve them manually", target)
 	}
 
-	cleanupErr := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, *dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "IDD flow finished").Get(dCtx, nil)
+	cleanupErr := workflow.ExecuteActivity(dCtx, ga.CleanupWorktreeActivity, *dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "IDD flow finished").Get(dCtx, nil)
 	if cleanupErr != nil {
 		workflow.GetLogger(dCtx).Warn("Failed to cleanup IDD worktree after finish merge", "Error", cleanupErr)
 	}

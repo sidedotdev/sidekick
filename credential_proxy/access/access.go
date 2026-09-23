@@ -94,8 +94,8 @@ func New(ctx context.Context, input Input) (*Binding, error) {
 }
 
 // Host returns explicit bindings suitable for scripting.Input.Host.
-func (b *Binding) Host() map[string]map[string]scripting.Operation {
-	return map[string]map[string]scripting.Operation{
+func (b *Binding) Host() scripting.Host {
+	return scripting.Host{
 		"credentialProxies": {"acquireAccess": b.operation},
 	}
 }

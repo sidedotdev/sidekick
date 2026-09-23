@@ -13,7 +13,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"sidekick/coding"
-	"sidekick/coding/git"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
@@ -128,6 +127,7 @@ func newReviewDiffsFlowHarness(t *testing.T) *reviewDiffsFlowHarness {
 // registerGitActivities registers every activity that really runs git, so the
 // diffs under test come from git itself rather than canned mock output.
 func (h *reviewDiffsFlowHarness) registerGitActivities() {
+	gitActivities := testGitActivities()
 	devActivities := &DevActivities{
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
@@ -135,27 +135,32 @@ func (h *reviewDiffsFlowHarness) registerGitActivities() {
 			},
 			InitializedClients: map[string]lsp.LSPClient{},
 		},
+		Git: gitActivities,
 	}
 	h.env.RegisterActivity(devActivities.ApplyEditBlocks)
-	h.env.RegisterActivity(git.GitDiffActivity)
-	h.env.RegisterActivity(git.DiffUntrackedFilesActivity)
-	h.env.RegisterActivity(git.GitAddActivity)
-	h.env.RegisterActivity(git.GitCommitActivity)
-	h.env.RegisterActivity(git.GitCommitMergeActivity)
-	h.env.RegisterActivity(git.GitMergeActivity)
-	h.env.RegisterActivity(git.GitMergeAbortActivity)
-	h.env.RegisterActivity(git.GitMergeInProgressActivity)
-	h.env.RegisterActivity(git.GitListUnmergedActivity)
-	h.env.RegisterActivity(git.GitCheckoutActivity)
-	h.env.RegisterActivity(git.GitRestoreActivity)
-	h.env.RegisterActivity(git.GitRevParseActivity)
-	h.env.RegisterActivity(git.GitSnapshotConflictMarkersActivity)
-	h.env.RegisterActivity(git.GitConflictResolutionDiffActivity)
-	h.env.RegisterActivity(git.GitTransferWorktreeChangesActivity)
-	h.env.RegisterActivity(git.GetGitUserConfigActivity)
-	h.env.RegisterActivity(git.WriteTreeActivity)
-	h.env.RegisterActivity(env.EnvRunCommandActivity)
-	var ca *coding.CodingActivities
+	for _, method := range []any{
+		gitActivities.GitDiffActivity,
+		gitActivities.DiffUntrackedFilesActivity,
+		gitActivities.GitAddActivity,
+		gitActivities.GitCommitActivity,
+		gitActivities.GitCommitMergeActivity,
+		gitActivities.GitMergeActivity,
+		gitActivities.GitMergeAbortActivity,
+		gitActivities.GitMergeInProgressActivity,
+		gitActivities.GitListUnmergedActivity,
+		gitActivities.GitCheckoutActivity,
+		gitActivities.GitRestoreActivity,
+		gitActivities.GitRevParseActivity,
+		gitActivities.GitSnapshotConflictMarkersActivity,
+		gitActivities.GitConflictResolutionDiffActivity,
+		gitActivities.GitTransferWorktreeChangesActivity,
+		gitActivities.GetGitUserConfigActivity,
+		gitActivities.WriteTreeActivity,
+	} {
+		h.env.RegisterActivity(method)
+	}
+	registerRunCommandActivity(h.env)
+	ca := &coding.CodingActivities{Git: gitActivities}
 	h.env.RegisterActivity(ca.GenerateReviewDiffsActivity)
 	// small test diffs pass through unchanged, so no summarization happens
 	h.env.RegisterActivity(SummarizeDiffActivity)
@@ -188,7 +193,7 @@ func (h *reviewDiffsFlowHarness) registerMocks() {
 		Return(verifierFlagValues(settings), nil).Maybe()
 
 	// the test repository is the flow's working copy, so it must outlive the flow
-	h.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	h.env.OnActivity(ga.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	var ragActivities *persisted_ai.RagActivities
 	h.env.OnActivity(ragActivities.RankedDirSignatureOutline, mock.Anything, mock.Anything).

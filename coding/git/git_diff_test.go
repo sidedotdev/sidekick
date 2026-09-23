@@ -58,8 +58,9 @@ func (s *GitDiffWorkflowTestSuite) SetupTest() {
 		return GitDiffLegacy(eCtx)
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
-	s.env.RegisterActivity(env.EnvRunCommandActivity)
-	s.env.RegisterActivity(DiffUntrackedFilesActivity)
+	gitActivities := testActivities()
+	s.env.RegisterActivity(gitActivities.Env.EnvRunCommandActivity)
+	s.env.RegisterActivity(gitActivities.DiffUntrackedFilesActivity)
 
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
@@ -486,8 +487,8 @@ func TestGitDiffActivity(t *testing.T) {
 			require.NoError(t, err)
 			envContainer := env.EnvContainer{Env: devEnv}
 
-			// Call GitDiffActivity
-			result, err := GitDiffActivity(ctx, envContainer, tt.params)
+			// Call Diff
+			result, err := testActivities().Diff(ctx, envContainer, tt.params)
 
 			// Check error expectations
 			if tt.expectError {
@@ -628,7 +629,7 @@ func TestGitDiffActivity_StagedWithTreeHash(t *testing.T) {
 			require.NoError(t, err)
 			envContainer := env.EnvContainer{Env: devEnv}
 
-			result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{
+			result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{
 				Staged:           true,
 				BaseRef:          treeHash,
 				IgnoreWhitespace: tt.ignoreWS,
@@ -704,7 +705,7 @@ func TestGitDiffActivity_BinaryFilesNotShown(t *testing.T) {
 
 	// Test 1: Staged diff should mention binaryfile but NOT show its content
 	t.Run("staged_binary_file_content_not_shown", func(t *testing.T) {
-		result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{Staged: true})
+		result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{Staged: true})
 		require.NoError(t, err)
 		require.Contains(t, result, "binaryfile", "Expected diff to mention the binary file name")
 		require.NotContains(t, result, stagedBinarySentinel, "Binary file content should not appear in staged diff")
@@ -713,7 +714,7 @@ func TestGitDiffActivity_BinaryFilesNotShown(t *testing.T) {
 	// Test 2: Working tree/untracked diff should not mention the untracked
 	// binary file at all, since untracked binaries are excluded from diffs.
 	t.Run("untracked_binary_file_not_mentioned", func(t *testing.T) {
-		result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{})
+		result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{})
 		require.NoError(t, err)
 		require.NotContains(t, result, "untrackedbinary", "Untracked binary file name should not appear in diff")
 		require.NotContains(t, result, untrackedBinarySentinel, "Binary file content should not appear in untracked diff")
@@ -734,7 +735,7 @@ func TestGitDiffActivity_StagedIncludesUnmergedFilesDuringConflict(t *testing.T)
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{Staged: true})
+	result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{Staged: true})
 	require.NoError(t, err)
 	require.Contains(t, result, "conflict.txt", "staged diff should include the conflicted file")
 	require.Contains(t, result, "feature change", "staged diff should include the incoming conflicting content")
@@ -787,7 +788,7 @@ func TestGitDiffActivity_WorkingTreeIncludesUnmergedFilesDuringConflict(t *testi
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{})
+	result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{})
 	require.NoError(t, err)
 	require.Contains(t, result, "conflict.txt", "working-tree diff should include the conflicted file")
 	require.Contains(t, result, "feature change", "working-tree diff should include the incoming conflicting content")
@@ -808,7 +809,7 @@ func TestGitDiffActivity_ThreeDotDiffExcludesUncommittedConflictDuringConflict(t
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{ThreeDotDiff: true, BaseRef: "feature"})
+	result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{ThreeDotDiff: true, BaseRef: "feature"})
 	require.NoError(t, err)
 	require.Contains(t, result, "main change", "three-dot diff should include committed changes on the HEAD side")
 	require.NotContains(t, result, "<<<<<<<", "three-dot diff should not include uncommitted conflict markers")
@@ -828,7 +829,7 @@ func TestGitDiffActivity_RefRangeExcludesUncommittedConflictDuringConflict(t *te
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{BaseRef: "feature", EndRef: "main"})
+	result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{BaseRef: "feature", EndRef: "main"})
 	require.NoError(t, err)
 	require.Contains(t, result, "main change", "ref-range diff should reflect the committed end ref content")
 	require.NotContains(t, result, "<<<<<<<", "ref-range diff without Staged should not include uncommitted conflict markers")
@@ -858,7 +859,7 @@ func TestGitDiffActivity_RefRangeWithStagedIncludesStagedChanges(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{Staged: true, BaseRef: "main", EndRef: "feature"})
+	result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{Staged: true, BaseRef: "main", EndRef: "feature"})
 	require.NoError(t, err)
 	require.Contains(t, result, "feature change", "ref-range diff should include the committed range content")
 	require.Contains(t, result, "staged content", "staged changes should be composed into a ref-range diff when Staged is set")
@@ -879,7 +880,7 @@ func TestGitDiffActivity_RefRangeWithStagedIncludesUnmergedFilesDuringConflict(t
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{Staged: true, ThreeDotDiff: true, BaseRef: "feature", EndRef: "main"})
+	result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{Staged: true, ThreeDotDiff: true, BaseRef: "feature", EndRef: "main"})
 	require.NoError(t, err)
 	require.Contains(t, result, "main change", "ref-range diff should reflect the committed end ref content")
 	require.Contains(t, result, "<<<<<<<", "combining a ref range with Staged should compose in the uncommitted conflict markers")
@@ -899,7 +900,7 @@ func TestGitDiffActivity_StagedWithBaseRefIncludesUnmergedFilesDuringConflict(t 
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{Staged: true, BaseRef: "feature"})
+	result, err := testActivities().Diff(ctx, envContainer, GitDiffParams{Staged: true, BaseRef: "feature"})
 	require.NoError(t, err)
 	require.Contains(t, result, "conflict.txt", "staged diff against a base ref should include the conflicted file")
 	require.Contains(t, result, "feature change", "staged diff against a base ref should include the incoming conflicting content")

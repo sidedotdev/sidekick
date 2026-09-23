@@ -8,7 +8,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"sidekick/coding"
-	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -88,7 +87,7 @@ func (s *AutoMergeApprovalTestSuite) TestMergeApprovalUsesGeneratedReviewDiffs()
 		}).
 		Return(coding.GenerateReviewDiffsResult{FullDiff: "full diff", SinceDiff: "since diff"}, nil)
 
-	s.env.OnActivity(git.WriteTreeActivity, mock.Anything, mock.Anything).
+	s.env.OnActivity(ga.WriteTreeActivity, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			s.Fail("no throwaway tree object should be written for the review-diffs mechanism")
 		}).
@@ -317,7 +316,7 @@ func (s *MergeStrategyRoundTripTestSuite) TestHumanMergeApprovalCarriesLastRevie
 	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
 		Return(coding.GenerateReviewDiffsResult{FullDiff: "full diff", SinceDiff: "since diff"}, nil)
 
-	s.env.OnActivity(git.WriteTreeActivity, mock.Anything, mock.Anything).
+	s.env.OnActivity(ga.WriteTreeActivity, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			s.Fail("no throwaway tree object should be written for the review-diffs mechanism")
 		}).

@@ -32,7 +32,6 @@ import (
 	"sidekick/flow_action"
 	"sidekick/persisted_ai"
 	"sidekick/poll_failures"
-	"sidekick/scripting"
 )
 
 // Worker wraps a Temporal worker with telemetry shutdown
@@ -144,12 +143,17 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		},
 		InitializedClients: map[string]lsp.LSPClient{},
 	}
+	envActivities := &env.Activities{HookScriptHost: access.HookScriptHost{}}
+	gitActivities := &git.Activities{Env: envActivities}
+	searchActivities := &dev.SearchActivities{Env: envActivities}
+
 	treeSitterActivities := &tree_sitter.TreeSitterActivities{
 		DatabaseAccessor: service,
 	}
 	codingActivities := &coding.CodingActivities{
 		TreeSitterActivities: treeSitterActivities,
 		LSPActivities:        lspActivities,
+		Git:                  gitActivities,
 	}
 	vectorActivities := &persisted_ai.VectorActivities{
 		DatabaseAccessor: service,
@@ -169,6 +173,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 
 	devActivities := &dev.DevActivities{
 		LSPActivities: lspActivities,
+		Git:           gitActivities,
 	}
 
 	devRunActivities := &dev.DevRunActivities{
@@ -183,19 +188,6 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		},
 	})
 	RegisterWorkflows(w)
-
-	// Host bindings for run_command script hooks are wired here so that env
-	// stays independent of credential-proxy packages.
-	env.CommandScriptHost = func(ctx context.Context, input env.EnvRunCommandActivityInput) (map[string]map[string]scripting.Operation, error) {
-		binding, err := access.New(ctx, access.Input{
-			RepoConfig:  input.HookContext.RepoConfig,
-			WorkspaceID: input.HookContext.WorkspaceId,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return binding.Host(), nil
-	}
 
 	w.RegisterActivity(env.NewLocalGitWorktreeActivity)
 	w.RegisterActivity(env.CreateDevPodWorktreeActivity)
@@ -219,32 +211,14 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(treeSitterActivities)
 	w.RegisterActivity(codingActivities)
 	w.RegisterActivity(ragActivities)
-	w.RegisterActivity(env.EnvRunCommandActivity)
+	w.RegisterActivity(envActivities)
 	w.RegisterActivity(env.GetEnvironmentInfoActivity)
-	w.RegisterActivity(git.GitDiffActivity)
-	w.RegisterActivity(git.DiffUntrackedFilesActivity)
-	w.RegisterActivity(git.GitAddActivity)
-	w.RegisterActivity(git.GitRestoreActivity)
-	w.RegisterActivity(git.GitCommitActivity)
-	w.RegisterActivity(git.GetGitUserConfigActivity)
-	w.RegisterActivity(git.GitCheckoutActivity)
-	w.RegisterActivity(git.GitMergeActivity)
-	w.RegisterActivity(git.GitMergeAbortActivity)
-	w.RegisterActivity(git.GitMergeInProgressActivity)
-	w.RegisterActivity(git.GitMergeIntoWorktreeActivity)
-	w.RegisterActivity(git.GitTransferWorktreeChangesActivity)
-	w.RegisterActivity(git.GitListUnmergedActivity)
-	w.RegisterActivity(git.GitSnapshotConflictMarkersActivity)
-	w.RegisterActivity(git.GitConflictResolutionDiffActivity)
-	w.RegisterActivity(git.GitCommitMergeActivity)
-	w.RegisterActivity(git.CleanupWorktreeActivity)
+	w.RegisterActivity(gitActivities)
 	w.RegisterActivity(git.HibernateWorktreeActivity)
 	w.RegisterActivity(git.WakeWorktreeActivity)
 	w.RegisterActivity(git.GetCurrentBranch)
 	w.RegisterActivity(git.GetDefaultBranch)
 	w.RegisterActivity(git.ListLocalBranches)
-	w.RegisterActivity(git.WriteTreeActivity)
-	w.RegisterActivity(git.GitRevParseActivity)
 	w.RegisterActivity(embedActivities)
 	w.RegisterActivity(vectorActivities)
 	w.RegisterActivity(flowActivities)
@@ -253,10 +227,9 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(dev.GetRepoConfigActivityV2)
 	w.RegisterActivity(dev.GetSymbolsActivity)
 	w.RegisterActivity(dev.EnsureCoreIgnoreFileActivity)
-	w.RegisterActivity(dev.BulkSearchRepositoryActivity)
+	w.RegisterActivity(searchActivities)
 	w.RegisterActivity(dev.ResolveToolNameMappingActivity)
 	w.RegisterActivity(devManagerActivities)
-	w.RegisterActivity(dev.ApplyEditBlocksActivity) // backcompat for <= v0.4.2
 	w.RegisterActivity(devActivities)
 	w.RegisterActivity(devRunActivities)
 	w.RegisterActivity(dev.ReadFileActivity)

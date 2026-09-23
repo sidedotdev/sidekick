@@ -138,6 +138,8 @@ const iddOrchestratorMaxChatLength = 100_000
 // to avoid re-dispatching slices already in flight. Restricting to intent/
 // keeps unrelated worktree edits from muddying the orchestrator's view.
 func pendingIntentDiff(dCtx DevContext, state *IddState) (string, error) {
+	var ea *env.Activities
+	var ga *git.Activities
 	base := "HEAD"
 	if workflow.GetVersion(dCtx, "idd-orchestrator-diff-from-start", workflow.DefaultVersion, 1) >= 1 {
 		if strings.TrimSpace(state.DefaultTargetBranch) != "" {
@@ -145,7 +147,7 @@ func pendingIntentDiff(dCtx DevContext, state *IddState) (string, error) {
 		}
 	}
 	var out env.EnvRunCommandActivityOutput
-	err := workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err := workflow.ExecuteActivity(dCtx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -163,7 +165,7 @@ func pendingIntentDiff(dCtx DevContext, state *IddState) (string, error) {
 	// tracked diff above.
 	var untracked string
 	if workflow.GetVersion(dCtx, "idd-orchestrator-untracked-intent", workflow.DefaultVersion, 1) >= 1 {
-		if err := workflow.ExecuteActivity(dCtx, git.DiffUntrackedFilesActivity, *dCtx.EnvContainer, []string{"intent"}).Get(dCtx, &untracked); err != nil {
+		if err := workflow.ExecuteActivity(dCtx, ga.DiffUntrackedFilesActivity, *dCtx.EnvContainer, []string{"intent"}).Get(dCtx, &untracked); err != nil {
 			return "", fmt.Errorf("failed to compute untracked intent diff: %w", err)
 		}
 	}

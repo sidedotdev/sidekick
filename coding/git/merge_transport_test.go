@@ -32,7 +32,7 @@ func TestMergeTransportRepositoryDiscovery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			source := mergeRepository{envContainer: env.EnvContainer{Env: tc.source}}
+			source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: tc.source}}
 			transport, err := newMergeTransport(ctx, source)
 			require.NoError(t, err)
 			target := transport.targetRepository()
@@ -54,6 +54,7 @@ func TestMergeTransportRequiresRemoteHostPath(t *testing.T) {
 	t.Parallel()
 	for _, source := range []env.Env{&env.ModalEnv{}, &env.OpenShellEnv{}} {
 		_, err := newMergeTransport(context.Background(), mergeRepository{
+			git:          testActivities(),
 			envContainer: env.EnvContainer{Env: source},
 		})
 		require.Error(t, err)
@@ -65,7 +66,7 @@ func TestSameRepositoryMergeTransport(t *testing.T) {
 	ctx := context.Background()
 	dir := setupTestGitRepo(t)
 	createCommit(t, dir, "Initial commit")
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: dir}}}
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: dir}}}
 	transport, err := newMergeTransport(ctx, source)
 	require.NoError(t, err)
 	require.NoError(t, transport.backupSourceBranch(ctx, "main"))

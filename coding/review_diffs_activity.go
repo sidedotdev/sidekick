@@ -59,7 +59,7 @@ func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, par
 		return GenerateReviewDiffsResult{}, fmt.Errorf("start point is required to generate review diffs")
 	}
 
-	fullDiff, err := fullReviewDiff(ctx, params)
+	fullDiff, err := ca.fullReviewDiff(ctx, params)
 	if err != nil {
 		return GenerateReviewDiffsResult{}, err
 	}
@@ -89,14 +89,14 @@ func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, par
 // has no such property - it stays an ancestor of HEAD - so the changes that
 // already existed at that start point are subtracted from the base branch diff
 // instead.
-func fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (string, error) {
+func (ca *CodingActivities) fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (string, error) {
 	pinnedStartPoint := params.BaseBranch != "" && params.BaseBranch != params.StartPoint
 	comparisonRef := params.StartPoint
 	if pinnedStartPoint {
 		comparisonRef = params.BaseBranch
 	}
 
-	currentDiff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
+	currentDiff, err := ca.Git.Diff(ctx, params.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		ThreeDotDiff:     true,
 		BaseRef:          comparisonRef,
@@ -111,7 +111,7 @@ func fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (stri
 		return currentDiff, nil
 	}
 
-	startPointDiff, err := diffAtStartPoint(ctx, params)
+	startPointDiff, err := ca.diffAtStartPoint(ctx, params)
 	if err != nil {
 		return "", err
 	}
@@ -131,13 +131,13 @@ func fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (stri
 // diffAtStartPoint renders the work that already existed at the start point,
 // relative to where the base branch was back then, which is exactly what must
 // not be attributed to the work under review now.
-func diffAtStartPoint(ctx context.Context, params GenerateReviewDiffsParams) (string, error) {
-	mergeBase, err := git.MergeBase(ctx, params.EnvContainer, params.BaseBranch, params.StartPoint)
+func (ca *CodingActivities) diffAtStartPoint(ctx context.Context, params GenerateReviewDiffsParams) (string, error) {
+	mergeBase, err := ca.Git.MergeBase(ctx, params.EnvContainer, params.BaseBranch, params.StartPoint)
 	if err != nil {
 		return "", fmt.Errorf("failed to find merge base of %s and %s: %w", params.BaseBranch, params.StartPoint, err)
 	}
 
-	diff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
+	diff, err := ca.Git.Diff(ctx, params.EnvContainer, git.GitDiffParams{
 		BaseRef:          mergeBase,
 		EndRef:           params.StartPoint,
 		IgnoreWhitespace: params.IgnoreWhitespace,

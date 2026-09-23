@@ -12,6 +12,9 @@ intent_links:
       - dev/run_command.go
       - dev/run_tests.go
       - env/environment.go
+      - env/environment.go:Activities
+      - env/environment.go:HookScriptHostProvider
+      - credential_proxy/access/hook_script_host.go:HookScriptHost
       - worker/worker.go
       - scripting/runner.go
       - scripting/command.go
@@ -74,8 +77,9 @@ and workflow compatibility paths have been removed. Command output policy
 
 ## Requirements
 
-- The ordinary `env.EnvRunCommandActivity` executes commands. It supports
-  generic hooks without depending on credential-proxy behavior.
+- The ordinary command activity, `env.Activities.RunCommand` (registered as
+  `EnvRunCommandActivity`), executes commands. It supports generic hooks
+  without depending on credential-proxy behavior.
 - Workflow code matches rules once against the original event context.
   Matching actions execute serially inside the command activity.
 - Scripts execute in a worker-side goja VM with explicitly exposed host
@@ -159,9 +163,12 @@ activities that return runtime values through workflow history. Activity retries
 can execute hooks again. Workflow code matches rules once against the original
 environment type and passes only matched actions plus non-secret invocation
 data (workspace identity and repository configuration) to the activity; call
-sites that pass no hooks run none. The worker injects host bindings into the
-activity through a single package-level function so that `env` never depends on
-credential-proxy packages.
+sites that pass no hooks run none. The worker builds one `env.Activities` whose
+`env.HookScriptHostProvider` (`credential_proxy/access.HookScriptHost`) returns
+the invocation's `scripting.Host`, so `env` never depends on credential-proxy
+packages. A nil provider exposes no `host.*` bindings. Other activity structs
+that run commands, such as `git.Activities` and `dev.SearchActivities`, receive
+that same instance.
 
 Each action has a fresh VM and an invocation-local set of host bindings.
 Bindings are closures capturing the activity context and required invocation

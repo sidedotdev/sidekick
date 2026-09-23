@@ -43,9 +43,9 @@ func TestGitCommitActivity_CommitAll(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	// Call the GitCommitActivity function with CommitAll set to true and a commit message
+	// Call the Commit function with CommitAll set to true and a commit message
 	commitMessage := "Test commit"
-	_, err = GitCommitActivity(ctx, envContainer, GitCommitParams{
+	_, err = testActivities().Commit(ctx, envContainer, GitCommitParams{
 		CommitMessage: commitMessage,
 		CommitAll:     true,
 	})
@@ -93,9 +93,9 @@ func TestGitCommitActivity_NoCommitAll(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	// Call the GitCommitActivity function with CommitAll set to false and a commit message
+	// Call the Commit function with CommitAll set to false and a commit message
 	commitMessage := "Test commit"
-	_, err = GitCommitActivity(ctx, envContainer, GitCommitParams{
+	_, err = testActivities().Commit(ctx, envContainer, GitCommitParams{
 		CommitMessage: commitMessage,
 		CommitAll:     false,
 	})
@@ -126,14 +126,14 @@ func TestGitCommitActivity_NoChangesToCommit(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	// Call the GitCommitActivity function with CommitAll set to true and a commit message
+	// Call the Commit function with CommitAll set to true and a commit message
 	commitMessage := "Test commit"
-	_, err = GitCommitActivity(ctx, envContainer, GitCommitParams{
+	_, err = testActivities().Commit(ctx, envContainer, GitCommitParams{
 		CommitMessage: commitMessage,
 		CommitAll:     true,
 	})
 
-	// Check if the GitCommitActivity function returns an error
+	// Check if the Commit function returns an error
 	require.Error(t, err)
 
 	// Check if the error message indicates that the git commit command failed
@@ -155,7 +155,7 @@ func TestGitCommitActivity_IgnoreNothingToCommit(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		_, err = GitCommitActivity(ctx, envContainer, GitCommitParams{
+		_, err = testActivities().Commit(ctx, envContainer, GitCommitParams{
 			CommitMessage:         "noop",
 			CommitAll:             true,
 			IgnoreNothingToCommit: true,
@@ -187,7 +187,7 @@ func TestGitCommitActivity_IgnoreNothingToCommit(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		_, err = GitCommitActivity(ctx, envContainer, GitCommitParams{
+		_, err = testActivities().Commit(ctx, envContainer, GitCommitParams{
 			CommitMessage:         "noop",
 			IgnoreNothingToCommit: true,
 		})
@@ -237,7 +237,7 @@ func TestGetGitUserConfigActivity(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	config, err := GetGitUserConfigActivity(ctx, envContainer)
+	config, err := testActivities().GetUserConfig(ctx, envContainer)
 	require.NoError(t, err)
 	require.Equal(t, "Test User", config.Name)
 	require.Equal(t, "test@example.com", config.Email)

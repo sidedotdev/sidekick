@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	"sidekick/coding/git"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
@@ -40,8 +39,8 @@ func testCodingSubflowVerifier(t *testing.T, reuse bool) {
 	var rag *persisted_ai.RagActivities
 	testEnv.OnActivity(rag.RankedDirSignatureOutline, mock.Anything, mock.Anything).Return("empty repository", nil).Once()
 	testEnv.OnActivity(env.GetEnvironmentInfoActivity, mock.Anything, mock.Anything).Return(env.GetEnvironmentInfoOutput{}, nil)
-	testEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{}, nil)
-	testEnv.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("+fixed", nil)
+	testEnv.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{}, nil)
+	testEnv.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("+fixed", nil)
 
 	var flags *fflag.FFlagActivities
 	for name, enabled := range map[string]bool{
@@ -148,7 +147,7 @@ func TestPlannedStepReviewForwardsHistoryAndSession(t *testing.T) {
 	settings.ReuseHistory = true
 	testEnv.OnActivity(flags.EvaluateFlags, mock.Anything, mock.Anything).Return(
 		verifierFlagValues(settings), nil).Once()
-	testEnv.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("+planned", nil)
+	testEnv.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("+planned", nil)
 	var historyActivities *persisted_ai.ChatHistoryActivities
 	testEnv.OnActivity(historyActivities.AppendMessage, mock.Anything, mock.Anything).Return(
 		&persisted_ai.MessageRef{Role: "user", BlockKeys: []string{"review"}}, nil)

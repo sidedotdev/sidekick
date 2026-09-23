@@ -93,6 +93,7 @@ func CheckWorkMeetsCriteriaWithDiff(dCtx DevContext, promptInfo CheckWorkInfo) (
 // that the review was based on, which is only available once review diffs are
 // generated rather than derived from legacy git object comparisons.
 func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedFullDiff *string) (CriteriaFulfillment, error) {
+	var ga *git.Activities
 	// Use GlobalState as single source of truth for base branch, falling back
 	// to caller-provided value. A caller that pinned a start point already
 	// decided what the work is compared against, including whether the base
@@ -113,7 +114,7 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 	if v >= 7 {
 		if promptInfo.StartPoint == "" && promptInfo.BaseBranch == "" {
 			// nothing to diff against, so the current working state is the work
-			err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
+			err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", ga.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
 			if err != nil {
 				return CriteriaFulfillment{}, fmt.Errorf("failed to get git diff: %v", err)
 			}
@@ -138,7 +139,7 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 		// git.GitDiff (which internally checks the flag again before
 		// running GitDiffActivity).
 		_ = fflag.IsEnabled(dCtx, fflag.CheckEdits)
-		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
+		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", ga.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get staged git diff: %v", err)
 		}

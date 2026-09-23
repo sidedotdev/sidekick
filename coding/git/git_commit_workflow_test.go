@@ -52,10 +52,11 @@ func (s *GitCommitWorkflowTestSuite) commitWorkflow(ctx workflow.Context) error 
 // The activity itself is asked to tolerate it, so it never fails in the first
 // place (see TestGitCommitActivity_IgnoreNothingToCommit).
 func (s *GitCommitWorkflowTestSuite) TestGitCommitToleratesNothingToCommit() {
-	s.env.OnActivity(GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("some diff", nil).Once()
+	var ga *Activities
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("some diff", nil).Once()
 
 	commitCalls := 0
-	s.env.OnActivity(GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, envContainer env.EnvContainer, params GitCommitParams) (string, error) {
 			commitCalls++
 			if !params.IgnoreNothingToCommit {
@@ -79,8 +80,9 @@ func (s *GitCommitWorkflowTestSuite) TestGitCommitToleratesNothingToCommit() {
 // TestGitCommitSurfacesRealFailure ensures genuine commit failures (including
 // flow-branch backup sync failures) are not swallowed.
 func (s *GitCommitWorkflowTestSuite) TestGitCommitSurfacesRealFailure() {
-	s.env.OnActivity(GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("some diff", nil).Once()
-	s.env.OnActivity(GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+	var ga *Activities
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("some diff", nil).Once()
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
 		"", errors.New("commit succeeded but failed to sync flow branch to local repo"),
 	).Once()
 

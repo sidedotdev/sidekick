@@ -37,11 +37,22 @@ type BulkSearchRepositoryActivityOutput struct {
 	Result string `json:"result"`
 }
 
-// BulkSearchRepositoryActivity performs all the searches within a single
-// activity, so that the many intermediate command inputs and outputs never
-// cross the activity boundary.
-func BulkSearchRepositoryActivity(ctx context.Context, input BulkSearchRepositoryActivityInput) (BulkSearchRepositoryActivityOutput, error) {
-	result, err := bulkSearchRepository(activitySearchRunner{ctx: ctx}, input.EnvContainer, input.Params)
+type SearchActivities struct {
+	Env *env.Activities
+}
+
+// BulkSearchRepositoryActivity is the registered Temporal activity for
+// BulkSearchRepository, named after the historical activity type that
+// workflows schedule and existing histories record.
+func (sa *SearchActivities) BulkSearchRepositoryActivity(ctx context.Context, input BulkSearchRepositoryActivityInput) (BulkSearchRepositoryActivityOutput, error) {
+	return sa.BulkSearchRepository(ctx, input)
+}
+
+// BulkSearchRepository performs all the searches within a single activity, so
+// that the many intermediate command inputs and outputs never cross the
+// activity boundary.
+func (sa *SearchActivities) BulkSearchRepository(ctx context.Context, input BulkSearchRepositoryActivityInput) (BulkSearchRepositoryActivityOutput, error) {
+	result, err := bulkSearchRepository(activitySearchRunner{ctx: ctx, env: sa.Env}, input.EnvContainer, input.Params)
 	if err != nil {
 		return BulkSearchRepositoryActivityOutput{}, err
 	}
@@ -55,8 +66,9 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 
 	v := workflow.GetVersion(ctx, "bulk-search-single-activity", workflow.DefaultVersion, 1)
 	if v >= 1 {
+		var sa *SearchActivities
 		var output BulkSearchRepositoryActivityOutput
-		err := workflow.ExecuteActivity(ctx, BulkSearchRepositoryActivity, BulkSearchRepositoryActivityInput{
+		err := workflow.ExecuteActivity(ctx, sa.BulkSearchRepositoryActivity, BulkSearchRepositoryActivityInput{
 			EnvContainer: envContainer,
 			Params:       bulkSearchRepositoryParams,
 		}).Get(ctx, &output)

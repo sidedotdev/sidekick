@@ -6,8 +6,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"sidekick/coding/git"
+	"sidekick/env"
+
 	"github.com/stretchr/testify/require"
 )
+
+func newTestCodingActivities() *CodingActivities {
+	return &CodingActivities{Git: &git.Activities{Env: &env.Activities{}}}
+}
 
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()

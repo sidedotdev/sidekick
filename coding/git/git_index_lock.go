@@ -50,12 +50,12 @@ func isIndexLockContentionError(output env.EnvRunCommandActivityOutput) bool {
 // directory whose repository owns the lock; pass "" to use the environment's
 // working directory. It never removes a lock that could belong to a live git
 // process (see staleIndexLockCleanupScript).
-func cleanupStaleIndexLock(ctx context.Context, envContainer env.EnvContainer, worktreeDir string, envVars []string) (bool, error) {
+func (a *Activities) cleanupStaleIndexLock(ctx context.Context, envContainer env.EnvContainer, worktreeDir string, envVars []string) (bool, error) {
 	script := fmt.Sprintf(staleIndexLockCleanupScript, staleIndexLockGraceSeconds)
 	if worktreeDir != "" {
 		script = fmt.Sprintf("cd %s && {\n%s\n}", shellQuote(worktreeDir), script)
 	}
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "sh",
@@ -73,13 +73,13 @@ func cleanupStaleIndexLock(ctx context.Context, envContainer env.EnvContainer, w
 // confirmed-stale lock is removed and the command is retried once. cleanupDir
 // is the worktree the lock lives in; pass "" to use the environment's working
 // directory (the same directory the command runs in).
-func runGitIndexCommandWithRetry(ctx context.Context, input env.EnvRunCommandActivityInput, cleanupDir string) (env.EnvRunCommandActivityOutput, error) {
-	output, err := env.EnvRunCommandActivity(ctx, input)
+func (a *Activities) runGitIndexCommandWithRetry(ctx context.Context, input env.EnvRunCommandActivityInput, cleanupDir string) (env.EnvRunCommandActivityOutput, error) {
+	output, err := a.Env.RunCommand(ctx, input)
 	if err != nil || output.ExitStatus == 0 || !isIndexLockContentionError(output) {
 		return output, err
 	}
 
-	removed, cleanupErr := cleanupStaleIndexLock(ctx, input.EnvContainer, cleanupDir, input.EnvVars)
+	removed, cleanupErr := a.cleanupStaleIndexLock(ctx, input.EnvContainer, cleanupDir, input.EnvVars)
 	if cleanupErr != nil {
 		log.Warn().Err(cleanupErr).Msg("failed to clean up stale git index.lock")
 		return output, err
@@ -89,5 +89,5 @@ func runGitIndexCommandWithRetry(ctx context.Context, input env.EnvRunCommandAct
 	}
 
 	log.Info().Msg("removed stale git index.lock; retrying git command")
-	return env.EnvRunCommandActivity(ctx, input)
+	return a.Env.RunCommand(ctx, input)
 }

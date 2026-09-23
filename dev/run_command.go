@@ -144,6 +144,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 
 // RunCommand handles the execution of shell commands with user approval
 func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
+	var ea *env.Activities
 	proceed, denyMessage, advisory, err := checkCommandPermission(dCtx, params.Command, params.WorkingDir)
 	if err != nil {
 		return "", err
@@ -167,7 +168,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		RelativeWorkingDir: relWorkDir,
 	}
 	input.Hooks, input.HookContext = runCommandHooks(dCtx, dCtx.EnvContainer.Env.GetType())
-	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
+	err = workflow.ExecuteActivity(dCtx.Context, ea.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute command: %v", err)
 	}

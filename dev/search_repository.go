@@ -123,8 +123,9 @@ type workflowSearchRunner struct {
 }
 
 func (r workflowSearchRunner) runCommand(input env.EnvRunCommandActivityInput) (env.EnvRunCommandOutput, error) {
+	var ea *env.Activities
 	var output env.EnvRunCommandOutput
-	err := workflow.ExecuteActivity(r.ctx, env.EnvRunCommandActivity, input).Get(r.ctx, &output)
+	err := workflow.ExecuteActivity(r.ctx, ea.EnvRunCommandActivity, input).Get(r.ctx, &output)
 	return output, err
 }
 
@@ -150,10 +151,11 @@ func (r workflowSearchRunner) warn(msg string, keyvals ...any) {
 
 type activitySearchRunner struct {
 	ctx context.Context
+	env *env.Activities
 }
 
 func (r activitySearchRunner) runCommand(input env.EnvRunCommandActivityInput) (env.EnvRunCommandOutput, error) {
-	return env.EnvRunCommandActivity(r.ctx, input)
+	return r.env.RunCommand(r.ctx, input)
 }
 
 func (r activitySearchRunner) ensureCoreIgnoreFile(input EnsureCoreIgnoreFileActivityInput) (EnsureCoreIgnoreFileActivityOutput, error) {

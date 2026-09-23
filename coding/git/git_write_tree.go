@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-func WriteTreeActivity(ctx context.Context, envContainer env.EnvContainer) (string, error) {
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+func (a *Activities) WriteTree(ctx context.Context, envContainer env.EnvContainer) (string, error) {
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",

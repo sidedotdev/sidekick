@@ -297,7 +297,7 @@ func (s *CriteriaFulfillmentDiffTestSuite) TestFallsBackToBaseBranchDiffWithoutU
 			return coding.GenerateReviewDiffsResult{}, errors.New("bad object deadbeef")
 		},
 	)
-	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("fallback diff", nil)
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("fallback diff", nil)
 
 	diff, requestForUserSeen, err := s.runDiffWorkflow(CheckWorkInfo{
 		BaseBranch:     "main",
@@ -328,7 +328,7 @@ func (s *CriteriaFulfillmentDiffTestSuite) TestReviewsGeneratedDiffEvenWhenWorkI
 	)
 
 	stagedDiffCalls := 0
-	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, envContainer env.EnvContainer, params git.GitDiffParams) (string, error) {
 			stagedDiffCalls++
 			return "staged diff", nil
@@ -563,7 +563,7 @@ func (s *CriteriaFulfillmentDiffTestSuite) TestActivityFailureUsesSingleFullDiff
 	var ca *coding.CodingActivities
 	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
 		Return(coding.GenerateReviewDiffsResult{}, errors.New("git failure"))
-	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).
 		Return("CURRENT_FULL_WORK", nil)
 	prompts := s.mockCriteriaReviewer()
 	_, err := s.runCheckWorkflow(CheckWorkInfo{

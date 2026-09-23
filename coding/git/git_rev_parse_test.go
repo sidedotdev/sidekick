@@ -58,7 +58,7 @@ func TestGitRevParseActivity(t *testing.T) {
 			require.NoError(t, err)
 			envContainer := env.EnvContainer{Env: devEnv}
 
-			result, err := GitRevParseActivity(ctx, GitRevParseParams{
+			result, err := testActivities().RevParse(ctx, GitRevParseParams{
 				EnvContainer: envContainer,
 				Ref:          tt.ref,
 			})

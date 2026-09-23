@@ -35,7 +35,7 @@ func TestRunGitIndexCommandWithRetry_RemovesStaleLock(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	require.NoError(t, GitAddActivity(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: "app.txt"}))
+	require.NoError(t, testActivities().Add(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: "app.txt"}))
 
 	require.True(t, stagedFiles(t, repoDir)["app.txt"], "file should be staged after stale lock recovery")
 	_, statErr := os.Stat(lockPath)
@@ -57,7 +57,7 @@ func TestCleanupStaleIndexLock_LeavesFreshLock(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	removed, err := cleanupStaleIndexLock(ctx, envContainer, "", nil)
+	removed, err := testActivities().cleanupStaleIndexLock(ctx, envContainer, "", nil)
 	require.NoError(t, err)
 	require.False(t, removed, "a fresh lock must not be treated as stale")
 	require.FileExists(t, lockPath, "fresh index.lock must be left in place")

@@ -40,8 +40,8 @@ func (s *AutoMergeApprovalTestSuite) AfterTest(suiteName, testName string) {
 }
 
 func (s *AutoMergeApprovalTestSuite) setupCommonMocks() {
-	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("diff content", nil).Maybe()
-	s.env.OnActivity(git.WriteTreeActivity, mock.Anything, mock.Anything).Return("tree-hash", nil).Maybe()
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("diff content", nil).Maybe()
+	s.env.OnActivity(ga.WriteTreeActivity, mock.Anything, mock.Anything).Return("tree-hash", nil).Maybe()
 	var ca *coding.CodingActivities
 	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
 		Return(coding.GenerateReviewDiffsResult{FullDiff: "diff content"}, nil).Maybe()
@@ -121,14 +121,14 @@ func (s *AutoMergeApprovalTestSuite) setupMergeMocks() {
 	s.env.OnActivity(srvActivities.GetFlow, mock.Anything, mock.Anything, mock.Anything).Return(domain.Flow{}, nil).Maybe()
 	s.env.OnActivity(srvActivities.PersistFlow, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
-	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("diff content", nil).Maybe()
-	s.env.OnActivity(git.WriteTreeActivity, mock.Anything, mock.Anything).Return("tree-hash", nil).Maybe()
+	s.env.OnActivity(ga.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("diff content", nil).Maybe()
+	s.env.OnActivity(ga.WriteTreeActivity, mock.Anything, mock.Anything).Return("tree-hash", nil).Maybe()
 	var ca *coding.CodingActivities
 	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.Anything).
 		Return(coding.GenerateReviewDiffsResult{FullDiff: "diff content"}, nil).Maybe()
-	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil).Maybe()
-	s.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil).Maybe()
+	s.env.OnActivity(ga.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 }
 
 func (s *AutoMergeApprovalTestSuite) mergeWorkflow(autoMerge bool, startBranch *string) func(ctx workflow.Context) (MergeApprovalResponse, error) {
@@ -171,7 +171,7 @@ func (s *AutoMergeApprovalTestSuite) TestAutoMergeMergesIntoConfiguredBranch() {
 
 	var mergedTarget string
 	var mergedSource string
-	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).
+	s.env.OnActivity(ga.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			params := args.Get(2).(git.GitMergeParams)
 			mergedTarget = params.TargetBranch

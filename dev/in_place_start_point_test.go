@@ -63,9 +63,10 @@ func (s *InPlaceStartPointTestSuite) SetupTest() {
 	s.Require().NoError(err)
 	s.envContainer = env.EnvContainer{Env: devEnv}
 
-	s.env.RegisterActivity(git.GitRevParseActivity)
-	s.env.RegisterActivity(git.GitDiffActivity)
-	var ca *coding.CodingActivities
+	gitActivities := testGitActivities()
+	s.env.RegisterActivity(gitActivities.GitRevParseActivity)
+	s.env.RegisterActivity(gitActivities.GitDiffActivity)
+	ca := &coding.CodingActivities{Git: gitActivities}
 	s.env.RegisterActivity(ca.GenerateReviewDiffsActivity)
 
 	var fa *flow_action.FlowActivities
@@ -180,7 +181,7 @@ func (s *InPlaceStartPointTestSuite) TestReviewsWorkDoneAfterThePinIncludingComm
 // point and lose the earlier work.
 func (s *InPlaceStartPointTestSuite) TestEveryRoundSharesOnePin() {
 	revParseCalls := 0
-	s.env.OnActivity(git.GitRevParseActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitRevParseActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, params git.GitRevParseParams) (git.GitRevParseResult, error) {
 			revParseCalls++
 			return git.GitRevParseResult{CommitHash: "in-place-start-sha"}, nil
@@ -225,7 +226,7 @@ func (s *InPlaceStartPointTestSuite) TestEveryRoundSharesOnePin() {
 // base branch, where the branch itself already isolates the work.
 func (s *InPlaceStartPointTestSuite) TestWorktreeFlowsAreNotPinned() {
 	revParseCalls := 0
-	s.env.OnActivity(git.GitRevParseActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitRevParseActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, params git.GitRevParseParams) (git.GitRevParseResult, error) {
 			revParseCalls++
 			return git.GitRevParseResult{CommitHash: "unexpected"}, nil
@@ -242,7 +243,7 @@ func (s *InPlaceStartPointTestSuite) TestLegacyVersionDoesNotPin() {
 	s.env.OnGetVersion("in-place-start-point", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 
 	revParseCalls := 0
-	s.env.OnActivity(git.GitRevParseActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitRevParseActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, params git.GitRevParseParams) (git.GitRevParseResult, error) {
 			revParseCalls++
 			return git.GitRevParseResult{CommitHash: "unexpected"}, nil

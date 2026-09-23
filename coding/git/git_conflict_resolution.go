@@ -62,11 +62,11 @@ func mergeAbortCommand(dir string) string {
 	)
 }
 
-// GitMergeAbortActivity aborts an in-progress merge (regular or squash) in
+// MergeAbort aborts an in-progress merge (regular or squash) in
 // the given directory. It is a no-op (and not an error) when no merge is in
 // progress, so it can be used as a pre-cleanup step without callers having
 // to introspect state first.
-func GitMergeAbortActivity(ctx context.Context, envContainer env.EnvContainer, params GitMergeAbortParams) error {
+func (a *Activities) MergeAbort(ctx context.Context, envContainer env.EnvContainer, params GitMergeAbortParams) error {
 	dir := params.WorktreePath
 	if dir == "" {
 		dir = envContainer.Env.GetWorkingDirectory()
@@ -75,7 +75,7 @@ func GitMergeAbortActivity(ctx context.Context, envContainer env.EnvContainer, p
 		return fmt.Errorf("worktree path is required to abort a merge")
 	}
 	cmd := mergeAbortCommand(dir)
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", cmd},
@@ -94,13 +94,13 @@ type GitMergeInProgressParams struct {
 	WorktreePath string
 }
 
-// GitMergeInProgressActivity reports whether a merge is currently in
+// MergeInProgress reports whether a merge is currently in
 // progress in the given worktree, i.e. whether `MERGE_HEAD` exists.
 // Callers use this to confirm there is something to finalize before
-// invoking GitCommitMergeActivity, which would otherwise produce a
+// invoking CommitMerge, which would otherwise produce a
 // regular (single-parent) commit on top of HEAD and mis-represent the
 // history.
-func GitMergeInProgressActivity(ctx context.Context, envContainer env.EnvContainer, params GitMergeInProgressParams) (bool, error) {
+func (a *Activities) MergeInProgress(ctx context.Context, envContainer env.EnvContainer, params GitMergeInProgressParams) (bool, error) {
 	dir := params.WorktreePath
 	if dir == "" {
 		dir = envContainer.Env.GetWorkingDirectory()
@@ -112,7 +112,7 @@ func GitMergeInProgressActivity(ctx context.Context, envContainer env.EnvContain
 		"cd %s && if git rev-parse --verify -q MERGE_HEAD >/dev/null; then echo yes; else echo no; fi",
 		shellQuote(dir),
 	)
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", cmd},
@@ -131,7 +131,7 @@ type GitListUnmergedParams struct {
 	WorktreePath string
 }
 
-// GitListUnmergedActivity returns the repository-relative paths of all
+// ListUnmerged returns the repository-relative paths of all
 // files that are still unresolved in the given worktree. This combines
 // two checks: index-level unmerged entries (`git ls-files -u`, the
 // authoritative signal for a real conflict state) and any tracked files
@@ -139,7 +139,7 @@ type GitListUnmergedParams struct {
 // markers into a file but then `git add`ed it, which clears the
 // unmerged stage but leaves a textual conflict). Both signals matter:
 // the merge cannot be finalized cleanly until both are empty.
-func GitListUnmergedActivity(ctx context.Context, envContainer env.EnvContainer, params GitListUnmergedParams) ([]string, error) {
+func (a *Activities) ListUnmerged(ctx context.Context, envContainer env.EnvContainer, params GitListUnmergedParams) ([]string, error) {
 	dir := params.WorktreePath
 	if dir == "" {
 		dir = envContainer.Env.GetWorkingDirectory()
@@ -155,7 +155,7 @@ func GitListUnmergedActivity(ctx context.Context, envContainer env.EnvContainer,
 		"cd %s && git ls-files -u && printf '\\n---MARKERS---\\n' && (git grep -lE '^(<{7}|={7}|>{7})( |$)' -- . || true)",
 		shellQuote(dir),
 	)
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", cmd},
@@ -209,11 +209,11 @@ type GitSnapshotConflictMarkersParams struct {
 	WorktreePath string
 }
 
-// GitSnapshotConflictMarkersActivity captures the conflict-marker content
+// SnapshotConflictMarkers captures the conflict-marker content
 // of currently-unmerged files into a git tree object, returning a snapshot
 // that can later be diffed against the resolved state. It uses a private
 // temporary index so it does not disturb the live index or working tree.
-func GitSnapshotConflictMarkersActivity(ctx context.Context, envContainer env.EnvContainer, params GitSnapshotConflictMarkersParams) (ConflictMarkerSnapshot, error) {
+func (a *Activities) SnapshotConflictMarkers(ctx context.Context, envContainer env.EnvContainer, params GitSnapshotConflictMarkersParams) (ConflictMarkerSnapshot, error) {
 	var snapshot ConflictMarkerSnapshot
 	dir := params.WorktreePath
 	if dir == "" {
@@ -223,7 +223,7 @@ func GitSnapshotConflictMarkersActivity(ctx context.Context, envContainer env.En
 		return snapshot, fmt.Errorf("worktree path is required to snapshot conflict markers")
 	}
 
-	unmerged, err := GitListUnmergedActivity(ctx, envContainer, GitListUnmergedParams{WorktreePath: dir})
+	unmerged, err := a.ListUnmerged(ctx, envContainer, GitListUnmergedParams{WorktreePath: dir})
 	if err != nil {
 		return snapshot, err
 	}
@@ -257,7 +257,7 @@ func GitSnapshotConflictMarkersActivity(ctx context.Context, envContainer env.En
 		`rm -f "$tmpidx"`,
 		`printf '%s\n' "$tree"`,
 	}
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", strings.Join(pipeline, " && ")},
@@ -270,7 +270,7 @@ func GitSnapshotConflictMarkersActivity(ctx context.Context, envContainer env.En
 	}
 	snapshot.TreeHash = strings.TrimSpace(out.Stdout)
 
-	regions, err := conflictMarkerRegions(ctx, envContainer, dir, unmerged)
+	regions, err := a.conflictMarkerRegions(ctx, envContainer, dir, unmerged)
 	if err != nil {
 		return snapshot, err
 	}
@@ -282,14 +282,14 @@ func GitSnapshotConflictMarkersActivity(ctx context.Context, envContainer env.En
 // versions of the given paths. Those line numbers also address the old side of
 // a later snapshot-vs-worktree diff, since the snapshot holds exactly this
 // marker content.
-func conflictMarkerRegions(ctx context.Context, envContainer env.EnvContainer, dir string, paths []string) ([]ConflictRegion, error) {
+func (a *Activities) conflictMarkerRegions(ctx context.Context, envContainer env.EnvContainer, dir string, paths []string) ([]ConflictRegion, error) {
 	args := []string{"grep", "--no-color", "-nE", shellQuote(`^(<{7}|>{7})( |$)`), "--"}
 	for _, p := range paths {
 		args = append(args, shellQuote(p))
 	}
 	// `git grep` exits non-zero when nothing matches, which is not an error here.
 	cmd := fmt.Sprintf("cd %s && { git %s || true; }", shellQuote(dir), strings.Join(args, " "))
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", cmd},
@@ -364,12 +364,12 @@ type GitConflictResolutionDiffParams struct {
 	Snapshot     ConflictMarkerSnapshot
 }
 
-// GitConflictResolutionDiffActivity returns a unified diff that shows
+// ConflictResolutionDiff returns a unified diff that shows
 // how the conflict markers were resolved. Regular `git diff` is empty
 // after a merge commit, and diffing against either parent only shows
 // the changes from that side; this combined "snapshot vs resolved"
 // diff is what makes the resolution itself reviewable.
-func GitConflictResolutionDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitConflictResolutionDiffParams) (string, error) {
+func (a *Activities) ConflictResolutionDiff(ctx context.Context, envContainer env.EnvContainer, params GitConflictResolutionDiffParams) (string, error) {
 	dir := params.WorktreePath
 	if dir == "" {
 		dir = envContainer.Env.GetWorkingDirectory()
@@ -385,7 +385,7 @@ func GitConflictResolutionDiffActivity(ctx context.Context, envContainer env.Env
 		args = append(args, shellQuote(p))
 	}
 	cmd := fmt.Sprintf("cd %s && git %s", shellQuote(dir), strings.Join(args, " "))
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", cmd},
@@ -426,11 +426,11 @@ type GitCommitMergeParams struct {
 	CommitterEmail string
 }
 
-// GitCommitMergeActivity finalizes the in-progress merge in the given
+// CommitMerge finalizes the in-progress merge in the given
 // directory by creating the merge commit. The agent is expected to have
 // resolved (and `git add`ed) all conflicts; this activity does not write
 // any working-tree files.
-func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params GitCommitMergeParams) error {
+func (a *Activities) CommitMerge(ctx context.Context, envContainer env.EnvContainer, params GitCommitMergeParams) error {
 	dir := params.WorktreePath
 	if dir == "" {
 		dir = envContainer.Env.GetWorkingDirectory()
@@ -443,12 +443,12 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 	// created the merge commit; committing again would produce a spurious
 	// single-parent commit, so only the backup sync is retried.
 	if isActivityRetry(ctx) {
-		inProgress, err := GitMergeInProgressActivity(ctx, envContainer, GitMergeInProgressParams{WorktreePath: dir})
+		inProgress, err := a.MergeInProgress(ctx, envContainer, GitMergeInProgressParams{WorktreePath: dir})
 		if err != nil {
 			return err
 		}
 		if !inProgress {
-			if err := syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
+			if err := a.syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
 				return fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
 			}
 			return nil
@@ -459,7 +459,7 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 	if committerName == "" || committerEmail == "" {
 		envType := envContainer.Env.GetType()
 		if envType == env.EnvTypeLocal || envType == env.EnvTypeLocalGitWorktree {
-			name, email, err := getGitUserConfig(ctx, envContainer)
+			name, email, err := a.getGitUserConfig(ctx, envContainer)
 			if err == nil {
 				if committerName == "" {
 					committerName = name
@@ -487,7 +487,7 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 		"cd %s && git add -A && git commit --no-verify -m %s",
 		shellQuote(dir), shellQuote(msg),
 	)
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", cmd},
@@ -500,7 +500,7 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 		return fmt.Errorf("git commit for merge finalization failed: %s", strings.TrimSpace(out.Stderr+out.Stdout))
 	}
 
-	if err := syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
+	if err := a.syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
 		return fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
 	}
 
@@ -525,11 +525,11 @@ type GitMergeIntoWorktreeResult struct {
 	WorktreePath string `json:"worktreePath"`
 }
 
-// GitMergeIntoWorktreeActivity runs `git merge --no-commit --no-ff
+// MergeIntoWorktree runs `git merge --no-commit --no-ff
 // <sourceBranch>` in the given worktree directory. The merge is left
 // un-finalized either way so the caller can run further steps before
 // committing.
-func GitMergeIntoWorktreeActivity(ctx context.Context, envContainer env.EnvContainer, params GitMergeIntoWorktreeParams) (GitMergeIntoWorktreeResult, error) {
+func (a *Activities) MergeIntoWorktree(ctx context.Context, envContainer env.EnvContainer, params GitMergeIntoWorktreeParams) (GitMergeIntoWorktreeResult, error) {
 	var result GitMergeIntoWorktreeResult
 	if params.SourceBranch == "" {
 		return result, fmt.Errorf("source branch is required")
@@ -547,7 +547,7 @@ func GitMergeIntoWorktreeActivity(ctx context.Context, envContainer env.EnvConta
 	if committerName == "" || committerEmail == "" {
 		envType := envContainer.Env.GetType()
 		if envType == env.EnvTypeLocal || envType == env.EnvTypeLocalGitWorktree {
-			name, email, err := getGitUserConfig(ctx, envContainer)
+			name, email, err := a.getGitUserConfig(ctx, envContainer)
 			if err == nil {
 				if committerName == "" {
 					committerName = name
@@ -564,7 +564,7 @@ func GitMergeIntoWorktreeActivity(ctx context.Context, envContainer env.EnvConta
 		"cd %s && git merge --no-commit --no-ff %s",
 		shellQuote(dir), shellQuote(params.SourceBranch),
 	)
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", cmd},

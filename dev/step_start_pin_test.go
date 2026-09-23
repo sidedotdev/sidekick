@@ -93,7 +93,7 @@ func newStepReviewRound(info CheckWorkInfo) stepReviewRound {
 
 func (s *StepStartPinTestSuite) TestPinsStepStartWithoutAutoReviewBaseline() {
 	var revParseParams []git.GitRevParseParams
-	s.env.OnActivity(git.GitRevParseActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitRevParseActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, params git.GitRevParseParams) (git.GitRevParseResult, error) {
 			revParseParams = append(revParseParams, params)
 			return git.GitRevParseResult{CommitHash: "step-start-sha"}, nil
@@ -119,7 +119,7 @@ func (s *StepStartPinTestSuite) TestLegacyVersionDoesNotPinStepStart() {
 	s.env.OnGetVersion("step-start-pin", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 
 	revParseCalls := 0
-	s.env.OnActivity(git.GitRevParseActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitRevParseActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, params git.GitRevParseParams) (git.GitRevParseResult, error) {
 			revParseCalls++
 			return git.GitRevParseResult{CommitHash: "step-start-sha"}, nil

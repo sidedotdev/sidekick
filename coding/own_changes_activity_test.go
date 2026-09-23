@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"sidekick/coding/git"
 	"sidekick/env"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +16,7 @@ import (
 
 func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 	t.Parallel()
-	ca := &CodingActivities{}
+	ca := newTestCodingActivities()
 
 	t.Run("no_changes_since_review", func(t *testing.T) {
 		t.Parallel()
@@ -32,7 +31,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
@@ -59,7 +58,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		createFileAndCommit(t, repoDir, "feature2.go", "package feature\n\nfunc Feature2() {}\n", "more feature work")
@@ -92,7 +91,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		// Add several files on main so the merge inflates the since-review diff
@@ -140,7 +139,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		runGit(t, repoDir, "checkout", "main")
@@ -180,7 +179,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		runGit(t, repoDir, "rm", "feature.go")
@@ -219,7 +218,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		runGit(t, repoDir, "add", "config.yml")
 		runGit(t, repoDir, "commit", "-m", "modify two lines")
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		err = os.WriteFile(filepath.Join(repoDir, "config.yml"),
@@ -257,7 +256,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		// Edit line 10 on feature
@@ -296,7 +295,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		runGit(t, repoDir, "rm", "newfile.go")
@@ -335,7 +334,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		runGit(t, repoDir, "checkout", "main")
@@ -373,7 +372,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		runGit(t, repoDir, "checkout", "main")
@@ -413,7 +412,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		withOurChange := "line1\nOUR_FEATURE_CHANGE\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n" +
@@ -467,7 +466,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		err = os.WriteFile(filepath.Join(repoDir, "config.yml"), []byte("key: original\n"), 0644)
@@ -502,7 +501,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		runGit(t, repoDir, "checkout", "main")
@@ -549,7 +548,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		// Feature edits line 3
@@ -611,7 +610,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		envContainer := env.EnvContainer{Env: devEnv}
 
 		// WriteTree captures the index including the staged file
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		// Commit the staged file, then remove it
@@ -653,7 +652,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		envContainer := env.EnvContainer{Env: devEnv}
 
 		// WriteTree captures the index with the staged modification
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		// Revert both index and working tree back to the committed content
@@ -687,7 +686,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		lastReviewTreeHash, err := ca.Git.WriteTree(ctx, envContainer)
 		require.NoError(t, err)
 
 		newContent := "line1\nOUR_CHANGE\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n" +

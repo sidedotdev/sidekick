@@ -71,7 +71,7 @@ func (s *GitDiffUserRetryTestSuite) newDevContext(ctx workflow.Context, disableH
 // workflow.
 func (s *GitDiffUserRetryTestSuite) TestGetGitDiffRetriesOnActivityFailure() {
 	callCount := 0
-	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, envContainer env.EnvContainer, params git.GitDiffParams) (string, error) {
 			callCount++
 			if callCount == 1 {
@@ -125,7 +125,7 @@ func (s *GitDiffUserRetryTestSuite) TestGetGitDiffRetriesOnActivityFailure() {
 // set, preserving existing semantics for unattended runs.
 func (s *GitDiffUserRetryTestSuite) TestGetGitDiffFailsFastWhenHumanInTheLoopDisabled() {
 	callCount := 0
-	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, envContainer env.EnvContainer, params git.GitDiffParams) (string, error) {
 			callCount++
 			return "", errors.New("simulated diff failure")

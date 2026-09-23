@@ -9,7 +9,6 @@ import (
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
-	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -310,7 +309,7 @@ func (s *MergeStrategyRoundTripTestSuite) AfterTest(suiteName, testName string) 
 func (s *MergeStrategyRoundTripTestSuite) setupCommonMocks() {
 	var fa *flow_action.FlowActivities
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
-	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything).Return("new diff", nil).Maybe()
+	s.env.OnActivity(ga.GitDiffActivity, mock.Anything, mock.Anything).Return("new diff", nil).Maybe()
 
 	var srvActivities srv.Activities
 	s.env.OnActivity(srvActivities.GetFlow, mock.Anything, mock.Anything, mock.Anything).Return(domain.Flow{}, nil).Maybe()

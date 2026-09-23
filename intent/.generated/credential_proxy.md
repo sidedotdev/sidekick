@@ -36,6 +36,7 @@ intent_links:
       - credential_proxy/server/flow_activation.go
       - credential_proxy/server/flow_activation_test.go
       - credential_proxy/server/flow_control_test.go
+      - credential_proxy/access/hook_script_host.go:HookScriptHost
       - scripting/command.go
 ---
 # Credential Proxy
@@ -156,6 +157,8 @@ Workflow code matches hook rules against the original invocation context. The
 ordinary command activity runs the selected scripts through generic hook support.
 An invocation-bound host function captures activity context, configuration,
 forwarding, and flow identity to acquire authorized proxy access.
+`access.HookScriptHost` supplies it to the command activity as an
+`env.HookScriptHostProvider`, exposing `host.credentialProxies.acquireAccess`.
 
 Access acquisition returns a token, expiry, and proxy metadata, not a command
 environment. The script calls `emitCommandEnvironment` to supply command

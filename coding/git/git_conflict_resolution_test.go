@@ -127,14 +127,14 @@ func TestGitConflictResolutionDiffActivity(t *testing.T) {
 		t.Parallel()
 		repoDir, envContainer := setupFarApartConflictRepo(t, ctx)
 
-		snapshot, err := GitSnapshotConflictMarkersActivity(ctx, envContainer, GitSnapshotConflictMarkersParams{WorktreePath: repoDir})
+		snapshot, err := testActivities().SnapshotConflictMarkers(ctx, envContainer, GitSnapshotConflictMarkersParams{WorktreePath: repoDir})
 		require.NoError(t, err)
 		require.NotEmpty(t, snapshot.TreeHash)
 		require.NotEmpty(t, snapshot.ConflictRegions)
 
 		resolveWithUnrelatedEdit(t, repoDir)
 
-		diff, err := GitConflictResolutionDiffActivity(ctx, envContainer, GitConflictResolutionDiffParams{
+		diff, err := testActivities().ConflictResolutionDiff(ctx, envContainer, GitConflictResolutionDiffParams{
 			WorktreePath: repoDir,
 			Snapshot:     snapshot,
 		})
@@ -149,13 +149,13 @@ func TestGitConflictResolutionDiffActivity(t *testing.T) {
 		t.Parallel()
 		repoDir, envContainer := setupFarApartConflictRepo(t, ctx)
 
-		snapshot, err := GitSnapshotConflictMarkersActivity(ctx, envContainer, GitSnapshotConflictMarkersParams{WorktreePath: repoDir})
+		snapshot, err := testActivities().SnapshotConflictMarkers(ctx, envContainer, GitSnapshotConflictMarkersParams{WorktreePath: repoDir})
 		require.NoError(t, err)
 		snapshot.ConflictRegions = nil
 
 		resolveWithUnrelatedEdit(t, repoDir)
 
-		diff, err := GitConflictResolutionDiffActivity(ctx, envContainer, GitConflictResolutionDiffParams{
+		diff, err := testActivities().ConflictResolutionDiff(ctx, envContainer, GitConflictResolutionDiffParams{
 			WorktreePath: repoDir,
 			Snapshot:     snapshot,
 		})
@@ -169,7 +169,7 @@ func TestGitConflictResolutionDiffActivity(t *testing.T) {
 		t.Parallel()
 		repoDir, envContainer := setupFarApartConflictRepo(t, ctx)
 
-		diff, err := GitConflictResolutionDiffActivity(ctx, envContainer, GitConflictResolutionDiffParams{
+		diff, err := testActivities().ConflictResolutionDiff(ctx, envContainer, GitConflictResolutionDiffParams{
 			WorktreePath: repoDir,
 		})
 		require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestGitMergeAbortActivity(t *testing.T) {
 		runConflictingMerge(t, repoDir, "feature")
 		require.True(t, mergeHeadExists(t, repoDir))
 
-		err := GitMergeAbortActivity(ctx, envContainer, GitMergeAbortParams{WorktreePath: repoDir})
+		err := testActivities().MergeAbort(ctx, envContainer, GitMergeAbortParams{WorktreePath: repoDir})
 		require.NoError(t, err)
 
 		assert.False(t, mergeHeadExists(t, repoDir))
@@ -207,7 +207,7 @@ func TestGitMergeAbortActivity(t *testing.T) {
 		// `git merge --abort` cannot clean it up.
 		require.False(t, mergeHeadExists(t, repoDir))
 
-		err := GitMergeAbortActivity(ctx, envContainer, GitMergeAbortParams{WorktreePath: repoDir})
+		err := testActivities().MergeAbort(ctx, envContainer, GitMergeAbortParams{WorktreePath: repoDir})
 		require.NoError(t, err)
 
 		assert.Empty(t, runGitCommandInTestRepo(t, repoDir, "status", "--porcelain"))
@@ -226,7 +226,7 @@ func TestGitMergeAbortActivity(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(repoDir, "conflict.txt"), []byte("local edit"), 0644))
 		require.NoError(t, os.WriteFile(filepath.Join(repoDir, "untracked.txt"), []byte("untracked"), 0644))
 
-		err := GitMergeAbortActivity(ctx, envContainer, GitMergeAbortParams{WorktreePath: repoDir})
+		err := testActivities().MergeAbort(ctx, envContainer, GitMergeAbortParams{WorktreePath: repoDir})
 		require.NoError(t, err)
 
 		content, err := os.ReadFile(filepath.Join(repoDir, "conflict.txt"))

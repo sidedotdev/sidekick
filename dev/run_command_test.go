@@ -40,7 +40,7 @@ func TestRunCommandDispatchesRunCommandHooks(t *testing.T) {
 				Return(CheckCommandPermissionOutput{Result: common.PermissionAutoApprove}, nil).Once()
 
 			var input env.EnvRunCommandActivityInput
-			te.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+			te.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
 				func(ctx context.Context, in env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
 					input = in
 					return env.EnvRunCommandActivityOutput{Stdout: "ok", ExitStatus: 0}, nil

@@ -102,7 +102,7 @@ func main() {
 		EnabledFlags: []string{}, // check-edits flag not passed in, thus no git repo is needed
 	}
 
-	devActivities := &DevActivities{LSPActivities: lspa} // should use same lspa
+	devActivities := &DevActivities{LSPActivities: lspa, Git: testGitActivities()} // should use same lspa
 
 	// Use a context with timeout to avoid test hanging if LSP is slow
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)

@@ -43,7 +43,7 @@ func TestGitMergeActivity(t *testing.T) {
 			SourceBranch: "feature",
 			TargetBranch: "main",
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestGitMergeActivity(t *testing.T) {
 			SourceBranch: "feature",
 			TargetBranch: "main",
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err, "GitMergeActivity should not return an operational error on merge conflicts")
@@ -131,7 +131,7 @@ func TestGitMergeActivity(t *testing.T) {
 			SourceBranch: worktree.Name,
 			TargetBranch: "main",
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err)
@@ -180,7 +180,7 @@ func TestGitMergeActivity(t *testing.T) {
 			SourceBranch: "feature",
 			TargetBranch: "main",
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err)
@@ -238,7 +238,7 @@ func TestGitMergeActivity(t *testing.T) {
 			SourceBranch: "feature",
 			TargetBranch: "main",
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err)
@@ -299,7 +299,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 			MergeStrategy: MergeStrategySquash,
 			CommitMessage: "Squashed feature changes",
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err)
@@ -341,7 +341,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 			MergeStrategy: MergeStrategySquash,
 			CommitMessage: "Squashed worktree changes",
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err)
@@ -373,7 +373,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 			TargetBranch:  "main",
 			MergeStrategy: MergeStrategySquash,
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err)
@@ -405,7 +405,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 			TargetBranch:  "main",
 			MergeStrategy: MergeStrategyMerge,
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// Assertions
 		require.NoError(t, err)
@@ -442,7 +442,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 			MergeStrategy: MergeStrategySquash,
 			CommitMessage: "Squashed feature changes",
 		}
-		result, err := GitMergeActivity(ctx, envContainer, params)
+		result, err := testActivities().Merge(ctx, envContainer, params)
 
 		// A no-op squash must succeed rather than error on the empty commit
 		require.NoError(t, err)
@@ -481,7 +481,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 			MergeStrategy: MergeStrategySquash,
 			CommitMessage: "Squashed feature changes",
 		}
-		result, err := GitMergeActivity(ctx, targetEnvContainer, params)
+		result, err := testActivities().Merge(ctx, targetEnvContainer, params)
 
 		// A no-op squash must succeed rather than error on the empty commit
 		require.NoError(t, err)
@@ -534,7 +534,7 @@ func TestGitMergeActivityDirtyTargetWorktree(t *testing.T) {
 		// Uncommitted local change to a file the merge does not touch.
 		require.NoError(t, os.WriteFile(filepath.Join(repoDir, "other.txt"), []byte("uncommitted local change"), 0644))
 
-		result, err := GitMergeActivity(ctx, envContainer, GitMergeParams{SourceBranch: "feature", TargetBranch: "main"})
+		result, err := testActivities().Merge(ctx, envContainer, GitMergeParams{SourceBranch: "feature", TargetBranch: "main"})
 		require.NoError(t, err)
 		assert.False(t, result.HasConflicts)
 
@@ -556,7 +556,7 @@ func TestGitMergeActivityDirtyTargetWorktree(t *testing.T) {
 		// restoring the stash on top of the merged content conflicts.
 		require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("local uncommitted edit"), 0644))
 
-		result, err := GitMergeActivity(ctx, envContainer, GitMergeParams{SourceBranch: "feature", TargetBranch: "main"})
+		result, err := testActivities().Merge(ctx, envContainer, GitMergeParams{SourceBranch: "feature", TargetBranch: "main"})
 		require.NoError(t, err)
 		assert.True(t, result.HasConflicts)
 		assert.False(t, result.ConflictOnTargetBranch)
@@ -605,7 +605,7 @@ func TestGitTransferWorktreeChangesActivity(t *testing.T) {
 	// Uncommitted resolved changes live in the source worktree.
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	err = testActivities().TransferWorktreeChanges(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 	})
@@ -650,7 +650,7 @@ func TestGitTransferWorktreeChangesActivityDropsPreservedBaseStash(t *testing.T)
 
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	err = testActivities().TransferWorktreeChanges(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 		BaseStashSha:       baseStashSha,
@@ -692,7 +692,7 @@ func TestGitTransferWorktreeChangesActivityDropsBaseStashOnNoOp(t *testing.T) {
 	runGitCommandInTestRepo(t, repoDir, "stash", "push", "-m", "preserved-base")
 	baseStashSha := strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "stash@{0}"))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	err = testActivities().TransferWorktreeChanges(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 		BaseStashSha:       baseStashSha,
@@ -739,7 +739,7 @@ func TestGitTransferWorktreeChangesActivityPreservesExistingStash(t *testing.T) 
 
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	err = testActivities().TransferWorktreeChanges(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 	})
@@ -794,7 +794,7 @@ func TestGitMergeActivityRefreshesTargetBranchFromLocal(t *testing.T) {
 	require.NoError(t, err)
 	syncerEnv := &targetBranchSyncerEnv{Env: localEnv, t: t, envRepoDir: envRepoDir, hostRepoDir: hostRepoDir}
 
-	result, err := GitMergeActivity(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
+	result, err := testActivities().Merge(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
 		SourceBranch: "feature",
 		TargetBranch: "main",
 	})
@@ -920,7 +920,7 @@ func TestGitMergeActivitySyncsMergeResultToLocalIddWorktree(t *testing.T) {
 		hostRepoDir:  fixture.hostRepoDir,
 	}
 
-	result, err := GitMergeActivity(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
+	result, err := testActivities().Merge(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
 		SourceBranch: iddChildBranch,
 		TargetBranch: iddBranch,
 	})
@@ -959,7 +959,7 @@ func TestGitMergeActivityPropagatesMergeResultSyncFailure(t *testing.T) {
 		syncErr:      errors.New("ssh connection lost"),
 	}
 
-	result, err := GitMergeActivity(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
+	result, err := testActivities().Merge(ctx, env.EnvContainer{Env: syncerEnv}, GitMergeParams{
 		SourceBranch: iddChildBranch,
 		TargetBranch: iddBranch,
 	})
@@ -1036,7 +1036,7 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					remote.backupErr = errors.New("source backup unavailable")
 				}
 				before := runGitCommandInTestRepo(t, fixture.hostRepoDir, "rev-parse", iddBranch)
-				result, err := GitMergeActivity(ctx, container, GitMergeParams{
+				result, err := testActivities().Merge(ctx, container, GitMergeParams{
 					SourceBranch: iddChildBranch, TargetBranch: iddBranch, MergeStrategy: strategy,
 				})
 				if scenario == "backup failure" {
@@ -1095,8 +1095,8 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					transfer := GitTransferWorktreeChangesParams{
 						SourceWorktreePath: result.ConflictDirPath, TargetWorktreePath: result.BaseStashWorktreePath, BaseStashSha: result.BaseStashSha,
 					}
-					source := mergeRepository{envContainer: container}
-					target := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: fixture.hostRepoDir}}}
+					source := mergeRepository{git: testActivities(), envContainer: container}
+					target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: fixture.hostRepoDir}}}
 					transport := &repositoryTestTransport{source: source, target: target, fail: true}
 					require.Error(t, (&mergeCoordinator{repository: source}).returnResolution(ctx, transport, transfer))
 					assert.Empty(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "status", "--porcelain"))
@@ -1105,7 +1105,7 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					assert.Equal(t, "untracked local notes", runGitCommandInTestRepo(t, fixture.childRepoDir, "show", "refs/stash^3:notes.txt"))
 
 					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"), []byte("intervening host edit\n"), 0644))
-					require.Error(t, GitTransferWorktreeChangesActivity(ctx, container, transfer))
+					require.Error(t, testActivities().TransferWorktreeChanges(ctx, container, transfer))
 					content, err = os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"))
 					require.NoError(t, err)
 					assert.Equal(t, "intervening host edit\n", string(content))
@@ -1113,7 +1113,7 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "restore", "child.txt")
 
 					for attempt := 0; attempt < 2; attempt++ {
-						require.NoError(t, GitTransferWorktreeChangesActivity(ctx, container, transfer))
+						require.NoError(t, testActivities().TransferWorktreeChanges(ctx, container, transfer))
 						for name, expected := range map[string]string{
 							"child.txt": "resolved child\n",
 							"intent.md": "updated intent\n",

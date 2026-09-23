@@ -24,7 +24,7 @@ func (s *RunTestsTestSuite) TestRunTestsHookFailurePreventsBatch() {
 	s.env.OnActivity(env.ModalRefreshVolumesActivity, mock.Anything, mock.Anything).
 		Return(env.ModalRefreshVolumesOutput{}, errors.New("reload failed")).Once()
 	commands := 0
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).
 		Return(func(context.Context, env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
 			commands++
 			return env.EnvRunCommandActivityOutput{}, nil
@@ -61,7 +61,7 @@ func (s *RunTestsTestSuite) TestRunTestsHooksBeforePendingHeartbeatRetry() {
 			}
 			return env.ModalRefreshVolumesOutput{}, nil
 		}).Twice()
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -100,7 +100,7 @@ func (s *RunTestsTestSuite) TestRunTestsLegacyHistoryEmitsNoHooks() {
 		Actions: []common.HookActionConfig{{Type: common.HookActionModalRefreshVolumes}},
 	}}}
 	s.devContext.RepoConfig.TestCommands = []common.CommandConfig{{Command: "test"}}
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).
 		Return(env.EnvRunCommandActivityOutput{}, nil).Once()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow)
 	s.Require().NoError(s.env.GetWorkflowError())
@@ -124,7 +124,7 @@ func (s *RunTestsTestSuite) TestRunTestsReadinessBeforeHook() {
 			events = append(events, "refresh")
 			return env.ModalRefreshVolumesOutput{}, nil
 		}).Once()
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).
 		Return(func(context.Context, env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
 			events = append(events, "test")
 			return env.EnvRunCommandActivityOutput{}, nil

@@ -82,8 +82,9 @@ func getDiffSinceLastReview(dCtx DevContext, lastReviewTreeHash string, ignoreWh
 }
 
 func getDiffSinceLastReviewWithContext(dCtx DevContext, lastReviewTreeHash string, ignoreWhitespace bool, filePaths []string, contextLines *int) (string, error) {
+	var ga *git.Activities
 	var diffOutput string
-	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate diff since last review", git.GitDiffActivity, &diffOutput, *dCtx.EnvContainer, git.GitDiffParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate diff since last review", ga.GitDiffActivity, &diffOutput, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		BaseRef:          lastReviewTreeHash,
 		IgnoreWhitespace: ignoreWhitespace,
@@ -99,10 +100,11 @@ func GetGitDiff(dCtx DevContext, baseBranch string, ignoreWhitespace bool) (stri
 }
 
 func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace bool, contextLines *int) (string, error) {
+	var ga *git.Activities
 	v := workflow.GetVersion(dCtx, "three-dot-prefer-smaller", workflow.DefaultVersion, 1)
 
 	var gitDiff string
-	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &gitDiff, *dCtx.EnvContainer, git.GitDiffParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", ga.GitDiffActivity, &gitDiff, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		ThreeDotDiff:     true,
 		BaseRef:          baseBranch,
@@ -115,7 +117,7 @@ func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace 
 
 	if v >= 1 {
 		var directDiff string
-		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &directDiff, *dCtx.EnvContainer, git.GitDiffParams{
+		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", ga.GitDiffActivity, &directDiff, *dCtx.EnvContainer, git.GitDiffParams{
 			Staged:           true,
 			BaseRef:          baseBranch,
 			IgnoreWhitespace: ignoreWhitespace,
@@ -232,9 +234,10 @@ func legacyOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewT
 }
 
 func getBaseSinceReviewDiff(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
+	var ga *git.Activities
 	var diff string
 	zeroCtx := 0
-	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+	err := workflow.ExecuteActivity(dCtx, ga.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 		BaseRef:          lastReviewTreeHash,
 		EndRef:           baseBranch,
 		IgnoreWhitespace: ignoreWhitespace,
@@ -445,6 +448,7 @@ func prepareBasicCodingContext(
 // from it. Concurrent flows sharing a checkout still see each other's changes;
 // only a worktree isolates that.
 func pinInPlaceReviewStart(dCtx DevContext) error {
+	var ga *git.Activities
 	if workflow.GetVersion(dCtx, "in-place-start-point", workflow.DefaultVersion, 1) < 1 {
 		return nil
 	}
@@ -453,7 +457,7 @@ func pinInPlaceReviewStart(dCtx DevContext) error {
 	}
 
 	var revParsed git.GitRevParseResult
-	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Pin review start point", git.GitRevParseActivity, &revParsed, git.GitRevParseParams{
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Pin review start point", ga.GitRevParseActivity, &revParsed, git.GitRevParseParams{
 		EnvContainer: *dCtx.EnvContainer,
 		Ref:          "HEAD",
 	})
@@ -468,7 +472,7 @@ func pinInPlaceReviewStart(dCtx DevContext) error {
 	}
 
 	var workingTreeDiff string
-	err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &workingTreeDiff, *dCtx.EnvContainer, git.GitDiffParams{IgnoreWhitespace: true})
+	err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", ga.GitDiffActivity, &workingTreeDiff, *dCtx.EnvContainer, git.GitDiffParams{IgnoreWhitespace: true})
 	if err != nil {
 		return err
 	}
@@ -791,6 +795,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 }
 
 func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool, lastReviewTreeHash string, lastReviewDiff string, autoMerge bool) (MergeApprovalResponse, string, string, error) {
+	var ga *git.Activities
 	// The diff mechanism has to be chosen before any diff work happens, but
 	// legacy executions recorded the "diff-since-last-review" marker only after
 	// their full-diff activity, so reading that marker first would break their
@@ -831,7 +836,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 		diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 5)
 		if diffSinceLastReviewVersion >= 1 {
 			// Capture current tree hash before getting approval
-			err = workflow.ExecuteActivity(dCtx, git.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
+			err = workflow.ExecuteActivity(dCtx, ga.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
 			if err != nil {
 				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to get current tree hash: %w", err)
 			}
@@ -1086,6 +1091,8 @@ func shortenCommitMessage(message string) string {
 }
 
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string, lastReviewDiff string) (string, MergeApprovalResponse, string, error) {
+	var ea *env.Activities
+	var ga *git.Activities
 	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 	case 2:
 		clearHibernationGlobalState(dCtx)
@@ -1158,7 +1165,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 
 	gitCommitVersion := workflow.GetVersion(dCtx, "git-commit-in-flow-action", workflow.DefaultVersion, 1)
 	if gitCommitVersion < 1 {
-		err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+		err = workflow.ExecuteActivity(dCtx, ga.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
 			CommitMessage:  commitMessage,
 			CommitterName:  committerName,
 			CommitterEmail: committerEmail,
@@ -1177,7 +1184,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 
 		if gitCommitVersion >= 1 && params.CommitRequired {
 			var commitOutput string
-			if err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitCommitActivity, &commitOutput, trackedCtx.EnvContainer, git.GitCommitParams{
+			if err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), ga.GitCommitActivity, &commitOutput, trackedCtx.EnvContainer, git.GitCommitParams{
 				CommitMessage:         commitMessage,
 				CommitterName:         committerName,
 				CommitterEmail:        committerEmail,
@@ -1187,7 +1194,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 			}
 		}
 
-		err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &mergeResult, trackedCtx.EnvContainer, git.GitMergeParams{
+		err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), ga.GitMergeActivity, &mergeResult, trackedCtx.EnvContainer, git.GitMergeParams{
 			SourceBranch:   trackedCtx.Worktree.Name,
 			TargetBranch:   mergeInfo.TargetBranch,
 			MergeStrategy:  git.MergeStrategy(mergeInfo.MergeStrategy),
@@ -1273,7 +1280,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				// relocated to and resolved on the flow's own worktree. The
 				// merge itself already completed on the base worktree, so we
 				// only move the resolved (still uncommitted) changes back there.
-				if err := workflow.ExecuteActivity(dCtx, git.GitTransferWorktreeChangesActivity, *dCtx.EnvContainer, git.GitTransferWorktreeChangesParams{
+				if err := workflow.ExecuteActivity(dCtx, ga.GitTransferWorktreeChangesActivity, *dCtx.EnvContainer, git.GitTransferWorktreeChangesParams{
 					SourceWorktreePath: resolutionWorktree,
 					TargetWorktreePath: mergeResult.BaseStashWorktreePath,
 					BaseStashSha:       mergeResult.BaseStashSha,
@@ -1302,7 +1309,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				}
 				finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 					var finalResult git.MergeActivityResult
-					err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
+					err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), ga.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
 						SourceBranch:   trackedCtx.Worktree.Name,
 						TargetBranch:   mergeInfo.TargetBranch,
 						MergeStrategy:  git.MergeStrategyMerge,
@@ -1339,7 +1346,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				for {
 					// FIXME let's check if MERGE_HEAD exists instead as better way to confirm conflicts are resolved
 					var statusOutput env.EnvRunCommandActivityOutput
-					statusFuture := workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+					statusFuture := workflow.ExecuteActivity(dCtx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 						EnvContainer: *dCtx.EnvContainer,
 						Command:      "git",
 						Args:         []string{"status", "--porcelain"},
@@ -1375,7 +1382,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 
 					finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 						var finalResult git.MergeActivityResult
-						err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
+						err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), ga.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
 							SourceBranch:   trackedCtx.Worktree.Name,
 							TargetBranch:   mergeInfo.TargetBranch,
 							MergeStrategy:  git.MergeStrategy(mergeInfo.MergeStrategy),
@@ -1407,7 +1414,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		worktreeName := dCtx.Worktree.Name
 		workingDir := envContainer.Env.GetWorkingDirectory()
 		_, err := flow_action.TrackWithOptions(actionCtx.FlowActionContext(), trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (interface{}, error) {
-			future := workflow.ExecuteActivity(trackedActionCtx, git.CleanupWorktreeActivity, envContainer, workingDir, worktreeName, "Sidekick task completed and merged")
+			future := workflow.ExecuteActivity(trackedActionCtx, ga.CleanupWorktreeActivity, envContainer, workingDir, worktreeName, "Sidekick task completed and merged")
 			return nil, future.Get(trackedActionCtx, nil)
 		})
 		if err != nil {

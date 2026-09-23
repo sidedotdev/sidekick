@@ -22,12 +22,12 @@ type GitCommitParams struct {
 	IgnoreNothingToCommit bool
 }
 
-func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, params GitCommitParams) (string, error) {
+func (a *Activities) Commit(ctx context.Context, envContainer env.EnvContainer, params GitCommitParams) (string, error) {
 	committerName, committerEmail := params.CommitterName, params.CommitterEmail
 	if committerName == "" || committerEmail == "" {
 		envType := envContainer.Env.GetType()
 		if envType == env.EnvTypeLocal || envType == env.EnvTypeLocalGitWorktree {
-			name, email, err := getGitUserConfig(ctx, envContainer)
+			name, email, err := a.getGitUserConfig(ctx, envContainer)
 			if err == nil {
 				if committerName == "" {
 					committerName = name
@@ -44,7 +44,7 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 	if params.CommitAll {
 		args = append(args, "-a")
 	}
-	gitCommitOutput, err := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
+	gitCommitOutput, err := a.runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -59,7 +59,7 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 		// On a rerun there may be nothing left to commit because an earlier
 		// attempt committed successfully but could not complete the backup.
 		if nothingToCommit && (params.IgnoreNothingToCommit || isActivityRetry(ctx)) {
-			if err := syncFlowBranchBackup(ctx, envContainer, ""); err != nil {
+			if err := a.syncFlowBranchBackup(ctx, envContainer, ""); err != nil {
 				return "", fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
 			}
 			return gitCommitOutput.Stdout, nil
@@ -67,7 +67,7 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 		return "", fmt.Errorf("git commit failed: %s", gitCommitOutput.Stdout+"\n"+gitCommitOutput.Stderr)
 	}
 
-	if err := syncFlowBranchBackup(ctx, envContainer, ""); err != nil {
+	if err := a.syncFlowBranchBackup(ctx, envContainer, ""); err != nil {
 		return "", fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
 	}
 
@@ -97,9 +97,9 @@ type GitUserConfig struct {
 	Email string `json:"email"`
 }
 
-// GetGitUserConfigActivity retrieves the git user.name and user.email configuration
-func GetGitUserConfigActivity(ctx context.Context, envContainer env.EnvContainer) (GitUserConfig, error) {
-	nameOutput, nameErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+// GetUserConfig retrieves the git user.name and user.email configuration
+func (a *Activities) GetUserConfig(ctx context.Context, envContainer env.EnvContainer) (GitUserConfig, error) {
+	nameOutput, nameErr := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -109,7 +109,7 @@ func GetGitUserConfigActivity(ctx context.Context, envContainer env.EnvContainer
 		return GitUserConfig{}, fmt.Errorf("failed to get git user.name")
 	}
 
-	emailOutput, emailErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	emailOutput, emailErr := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -125,8 +125,8 @@ func GetGitUserConfigActivity(ctx context.Context, envContainer env.EnvContainer
 	}, nil
 }
 
-func getGitUserConfig(ctx context.Context, envContainer env.EnvContainer) (name string, email string, err error) {
-	config, err := GetGitUserConfigActivity(ctx, envContainer)
+func (a *Activities) getGitUserConfig(ctx context.Context, envContainer env.EnvContainer) (name string, email string, err error) {
+	config, err := a.GetUserConfig(ctx, envContainer)
 	if err != nil {
 		return "", "", err
 	}
@@ -164,7 +164,8 @@ func GitCommit(eCtx flow_action.ExecContext, commitMessage string) error {
 		commitParams.CommitterName = eCtx.GlobalState.GetStringValue("committerName")
 		commitParams.CommitterEmail = eCtx.GlobalState.GetStringValue("committerEmail")
 	}
-	commitErr := flow_action.PerformActivityWithUserRetry(eCtx, "git_commit", GitCommitActivity, nil, eCtx.EnvContainer, commitParams)
+	var ga *Activities
+	commitErr := flow_action.PerformActivityWithUserRetry(eCtx, "git_commit", ga.GitCommitActivity, nil, eCtx.EnvContainer, commitParams)
 	if commitErr != nil {
 		if !strings.Contains(commitErr.Error(), "nothing to commit") {
 			return fmt.Errorf("failed to commit changes: %v", commitErr)
@@ -174,8 +175,9 @@ func GitCommit(eCtx flow_action.ExecContext, commitMessage string) error {
 }
 
 func gitDiffStaged(eCtx flow_action.ExecContext) (string, error) {
+	var ga *Activities
 	var diff string
-	err := workflow.ExecuteActivity(eCtx, GitDiffActivity, eCtx.EnvContainer, GitDiffParams{
+	err := workflow.ExecuteActivity(eCtx, ga.GitDiffActivity, eCtx.EnvContainer, GitDiffParams{
 		Staged: true,
 	}).Get(eCtx, &diff)
 	return diff, err

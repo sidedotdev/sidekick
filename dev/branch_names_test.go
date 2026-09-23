@@ -84,7 +84,7 @@ func (s *BranchNameTestSuite) SetupTest() {
 	).Maybe()
 
 	// Mock git command to simulate existing branches
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		ExitStatus: 0,
 		Stdout:     "  main\n  side/add-user-auth\n  side/other-branch",
 	}, nil).Maybe()

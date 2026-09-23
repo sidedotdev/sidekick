@@ -232,7 +232,8 @@ func GetUserMergeApproval(
 							}
 						}
 					} else {
-						err = workflow.ExecuteActivity(trackedCtx, git.GitDiffActivity, *trackedCtx.EnvContainer, git.GitDiffParams{
+						var ga *git.Activities
+						err = workflow.ExecuteActivity(trackedCtx, ga.GitDiffActivity, *trackedCtx.EnvContainer, git.GitDiffParams{
 							Staged:           true,
 							ThreeDotDiff:     true,
 							BaseRef:          finalTarget,
@@ -242,7 +243,7 @@ func GetUserMergeApproval(
 							return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
 						}
 						if lastReviewTreeHash != "" {
-							err = workflow.ExecuteActivity(trackedCtx, git.GitDiffActivity, *trackedCtx.EnvContainer, git.GitDiffParams{
+							err = workflow.ExecuteActivity(trackedCtx, ga.GitDiffActivity, *trackedCtx.EnvContainer, git.GitDiffParams{
 								Staged:           true,
 								BaseRef:          lastReviewTreeHash,
 								IgnoreWhitespace: ignoreWhitespace,

@@ -5,8 +5,8 @@ intent_links:
       - coding/git/merge_coordinator.go:MergeCoordinator
       - coding/git/merge_coordinator.go:mergeRepository
       - coding/git/merge_transport.go:mergeTransport
-      - coding/git/git_merge.go:GitMergeActivity
-      - coding/git/git_merge.go:GitTransferWorktreeChangesActivity
+      - coding/git/git_merge.go:Activities.Merge
+      - coding/git/git_merge.go:Activities.TransferWorktreeChanges
       - coding/git/merge_resolution.go:relocateStashConflict
       - coding/git/merge_resolution.go:returnResolution
 ---

@@ -45,7 +45,7 @@ func newMergeTransport(ctx context.Context, source mergeRepository) (mergeTransp
 	}
 	return remoteMergeTransport{
 		source: source.envContainer.Env.(mergeSourceEnv),
-		host:   mergeRepository{envContainer: env.EnvContainer{Env: host}},
+		host:   mergeRepository{git: source.git, envContainer: env.EnvContainer{Env: host}},
 	}, nil
 }
 

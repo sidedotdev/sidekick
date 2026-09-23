@@ -136,7 +136,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithPassingTests() {
 			{WorkingDir: ".", Command: "not a real command"},
 		},
 	}
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "xyz pass",
 		ExitStatus: 0,
 	}, nil).Times(1)
@@ -164,7 +164,7 @@ func (s *RunTestsTestSuite) TestRunTestsUsesLongTestCommandTimeout() {
 	}
 
 	var startToClose time.Duration
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
 			startToClose = activity.GetInfo(ctx).StartToCloseTimeout
 			return env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil
@@ -190,7 +190,7 @@ func (s *RunTestsTestSuite) TestRunTestsDispatchesRunCommandHooksForMatchingEnvT
 	s.envContainer = env.EnvContainer{Env: &env.ModalEnv{WorkingDirectory: "/workspace", SandboxName: "sb-1"}}
 
 	var input env.EnvRunCommandActivityInput
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, in env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
 			input = in
 			return env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil
@@ -220,7 +220,7 @@ func (s *RunTestsTestSuite) TestRunTestsSkipsRunCommandHooksForNonMatchingEnvTyp
 	}
 
 	var input env.EnvRunCommandActivityInput
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, in env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
 			input = in
 			return env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil
@@ -241,7 +241,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithFailingTests() {
 			{WorkingDir: ".", Command: "failing command"},
 		},
 	}
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "Test output",
 		Stderr:     "Error output",
 		ExitStatus: 1,
@@ -267,13 +267,13 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommands() {
 			{WorkingDir: ".", Command: "failing command"},
 		},
 	}
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "passing command"
 	})).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "xyz pass",
 		ExitStatus: 0,
 	}, nil).Times(1)
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "failing command"
 	})).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "abc fail",
@@ -305,15 +305,15 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleTestsMixedResult() {
 			{Command: "not a real command 3"},
 		},
 	}
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "test1 pass",
 		ExitStatus: 0,
 	}, nil).Times(1)
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "test2 pass",
 		ExitStatus: 0,
 	}, nil).Times(1)
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "test3 fail out",
 		Stderr:     "test3 fail err",
 		ExitStatus: 1,
@@ -343,7 +343,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithActivityErrorReturnsError() {
 	}
 	s.devContext.ExecContext.DisableHumanInTheLoop = true
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
 		env.EnvRunCommandActivityOutput{}, errors.New("activity timeout"),
 	).Times(1)
 
@@ -364,7 +364,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithRetryOnActivityError() {
 	s.devContext.ExecContext.DisableHumanInTheLoop = false
 
 	callCount := 0
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
 			callCount++
 			if callCount == 1 {
@@ -424,14 +424,14 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 
 	var mu sync.Mutex
 	flakyCallCounts := map[string]int{}
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "passing command"
 	})).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "pass output",
 		ExitStatus: 0,
 	}, nil).Times(1)
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "flaky command 1"
 	})).Return(
 		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
@@ -449,7 +449,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 		},
 	)
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "flaky command 2"
 	})).Return(
 		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
@@ -521,7 +521,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithMixedHeartbeatAndNonHeartbeatFailure
 	realFailCallCount := 0
 	userPromptCount := 0
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "heartbeat fail command"
 	})).Return(
 		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
@@ -536,7 +536,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithMixedHeartbeatAndNonHeartbeatFailure
 		},
 	)
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "real fail command"
 	})).Return(
 		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
@@ -601,18 +601,18 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 	}
 	s.devContext.ExecContext.DisableHumanInTheLoop = true
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "passing command"
 	})).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     "pass output",
 		ExitStatus: 0,
 	}, nil).Times(1)
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "timeout command 1"
 	})).Return(env.EnvRunCommandActivityOutput{}, errors.New("timeout error 1")).Times(1)
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "timeout command 2"
 	})).Return(env.EnvRunCommandActivityOutput{}, errors.New("timeout error 2")).Times(1)
 
@@ -635,7 +635,7 @@ func (s *RunTestsTestSuite) TestPausedSummarizationReachesUserResponsePath() {
 			{WorkingDir: ".", Command: "failing command"},
 		},
 	}
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		Stdout:     strings.Repeat("failure output", maxTestOutputSize),
 		ExitStatus: 1,
 	}, nil).Once()

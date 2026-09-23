@@ -122,10 +122,11 @@ func TestEnvRunCommandActivity_TruncatesLargeOutput(t *testing.T) {
 	}
 
 	testSuite := &testsuite.WorkflowTestSuite{}
+	ea := &Activities{}
 	actEnv := testSuite.NewTestActivityEnvironment()
-	actEnv.RegisterActivity(EnvRunCommandActivity)
+	actEnv.RegisterActivity(ea.EnvRunCommandActivity)
 
-	result, err := actEnv.ExecuteActivity(EnvRunCommandActivity, input)
+	result, err := actEnv.ExecuteActivity(ea.EnvRunCommandActivity, input)
 	require.NoError(t, err)
 
 	var output EnvRunCommandActivityOutput
@@ -153,10 +154,11 @@ func TestEnvRunCommandActivity_NoTruncationUnderLimit(t *testing.T) {
 	}
 
 	testSuite := &testsuite.WorkflowTestSuite{}
+	ea := &Activities{}
 	actEnv := testSuite.NewTestActivityEnvironment()
-	actEnv.RegisterActivity(EnvRunCommandActivity)
+	actEnv.RegisterActivity(ea.EnvRunCommandActivity)
 
-	result, err := actEnv.ExecuteActivity(EnvRunCommandActivity, input)
+	result, err := actEnv.ExecuteActivity(ea.EnvRunCommandActivity, input)
 	require.NoError(t, err)
 
 	var output EnvRunCommandActivityOutput
@@ -181,10 +183,11 @@ func TestEnvRunCommandActivity_TruncatesLargeStderr(t *testing.T) {
 	}
 
 	testSuite := &testsuite.WorkflowTestSuite{}
+	ea := &Activities{}
 	actEnv := testSuite.NewTestActivityEnvironment()
-	actEnv.RegisterActivity(EnvRunCommandActivity)
+	actEnv.RegisterActivity(ea.EnvRunCommandActivity)
 
-	result, err := actEnv.ExecuteActivity(EnvRunCommandActivity, input)
+	result, err := actEnv.ExecuteActivity(ea.EnvRunCommandActivity, input)
 	require.NoError(t, err)
 
 	var output EnvRunCommandActivityOutput

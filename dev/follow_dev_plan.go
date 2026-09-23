@@ -211,6 +211,7 @@ type stepReviewState struct {
 // from the flow's branch stays available for the whole flow, unlike the
 // unreferenced tree objects earlier review-diff mechanisms depended on.
 func pinStepReviewState(dCtx DevContext) (stepReviewState, error) {
+	var ga *git.Activities
 	if workflow.GetVersion(dCtx, "step-start-pin", workflow.DefaultVersion, 1) < 1 {
 		return stepReviewState{}, nil
 	}
@@ -219,7 +220,7 @@ func pinStepReviewState(dCtx DevContext) (stepReviewState, error) {
 	}
 
 	var revParsed git.GitRevParseResult
-	err := workflow.ExecuteActivity(dCtx, git.GitRevParseActivity, git.GitRevParseParams{
+	err := workflow.ExecuteActivity(dCtx, ga.GitRevParseActivity, git.GitRevParseParams{
 		EnvContainer: *dCtx.EnvContainer,
 		Ref:          "HEAD",
 	}).Get(dCtx, &revParsed)

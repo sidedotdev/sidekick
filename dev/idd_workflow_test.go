@@ -108,19 +108,19 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 		workflow.RegisterOptions{Name: "BasicDevWorkflow"},
 	)
 
-	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.MatchedBy(func(input git.GitAddActivityInput) bool {
+	s.env.OnActivity(ga.GitAddActivity, mock.Anything, mock.MatchedBy(func(input git.GitAddActivityInput) bool {
 		return input.Path == "."
 	})).Return(nil).Once()
 
-	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
 		return params.CommitAll && params.IgnoreNothingToCommit
 	})).Return("commit-sha", nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "abc123\n", ExitStatus: 0}, nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
@@ -216,14 +216,14 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskTriggersOrchestratorOnTermina
 		workflow.RegisterOptions{Name: "BasicDevWorkflow"},
 	)
 
-	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
-	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil).Once()
+	s.env.OnActivity(ga.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "abc123\n", ExitStatus: 0}, nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
@@ -305,29 +305,29 @@ func (s *IddWorkflowTestSuite) TestFinishIddSignalMergesAndCloses() {
 	const iddBranch = "side/idd-worktree"
 	const targetBranch = "main"
 
-	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.MatchedBy(func(input git.GitAddActivityInput) bool {
+	s.env.OnActivity(ga.GitAddActivity, mock.Anything, mock.MatchedBy(func(input git.GitAddActivityInput) bool {
 		return input.Path == "."
 	})).Return(nil).Once()
 
-	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
 		return params.CommitAll && params.IgnoreNothingToCommit
 	})).Return("commit-sha", nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "deadbeef\n", ExitStatus: 0}, nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
 	var capturedMergeParams git.GitMergeParams
-	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitMergeParams) bool {
+	s.env.OnActivity(ga.GitMergeActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitMergeParams) bool {
 		capturedMergeParams = params
 		return true
 	})).Return(git.MergeActivityResult{HasConflicts: false}, nil).Once()
 
-	s.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	s.env.OnActivity(ga.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	miniIdd := func(ctx workflow.Context) error {
 		ctx = utils.NoRetryCtx(ctx)
@@ -421,10 +421,10 @@ func (s *IddWorkflowTestSuite) TestFinishIddSignalMergesAndCloses() {
 func (s *IddWorkflowTestSuite) TestRunOrchestratorTurn_EmptyDiffIsNoOp() {
 	const iddBranch = "side/idd-worktree"
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return in.Command == "git" && len(in.Args) >= 2 && in.Args[0] == "diff"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: ""}, nil).Once()
-	s.env.OnActivity(git.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.Anything).
+	s.env.OnActivity(ga.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.Anything).
 		Return("", nil).Once()
 
 	miniIdd := func(ctx workflow.Context) (IddState, error) {
@@ -473,10 +473,10 @@ func (s *IddWorkflowTestSuite) TestRunOrchestratorTurn_EmptyDiffIsNoOp() {
 func (s *IddWorkflowTestSuite) TestPendingIntentDiffIncludesUntrackedFiles() {
 	const iddBranch = "side/idd-worktree"
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return in.Command == "git" && len(in.Args) >= 2 && in.Args[0] == "diff"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "tracked-intent-change"}, nil).Once()
-	s.env.OnActivity(git.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(paths []string) bool {
+	s.env.OnActivity(ga.DiffUntrackedFilesActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(paths []string) bool {
 		return len(paths) == 1 && paths[0] == "intent"
 	})).Return("untracked-intent-file", nil).Once()
 
@@ -649,19 +649,19 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesSelectedOptionsToPl
 		workflow.RegisterOptions{Name: "PlannedDevWorkflow"},
 	)
 
-	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.MatchedBy(func(input git.GitAddActivityInput) bool {
+	s.env.OnActivity(ga.GitAddActivity, mock.Anything, mock.MatchedBy(func(input git.GitAddActivityInput) bool {
 		return input.Path == "."
 	})).Return(nil).Once()
 
-	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.MatchedBy(func(params git.GitCommitParams) bool {
 		return params.CommitAll && params.IgnoreNothingToCommit
 	})).Return("commit-sha", nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "abc123\n", ExitStatus: 0}, nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
@@ -808,7 +808,7 @@ func (s *IddWorkflowTestSuite) setupLocalParentMocks() {
 	s.env.OnActivity(GetRepoConfigActivityV2, mock.Anything).Return(GetRepoConfigActivityResult{}, nil).Maybe()
 	s.env.OnActivity(GetRepoConfigActivity, mock.Anything).Return(common.RepoConfig{}, nil).Maybe()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			input := args.Get(1).(env.EnvRunCommandActivityInput)
 			if len(input.Args) == 3 && input.Args[0] == "sh" && input.Args[1] == "-c" && input.Args[2] == env.EnsureSideTmpScript {
@@ -818,9 +818,9 @@ func (s *IddWorkflowTestSuite) setupLocalParentMocks() {
 		Return(env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil).Maybe()
 	s.env.OnActivity(common.BaseCommandPermissionsActivity, mock.Anything, mock.Anything).
 		Return(common.CommandPermissionConfig{}, nil).Maybe()
-	s.env.OnActivity(git.GetGitUserConfigActivity, mock.Anything, mock.Anything).
+	s.env.OnActivity(ga.GetGitUserConfigActivity, mock.Anything, mock.Anything).
 		Return(git.GitUserConfig{}, nil).Maybe()
-	s.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	s.env.OnActivity(ga.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 
 	s.setupTitleGenerationMocks()
@@ -1017,10 +1017,10 @@ func (s *IddWorkflowTestSuite) setupCommitIntentUserRetryMocks() {
 func (s *IddWorkflowTestSuite) TestCommitIntentRetriesCommitAfterUserContinue() {
 	s.setupCommitIntentUserRetryMocks()
 
-	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
+	s.env.OnActivity(ga.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
 
 	commitCalls := 0
-	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, envContainer env.EnvContainer, params git.GitCommitParams) (string, error) {
 			commitCalls++
 			if commitCalls == 1 {
@@ -1030,11 +1030,11 @@ func (s *IddWorkflowTestSuite) TestCommitIntentRetriesCommitAfterUserContinue() 
 		},
 	)
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "abc123\n", ExitStatus: 0}, nil).Once()
 
-	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+	s.env.OnActivity(ea.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Twice()
 
@@ -1076,8 +1076,8 @@ func (s *IddWorkflowTestSuite) TestCommitIntentRetriesCommitAfterUserContinue() 
 func (s *IddWorkflowTestSuite) TestCommitIntentSurfacesCommitFailureWithoutHumanInTheLoop() {
 	s.setupCommitIntentUserRetryMocks()
 
-	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
-	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
+	s.env.OnActivity(ga.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
+	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return(
 		"", errors.New("commit succeeded but failed to sync flow branch to local repo"),
 	).Once()
 

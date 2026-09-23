@@ -25,10 +25,11 @@ type GitDiffParams struct {
 
 // GitDiff returns the diff of the current, staged changes in the working tree.
 func GitDiff(eCtx flow_action.ExecContext) (string, error) {
+	var ga *Activities
 	var diff string
 	var err error
 	if fflag.IsEnabled(eCtx, fflag.CheckEdits) {
-		err = workflow.ExecuteActivity(eCtx, GitDiffActivity, *eCtx.EnvContainer, GitDiffParams{
+		err = workflow.ExecuteActivity(eCtx, ga.GitDiffActivity, *eCtx.EnvContainer, GitDiffParams{
 			Staged: true, // when check_edits is enabled, changes are staged as they are applied, so the diff must look at staged changes
 		}).Get(eCtx, &diff)
 		if err != nil {
@@ -48,8 +49,10 @@ func GitDiff(eCtx flow_action.ExecContext) (string, error) {
  * sunset this eventually, so this function shouldn't be used directly. */
 func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 	envContainer := *eCtx.EnvContainer
+	var ea *env.Activities
+	var ga *Activities
 	var gitDiffOutput env.EnvRunCommandActivityOutput
-	err := workflow.ExecuteActivity(eCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err := workflow.ExecuteActivity(eCtx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -65,7 +68,7 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 
 	// Get diff of untracked files using temp index approach (respects .gitattributes)
 	var untrackedDiff string
-	err = workflow.ExecuteActivity(eCtx, DiffUntrackedFilesActivity, envContainer, []string(nil)).Get(eCtx, &untrackedDiff)
+	err = workflow.ExecuteActivity(eCtx, ga.DiffUntrackedFilesActivity, envContainer, []string(nil)).Get(eCtx, &untrackedDiff)
 	if err != nil {
 		return "", fmt.Errorf("failed to get untracked files diff: %v", err)
 	}
@@ -76,19 +79,19 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 	return gitDiffOutput.Stdout, nil
 }
 
-func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+func (a *Activities) Diff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	if params.ThreeDotDiff || params.Staged || params.EndRef != "" {
-		return stagedAndOrThreeDotDiff(ctx, envContainer, params)
+		return a.stagedAndOrThreeDotDiff(ctx, envContainer, params)
 	}
 
-	return workingTreeAndUntrackedDiff(ctx, envContainer, params)
+	return a.workingTreeAndUntrackedDiff(ctx, envContainer, params)
 }
 
 func shellQuote(s string) string {
 	return shellescape.Quote(s)
 }
 
-func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+func (a *Activities) stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	if params.ThreeDotDiff && params.BaseRef == "" {
 		return "", fmt.Errorf("base ref is required for three-dot diff")
 	}
@@ -138,7 +141,7 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 
 	shellCommand := strings.Join(cmdParts, " ")
 
-	gitDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	gitDiffRunOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "sh",
@@ -159,7 +162,7 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 		// An explicit two-ref range compares committed trees only and can't take
 		// `--staged`, so compose the requested staged changes in separately.
 		if !stagedInMainCmd {
-			stagedDiff, err := stagedIndexDiff(ctx, envContainer, params)
+			stagedDiff, err := a.stagedIndexDiff(ctx, envContainer, params)
 			if err != nil {
 				return "", err
 			}
@@ -169,7 +172,7 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 		// `git diff --staged` only emits stage-0 index entries, so during a merge
 		// the unmerged (conflicted) paths are silently omitted. Append them
 		// explicitly so applied/conflicted changes aren't hidden from review.
-		unmergedDiff, err := unmergedFilesDiff(ctx, envContainer, params)
+		unmergedDiff, err := a.unmergedFilesDiff(ctx, envContainer, params)
 		if err != nil {
 			return "", err
 		}
@@ -195,7 +198,7 @@ func appendDiffSection(diff, section string) string {
 // `git diff --staged`, honoring the file path, context, and whitespace options.
 // It excludes unmerged (conflicted) paths, which lack a stage-0 index entry;
 // callers append unmergedFilesDiff for those.
-func stagedIndexDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+func (a *Activities) stagedIndexDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	args := []string{"diff", "--no-ext-diff", "--staged"}
 	if params.ContextLines != nil {
 		args = append(args, fmt.Sprintf("-U%d", *params.ContextLines))
@@ -209,7 +212,7 @@ func stagedIndexDiff(ctx context.Context, envContainer env.EnvContainer, params 
 			args = append(args, strings.TrimSpace(fp))
 		}
 	}
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -227,7 +230,7 @@ func stagedIndexDiff(ctx context.Context, envContainer env.EnvContainer, params 
 // unmergedFilesDiff returns the diff of unmerged (conflicted) paths against
 // HEAD, including conflict markers. These paths lack a stage-0 index entry
 // during a merge and are therefore omitted by `git diff --staged`.
-func unmergedFilesDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+func (a *Activities) unmergedFilesDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	listArgs := []string{"diff", "--name-only", "--diff-filter=U", "-z"}
 	if len(params.FilePaths) > 0 {
 		listArgs = append(listArgs, "--")
@@ -235,7 +238,7 @@ func unmergedFilesDiff(ctx context.Context, envContainer env.EnvContainer, param
 			listArgs = append(listArgs, strings.TrimSpace(fp))
 		}
 	}
-	listOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	listOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -268,7 +271,7 @@ func unmergedFilesDiff(ctx context.Context, envContainer env.EnvContainer, param
 	diffArgs = append(diffArgs, "--")
 	diffArgs = append(diffArgs, unmergedFiles...)
 
-	diffOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	diffOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -284,9 +287,9 @@ func unmergedFilesDiff(ctx context.Context, envContainer env.EnvContainer, param
 	return diffOutput.Stdout, nil
 }
 
-// DiffUntrackedFilesActivity is an activity that diffs untracked files using a temporary index.
+// DiffUntrackedFiles diffs untracked files using a temporary index.
 // This approach respects .gitattributes (e.g., binary file handling) unlike diffing against /dev/null.
-func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContainer, filePaths []string) (string, error) {
+func (a *Activities) DiffUntrackedFiles(ctx context.Context, envContainer env.EnvContainer, filePaths []string) (string, error) {
 	// Step 1: Get list of untracked files
 	lsFilesArgs := []string{"ls-files", "--others", "--exclude-standard", "-z"}
 	if len(filePaths) > 0 {
@@ -296,7 +299,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 		}
 	}
 
-	lsFilesOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	lsFilesOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -328,7 +331,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 	// changes, so exclude them from the diff entirely (they should not even be
 	// referenced in the output). When they genuinely should be tracked, we rely
 	// on the agent staging them explicitly.
-	nonBinaryPaths, binaryPaths, err := partitionUntrackedBinaries(ctx, envContainer, untrackedPaths)
+	nonBinaryPaths, binaryPaths, err := a.partitionUntrackedBinaries(ctx, envContainer, untrackedPaths)
 	if err != nil {
 		return "", err
 	}
@@ -341,7 +344,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 	untrackedPaths = nonBinaryPaths
 
 	// Step 2: Create a temporary index file
-	mkTempOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	mkTempOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "mktemp",
@@ -358,7 +361,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 	// Ensure cleanup of temp index file
 	defer func() {
 		// Remove temp index and any lock file
-		_, _ = env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		_, _ = a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
 			RelativeWorkingDir: "./",
 			Command:            "rm",
@@ -368,7 +371,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 
 	// Remove the temp file so git can create a proper empty index
 	// (mktemp creates an empty file, but git expects a valid index format)
-	_, _ = env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	_, _ = a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "rm",
@@ -379,7 +382,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 
 	// Step 3: Copy the current index to the temp index so we have the same base state
 	// First check if HEAD exists (it won't in an empty repo with no commits)
-	revParseOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	revParseOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -391,7 +394,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 
 	// If HEAD exists, populate the temp index with HEAD's tree
 	if revParseOutput.ExitStatus == 0 {
-		readTreeOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		readTreeOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
 			RelativeWorkingDir: "./",
 			Command:            "git",
@@ -411,7 +414,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 	addArgs := []string{"add", "-N", "--"}
 	addArgs = append(addArgs, untrackedPaths...)
 
-	addOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	addOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -429,7 +432,7 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 	diffArgs := []string{"--no-pager", "diff", "--no-ext-diff", "--"}
 	diffArgs = append(diffArgs, untrackedPaths...)
 
-	diffOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	diffOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -447,14 +450,14 @@ func DiffUntrackedFilesActivity(ctx context.Context, envContainer env.EnvContain
 	return diffOutput.Stdout, nil
 }
 
-func workingTreeAndUntrackedDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+func (a *Activities) workingTreeAndUntrackedDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	var untrackedDiffStdout string
 	var trackedDiffStdout string
 
 	// Part 1: Untracked files diff using a temporary index
 	// This approach respects .gitattributes (e.g., binary file handling) unlike diffing against /dev/null
 	{
-		untrackedDiff, err := DiffUntrackedFilesActivity(ctx, envContainer, params.FilePaths)
+		untrackedDiff, err := a.DiffUntrackedFiles(ctx, envContainer, params.FilePaths)
 		if err != nil {
 			return "", fmt.Errorf("failed to get untracked files diff: %w", err)
 		}
@@ -480,7 +483,7 @@ func workingTreeAndUntrackedDiff(ctx context.Context, envContainer env.EnvContai
 		trackedArgs = append(trackedArgs, cleanFilePaths...)
 	}
 
-	trackedDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	trackedDiffRunOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",

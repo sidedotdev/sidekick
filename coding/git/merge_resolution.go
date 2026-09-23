@@ -10,7 +10,7 @@ import (
 )
 
 func (r mergeRepository) script(ctx context.Context, dir, script string) (string, error) {
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := r.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: r.envContainer,
 		Command:      "sh",
 		Args:         []string{"-c", "cd " + shellQuote(dir) + " && (" + script + ")"},
@@ -132,7 +132,7 @@ func (c *mergeCoordinator) returnResolution(ctx context.Context, transport merge
 		return err
 	}
 	if delivered != "" && params.BaseStashSha == "" {
-		dirty, err := worktreeHasUncommittedChanges(ctx, source.envContainer, sourceDir)
+		dirty, err := c.repository.git.worktreeHasUncommittedChanges(ctx, source.envContainer, sourceDir)
 		if err != nil {
 			return err
 		}
@@ -195,11 +195,11 @@ fi`, shellQuote(ref), shellQuote(": "+message), shellQuote(message), shellQuote(
 			}
 		}
 	}
-	if err := dropStashBySha(ctx, source.envContainer, sourceDir, delivered, nil); err != nil {
+	if err := c.repository.git.dropStashBySha(ctx, source.envContainer, sourceDir, delivered, nil); err != nil {
 		return err
 	}
 	if params.BaseStashSha != "" {
-		if err := dropStashBySha(ctx, target.envContainer, targetDir, params.BaseStashSha, nil); err != nil {
+		if err := c.repository.git.dropStashBySha(ctx, target.envContainer, targetDir, params.BaseStashSha, nil); err != nil {
 			return err
 		}
 		if err := target.clearMergeState(ctx, targetDir, params.BaseStashSha); err != nil {
@@ -227,7 +227,7 @@ func (r mergeRepository) deliverResolution(ctx context.Context, dir, ref, stash 
 		return err
 	}
 	if expected == "" {
-		dirty, err := worktreeHasUncommittedChanges(ctx, r.envContainer, dir)
+		dirty, err := r.git.worktreeHasUncommittedChanges(ctx, r.envContainer, dir)
 		if err != nil {
 			return err
 		}
@@ -249,7 +249,7 @@ git read-tree HEAD && git add -A && git write-tree`)
 		return err
 	}
 	if current != expected {
-		dirty, err := worktreeHasUncommittedChanges(ctx, r.envContainer, dir)
+		dirty, err := r.git.worktreeHasUncommittedChanges(ctx, r.envContainer, dir)
 		if err != nil {
 			return err
 		}
@@ -288,7 +288,7 @@ func (c *mergeCoordinator) relocateStashConflict(ctx context.Context, transport 
 		return err
 	}
 	if relocated == "" {
-		dirty, err := worktreeHasUncommittedChanges(ctx, source.envContainer, sourceDir)
+		dirty, err := c.repository.git.worktreeHasUncommittedChanges(ctx, source.envContainer, sourceDir)
 		if err != nil {
 			return err
 		}
@@ -316,7 +316,7 @@ func (c *mergeCoordinator) relocateStashConflict(ctx context.Context, transport 
 			}
 		}
 		if !dirty {
-			out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			out, err := c.repository.git.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: source.envContainer,
 				Command:      "git",
 				Args:         []string{"-C", sourceDir, "stash", "apply", stash},
@@ -410,8 +410,8 @@ fi`, shellQuote(ref), shellQuote(": "+message), shellQuote(message), shellQuote(
 	return sha, ref, err
 }
 
-func restoreOwnedMergeStash(ctx context.Context, container env.EnvContainer, dir, sha, ref string, vars []string) (bool, error) {
-	repository := mergeRepository{envContainer: container}
+func (a *Activities) restoreOwnedMergeStash(ctx context.Context, container env.EnvContainer, dir, sha, ref string, vars []string) (bool, error) {
+	repository := mergeRepository{git: a, envContainer: container}
 	restored, err := repository.restoredMergeStash(ctx, dir, sha, ref)
 	if err != nil {
 		return false, err
@@ -419,7 +419,7 @@ func restoreOwnedMergeStash(ctx context.Context, container env.EnvContainer, dir
 	if restored {
 		return false, repository.finishMergeRestore(ctx, dir, sha, ref, vars)
 	}
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: container,
 		Command:      "git",
 		Args:         []string{"-C", dir, "stash", "apply", "--index", sha},
@@ -429,7 +429,7 @@ func restoreOwnedMergeStash(ctx context.Context, container env.EnvContainer, dir
 		return false, err
 	}
 	if out.ExitStatus != 0 {
-		repository := mergeRepository{envContainer: container}
+		repository := mergeRepository{git: a, envContainer: container}
 		unmerged, inspectErr := repository.script(ctx, dir, "git diff --name-only --diff-filter=U")
 		if inspectErr != nil {
 			return false, inspectErr
@@ -441,7 +441,7 @@ func restoreOwnedMergeStash(ctx context.Context, container env.EnvContainer, dir
 			if _, err := repository.script(ctx, dir, "git diff --cached --quiet HEAD"); err != nil {
 				return false, fmt.Errorf("stash index restoration incomplete; stash %s preserved: %w", sha, err)
 			}
-			out, err = env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			out, err = a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: container,
 				Command:      "git",
 				Args:         []string{"-C", dir, "stash", "apply", sha},
@@ -533,7 +533,7 @@ printf '%%s' "$tree"`, shellQuote(sha), shellQuote(indexRef), shellQuote(expecte
 }
 
 func (r mergeRepository) finishMergeRestore(ctx context.Context, dir, sha, ref string, vars []string) error {
-	if err := dropStashBySha(ctx, r.envContainer, dir, sha, vars); err != nil {
+	if err := r.git.dropStashBySha(ctx, r.envContainer, dir, sha, vars); err != nil {
 		return err
 	}
 	_, err := r.script(ctx, dir, fmt.Sprintf("printf 'delete %%s %%s\\ndelete %%s\\ndelete %%s\\n' %s %s %s %s | git update-ref --stdin",

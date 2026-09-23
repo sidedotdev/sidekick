@@ -133,6 +133,8 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 }
 
 func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, repoMode string, startBranch *string, requirements string, configOverrides common.ConfigOverrides) (DevContext, error) {
+	var ea *env.Activities
+	var ga *git.Activities
 	ctx = utils.NoRetryCtx(ctx)
 
 	var devEnv env.Env
@@ -653,7 +655,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// Execute worktree setup script if configured and using worktree mode
 	if worktree != nil && repoConfig.WorktreeSetup != "" {
 		var output env.EnvRunCommandActivityOutput
-		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		err = workflow.ExecuteActivity(ctx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "/usr/bin/env",
 			Args:         []string{"sh", "-c", repoConfig.WorktreeSetup},
@@ -674,7 +676,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// provisioning performs this setup for new workflows.
 	if v := workflow.GetVersion(ctx, "ensure-side-tmp-dir", workflow.DefaultVersion, 2); v == 1 {
 		var output env.EnvRunCommandActivityOutput
-		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		err = workflow.ExecuteActivity(ctx, ea.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "/usr/bin/env",
 			Args:         []string{"sh", "-c", env.EnsureSideTmpScript},
@@ -699,7 +701,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// the developer's git identity and we want commits attributed to them.
 	if v := workflow.GetVersion(ctx, "git-user-config-in-global-state", workflow.DefaultVersion, 1); v >= 1 {
 		var gitUserConfig git.GitUserConfig
-		err = workflow.ExecuteActivity(ctx, git.GetGitUserConfigActivity, *tempLocalExecContext.EnvContainer).Get(ctx, &gitUserConfig)
+		err = workflow.ExecuteActivity(ctx, ga.GetGitUserConfigActivity, *tempLocalExecContext.EnvContainer).Get(ctx, &gitUserConfig)
 		if err != nil {
 			// Log but don't fail - commit authorship falls back to git config lookup
 			log.Warn().Err(err).Msg("Failed to get git user config, will fall back to git config lookup")
@@ -771,6 +773,7 @@ func stopActiveDevRun(dCtx DevContext) {
 
 // cleanup on cancel for resources created during setupDevContextAction
 func handleFlowCancel(dCtx DevContext) {
+	var ga *git.Activities
 	if !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
 		return
 	}
@@ -830,7 +833,7 @@ func handleFlowCancel(dCtx DevContext) {
 			dCtx.ExecContext.GlobalState.SetValue(globalStateKeyHibernated, nil)
 		}
 
-		future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
+		future := workflow.ExecuteActivity(disconnectedCtx, ga.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
 		if err := future.Get(disconnectedCtx, nil); err != nil {
 			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree during workflow cancellation", "error", err, "worktree", dCtx.Worktree.Name)
 		}

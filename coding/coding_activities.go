@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sidekick/coding/git"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
@@ -29,6 +30,7 @@ import (
 type CodingActivities struct {
 	LSPActivities        *lsp.LSPActivities
 	TreeSitterActivities *tree_sitter.TreeSitterActivities
+	Git                  *git.Activities
 }
 
 type FileSymDefRequest struct {

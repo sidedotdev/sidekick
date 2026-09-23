@@ -46,7 +46,7 @@ func TestGitAddActivity_SkipsUntrackedBinaries(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	require.NoError(t, GitAddActivity(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: "."}))
+	require.NoError(t, testActivities().Add(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: "."}))
 
 	staged := stagedFiles(t, repoDir)
 	require.True(t, staged["tracked.txt"], "modified tracked file should be staged")
@@ -78,7 +78,7 @@ func TestGitAddActivity_StagesTrackedBinary(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	require.NoError(t, GitAddActivity(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: "."}))
+	require.NoError(t, testActivities().Add(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: "."}))
 
 	staged := stagedFiles(t, repoDir)
 	require.True(t, staged["image.bin"], "modified tracked binary file should be staged")

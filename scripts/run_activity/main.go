@@ -18,6 +18,7 @@ import (
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	"sidekick/credential_proxy/access"
 	"sidekick/dev"
 	"sidekick/env"
 	"sidekick/fflag"
@@ -123,12 +124,17 @@ func buildActivityRegistry() map[string]interface{} {
 		},
 		InitializedClients: map[string]lsp.LSPClient{},
 	}
+	envActivities := &env.Activities{HookScriptHost: access.HookScriptHost{}}
+	gitActivities := &git.Activities{Env: envActivities}
+	searchActivities := &dev.SearchActivities{Env: envActivities}
+
 	treeSitterActivities := &tree_sitter.TreeSitterActivities{
 		DatabaseAccessor: service,
 	}
 	codingActivities := &coding.CodingActivities{
 		TreeSitterActivities: treeSitterActivities,
 		LSPActivities:        lspActivities,
+		Git:                  gitActivities,
 	}
 	readImageActivities := &dev.ReadImageActivities{
 		Storage: service,
@@ -158,6 +164,7 @@ func buildActivityRegistry() map[string]interface{} {
 	}
 	devActivities := &dev.DevActivities{
 		LSPActivities: lspActivities,
+		Git:           gitActivities,
 	}
 	devRunActivities := &dev.DevRunActivities{
 		Streamer: service,
@@ -179,35 +186,14 @@ func buildActivityRegistry() map[string]interface{} {
 		env.SnapshotEnvironmentActivity,
 		env.CreateRemoteWorktreeActivity,
 		sidekick.GithubCloneRepoActivity,
-		env.EnvRunCommandActivity,
 		env.GetEnvironmentInfoActivity,
-		git.GitDiffActivity,
-		git.DiffUntrackedFilesActivity,
-		git.GitAddActivity,
-		git.GitRestoreActivity,
-		git.GitCommitActivity,
-		git.GetGitUserConfigActivity,
-		git.GitCheckoutActivity,
-		git.GitMergeActivity,
-		git.GitMergeAbortActivity,
-		git.GitMergeInProgressActivity,
-		git.GitMergeIntoWorktreeActivity,
-		git.GitTransferWorktreeChangesActivity,
-		git.GitListUnmergedActivity,
-		git.GitSnapshotConflictMarkersActivity,
-		git.GitConflictResolutionDiffActivity,
-		git.GitCommitMergeActivity,
-		git.CleanupWorktreeActivity,
 		git.GetCurrentBranch,
 		git.GetDefaultBranch,
 		git.ListLocalBranches,
-		git.WriteTreeActivity,
-		git.GitRevParseActivity,
 		dev.GetRepoConfigActivity,
 		dev.GetRepoConfigActivityV2,
 		dev.GetSymbolsActivity,
 		dev.ResolveToolNameMappingActivity,
-		dev.ApplyEditBlocksActivity,
 		dev.ReadFileActivity,
 		dev.BulkReadFileActivity,
 		dev.ManageChatHistoryActivity,
@@ -216,7 +202,6 @@ func buildActivityRegistry() map[string]interface{} {
 		dev.AssessResolutionSubstantialityActivity,
 		dev.CheckCommandPermissionActivity,
 		dev.EnsureCoreIgnoreFileActivity,
-		dev.BulkSearchRepositoryActivity,
 		common.GetLocalConfig,
 		common.BaseCommandPermissionsActivity,
 		persisted_ai.RepairToolCallArgumentsActivity,
@@ -226,6 +211,9 @@ func buildActivityRegistry() map[string]interface{} {
 	}
 
 	// Register struct methods
+	registerStructMethods(registry, envActivities)
+	registerStructMethods(registry, gitActivities)
+	registerStructMethods(registry, searchActivities)
 	registerStructMethods(registry, srvActivities)
 	registerStructMethods(registry, llmActivities)
 	registerStructMethods(registry, llm2Activities)

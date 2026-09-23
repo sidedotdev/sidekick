@@ -7,14 +7,14 @@ intent_links:
       - coding/review_diffs_activity.go:GenerateReviewDiffsResult
       - coding/review_diffs_activity.go:fullReviewDiff
       - coding/diffanalysis/interdiff.go:Interdiff
-      - coding/git/git_diff.go:GitDiffActivity
-      - coding/git/git_merge_base.go:MergeBase
+      - coding/git/git_diff.go:Activities.Diff
+      - coding/git/git_merge_base.go:Activities.MergeBase
   - intent: "#start-points"
     code:
       - coding/review_diffs_activity.go:fullReviewDiff
       - coding/review_diffs_activity.go:diffAtStartPoint
       - coding/review_diffs_activity_test.go:reviewDiffsScenarios
-      - coding/git/git_rev_parse.go:GitRevParseActivity
+      - coding/git/git_rev_parse.go:Activities.RevParse
       - dev/follow_dev_plan.go:stepReviewState
       - dev/follow_dev_plan.go:pinStepReviewState
   - intent: "#activity-level-cases"
@@ -35,7 +35,7 @@ intent_links:
       - dev/step_start_pin_test.go:StepStartPinTestSuite
       - dev/planned_dev_review_diffs_test.go:TestPlannedDevStepDiffsRealFlow
       - dev/planned_dev_review_diffs_test.go:TestPlannedDevPlanPinsEachStepWhereItStarted
-      - coding/git/git_conflict_resolution.go:GitConflictResolutionDiffActivity
+      - coding/git/git_conflict_resolution.go:Activities.ConflictResolutionDiff
   - intent: "#degradation"
     code:
       - coding/review_diffs_activity.go:GenerateReviewDiffsActivity

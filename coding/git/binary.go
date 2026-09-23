@@ -10,7 +10,7 @@ import (
 // listUntrackedFiles returns the repo-relative paths of files that are
 // untracked (and not ignored). When filePaths is non-empty, the listing is
 // limited to those pathspecs.
-func listUntrackedFiles(ctx context.Context, envContainer env.EnvContainer, filePaths []string) ([]string, error) {
+func (a *Activities) listUntrackedFiles(ctx context.Context, envContainer env.EnvContainer, filePaths []string) ([]string, error) {
 	lsFilesArgs := []string{"ls-files", "--others", "--exclude-standard", "-z"}
 	if len(filePaths) > 0 {
 		lsFilesArgs = append(lsFilesArgs, "--")
@@ -19,7 +19,7 @@ func listUntrackedFiles(ctx context.Context, envContainer env.EnvContainer, file
 		}
 	}
 
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -45,8 +45,8 @@ func listUntrackedFiles(ctx context.Context, envContainer env.EnvContainer, file
 // path to be binary. It relies on git's own content heuristic via
 // `git diff --no-index --numstat`, which reports "-" for the added and deleted
 // line counts of binary files and also honors .gitattributes.
-func isBinaryFile(ctx context.Context, envContainer env.EnvContainer, path string) (bool, error) {
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+func (a *Activities) isBinaryFile(ctx context.Context, envContainer env.EnvContainer, path string) (bool, error) {
+	output, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
@@ -72,9 +72,9 @@ func isBinaryFile(ctx context.Context, envContainer env.EnvContainer, path strin
 
 // partitionUntrackedBinaries splits the given repo-relative paths into
 // non-binary and binary groups using git's content heuristic.
-func partitionUntrackedBinaries(ctx context.Context, envContainer env.EnvContainer, paths []string) (nonBinary, binary []string, err error) {
+func (a *Activities) partitionUntrackedBinaries(ctx context.Context, envContainer env.EnvContainer, paths []string) (nonBinary, binary []string, err error) {
 	for _, p := range paths {
-		isBinary, err := isBinaryFile(ctx, envContainer, p)
+		isBinary, err := a.isBinaryFile(ctx, envContainer, p)
 		if err != nil {
 			return nil, nil, err
 		}

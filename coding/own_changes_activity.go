@@ -21,7 +21,7 @@ type GetOwnChangesSinceReviewParams struct {
 // base-branch changes, so falling back to the base-branch diff keeps the
 // output focused.
 func (ca *CodingActivities) GetOwnChangesSinceReviewActivity(ctx context.Context, params GetOwnChangesSinceReviewParams) (string, error) {
-	sinceReviewDiff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
+	sinceReviewDiff, err := ca.Git.Diff(ctx, params.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		BaseRef:          params.LastReviewTree,
 		IgnoreWhitespace: params.IgnoreWhitespace,
@@ -30,7 +30,7 @@ func (ca *CodingActivities) GetOwnChangesSinceReviewActivity(ctx context.Context
 		return "", fmt.Errorf("failed to get diff since last review: %w", err)
 	}
 
-	baseBranchDiff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
+	baseBranchDiff, err := ca.Git.Diff(ctx, params.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		ThreeDotDiff:     true,
 		BaseRef:          params.BaseBranch,

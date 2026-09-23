@@ -36,7 +36,7 @@ func TestMergeCoordinatorResolutionRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			container := env.EnvContainer{Env: localEnv}
 
-			result, err := newMergeCoordinator(container).Merge(ctx, GitMergeParams{
+			result, err := newMergeCoordinator(testActivities(), container).Merge(ctx, GitMergeParams{
 				SourceBranch:  "feature",
 				TargetBranch:  "main",
 				MergeStrategy: strategy,
@@ -61,7 +61,7 @@ func TestMergeCoordinatorResolutionRoundTrip(t *testing.T) {
 
 			// Separate activities construct separate coordinators; recovery must
 			// not depend on the instance that performed the merge.
-			err = newMergeCoordinator(container).ReturnResolution(ctx, GitTransferWorktreeChangesParams{
+			err = newMergeCoordinator(testActivities(), container).ReturnResolution(ctx, GitTransferWorktreeChangesParams{
 				SourceWorktreePath: sourceDir,
 				TargetWorktreePath: result.BaseStashWorktreePath,
 				BaseStashSha:       result.BaseStashSha,
@@ -102,14 +102,14 @@ func TestMergeCoordinatorRetriesFailedResolutionDelivery(t *testing.T) {
 		TargetWorktreePath: target,
 		BaseStashSha:       baseStash,
 	}
-	require.Error(t, newMergeCoordinator(container).ReturnResolution(ctx, params))
+	require.Error(t, newMergeCoordinator(testActivities(), container).ReturnResolution(ctx, params))
 	assert.Contains(t, runGitCommandInTestRepo(t, target, "stash", "list", "--format=%H"), baseStash)
 	content, err := os.ReadFile(filepath.Join(target, "file.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "delivery blocker\n", string(content))
 
 	runGitCommandInTestRepo(t, target, "restore", "file.txt")
-	require.NoError(t, newMergeCoordinator(container).ReturnResolution(ctx, params))
+	require.NoError(t, newMergeCoordinator(testActivities(), container).ReturnResolution(ctx, params))
 
 	content, err = os.ReadFile(filepath.Join(target, "file.txt"))
 	require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestMergeCoordinatorRetriesFailedResolutionDelivery(t *testing.T) {
 	assert.Empty(t, runGitCommandInTestRepo(t, target, "stash", "list"))
 	assert.Empty(t, runGitCommandInTestRepo(t, target, "diff", "--cached"))
 
-	require.NoError(t, newMergeCoordinator(container).ReturnResolution(ctx, params))
+	require.NoError(t, newMergeCoordinator(testActivities(), container).ReturnResolution(ctx, params))
 	content, err = os.ReadFile(filepath.Join(target, "file.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "resolved\n", string(content))
@@ -172,8 +172,8 @@ func TestMergeCoordinatorCrossRepositoryTransfer(t *testing.T) {
 	runGitCommandInTestRepo(t, remote, "add", "file.txt")
 	require.NoError(t, os.WriteFile(filepath.Join(remote, "untracked.txt"), []byte("untracked\n"), 0644))
 
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
-	target := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
+	target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
 	transport := &repositoryTestTransport{source: source, target: target, fail: true}
 	params := GitTransferWorktreeChangesParams{
 		SourceWorktreePath: remote,
@@ -209,7 +209,7 @@ func TestMergeCoordinatorSuccessiveTransfers(t *testing.T) {
 	params := GitTransferWorktreeChangesParams{SourceWorktreePath: source, TargetWorktreePath: target}
 	for _, content := range []string{"first\n", "second\n"} {
 		require.NoError(t, os.WriteFile(filepath.Join(source, "file.txt"), []byte(content), 0644))
-		require.NoError(t, newMergeCoordinator(container).ReturnResolution(ctx, params))
+		require.NoError(t, newMergeCoordinator(testActivities(), container).ReturnResolution(ctx, params))
 		actual, err := os.ReadFile(filepath.Join(target, "file.txt"))
 		require.NoError(t, err)
 		assert.Equal(t, content, string(actual))
@@ -231,7 +231,7 @@ func TestMergeCoordinatorPreservesLegacyPendingTransfer(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(source, "file.txt"), []byte("resolved\n"), 0644))
 	runGitCommandInTestRepo(t, source, "stash", "push", "-m", "sidekick-resolution-transfer")
 	stashes := runGitCommandInTestRepo(t, target, "stash", "list", "--format=%H")
-	err := newMergeCoordinator(env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: source}}).ReturnResolution(ctx, GitTransferWorktreeChangesParams{
+	err := newMergeCoordinator(testActivities(), env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: source}}).ReturnResolution(ctx, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: source,
 		TargetWorktreePath: target,
 		BaseStashSha:       base,
@@ -285,9 +285,9 @@ func TestMergeCoordinatorRetriesReceiptFailure(t *testing.T) {
 	runGitCommandInTestRepo(t, host, "clone", host, remote)
 	require.NoError(t, os.WriteFile(filepath.Join(remote, "file.txt"), []byte("resolved\n"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(remote, "untracked.txt"), []byte("untracked\n"), 0644))
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
 	failing := &receiptFailureEnv{Env: &env.LocalEnv{WorkingDirectory: host}, fail: true}
-	target := mergeRepository{envContainer: env.EnvContainer{Env: failing}}
+	target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: failing}}
 	transport := &repositoryTestTransport{source: source, target: target}
 	params := GitTransferWorktreeChangesParams{SourceWorktreePath: remote, TargetWorktreePath: host}
 	require.Error(t, (&mergeCoordinator{repository: source}).returnResolution(ctx, transport, params))
@@ -314,8 +314,8 @@ func TestMergeCoordinatorCrossRepositoryRelocation(t *testing.T) {
 	stash := runGitCommandInTestRepo(t, host, "rev-parse", "refs/stash")
 	createCommitWithFile(t, host, "Merged feature", "file.txt", "feature\n")
 	createCommitWithFile(t, remote, "Feature", "file.txt", "feature\n")
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
-	target := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
+	target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
 	_, err := target.script(ctx, host, "git stash apply "+stash)
 	require.Error(t, err)
 	transport := &repositoryTestTransport{source: source, target: target, fail: true}
@@ -358,7 +358,7 @@ func TestMergeCoordinatorRelocatesUntrackedBaseEdits(t *testing.T) {
 	stash := runGitCommandInTestRepo(t, targetDir, "rev-parse", "refs/stash")
 	createCommitWithFile(t, sourceDir, "Feature", "file.txt", "feature\n")
 	runGitCommandInTestRepo(t, targetDir, "merge", "feature")
-	repository := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: sourceDir}}}
+	repository := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: sourceDir}}}
 	_, err := repository.script(ctx, targetDir, "git stash apply "+stash)
 	require.Error(t, err)
 	coordinator := &mergeCoordinator{repository: repository}
@@ -384,7 +384,7 @@ func TestMergeCoordinatorTransfersDisjointEdits(t *testing.T) {
 	runGitCommandInTestRepo(t, target, "worktree", "add", "-b", "feature", source)
 	createCommitWithFile(t, target, "Target edit", "file.txt", "one\nTWO\nthree\nfour\nfive\n")
 	require.NoError(t, os.WriteFile(filepath.Join(source, "file.txt"), []byte("one\ntwo\nthree\nfour\nFIVE\n"), 0644))
-	require.NoError(t, newMergeCoordinator(env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: source}}).ReturnResolution(ctx, GitTransferWorktreeChangesParams{
+	require.NoError(t, newMergeCoordinator(testActivities(), env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: source}}).ReturnResolution(ctx, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: source, TargetWorktreePath: target,
 	}))
 	content, err := os.ReadFile(filepath.Join(target, "file.txt"))
@@ -404,8 +404,8 @@ func TestMergeCoordinatorRetriesRelocationReceiptFailure(t *testing.T) {
 	stash := runGitCommandInTestRepo(t, host, "rev-parse", "refs/stash")
 	createCommitWithFile(t, host, "Feature", "file.txt", "feature\n")
 	createCommitWithFile(t, remote, "Feature", "file.txt", "feature\n")
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
-	target := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
+	target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
 	transport := &repositoryTestTransport{source: source, target: target}
 	_, err := target.script(ctx, host, "git stash apply "+stash)
 	require.Error(t, err)
@@ -460,7 +460,7 @@ func TestMergeCoordinatorInterruptedMergeOwnsStash(t *testing.T) {
 	e := &interruptedMergeEnv{Env: &env.LocalEnv{WorkingDirectory: source}, t: t, other: other, interrupt: true}
 	container := env.EnvContainer{Env: e}
 	params := GitMergeParams{SourceBranch: "feature", TargetBranch: "main"}
-	_, err := newMergeCoordinator(container).Merge(ctx, params)
+	_, err := newMergeCoordinator(testActivities(), container).Merge(ctx, params)
 	require.Error(t, err)
 	assert.Equal(t, targetTip, runGitCommandInTestRepo(t, target, "rev-parse", "HEAD"))
 	assert.NoFileExists(t, filepath.Join(target, "feature.txt"))
@@ -478,7 +478,7 @@ func TestMergeCoordinatorInterruptedMergeOwnsStash(t *testing.T) {
 		assert.Equal(t, e.userStash, runGitCommandInTestRepo(t, target, "stash", "list", "--format=%H"))
 		assert.Equal(t, "user work", runGitCommandInTestRepo(t, target, "show", e.userStash+"^3:user.txt"))
 		if attempt == 0 {
-			result, err := newMergeCoordinator(container).Merge(ctx, params)
+			result, err := newMergeCoordinator(testActivities(), container).Merge(ctx, params)
 			require.NoError(t, err)
 			assert.False(t, result.HasConflicts)
 		}
@@ -495,8 +495,8 @@ func TestMergeCoordinatorResolutionRepositoryMembership(t *testing.T) {
 	runGitCommandInTestRepo(t, remote, "worktree", "add", "-b", "target", targetDir)
 	host := setupTestGitRepo(t)
 	createCommitWithFile(t, host, "Host", "host.txt", "host\n")
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
-	target := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
+	target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
 	transport := &repositoryTestTransport{source: source, target: target, fail: true}
 	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "file.txt"), []byte("original local edit\n"), 0644))
 	runGitCommandInTestRepo(t, targetDir, "stash", "push")
@@ -557,7 +557,7 @@ func (e membershipErrorEnv) RunCommand(context.Context, env.EnvRunCommandInput) 
 func TestMergeCoordinatorMembershipFailureIsNotAbsence(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	repository := mergeRepository{envContainer: env.EnvContainer{Env: membershipErrorEnv{
+	repository := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: membershipErrorEnv{
 		Env: &env.LocalEnv{WorkingDirectory: "/unreachable"},
 	}}}
 	_, err := repository.containsWorktree(ctx, "/target")
@@ -581,7 +581,7 @@ func TestMergeCoordinatorMergeAfterResolution(t *testing.T) {
 			}
 			container := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: source}}
 			params := GitMergeParams{SourceBranch: "feature", TargetBranch: "main"}
-			result, err := newMergeCoordinator(container).Merge(ctx, params)
+			result, err := newMergeCoordinator(testActivities(), container).Merge(ctx, params)
 			require.NoError(t, err)
 			require.True(t, result.HasConflicts)
 			conflict, err := os.ReadFile(filepath.Join(source, "file.txt"))
@@ -592,11 +592,11 @@ func TestMergeCoordinatorMergeAfterResolution(t *testing.T) {
 			transfer := GitTransferWorktreeChangesParams{
 				SourceWorktreePath: source, TargetWorktreePath: result.BaseStashWorktreePath, BaseStashSha: result.BaseStashSha,
 			}
-			require.NoError(t, newMergeCoordinator(container).ReturnResolution(ctx, transfer))
-			require.NoError(t, newMergeCoordinator(container).ReturnResolution(ctx, transfer))
+			require.NoError(t, newMergeCoordinator(testActivities(), container).ReturnResolution(ctx, transfer))
+			require.NoError(t, newMergeCoordinator(testActivities(), container).ReturnResolution(ctx, transfer))
 			createCommitWithFile(t, target, "Save resolution", "file.txt", "resolved\n")
 			createCommitWithFile(t, source, "Next feature", "next.txt", "next\n")
-			result, err = newMergeCoordinator(container).Merge(ctx, params)
+			result, err = newMergeCoordinator(testActivities(), container).Merge(ctx, params)
 			require.NoError(t, err)
 			assert.False(t, result.HasConflicts)
 			content, err := os.ReadFile(filepath.Join(target, "file.txt"))
@@ -637,8 +637,8 @@ func TestMergeCoordinatorAmbiguousPathUsesOwnershipAndReceipt(t *testing.T) {
 	sourceDir := filepath.Join(t.TempDir(), "source")
 	runGitCommandInTestRepo(t, remote, "worktree", "add", "-b", "feature", sourceDir)
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved\n"), 0644))
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
-	target := mergeRepository{envContainer: env.EnvContainer{Env: aliasedRepositoryEnv{
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
+	target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: aliasedRepositoryEnv{
 		Env: &env.LocalEnv{WorkingDirectory: host}, visible: remote, actual: host,
 	}}}
 	transport := &repositoryTestTransport{source: source, target: target, fail: true}
@@ -692,10 +692,10 @@ func TestMergeCoordinatorRetriesLostRestoreResult(t *testing.T) {
 		Env: &env.LocalEnv{WorkingDirectory: source}, afterRestore: true,
 	}}
 	params := GitMergeParams{SourceBranch: "feature", TargetBranch: "main"}
-	_, err := newMergeCoordinator(container).Merge(ctx, params)
+	_, err := newMergeCoordinator(testActivities(), container).Merge(ctx, params)
 	require.Error(t, err)
 	require.Equal(t, "staged", runGitCommandInTestRepo(t, target, "show", ":file.txt"))
-	_, err = newMergeCoordinator(container).Merge(ctx, params)
+	_, err = newMergeCoordinator(testActivities(), container).Merge(ctx, params)
 	require.NoError(t, err)
 	assert.Equal(t, "staged", runGitCommandInTestRepo(t, target, "show", ":file.txt"))
 	content, err := os.ReadFile(filepath.Join(target, "file.txt"))
@@ -716,8 +716,8 @@ func TestMergeCoordinatorRelocationPreservesInterveningTargetEdit(t *testing.T) 
 	stash := runGitCommandInTestRepo(t, targetDir, "rev-parse", "refs/stash")
 	createCommitWithFile(t, sourceDir, "Feature", "file.txt", "feature\n")
 	runGitCommandInTestRepo(t, targetDir, "merge", "feature")
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: sourceDir}}}
-	target := mergeRepository{envContainer: env.EnvContainer{Env: &mergeSideEffectFailureEnv{
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: sourceDir}}}
+	target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &mergeSideEffectFailureEnv{
 		Env: &env.LocalEnv{WorkingDirectory: targetDir}, beforeReset: true,
 	}}}
 	_, err := target.script(ctx, targetDir, "git stash apply "+stash)
@@ -744,8 +744,8 @@ func TestMergeCoordinatorRetriesLostRelocationCleanup(t *testing.T) {
 	stash := runGitCommandInTestRepo(t, targetDir, "rev-parse", "refs/stash")
 	createCommitWithFile(t, sourceDir, "Feature", "file.txt", "feature\n")
 	runGitCommandInTestRepo(t, targetDir, "merge", "feature")
-	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: sourceDir}}}
-	target := mergeRepository{envContainer: env.EnvContainer{Env: &mergeSideEffectFailureEnv{
+	source := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: sourceDir}}}
+	target := mergeRepository{git: testActivities(), envContainer: env.EnvContainer{Env: &mergeSideEffectFailureEnv{
 		Env: &env.LocalEnv{WorkingDirectory: targetDir}, afterReset: true,
 	}}}
 	_, err := target.script(ctx, targetDir, "git stash apply "+stash)

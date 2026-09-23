@@ -78,7 +78,7 @@ func TestGenerateReviewDiffsActivity_FirstRound(t *testing.T) {
 	runGit(t, repoDir, "checkout", "-b", "feature")
 	writeAndStage(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n")
 
-	ca := &CodingActivities{}
+	ca := newTestCodingActivities()
 	result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
 		EnvContainer: newReviewDiffsTestEnv(t, ctx, repoDir),
 		StartPoint:   "main",
@@ -98,7 +98,7 @@ func TestGenerateReviewDiffsActivity_SinceLastReview(t *testing.T) {
 	runGit(t, repoDir, "checkout", "-b", "feature")
 	createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "feature work")
 
-	ca := &CodingActivities{}
+	ca := newTestCodingActivities()
 	envContainer := newReviewDiffsTestEnv(t, ctx, repoDir)
 	reviewed, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
 		EnvContainer: envContainer,
@@ -135,7 +135,7 @@ func TestGenerateReviewDiffsActivity_RegisteredByName(t *testing.T) {
 
 	var testSuite testsuite.WorkflowTestSuite
 	activityEnv := testSuite.NewTestActivityEnvironment()
-	activityEnv.RegisterActivity(&CodingActivities{})
+	activityEnv.RegisterActivity(newTestCodingActivities())
 
 	encoded, err := activityEnv.ExecuteActivity("GenerateReviewDiffsActivity", GenerateReviewDiffsParams{
 		EnvContainer: newReviewDiffsTestEnv(t, ctx, repoDir),
@@ -158,7 +158,7 @@ func TestGenerateReviewDiffsActivity_StagedChangesAlwaysIncluded(t *testing.T) {
 			ctx := context.Background()
 			repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
 			startPoint, baseBranch, preStartPointMarker := scenario.prepare(t, repoDir)
-			ca := &CodingActivities{}
+			ca := newTestCodingActivities()
 
 			writeAndStage(t, repoDir, "staged_before.go", "package feature\n\nfunc StagedBeforeReview() {}\n")
 			reviewed, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
@@ -198,7 +198,7 @@ func TestGenerateReviewDiffsActivity_CommitsRelativeToStartPointAndReview(t *tes
 			ctx := context.Background()
 			repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
 			startPoint, baseBranch, preStartPointMarker := scenario.prepare(t, repoDir)
-			ca := &CodingActivities{}
+			ca := newTestCodingActivities()
 
 			createFileAndCommit(t, repoDir, "reviewed.go", "package feature\n\nfunc ReviewedWork() {}\n", "reviewed work")
 			reviewed, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
@@ -238,7 +238,7 @@ func TestGenerateReviewDiffsActivity_CleanBaseMergeDoesNotAffectDiffs(t *testing
 			ctx := context.Background()
 			repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
 			startPoint, baseBranch, preStartPointMarker := scenario.prepare(t, repoDir)
-			ca := &CodingActivities{}
+			ca := newTestCodingActivities()
 
 			createFileAndCommit(t, repoDir, "ours.go", "package feature\n\nfunc OurWork() {}\n", "our work")
 			reviewed, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
@@ -281,7 +281,7 @@ func TestGenerateReviewDiffsActivity_ConflictResolvingBaseMerge(t *testing.T) {
 			ctx := context.Background()
 			repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
 			startPoint, baseBranch, preStartPointMarker := scenario.prepare(t, repoDir)
-			ca := &CodingActivities{}
+			ca := newTestCodingActivities()
 
 			createFileAndCommit(t, repoDir, "contended.go", "package shared\n\nfunc Contended() { ours() }\n", "our change to the contended file")
 			reviewed, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
@@ -333,7 +333,7 @@ func TestGenerateReviewDiffsActivity_SuccessiveReviewRounds(t *testing.T) {
 			ctx := context.Background()
 			repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
 			startPoint, baseBranch, preStartPointMarker := scenario.prepare(t, repoDir)
-			ca := &CodingActivities{}
+			ca := newTestCodingActivities()
 
 			review := func(priorReviewDiff string) GenerateReviewDiffsResult {
 				t.Helper()
@@ -378,7 +378,7 @@ func TestGenerateReviewDiffsActivity_DegradesOnUnusablePriorDiff(t *testing.T) {
 	runGit(t, repoDir, "checkout", "-b", "feature")
 	writeAndStage(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n")
 
-	ca := &CodingActivities{}
+	ca := newTestCodingActivities()
 	result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
 		EnvContainer:    newReviewDiffsTestEnv(t, ctx, repoDir),
 		StartPoint:      "main",
@@ -398,7 +398,7 @@ func TestGenerateReviewDiffsActivity_RequiresStartPoint(t *testing.T) {
 	repoDir := setupTestGitRepo(t)
 	createFileAndCommit(t, repoDir, "shared.go", "package shared\n", "initial commit")
 
-	ca := &CodingActivities{}
+	ca := newTestCodingActivities()
 	_, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
 		EnvContainer: newReviewDiffsTestEnv(t, ctx, repoDir),
 	})
@@ -416,7 +416,7 @@ func TestGenerateReviewDiffsActivity_Reversions(t *testing.T) {
 			ctx := context.Background()
 			repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
 			startPoint, baseBranch, _ := scenario.prepare(t, repoDir)
-			ca := &CodingActivities{}
+			ca := newTestCodingActivities()
 			review := func(prior string) GenerateReviewDiffsResult {
 				t.Helper()
 				result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{

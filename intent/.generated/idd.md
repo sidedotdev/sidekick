@@ -12,7 +12,7 @@ intent_links:
       - dev/dev_context.go:setupDevContextAction
       - dev/idd_watcher_activity.go:IddWatchEditIdleActivity
       - api/intent_api.go:flowWorktreeDir
-      - coding/git/git_merge.go:GitMergeActivity
+      - coding/git/git_merge.go:Activities.Merge
       - env/remote_repo.go:syncMergeResultToLocalOverSSH
       - env/modal_guard.go:modalIdleSeconds
   - intent: "#clarifications-from-sub-tasks"
@@ -113,7 +113,7 @@ are child-execution options only: they are forwarded unchanged to each
 BasicDev/PlannedDev child, which starts from the current IDD branch, stays
 IDD-marked, and auto-merges back into it. A remote child's clean merge is
 returned to the host by `MergeResultSyncer.SyncMergeResultToLocal` before
-`GitMergeActivity` reports success, fast-forwarding the checked-out local IDD
+`git.Activities.Merge` reports success, fast-forwarding the checked-out local IDD
 branch so the editor, orchestrator, and finish flow observe the child's
 commits. There is deliberately no second intent mirror and no bidirectional
 sync protocol.

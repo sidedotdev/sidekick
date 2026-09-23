@@ -95,10 +95,11 @@ func runHandleToolCallToolSubtests(t *testing.T, ctx context.Context, envContain
 		// default 3s test timeout, so allow plenty of headroom.
 		tenv.SetTestTimeout(90 * time.Second)
 
-		tenv.RegisterActivity(env.EnvRunCommandActivity)
+		registerRunCommandActivity(tenv)
 		tenv.RegisterActivity(GetSymbolsActivity)
 		tenv.RegisterActivity(EnsureCoreIgnoreFileActivity)
-		tenv.RegisterActivity(BulkSearchRepositoryActivity)
+		searchActivities := &SearchActivities{Env: &env.Activities{}}
+		tenv.RegisterActivity(searchActivities.BulkSearchRepositoryActivity)
 		tenv.RegisterActivity(CheckCommandPermissionActivity)
 		tenv.RegisterActivity(ReadFileActivity)
 		tenv.RegisterActivity(codingActivities.BulkGetSymbolDefinitions)

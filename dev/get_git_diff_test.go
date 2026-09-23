@@ -16,7 +16,6 @@ import (
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
-	"sidekick/coding/git"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/utils"
@@ -39,9 +38,10 @@ func (s *GetGitDiffTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.env.SetTestTimeout(30 * time.Second)
-	s.env.RegisterActivity(git.GitDiffActivity)
-	s.env.RegisterActivity(env.EnvRunCommandActivity)
-	s.env.RegisterActivity(git.DiffUntrackedFilesActivity)
+	gitActivities := testGitActivities()
+	s.env.RegisterActivity(gitActivities.GitDiffActivity)
+	registerRunCommandActivity(s.env)
+	s.env.RegisterActivity(gitActivities.DiffUntrackedFilesActivity)
 
 	s.dir = s.T().TempDir()
 	devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: s.dir})

@@ -37,6 +37,7 @@ var applyEditBlocksTracer = otel.Tracer("sidekick/dev/apply_edit_blocks")
 
 type DevActivities struct {
 	LSPActivities *lsp.LSPActivities
+	Git           *git.Activities
 }
 
 type ApplyEditBlockReport struct {
@@ -115,9 +116,10 @@ func (input ApplyEditBlockActivityInput) goBuildCheckEnabled() bool {
 }
 
 // DEPRECATED: use DevActivities.ApplyEditBlocks instead
-// needed for backcompat, avoiding non-deterministic temporal workflow runs
-func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
-	da := DevActivities{
+// needed for backcompat (<= v0.4.2), avoiding non-deterministic temporal
+// workflow runs. Legacy executions used fresh LSP clients per invocation.
+func (da *DevActivities) ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
+	legacy := DevActivities{
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
@@ -127,8 +129,9 @@ func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityIn
 			},
 			InitializedClients: map[string]lsp.LSPClient{},
 		},
+		Git: da.Git,
 	}
-	return da.ApplyEditBlocks(ctx, input)
+	return legacy.ApplyEditBlocks(ctx, input)
 }
 
 func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
@@ -158,7 +161,7 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 	// not version controlled remains supported, and skips staging.
 	stageEdits := checksEnabled
 	if !checksEnabled {
-		insideWorkTree, err := git.IsInsideWorkTree(ctx, input.EnvContainer)
+		insideWorkTree, err := da.Git.IsInsideWorkTree(ctx, input.EnvContainer)
 		if err != nil {
 			log.Warn().Err(err).Msg("Failed to determine whether edits are inside a git work tree")
 		}
@@ -357,12 +360,12 @@ func (da *DevActivities) tryBatchApply(
 		// possible after deleting it.
 		gitMu.Lock()
 		pathForDiff := filepath.Join(baseDir, filePath)
-		unstagedDiff, _ := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+		unstagedDiff, _ := da.Git.Diff(context.Background(), input.EnvContainer, git.GitDiffParams{
 			FilePaths: []string{pathForDiff},
 			Staged:    false,
 		})
 		batchReport.FinalDiff = unstagedDiff
-		gitAddErr := gitAdd(input.EnvContainer, filePath)
+		gitAddErr := da.gitAdd(input.EnvContainer, filePath)
 		if gitAddErr != nil {
 			batchReport.Error = fmt.Sprintf("Failed to git add deleted file: %v", gitAddErr)
 		} else {
@@ -384,13 +387,13 @@ func (da *DevActivities) tryBatchApply(
 	// autofixes). This serves as FinalDiff, representing the total change.
 	gitMu.Lock()
 	pathForDiff := filepath.Join(baseDir, filePath)
-	combinedDiff, scdErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+	combinedDiff, scdErr := da.Git.Diff(context.Background(), input.EnvContainer, git.GitDiffParams{
 		FilePaths: []string{pathForDiff},
 		Staged:    false,
 	})
 
 	if checksEnabled {
-		checkResult, checkErr := checkAndStageOrRestoreFile(
+		checkResult, checkErr := da.checkAndStageOrRestoreFile(
 			ctx, input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors, input.goBuildCheckEnabled(),
 		)
 
@@ -423,7 +426,7 @@ func (da *DevActivities) tryBatchApply(
 		// Checks disabled — just stage the file and populate diffs.
 		var gitAddErr error
 		if stageEdits {
-			gitAddErr = gitAdd(input.EnvContainer, filePath)
+			gitAddErr = da.gitAdd(input.EnvContainer, filePath)
 		}
 		gitMu.Unlock()
 
@@ -460,7 +463,7 @@ func (da *DevActivities) restoreFileForBatchFallback(envContainer env.EnvContain
 		return
 	}
 
-	err := git.GitRestoreActivity(context.Background(), envContainer, filePath)
+	err := da.Git.Restore(context.Background(), envContainer, filePath)
 	if err != nil {
 		log.Warn().Err(err).Str("filePath", filePath).Msg("Failed to restore file for batch fallback")
 	}
@@ -539,7 +542,7 @@ func (da *DevActivities) applyBlocksSequentially(
 			// related to this edit block plus any autofixes that might have run
 			// after it was applied. This serves as the base for FinalDiff,
 			// representing the total change if successful.
-			unstagedChangesDiff, scdErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+			unstagedChangesDiff, scdErr := da.Git.Diff(context.Background(), input.EnvContainer, git.GitDiffParams{
 				FilePaths: []string{pathForDiff},
 				Staged:    false,
 			})
@@ -559,7 +562,7 @@ func (da *DevActivities) applyBlocksSequentially(
 				// disabled there is nothing to check before staging. Staging
 				// every applied edit keeps the review diffs, which are based on
 				// staged changes, complete.
-				gitAddErr := gitAdd(input.EnvContainer, block.FilePath)
+				gitAddErr := da.gitAdd(input.EnvContainer, block.FilePath)
 				if gitAddErr != nil {
 					errMsg := fmt.Sprintf("Failed to git add file: %v", gitAddErr)
 					if currentBlockError == "" {
@@ -572,7 +575,7 @@ func (da *DevActivities) applyBlocksSequentially(
 					report.CheckResult.Message = "Skipped"
 				}
 			} else {
-				checkResult, checkErr := checkAndStageOrRestoreFile(ctx, input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors, input.goBuildCheckEnabled())
+				checkResult, checkErr := da.checkAndStageOrRestoreFile(ctx, input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors, input.goBuildCheckEnabled())
 				report.CheckResult = checkResult
 				if preEditFileHadErrors {
 					report.CheckWarning = "file had pre-existing syntax errors; base file validity check was skipped"
@@ -844,7 +847,7 @@ func countUnbalanced(lines []string, openingDelimiter, closingDelimiter string) 
 // restored, otherwise it is staged, so that future restores don't affect this
 // change. When preEditFileHadErrors is true, the built-in syntax check is
 // skipped since the file was already invalid before the edit.
-func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool, enableGoBuildCheck bool) (CheckResult, error) {
+func (da *DevActivities) checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool, enableGoBuildCheck bool) (CheckResult, error) {
 	ctx, span := applyEditBlocksTracer.Start(ctx, "checkAndStageOrRestoreFile")
 	defer span.End()
 	span.SetAttributes(
@@ -878,7 +881,7 @@ func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContain
 		if isExistingFile {
 			// Restoring the file to its previous state in case of an error
 			_, restoreSpan := applyEditBlocksTracer.Start(ctx, "GitRestoreActivity")
-			err := git.GitRestoreActivity(context.Background(), envContainer, filePath)
+			err := da.Git.Restore(context.Background(), envContainer, filePath)
 			if err != nil {
 				restoreSpan.RecordError(err)
 				restoreSpan.SetStatus(codes.Error, err.Error())
@@ -900,7 +903,7 @@ func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContain
 	// if checks pass, git add the changes to the staging area so other restores
 	// don't affect this change
 	_, addSpan := applyEditBlocksTracer.Start(ctx, "gitAdd")
-	err := gitAdd(envContainer, filePath)
+	err := da.gitAdd(envContainer, filePath)
 	if err != nil {
 		addSpan.RecordError(err)
 		addSpan.SetStatus(codes.Error, err.Error())
@@ -912,9 +915,9 @@ func checkAndStageOrRestoreFile(ctx context.Context, envContainer env.EnvContain
 	return checkResult, nil
 }
 
-func gitAdd(envContainer env.EnvContainer, filePath string) error {
+func (da *DevActivities) gitAdd(envContainer env.EnvContainer, filePath string) error {
 	input := git.GitAddActivityInput{EnvContainer: envContainer, Path: filePath}
-	return git.GitAddActivity(context.Background(), input)
+	return da.Git.Add(context.Background(), input)
 }
 
 func ApplyCreateEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
@@ -1091,11 +1094,11 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		var validReports []ApplyEditBlockReport
 		var err error
 		v := workflow.GetVersion(trackedCtx, "apply-edit-blocks", workflow.DefaultVersion, 1)
+		var da *DevActivities
 		if v == 1 {
-			var da *DevActivities
 			err = workflow.ExecuteActivity(noRetryCtx, da.ApplyEditBlocks, applyEditBlockInput).Get(noRetryCtx, &validReports)
 		} else {
-			err = workflow.ExecuteActivity(noRetryCtx, ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
+			err = workflow.ExecuteActivity(noRetryCtx, da.ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
 		}
 		if err != nil {
 			return nil, err

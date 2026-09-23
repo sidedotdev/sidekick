@@ -3,12 +3,17 @@ package git
 import (
 	"os"
 	"os/exec"
+	"sidekick/env"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func testActivities() *Activities {
+	return &Activities{Env: &env.Activities{}}
+}
 
 // setupTestGitRepo initializes a git repository in a temporary directory.
 // It configures a default user and initializes with 'main' as the default branch.

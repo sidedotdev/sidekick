@@ -6,9 +6,9 @@ import (
 	"sidekick/env"
 )
 
-func GitRestoreActivity(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
+func (a *Activities) Restore(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
 	args := []string{"restore", filePath}
-	gitRestoreOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	gitRestoreOutput, err := a.Env.RunCommand(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "git",
