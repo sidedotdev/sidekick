@@ -584,7 +584,9 @@ func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectGitignore() {
 	s.createTestFile("normal_dir/test_file.txt", "This file should not be ignored")
 	s.createTestFile("test.txt", "This file should not be ignored")
 
-	// Test with glob pattern that would match both ignored and non-ignored files
+	// The ignored file's directory is excluded as a whole and only reachable
+	// through the glob's wildcard segment, so it stays hidden while other
+	// matches exist (see explicitTargetRgCmd), but is reported as skipped.
 	var result string
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
 		PathGlob:     "*/test_file.txt",
@@ -593,9 +595,11 @@ func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectGitignore() {
 	})
 	s.Require().NoError(s.env.GetWorkflowResult(&result))
 
-	// Verify that only non-ignored files are found
 	s.Contains(result, "normal_dir/test_file.txt")
-	s.NotContains(result, "ignored_dir/test_file.txt")
+	s.NotContains(result, "should be ignored by git")
+	s.NotContains(result, "test.ignored")
+	s.Contains(result, "were not searched:\n\tignored_dir/")
+	s.Contains(result, "e.g. 'ignored_dir/test_file.txt'")
 
 	// Test with glob pattern that matches ignored file extension
 	s.ResetWorkflowEnvironment()
@@ -685,7 +689,9 @@ func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectSideignore() {
 	s.createTestFile("src_dir/build_file.txt", "This file should not be ignored")
 	s.createTestFile("cache.txt", "This file should not be ignored")
 
-	// Test with glob pattern that would match both ignored and non-ignored files
+	// The ignored file's directory is excluded as a whole and only reachable
+	// through the glob's wildcard segment, so it stays hidden while other
+	// matches exist (see explicitTargetRgCmd), but is reported as skipped.
 	var result string
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
 		PathGlob:     "*/build_file.txt",
@@ -694,9 +700,11 @@ func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectSideignore() {
 	})
 	s.Require().NoError(s.env.GetWorkflowResult(&result))
 
-	// Verify that only non-ignored files are found
 	s.Contains(result, "src_dir/build_file.txt")
-	s.NotContains(result, "temp_dir/build_file.txt")
+	s.NotContains(result, "should be ignored by sideignore")
+	s.NotContains(result, "cache.temp")
+	s.Contains(result, "were not searched:\n\ttemp_dir/")
+	s.Contains(result, "e.g. 'temp_dir/build_file.txt'")
 
 	// Test with glob pattern that matches ignored file extension
 	s.ResetWorkflowEnvironment()
