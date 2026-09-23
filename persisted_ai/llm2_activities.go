@@ -58,20 +58,27 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
 	}
 
-	// Background heartbeat keeps the activity alive during long provider calls
-	// where no events are emitted (e.g. extended thinking).
+	// Providers without observed keepalive support may remain silent during
+	// extended thinking. Once support is observed, upstream silence is bounded.
+	var heartbeat streamHeartbeat
+	streamCtx, cancelStream := context.WithCancelCause(ctx)
+	defer cancelStream(nil)
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-done:
 				return
-			case <-ctx.Done():
+			case <-streamCtx.Done():
 				return
 			case <-ticker.C:
+				if !heartbeat.active(time.Now()) {
+					cancelStream(fmt.Errorf("LLM stream received no upstream events for %s", upstreamSilenceGrace))
+					return
+				}
 				if activity.IsActivity(ctx) {
 					activity.RecordHeartbeat(ctx, nil)
 				}
@@ -94,10 +101,11 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 
 		streamedBlocks := make(map[int]llm2.ContentBlock)
 		for event := range eventChan {
+			heartbeat.observe(event.Type == llm2.EventHeartbeat, time.Now())
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, event)
 			}
-			if input.FlowActionId == "" {
+			if event.Type == llm2.EventHeartbeat || input.FlowActionId == "" {
 				continue
 			}
 
@@ -145,8 +153,17 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		SecretManager: secretManager,
 	}
 
-	response, err := provider.Stream(ctx, request, eventChan)
+	if capability, ok := provider.(interface {
+		ExpectsKeepalives(llm2.StreamRequest) bool
+	}); ok && capability.ExpectsKeepalives(request) {
+		heartbeat.observe(true, time.Now())
+	}
+
+	response, err := provider.Stream(streamCtx, request, eventChan)
 	close(eventChan)
+	if cause := context.Cause(streamCtx); cause != nil {
+		return nil, cause
+	}
 
 	if response != nil {
 		response.Provider = input.Options.ModelConfig.Provider

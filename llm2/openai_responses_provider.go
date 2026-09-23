@@ -17,6 +17,7 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+	"github.com/rs/zerolog/log"
 )
 
 const defaultModel = "gpt-5.3-codex"
@@ -169,6 +170,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	}
 
 	stream := client.Responses.NewStreaming(ctx, params, extraBodyOptions...)
+	defer stream.Close()
 
 	var events []Event
 	var stopReason string
@@ -179,6 +181,19 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 loop:
 	for stream.Next() {
 		data := stream.Current()
+		if data.Type == "keepalive" {
+			select {
+			case eventChan <- Event{Type: EventHeartbeat}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		log.Trace().
+			Str("provider", options.Provider).
+			Str("model", model).
+			Str("eventType", data.Type).
+			Str("receivedAt", time.Now().Format(time.RFC3339Nano)).
+			Msg("OpenAI Responses stream event")
 
 		switch data.AsAny().(type) {
 		case responses.ResponseCompletedEvent:
