@@ -1,6 +1,7 @@
 package diffanalysis
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -235,6 +236,104 @@ func TestInterdiffDivergedBaseRendersEachChangeOnce(t *testing.T) {
 	assert.LessOrEqual(t, strings.Count(result, "+var first = 1"), 1,
 		"the prior change may appear as context of the emitted hunk, but never more than once")
 	assert.NotContains(t, result, "Reverted since last review")
+}
+
+// The interdiff library merges overlapping hunks into one continuous hunk, so a
+// small edit inside a large prior addition would otherwise be reported with the
+// whole addition as context.
+func TestInterdiffLimitsContextLines(t *testing.T) {
+	t.Parallel()
+
+	const totalLines = 40
+	newFileDiff := func(changed map[int]string) string {
+		var out strings.Builder
+		fmt.Fprintf(&out, "diff --git a/big.txt b/big.txt\n--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,%d @@\n", totalLines)
+		for i := 1; i <= totalLines; i++ {
+			content := fmt.Sprintf("line %d", i)
+			if replacement, ok := changed[i]; ok {
+				content = replacement
+			}
+			out.WriteString("+" + content + "\n")
+		}
+		return out.String()
+	}
+	prior := newFileDiff(nil)
+
+	tests := []struct {
+		name        string
+		current     string
+		wantHunks   int
+		contains    []string
+		notContains []string
+	}{
+		{
+			name:      "single edit keeps at most five context lines per side",
+			current:   newFileDiff(map[int]string{20: "line 20 changed"}),
+			wantHunks: 1,
+			contains: []string{
+				"-line 20\n+line 20 changed\n",
+				" line 15\n", " line 25\n",
+			},
+			notContains: []string{"line 14\n", "line 26\n"},
+		},
+		{
+			name:      "distant edits are split into separate hunks",
+			current:   newFileDiff(map[int]string{5: "line 5 changed", 35: "line 35 changed"}),
+			wantHunks: 2,
+			contains: []string{
+				"@@ -1,10 +1,10 @@\n line 1\n",
+				"-line 5\n+line 5 changed\n",
+				"-line 35\n+line 35 changed\n",
+				" line 40\n",
+			},
+			notContains: []string{"line 20\n", "line 11\n", "line 29\n"},
+		},
+		{
+			name:      "nearby edits share one hunk",
+			current:   newFileDiff(map[int]string{10: "line 10 changed", 20: "line 20 changed"}),
+			wantHunks: 1,
+			contains: []string{
+				"-line 10\n+line 10 changed\n",
+				"-line 20\n+line 20 changed\n",
+				" line 15\n",
+			},
+			notContains: []string{"line 4\n", "line 26\n"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := Interdiff(prior, tt.current)
+			require.NoError(t, err)
+
+			files, err := ParseUnifiedDiff(result)
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			assert.Len(t, files[0].Hunks, tt.wantHunks)
+			for _, hunk := range files[0].Hunks {
+				leading, trailing := 0, 0
+				for _, line := range hunk.Lines {
+					if line.Type != LineContext {
+						break
+					}
+					leading++
+				}
+				for i := len(hunk.Lines) - 1; i >= 0 && hunk.Lines[i].Type == LineContext; i-- {
+					trailing++
+				}
+				assert.LessOrEqual(t, leading, interdiffContextLines, hunk.RawHeader)
+				assert.LessOrEqual(t, trailing, interdiffContextLines, hunk.RawHeader)
+			}
+			for _, want := range tt.contains {
+				assert.Contains(t, result, want)
+			}
+			for _, unwanted := range tt.notContains {
+				assert.NotContains(t, result, unwanted)
+			}
+		})
+	}
 }
 
 // Files whose changes are identical in both diffs must not leave behind bare
