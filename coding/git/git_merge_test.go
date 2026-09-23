@@ -605,7 +605,7 @@ func TestGitTransferWorktreeChangesActivity(t *testing.T) {
 	// Uncommitted resolved changes live in the source worktree.
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	_, err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 	})
@@ -650,7 +650,7 @@ func TestGitTransferWorktreeChangesActivityDropsPreservedBaseStash(t *testing.T)
 
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	_, err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 		BaseStashSha:       baseStashSha,
@@ -692,7 +692,7 @@ func TestGitTransferWorktreeChangesActivityDropsBaseStashOnNoOp(t *testing.T) {
 	runGitCommandInTestRepo(t, repoDir, "stash", "push", "-m", "preserved-base")
 	baseStashSha := strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "stash@{0}"))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	_, err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 		BaseStashSha:       baseStashSha,
@@ -739,7 +739,7 @@ func TestGitTransferWorktreeChangesActivityPreservesExistingStash(t *testing.T) 
 
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	_, err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 	})
@@ -1088,8 +1088,9 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					sourceTip := runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "HEAD")
 					targetTip := runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD")
 					assert.NotEqual(t, before, targetTip)
-					assert.NotEqual(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "HEAD^{tree}"),
-						runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD^{tree}"))
+					// Relocation aligns the source with the merged target so the
+					// stash conflict reproduces there exactly as on the host.
+					runGitCommandInTestRepo(t, fixture.childRepoDir, "merge-base", "--is-ancestor", targetTip, "HEAD")
 					require.NoError(t, os.WriteFile(filepath.Join(fixture.childRepoDir, "child.txt"), []byte("resolved child\n"), 0644))
 					runGitCommandInTestRepo(t, fixture.childRepoDir, "add", "child.txt")
 					transfer := GitTransferWorktreeChangesParams{
@@ -1105,7 +1106,7 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					assert.Equal(t, "untracked local notes", runGitCommandInTestRepo(t, fixture.childRepoDir, "show", "refs/stash^3:notes.txt"))
 
 					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"), []byte("intervening host edit\n"), 0644))
-					require.Error(t, GitTransferWorktreeChangesActivity(ctx, container, transfer))
+					require.Error(t, transferWorktreeChanges(ctx, container, transfer))
 					content, err = os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"))
 					require.NoError(t, err)
 					assert.Equal(t, "intervening host edit\n", string(content))
@@ -1113,7 +1114,7 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "restore", "child.txt")
 
 					for attempt := 0; attempt < 2; attempt++ {
-						require.NoError(t, GitTransferWorktreeChangesActivity(ctx, container, transfer))
+						require.NoError(t, transferWorktreeChanges(ctx, container, transfer))
 						for name, expected := range map[string]string{
 							"child.txt": "resolved child\n",
 							"intent.md": "updated intent\n",
@@ -1150,4 +1151,9 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 			})
 		}
 	}
+}
+
+func transferWorktreeChanges(ctx context.Context, container env.EnvContainer, params GitTransferWorktreeChangesParams) error {
+	_, err := GitTransferWorktreeChangesActivity(ctx, container, params)
+	return err
 }
