@@ -358,6 +358,9 @@ const summary = computed<Summary | null>(() => {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 0.85em;
@@ -411,7 +414,11 @@ h3 + p {
 }
 
 a h3 {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
   min-width: 0;
+  white-space: nowrap;
   cursor: pointer;
   font-size: 1.0rem;
 }
