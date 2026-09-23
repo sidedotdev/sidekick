@@ -355,6 +355,11 @@ const summary = computed<Summary | null>(() => {
 
 <style scoped>
 .action-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 0.85em;
   margin-left: 0px;
   padding: 2px 5px;
@@ -406,6 +411,7 @@ h3 + p {
 }
 
 a h3 {
+  min-width: 0;
   cursor: pointer;
   font-size: 1.0rem;
 }
