@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sidekick/env"
 	"strings"
@@ -547,13 +548,30 @@ type GitTransferWorktreeChangesParams struct {
 	BaseStashSha string
 }
 
+// GitTransferWorktreeChangesResult reports the outcome of transferring a
+// resolution. HasConflicts means the target changed since the resolution was
+// made so it no longer applies cleanly; the conflict has been relocated back
+// onto the source worktree at ConflictDirPath for another round of resolution,
+// after which the transfer should be attempted again.
+type GitTransferWorktreeChangesResult struct {
+	HasConflicts    bool   `json:"hasConflicts"`
+	ConflictDirPath string `json:"conflictDirPath"`
+}
+
 // GitTransferWorktreeChangesActivity moves the uncommitted changes from the
 // source worktree onto the target worktree as uncommitted changes, leaving the
 // source worktree clean. It is used after conflict resolution to carry resolved
 // base-worktree changes (resolved on the flow's own worktree) back to the base
-// worktree where the merge already completed.
-func GitTransferWorktreeChangesActivity(ctx context.Context, envContainer env.EnvContainer, params GitTransferWorktreeChangesParams) error {
-	return newMergeCoordinator(envContainer).ReturnResolution(ctx, params)
+// worktree where the merge already completed. A resolution that conflicts with
+// the target is a result, not a failure: retrying cannot help, and the caller
+// must resolve the relocated conflict first.
+func GitTransferWorktreeChangesActivity(ctx context.Context, envContainer env.EnvContainer, params GitTransferWorktreeChangesParams) (GitTransferWorktreeChangesResult, error) {
+	err := newMergeCoordinator(envContainer).ReturnResolution(ctx, params)
+	var conflict *resolutionConflictError
+	if errors.As(err, &conflict) {
+		return GitTransferWorktreeChangesResult{HasConflicts: true, ConflictDirPath: conflict.ConflictDirPath}, nil
+	}
+	return GitTransferWorktreeChangesResult{}, err
 }
 
 func (c *mergeCoordinator) ReturnResolution(ctx context.Context, params GitTransferWorktreeChangesParams) error {

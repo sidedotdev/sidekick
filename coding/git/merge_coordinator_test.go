@@ -2,6 +2,8 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +31,6 @@ func TestMergeCoordinatorResolutionRoundTrip(t *testing.T) {
 				runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", sourceDir)
 			})
 			createCommitWithFile(t, sourceDir, "Feature commit", "file.txt", "feature\n")
-			sourceTip := strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "rev-parse", "HEAD"))
 
 			require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("local edit\n"), 0644))
 			localEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: sourceDir})
@@ -75,7 +76,9 @@ func TestMergeCoordinatorResolutionRoundTrip(t *testing.T) {
 			assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "stash", "list")))
 			assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "diff", "--cached")))
 			assert.Contains(t, runGitCommandInTestRepo(t, repoDir, "diff"), "+resolved")
-			assert.Equal(t, sourceTip, strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "rev-parse", "HEAD")))
+			// Relocation aligns the source with the merged target so the
+			// stash conflict reproduces faithfully there.
+			runGitCommandInTestRepo(t, sourceDir, "merge-base", "--is-ancestor", targetTip, "HEAD")
 			assert.Equal(t, targetTip, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "HEAD")))
 		})
 	}
@@ -657,6 +660,15 @@ type mergeSideEffectFailureEnv struct {
 	afterRestore bool
 	beforeReset  bool
 	afterReset   bool
+	// Simulate losing the relocation's completion after the conflicting
+	// resolution has been applied to the source, or after its stash and
+	// refs have already been cleaned up.
+	beforeRelocationApply  bool
+	afterRelocationApply   bool
+	afterRelocationCleanup bool
+	// Simulate git itself rejecting the relocation's stash apply (e.g. a
+	// held index lock) without touching the working tree.
+	rejectRelocationApply bool
 }
 
 func (e *mergeSideEffectFailureEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
@@ -664,6 +676,30 @@ func (e *mergeSideEffectFailureEnv) RunCommand(ctx context.Context, input env.En
 	if e.beforeReset && strings.Contains(command, "git reset --hard HEAD") {
 		e.beforeReset = false
 		return env.EnvRunCommandOutput{}, os.ErrPermission
+	}
+	if e.beforeRelocationApply && input.Command == "git" && strings.Contains(command, "stash apply") {
+		e.beforeRelocationApply = false
+		return env.EnvRunCommandOutput{}, os.ErrPermission
+	}
+	if e.rejectRelocationApply && input.Command == "git" && strings.Contains(command, "stash apply") {
+		e.rejectRelocationApply = false
+		return env.EnvRunCommandOutput{ExitStatus: 128, Stderr: "fatal: Unable to create index.lock: File exists."}, nil
+	}
+	if e.afterRelocationApply && input.Command == "git" && strings.Contains(command, "stash apply") {
+		out, err := e.Env.RunCommand(ctx, input)
+		if err == nil {
+			e.afterRelocationApply = false
+			return env.EnvRunCommandOutput{}, os.ErrPermission
+		}
+		return out, err
+	}
+	if e.afterRelocationCleanup && strings.Contains(command, "git update-ref -d refs/sidekick-merge/resolution/") && !strings.Contains(command, "-relocated") {
+		out, err := e.Env.RunCommand(ctx, input)
+		if err == nil && out.ExitStatus == 0 {
+			e.afterRelocationCleanup = false
+			return env.EnvRunCommandOutput{}, os.ErrPermission
+		}
+		return out, err
 	}
 	out, err := e.Env.RunCommand(ctx, input)
 	if e.afterReset && strings.Contains(command, "git reset --hard HEAD") && err == nil && out.ExitStatus == 0 {
@@ -758,4 +794,213 @@ func TestMergeCoordinatorRetriesLostRelocationCleanup(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(sourceDir, "notes.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "notes\n", string(content))
+}
+
+// The base worktree's stash conflicts with a commit made after stashing, on a
+// file the source never touched. Applying the stash onto the unaligned source
+// would succeed silently, leaving nothing to resolve and a conflicting
+// delivery later; the relocation must reproduce the target's conflict.
+func TestMergeCoordinatorRelocationReproducesTargetConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	host := setupTestGitRepo(t)
+	createCommitWithFile(t, host, "Initial commit", "file.txt", "initial\n")
+	remote := filepath.Join(t.TempDir(), "remote")
+	runGitCommandInTestRepo(t, host, "clone", host, remote)
+	require.NoError(t, os.WriteFile(filepath.Join(host, "file.txt"), []byte("local edit\n"), 0644))
+	runGitCommandInTestRepo(t, host, "stash", "push")
+	stash := runGitCommandInTestRepo(t, host, "rev-parse", "refs/stash")
+	createCommitWithFile(t, host, "Committed edit", "file.txt", "committed edit\n")
+	createCommitWithFile(t, remote, "Feature", "other.txt", "feature\n")
+	source := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: remote}}}
+	target := mergeRepository{envContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: host}}}
+	_, err := target.script(ctx, host, "git stash apply "+stash)
+	require.Error(t, err)
+	transport := &repositoryTestTransport{source: source, target: target}
+	coordinator := &mergeCoordinator{repository: source}
+
+	require.NoError(t, coordinator.relocateStashConflict(ctx, transport, target, host, remote, stash, true))
+	content, err := os.ReadFile(filepath.Join(remote, "file.txt"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "<<<<<<<")
+	assert.Contains(t, string(content), "local edit")
+	assert.Contains(t, string(content), "committed edit")
+	assert.Empty(t, runGitCommandInTestRepo(t, host, "status", "--porcelain"))
+	assert.Equal(t, stash, runGitCommandInTestRepo(t, host, "rev-parse", "refs/stash"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(remote, "file.txt"), []byte("resolved\n"), 0644))
+	runGitCommandInTestRepo(t, remote, "add", "file.txt")
+	require.NoError(t, coordinator.returnResolution(ctx, transport, GitTransferWorktreeChangesParams{
+		SourceWorktreePath: remote,
+		TargetWorktreePath: host,
+		BaseStashSha:       stash,
+	}))
+	content, err = os.ReadFile(filepath.Join(host, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "resolved\n", string(content))
+	assert.Empty(t, runGitCommandInTestRepo(t, host, "stash", "list"))
+	assert.Empty(t, runGitCommandInTestRepo(t, remote, "status", "--porcelain"))
+}
+
+// A delivery that conflicts because the base worktree moved on is reported as
+// a conflict relocated onto the source, not as a failure; resolving again and
+// retrying the transfer then succeeds.
+func TestMergeCoordinatorRelocatesConflictingDelivery(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	createCommitWithFile(t, repoDir, "Initial commit", "file.txt", "initial\n")
+	sourceDir := filepath.Join(t.TempDir(), "source")
+	runGitCommandInTestRepo(t, repoDir, "worktree", "add", "-b", "feature", sourceDir)
+	t.Cleanup(func() {
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", sourceDir)
+	})
+	createCommitWithFile(t, sourceDir, "Feature commit", "file.txt", "feature\n")
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("local edit\n"), 0644))
+	localEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: sourceDir})
+	require.NoError(t, err)
+	container := env.EnvContainer{Env: localEnv}
+
+	result, err := newMergeCoordinator(container).Merge(ctx, GitMergeParams{
+		SourceBranch:  "feature",
+		TargetBranch:  "main",
+		MergeStrategy: MergeStrategyMerge,
+	})
+	require.NoError(t, err)
+	require.True(t, result.HasConflicts)
+	require.NotEmpty(t, result.BaseStashSha)
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved\n"), 0644))
+	runGitCommandInTestRepo(t, sourceDir, "add", "file.txt")
+	createCommitWithFile(t, repoDir, "Intervening commit", "file.txt", "intervening\n")
+
+	params := GitTransferWorktreeChangesParams{
+		SourceWorktreePath: sourceDir,
+		TargetWorktreePath: repoDir,
+		BaseStashSha:       result.BaseStashSha,
+	}
+	transfer, err := GitTransferWorktreeChangesActivity(ctx, container, params)
+	require.NoError(t, err)
+	require.True(t, transfer.HasConflicts)
+	assert.Equal(t, evalSymlinks(t, sourceDir), evalSymlinks(t, transfer.ConflictDirPath))
+	content, err := os.ReadFile(filepath.Join(sourceDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "<<<<<<<")
+	assert.Contains(t, string(content), "resolved")
+	assert.Contains(t, string(content), "intervening")
+	assert.Empty(t, runGitCommandInTestRepo(t, repoDir, "status", "--porcelain"))
+	assert.Equal(t, result.BaseStashSha, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "refs/stash")))
+	assert.NotContains(t, runGitCommandInTestRepo(t, repoDir, "stash", "list"), "sidekick-resolution")
+
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved again\n"), 0644))
+	runGitCommandInTestRepo(t, sourceDir, "add", "file.txt")
+	transfer, err = GitTransferWorktreeChangesActivity(ctx, container, params)
+	require.NoError(t, err)
+	assert.False(t, transfer.HasConflicts)
+	content, err = os.ReadFile(filepath.Join(repoDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "resolved again\n", string(content))
+	assert.Empty(t, runGitCommandInTestRepo(t, repoDir, "stash", "list"))
+	assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "status", "--porcelain")))
+}
+
+// A relocated resolution conflict must survive interruption and repeated
+// invocation: identical transfer inputs keep reporting the same conflict
+// (without re-stashing the unmerged source) until it is resolved, whether the
+// completion was lost right after applying the stash or after cleanup.
+func TestMergeCoordinatorResolutionRelocationIsResumable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		env  func(env.Env) *mergeSideEffectFailureEnv
+		// Whether the interrupted attempt already left the conflict in the
+		// source working tree.
+		applied bool
+	}{
+		{"lost before apply", func(e env.Env) *mergeSideEffectFailureEnv {
+			return &mergeSideEffectFailureEnv{Env: e, beforeRelocationApply: true}
+		}, false},
+		{"apply rejected by git", func(e env.Env) *mergeSideEffectFailureEnv {
+			return &mergeSideEffectFailureEnv{Env: e, rejectRelocationApply: true}
+		}, false},
+		{"lost after apply", func(e env.Env) *mergeSideEffectFailureEnv {
+			return &mergeSideEffectFailureEnv{Env: e, afterRelocationApply: true}
+		}, true},
+		{"lost after cleanup", func(e env.Env) *mergeSideEffectFailureEnv {
+			return &mergeSideEffectFailureEnv{Env: e, afterRelocationCleanup: true}
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			repoDir := setupTestGitRepo(t)
+			createCommitWithFile(t, repoDir, "Initial commit", "file.txt", "initial\n")
+			sourceDir := filepath.Join(t.TempDir(), "source")
+			runGitCommandInTestRepo(t, repoDir, "worktree", "add", "-b", "feature", sourceDir)
+			t.Cleanup(func() {
+				runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", sourceDir)
+			})
+			createCommitWithFile(t, sourceDir, "Feature commit", "file.txt", "feature\n")
+			require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("local edit\n"), 0644))
+			localEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: sourceDir})
+			require.NoError(t, err)
+			container := env.EnvContainer{Env: localEnv}
+			result, err := newMergeCoordinator(container).Merge(ctx, GitMergeParams{
+				SourceBranch: "feature", TargetBranch: "main", MergeStrategy: MergeStrategyMerge,
+			})
+			require.NoError(t, err)
+			require.True(t, result.HasConflicts)
+			require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved\n"), 0644))
+			runGitCommandInTestRepo(t, sourceDir, "add", "file.txt")
+			createCommitWithFile(t, repoDir, "Intervening commit", "file.txt", "intervening\n")
+			params := GitTransferWorktreeChangesParams{
+				SourceWorktreePath: sourceDir, TargetWorktreePath: repoDir, BaseStashSha: result.BaseStashSha,
+			}
+			key := fmt.Sprintf("%x", sha256.Sum256([]byte(sourceDir+"\x00"+repoDir+"\x00"+result.BaseStashSha)))
+			resolutionRef := "refs/sidekick-merge/resolution/" + key
+			refExists := func(ref string) bool {
+				return strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "for-each-ref", ref)) != ""
+			}
+
+			failing := env.EnvContainer{Env: tc.env(localEnv)}
+			_, err = GitTransferWorktreeChangesActivity(ctx, failing, params)
+			require.Error(t, err)
+			content, err := os.ReadFile(filepath.Join(sourceDir, "file.txt"))
+			require.NoError(t, err)
+			if tc.applied {
+				require.Contains(t, string(content), "<<<<<<<")
+			} else {
+				require.Equal(t, "intervening\n", string(content))
+				require.True(t, refExists(resolutionRef), "unapplied resolution must stay preserved")
+			}
+
+			for attempt := 0; attempt < 2; attempt++ {
+				transfer, err := GitTransferWorktreeChangesActivity(ctx, container, params)
+				require.NoError(t, err)
+				assert.True(t, transfer.HasConflicts)
+				assert.Equal(t, evalSymlinks(t, sourceDir), evalSymlinks(t, transfer.ConflictDirPath))
+				content, err = os.ReadFile(filepath.Join(sourceDir, "file.txt"))
+				require.NoError(t, err)
+				assert.Contains(t, string(content), "resolved")
+				assert.Contains(t, string(content), "intervening")
+				assert.NotContains(t, runGitCommandInTestRepo(t, repoDir, "stash", "list"), "sidekick-resolution")
+				assert.False(t, refExists(resolutionRef), "superseded resolution ref must be gone")
+				assert.True(t, refExists(resolutionRef+"-relocated"), "relocation receipt must persist while unresolved")
+				assert.Empty(t, runGitCommandInTestRepo(t, repoDir, "status", "--porcelain"))
+				assert.Equal(t, result.BaseStashSha, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "refs/stash")))
+			}
+
+			require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved again\n"), 0644))
+			runGitCommandInTestRepo(t, sourceDir, "add", "file.txt")
+			transfer, err := GitTransferWorktreeChangesActivity(ctx, container, params)
+			require.NoError(t, err)
+			assert.False(t, transfer.HasConflicts)
+			content, err = os.ReadFile(filepath.Join(repoDir, "file.txt"))
+			require.NoError(t, err)
+			assert.Equal(t, "resolved again\n", string(content))
+			assert.Empty(t, runGitCommandInTestRepo(t, repoDir, "stash", "list"))
+			assert.False(t, refExists(resolutionRef))
+			assert.False(t, refExists(resolutionRef+"-relocated"))
+			assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "status", "--porcelain")))
+		})
+	}
 }

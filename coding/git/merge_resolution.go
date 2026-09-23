@@ -3,11 +3,25 @@ package git
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 
 	"sidekick/env"
 )
+
+var errResolutionConflict = errors.New("resolution conflicts with the current target")
+
+// resolutionConflictError reports that a resolution could not be delivered to
+// the target and has instead been relocated onto the source worktree, where
+// another round of conflict resolution is needed.
+type resolutionConflictError struct {
+	ConflictDirPath string
+}
+
+func (e *resolutionConflictError) Error() string {
+	return "resolution conflicts with the current target; relocated to " + e.ConflictDirPath
+}
 
 func (r mergeRepository) script(ctx context.Context, dir, script string) (string, error) {
 	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
@@ -127,6 +141,10 @@ func (c *mergeCoordinator) returnResolution(ctx context.Context, transport merge
 	}
 	sourceDir, targetDir := params.SourceWorktreePath, params.TargetWorktreePath
 
+	if relocated, err := c.resumeResolutionRelocation(ctx, transport, target, targetDir, sourceDir, ref, toHost); err != nil || relocated {
+		return err
+	}
+
 	delivered, err := target.script(ctx, targetDir, "git rev-parse --verify --quiet "+shellQuote(doneRef)+" || test $? = 1")
 	if err != nil {
 		return err
@@ -182,6 +200,9 @@ fi`, shellQuote(ref), shellQuote(": "+message), shellQuote(message), shellQuote(
 				}
 			}
 			if err := target.deliverResolution(ctx, targetDir, ref, stash); err != nil {
+				if errors.Is(err, errResolutionConflict) {
+					return c.relocateResolution(ctx, transport, target, targetDir, sourceDir, ref, stash, toHost)
+				}
 				return err
 			}
 			delivered = stash
@@ -234,9 +255,13 @@ func (r mergeRepository) deliverResolution(ctx context.Context, dir, ref, stash 
 		if dirty {
 			return fmt.Errorf("target has uncommitted changes; resolution preserved at %s", ref)
 		}
-		expected, err = r.prepareStashTree(ctx, dir, stash, expectedRef, false)
+		var conflicted bool
+		expected, conflicted, err = r.prepareStashTree(ctx, dir, stash, expectedRef, false)
 		if err != nil {
 			return fmt.Errorf("cannot prepare resolution delivery; stash preserved: %w", err)
+		}
+		if conflicted {
+			return errResolutionConflict
 		}
 	}
 	current, err := r.script(ctx, dir, `
@@ -262,6 +287,156 @@ git read-tree HEAD && git add -A && git write-tree`)
 	}
 	_, err = r.script(ctx, dir, "git update-ref "+shellQuote(ref+"-delivered")+" "+shellQuote(stash))
 	return err
+}
+
+// relocateResolution moves a resolution whose delivery conflicted back onto
+// the source worktree. The source is first aligned with the target's current
+// HEAD so the conflict reproduces there exactly as it would on the target.
+// A receipt is recorded before the stash is applied so an interrupted or
+// repeated invocation converges on the same conflict result.
+func (c *mergeCoordinator) relocateResolution(ctx context.Context, transport mergeTransport, target mergeRepository, targetDir, sourceDir, ref, stash string, toHost bool) error {
+	if err := c.alignSourceWithTarget(ctx, transport, target, targetDir, sourceDir, toHost); err != nil {
+		return fmt.Errorf("resolution remains preserved at %s: %w", ref, err)
+	}
+	source := c.repository
+	if _, err := source.script(ctx, sourceDir, "git update-ref "+shellQuote(ref+"-relocated")+" "+shellQuote(stash)); err != nil {
+		return err
+	}
+	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: source.envContainer,
+		Command:      "git",
+		Args:         []string{"-C", sourceDir, "stash", "apply", stash},
+	})
+	if err != nil {
+		return err
+	}
+	if out.ExitStatus != 0 {
+		unmerged, err := source.script(ctx, sourceDir, "git diff --name-only --diff-filter=U")
+		if err != nil {
+			return err
+		}
+		if unmerged == "" {
+			return fmt.Errorf("failed to relocate resolution; preserved at %s: %s", ref, out.Stderr+out.Stdout)
+		}
+	}
+	return c.finishResolutionRelocation(ctx, target, targetDir, sourceDir, ref, stash, toHost)
+}
+
+// finishResolutionRelocation marks the stash as applied, then discards the
+// superseded resolution stash and its refs once the conflict lives in the
+// source working tree, so the next transfer captures the re-resolved state
+// instead of finding this entry again by ref or message. Every step is a
+// no-op when already done.
+func (c *mergeCoordinator) finishResolutionRelocation(ctx context.Context, target mergeRepository, targetDir, sourceDir, ref, stash string, toHost bool) error {
+	source := c.repository
+	// The marker lets a resumed relocation tell a resolved conflict apart
+	// from an apply that never reached the working tree.
+	if _, err := source.script(ctx, sourceDir, "git update-ref "+shellQuote(ref+"-applied")+" "+shellQuote(stash)); err != nil {
+		return err
+	}
+	if err := dropStashBySha(ctx, source.envContainer, sourceDir, stash, nil); err != nil {
+		return err
+	}
+	if _, err := source.script(ctx, sourceDir, "git update-ref -d "+shellQuote(ref)); err != nil {
+		return err
+	}
+	if toHost {
+		if _, err := target.script(ctx, targetDir, "git update-ref -d "+shellQuote(ref)); err != nil {
+			return err
+		}
+	}
+	return &resolutionConflictError{ConflictDirPath: sourceDir}
+}
+
+// resumeResolutionRelocation handles a transfer re-invoked after a relocation
+// receipt was recorded. While the source holds unmerged paths the relocation
+// is (re)completed and reported again. Otherwise, unless the applied marker
+// confirms the stash reached the working tree, the apply is redone from the
+// preserved stash; only a marked, conflict-free source counts as resolved, at
+// which point the superseded stash is discarded and the receipt cleared so the
+// transfer proceeds with the new resolution. Returns whether the caller should
+// stop because the relocated conflict is still pending.
+func (c *mergeCoordinator) resumeResolutionRelocation(ctx context.Context, transport mergeTransport, target mergeRepository, targetDir, sourceDir, ref string, toHost bool) (bool, error) {
+	source := c.repository
+	receipt := ref + "-relocated"
+	applied := ref + "-applied"
+	stash, err := source.script(ctx, sourceDir, "git rev-parse --verify --quiet "+shellQuote(receipt)+" || test $? = 1")
+	if err != nil || stash == "" {
+		return false, err
+	}
+	var conflict *resolutionConflictError
+	unmerged, err := source.script(ctx, sourceDir, "git diff --name-only --diff-filter=U")
+	if err != nil {
+		return false, err
+	}
+	if unmerged != "" {
+		err := c.finishResolutionRelocation(ctx, target, targetDir, sourceDir, ref, stash, toHost)
+		return errors.As(err, &conflict), err
+	}
+	marked, err := source.script(ctx, sourceDir, "git rev-parse --verify --quiet "+shellQuote(applied)+" || test $? = 1")
+	if err != nil {
+		return false, err
+	}
+	if marked == "" {
+		err := c.relocateResolution(ctx, transport, target, targetDir, sourceDir, ref, stash, toHost)
+		return errors.As(err, &conflict), err
+	}
+	// Discarding here is safe: the stash under ref, if still present, is the
+	// superseded resolution, and the receipt was written before it was applied.
+	if err := dropStashBySha(ctx, source.envContainer, sourceDir, stash, nil); err != nil {
+		return false, err
+	}
+	_, err = source.script(ctx, sourceDir, "git update-ref -d "+shellQuote(ref)+" && git update-ref -d "+shellQuote(receipt)+" && git update-ref -d "+shellQuote(applied))
+	if toHost && err == nil {
+		_, err = target.script(ctx, targetDir, "git update-ref -d "+shellQuote(ref))
+	}
+	return false, err
+}
+
+// alignSourceWithTarget merges the target worktree's HEAD into the source
+// worktree. A stash relocated onto the source must meet the same content it
+// conflicted with on the target; otherwise the conflict can vanish on the
+// source only to reappear when the resolution is delivered back.
+func (c *mergeCoordinator) alignSourceWithTarget(ctx context.Context, transport mergeTransport, target mergeRepository, targetDir, sourceDir string, fromHost bool) error {
+	sha, err := target.script(ctx, targetDir, "git rev-parse HEAD")
+	if err != nil {
+		return err
+	}
+	ref := "refs/sidekick-merge/target/" + sha
+	if _, err := target.script(ctx, targetDir, "git update-ref "+shellQuote(ref)+" "+shellQuote(sha)); err != nil {
+		return err
+	}
+	if fromHost {
+		if err := transport.copyRef(ctx, ref, false); err != nil {
+			return fmt.Errorf("failed to transport target head for relocation: %w", err)
+		}
+	}
+	// The merge commit is an internal artifact, so a missing identity should
+	// not block relocation. Prints "merged" only when HEAD actually moved.
+	out, err := c.repository.script(ctx, sourceDir, fmt.Sprintf(`
+if git merge-base --is-ancestor %s HEAD; then exit 0; fi
+if ! git config user.name >/dev/null || ! git config user.email >/dev/null; then
+	export GIT_AUTHOR_NAME=sidekick GIT_AUTHOR_EMAIL=sidekick@side.dev
+	export GIT_COMMITTER_NAME=sidekick GIT_COMMITTER_EMAIL=sidekick@side.dev
+fi
+git merge --no-edit %s >&2 || { git merge --abort >/dev/null 2>&1; exit 1; }
+printf merged`, shellQuote(sha), shellQuote(sha)))
+	if err != nil {
+		return fmt.Errorf("cannot align source with target for relocation: %w", err)
+	}
+	if !fromHost || out != "merged" {
+		return nil
+	}
+	// The host's backup of the flow branch predates the alignment commit;
+	// refresh it so the host copy keeps matching the sandbox branch.
+	branch, err := c.repository.script(ctx, sourceDir, "git symbolic-ref -q --short HEAD || true")
+	if err != nil || branch == "" {
+		return err
+	}
+	if err := transport.backupSourceBranch(ctx, branch); err != nil {
+		return fmt.Errorf("failed to back up aligned merge source: %w", err)
+	}
+	return nil
 }
 
 func (c *mergeCoordinator) relocateStashConflict(ctx context.Context, transport mergeTransport, target mergeRepository, targetDir, sourceDir, stash string, fromHost bool) error {
@@ -301,7 +476,10 @@ func (c *mergeCoordinator) relocateStashConflict(ctx context.Context, transport 
 			if dirty {
 				return fmt.Errorf("source has edits; base stash preserved at %s", ref)
 			}
-			expected, err = source.prepareStashTree(ctx, sourceDir, stash, expectedRef, true)
+			if err := c.alignSourceWithTarget(ctx, transport, target, targetDir, sourceDir, fromHost); err != nil {
+				return fmt.Errorf("base stash preserved at %s: %w", ref, err)
+			}
+			expected, _, err = source.prepareStashTree(ctx, sourceDir, stash, expectedRef, true)
 			if err != nil {
 				return err
 			}
@@ -371,20 +549,34 @@ export GIT_INDEX_FILE="$index"
 git read-tree HEAD && git add -A && git write-tree`)
 }
 
-func (r mergeRepository) prepareStashTree(ctx context.Context, dir, stash, ref string, allowConflicts bool) (string, error) {
-	conflicts := "exit 1"
+// prepareStashTree records under ref the tree that applying stash onto HEAD
+// produces. When conflicts are not allowed, a conflicting apply is reported
+// via the conflicted flag rather than as an error; any other apply failure is
+// an error.
+func (r mergeRepository) prepareStashTree(ctx context.Context, dir, stash, ref string, allowConflicts bool) (tree string, conflicted bool, err error) {
+	onConflict := "{ printf conflict; exit 0; }"
 	if allowConflicts {
-		conflicts = `test -n "$(git -C "$tmp" diff --name-only --diff-filter=U)" || exit 1`
+		onConflict = ":"
 	}
-	return r.script(ctx, dir, fmt.Sprintf(`
+	out, err := r.script(ctx, dir, fmt.Sprintf(`
 tmp=$(mktemp -d) || exit
 trap 'git worktree remove --force "$tmp" >/dev/null 2>&1; rm -rf "$tmp"' EXIT
 git worktree add --detach "$tmp" HEAD >&2 || exit
-git -C "$tmp" stash apply %s >&2 || { %s; }
+git -C "$tmp" stash apply %s >&2 || {
+	test -n "$(git -C "$tmp" diff --name-only --diff-filter=U)" || exit 1
+	%s
+}
 git -C "$tmp" add -A || exit
 tree=$(git -C "$tmp" write-tree) || exit
 git update-ref %s "$tree" || exit
-printf '%%s' "$tree"`, shellQuote(stash), conflicts, shellQuote(ref)))
+printf '%%s' "$tree"`, shellQuote(stash), onConflict, shellQuote(ref)))
+	if err != nil {
+		return "", false, err
+	}
+	if out == "conflict" {
+		return "", true, nil
+	}
+	return out, false, nil
 }
 
 func (r mergeRepository) captureMergeStash(ctx context.Context, dir, source, target string) (string, string, error) {
