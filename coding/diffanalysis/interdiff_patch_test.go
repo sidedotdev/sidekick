@@ -1,6 +1,7 @@
 package diffanalysis
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,21 @@ import (
 func TestInterdiffAppliesToReviewedContent(t *testing.T) {
 	t.Parallel()
 
+	numbered := func(count int, replace map[int]string, trailingNewline bool) string {
+		var out strings.Builder
+		for i := 1; i <= count; i++ {
+			content := fmt.Sprintf("line %d", i)
+			if replacement, ok := replace[i]; ok {
+				content = replacement
+			}
+			out.WriteString(content)
+			if i < count || trailingNewline {
+				out.WriteString("\n")
+			}
+		}
+		return out.String()
+	}
+
 	for _, tt := range []struct {
 		name    string
 		base    string
@@ -20,6 +36,10 @@ func TestInterdiffAppliesToReviewedContent(t *testing.T) {
 		current string
 	}{
 		{"partial reversion", "start\nend\n", "start\nfirst\nsecond\nend\n", "start\nsecond\nend\n"},
+		{"edit inside large new file", "", numbered(40, nil, true), numbered(40, map[int]string{20: "changed"}, true)},
+		{"distant edits inside large new file", "", numbered(40, nil, true), numbered(40, map[int]string{3: "a", 37: "b"}, true)},
+		{"edit inside large new file without final newline", "", numbered(40, nil, false), numbered(40, map[int]string{20: "changed"}, false)},
+		{"large prior addition mid file", numbered(40, nil, true), numbered(40, map[int]string{20: "line 20\n" + numbered(30, nil, false)}, true), numbered(40, map[int]string{20: "line 20\n" + numbered(30, map[int]string{15: "x"}, false)}, true)},
 		{"complete replacement reversion", "start\noriginal\nend\n", "start\nreplacement\nend\n", "start\noriginal\nend\n"},
 		{"restored deletion", "start\nremoved\nend\n", "start\nend\n", "start\nremoved\nend\n"},
 		{"modified prior addition", "start\nend\n", "start\nold\nend\n", "start\nnew\nend\n"},

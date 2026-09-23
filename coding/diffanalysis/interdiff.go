@@ -7,6 +7,10 @@ import (
 	patchutils "github.com/google/go-patchutils"
 )
 
+// interdiffContextLines caps the unchanged lines kept around each change in a
+// computed interdiff hunk.
+const interdiffContextLines = 5
+
 // Interdiff compares two full review diffs, including reversions of prior work.
 // Comparisons that cannot be represented as unified diffs return an error so
 // callers can distinguish a full-diff fallback from an incremental comparison.
@@ -100,7 +104,7 @@ func exactInterdiff(priorFiles, currentFiles []FileDiff) (string, error) {
 		if _, err := parseForInterdiff(section); err != nil {
 			section = restoreInterdiffTrailingContext(section, prior, current)
 		}
-		out.WriteString(section)
+		out.WriteString(limitHunkContext(section, interdiffContextLines))
 	}
 	for _, prior := range priorFiles {
 		if _, ok := priorByPath[filePathKey(prior)]; ok {
@@ -395,4 +399,169 @@ func restoreInterdiffTrailingContext(section string, prior, current FileDiff) st
 		return section
 	}
 	return out.String()
+}
+
+// hunkRange is a parsed hunk header, with the trailing header text kept verbatim.
+type hunkRange struct {
+	oldStart, oldCount, newStart, newCount int
+	trailer                                string
+}
+
+// The interdiff library merges every overlapping pair of hunks into one
+// continuous hunk, so a small edit inside a large prior addition is emitted
+// with the entire addition as unchanged context. Re-split each hunk around its
+// changed lines, keeping at most contextLines of context on either side.
+//
+// Works on raw lines rather than the parsed representation so that "\ No
+// newline at end of file" markers stay attached to the line they qualify.
+// Sections that fail validation are returned unchanged.
+func limitHunkContext(section string, contextLines int) string {
+	if _, err := parseForInterdiff(section); err != nil {
+		return section
+	}
+
+	lines := strings.Split(strings.TrimSuffix(section, "\n"), "\n")
+	var out []string
+	var hunk *hunkRange
+	// Each record is a diff line followed by any marker lines that qualify it.
+	var records [][]string
+	oldLeft, newLeft := 0, 0
+	flush := func() {
+		if hunk != nil {
+			out = append(out, splitHunkByContext(*hunk, records, contextLines)...)
+		}
+		hunk = nil
+		records = nil
+	}
+
+	for _, line := range lines {
+		if matches := hunkHeaderRegex.FindStringSubmatch(line); matches != nil && (hunk == nil || (oldLeft == 0 && newLeft == 0)) {
+			flush()
+			hunk = &hunkRange{
+				oldStart: parseInt(matches[1]), oldCount: 1,
+				newStart: parseInt(matches[3]), newCount: 1,
+				trailer: matches[5],
+			}
+			if matches[2] != "" {
+				hunk.oldCount = parseInt(matches[2])
+			}
+			if matches[4] != "" {
+				hunk.newCount = parseInt(matches[4])
+			}
+			oldLeft, newLeft = hunk.oldCount, hunk.newCount
+			continue
+		}
+		if hunk == nil {
+			out = append(out, line)
+			continue
+		}
+		if strings.HasPrefix(line, "\\") && len(records) > 0 {
+			records[len(records)-1] = append(records[len(records)-1], line)
+			continue
+		}
+		if oldLeft == 0 && newLeft == 0 {
+			flush()
+			out = append(out, line)
+			continue
+		}
+		if len(line) == 0 {
+			return section
+		}
+		switch line[0] {
+		case ' ':
+			oldLeft--
+			newLeft--
+		case '-':
+			oldLeft--
+		case '+':
+			newLeft--
+		default:
+			return section
+		}
+		records = append(records, []string{line})
+	}
+	flush()
+	return strings.Join(out, "\n") + "\n"
+}
+
+func splitHunkByContext(hunk hunkRange, records [][]string, contextLines int) []string {
+	renderUnchanged := func() []string {
+		out := []string{hunkHeader(hunk)}
+		for _, record := range records {
+			out = append(out, record...)
+		}
+		return out
+	}
+
+	var changes []int
+	for i, record := range records {
+		if record[0][0] != ' ' {
+			changes = append(changes, i)
+		}
+	}
+	if len(changes) == 0 {
+		return renderUnchanged()
+	}
+
+	// Changes separated by more context than two hunks' worth are split apart,
+	// mirroring how diff tools decide when adjacent hunks must be merged.
+	var groups [][2]int
+	for _, change := range changes {
+		if len(groups) > 0 && change-groups[len(groups)-1][1]-1 <= 2*contextLines {
+			groups[len(groups)-1][1] = change
+		} else {
+			groups = append(groups, [2]int{change, change})
+		}
+	}
+	if len(groups) == 1 && groups[0][0] <= contextLines && len(records)-1-groups[0][1] <= contextLines {
+		return renderUnchanged()
+	}
+
+	oldBefore := make([]int, len(records)+1)
+	newBefore := make([]int, len(records)+1)
+	for i, record := range records {
+		oldBefore[i+1], newBefore[i+1] = oldBefore[i], newBefore[i]
+		if record[0][0] != '+' {
+			oldBefore[i+1]++
+		}
+		if record[0][0] != '-' {
+			newBefore[i+1]++
+		}
+	}
+
+	var out []string
+	for i, group := range groups {
+		start := max(0, group[0]-contextLines)
+		end := min(len(records), group[1]+contextLines+1)
+		split := hunkRange{
+			oldCount: oldBefore[end] - oldBefore[start],
+			newCount: newBefore[end] - newBefore[start],
+		}
+		split.oldStart = hunkRangeStart(hunk.oldStart, hunk.oldCount, oldBefore[start], split.oldCount)
+		split.newStart = hunkRangeStart(hunk.newStart, hunk.newCount, newBefore[start], split.newCount)
+		if i == 0 {
+			split.trailer = hunk.trailer
+		}
+		out = append(out, hunkHeader(split))
+		for _, record := range records[start:end] {
+			out = append(out, record...)
+		}
+	}
+	return out
+}
+
+// hunkRangeStart follows the unified diff convention that an empty range is
+// anchored at the line preceding it rather than the line following it.
+func hunkRangeStart(hunkStart, hunkCount, linesBefore, count int) int {
+	if hunkCount == 0 {
+		return hunkStart
+	}
+	if count == 0 {
+		return hunkStart + linesBefore - 1
+	}
+	return hunkStart + linesBefore
+}
+
+func hunkHeader(hunk hunkRange) string {
+	return fmt.Sprintf("@@ -%d,%d +%d,%d @@%s", hunk.oldStart, hunk.oldCount, hunk.newStart, hunk.newCount, hunk.trailer)
 }
