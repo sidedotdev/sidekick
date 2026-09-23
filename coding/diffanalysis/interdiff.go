@@ -102,7 +102,7 @@ func exactInterdiff(priorFiles, currentFiles []FileDiff) (string, error) {
 		}
 		section = withGitFileHeader(dropEmptyFileSections(section), current)
 		if _, err := parseForInterdiff(section); err != nil {
-			section = restoreInterdiffTrailingContext(section, prior, current)
+			section = restoreOmittedCommonLines(section, prior, current)
 		}
 		out.WriteString(limitHunkContext(section, interdiffContextLines))
 	}
@@ -324,47 +324,171 @@ func alignInterdiffBase(prior, current FileDiff) FileDiff {
 	return prior
 }
 
-// The interdiff library can count common trailing additions without emitting
-// them as context. Recover only lines proven identical in both post-images.
-func restoreInterdiffTrailingContext(section string, prior, current FileDiff) string {
-	if strings.Contains(section+prior.RawContent+current.RawContent, "\\ No newline at end of file") {
-		return section
+const noNewlineMarker = `\ No newline at end of file`
+
+// reviewImages holds what one review diff reveals about a file's pre-image and
+// post-image, indexed by line number, including which line of each, if any,
+// ends the file without a trailing newline (-1 when none does).
+type reviewImages struct {
+	pre, post                       map[int]string
+	preNoNewlineAt, postNoNewlineAt int
+	hunks                           []hunkRange
+}
+
+type imageLine struct {
+	content   string
+	noNewline bool
+}
+
+// newReviewImages reads the raw hunk lines rather than the parsed ones so that
+// no-newline markers are seen and so that any header realignment applied to
+// RawContent is honored.
+func newReviewImages(file FileDiff) reviewImages {
+	images := reviewImages{
+		pre: make(map[int]string), post: make(map[int]string),
+		preNoNewlineAt: -1, postNoNewlineAt: -1,
 	}
+	inHunk := false
+	oldLine, newLine := 0, 0
+	lastOld, lastNew := -1, -1
+	for _, raw := range strings.Split(file.RawContent, "\n") {
+		if matches := hunkHeaderRegex.FindStringSubmatch(raw); matches != nil {
+			hunk := parseHunkHeader(matches)
+			images.hunks = append(images.hunks, hunk)
+			oldLine, newLine = hunk.oldStart, hunk.newStart
+			lastOld, lastNew = -1, -1
+			inHunk = true
+			continue
+		}
+		if !inHunk || raw == "" {
+			continue
+		}
+		switch raw[0] {
+		case ' ':
+			images.pre[oldLine], images.post[newLine] = raw[1:], raw[1:]
+			lastOld, lastNew = oldLine, newLine
+			oldLine++
+			newLine++
+		case '-':
+			images.pre[oldLine] = raw[1:]
+			lastOld, lastNew = oldLine, -1
+			oldLine++
+		case '+':
+			images.post[newLine] = raw[1:]
+			lastOld, lastNew = -1, newLine
+			newLine++
+		case '\\':
+			if lastOld >= 0 {
+				images.preNoNewlineAt = lastOld
+			}
+			if lastNew >= 0 {
+				images.postNoNewlineAt = lastNew
+			}
+		}
+	}
+	return images
+}
+
+// postLine reports this review's post-image at the given line. Lines the
+// review left untouched fall outside its hunks, but they equal the base both
+// reviews share, which the other review's pre-image may reveal. This is the
+// same shared-base model the interdiff library applies when it emits such
+// lines as context itself; where both reviews reveal a base line that differs,
+// the library rejects the comparison before any repair is attempted.
+func (r reviewImages) postLine(line int, other reviewImages) (imageLine, bool) {
+	if content, ok := r.post[line]; ok {
+		return imageLine{content, line == r.postNoNewlineAt}, true
+	}
+	offset := 0
+	for _, hunk := range r.hunks {
+		if line >= hunk.newStart && line < hunk.newStart+hunk.newCount {
+			return imageLine{}, false
+		}
+		if line >= hunk.newStart+hunk.newCount {
+			offset += hunk.newCount - hunk.oldCount
+		}
+	}
+	base := line - offset
+	content, ok := other.pre[base]
+	return imageLine{content, base == other.preNoNewlineAt}, ok
+}
+
+// The interdiff library can count lines that are identical in both post-images
+// without emitting them, whether they trail a hunk or sit between two changes,
+// and can drop the marker of a final line that lacks a trailing newline.
+// Recover only what both post-images prove, verifying every emitted line
+// against them so the repaired hunk cannot misrepresent the reviewed content.
+// Sections that cannot be fully verified are returned unchanged.
+func restoreOmittedCommonLines(section string, prior, current FileDiff) string {
 	files, err := ParseUnifiedDiff(section)
 	if err != nil || len(files) != 1 {
 		return section
 	}
-	postImage := func(file FileDiff) map[int]string {
-		lines := make(map[int]string)
-		for _, hunk := range file.Hunks {
-			for _, line := range hunk.Lines {
-				if line.Type != LineRemoved {
-					lines[line.NewLine] = line.Content
-				}
-			}
-		}
-		return lines
-	}
-	oldLines, newLines := postImage(prior), postImage(current)
+	oldImages, newImages := newReviewImages(prior), newReviewImages(current)
+
 	var out strings.Builder
 	hunkIndex := -1
 	oldPos, newPos, oldEnd, newEnd := 0, 0, 0, 0
-	finish := func() bool {
-		for oldPos < oldEnd && newPos < newEnd {
-			old, oldOK := oldLines[oldPos]
-			new, newOK := newLines[newPos]
-			if !oldOK || !newOK || old != new {
+	wroteMarker := false
+
+	// verify writes a section line once both images it belongs to confirm it,
+	// along with the no-newline marker when they call for one. A context line
+	// whose two images disagree on the ending is not truly shared.
+	verify := func(line string) bool {
+		content := line[1:]
+		inOld, inNew := line[0] != '+', line[0] != '-'
+		var endsOld, endsNew bool
+		if inOld {
+			old, ok := oldImages.postLine(oldPos, newImages)
+			if !ok || old.content != content {
 				return false
 			}
-			out.WriteString(" " + old + "\n")
+			endsOld = old.noNewline
+		}
+		if inNew {
+			new, ok := newImages.postLine(newPos, oldImages)
+			if !ok || new.content != content {
+				return false
+			}
+			endsNew = new.noNewline
+		}
+		if inOld && inNew && endsOld != endsNew {
+			return false
+		}
+		out.WriteString(line + "\n")
+		wroteMarker = endsOld || endsNew
+		if wroteMarker {
+			out.WriteString(noNewlineMarker + "\n")
+		}
+		if inOld {
 			oldPos++
+		}
+		if inNew {
 			newPos++
 		}
-		return oldPos == oldEnd && newPos == newEnd
+		return true
 	}
-	for _, line := range strings.Split(strings.TrimSuffix(section, "\n"), "\n") {
+	fillCommon := func() bool {
+		if oldPos >= oldEnd || newPos >= newEnd {
+			return false
+		}
+		old, ok := oldImages.postLine(oldPos, newImages)
+		return ok && verify(" "+old.content)
+	}
+	fillToHunkEnd := func() bool {
+		for oldPos < oldEnd || newPos < newEnd {
+			if !fillCommon() {
+				return false
+			}
+		}
+		return true
+	}
+
+	lines := strings.Split(strings.TrimSuffix(section, "\n"), "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		if hunkHeaderRegex.MatchString(line) {
-			if !finish() {
+			if !fillToHunkEnd() {
 				return section
 			}
 			hunkIndex++
@@ -374,28 +498,31 @@ func restoreInterdiffTrailingContext(section string, prior, current FileDiff) st
 			hunk := files[0].Hunks[hunkIndex]
 			oldPos, newPos = hunk.OldStart, hunk.NewStart
 			oldEnd, newEnd = oldPos+hunk.OldCount, newPos+hunk.NewCount
-		} else if hunkIndex >= 0 {
-			if len(line) == 0 {
+			out.WriteString(line + "\n")
+			continue
+		}
+		if hunkIndex < 0 {
+			out.WriteString(line + "\n")
+			continue
+		}
+		if len(line) == 0 || !strings.ContainsRune(" -+", rune(line[0])) {
+			return section
+		}
+		for !verify(line) {
+			if !fillCommon() {
 				return section
 			}
-			if line[0] == ' ' || line[0] == '-' {
-				content, ok := oldLines[oldPos]
-				if !ok || content != line[1:] {
-					return section
-				}
-				oldPos++
-			}
-			if line[0] == ' ' || line[0] == '+' {
-				content, ok := newLines[newPos]
-				if !ok || content != line[1:] {
-					return section
-				}
-				newPos++
+		}
+		// Markers are re-derived from the post-images, so an emitted marker
+		// is consumed and must agree with them.
+		if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "\\") {
+			i++
+			if !wroteMarker {
+				return section
 			}
 		}
-		out.WriteString(line + "\n")
 	}
-	if !finish() {
+	if !fillToHunkEnd() {
 		return section
 	}
 	return out.String()
@@ -405,6 +532,23 @@ func restoreInterdiffTrailingContext(section string, prior, current FileDiff) st
 type hunkRange struct {
 	oldStart, oldCount, newStart, newCount int
 	trailer                                string
+}
+
+// parseHunkHeader builds a hunkRange from hunkHeaderRegex submatches, applying
+// the unified diff default of a single line when a count is omitted.
+func parseHunkHeader(matches []string) hunkRange {
+	hunk := hunkRange{
+		oldStart: parseInt(matches[1]), oldCount: 1,
+		newStart: parseInt(matches[3]), newCount: 1,
+		trailer: matches[5],
+	}
+	if matches[2] != "" {
+		hunk.oldCount = parseInt(matches[2])
+	}
+	if matches[4] != "" {
+		hunk.newCount = parseInt(matches[4])
+	}
+	return hunk
 }
 
 // The interdiff library merges every overlapping pair of hunks into one
@@ -437,17 +581,8 @@ func limitHunkContext(section string, contextLines int) string {
 	for _, line := range lines {
 		if matches := hunkHeaderRegex.FindStringSubmatch(line); matches != nil && (hunk == nil || (oldLeft == 0 && newLeft == 0)) {
 			flush()
-			hunk = &hunkRange{
-				oldStart: parseInt(matches[1]), oldCount: 1,
-				newStart: parseInt(matches[3]), newCount: 1,
-				trailer: matches[5],
-			}
-			if matches[2] != "" {
-				hunk.oldCount = parseInt(matches[2])
-			}
-			if matches[4] != "" {
-				hunk.newCount = parseInt(matches[4])
-			}
+			parsed := parseHunkHeader(matches)
+			hunk = &parsed
 			oldLeft, newLeft = hunk.oldCount, hunk.newCount
 			continue
 		}

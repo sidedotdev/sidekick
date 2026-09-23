@@ -47,6 +47,10 @@ func TestInterdiffAppliesToReviewedContent(t *testing.T) {
 		{"whitespace is significant", "start\nend\n", "start\n value\nend\n", "start\n  value\nend\n"},
 		{"no final newline reversion", "original", "replacement", "original"},
 		{"unchanged", "start\nend\n", "start\nadded\nend\n", "start\nadded\nend\n"},
+		{"shared replacement before a differing change", "s\nA\nx\ny\nB\ne\n", "s\nA2\nx\ny\nB2\ne\n", "s\nA2\nx\ny\nB3\nB4\ne\n"},
+		{"shared replacement before a differing change without final newline", "s\nA\nx\ny\nB\ne", "s\nA2\nx\ny\nB2\ne", "s\nA2\nx\ny\nB3\nB4\ne"},
+		{"shared replacement then differing final line without newline", "s\nA\nx\nB", "s\nA2\nx\nB2", "s\nA2\nx\nB3"},
+		{"differing change then shared final replacement without newline", "s\nA\nx\nB", "s\nA2\nx\nB2", "s\nA3\nx\nB2"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -106,6 +110,67 @@ func TestInterdiffAppliesToReviewedContent(t *testing.T) {
 			require.Equal(t, tt.current, string(actual))
 		})
 	}
+}
+
+// Review bases diverge when the target branch is merged in between reviews.
+// A base line both reviews reveal with different content makes the comparison
+// unavailable, while an upstream change only the current review reveals is
+// context rather than work done since the last review.
+func TestInterdiffDivergedBases(t *testing.T) {
+	t.Parallel()
+
+	numbered := func(count int, replace map[int]string) string {
+		var out strings.Builder
+		for i := 1; i <= count; i++ {
+			content := fmt.Sprintf("line %d", i)
+			if replacement, ok := replace[i]; ok {
+				content = replacement
+			}
+			out.WriteString(content + "\n")
+		}
+		return out.String()
+	}
+	gitDiff := func(t *testing.T, base, after string) string {
+		t.Helper()
+		dir := t.TempDir()
+		git := func(args ...string) string {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", output)
+			return string(output)
+		}
+		git("init")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte(base), 0600))
+		git("add", "file.txt")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte(after), 0600))
+		return git("diff", "--no-ext-diff", "--no-color")
+	}
+
+	priorBase := numbered(20, nil)
+	upstreamBase := numbered(20, map[int]string{8: "upstream 8"})
+
+	t.Run("upstream change revealed by both reviews", func(t *testing.T) {
+		t.Parallel()
+		prior := gitDiff(t, priorBase, numbered(20, map[int]string{10: "ten", 15: "fifteen"}))
+		current := gitDiff(t, upstreamBase, numbered(20, map[int]string{8: "upstream 8", 10: "ten", 15: "fifteen\nsixteen"}))
+		result, err := Interdiff(prior, current)
+		require.Error(t, err)
+		require.Empty(t, result)
+	})
+
+	t.Run("upstream change revealed only by the current review", func(t *testing.T) {
+		t.Parallel()
+		prior := gitDiff(t, priorBase, numbered(20, map[int]string{15: "fifteen"}))
+		current := gitDiff(t, upstreamBase, numbered(20, map[int]string{8: "upstream 8", 10: "ten", 15: "fifteen\nsixteen"}))
+		result, err := Interdiff(prior, current)
+		require.NoError(t, err)
+		require.Contains(t, result, "\n upstream 8\n")
+		require.Contains(t, result, "\n+ten\n")
+		require.Contains(t, result, "\n+sixteen\n")
+		require.NotContains(t, result, "+upstream 8")
+		require.NotContains(t, result, "-line 8")
+	})
 }
 
 func TestInterdiffRejectsUnavailableComparison(t *testing.T) {

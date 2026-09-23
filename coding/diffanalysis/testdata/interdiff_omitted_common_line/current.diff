@@ -1,0 +1,636 @@
+diff --git a/frontend/src/components/ApplyEditBlocksFlowAction.spec.ts b/frontend/src/components/ApplyEditBlocksFlowAction.spec.ts
+new file mode 100644
+index 0000000..af66ef2
+--- /dev/null
++++ b/frontend/src/components/ApplyEditBlocksFlowAction.spec.ts
+@@ -0,0 +1,171 @@
++import { defineComponent, h, nextTick, ref } from 'vue'
++import { mount } from '@vue/test-utils'
++import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
++import ApplyEditBlocksFlowAction from './ApplyEditBlocksFlowAction.vue'
++import FlowActionErrorBoundary from './FlowActionErrorBoundary.vue'
++import type { FlowAction } from '../lib/models'
++
++// jsdom has no canvas; @git-diff-view measures text widths with one. Stub only
++// that so the real diff renderer still runs.
++let getContextSpy: ReturnType<typeof vi.spyOn>
++beforeAll(() => {
++  getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
++    font: '',
++    measureText: (text: string) => ({ width: text.length * 7 }),
++  }) as unknown as CanvasRenderingContext2D)
++})
++afterAll(() => {
++  getContextSpy.mockRestore()
++})
++
++// Recovered from a real flow: git emits a combined diff (`diff --cc`, `@@@`
++// hunk header, two prefix columns) when the edited file is unmerged during
++// conflict resolution. The diff renderer library rejects this hunk format.
++const combinedDiff = [
++  'diff --cc Justfile',
++  'index 07a3b20,2a11cd1..0000000',
++  '--- a/Justfile',
++  '+++ b/Justfile',
++  '@@@ -7,5 -7,6 +7,9 @@@ install',
++  '  release *args:',
++  '  \t./scripts/release.sh {{args}}',
++  '  ',
++  ' +publish-web *args:',
++  '- \t./scripts/publish-web.sh {{args}}',
++  '++\t./scripts/publish-web.sh {{args}}',
++  '++',
++  '+ # Publish the empty npm package that reserves the `bgx` name; pass --dry-run to preview.',
++  '+ publish-node-placeholder *args:',
++  ' -\tcd node && npm publish {{args}}',
++  '++\tcd node && npm publish {{args}}',
++  '',
++].join('\n')
++
++const malformedDiff = [
++  'diff --git a/foo.txt b/foo.txt',
++  '--- a/foo.txt',
++  '+++ b/foo.txt',
++  '@@ not a real hunk header @@',
++  '-old line',
++  '+new line',
++  '',
++].join('\n')
++
++const unifiedDiff = [
++  'diff --git a/foo.txt b/foo.txt',
++  '--- a/foo.txt',
++  '+++ b/foo.txt',
++  '@@ -1,2 +1,2 @@',
++  ' unchanged',
++  '-old line',
++  '+new line',
++  '',
++].join('\n')
++
++function flowActionWithDiff(finalDiff: string): FlowAction {
++  return {
++    id: 'fa_test',
++    flowId: 'flow_test',
++    workspaceId: 'ws_test',
++    created: new Date(),
++    updated: new Date(),
++    subflow: 'Edit Code',
++    actionType: 'apply_edit_blocks',
++    actionStatus: 'complete',
++    isHumanAction: false,
++    actionParams: {},
++    actionResult: JSON.stringify([{
++      originalEditBlocks: [{ filePath: 'Justfile', oldLines: ['a'], newLines: ['b'], sequenceNumber: 1 }],
++      didApply: true,
++      error: '',
++      checkResult: { success: true, message: '' },
++      finalDiff,
++    }]),
++  } as FlowAction
++}
++
++async function settle() {
++  await nextTick()
++  await nextTick()
++}
++
++async function mountInBoundary(initialFlowAction: FlowAction) {
++  const flowAction = ref(initialFlowAction)
++  const Host = defineComponent({
++    setup: () => () => h(FlowActionErrorBoundary, { actionId: flowAction.value.id }, {
++      default: () => h(ApplyEditBlocksFlowAction, { flowAction: flowAction.value, expand: true }),
++    }),
++  })
++  const wrapper = mount(Host, { attachTo: document.body })
++  await settle()
++  return { wrapper, flowAction }
++}
++
++describe('ApplyEditBlocksFlowAction diff rendering', () => {
++  it('shows a diff the renderer rejects as the raw patch instead of failing the whole action', async () => {
++    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
++    try {
++      const { wrapper } = await mountInBoundary(flowActionWithDiff(malformedDiff))
++      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
++      expect(wrapper.text()).toContain('Applied')
++      expect(wrapper.get('.raw-diff').element.textContent).toBe(malformedDiff)
++    } finally {
++      consoleError.mockRestore()
++    }
++  })
++
++  it('renders a combined merge-conflict diff as a two-way diff against a selectable parent', async () => {
++    const { wrapper } = await mountInBoundary(flowActionWithDiff(combinedDiff))
++    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
++    expect(wrapper.find('.raw-diff').exists()).toBe(false)
++
++    const optionLabels = () => wrapper.findAll('.combined-diff-bar .segmented-control button').map(b => b.text())
++    expect(optionLabels()).toEqual(['HEAD (ours)', 'Incoming (theirs)', 'Raw'])
++
++    // Against HEAD: publish-web target already existed, so only its recipe changed.
++    let content = wrapper.get('.diff-content').text()
++    expect(content).toContain('@@ -7,5 +7,9 @@')
++    expect(content).toContain('publish-node-placeholder')
++    expect(wrapper.get('.added-count').text()).toBe('+5')
++    expect(wrapper.get('.removed-count').text()).toBe('-1')
++    expect(content).not.toContain('@@@')
++
++    await wrapper.findAll('.combined-diff-bar .segmented-control button')[1].trigger('click')
++    await settle()
++    content = wrapper.get('.diff-content').text()
++    // Against the incoming branch: publish-web target is new, placeholder target is context.
++    expect(content).toContain('@@ -7,6 +7,9 @@')
++    expect(content).toContain('publish-web')
++    expect(wrapper.get('.added-count').text()).toBe('+4')
++    expect(wrapper.get('.removed-count').text()).toBe('-1')
++    expect(wrapper.find('.raw-diff').exists()).toBe(false)
++
++    await wrapper.findAll('.combined-diff-bar .segmented-control button')[2].trigger('click')
++    await settle()
++    expect(wrapper.get('.raw-diff').element.textContent).toBe(combinedDiff)
++  })
++
++  it('renders an ordinary unified diff with the rich diff viewer', async () => {
++    const { wrapper } = await mountInBoundary(flowActionWithDiff(unifiedDiff))
++    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
++    expect(wrapper.find('.raw-diff').exists()).toBe(false)
++    expect(wrapper.get('.diff-content').text()).toContain('new line')
++  })
++
++  it('returns to the rich viewer once a rejected diff is replaced by a valid one', async () => {
++    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
++    try {
++      const { wrapper, flowAction } = await mountInBoundary(flowActionWithDiff(malformedDiff))
++      expect(wrapper.get('.raw-diff').element.textContent).toBe(malformedDiff)
++
++      flowAction.value = flowActionWithDiff(unifiedDiff)
++      await settle()
++
++      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
++      expect(wrapper.find('.raw-diff').exists()).toBe(false)
++      expect(wrapper.get('.diff-content').text()).toContain('new line')
++    } finally {
++      consoleError.mockRestore()
++    }
++  })
++})
+\ No newline at end of file
+diff --git a/frontend/src/components/DiffFile.vue b/frontend/src/components/DiffFile.vue
+index 49a9dcb..43c6f4d 100644
+--- a/frontend/src/components/DiffFile.vue
++++ b/frontend/src/components/DiffFile.vue
+@@ -27,15 +27,28 @@
+             ></div>
+           </div>
+           <div class="line-counts">
+-            <span v-if="fileData.linesAdded > 0" class="added-count">+{{ fileData.linesAdded }}</span>
+-            <span v-if="fileData.linesRemoved > 0" class="removed-count">-{{ fileData.linesRemoved }}</span>
++            <span v-if="displayData.linesAdded > 0" class="added-count">+{{ displayData.linesAdded }}</span>
++            <span v-if="displayData.linesRemoved > 0" class="removed-count">-{{ displayData.linesRemoved }}</span>
+           </div>
+         </div>
+       </div>
+     </div>
+     <div v-if="isExpanded" class="diff-content" tabindex="-1">
++      <div v-if="combinedParentCount" class="combined-diff-bar">
++        <span class="combined-diff-note">
++          Unmerged file: showing changes from the selected side to the working tree.
++          Only regions git recorded in the combined diff are included.
++        </span>
++        <SegmentedControl v-model="combinedView" :options="combinedViewOptions" />
++      </div>
++      <pre v-if="showRawPatch" class="raw-diff">{{ rawPatch }}</pre>
++      <div v-else-if="projectedIsEmpty" class="combined-diff-empty">
++        No differences from this side within the recorded regions.
++      </div>
+       <DiffView
+-        :data="fileData"
++        v-else
++        :key="combinedView"
++        :data="displayData"
+         :diff-view-font-size="14"
+         :diff-view-mode="viewMode"
+         :diff-view-highlight="true"
+@@ -48,10 +61,11 @@
+ </template>
+ 
+ <script setup lang="ts">
+-import { computed, ref, inject } from 'vue'
++import { computed, ref, inject, onErrorCaptured, watch } from 'vue'
+ import CopyIcon from './icons/CopyIcon.vue'
+ import OpenIcon from './icons/OpenIcon.vue'
+-import type { ParsedDiff } from '../lib/diffUtils'
++import SegmentedControl from './SegmentedControl.vue'
++import { combinedDiffParentCount, parseDiff, projectCombinedDiff, type ParsedDiff } from '../lib/diffUtils'
+ import "@git-diff-view/vue/styles/diff-view.css"
+ import { DiffView, DiffModeEnum } from "@git-diff-view/vue"
+ import { IDE_OPENER_KEY } from '../composables/useIdeOpener'
+@@ -86,6 +100,52 @@ const viewMode = computed(() => {
+   return props.diffMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified
+ })
+ 
++// The rich viewer only understands two-way unified diffs. Git's combined diffs
++// for unmerged files are projected onto one parent at a time (stage 2 is
++// always HEAD, stage 3 the side being merged in); anything the viewer still
++// rejects at render time falls back to the original patch text so the diff is
++// never hidden behind an error.
++const rawPatch = computed(() => props.fileData.hunks.join('\n'))
++const renderFailed = ref(false)
++
++const combinedParentCount = computed(() => combinedDiffParentCount(rawPatch.value))
++const combinedView = ref('0')
++const combinedViewOptions = computed(() => {
++  const count = combinedParentCount.value ?? 0
++  const parents = count === 2
++    ? [{ label: 'HEAD (ours)', value: '0' }, { label: 'Incoming (theirs)', value: '1' }]
++    : Array.from({ length: count }, (_, i) => ({ label: `Parent ${i + 1}`, value: String(i) }))
++  return [...parents, { label: 'Raw', value: 'raw' }]
++})
++
++const projectedData = computed<ParsedDiff | null>(() => {
++  if (!combinedParentCount.value || combinedView.value === 'raw') return null
++  const projected = projectCombinedDiff(rawPatch.value, Number(combinedView.value))
++  if (projected === null) return null
++  const parsed = parseDiff(projected)[0]
++  return parsed ? { ...parsed, isRename: props.fileData.isRename } : null
++})
++const projectedIsEmpty = computed(() => projectedData.value !== null && !/^@@ /m.test(projectedData.value.hunks[0]))
++const displayData = computed(() => projectedData.value ?? props.fileData)
++const showRawPatch = computed(() => renderFailed.value || (combinedParentCount.value !== null && projectedData.value === null))
++
++watch(() => props.fileData, () => {
++  renderFailed.value = false
++  combinedView.value = '0'
++})
++watch(combinedView, () => {
++  renderFailed.value = false
++})
++
++onErrorCaptured((error) => {
++  if (renderFailed.value) {
++    return false
++  }
++  renderFailed.value = true
++  console.warn(`Falling back to raw patch for ${filePath.value}:`, error)
++  return false
++})
++
+ const toggleExpanded = () => {
+   isExpanded.value = !isExpanded.value
+ }
+@@ -277,4 +337,44 @@ const getTheme = () => {
+ .diff-content {
+   padding: 0;
+ }
++
++.combined-diff-bar {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 1rem;
++  padding: 0.5rem 1rem;
++  border-bottom: 1px solid var(--color-border);
++  background: var(--color-background-soft);
++}
++
++.combined-diff-note {
++  font-size: 0.8125rem;
++  color: var(--color-text-muted);
++}
++
++.combined-diff-bar :deep(.segmented-control button) {
++  padding: 0.25rem 0.75rem;
++  font-size: 0.8125rem;
++  white-space: nowrap;
++}
++
++.combined-diff-empty {
++  padding: 0.75rem 1rem;
++  font-size: 0.875rem;
++  color: var(--color-text-muted);
++}
++
++.raw-diff {
++  margin: 0;
++  padding: 0.75rem 1rem;
++  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
++  font-size: 0.875rem;
++  line-height: 1.4;
++  color: var(--color-text);
++  background: var(--color-background);
++  white-space: pre-wrap;
++  overflow-wrap: anywhere;
++  tab-size: 4;
++}
+ </style>
+\ No newline at end of file
+diff --git a/frontend/src/components/__tests__/UnifiedDiffViewer.spec.ts b/frontend/src/components/__tests__/UnifiedDiffViewer.spec.ts
+index a7fa661..b706cf1 100644
+--- a/frontend/src/components/__tests__/UnifiedDiffViewer.spec.ts
++++ b/frontend/src/components/__tests__/UnifiedDiffViewer.spec.ts
+@@ -37,10 +37,14 @@ Object.defineProperty(window, 'matchMedia', {
+   })),
+ })
+ 
+-// Mock the parseDiff function
+-vi.mock('../../lib/diffUtils', () => ({
+-  parseDiff: vi.fn()
+-}))
++// Mock only parseDiff; DiffFile still relies on the real helpers.
++vi.mock('../../lib/diffUtils', async (importOriginal) => {
++  const actual: Record<string, unknown> = await importOriginal()
++  return {
++    ...actual,
++    parseDiff: vi.fn()
++  }
++})
+ 
+ import { parseDiff } from '../../lib/diffUtils'
+ const mockParseDiff = vi.mocked(parseDiff)
+diff --git a/frontend/src/lib/__tests__/diffUtils.test.ts b/frontend/src/lib/__tests__/diffUtils.test.ts
+index 645351a..cb3c595 100644
+--- a/frontend/src/lib/__tests__/diffUtils.test.ts
++++ b/frontend/src/lib/__tests__/diffUtils.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, it, expect } from 'vitest';
+-import { parseDiff, getFileLanguage } from '../diffUtils';
++import { parseDiff, getFileLanguage, isCombinedDiff, combinedDiffParentCount, projectCombinedDiff } from '../diffUtils';
+ 
+ describe('getFileLanguage', () => {
+   it('should return correct language for common file extensions', () => {
+@@ -271,6 +271,148 @@ without proper headers`;
+     expect(result[0].linesUnchanged).toBe(0);
+   });
+ 
++  describe('isCombinedDiff', () => {
++    it('detects hunks with combined (multi-parent) headers', () => {
++      expect(isCombinedDiff(['diff --cc a.txt\n@@@ -1,2 -1,2 +1,3 @@@\n +ours\n+ theirs\n  shared'])).toBe(true);
++      expect(isCombinedDiff(['diff --combined a.txt\n@@@@ -1 -1 -1 +1,2 @@@@\n+++x'])).toBe(true);
++    });
++
++    it('does not flag two-way hunks, even in a diff --cc file or with @@@ inside content', () => {
++      expect(isCombinedDiff(['diff --cc a.txt\n@@ -1,2 +1,3 @@\n ours\n+theirs'])).toBe(false);
++      expect(isCombinedDiff(['diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-x\n+@@@ not a header'])).toBe(false);
++      expect(isCombinedDiff([])).toBe(false);
++    });
++  });
++
++  describe('projectCombinedDiff', () => {
++    // Real merge-conflict resolution diff: `- ` is a line only parent 1 had,
++    // ` -` a line only parent 2 had, `++` a line neither had, ` +` a line
++    // parent 1 already had, `+ ` a line parent 2 already had.
++    const combinedDiff = [
++      'diff --cc Justfile',
++      'index 07a3b20,2a11cd1..0000000',
++      '--- a/Justfile',
++      '+++ b/Justfile',
++      '@@@ -7,5 -7,6 +7,9 @@@ install',
++      '  release *args:',
++      '  \t./scripts/release.sh {{args}}',
++      '  ',
++      ' +publish-web *args:',
++      '- \t./scripts/publish-web.sh {{args}}',
++      '++\t./scripts/publish-web.sh {{args}}',
++      '++',
++      '+ # Publish placeholder',
++      '+ publish-node-placeholder *args:',
++      ' -\tcd node && npm publish {{args}}',
++      '++\tcd node && npm publish {{args}}',
++      '',
++    ].join('\n');
++
++    it('reports the number of parents from the hunk header', () => {
++      expect(combinedDiffParentCount(combinedDiff)).toBe(2);
++      expect(combinedDiffParentCount('diff --cc a\n@@@@ -1 -1 -1 +1,2 @@@@\n+++x')).toBe(3);
++      expect(combinedDiffParentCount('diff --git a/a b/a\n@@ -1 +1 @@\n-x\n+y')).toBe(null);
++    });
++
++    it('projects onto parent 1, dropping rows that only parent 2 removed', () => {
++      expect(projectCombinedDiff(combinedDiff, 0)).toBe([
++        'diff --git a/Justfile b/Justfile',
++        '--- a/Justfile',
++        '+++ b/Justfile',
++        '@@ -7,5 +7,9 @@ install',
++        ' release *args:',
++        ' \t./scripts/release.sh {{args}}',
++        ' ',
++        ' publish-web *args:',
++        '-\t./scripts/publish-web.sh {{args}}',
++        '+\t./scripts/publish-web.sh {{args}}',
++        '+',
++        '+# Publish placeholder',
++        '+publish-node-placeholder *args:',
++        '+\tcd node && npm publish {{args}}',
++        '',
++      ].join('\n'));
++    });
++
++    it('projects onto parent 2, dropping rows that only parent 1 removed', () => {
++      expect(projectCombinedDiff(combinedDiff, 1)).toBe([
++        'diff --git a/Justfile b/Justfile',
++        '--- a/Justfile',
++        '+++ b/Justfile',
++        '@@ -7,6 +7,9 @@ install',
++        ' release *args:',
++        ' \t./scripts/release.sh {{args}}',
++        ' ',
++        '+publish-web *args:',
++        '+\t./scripts/publish-web.sh {{args}}',
++        '+',
++        ' # Publish placeholder',
++        ' publish-node-placeholder *args:',
++        '-\tcd node && npm publish {{args}}',
++        '+\tcd node && npm publish {{args}}',
++        '',
++      ].join('\n'));
++    });
++
++    it('handles multiple hunks, three parents and no-newline markers', () => {
++      const diff = [
++        'diff --combined a.txt',
++        '@@@@ -1,2 -1,1 -1,2 +1,2 @@@@',
++        '   shared',
++        '- - gone',
++        '+++new',
++        '@@@@ -10,1 -9,1 -10,1 +9,1 @@@@',
++        '---last',
++        '\\ No newline at end of file',
++        '+++LAST',
++        '\\ No newline at end of file',
++        '',
++      ].join('\n');
++      expect(projectCombinedDiff(diff, 1)).toBe([
++        'diff --git a/a.txt b/a.txt',
++        '--- a/a.txt',
++        '+++ b/a.txt',
++        '@@ -1,1 +1,2 @@',
++        ' shared',
++        '+new',
++        '@@ -9,1 +9,1 @@',
++        '-last',
++        '\\ No newline at end of file',
++        '+LAST',
++        '\\ No newline at end of file',
++        '',
++      ].join('\n'));
++    });
++
++    it('omits hunks that are empty from the selected parent\'s point of view', () => {
++      const diff = [
++        'diff --cc a.txt',
++        '@@@ -1,0 -1,1 +1,0 @@@',
++        ' -only parent 2 had this',
++        '@@@ -5,1 -6,1 +5,1 @@@',
++        '- x',
++        '++y',
++        '',
++      ].join('\n');
++      expect(projectCombinedDiff(diff, 0)).toBe([
++        'diff --git a/a.txt b/a.txt',
++        '--- a/a.txt',
++        '+++ b/a.txt',
++        '@@ -5,1 +5,1 @@',
++        '-x',
++        '+y',
++        '',
++      ].join('\n'));
++    });
++
++    it('returns null for parents out of range, malformed rows or inconsistent counts', () => {
++      expect(projectCombinedDiff(combinedDiff, 2)).toBe(null);
++      expect(projectCombinedDiff('diff --cc a\n@@@ -1,1 -1,1 +1,1 @@@\n?!x\n', 0)).toBe(null);
++      expect(projectCombinedDiff('diff --cc a\n@@@ -1,1 -1,1 +1,2 @@@\n  x\n', 0)).toBe(null);
++      expect(projectCombinedDiff('diff --git a/a b/a\n@@ -1 +1 @@\n-x\n+y\n', 0)).toBe(null);
++    });
++  });
++
+   it('should handle combined diff format (diff --cc)', () => {
+     const combinedDiff = `diff --cc scripts/lint_chat_history_append/main.go
+ index 32293236,12d21e3c..00000000
+diff --git a/frontend/src/lib/diffUtils.ts b/frontend/src/lib/diffUtils.ts
+index 1b6d875..c69e4dc 100644
+--- a/frontend/src/lib/diffUtils.ts
++++ b/frontend/src/lib/diffUtils.ts
+@@ -70,6 +70,121 @@ export const getFileLanguage = (fileName: string | undefined): string | null =>
+   return languageMap[extension?.toLowerCase() ?? ''] || null;
+ };
+ 
++// Git emits combined diffs (`@@@ -a,b -c,d +e,f @@@`, one prefix column per
++// parent) for unmerged paths during a merge. They carry more information than
++// a two-way diff but unified-diff renderers can't display them.
++export const isCombinedDiff = (hunks: string[]): boolean => {
++  return hunks.some(hunk => /^@@@+ /m.test(hunk));
++};
++
++const combinedHunkHeaderRe = /^(@@+) ((?:-\d+(?:,\d+)? )+)\+(\d+)(?:,(\d+))? @@+(.*)$/;
++
++const parseRange = (range: string): { start: number; count: number } => {
++  const [start, count] = range.split(',');
++  return { start: parseInt(start, 10), count: count === undefined ? 1 : parseInt(count, 10) };
++};
++
++export const combinedDiffParentCount = (diff: string): number | null => {
++  for (const line of diff.split('\n')) {
++    const match = combinedHunkHeaderRe.exec(line.replace(/\r$/, ''));
++    if (match && match[1].length > 2) {
++      return match[1].length - 1;
++    }
++  }
++  return null;
++};
++
++const combinedDiffFilePath = (lines: string[]): string | null => {
++  for (const line of lines) {
++    const clean = line.replace(/\r$/, '');
++    const headerMatch = clean.match(/^diff --(?:cc|combined) (.+)$/);
++    if (headerMatch) return headerMatch[1];
++    const newFile = extractFileFromHeader(clean, '+++ ');
++    if (newFile) return newFile;
++  }
++  return null;
++};
++
++// Reduces a combined diff to a plain two-way diff from one parent to the
++// result by reading only that parent's prefix column. Per git's semantics, a
++// row carrying '-' in any column is absent from the result: it is a deletion
++// if the selected column is '-' and otherwise belongs to neither side, so it
++// is dropped. Only regions git recorded in the combined diff are covered, as
++// `--cc` omits hunks where a single parent changed. Returns null when the
++// input isn't a well-formed combined diff or its counts don't add up.
++export const projectCombinedDiff = (diff: string, parentIndex: number): string | null => {
++  const lines = diff.split('\n');
++  const filePath = combinedDiffFilePath(lines) ?? 'file';
++  const output = [`diff --git a/${filePath} b/${filePath}`, `--- a/${filePath}`, `+++ b/${filePath}`];
++
++  let sawHunk = false;
++  let i = 0;
++  while (i < lines.length) {
++    const header = combinedHunkHeaderRe.exec(lines[i].replace(/\r$/, ''));
++    if (!header || header[1].length < 3) {
++      i++;
++      continue;
++    }
++    sawHunk = true;
++
++    const parentCount = header[1].length - 1;
++    const oldRanges = header[2].trim().split(' ').map(range => parseRange(range.slice(1)));
++    if (oldRanges.length !== parentCount || parentIndex < 0 || parentIndex >= parentCount) {
++      return null;
++    }
++    const oldRange = oldRanges[parentIndex];
++    const newRange = { start: parseInt(header[3], 10), count: header[4] === undefined ? 1 : parseInt(header[4], 10) };
++    const heading = header[5];
++
++    const body: string[] = [];
++    let oldCount = 0;
++    let newCount = 0;
++    let lastRowOmitted = false;
++    i++;
++    for (; i < lines.length && !/^@@+ /.test(lines[i]); i++) {
++      const line = lines[i];
++      if (line === '' && i === lines.length - 1) break;
++      if (line.startsWith('\\')) {
++        if (!lastRowOmitted) body.push(line);
++        continue;
++      }
++      if (line.length < parentCount) return null;
++
++      const prefix = line.slice(0, parentCount);
++      const content = line.slice(parentCount);
++      const marker = prefix[parentIndex];
++      lastRowOmitted = false;
++      if (prefix.includes('-')) {
++        if (marker === '-') {
++          body.push('-' + content);
++          oldCount++;
++        } else if (marker === ' ') {
++          lastRowOmitted = true;
++        } else {
++          return null;
++        }
++      } else if (marker === '+') {
++        body.push('+' + content);
++        newCount++;
++      } else if (marker === ' ') {
++        body.push(' ' + content);
++        oldCount++;
++        newCount++;
++      } else {
++        return null;
++      }
++    }
++
++    if (oldCount !== oldRange.count || newCount !== newRange.count) return null;
++    if (body.length === 0) continue;
++    output.push(`@@ -${oldRange.start},${oldRange.count} +${newRange.start},${newRange.count} @@${heading}`, ...body);
++  }
++
++  if (!sawHunk) return null;
++  output.push('');
++  return output.join('\n');
++};
++
+ const parseHunkHeader = (line: string): { oldStart: number; oldCount: number; newStart: number; newCount: number } | null => {
+   const match = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+   if (!match) return null;
