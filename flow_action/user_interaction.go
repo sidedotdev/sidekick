@@ -199,12 +199,25 @@ func ReceiveUserResponse(ctx workflow.Context, expectedFlowActionId string) (Use
 		}
 	}
 
+	// Select doesn't return on cancellation by itself; without a ctx.Done case
+	// a canceled workflow stays blocked here forever, never reaching its
+	// cleanup, and anything waiting for it to close hangs with it. Histories
+	// that entered this wait before the case existed recorded no commands when
+	// canceled, so they must keep the signal-only wait to replay.
+	exitOnCancel := workflow.GetVersion(ctx, "user-response-exit-on-cancel", workflow.DefaultVersion, 1) >= 1
+
 	var userResponse UserResponse
 	selector := workflow.NewNamedSelector(ctx, "userResponseSelector")
 	selector.AddReceive(workflow.GetSignalChannel(ctx, signalName), func(c workflow.ReceiveChannel, more bool) {
 		c.Receive(ctx, &userResponse)
 	})
+	if exitOnCancel {
+		selector.AddReceive(ctx.Done(), func(c workflow.ReceiveChannel, more bool) {})
+	}
 	selector.Select(ctx)
+	if exitOnCancel && ctx.Err() != nil {
+		return UserResponse{}, ctx.Err()
+	}
 	return userResponse, nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -2043,6 +2044,146 @@ func (s *IddWorkflowTestSuite) TestCommitIntentSurfacesCommitFailureWithoutHuman
 	s.True(s.env.IsWorkflowCompleted())
 	s.Require().Error(s.env.GetWorkflowError())
 	s.Contains(s.env.GetWorkflowError().Error(), "failed to sync flow branch to local repo")
+}
+
+// waitForChildCancellationInterceptor makes child workflows in the test
+// environment behave like real ones under cancellation. The test environment
+// resolves a child future with ErrCanceled the moment cancellation is requested
+// unless WaitForCancellation is set, whereas a real parent only learns of the
+// child's closure once the child has actually handled the cancellation.
+type waitForChildCancellationInterceptor struct {
+	interceptor.WorkerInterceptorBase
+}
+
+func (i *waitForChildCancellationInterceptor) InterceptWorkflow(ctx workflow.Context, next interceptor.WorkflowInboundInterceptor) interceptor.WorkflowInboundInterceptor {
+	return &waitForChildCancellationInbound{WorkflowInboundInterceptorBase: interceptor.WorkflowInboundInterceptorBase{Next: next}}
+}
+
+type waitForChildCancellationInbound struct {
+	interceptor.WorkflowInboundInterceptorBase
+}
+
+func (i *waitForChildCancellationInbound) Init(outbound interceptor.WorkflowOutboundInterceptor) error {
+	return i.Next.Init(&waitForChildCancellationOutbound{WorkflowOutboundInterceptorBase: interceptor.WorkflowOutboundInterceptorBase{Next: outbound}})
+}
+
+type waitForChildCancellationOutbound struct {
+	interceptor.WorkflowOutboundInterceptorBase
+}
+
+func (o *waitForChildCancellationOutbound) ExecuteChildWorkflow(ctx workflow.Context, childWorkflowType string, args ...interface{}) workflow.ChildWorkflowFuture {
+	opts := workflow.GetChildWorkflowOptions(ctx)
+	opts.WaitForCancellation = true
+	return o.Next.ExecuteChildWorkflow(workflow.WithChildOptions(ctx, opts), childWorkflowType, args...)
+}
+
+// TestIddFinishCompletesWithSubtaskBlockedOnUserResponse pins the finish
+// against a sub-task waiting on the user: the finish cancels in-flight
+// sub-tasks and waits for them to close before cleaning up, so a sub-task that
+// ignored cancellation while awaiting its response would leave the flow hung
+// after a successful merge, with the approval still shown as pending.
+func (s *IddWorkflowTestSuite) TestIddFinishCompletesWithSubtaskBlockedOnUserResponse() {
+	const iddBranch = "side/idd-worktree"
+	const targetBranch = "main"
+
+	workerOptions := utils.TestWorkerOptions()
+	workerOptions.Interceptors = []interceptor.WorkerInterceptor{&waitForChildCancellationInterceptor{}}
+	s.env.SetWorkerOptions(workerOptions)
+	// The finish would otherwise hang for the environment's 10-year default
+	// timeout when the sub-task ignores its cancellation.
+	s.env.SetTestTimeout(10 * time.Second)
+
+	mu, approvalActions := s.recordMergeApprovalActions()
+	s.setupTitleGenerationMocks()
+
+	var childMu sync.Mutex
+	var childErr error
+	s.env.RegisterWorkflowWithOptions(
+		func(ctx workflow.Context, input BasicDevWorkflowInput) (string, error) {
+			_, err := flow_action.ReceiveUserResponse(ctx, "fa_blocked")
+			childMu.Lock()
+			childErr = err
+			childMu.Unlock()
+			return "", err
+		},
+		workflow.RegisterOptions{Name: "BasicDevWorkflow"},
+	)
+
+	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil)
+	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil)
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 0 && in.Args[0] == "rev-parse"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "abc123\n", ExitStatus: 0}, nil)
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 0 && in.Args[0] == "show"
+	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil)
+	s.env.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("intent diff", nil)
+	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).Return(git.MergeActivityResult{}, nil)
+	s.env.OnActivity(s.ima.PutWorkflow, mock.Anything, mock.AnythingOfType("domain.Flow")).Return(nil).Maybe()
+
+	state := &IddState{DefaultTargetBranch: targetBranch}
+	var cleanupMu sync.Mutex
+	pendingAtCleanup, runnersAtCleanup := -1, -1
+	// The workflow is blocked on this activity, so the drain state it observes
+	// is exactly what the finish saw when it decided to clean up.
+	s.env.OnActivity(git.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, envContainer env.EnvContainer, worktreePath, branchName, archiveMessage string) error {
+			cleanupMu.Lock()
+			defer cleanupMu.Unlock()
+			pendingAtCleanup = len(pendingSubtaskFlowIds(state))
+			runnersAtCleanup = state.InFlightSubtaskRunners
+			return nil
+		}).Once()
+
+	// resolves to the sub-task's final status once the flow has finished
+	miniIdd := func(ctx workflow.Context) (string, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		dCtx := newIddMergeApprovalDevContext(ctx, iddBranch)
+		input := iddMergeApprovalInput()
+		ma := startIddMergeApproval(dCtx, input, state)
+		if err := runIddMainLoop(dCtx, input, state, ma, nil); err != nil {
+			return "", err
+		}
+		if len(state.Subtasks) != 1 {
+			return "", fmt.Errorf("expected exactly one sub-task, got %d", len(state.Subtasks))
+		}
+		return state.Subtasks[0].Status, nil
+	}
+	s.env.RegisterWorkflow(miniIdd)
+
+	s.env.RegisterDelayedCallback(func() {
+		s.env.SignalWorkflow(SignalNameStartIntentSubtask, StartIntentSubtaskSignal{})
+	}, time.Second)
+	approved := true
+	s.env.RegisterDelayedCallback(func() {
+		s.Require().Len(state.Subtasks, 1, "the sub-task should have been dispatched before approval")
+		s.Require().Equal("in_progress", state.Subtasks[0].Status, "the sub-task should be running when the user approves")
+		s.signalMergeApprovalResponse(mu, approvalActions, flow_action.UserResponse{Approved: &approved})
+	}, 10*time.Second)
+
+	s.env.ExecuteWorkflow(miniIdd)
+	s.Require().True(s.env.IsWorkflowCompleted())
+	s.Require().NoError(s.env.GetWorkflowError(), "the flow must finish once the merge has succeeded")
+
+	var subtaskStatus string
+	s.Require().NoError(s.env.GetWorkflowResult(&subtaskStatus))
+	s.Equal("canceled", subtaskStatus, "the finish should have canceled the blocked sub-task")
+
+	childMu.Lock()
+	s.True(temporal.IsCanceledError(childErr), "the blocked sub-task should have observed its cancellation, got: %v", childErr)
+	childMu.Unlock()
+
+	cleanupMu.Lock()
+	s.Equal(0, pendingAtCleanup, "cleanup must wait for the canceled sub-task to close")
+	s.Equal(0, runnersAtCleanup, "cleanup must wait for the sub-task runner to settle")
+	cleanupMu.Unlock()
+
+	mu.Lock()
+	defer mu.Unlock()
+	s.Require().NotEmpty(*approvalActions)
+	final := (*approvalActions)[len(*approvalActions)-1]
+	s.Equal(domain.ActionStatusComplete, final.ActionStatus, "the approval must complete once the flow has finished")
+	s.Equal("intent diff", mergeApprovalInfo(final)["diff"])
 }
 
 // TestCancelPendingSubtasksWaitsForRunnersPastClosure pins the barrier the
