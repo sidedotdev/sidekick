@@ -1075,6 +1075,30 @@ func commitMessageForMerge(params MergeWithReviewParams) string {
 	return shortenCommitMessage(requirements)
 }
 
+// resolveCommitTitle falls back to the parent task's current title when none
+// was passed in, since task titles are generated concurrently with the flow
+// and so usually aren't known yet when the flow starts.
+func resolveCommitTitle(dCtx DevContext, params MergeWithReviewParams) string {
+	if strings.TrimSpace(params.Title) != "" {
+		return params.Title
+	}
+	if workflow.GetVersion(dCtx, "commit-title-from-task", workflow.DefaultVersion, 1) < 1 {
+		return params.Title
+	}
+
+	var ima *DevAgentManagerActivities
+	var output GetFlowTaskTitleOutput
+	err := workflow.ExecuteActivity(setActivityOptions(dCtx), ima.GetFlowTaskTitle, GetFlowTaskTitleInput{
+		WorkspaceId: dCtx.WorkspaceId,
+		FlowId:      workflow.GetInfo(dCtx).WorkflowExecution.ID,
+	}).Get(dCtx, &output)
+	if err != nil {
+		workflow.GetLogger(dCtx).Warn("Failed to get task title for commit message", "Error", err)
+		return params.Title
+	}
+	return output.Title
+}
+
 // shortenCommitMessage keeps only the first line as the commit subject, moving
 // any overflow beyond the subject line's length limit into the commit body.
 func shortenCommitMessage(message string) string {
@@ -1151,6 +1175,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 	// handling review feedback in the review and resolve flow, and related to
 	// the overall requirements in the initial basic dev flow.
 
+	params.Title = resolveCommitTitle(dCtx, params)
 	commitMessage := commitMessageForMerge(params)
 
 	committerName := dCtx.GlobalState.GetStringValue("committerName")

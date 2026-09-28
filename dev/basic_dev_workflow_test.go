@@ -197,6 +197,31 @@ func (s *AutoMergeApprovalTestSuite) TestAutoMergeMergesIntoConfiguredBranch() {
 	s.Equal("side/sub-task", mergedSource)
 }
 
+// TestMergeCommitUsesTaskTitleGeneratedAfterFlowStart covers flows started
+// before their task title was generated: the commit must still use the title.
+func (s *AutoMergeApprovalTestSuite) TestMergeCommitUsesTaskTitleGeneratedAfterFlowStart() {
+	s.setupMergeMocks()
+	var ima *DevAgentManagerActivities
+	s.env.OnActivity(ima.GetFlowTaskTitle, mock.Anything, mock.Anything).
+		Return(GetFlowTaskTitleOutput{Title: "Rename npm package"}, nil)
+
+	var commitMessage string
+	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			commitMessage = args.Get(2).(git.GitMergeParams).CommitMessage
+		}).
+		Return(git.MergeActivityResult{HasConflicts: false}, nil)
+
+	startBranch := "main"
+	testWorkflow := s.mergeWorkflow(true, &startBranch)
+	s.env.RegisterWorkflow(testWorkflow)
+	s.env.ExecuteWorkflow(testWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal("Rename npm package", commitMessage)
+}
+
 // setupStashConflictMocks makes the merge report a base-worktree stash
 // conflict relocated onto the flow's own worktree, with a trivially
 // "resolved" resolution subflow (nothing conflicted, no merge in progress).
