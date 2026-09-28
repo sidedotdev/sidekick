@@ -562,3 +562,106 @@ func TestRestoreOmittedCommonLinesInteriorAndFinalNewline(t *testing.T) {
 		})
 	}
 }
+
+// Changes git cannot express as hunks (empty files, mode-only changes, binary
+// files, renames) must neither fail the comparison nor be reported when both
+// reviews contain them unchanged.
+func TestInterdiffHunklessSections(t *testing.T) {
+	t.Parallel()
+
+	const emptyFile = "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n"
+	const modeOnly = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n"
+	const binary = "diff --git a/img.png b/img.png\nnew file mode 100644\nindex 0000000..1234567\nBinary files /dev/null and b/img.png differ\n"
+	const rename = "diff --git a/old.go b/new.go\nsimilarity index 100%\nrename from old.go\nrename to new.go\n"
+	const textChange = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-base\n+reviewed\n"
+	const textChangeMore = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n-base\n+reviewed\n+more\n"
+	const emptyFileFilled = "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n--- /dev/null\n+++ b/empty.txt\n@@ -0,0 +1 @@\n+filled\n"
+
+	tests := []struct {
+		name    string
+		prior   string
+		current string
+		want    string
+	}{
+		{
+			name:    "unchanged hunkless sections are omitted",
+			prior:   emptyFile + modeOnly + binary + rename + textChange,
+			current: emptyFile + modeOnly + binary + rename + textChangeMore,
+			want:    "diff --git a/f b/f\n--- b/f\n+++ b/f\n@@ -1,1 +1,2 @@\n reviewed\n+more\n",
+		},
+		{
+			name:    "hunkless section only in current is reported as is",
+			prior:   textChange,
+			current: textChange + emptyFile,
+			want:    emptyFile,
+		},
+		{
+			name:    "empty file only in prior is reported as deleted",
+			prior:   textChange + emptyFile,
+			current: textChange,
+			want:    "diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\nindex e69de29..0000000\n",
+		},
+		{
+			name:    "mode change only in prior is reverted",
+			prior:   modeOnly,
+			current: textChange,
+			want:    textChange + "diff --git a/run.sh b/run.sh\nold mode 100755\nnew mode 100644\n",
+		},
+		{
+			name:    "rename only in prior is reverted",
+			prior:   rename,
+			current: textChange,
+			want:    textChange + "diff --git a/new.go b/old.go\nsimilarity index 100%\nrename from new.go\nrename to old.go\n",
+		},
+		{
+			name:    "empty file filled since prior reports the added lines",
+			prior:   emptyFile,
+			current: emptyFileFilled,
+			want:    "diff --git a/empty.txt b/empty.txt\n--- a/empty.txt\n+++ b/empty.txt\n@@ -0,0 +1 @@\n+filled\n",
+		},
+		{
+			name:    "filled file emptied since prior reports the removed lines",
+			prior:   emptyFileFilled,
+			current: emptyFile,
+			want:    "diff --git a/empty.txt b/empty.txt\n--- a/empty.txt\n+++ b/empty.txt\n@@ -1 +0,0 @@\n-filled\n",
+		},
+		{
+			name:    "filled file deleted since prior reports the removed lines",
+			prior:   "diff --git a/empty.txt b/empty.txt\n--- a/empty.txt\n+++ b/empty.txt\n@@ -0,0 +1 @@\n+filled\n",
+			current: "diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\nindex e69de29..0000000\n",
+			want:    "diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\n--- a/empty.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-filled\n",
+		},
+		{
+			name:    "text edits reverted while mode change remains reports the reversion",
+			prior:   textChange,
+			current: "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n",
+			want:    "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-reviewed\n+base\n",
+		},
+		{
+			name:    "text edited after a reviewed mode change reports only the edit",
+			prior:   "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n",
+			current: "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-base\n+edited\n",
+			want:    "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-base\n+edited\n",
+		},
+		{
+			name:    "reviewed mode change reverted while editing reports the mode reversion",
+			prior:   "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n",
+			current: textChange,
+			want:    "diff --git a/f b/f\nold mode 100755\nnew mode 100644\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-base\n+reviewed\n",
+		},
+		{
+			name:    "text file turned binary reports the current section",
+			prior:   textChange,
+			current: "diff --git a/f b/f\nBinary files a/f and b/f differ\n",
+			want:    "diff --git a/f b/f\nBinary files a/f and b/f differ\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := Interdiff(tt.prior, tt.current)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}

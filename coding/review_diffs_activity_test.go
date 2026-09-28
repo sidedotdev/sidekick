@@ -532,6 +532,7 @@ func TestGenerateReviewDiffsActivity_PinnedStartPointExcludesNonTextPriorWork(t 
 
 			createFileAndCommit(t, repoDir, "previous_step.go", "package feature\n\nfunc PreviousStep() {}\n", "previous step work")
 			createFileAndCommit(t, repoDir, "placeholder.txt", "", "previous step placeholder")
+			createFileAndCommit(t, repoDir, "image.bin", "\x00\x01\x02binary", "previous step binary")
 			require.NoError(t, os.Chmod(filepath.Join(repoDir, "shared.go"), 0755))
 			runGit(t, repoDir, "update-index", "--chmod=+x", "shared.go")
 			runGit(t, repoDir, "commit", "-m", "previous step mode change")
@@ -559,10 +560,9 @@ func TestGenerateReviewDiffsActivity_PinnedStartPointExcludesNonTextPriorWork(t 
 			assert.Contains(t, result.FullDiff, "ThisStepMore")
 			assert.NotContains(t, result.FullDiff, "PreviousStep", "work before the step start point is not this step's")
 			assert.NotContains(t, result.FullDiff, "placeholder.txt")
+			assert.NotContains(t, result.FullDiff, "image.bin")
 			assert.NotContains(t, result.FullDiff, "shared.go")
-			if !tt.mergeBaseWork {
-				assert.NotContains(t, result.FullDiff, "UpstreamWork")
-			}
+			assert.NotContains(t, result.FullDiff, "UpstreamWork", "changes merged in from the base branch are not this step's")
 		})
 	}
 }
