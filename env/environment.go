@@ -1234,6 +1234,20 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 		return output, "", err
 	}
 
+	// A rejected key would survive an endpoint refresh and leave only the API
+	// fallback, which drops the reverse port forwards, so repair it first.
+	if isModalSSHAuthFailure(diagnostics) {
+		if repairErr := e.repairSSHAuthorizedKey(ctx); repairErr != nil {
+			log.Warn().Err(repairErr).Str("sandbox", e.SandboxName).Msg("failed to repair rejected modal SSH key")
+		} else {
+			output, diagnostics, err = runCommand(ctx, input)
+			appendDiagnostics()
+			if !transportFailed() {
+				return output, "", err
+			}
+		}
+	}
+
 	// The stored tunnel endpoint may be stale because the idle watchdog
 	// snapshotted and terminated the sandbox; refreshing restores it. The
 	// idle timeout is short enough that the sandbox can be terminated again
@@ -1327,7 +1341,15 @@ func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
 }
 
 func (e *ModalEnv) recoverSSHTransport(ctx context.Context, cause error) (bool, error) {
-	if cause == nil || !isModalSSHTransportFailure(cause.Error()) {
+	if cause == nil {
+		return false, nil
+	}
+	// Authentication precedes any remote execution, so a rejected key is as
+	// safe to retry as a failed dial once the key is reinstalled.
+	if isModalSSHAuthFailure(cause.Error()) {
+		return true, e.repairSSHAuthorizedKey(ctx)
+	}
+	if !isModalSSHTransportFailure(cause.Error()) {
 		return false, nil
 	}
 	refreshEndpoint := refreshModalEndpoint
@@ -1340,6 +1362,52 @@ func (e *ModalEnv) recoverSSHTransport(ctx context.Context, cause error) (bool, 
 	}
 	e.SSHHost, e.SSHPort = host, port
 	return true, nil
+}
+
+// modalAuthorizedKeyRepairScript reinstalls the host's key the way the sshd
+// startup command does, and removes group/other write access from the paths
+// sshd's StrictModes checks, since either can be clobbered by work running as
+// root inside the sandbox after boot.
+const modalAuthorizedKeyRepairScript = `mkdir -p /root/.ssh && ` +
+	`printf '%s\n' "$SIDE_SSH_PUBKEY" > /root/.ssh/authorized_keys && ` +
+	`chown root:root /root /root/.ssh /root/.ssh/authorized_keys && ` +
+	`chmod go-w /root && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys`
+
+// repairSSHAuthorizedKey restores key authorization through the Modal API,
+// which does not depend on the SSH access being repaired. Already
+// authenticated connections survive a clobbered authorized_keys, so only new
+// sessions notice the damage.
+func (e *ModalEnv) repairSSHAuthorizedKey(ctx context.Context) error {
+	_, publicKey, err := ensureModalSSHKey(ctx)
+	if err != nil {
+		return err
+	}
+	run := e.runModalAPICommand
+	if run == nil {
+		run = e.runAPICommandInner
+	}
+	output, err := run(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", modalAuthorizedKeyRepairScript},
+		EnvVars: []string{"SIDE_SSH_PUBKEY=" + publicKey},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to repair SSH authorized key in modal sandbox %s: %w", e.SandboxName, err)
+	}
+	if output.ExitStatus != 0 {
+		return fmt.Errorf("failed to repair SSH authorized key in modal sandbox %s (exit %d): %s",
+			e.SandboxName, output.ExitStatus, strings.TrimSpace(output.Stderr+output.Stdout))
+	}
+	log.Warn().Str("sandbox", e.SandboxName).Msg("repaired SSH authorized key after the sandbox rejected it")
+	return nil
+}
+
+// isModalSSHAuthFailure reports whether ssh diagnostics show the sandbox's
+// sshd rejecting our key, from either the OpenSSH client or the native one.
+func isModalSSHAuthFailure(diagnostics string) bool {
+	diagnostics = strings.ToLower(diagnostics)
+	return strings.Contains(diagnostics, "permission denied (publickey") ||
+		strings.Contains(diagnostics, "ssh: unable to authenticate")
 }
 
 // isModalSSHTransportFailure reports whether ssh client diagnostics describe a
