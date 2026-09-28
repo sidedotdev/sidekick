@@ -125,6 +125,22 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 				continue
 			}
 
+			if isContentRelevantLlm2Event(event.Type) {
+				streamEvent := domain.Llm2StreamEvent{
+					EventType:    domain.Llm2StreamEventType,
+					FlowActionId: input.FlowActionId,
+					Event:        event,
+				}
+				err := la.Streamer.AddFlowEvent(context.Background(), input.WorkspaceId, input.FlowId, streamEvent)
+				if err != nil {
+					log.Error().Err(err).
+						Str("workspaceId", input.WorkspaceId).
+						Str("flowId", input.FlowId).
+						Str("flowActionId", input.FlowActionId).
+						Msg("failed to add llm2 stream event to flow event stream")
+				}
+			}
+
 			flowEvent := convertLlm2EventToFlowEvent(event, input.FlowActionId, streamedBlocks)
 			if flowEvent == nil {
 				continue
@@ -190,6 +206,18 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	}
 
 	return response, err
+}
+
+// isContentRelevantLlm2Event reports whether an llm2 event carries content the
+// UI needs to render blocks live. Signature deltas are opaque replay bytes and
+// heartbeats carry nothing, so neither is forwarded.
+func isContentRelevantLlm2Event(eventType llm2.EventType) bool {
+	switch eventType {
+	case llm2.EventBlockStarted, llm2.EventTextDelta, llm2.EventSummaryTextDelta, llm2.EventBlockDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // convertLlm2EventToFlowEvent converts an llm2.Event to a domain.FlowEvent for streaming.

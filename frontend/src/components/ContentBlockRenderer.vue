@@ -11,7 +11,7 @@
       <ContentBlockRenderer :block="nested" />
     </template>
   </div>
-  <BuiltinToolBlock v-else-if="block.type === 'builtin_tool_use'" :block="block" :json-tree-depth="0" />
+  <BuiltinToolBlock v-else-if="block.type === 'builtin_tool_use' || block.type === 'builtin_tool_result'" :block="block" :json-tree-depth="0" />
   <JsonTree v-else :deep="0" :data="block" />
 </template>
 

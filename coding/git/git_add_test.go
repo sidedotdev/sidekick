@@ -83,3 +83,33 @@ func TestGitAddActivity_StagesTrackedBinary(t *testing.T) {
 	staged := stagedFiles(t, repoDir)
 	require.True(t, staged["image.bin"], "modified tracked binary file should be staged")
 }
+
+func TestGitAddActivity_IgnoredPath(t *testing.T) {
+	t.Parallel()
+
+	repoDir := setupTestGitRepo(t)
+	createFileAndCommit(t, repoDir, "tracked.txt", "original\n", "initial commit")
+	excludePath := filepath.Join(repoDir, ".git", "info", "exclude")
+	require.NoError(t, os.MkdirAll(filepath.Dir(excludePath), 0755))
+	require.NoError(t, os.WriteFile(excludePath, []byte("/.side/tmp/\n"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".side", "tmp"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".side", "tmp", "scratch.txt"), []byte("scratch\n"), 0644))
+
+	ctx := context.Background()
+	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+	envContainer := env.EnvContainer{Env: devEnv}
+
+	// Subtests run serially since concurrent git adds contend for index.lock.
+	t.Run("ignored path returns ErrPathIgnored", func(t *testing.T) {
+		err := GitAddActivity(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: ".side/tmp/scratch.txt"})
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrPathIgnored)
+	})
+
+	t.Run("missing path is not ErrPathIgnored", func(t *testing.T) {
+		err := GitAddActivity(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: "does-not-exist.txt"})
+		require.Error(t, err)
+		require.NotErrorIs(t, err, ErrPathIgnored)
+	})
+}

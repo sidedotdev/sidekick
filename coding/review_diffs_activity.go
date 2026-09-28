@@ -94,27 +94,33 @@ func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, par
 // instead.
 func fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (string, error) {
 	pinnedStartPoint := params.BaseBranch != "" && params.BaseBranch != params.StartPoint
-	comparisonRef := params.StartPoint
-	if pinnedStartPoint {
-		comparisonRef = params.BaseBranch
-	}
-
-	currentDiff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
-		Staged:           true,
-		ThreeDotDiff:     true,
-		BaseRef:          comparisonRef,
-		IgnoreWhitespace: params.IgnoreWhitespace,
-		ContextLines:     params.ContextLines,
-		FilePaths:        params.FilePaths,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to get diff vs %s: %w", comparisonRef, err)
-	}
 	if !pinnedStartPoint {
-		return currentDiff, nil
+		return currentDiffVersus(ctx, params, params.StartPoint, true)
 	}
 
-	startPointDiff, err := diffAtStartPoint(ctx, params)
+	startMergeBase, err := git.MergeBase(ctx, params.EnvContainer, params.BaseBranch, params.StartPoint)
+	if err != nil {
+		return "", fmt.Errorf("failed to find merge base of %s and %s: %w", params.BaseBranch, params.StartPoint, err)
+	}
+	headMergeBase, err := git.MergeBase(ctx, params.EnvContainer, params.BaseBranch, "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("failed to find merge base of %s and HEAD: %w", params.BaseBranch, err)
+	}
+
+	// Without any base branch changes merged in since the start point,
+	// everything past it is our own work, and git can render that exactly.
+	// Subtracting earlier work from the base branch diff is only needed
+	// otherwise, and is more fragile: interdiffs can't represent everything
+	// git can (binary or mode-only changes, empty files).
+	if startMergeBase == headMergeBase {
+		return currentDiffVersus(ctx, params, params.StartPoint, false)
+	}
+
+	currentDiff, err := currentDiffVersus(ctx, params, params.BaseBranch, true)
+	if err != nil {
+		return "", err
+	}
+	startPointDiff, err := diffAtStartPoint(ctx, params, startMergeBase)
 	if err != nil {
 		return "", err
 	}
@@ -124,22 +130,38 @@ func fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (stri
 
 	sinceStartPoint, err := diffanalysis.Interdiff(startPointDiff, currentDiff)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to exclude changes made before the start point, falling back to the full base branch diff")
-		return currentDiff, nil
+		// Mis-attributing merged-in base branch changes to the step is a far
+		// smaller distortion than reviewing every earlier step's work again.
+		log.Warn().Err(err).Msg("failed to exclude changes made before the start point, falling back to the diff since the start point, which includes changes merged in from the base branch")
+		return currentDiffVersus(ctx, params, params.StartPoint, false)
 	}
 
 	return sinceStartPoint, nil
 }
 
+// currentDiffVersus renders the working tree, including staged changes,
+// against the given ref. A three-dot comparison excludes changes that only
+// exist on the ref's side, which is what a moving base branch needs; a pinned
+// commit that is an ancestor of HEAD has no such side.
+func currentDiffVersus(ctx context.Context, params GenerateReviewDiffsParams, ref string, threeDot bool) (string, error) {
+	diff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
+		Staged:           true,
+		ThreeDotDiff:     threeDot,
+		BaseRef:          ref,
+		IgnoreWhitespace: params.IgnoreWhitespace,
+		ContextLines:     params.ContextLines,
+		FilePaths:        params.FilePaths,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get diff vs %s: %w", ref, err)
+	}
+	return diff, nil
+}
+
 // diffAtStartPoint renders the work that already existed at the start point,
 // relative to where the base branch was back then, which is exactly what must
 // not be attributed to the work under review now.
-func diffAtStartPoint(ctx context.Context, params GenerateReviewDiffsParams) (string, error) {
-	mergeBase, err := git.MergeBase(ctx, params.EnvContainer, params.BaseBranch, params.StartPoint)
-	if err != nil {
-		return "", fmt.Errorf("failed to find merge base of %s and %s: %w", params.BaseBranch, params.StartPoint, err)
-	}
-
+func diffAtStartPoint(ctx context.Context, params GenerateReviewDiffsParams, mergeBase string) (string, error) {
 	diff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
 		BaseRef:          mergeBase,
 		EndRef:           params.StartPoint,

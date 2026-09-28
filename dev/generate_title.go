@@ -42,6 +42,34 @@ func (ima *DevAgentManagerActivities) GetTask(ctx context.Context, input GetTask
 	return ima.Storage.GetTask(ctx, input.WorkspaceId, input.TaskId)
 }
 
+type GetFlowTaskTitleInput struct {
+	WorkspaceId string `json:"workspaceId"`
+	FlowId      string `json:"flowId"`
+}
+
+type GetFlowTaskTitleOutput struct {
+	Title string `json:"title"`
+}
+
+// GetFlowTaskTitle returns the commit-worthy title of the task that owns the
+// flow, or an empty title when the flow has no parent task or the task has no
+// title distinct from its description.
+func (ima *DevAgentManagerActivities) GetFlowTaskTitle(ctx context.Context, input GetFlowTaskTitleInput) (GetFlowTaskTitleOutput, error) {
+	flow, err := ima.Storage.GetFlow(ctx, input.WorkspaceId, input.FlowId)
+	if err != nil {
+		return GetFlowTaskTitleOutput{}, fmt.Errorf("failed to get flow: %w", err)
+	}
+	if !strings.HasPrefix(flow.ParentId, "task_") {
+		return GetFlowTaskTitleOutput{}, nil
+	}
+
+	task, err := ima.Storage.GetTask(ctx, input.WorkspaceId, flow.ParentId)
+	if err != nil {
+		return GetFlowTaskTitleOutput{}, fmt.Errorf("failed to get task: %w", err)
+	}
+	return GetFlowTaskTitleOutput{Title: commitTitleForTask(task.Title, task.Description)}, nil
+}
+
 func (ima *DevAgentManagerActivities) UpdateTaskTitle(ctx context.Context, input UpdateTaskTitleInput) error {
 	return ima.Storage.UpdateTaskTitle(ctx, input.WorkspaceId, input.TaskId, input.Title)
 }

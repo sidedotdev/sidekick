@@ -16,6 +16,7 @@ import com.example.app.core.coroutine.DispatcherProvider
 import com.example.app.core.remote.PairingCredentialStore
 import com.example.app.core.remote.PairingCredentials
 import com.example.app.core.remote.SidekickRemoteApi
+import com.example.app.core.remote.StubSidekickRemoteApi
 import com.example.app.core.remote.Task
 import com.example.app.core.remote.TaskListResponse
 import com.example.app.core.remote.Workspace
@@ -228,7 +229,7 @@ class AppNavHostJvmTest {
     private class FakeRemoteApi(
         private val workspaces: List<Workspace>,
         private val tasksByWorkspace: Map<String, List<Task>>,
-    ) : SidekickRemoteApi {
+    ) : StubSidekickRemoteApi() {
         val requestedWorkspaceIds = mutableListOf<String>()
 
         override suspend fun getWorkspaces() = WorkspaceListResponse(workspaces)

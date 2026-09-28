@@ -52,9 +52,6 @@ func parseForInterdiff(diff string) ([]FileDiff, error) {
 			return nil, fmt.Errorf("duplicate file section: %s", path)
 		}
 		seen[path] = true
-		if file.IsBinary || len(file.Hunks) == 0 {
-			return nil, fmt.Errorf("unsupported non-text change: %s", path)
-		}
 		for _, hunk := range file.Hunks {
 			var oldCount, newCount int
 			for _, line := range hunk.Lines {
@@ -94,6 +91,18 @@ func exactInterdiff(priorFiles, currentFiles []FileDiff) (string, error) {
 		if strings.TrimSpace(prior.RawContent) == strings.TrimSpace(current.RawContent) {
 			continue
 		}
+		// A section without hunks (mode-only, empty or renamed file) leaves the
+		// content at the base, so its metadata and any text change on the other
+		// side can still be compared exactly. Binary content cannot, and the
+		// current section then stands in for the change since the prior one.
+		if len(prior.Hunks) == 0 || len(current.Hunks) == 0 {
+			if prior.IsBinary || current.IsBinary {
+				out.WriteString(ensureTrailingNewline(current.RawContent))
+			} else {
+				out.WriteString(transitionSection(prior, current))
+			}
+			continue
+		}
 
 		prior = alignInterdiffBase(prior, current)
 		section, err := safeInterDiff(ensureTrailingNewline(prior.RawContent), ensureTrailingNewline(current.RawContent))
@@ -102,7 +111,7 @@ func exactInterdiff(priorFiles, currentFiles []FileDiff) (string, error) {
 		}
 		section = withGitFileHeader(dropEmptyFileSections(section), current)
 		if _, err := parseForInterdiff(section); err != nil {
-			section = restoreInterdiffTrailingContext(section, prior, current)
+			section = restoreOmittedCommonLines(section, prior, current)
 		}
 		out.WriteString(limitHunkContext(section, interdiffContextLines))
 	}
@@ -242,6 +251,9 @@ func filePathKey(file FileDiff) string {
 // Reverse raw hunk lines so no-final-newline markers retain their association
 // with the affected line rather than being lost through the shared parser.
 func reverseFileSection(file FileDiff) string {
+	if len(file.Hunks) == 0 {
+		return reverseHunklessSection(file)
+	}
 	reversed := file
 	reversed.OldPath, reversed.NewPath = file.NewPath, file.OldPath
 	var out strings.Builder
@@ -256,10 +268,34 @@ func reverseFileSection(file FileDiff) string {
 	} else {
 		fmt.Fprintf(&out, "+++ b/%s\n", file.OldPath)
 	}
+	writeRawHunks(&out, file, true)
+	return out.String()
+}
+
+// writeRawHunks copies a section's hunks from its raw content, optionally
+// swapping the two sides. Reversal keeps git's convention of listing removed
+// lines before added ones within each run of changed lines, so the lines that
+// were added by the original are held back until the run ends. No-newline
+// markers travel with the line they annotate.
+func writeRawHunks(out *strings.Builder, file FileDiff, reverse bool) {
 	inHunk := false
+	var pendingAdded []string
+	lastPending := false
+	flush := func() {
+		for _, line := range pendingAdded {
+			out.WriteString(line + "\n")
+		}
+		pendingAdded = nil
+		lastPending = false
+	}
 	for _, line := range strings.Split(strings.TrimSuffix(file.RawContent, "\n"), "\n") {
 		if matches := hunkHeaderRegex.FindStringSubmatch(line); matches != nil {
+			flush()
 			inHunk = true
+			if !reverse {
+				out.WriteString(line + "\n")
+				continue
+			}
 			oldRange, newRange := matches[1], matches[3]
 			if matches[2] != "" {
 				oldRange += "," + matches[2]
@@ -267,20 +303,229 @@ func reverseFileSection(file FileDiff) string {
 			if matches[4] != "" {
 				newRange += "," + matches[4]
 			}
-			fmt.Fprintf(&out, "@@ -%s +%s @@%s\n", newRange, oldRange, matches[5])
+			fmt.Fprintf(out, "@@ -%s +%s @@%s\n", newRange, oldRange, matches[5])
 			continue
 		}
 		if !inHunk {
 			continue
 		}
-		if strings.HasPrefix(line, "+") {
-			line = "-" + line[1:]
-		} else if strings.HasPrefix(line, "-") {
-			line = "+" + line[1:]
+		if !reverse {
+			out.WriteString(line + "\n")
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "+"):
+			out.WriteString("-" + line[1:] + "\n")
+			lastPending = false
+		case strings.HasPrefix(line, "-"):
+			pendingAdded = append(pendingAdded, "+"+line[1:])
+			lastPending = true
+		case strings.HasPrefix(line, `\`):
+			if lastPending {
+				pendingAdded = append(pendingAdded, line)
+			} else {
+				out.WriteString(line + "\n")
+			}
+		default:
+			flush()
+			out.WriteString(line + "\n")
+		}
+	}
+	flush()
+}
+
+// transitionSection renders the change from the prior to the current section
+// when at least one of them has no hunks. A hunkless side leaves the content
+// at the base, so the other side's hunks - reversed when they are the prior's
+// - describe the content change exactly. File existence and mode are derived
+// from what each side did to the base, so that a mode change made or undone
+// since the prior review is reported relative to the prior state rather than
+// to the base. Index hashes are dropped since they only hold for the base.
+func transitionSection(prior, current FileDiff) string {
+	priorExists := !prior.IsDeleted && !hasHeaderLinePrefix(prior, "deleted file mode ")
+	currentExists := !current.IsDeleted && !hasHeaderLinePrefix(current, "deleted file mode ")
+	priorBaseMode, priorResultMode := sectionModes(prior)
+	currentBaseMode, currentResultMode := sectionModes(current)
+	baseMode := firstNonEmpty(priorBaseMode, currentBaseMode)
+	priorMode := firstNonEmpty(priorResultMode, baseMode)
+	currentMode := firstNonEmpty(currentResultMode, baseMode)
+	alreadyReviewed := make(map[string]bool)
+	for _, line := range extendedHeaderLines(prior) {
+		alreadyReviewed[line] = true
+	}
+
+	var out strings.Builder
+	out.WriteString(gitFileHeader(current))
+	switch {
+	case !priorExists && currentExists && currentMode != "":
+		fmt.Fprintf(&out, "new file mode %s\n", currentMode)
+	case priorExists && !currentExists && priorMode != "":
+		fmt.Fprintf(&out, "deleted file mode %s\n", priorMode)
+	case priorExists && currentExists && priorMode != "" && currentMode != "" && priorMode != currentMode:
+		fmt.Fprintf(&out, "old mode %s\nnew mode %s\n", priorMode, currentMode)
+	}
+	for _, line := range extendedHeaderLines(current) {
+		if alreadyReviewed[line] || hasAnyPrefix(line, modeHeaderPrefixes) || strings.HasPrefix(line, "index ") {
+			continue
 		}
 		out.WriteString(line + "\n")
 	}
+	if len(prior.Hunks) == 0 && len(current.Hunks) == 0 {
+		// Sections whose metadata is identical relative to the prior state
+		// (e.g. differing only in index hashes) have nothing to report.
+		if out.String() == gitFileHeader(current) {
+			return ""
+		}
+		return out.String()
+	}
+	if priorExists {
+		fmt.Fprintf(&out, "--- a/%s\n", prior.NewPath)
+	} else {
+		out.WriteString("--- /dev/null\n")
+	}
+	if currentExists {
+		fmt.Fprintf(&out, "+++ b/%s\n", current.NewPath)
+	} else {
+		out.WriteString("+++ /dev/null\n")
+	}
+	if len(current.Hunks) > 0 {
+		writeRawHunks(&out, current, false)
+	} else {
+		writeRawHunks(&out, prior, true)
+	}
 	return out.String()
+}
+
+// extendedHeaderLines returns git's extended header lines of a section: those
+// between the diff --git line and the ---/+++ lines or first hunk.
+func extendedHeaderLines(file FileDiff) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSuffix(file.RawContent, "\n"), "\n") {
+		if hunkHeaderRegex.MatchString(line) || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
+			break
+		}
+		if strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "Binary files ") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func hasHeaderLinePrefix(file FileDiff, prefix string) bool {
+	for _, line := range extendedHeaderLines(file) {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+var modeHeaderPrefixes = []string{"old mode ", "new mode ", "new file mode ", "deleted file mode "}
+
+// sectionModes extracts the file modes a section records on the base side and
+// on its result side. Either is empty when the section does not mention it,
+// which for an existing file means the mode is unchanged from the base.
+func sectionModes(file FileDiff) (baseMode, resultMode string) {
+	for _, line := range extendedHeaderLines(file) {
+		if mode, ok := strings.CutPrefix(line, "old mode "); ok {
+			baseMode = mode
+		} else if mode, ok := strings.CutPrefix(line, "deleted file mode "); ok {
+			baseMode = mode
+		} else if mode, ok := strings.CutPrefix(line, "new mode "); ok {
+			resultMode = mode
+		} else if mode, ok := strings.CutPrefix(line, "new file mode "); ok {
+			resultMode = mode
+		}
+	}
+	return baseMode, resultMode
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// Extended header lines that git pairs as old side then new side. Reversing a
+// section swaps their meaning, after which the pairs are put back in git's
+// order.
+var (
+	headerLineReversals = []struct{ from, to string }{
+		{"old mode ", "new mode "},
+		{"new mode ", "old mode "},
+		{"new file mode ", "deleted file mode "},
+		{"deleted file mode ", "new file mode "},
+		{"rename from ", "rename to "},
+		{"rename to ", "rename from "},
+		{"copy from ", "copy to "},
+		{"copy to ", "copy from "},
+		{"--- a/", "+++ b/"},
+		{"+++ b/", "--- a/"},
+		{"--- /dev/null", "+++ /dev/null"},
+		{"+++ /dev/null", "--- /dev/null"},
+	}
+	headerPairOldSide = []string{"old mode ", "rename from ", "copy from ", "--- "}
+	headerPairNewSide = []string{"new mode ", "rename to ", "copy to ", "+++ "}
+)
+
+// reverseHunklessSection undoes a change that has no hunks (binary, mode-only,
+// empty or renamed files), which is expressed entirely by its header lines.
+func reverseHunklessSection(file FileDiff) string {
+	reversed := file
+	reversed.OldPath, reversed.NewPath = file.NewPath, file.OldPath
+
+	lines := strings.Split(strings.TrimSuffix(file.RawContent, "\n"), "\n")
+	var out []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") {
+			continue
+		}
+		out = append(out, reverseHeaderLine(line))
+	}
+	for i := 0; i+1 < len(out); i++ {
+		if hasAnyPrefix(out[i], headerPairNewSide) && hasAnyPrefix(out[i+1], headerPairOldSide) {
+			out[i], out[i+1] = out[i+1], out[i]
+		}
+	}
+
+	section := gitFileHeader(reversed)
+	if len(out) > 0 {
+		section += strings.Join(out, "\n") + "\n"
+	}
+	return section
+}
+
+func reverseHeaderLine(line string) string {
+	for _, reversal := range headerLineReversals {
+		if strings.HasPrefix(line, reversal.from) {
+			return reversal.to + strings.TrimPrefix(line, reversal.from)
+		}
+	}
+	if rest, ok := strings.CutPrefix(line, "index "); ok {
+		hashes, mode, hasMode := strings.Cut(rest, " ")
+		oldHash, newHash, ok := strings.Cut(hashes, "..")
+		if !ok {
+			return line
+		}
+		line = "index " + newHash + ".." + oldHash
+		if hasMode {
+			line += " " + mode
+		}
+	}
+	return line
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // A uniform coordinate shift is safe to align only when the visible base
@@ -324,47 +569,171 @@ func alignInterdiffBase(prior, current FileDiff) FileDiff {
 	return prior
 }
 
-// The interdiff library can count common trailing additions without emitting
-// them as context. Recover only lines proven identical in both post-images.
-func restoreInterdiffTrailingContext(section string, prior, current FileDiff) string {
-	if strings.Contains(section+prior.RawContent+current.RawContent, "\\ No newline at end of file") {
-		return section
+const noNewlineMarker = `\ No newline at end of file`
+
+// reviewImages holds what one review diff reveals about a file's pre-image and
+// post-image, indexed by line number, including which line of each, if any,
+// ends the file without a trailing newline (-1 when none does).
+type reviewImages struct {
+	pre, post                       map[int]string
+	preNoNewlineAt, postNoNewlineAt int
+	hunks                           []hunkRange
+}
+
+type imageLine struct {
+	content   string
+	noNewline bool
+}
+
+// newReviewImages reads the raw hunk lines rather than the parsed ones so that
+// no-newline markers are seen and so that any header realignment applied to
+// RawContent is honored.
+func newReviewImages(file FileDiff) reviewImages {
+	images := reviewImages{
+		pre: make(map[int]string), post: make(map[int]string),
+		preNoNewlineAt: -1, postNoNewlineAt: -1,
 	}
+	inHunk := false
+	oldLine, newLine := 0, 0
+	lastOld, lastNew := -1, -1
+	for _, raw := range strings.Split(file.RawContent, "\n") {
+		if matches := hunkHeaderRegex.FindStringSubmatch(raw); matches != nil {
+			hunk := parseHunkHeader(matches)
+			images.hunks = append(images.hunks, hunk)
+			oldLine, newLine = hunk.oldStart, hunk.newStart
+			lastOld, lastNew = -1, -1
+			inHunk = true
+			continue
+		}
+		if !inHunk || raw == "" {
+			continue
+		}
+		switch raw[0] {
+		case ' ':
+			images.pre[oldLine], images.post[newLine] = raw[1:], raw[1:]
+			lastOld, lastNew = oldLine, newLine
+			oldLine++
+			newLine++
+		case '-':
+			images.pre[oldLine] = raw[1:]
+			lastOld, lastNew = oldLine, -1
+			oldLine++
+		case '+':
+			images.post[newLine] = raw[1:]
+			lastOld, lastNew = -1, newLine
+			newLine++
+		case '\\':
+			if lastOld >= 0 {
+				images.preNoNewlineAt = lastOld
+			}
+			if lastNew >= 0 {
+				images.postNoNewlineAt = lastNew
+			}
+		}
+	}
+	return images
+}
+
+// postLine reports this review's post-image at the given line. Lines the
+// review left untouched fall outside its hunks, but they equal the base both
+// reviews share, which the other review's pre-image may reveal. This is the
+// same shared-base model the interdiff library applies when it emits such
+// lines as context itself; where both reviews reveal a base line that differs,
+// the library rejects the comparison before any repair is attempted.
+func (r reviewImages) postLine(line int, other reviewImages) (imageLine, bool) {
+	if content, ok := r.post[line]; ok {
+		return imageLine{content, line == r.postNoNewlineAt}, true
+	}
+	offset := 0
+	for _, hunk := range r.hunks {
+		if line >= hunk.newStart && line < hunk.newStart+hunk.newCount {
+			return imageLine{}, false
+		}
+		if line >= hunk.newStart+hunk.newCount {
+			offset += hunk.newCount - hunk.oldCount
+		}
+	}
+	base := line - offset
+	content, ok := other.pre[base]
+	return imageLine{content, base == other.preNoNewlineAt}, ok
+}
+
+// The interdiff library can count lines that are identical in both post-images
+// without emitting them, whether they trail a hunk or sit between two changes,
+// and can drop the marker of a final line that lacks a trailing newline.
+// Recover only what both post-images prove, verifying every emitted line
+// against them so the repaired hunk cannot misrepresent the reviewed content.
+// Sections that cannot be fully verified are returned unchanged.
+func restoreOmittedCommonLines(section string, prior, current FileDiff) string {
 	files, err := ParseUnifiedDiff(section)
 	if err != nil || len(files) != 1 {
 		return section
 	}
-	postImage := func(file FileDiff) map[int]string {
-		lines := make(map[int]string)
-		for _, hunk := range file.Hunks {
-			for _, line := range hunk.Lines {
-				if line.Type != LineRemoved {
-					lines[line.NewLine] = line.Content
-				}
-			}
-		}
-		return lines
-	}
-	oldLines, newLines := postImage(prior), postImage(current)
+	oldImages, newImages := newReviewImages(prior), newReviewImages(current)
+
 	var out strings.Builder
 	hunkIndex := -1
 	oldPos, newPos, oldEnd, newEnd := 0, 0, 0, 0
-	finish := func() bool {
-		for oldPos < oldEnd && newPos < newEnd {
-			old, oldOK := oldLines[oldPos]
-			new, newOK := newLines[newPos]
-			if !oldOK || !newOK || old != new {
+	wroteMarker := false
+
+	// verify writes a section line once both images it belongs to confirm it,
+	// along with the no-newline marker when they call for one. A context line
+	// whose two images disagree on the ending is not truly shared.
+	verify := func(line string) bool {
+		content := line[1:]
+		inOld, inNew := line[0] != '+', line[0] != '-'
+		var endsOld, endsNew bool
+		if inOld {
+			old, ok := oldImages.postLine(oldPos, newImages)
+			if !ok || old.content != content {
 				return false
 			}
-			out.WriteString(" " + old + "\n")
+			endsOld = old.noNewline
+		}
+		if inNew {
+			new, ok := newImages.postLine(newPos, oldImages)
+			if !ok || new.content != content {
+				return false
+			}
+			endsNew = new.noNewline
+		}
+		if inOld && inNew && endsOld != endsNew {
+			return false
+		}
+		out.WriteString(line + "\n")
+		wroteMarker = endsOld || endsNew
+		if wroteMarker {
+			out.WriteString(noNewlineMarker + "\n")
+		}
+		if inOld {
 			oldPos++
+		}
+		if inNew {
 			newPos++
 		}
-		return oldPos == oldEnd && newPos == newEnd
+		return true
 	}
-	for _, line := range strings.Split(strings.TrimSuffix(section, "\n"), "\n") {
+	fillCommon := func() bool {
+		if oldPos >= oldEnd || newPos >= newEnd {
+			return false
+		}
+		old, ok := oldImages.postLine(oldPos, newImages)
+		return ok && verify(" "+old.content)
+	}
+	fillToHunkEnd := func() bool {
+		for oldPos < oldEnd || newPos < newEnd {
+			if !fillCommon() {
+				return false
+			}
+		}
+		return true
+	}
+
+	lines := strings.Split(strings.TrimSuffix(section, "\n"), "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		if hunkHeaderRegex.MatchString(line) {
-			if !finish() {
+			if !fillToHunkEnd() {
 				return section
 			}
 			hunkIndex++
@@ -374,28 +743,31 @@ func restoreInterdiffTrailingContext(section string, prior, current FileDiff) st
 			hunk := files[0].Hunks[hunkIndex]
 			oldPos, newPos = hunk.OldStart, hunk.NewStart
 			oldEnd, newEnd = oldPos+hunk.OldCount, newPos+hunk.NewCount
-		} else if hunkIndex >= 0 {
-			if len(line) == 0 {
+			out.WriteString(line + "\n")
+			continue
+		}
+		if hunkIndex < 0 {
+			out.WriteString(line + "\n")
+			continue
+		}
+		if len(line) == 0 || !strings.ContainsRune(" -+", rune(line[0])) {
+			return section
+		}
+		for !verify(line) {
+			if !fillCommon() {
 				return section
 			}
-			if line[0] == ' ' || line[0] == '-' {
-				content, ok := oldLines[oldPos]
-				if !ok || content != line[1:] {
-					return section
-				}
-				oldPos++
-			}
-			if line[0] == ' ' || line[0] == '+' {
-				content, ok := newLines[newPos]
-				if !ok || content != line[1:] {
-					return section
-				}
-				newPos++
+		}
+		// Markers are re-derived from the post-images, so an emitted marker
+		// is consumed and must agree with them.
+		if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "\\") {
+			i++
+			if !wroteMarker {
+				return section
 			}
 		}
-		out.WriteString(line + "\n")
 	}
-	if !finish() {
+	if !fillToHunkEnd() {
 		return section
 	}
 	return out.String()
@@ -405,6 +777,23 @@ func restoreInterdiffTrailingContext(section string, prior, current FileDiff) st
 type hunkRange struct {
 	oldStart, oldCount, newStart, newCount int
 	trailer                                string
+}
+
+// parseHunkHeader builds a hunkRange from hunkHeaderRegex submatches, applying
+// the unified diff default of a single line when a count is omitted.
+func parseHunkHeader(matches []string) hunkRange {
+	hunk := hunkRange{
+		oldStart: parseInt(matches[1]), oldCount: 1,
+		newStart: parseInt(matches[3]), newCount: 1,
+		trailer: matches[5],
+	}
+	if matches[2] != "" {
+		hunk.oldCount = parseInt(matches[2])
+	}
+	if matches[4] != "" {
+		hunk.newCount = parseInt(matches[4])
+	}
+	return hunk
 }
 
 // The interdiff library merges every overlapping pair of hunks into one
@@ -437,17 +826,8 @@ func limitHunkContext(section string, contextLines int) string {
 	for _, line := range lines {
 		if matches := hunkHeaderRegex.FindStringSubmatch(line); matches != nil && (hunk == nil || (oldLeft == 0 && newLeft == 0)) {
 			flush()
-			hunk = &hunkRange{
-				oldStart: parseInt(matches[1]), oldCount: 1,
-				newStart: parseInt(matches[3]), newCount: 1,
-				trailer: matches[5],
-			}
-			if matches[2] != "" {
-				hunk.oldCount = parseInt(matches[2])
-			}
-			if matches[4] != "" {
-				hunk.newCount = parseInt(matches[4])
-			}
+			parsed := parseHunkHeader(matches)
+			hunk = &parsed
 			oldLeft, newLeft = hunk.oldCount, hunk.newCount
 			continue
 		}

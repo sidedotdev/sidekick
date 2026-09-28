@@ -1075,6 +1075,30 @@ func commitMessageForMerge(params MergeWithReviewParams) string {
 	return shortenCommitMessage(requirements)
 }
 
+// resolveCommitTitle falls back to the parent task's current title when none
+// was passed in, since task titles are generated concurrently with the flow
+// and so usually aren't known yet when the flow starts.
+func resolveCommitTitle(dCtx DevContext, params MergeWithReviewParams) string {
+	if strings.TrimSpace(params.Title) != "" {
+		return params.Title
+	}
+	if workflow.GetVersion(dCtx, "commit-title-from-task", workflow.DefaultVersion, 1) < 1 {
+		return params.Title
+	}
+
+	var ima *DevAgentManagerActivities
+	var output GetFlowTaskTitleOutput
+	err := workflow.ExecuteActivity(setActivityOptions(dCtx), ima.GetFlowTaskTitle, GetFlowTaskTitleInput{
+		WorkspaceId: dCtx.WorkspaceId,
+		FlowId:      workflow.GetInfo(dCtx).WorkflowExecution.ID,
+	}).Get(dCtx, &output)
+	if err != nil {
+		workflow.GetLogger(dCtx).Warn("Failed to get task title for commit message", "Error", err)
+		return params.Title
+	}
+	return output.Title
+}
+
 // shortenCommitMessage keeps only the first line as the commit subject, moving
 // any overflow beyond the subject line's length limit into the commit body.
 func shortenCommitMessage(message string) string {
@@ -1083,6 +1107,27 @@ func shortenCommitMessage(message string) string {
 		message = message[:100] + "...\n\n..." + message[100:]
 	}
 	return message
+}
+
+// transferResolvedBaseChanges delivers a stash-conflict resolution to the base
+// worktree. That delivery is what lands a merge whose initial attempt reported
+// conflicts, so when tracked it is recorded as a merge flow action.
+func transferResolvedBaseChanges(dCtx DevContext, params git.GitTransferWorktreeChangesParams, targetBranch string, tracked bool) (git.GitTransferWorktreeChangesResult, error) {
+	if !tracked {
+		var transfer git.GitTransferWorktreeChangesResult
+		err := workflow.ExecuteActivity(dCtx, git.GitTransferWorktreeChangesActivity, *dCtx.EnvContainer, params).Get(dCtx, &transfer)
+		return transfer, err
+	}
+	actionCtx := dCtx.NewActionContext("merge")
+	actionCtx.ActionParams = map[string]interface{}{
+		"sourceBranch": dCtx.Worktree.Name,
+		"targetBranch": targetBranch,
+	}
+	return Track(actionCtx, func(trackedCtx DevActionContext, _ *domain.FlowAction) (git.GitTransferWorktreeChangesResult, error) {
+		var transfer git.GitTransferWorktreeChangesResult
+		err := workflow.ExecuteActivity(trackedCtx, git.GitTransferWorktreeChangesActivity, *trackedCtx.EnvContainer, params).Get(trackedCtx, &transfer)
+		return transfer, err
+	})
 }
 
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string, lastReviewDiff string) (string, MergeApprovalResponse, string, error) {
@@ -1151,6 +1196,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 	// handling review feedback in the review and resolve flow, and related to
 	// the overall requirements in the initial basic dev flow.
 
+	params.Title = resolveCommitTitle(dCtx, params)
 	commitMessage := commitMessageForMerge(params)
 
 	committerName := dCtx.GlobalState.GetStringValue("committerName")
@@ -1295,9 +1341,10 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 							return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to transfer resolved base changes: resolution conflicts with the base worktree at %s", transfer.ConflictDirPath)
 						}
 					} else {
+						trackTransfer := workflow.GetVersion(dCtx, "transfer-resolution-flow-action", workflow.DefaultVersion, 1) >= 1
 						for {
-							var transfer git.GitTransferWorktreeChangesResult
-							if err := workflow.ExecuteActivity(dCtx, git.GitTransferWorktreeChangesActivity, *dCtx.EnvContainer, transferParams).Get(dCtx, &transfer); err != nil {
+							transfer, err := transferResolvedBaseChanges(dCtx, transferParams, mergeInfo.TargetBranch, trackTransfer)
+							if err != nil {
 								return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to transfer resolved base changes: %w", err)
 							}
 							if !transfer.HasConflicts {

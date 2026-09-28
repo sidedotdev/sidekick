@@ -197,6 +197,31 @@ func (s *AutoMergeApprovalTestSuite) TestAutoMergeMergesIntoConfiguredBranch() {
 	s.Equal("side/sub-task", mergedSource)
 }
 
+// TestMergeCommitUsesTaskTitleGeneratedAfterFlowStart covers flows started
+// before their task title was generated: the commit must still use the title.
+func (s *AutoMergeApprovalTestSuite) TestMergeCommitUsesTaskTitleGeneratedAfterFlowStart() {
+	s.setupMergeMocks()
+	var ima *DevAgentManagerActivities
+	s.env.OnActivity(ima.GetFlowTaskTitle, mock.Anything, mock.Anything).
+		Return(GetFlowTaskTitleOutput{Title: "Rename npm package"}, nil)
+
+	var commitMessage string
+	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			commitMessage = args.Get(2).(git.GitMergeParams).CommitMessage
+		}).
+		Return(git.MergeActivityResult{HasConflicts: false}, nil)
+
+	startBranch := "main"
+	testWorkflow := s.mergeWorkflow(true, &startBranch)
+	s.env.RegisterWorkflow(testWorkflow)
+	s.env.ExecuteWorkflow(testWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal("Rename npm package", commitMessage)
+}
+
 // setupStashConflictMocks makes the merge report a base-worktree stash
 // conflict relocated onto the flow's own worktree, with a trivially
 // "resolved" resolution subflow (nothing conflicted, no merge in progress).
@@ -244,6 +269,57 @@ func (s *AutoMergeApprovalTestSuite) TestStashConflictTransferLoopsUntilDelivere
 		s.Equal("/tmp/base-repo", params.TargetWorktreePath)
 		s.Equal("base-stash-sha", params.BaseStashSha)
 	}
+}
+
+// Delivering a stash-conflict resolution to the base worktree is what lands the
+// merge, so each delivery attempt must show up as a merge flow action after the
+// initial conflicted merge, ending in a successful one.
+func (s *AutoMergeApprovalTestSuite) TestStashConflictTransferRecordedAsMergeFlowActions() {
+	var actionOrder []string
+	latestById := map[string]domain.FlowAction{}
+	var fa *flow_action.FlowActivities
+	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			action := args.Get(1).(domain.FlowAction)
+			if _, seen := latestById[action.Id]; !seen {
+				actionOrder = append(actionOrder, action.Id)
+			}
+			latestById[action.Id] = action
+		}).
+		Return(nil)
+	s.setupStashConflictMocks()
+	transfers := 0
+	s.env.OnActivity(git.GitTransferWorktreeChangesActivity, mock.Anything, mock.Anything, mock.Anything).
+		Return(func(context.Context, env.EnvContainer, git.GitTransferWorktreeChangesParams) (git.GitTransferWorktreeChangesResult, error) {
+			transfers++
+			if transfers == 1 {
+				return git.GitTransferWorktreeChangesResult{HasConflicts: true, ConflictDirPath: "/tmp/test-repo"}, nil
+			}
+			return git.GitTransferWorktreeChangesResult{}, nil
+		})
+
+	startBranch := "side/idd-worktree"
+	testWorkflow := s.mergeWorkflow(true, &startBranch)
+	s.env.RegisterWorkflow(testWorkflow)
+	s.env.ExecuteWorkflow(testWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var merges []domain.FlowAction
+	for _, id := range actionOrder {
+		if action := latestById[id]; action.ActionType == "merge" {
+			merges = append(merges, action)
+		}
+	}
+	s.Require().Len(merges, 3, "the initial merge plus one merge action per delivery attempt")
+	s.Contains(merges[0].ActionResult, `"hasConflicts":true`)
+	s.Contains(merges[1].ActionResult, `"hasConflicts":true`)
+	final := merges[2]
+	s.Equal(domain.ActionStatusComplete, final.ActionStatus)
+	s.Contains(final.ActionResult, `"hasConflicts":false`)
+	s.Equal("side/sub-task", final.ActionParams["sourceBranch"])
+	s.Equal(startBranch, final.ActionParams["targetBranch"])
 }
 
 // Executions that predate the transfer loop must not mistake an undelivered

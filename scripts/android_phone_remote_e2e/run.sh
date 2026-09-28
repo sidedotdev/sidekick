@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the live iroh remote-access instrumentation test on a physically
+# Runs the live iroh remote-access instrumentation tests on a physically
 # connected Android device against the locally running sidekick server.
 #
 # It mints a throwaway pairing through the local API, hands the credentials to
@@ -8,25 +8,29 @@
 # occurrence is redacted before printing.
 #
 # Usage:
-#   scripts/android_phone_remote_e2e/run.sh [-s SERIAL] [-t TIMEOUT_SECONDS]
+#   scripts/android_phone_remote_e2e/run.sh [-s SERIAL] [-t TIMEOUT_SECONDS] [-w WORKSPACE_ID]
 #
 # Environment:
-#   ANDROID_SERIAL     device serial to target (same as -s); required when
-#                      more than one device is attached
-#   ADB                explicit adb binary (defaults to PATH, then
-#                      $ANDROID_HOME/platform-tools/adb)
-#   SIDE_SERVER_HOST   local sidekick server host (default 127.0.0.1)
-#   SIDE_SERVER_PORT   local sidekick server port (default 8855)
+#   ANDROID_SERIAL         device serial to target (same as -s); required when
+#                          more than one device is attached
+#   ADB                    explicit adb binary (defaults to PATH, then
+#                          $ANDROID_HOME/platform-tools/adb)
+#   SIDE_SERVER_HOST       local sidekick server host (default 127.0.0.1)
+#   SIDE_SERVER_PORT       local sidekick server port (default 8855)
+#   SIDEKICK_WORKSPACE_ID  workspace the flow sync test creates its task in
+#                          (same as -w); defaults to the server's first workspace
 set -euo pipefail
 
 SERIAL="${ANDROID_SERIAL:-}"
 TIMEOUT_SECONDS=900
+WORKSPACE_ID="${SIDEKICK_WORKSPACE_ID:-}"
 
-while getopts ":s:t:h" opt; do
+while getopts ":s:t:w:h" opt; do
   case "$opt" in
     s) SERIAL="$OPTARG" ;;
     t) TIMEOUT_SECONDS="$OPTARG" ;;
-    h) sed -n '2,25p' "$0"; exit 0 ;;
+    w) WORKSPACE_ID="$OPTARG" ;;
+    h) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "unknown option: -$OPTARG" >&2; exit 2 ;;
   esac
 done
@@ -36,7 +40,10 @@ ANDROID_PROJECT="${ANDROID_PROJECT:-$REPO_ROOT/app/android}"
 GRADLEW="${GRADLEW:-$ANDROID_PROJECT/gradlew}"
 RESULTS_DIR="$ANDROID_PROJECT/app/build/outputs/androidTest-results/connected"
 BASE_URL="http://${SIDE_SERVER_HOST:-127.0.0.1}:${SIDE_SERVER_PORT:-8855}"
-TEST_CLASS="com.example.app.RemoteWorkspaceIrohInstrumentedTest"
+TEST_CLASSES=(
+  "com.example.app.RemoteWorkspaceIrohInstrumentedTest"
+  "com.example.app.RemoteFlowSyncIrohInstrumentedTest"
+)
 APP_ID="com.example.app"
 CURL_TIMEOUT_SECONDS=15
 ADB_TIMEOUT_SECONDS=60
@@ -158,53 +165,64 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 run_instrumentation() {
-  "$GRADLEW" -p "$ANDROID_PROJECT" :app:connectedDebugAndroidTest \
-    "-Pandroid.testInstrumentationRunnerArguments.class=$TEST_CLASS" \
-    "-Pandroid.testInstrumentationRunnerArguments.sidekickTicket=$TICKET" \
-    "-Pandroid.testInstrumentationRunnerArguments.sidekickToken=$TOKEN" 2>&1 | redact
+  local class_filter
+  class_filter="$(IFS=,; printf '%s' "${TEST_CLASSES[*]}")"
+  local args=(
+    "-Pandroid.testInstrumentationRunnerArguments.class=$class_filter"
+    "-Pandroid.testInstrumentationRunnerArguments.sidekickTicket=$TICKET"
+    "-Pandroid.testInstrumentationRunnerArguments.sidekickToken=$TOKEN"
+  )
+  if [ -n "$WORKSPACE_ID" ]; then
+    args+=("-Pandroid.testInstrumentationRunnerArguments.sidekickWorkspaceId=$WORKSPACE_ID")
+  fi
+  "$GRADLEW" -p "$ANDROID_PROJECT" :app:connectedDebugAndroidTest "${args[@]}" 2>&1 | redact
 }
 
 testsuite_attribute() {
   sed -n "s/.*<testsuite[^>]* $2=\"\([0-9][0-9]*\)\".*/\1/p" "$1" | head -1
 }
 
-# A green gradle run proves nothing on its own: the task can be skipped or the
-# test filtered out, so the instrumentation results must show it truly ran.
+# A green gradle run proves nothing on its own: the task can be skipped or a
+# test filtered out, so the instrumentation results must show that every
+# expected class truly ran and passed.
 verify_test_executed() {
   local results
   results="$(find "$RESULTS_DIR" -name 'TEST-*.xml' 2>/dev/null || true)"
   if [ -z "$results" ]; then
-    echo "no instrumentation results under $RESULTS_DIR: $TEST_CLASS never ran" >&2
+    echo "no instrumentation results under $RESULTS_DIR: ${TEST_CLASSES[*]} never ran" >&2
     return 1
   fi
 
-  local matched=0
-  while IFS= read -r result_file; do
-    [ -n "$result_file" ] || continue
-    grep -q "$TEST_CLASS" "$result_file" || continue
-    matched=1
+  local test_class
+  for test_class in "${TEST_CLASSES[@]}"; do
+    local matched=0
+    while IFS= read -r result_file; do
+      [ -n "$result_file" ] || continue
+      grep -q "$test_class" "$result_file" || continue
+      matched=1
 
-    if grep -q '<skipped' "$result_file"; then
-      echo "$TEST_CLASS was skipped (no pairing credentials reached the device)" >&2
-      return 1
-    fi
+      if grep -q '<skipped' "$result_file"; then
+        echo "$test_class was skipped (no pairing credentials reached the device)" >&2
+        return 1
+      fi
 
-    local tests failures errors
-    tests="$(testsuite_attribute "$result_file" tests)"
-    failures="$(testsuite_attribute "$result_file" failures)"
-    errors="$(testsuite_attribute "$result_file" errors)"
-    if [ "${tests:-0}" -lt 1 ] || [ "${failures:-0}" -ne 0 ] || [ "${errors:-0}" -ne 0 ]; then
-      echo "instrumentation results report tests=${tests:-?} failures=${failures:-?} errors=${errors:-?}" >&2
-      return 1
-    fi
-  done <<EOF
+      local tests failures errors
+      tests="$(testsuite_attribute "$result_file" tests)"
+      failures="$(testsuite_attribute "$result_file" failures)"
+      errors="$(testsuite_attribute "$result_file" errors)"
+      if [ "${tests:-0}" -lt 1 ] || [ "${failures:-0}" -ne 0 ] || [ "${errors:-0}" -ne 0 ]; then
+        echo "instrumentation results report tests=${tests:-?} failures=${failures:-?} errors=${errors:-?}" >&2
+        return 1
+      fi
+    done <<EOF
 $results
 EOF
 
-  if [ "$matched" -ne 1 ]; then
-    echo "$TEST_CLASS is absent from the instrumentation results: it never ran" >&2
-    return 1
-  fi
+    if [ "$matched" -ne 1 ]; then
+      echo "$test_class is absent from the instrumentation results: it never ran" >&2
+      return 1
+    fi
+  done
 }
 
 device_properties() {
@@ -239,7 +257,12 @@ log "Clearing device logcat and stale instrumentation results"
 run_with_timeout "$ADB_TIMEOUT_SECONDS" "$ADB" -s "$SERIAL" logcat -c || true
 rm -rf "$RESULTS_DIR"
 
-log "Running $TEST_CLASS on $SERIAL (hard timeout ${TIMEOUT_SECONDS}s)"
+log "Running ${TEST_CLASSES[*]} on $SERIAL (hard timeout ${TIMEOUT_SECONDS}s)"
+if [ -n "$WORKSPACE_ID" ]; then
+  echo "workspace: $WORKSPACE_ID"
+else
+  echo "workspace: first workspace reported by the server"
+fi
 status=0
 run_with_timeout "$TIMEOUT_SECONDS" run_instrumentation || status=$?
 
@@ -252,7 +275,7 @@ if [ "$status" -eq 0 ] && ! verify_test_executed; then
 fi
 
 if [ "$status" -eq 0 ]; then
-  echo "PASS: workspaces loaded over iroh on $SERIAL"
+  echo "PASS: instrumentation passed over iroh on $SERIAL (${TEST_CLASSES[*]})"
 else
   echo "FAIL: instrumentation run exited with status $status" >&2
   echo "HTML report: $ANDROID_PROJECT/app/build/reports/androidTests/connected/index.html" >&2

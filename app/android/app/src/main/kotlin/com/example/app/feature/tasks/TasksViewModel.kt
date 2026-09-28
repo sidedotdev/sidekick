@@ -8,11 +8,10 @@ import com.example.app.core.coroutine.DefaultDispatcherProvider
 import com.example.app.core.coroutine.DispatcherProvider
 import com.example.app.core.remote.DataStorePairingCredentialStore
 import com.example.app.core.remote.DataStoreWorkspaceSelectionStore
-import com.example.app.core.remote.FfiIrohConnector
 import com.example.app.core.remote.PairingCredentialStore
 import com.example.app.core.remote.PairingCredentials
+import com.example.app.core.remote.RemoteSessionProvider
 import com.example.app.core.remote.SidekickRemoteApi
-import com.example.app.core.remote.SidekickRemoteApiFactory
 import com.example.app.core.remote.Workspace
 import com.example.app.core.remote.WorkspaceSelectionStore
 import kotlinx.coroutines.CancellationException
@@ -30,6 +29,7 @@ class TasksViewModel(
     private val workspaceSelectionStore: WorkspaceSelectionStore,
     private val remoteApiFactory: (PairingCredentials) -> SidekickRemoteApi,
     private val dispatchers: DispatcherProvider = DefaultDispatcherProvider(),
+    private val remoteResources: AutoCloseable? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TasksUiState())
@@ -42,6 +42,10 @@ class TasksViewModel(
 
     init {
         loadWorkspaces()
+    }
+
+    override fun onCleared() {
+        remoteResources?.close()
     }
 
     fun onWorkspaceSelected(id: String) {
@@ -277,16 +281,13 @@ class TasksViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(TasksViewModel::class.java))
+        val sessions = RemoteSessionProvider()
         return TasksViewModel(
             hintedWorkspaceId = hintedWorkspaceId,
             credentialStore = DataStorePairingCredentialStore(applicationContext),
             workspaceSelectionStore = DataStoreWorkspaceSelectionStore(applicationContext),
-            remoteApiFactory = { credentials ->
-                SidekickRemoteApiFactory().create(
-                    credentials = credentials,
-                    connector = FfiIrohConnector(),
-                )
-            },
+            remoteApiFactory = sessions::apiFor,
+            remoteResources = sessions,
         ) as T
     }
 }

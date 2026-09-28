@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/common"
+	"sidekick/llm2"
 )
 
 // FlowEventType represents the different types of flow events.
@@ -19,6 +20,7 @@ const (
 	DevRunStartedEventType    FlowEventType = "dev_run_started"
 	DevRunOutputEventType     FlowEventType = "dev_run_output"
 	DevRunEndedEventType      FlowEventType = "dev_run_ended"
+	Llm2StreamEventType       FlowEventType = "llm2_stream_event"
 )
 
 // EndStreamEvent represents the end of a flow event stream.
@@ -78,6 +80,24 @@ func (e ChatMessageDeltaEvent) GetEventType() FlowEventType {
 }
 
 var _ FlowEvent = ChatMessageDeltaEvent{}
+
+// Llm2StreamEvent forwards an llm2.Event near-verbatim so consumers can
+// reconstruct ordered content blocks exactly as the provider streamed them.
+type Llm2StreamEvent struct {
+	EventType    FlowEventType `json:"eventType"`
+	FlowActionId string        `json:"flowActionId"`
+	llm2.Event
+}
+
+func (e Llm2StreamEvent) GetParentId() string {
+	return e.FlowActionId
+}
+
+func (e Llm2StreamEvent) GetEventType() FlowEventType {
+	return e.EventType
+}
+
+var _ FlowEvent = Llm2StreamEvent{}
 
 // StatusChangeEvent represents a status change in the flow.
 type StatusChangeEvent struct {
@@ -254,6 +274,14 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 			return nil, err
 		}
 		return devRunEnded, nil
+
+	case Llm2StreamEventType:
+		var llm2Stream Llm2StreamEvent
+		err := json.Unmarshal(data, &llm2Stream)
+		if err != nil {
+			return nil, err
+		}
+		return llm2Stream, nil
 
 	default:
 		return nil, fmt.Errorf("unknown flow eventType: %s", event.EventType)

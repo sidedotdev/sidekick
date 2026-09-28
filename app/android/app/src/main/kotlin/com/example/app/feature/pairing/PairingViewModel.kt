@@ -28,6 +28,7 @@ class PairingViewModel(
     private val payloadParser: PairingPayloadParser = PairingPayloadParser(),
     restoreStoredPairing: Boolean = true,
     private val dispatchers: DispatcherProvider = DefaultDispatcherProvider(),
+    private val remoteResources: AutoCloseable? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PairingUiState(isCheckingStoredPairing = restoreStoredPairing))
@@ -39,6 +40,10 @@ class PairingViewModel(
                 restorePairing()
             }
         }
+    }
+
+    override fun onCleared() {
+        remoteResources?.close()
     }
 
     fun onPairingPayload(payload: String) {

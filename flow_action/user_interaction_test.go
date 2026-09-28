@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
@@ -87,6 +88,65 @@ func TestReceiveUserResponse_AcceptsAnyWhenExpectedIsEmpty(t *testing.T) {
 	var result UserResponse
 	require.NoError(t, env.GetWorkflowResult(&result))
 	assert.Equal(t, "anything", result.FlowActionId)
+}
+
+// A workflow blocked on a user response must still be cancelable, otherwise a
+// parent that cancels it and waits for it to close (e.g. the IDD finish) hangs
+// forever alongside it.
+func TestReceiveUserResponse_ReturnsCanceledOnWorkflowCancel(t *testing.T) {
+	t.Parallel()
+	for _, expected := range []string{"action-current", ""} {
+		expected := expected
+		t.Run("flowActionId="+expected, func(t *testing.T) {
+			t.Parallel()
+			suite := &testsuite.WorkflowTestSuite{}
+			env := suite.NewTestWorkflowEnvironment()
+			env.SetWorkerOptions(utils.TestWorkerOptions())
+			env.SetTestTimeout(10 * time.Second)
+
+			env.RegisterDelayedCallback(func() {
+				env.CancelWorkflow()
+			}, time.Millisecond)
+
+			env.ExecuteWorkflow(runReceiveUserResponseWorkflow(expected))
+			require.True(t, env.IsWorkflowCompleted())
+			err := env.GetWorkflowError()
+			require.Error(t, err)
+			var canceledErr *temporal.CanceledError
+			assert.ErrorAs(t, err, &canceledErr)
+		})
+	}
+}
+
+// Histories recorded before the wait honoured cancellation show a canceled
+// workflow staying blocked and consuming a later response; replaying them must
+// take exactly that path or they fail with a nondeterminism error.
+func TestReceiveUserResponse_DefaultVersionKeepsWaitingThroughCancel(t *testing.T) {
+	t.Parallel()
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
+	env.SetTestTimeout(10 * time.Second)
+	env.OnGetVersion("user-response-exit-on-cancel", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+
+	expected := "action-legacy"
+	env.RegisterDelayedCallback(func() {
+		env.CancelWorkflow()
+	}, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(UserResponseSignalName(expected), UserResponse{
+			FlowActionId: expected,
+			Content:      "late answer",
+		})
+	}, 2*time.Millisecond)
+
+	env.ExecuteWorkflow(runReceiveUserResponseWorkflow(expected))
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result UserResponse
+	require.NoError(t, env.GetWorkflowResult(&result))
+	assert.Equal(t, "late answer", result.Content)
 }
 
 const skipOptionsFlowActionId = "action-skip-options"

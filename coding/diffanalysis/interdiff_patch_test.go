@@ -47,6 +47,10 @@ func TestInterdiffAppliesToReviewedContent(t *testing.T) {
 		{"whitespace is significant", "start\nend\n", "start\n value\nend\n", "start\n  value\nend\n"},
 		{"no final newline reversion", "original", "replacement", "original"},
 		{"unchanged", "start\nend\n", "start\nadded\nend\n", "start\nadded\nend\n"},
+		{"shared replacement before a differing change", "s\nA\nx\ny\nB\ne\n", "s\nA2\nx\ny\nB2\ne\n", "s\nA2\nx\ny\nB3\nB4\ne\n"},
+		{"shared replacement before a differing change without final newline", "s\nA\nx\ny\nB\ne", "s\nA2\nx\ny\nB2\ne", "s\nA2\nx\ny\nB3\nB4\ne"},
+		{"shared replacement then differing final line without newline", "s\nA\nx\nB", "s\nA2\nx\nB2", "s\nA2\nx\nB3"},
+		{"differing change then shared final replacement without newline", "s\nA\nx\nB", "s\nA2\nx\nB2", "s\nA3\nx\nB2"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -108,6 +112,165 @@ func TestInterdiffAppliesToReviewedContent(t *testing.T) {
 	}
 }
 
+// Review bases diverge when the target branch is merged in between reviews.
+// A base line both reviews reveal with different content makes the comparison
+// unavailable, while an upstream change only the current review reveals is
+// context rather than work done since the last review.
+func TestInterdiffDivergedBases(t *testing.T) {
+	t.Parallel()
+
+	numbered := func(count int, replace map[int]string) string {
+		var out strings.Builder
+		for i := 1; i <= count; i++ {
+			content := fmt.Sprintf("line %d", i)
+			if replacement, ok := replace[i]; ok {
+				content = replacement
+			}
+			out.WriteString(content + "\n")
+		}
+		return out.String()
+	}
+	gitDiff := func(t *testing.T, base, after string) string {
+		t.Helper()
+		dir := t.TempDir()
+		git := func(args ...string) string {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", output)
+			return string(output)
+		}
+		git("init")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte(base), 0600))
+		git("add", "file.txt")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte(after), 0600))
+		return git("diff", "--no-ext-diff", "--no-color")
+	}
+
+	priorBase := numbered(20, nil)
+	upstreamBase := numbered(20, map[int]string{8: "upstream 8"})
+
+	t.Run("upstream change revealed by both reviews", func(t *testing.T) {
+		t.Parallel()
+		prior := gitDiff(t, priorBase, numbered(20, map[int]string{10: "ten", 15: "fifteen"}))
+		current := gitDiff(t, upstreamBase, numbered(20, map[int]string{8: "upstream 8", 10: "ten", 15: "fifteen\nsixteen"}))
+		result, err := Interdiff(prior, current)
+		require.Error(t, err)
+		require.Empty(t, result)
+	})
+
+	t.Run("upstream change revealed only by the current review", func(t *testing.T) {
+		t.Parallel()
+		prior := gitDiff(t, priorBase, numbered(20, map[int]string{15: "fifteen"}))
+		current := gitDiff(t, upstreamBase, numbered(20, map[int]string{8: "upstream 8", 10: "ten", 15: "fifteen\nsixteen"}))
+		result, err := Interdiff(prior, current)
+		require.NoError(t, err)
+		require.Contains(t, result, "\n upstream 8\n")
+		require.Contains(t, result, "\n+ten\n")
+		require.Contains(t, result, "\n+sixteen\n")
+		require.NotContains(t, result, "+upstream 8")
+		require.NotContains(t, result, "-line 8")
+	})
+}
+
+// A review in which the file has no hunks (empty, mode-only or deleted) on one
+// side must still yield an interdiff that carries the prior reviewed state to
+// the current one.
+func TestInterdiffAppliesAcrossHunklessStates(t *testing.T) {
+	t.Parallel()
+
+	type fileState struct {
+		exists     bool
+		content    string
+		executable bool
+	}
+	absent := fileState{}
+	regular := func(content string) fileState { return fileState{exists: true, content: content} }
+	executable := func(content string) fileState { return fileState{exists: true, content: content, executable: true} }
+
+	for _, tt := range []struct {
+		name          string
+		base          fileState
+		prior         fileState
+		current       fileState
+		wantContained []string
+	}{
+		{"added file emptied", absent, regular("filled\n"), regular(""), []string{"\n-filled\n"}},
+		{"empty added file filled", absent, regular(""), regular("filled\n"), []string{"\n+filled\n"}},
+		{"filled empty file deleted", regular(""), regular("filled\n"), absent, []string{"\n-filled\n", "deleted file mode"}},
+		{"edits reverted while mode change remains", regular("base\n"), regular("reviewed\n"), executable("base\n"), []string{"\n-reviewed\n", "\n+base\n", "new mode 100755"}},
+		{"edits made after a reviewed mode change", regular("base\n"), executable("base\n"), executable("edited\n"), []string{"\n-base\n", "\n+edited\n"}},
+		{"mode change reverted while editing", regular("base\n"), executable("base\n"), regular("edited\n"), []string{"old mode 100755\nnew mode 100644\n", "\n-base\n", "\n+edited\n"}},
+		{"mode change reverted while emptying an added file", absent, executable("filled\n"), regular(""), []string{"old mode 100755\nnew mode 100644\n", "\n-filled\n"}},
+		{"empty added file made executable", absent, regular(""), executable(""), []string{"old mode 100644\nnew mode 100755\n"}},
+		{"empty added file made regular", absent, executable(""), regular(""), []string{"old mode 100755\nnew mode 100644\n"}},
+		{"empty added file deleted", absent, executable(""), absent, []string{"deleted file mode 100755\n"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "file.txt")
+			git := func(stdin string, args ...string) string {
+				t.Helper()
+				cmd := exec.Command("git", args...)
+				cmd.Dir = dir
+				cmd.Stdin = strings.NewReader(stdin)
+				output, err := cmd.CombinedOutput()
+				require.NoError(t, err, "%s\n%s", output, stdin)
+				return string(output)
+			}
+			setState := func(state fileState) {
+				t.Helper()
+				if !state.exists {
+					require.NoError(t, os.RemoveAll(path))
+					return
+				}
+				mode := os.FileMode(0644)
+				if state.executable {
+					mode = 0755
+				}
+				require.NoError(t, os.WriteFile(path, []byte(state.content), mode))
+				require.NoError(t, os.Chmod(path, mode))
+			}
+			readState := func() fileState {
+				t.Helper()
+				info, err := os.Stat(path)
+				if os.IsNotExist(err) {
+					return absent
+				}
+				require.NoError(t, err)
+				content, err := os.ReadFile(path)
+				require.NoError(t, err)
+				return fileState{exists: true, content: string(content), executable: info.Mode()&0100 != 0}
+			}
+
+			git("", "init")
+			git("", "config", "core.fileMode", "true")
+			if tt.base.exists {
+				setState(tt.base)
+				git("", "add", "file.txt")
+			} else {
+				setState(regular(""))
+				git("", "add", "-N", "file.txt")
+			}
+			setState(tt.prior)
+			prior := git("", "diff", "--no-ext-diff", "--no-color")
+			setState(tt.current)
+			current := git("", "diff", "--no-ext-diff", "--no-color")
+
+			result, err := Interdiff(prior, current)
+			require.NoError(t, err)
+			for _, want := range tt.wantContained {
+				require.Contains(t, result, want, "%s", result)
+			}
+
+			setState(tt.prior)
+			git(result, "apply", "--whitespace=nowarn", "-")
+			require.Equal(t, tt.current, readState(), "%s", result)
+		})
+	}
+}
+
 func TestInterdiffRejectsUnavailableComparison(t *testing.T) {
 	t.Parallel()
 
@@ -118,7 +281,6 @@ func TestInterdiffRejectsUnavailableComparison(t *testing.T) {
 	}{
 		{"incompatible base", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-upstream\n+current\n"},
 		{"invalid counts", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,5 +1,5 @@\n-base\n+current\n"},
-		{"binary", "diff --git a/f b/f\nBinary files a/f and b/f differ\n"},
 		{"duplicate section", prior + prior},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

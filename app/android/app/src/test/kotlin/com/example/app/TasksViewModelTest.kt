@@ -3,13 +3,14 @@ package com.example.app
 import com.example.app.core.coroutine.DispatcherProvider
 import com.example.app.core.remote.PairingCredentialStore
 import com.example.app.core.remote.PairingCredentials
-import com.example.app.core.remote.SidekickRemoteApi
+import com.example.app.core.remote.StubSidekickRemoteApi
 import com.example.app.core.remote.Task
 import com.example.app.core.remote.TaskListResponse
 import com.example.app.core.remote.Workspace
 import com.example.app.core.remote.WorkspaceListResponse
 import com.example.app.core.remote.WorkspaceSelectionStore
 import com.example.app.feature.tasks.TasksViewModel
+import androidx.lifecycle.ViewModelStore
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -462,12 +463,29 @@ class TasksViewModelTest {
         assertTrue(viewModel.uiState.value.doneExpanded)
     }
 
+    @Test
+    fun `clearing the view model releases the remote session resources`() = runTest {
+        val api = FakeRemoteApi(workspaces = listOf(alpha), tasksByWorkspace = mapOf("alpha" to emptyList()))
+        var closeCount = 0
+        val store = ViewModelStore()
+        val viewModel = createViewModel(api, remoteResources = AutoCloseable { closeCount++ })
+        store.put("tasks", viewModel)
+        advanceUntilIdle()
+
+        assertEquals(0, closeCount)
+
+        store.clear()
+
+        assertEquals(1, closeCount)
+    }
+
     private fun TestScope.createViewModel(
         api: FakeRemoteApi,
         hintedWorkspaceId: String? = null,
         selectionStore: FakeWorkspaceSelectionStore = FakeWorkspaceSelectionStore(),
         credentials: PairingCredentials? = PairingCredentials("ticket", "token"),
         credentialStore: FakeCredentialStore = FakeCredentialStore(initialCredentials = credentials),
+        remoteResources: AutoCloseable? = null,
     ) = TasksViewModel(
         hintedWorkspaceId = hintedWorkspaceId,
         credentialStore = credentialStore,
@@ -477,6 +495,7 @@ class TasksViewModelTest {
             api
         },
         dispatchers = TestDispatcherProvider(StandardTestDispatcher(testScheduler)),
+        remoteResources = remoteResources,
     )
 
     private fun TestScope.advanceUntilIdle() = testScheduler.advanceUntilIdle()
@@ -543,7 +562,7 @@ class TasksViewModelTest {
         var tasksError: Throwable? = null,
         var deferWorkspaces: Boolean = false,
         var deferTasks: Boolean = false,
-    ) : SidekickRemoteApi {
+    ) : StubSidekickRemoteApi() {
         var workspaceRequests = 0
         val requestedWorkspaceIds = mutableListOf<String>()
         val pendingWorkspaceRequests = mutableListOf<CompletableDeferred<WorkspaceListResponse>>()
