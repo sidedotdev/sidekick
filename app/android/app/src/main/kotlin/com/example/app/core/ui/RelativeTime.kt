@@ -19,7 +19,7 @@ private const val SECONDS_PER_YEAR = 365L * SECONDS_PER_DAY
  * Timestamps in the future (clock skew) read as "just now".
  */
 fun relativeTime(isoUpdated: String, now: Instant = Instant.now()): String {
-    val updated = parseInstant(isoUpdated) ?: return ""
+    val updated = parseIsoInstant(isoUpdated) ?: return ""
     val seconds = Duration.between(updated, now).seconds
     return when {
         seconds < SECONDS_PER_MINUTE -> "just now"
@@ -32,7 +32,8 @@ fun relativeTime(isoUpdated: String, now: Instant = Instant.now()): String {
     }
 }
 
-private fun parseInstant(value: String): Instant? {
+/** Lenient parse of the server's ISO-8601 timestamps, or null when the value is not one. */
+fun parseIsoInstant(value: String): Instant? {
     val trimmed = value.trim()
     if (trimmed.isEmpty()) return null
     return try {
