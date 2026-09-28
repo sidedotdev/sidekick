@@ -54,10 +54,10 @@ versions.
 
    ```sh
    yes | sdkmanager --licenses
-   sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+   sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
    ```
 
-   Use the current stable platform/build-tools if 36 is no longer latest.
+   Use the current stable platform/build-tools if 37 is no longer latest.
 
 If `sdkmanager: command not found`, verify that
 `$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager` exists and that directory
