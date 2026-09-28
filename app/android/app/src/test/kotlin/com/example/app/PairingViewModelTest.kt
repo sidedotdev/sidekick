@@ -3,8 +3,7 @@ package com.example.app
 import com.example.app.core.coroutine.DispatcherProvider
 import com.example.app.core.remote.PairingCredentialStore
 import com.example.app.core.remote.PairingCredentials
-import com.example.app.core.remote.SidekickRemoteApi
-import com.example.app.core.remote.TaskListResponse
+import com.example.app.core.remote.StubSidekickRemoteApi
 import com.example.app.core.remote.Workspace
 import com.example.app.core.remote.WorkspaceListResponse
 import com.example.app.feature.pairing.PairingViewModel
@@ -258,7 +257,7 @@ class PairingViewModelTest {
     private class FakeRemoteApi(
         var workspaces: List<Workspace> = emptyList(),
         var error: Throwable? = null,
-    ) : SidekickRemoteApi {
+    ) : StubSidekickRemoteApi() {
         var workspaceRequests = 0
         var receivedCredentials: PairingCredentials? = null
 
@@ -266,10 +265,6 @@ class PairingViewModelTest {
             workspaceRequests += 1
             error?.let { throw it }
             return WorkspaceListResponse(workspaces)
-        }
-
-        override suspend fun getTasks(workspaceId: String): TaskListResponse {
-            throw UnsupportedOperationException("Tasks are not used by pairing tests")
         }
     }
 

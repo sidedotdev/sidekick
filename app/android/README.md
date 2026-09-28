@@ -158,18 +158,31 @@ Do **not** run this in the container — it requires `/dev/kvm` and a
 device/emulator. For CI, use nested virtualization or a device farm such as
 Firebase Test Lab or Gradle Managed Devices.
 
-### Live remote-access test on a real phone
+### Live remote-access tests on a real phone
 
-`RemoteWorkspaceIrohInstrumentedTest` dials a running sidekick server over iroh
-from the device and loads the workspace list, first stage by stage over a raw
-iroh stream (connect → open stream → write → first response chunk → EOF) and
-then through the full Retrofit + `IrohHttpCallFactory` stack. It needs live
-pairing credentials, so it is skipped unless they are supplied as
-instrumentation arguments.
+Two instrumented tests dial a running sidekick server over iroh from the
+device. Both need live pairing credentials, so they are skipped unless those
+are supplied as instrumentation arguments.
 
-The runner script mints a throwaway pairing, targets a connected phone, bounds
-the whole run, prints the on-device stage diagnostics, and revokes the pairing
-afterwards:
+- `RemoteWorkspaceIrohInstrumentedTest` loads the workspace list, first stage
+  by stage over a raw iroh stream (connect → open stream → write → first
+  response chunk → EOF) and then through the full `SidekickRemoteSession`
+  stack (OkHttp + Retrofit over the `IrohLoopbackProxy`).
+- `RemoteFlowSyncIrohInstrumentedTest` exercises the realtime sync stack: the
+  task-changes websocket connects through the proxy, a bogus token is rejected
+  with 401 during the websocket handshake, a `basic_dev` task is created via
+  `TaskRepository` and its flow observed via `FlowRepository` until actions
+  arrive (ordered by `created`; without LLM credentials on the server the
+  first action is expected to fail and must keep its `actionResult`), then the
+  flow's sockets are stopped and restarted to prove the reconnect re-merges a
+  fresh REST snapshot (the task is cancelled while the sockets are down, so
+  the cancelled flow status can only arrive via that snapshot). The task is
+  archived afterwards. It uses the `sidekickWorkspaceId` argument when given
+  and the server's first workspace otherwise.
+
+The runner script mints a throwaway pairing, targets a connected phone, runs
+both classes, bounds the whole run, prints the on-device stage diagnostics, and
+revokes the pairing afterwards:
 
 ```sh
 side start   # server incl. the remote (iroh) component
@@ -180,9 +193,12 @@ bash -o pipefail -c 'scripts/android_phone_remote_e2e/run.sh 2>&1 | tee REPRO.tx
 phone looks like a pass.
 
 Options: `-s SERIAL` (or `ANDROID_SERIAL`) selects among several attached
-devices, `-t SECONDS` overrides the default 900s hard timeout. The pairing
-ticket and token are redacted from everything the script and the test print, so
-the captured output is safe to share.
+devices, `-t SECONDS` overrides the default 900s hard timeout, and
+`-w WORKSPACE_ID` (or `SIDEKICK_WORKSPACE_ID`) picks the workspace the flow
+sync test creates its task in. The script only reports success when the
+results show every class ran and passed (a skipped class fails the run). The
+pairing ticket and token are redacted from everything the script and the tests
+print, so the captured output is safe to share.
 
 Debugging a hang: each stage is logged to logcat under the `SidekickPhoneE2E`
 tag when it starts and again when it settles, so a stage logged as `START`

@@ -7,12 +7,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.app.core.coroutine.DefaultDispatcherProvider
 import com.example.app.core.coroutine.DispatcherProvider
 import com.example.app.core.remote.DataStorePairingCredentialStore
-import com.example.app.core.remote.FfiIrohConnector
 import com.example.app.core.remote.PairingCredentialStore
 import com.example.app.core.remote.PairingCredentials
 import com.example.app.core.remote.PairingPayloadParser
+import com.example.app.core.remote.RemoteSessionProvider
 import com.example.app.core.remote.SidekickRemoteApi
-import com.example.app.core.remote.SidekickRemoteApiFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +25,7 @@ class PairingViewModel(
     private val payloadParser: PairingPayloadParser = PairingPayloadParser(),
     private val remoteApiFactory: (PairingCredentials) -> SidekickRemoteApi,
     private val dispatchers: DispatcherProvider = DefaultDispatcherProvider(),
+    private val remoteResources: AutoCloseable? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PairingUiState())
@@ -37,6 +37,10 @@ class PairingViewModel(
         viewModelScope.launch(dispatchers.io) {
             restorePairing()
         }
+    }
+
+    override fun onCleared() {
+        remoteResources?.close()
     }
 
     fun onPairingPayload(payload: String) {
@@ -186,14 +190,11 @@ class PairingViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(PairingViewModel::class.java))
+        val sessions = RemoteSessionProvider()
         return PairingViewModel(
             credentialStore = DataStorePairingCredentialStore(applicationContext),
-            remoteApiFactory = { credentials ->
-                SidekickRemoteApiFactory().create(
-                    credentials = credentials,
-                    connector = FfiIrohConnector(),
-                )
-            },
+            remoteApiFactory = sessions::apiFor,
+            remoteResources = sessions,
         ) as T
     }
 }
