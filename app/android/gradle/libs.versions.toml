@@ -1,7 +1,7 @@
 [versions]
-agp = "8.13.2"
+agp = "9.4.1"
 kotlin = "2.4.0"
-composeBom = "2026.06.01"
+composeBom = "2026.09.00"
 activityCompose = "1.13.0"
 lifecycle = "2.9.4"
 coreKtx = "1.17.0"
@@ -12,6 +12,7 @@ retrofit = "2.11.0"
 okhttp = "4.12.0"
 serialization = "1.9.0"
 zxingEmbedded = "4.3.0"
+desugarJdkLibs = "2.1.5"
 
 junit = "4.13.2"
 turbine = "1.2.1"
@@ -32,6 +33,7 @@ androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
 
 iroh-android = { group = "computer.iroh", name = "iroh-android", version.ref = "iroh" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutinesTest" }
@@ -40,6 +42,7 @@ retrofit-kotlinx-serialization = { group = "com.squareup.retrofit2", name = "con
 okhttp-core = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
 zxing-android-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxingEmbedded" }
+android-desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 
 androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }

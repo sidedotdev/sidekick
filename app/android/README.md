@@ -54,10 +54,10 @@ versions.
 
    ```sh
    yes | sdkmanager --licenses
-   sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+   sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
    ```
 
-   Use the current stable platform/build-tools if 36 is no longer latest.
+   Use the current stable platform/build-tools if 37 is no longer latest.
 
 If `sdkmanager: command not found`, verify that
 `$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager` exists and that directory
@@ -78,8 +78,10 @@ SDK Manager under **SDK Tools → Android SDK Platform-Tools**).
 - Retrofit, OkHttp, and kotlinx.serialization provide the typed REST client.
   MockWebServer covers the HTTP layer in JVM tests.
 - ZXing Embedded scans the server-generated pairing QR code.
-- Navigation Compose routes between pairing, workspace selection, and task
-  screens.
+- Navigation Compose routes between pairing and the Tasks screen (which lands on
+  the last-used workspace and switches workspaces in place) plus a task detail
+  placeholder; "Scan a different pairing code" returns to pairing without
+  auto-restoring the stored credentials.
 - Preferences DataStore persists the iroh ticket and bearer token.
 
 The app requests camera permission when pairing and requires network access for

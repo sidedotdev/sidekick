@@ -1,13 +1,13 @@
+// Kotlin compilation is built into AGP 9; the KGP version is pinned at the root project.
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
 
 android {
     namespace = "com.example.app"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.example.app"
@@ -35,6 +35,8 @@ android {
 
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG gates the design-variant switcher.
+        buildConfig = true
     }
 
     packaging {
@@ -55,6 +57,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
+        // java.time is used below API 26 (minSdk 24).
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlin {
@@ -92,6 +96,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
 
     implementation(libs.iroh.android)
     implementation(libs.kotlinx.coroutines.android)
@@ -100,6 +105,7 @@ dependencies {
     implementation(libs.okhttp.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.zxing.android.embedded)
+    coreLibraryDesugaring(libs.android.desugar.jdk.libs)
 
     testImplementation(libs.junit)
     testImplementation(libs.turbine)
