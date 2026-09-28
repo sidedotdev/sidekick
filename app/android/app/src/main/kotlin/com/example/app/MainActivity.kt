@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.remember
 import com.example.app.core.ui.theme.AppTheme
-import com.example.app.feature.tasks.DesignVariantsProvider
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -13,9 +12,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val factories = remember { DataStoreAppViewModelFactories(this) }
             AppTheme {
-                DesignVariantsProvider {
-                    AppNavHost(factories = factories)
-                }
+                AppNavHost(factories = factories)
             }
         }
     }

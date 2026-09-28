@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -22,8 +21,6 @@ import com.example.app.core.ui.theme.AmberDark
 import com.example.app.core.ui.theme.AmberLight
 import com.example.app.core.ui.theme.GreenDark
 import com.example.app.core.ui.theme.GreenLight
-import com.example.app.core.ui.theme.LocalStyleVariant
-import com.example.app.core.ui.theme.StatusChipStyle
 
 fun statusLabel(status: String): String = when (status) {
     "drafting" -> "Draft"
@@ -55,7 +52,7 @@ fun statusColor(status: String, colorScheme: ColorScheme): Color {
 }
 
 /**
- * Small status indicator whose treatment follows the active [com.example.app.core.ui.theme.StyleVariant].
+ * Coloured status dot followed by a muted human-readable label.
  * Descendants are merged so a test tag on [modifier] exposes the label text.
  */
 @Composable
@@ -63,34 +60,20 @@ fun TaskStatusChip(
     status: String,
     modifier: Modifier = Modifier,
 ) {
-    val color = statusColor(status, MaterialTheme.colorScheme)
-    val label = statusLabel(status)
-    val merged = modifier.semantics(mergeDescendants = true) {}
-    when (LocalStyleVariant.current.statusChipStyle) {
-        StatusChipStyle.DOT -> Row(
-            modifier = merged,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .background(color, CircleShape),
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        StatusChipStyle.TINTED -> Text(
-            text = label,
+    Row(
+        modifier = modifier.semantics(mergeDescendants = true) {},
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .background(statusColor(status, MaterialTheme.colorScheme), CircleShape),
+        )
+        Text(
+            text = statusLabel(status),
             style = MaterialTheme.typography.labelMedium,
-            color = color,
-            modifier = merged
-                .background(color.copy(alpha = 0.14f), RoundedCornerShape(6.dp))
-                .padding(horizontal = 7.dp, vertical = 1.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

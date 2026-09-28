@@ -13,24 +13,19 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import com.example.app.core.remote.Workspace
 import com.example.app.core.ui.theme.AppTheme
-import com.example.app.feature.tasks.DesignVariants
-import com.example.app.feature.tasks.DesignVariantsProvider
-import com.example.app.feature.tasks.SwitcherContainer
 import com.example.app.feature.tasks.TasksScreen
 import com.example.app.feature.tasks.TasksUiState
-import com.example.app.feature.tasks.WorkspaceAffordance
 import com.example.app.feature.tasks.sampleTasks
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.ParameterizedRobolectricTestRunner
+import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** Switcher behaviour must hold in every container, so the whole class runs once per container. */
-@RunWith(ParameterizedRobolectricTestRunner::class)
+@RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h640dp-xhdpi")
-class WorkspaceSwitcherJvmTest(private val container: SwitcherContainer) {
+class WorkspaceSwitcherJvmTest {
 
     @get:Rule
     val composeRule = createComposeRule()
@@ -55,33 +50,27 @@ class WorkspaceSwitcherJvmTest(private val container: SwitcherContainer) {
         var scans = 0
     }
 
-    private fun setContent(
-        harness: Harness,
-        affordance: WorkspaceAffordance = WorkspaceAffordance.CHEVRON,
-    ) {
-        val variants = DesignVariants(workspaceAffordance = affordance, switcherContainer = container)
+    private fun setContent(harness: Harness) {
         composeRule.setContent {
-            DesignVariantsProvider(initial = variants) {
-                AppTheme(darkTheme = false) {
-                    TasksScreen(
-                        state = harness.state,
-                        onRefresh = {},
-                        onRetryTasks = {},
-                        onRetryWorkspaces = { harness.workspaceRetries += 1 },
-                        onWorkspaceSelected = { id ->
-                            harness.selected += id
-                            val picked = harness.state.workspaces.first { it.id == id }
-                            harness.state = harness.state.copy(currentWorkspace = picked, isLoadingTasks = true)
-                        },
-                        onSwitcherQueryChanged = { harness.state = harness.state.copy(switcherQuery = it) },
-                        onSearchQueryChanged = {},
-                        onSearchActiveChanged = {},
-                        onToggleDrafts = {},
-                        onToggleDone = {},
-                        onTaskClick = {},
-                        onScanDifferentCode = { harness.scans += 1 },
-                    )
-                }
+            AppTheme(darkTheme = false) {
+                TasksScreen(
+                    state = harness.state,
+                    onRefresh = {},
+                    onRetryTasks = {},
+                    onRetryWorkspaces = { harness.workspaceRetries += 1 },
+                    onWorkspaceSelected = { id ->
+                        harness.selected += id
+                        val picked = harness.state.workspaces.first { it.id == id }
+                        harness.state = harness.state.copy(currentWorkspace = picked, isLoadingTasks = true)
+                    },
+                    onSwitcherQueryChanged = { harness.state = harness.state.copy(switcherQuery = it) },
+                    onSearchQueryChanged = {},
+                    onSearchActiveChanged = {},
+                    onToggleDrafts = {},
+                    onToggleDone = {},
+                    onTaskClick = {},
+                    onScanDifferentCode = { harness.scans += 1 },
+                )
             }
         }
     }
@@ -205,17 +194,10 @@ class WorkspaceSwitcherJvmTest(private val container: SwitcherContainer) {
     }
 
     @Test
-    fun affordanceFollowsTheDesignVariant() {
-        setContent(Harness(loadedState()), affordance = WorkspaceAffordance.AVATAR)
+    fun titleShowsTheWorkspaceNameWithAChevron() {
+        setContent(Harness(loadedState()))
 
-        composeRule.onNodeWithTag("workspace-avatar", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("workspace-chevron", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("workspace-chevron", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("workspace-title").assertTextEquals("Sidekick")
-    }
-
-    companion object {
-        @JvmStatic
-        @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
-        fun parameters(): List<Array<Any>> = SwitcherContainer.entries.map { arrayOf<Any>(it) }
     }
 }

@@ -23,7 +23,6 @@ import com.example.app.core.remote.WorkspaceListResponse
 import com.example.app.core.remote.WorkspaceSelectionStore
 import com.example.app.core.ui.theme.AppTheme
 import com.example.app.feature.pairing.PairingViewModel
-import com.example.app.feature.tasks.DesignVariantsProvider
 import com.example.app.feature.tasks.TasksViewModel
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -67,9 +66,7 @@ class AppNavHostJvmTest {
         composeRule.setContent {
             navController = rememberNavController()
             AppTheme(darkTheme = false) {
-                DesignVariantsProvider {
-                    AppNavHost(factories = factories, navController = navController)
-                }
+                AppNavHost(factories = factories, navController = navController)
             }
         }
     }

@@ -46,31 +46,10 @@ internal val NeutralDark = NeutralPalette(
     outlineVariant = Color(0xFF2B2B31),
 )
 
-internal val MossNeutralLight = NeutralLight.copy(
-    background = Color(0xFFF7F8F6),
-    surfaceContainerLow = Color(0xFFF1F3EF),
-    surfaceContainer = Color(0xFFEAEDE8),
-    surfaceContainerHigh = Color(0xFFE2E6E0),
-    surfaceContainerHighest = Color(0xFFDADFD8),
-    outlineVariant = Color(0xFFE1E5DF),
-)
-
-internal val MossNeutralDark = NeutralDark.copy(
-    background = Color(0xFF0F1210),
-    surfaceContainerLow = Color(0xFF171B18),
-    surfaceContainer = Color(0xFF212723),
-    surfaceContainerHigh = Color(0xFF2A312C),
-    surfaceContainerHighest = Color(0xFF343C36),
-    outlineVariant = Color(0xFF283029),
-)
-
 // Matches the web frontend CTA/brand purple (--color-primary: rgb(131, 58, 180)),
 // lifted in dark mode so text on it stays legible.
-internal val GraphiteAccentLight = AccentPalette(Color(0xFF833AB4), Color(0xFFFFFFFF))
-internal val GraphiteAccentDark = AccentPalette(Color(0xFFC58BF0), Color(0xFF2E0A4A))
-
-internal val MossAccentLight = AccentPalette(Color(0xFF2F855A), Color(0xFFFFFFFF))
-internal val MossAccentDark = AccentPalette(Color(0xFF6CCB93), Color(0xFF06301A))
+internal val AccentLight = AccentPalette(Color(0xFF833AB4), Color(0xFFFFFFFF))
+internal val AccentDark = AccentPalette(Color(0xFFC58BF0), Color(0xFF2E0A4A))
 
 internal val ErrorLight = Color(0xFFC92A2A)
 internal val OnErrorLight = Color(0xFFFFFFFF)

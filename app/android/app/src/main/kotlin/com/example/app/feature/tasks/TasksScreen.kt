@@ -2,7 +2,6 @@
 
 package com.example.app.feature.tasks
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -21,12 +20,10 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -58,7 +55,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -66,8 +62,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.tooling.preview.PreviewParameter
-import androidx.compose.ui.tooling.preview.PreviewParameterProvider
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.app.core.remote.Task
@@ -75,8 +69,6 @@ import com.example.app.core.remote.Workspace
 import com.example.app.core.ui.TaskStatusChip
 import com.example.app.core.ui.relativeTime
 import com.example.app.core.ui.theme.AppTheme
-import com.example.app.core.ui.theme.LocalStyleVariant
-import com.example.app.core.ui.theme.RowDividerStyle
 import java.time.Instant
 import kotlinx.coroutines.launch
 
@@ -183,8 +175,6 @@ private fun TasksTopBar(
     onScanDifferentCode: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    var variantSwitcherOpen by remember { mutableStateOf(false) }
-    val variantsEditor = LocalDesignVariantsEditor.current
 
     TopAppBar(
         title = title,
@@ -208,29 +198,11 @@ private fun TasksTopBar(
                         },
                         modifier = Modifier.testTag("scan-different-code"),
                     )
-                    if (variantsEditor != null) {
-                        DropdownMenuItem(
-                            text = { Text("Design variants") },
-                            onClick = {
-                                menuOpen = false
-                                variantSwitcherOpen = true
-                            },
-                            modifier = Modifier.testTag("design-variants"),
-                        )
-                    }
                 }
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
     )
-
-    if (variantSwitcherOpen && variantsEditor != null) {
-        DesignVariantSwitcherDialog(
-            current = LocalDesignVariants.current,
-            onChange = variantsEditor,
-            onDismiss = { variantSwitcherOpen = false },
-        )
-    }
 }
 
 @Composable
@@ -291,7 +263,6 @@ private fun TasksBody(
     modifier: Modifier = Modifier,
 ) {
     val error = state.tasksError
-    val topChips = LocalDesignVariants.current.bucketPresentation == BucketPresentation.TOP_CHIPS
     when {
         state.isLoadingTasks -> CenteredContent(modifier) {
             CircularProgressIndicator(modifier = Modifier.testTag("tasks-loading"))
@@ -330,16 +301,7 @@ private fun TasksBody(
             )
         }
 
-        topChips -> TopChipsList(
-            state = state,
-            listState = bucketListState,
-            onToggleDrafts = onToggleDrafts,
-            onToggleDone = onToggleDone,
-            onTaskClick = onTaskClick,
-            modifier = modifier,
-        )
-
-        else -> SectionedList(
+        else -> BucketFilterList(
             state = state,
             listState = bucketListState,
             onToggleDrafts = onToggleDrafts,
@@ -447,8 +409,12 @@ private fun TasksUiState.selectBucketFilter(
     }
 }
 
+/**
+ * Open / Drafts / Done filter chips above the list. Open lists the Needs-attention bucket
+ * followed by Active with no headers; ordering and status dots carry the grouping.
+ */
 @Composable
-private fun TopChipsList(
+private fun BucketFilterList(
     state: TasksUiState,
     listState: LazyListState,
     onToggleDrafts: () -> Unit,
@@ -464,9 +430,15 @@ private fun TopChipsList(
         BucketFilter.DRAFTS -> buckets.drafts
         BucketFilter.DONE -> buckets.done
     }
-    val chipsAtBottom = LocalDesignVariants.current.collapsedAccess == CollapsedAccess.BOTTOM
-    val filterChips: @Composable () -> Unit = {
-        ChipRow {
+
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             CountChip(
                 label = "Open",
                 count = openTasks.size,
@@ -489,12 +461,6 @@ private fun TopChipsList(
                 tag = "done-toggle",
             )
         }
-    }
-
-    Column(modifier = modifier.fillMaxSize()) {
-        if (!chipsAtBottom) {
-            filterChips()
-        }
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -508,97 +474,6 @@ private fun TopChipsList(
                 taskRows(shown, onTaskClick)
             }
         }
-        if (chipsAtBottom) {
-            HorizontalDivider(thickness = Dp.Hairline, color = MaterialTheme.colorScheme.outlineVariant)
-            filterChips()
-        }
-    }
-}
-
-@Composable
-private fun SectionedList(
-    state: TasksUiState,
-    listState: LazyListState,
-    onToggleDrafts: () -> Unit,
-    onToggleDone: () -> Unit,
-    onTaskClick: (Task) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val variants = LocalDesignVariants.current
-    val withHeaders = variants.bucketPresentation == BucketPresentation.HEADERS
-    val accessAtTop = variants.collapsedAccess == CollapsedAccess.TOP
-    val buckets = state.bucketed
-    val openIsEmpty = buckets.needsAttention.isEmpty() && buckets.active.isEmpty()
-
-    Column(modifier = modifier.fillMaxSize()) {
-        if (accessAtTop) {
-            ChipRow {
-                CountChip(
-                    label = "Drafts",
-                    count = buckets.drafts.size,
-                    selected = state.draftsExpanded,
-                    onClick = onToggleDrafts,
-                    tag = "drafts-toggle",
-                )
-                CountChip(
-                    label = "Done",
-                    count = buckets.done.size,
-                    selected = state.doneExpanded,
-                    onClick = onToggleDone,
-                    tag = "done-toggle",
-                )
-            }
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("task-list"),
-        ) {
-            bucketSection("Needs attention", buckets.needsAttention, withHeaders, onTaskClick)
-            bucketSection("Active", buckets.active, withHeaders, onTaskClick)
-            if (openIsEmpty) {
-                emptyBucketNote(BucketFilter.OPEN.emptyText)
-            }
-            if (accessAtTop) {
-                if (state.draftsExpanded) {
-                    bucketSection("Drafts", buckets.drafts, withHeaders, onTaskClick)
-                }
-                if (state.doneExpanded) {
-                    bucketSection("Done", buckets.done, withHeaders, onTaskClick)
-                }
-            } else {
-                collapsibleSection(
-                    title = "Drafts",
-                    tasks = buckets.drafts,
-                    expanded = state.draftsExpanded,
-                    onToggle = onToggleDrafts,
-                    tag = "drafts-toggle",
-                    onTaskClick = onTaskClick,
-                )
-                collapsibleSection(
-                    title = "Done",
-                    tasks = buckets.done,
-                    expanded = state.doneExpanded,
-                    onToggle = onToggleDone,
-                    tag = "done-toggle",
-                    onTaskClick = onTaskClick,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChipRow(content: @Composable () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        content()
     }
 }
 
@@ -626,99 +501,6 @@ private fun CountChip(
         },
         modifier = Modifier.testTag(tag),
     )
-}
-
-private fun LazyListScope.bucketSection(
-    title: String,
-    tasks: List<Task>,
-    withHeader: Boolean,
-    onTaskClick: (Task) -> Unit,
-) {
-    if (tasks.isEmpty()) {
-        return
-    }
-    if (withHeader) {
-        item(key = "header-$title") {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .padding(
-                        start = ScreenHorizontalPadding,
-                        end = ScreenHorizontalPadding,
-                        top = 12.dp,
-                        bottom = 4.dp,
-                    )
-                    .testTag("section-header"),
-            )
-        }
-    }
-    taskRows(tasks, onTaskClick)
-}
-
-private fun LazyListScope.collapsibleSection(
-    title: String,
-    tasks: List<Task>,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    tag: String,
-    onTaskClick: (Task) -> Unit,
-) {
-    item(key = "toggle-$title") {
-        CollapsibleHeader(
-            title = title,
-            count = tasks.size,
-            expanded = expanded,
-            onToggle = onToggle,
-            tag = tag,
-        )
-    }
-    if (expanded) {
-        taskRows(tasks, onTaskClick)
-    }
-}
-
-@Composable
-private fun CollapsibleHeader(
-    title: String,
-    count: Int,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    tag: String,
-) {
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .testTag(tag)
-                .padding(horizontal = ScreenHorizontalPadding, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = count.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 7.dp, vertical = 1.dp),
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowDown,
-                contentDescription = if (expanded) "Collapse $title" else "Expand $title",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.rotate(if (expanded) 180f else 0f),
-            )
-        }
-        RowDivider()
-    }
 }
 
 private fun LazyListScope.emptyBucketNote(text: String) {
@@ -811,15 +593,7 @@ private fun TaskRowStatusLine(task: Task) {
 
 @Composable
 private fun RowDivider() {
-    val inset = when (LocalStyleVariant.current.rowDividerStyle) {
-        RowDividerStyle.FULL_WIDTH -> 0.dp
-        RowDividerStyle.INSET -> ScreenHorizontalPadding
-    }
-    HorizontalDivider(
-        modifier = Modifier.padding(start = inset),
-        thickness = Dp.Hairline,
-        color = MaterialTheme.colorScheme.outlineVariant,
-    )
+    HorizontalDivider(thickness = Dp.Hairline, color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 private val SampleWorkspace = Workspace(id = "ws-sidekick", name = "Sidekick")
@@ -866,44 +640,34 @@ internal fun sampleTasksUiState(now: Instant = Instant.now()): TasksUiState = Ta
     tasks = sampleTasks(now),
 )
 
-private class BucketLayoutPreviewProvider : PreviewParameterProvider<DesignVariants> {
-    override val values: Sequence<DesignVariants> = bucketLayoutVariants.asSequence()
-}
-
 @Composable
-private fun TasksScreenPreview(variants: DesignVariants, darkTheme: Boolean) {
-    DesignVariantsProvider(initial = variants) {
-        AppTheme(darkTheme = darkTheme) {
-            TasksScreen(
-                state = sampleTasksUiState(),
-                onRefresh = {},
-                onRetryTasks = {},
-                onRetryWorkspaces = {},
-                onWorkspaceSelected = {},
-                onSwitcherQueryChanged = {},
-                onSearchQueryChanged = {},
-                onSearchActiveChanged = {},
-                onToggleDrafts = {},
-                onToggleDone = {},
-                onTaskClick = {},
-                onScanDifferentCode = {},
-            )
-        }
+private fun TasksScreenPreview(darkTheme: Boolean) {
+    AppTheme(darkTheme = darkTheme) {
+        TasksScreen(
+            state = sampleTasksUiState(),
+            onRefresh = {},
+            onRetryTasks = {},
+            onRetryWorkspaces = {},
+            onWorkspaceSelected = {},
+            onSwitcherQueryChanged = {},
+            onSearchQueryChanged = {},
+            onSearchActiveChanged = {},
+            onToggleDrafts = {},
+            onToggleDone = {},
+            onTaskClick = {},
+            onScanDifferentCode = {},
+        )
     }
 }
 
 @Preview(name = "Tasks light", showBackground = true, widthDp = 360, heightDp = 640)
 @Composable
-private fun TasksScreenLightPreview(
-    @PreviewParameter(BucketLayoutPreviewProvider::class) variants: DesignVariants,
-) {
-    TasksScreenPreview(variants = variants, darkTheme = false)
+private fun TasksScreenLightPreview() {
+    TasksScreenPreview(darkTheme = false)
 }
 
 @Preview(name = "Tasks dark", showBackground = true, widthDp = 360, heightDp = 640)
 @Composable
-private fun TasksScreenDarkPreview(
-    @PreviewParameter(BucketLayoutPreviewProvider::class) variants: DesignVariants,
-) {
-    TasksScreenPreview(variants = variants, darkTheme = true)
+private fun TasksScreenDarkPreview() {
+    TasksScreenPreview(darkTheme = true)
 }

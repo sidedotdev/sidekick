@@ -1,6 +1,5 @@
 package com.example.app.core.ui
 
-import com.example.app.core.ui.theme.StyleVariant
 import com.example.app.core.ui.theme.appColorScheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -44,29 +43,27 @@ class TaskStatusUiTest {
 
     @Test
     fun `status colours distinguish attention from neutral statuses`() {
-        StyleVariant.entries.forEach { variant ->
-            listOf(false, true).forEach { darkTheme ->
-                val scheme = appColorScheme(variant, darkTheme)
-                val label = "$variant dark=$darkTheme"
+        listOf(false, true).forEach { darkTheme ->
+            val scheme = appColorScheme(darkTheme)
+            val label = "dark=$darkTheme"
 
-                assertEquals(label, scheme.error, statusColor("blocked", scheme))
-                assertEquals(label, scheme.error, statusColor("failed", scheme))
-                assertEquals(label, scheme.primary, statusColor("in_progress", scheme))
-                assertEquals(label, scheme.onSurfaceVariant, statusColor("to_do", scheme))
-                assertEquals(label, scheme.onSurfaceVariant, statusColor("drafting", scheme))
-                assertEquals(label, scheme.onSurfaceVariant, statusColor("canceled", scheme))
-                assertEquals(label, scheme.onSurfaceVariant, statusColor("mystery", scheme))
-                assertNotEquals(label, scheme.onSurfaceVariant, statusColor("in_review", scheme))
-                assertNotEquals(label, scheme.onSurfaceVariant, statusColor("complete", scheme))
-                assertNotEquals(label, statusColor("in_review", scheme), statusColor("complete", scheme))
-            }
+            assertEquals(label, scheme.error, statusColor("blocked", scheme))
+            assertEquals(label, scheme.error, statusColor("failed", scheme))
+            assertEquals(label, scheme.primary, statusColor("in_progress", scheme))
+            assertEquals(label, scheme.onSurfaceVariant, statusColor("to_do", scheme))
+            assertEquals(label, scheme.onSurfaceVariant, statusColor("drafting", scheme))
+            assertEquals(label, scheme.onSurfaceVariant, statusColor("canceled", scheme))
+            assertEquals(label, scheme.onSurfaceVariant, statusColor("mystery", scheme))
+            assertNotEquals(label, scheme.onSurfaceVariant, statusColor("in_review", scheme))
+            assertNotEquals(label, scheme.onSurfaceVariant, statusColor("complete", scheme))
+            assertNotEquals(label, statusColor("in_review", scheme), statusColor("complete", scheme))
         }
     }
 
     @Test
     fun `status colours follow the light or dark scheme`() {
-        val light = appColorScheme(StyleVariant.GRAPHITE, darkTheme = false)
-        val dark = appColorScheme(StyleVariant.GRAPHITE, darkTheme = true)
+        val light = appColorScheme(darkTheme = false)
+        val dark = appColorScheme(darkTheme = true)
 
         listOf("in_review", "complete", "blocked").forEach { status ->
             assertNotEquals(status, statusColor(status, light), statusColor(status, dark))

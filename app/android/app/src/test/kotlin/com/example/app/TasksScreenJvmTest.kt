@@ -23,10 +23,6 @@ import androidx.compose.ui.unit.height
 import com.example.app.core.remote.Task
 import com.example.app.core.remote.Workspace
 import com.example.app.core.ui.theme.AppTheme
-import com.example.app.feature.tasks.BucketPresentation
-import com.example.app.feature.tasks.CollapsedAccess
-import com.example.app.feature.tasks.DesignVariants
-import com.example.app.feature.tasks.DesignVariantsProvider
 import com.example.app.feature.tasks.TasksScreen
 import com.example.app.feature.tasks.TasksUiState
 import com.example.app.feature.tasks.sampleTasks
@@ -85,38 +81,36 @@ class TasksScreenJvmTest {
     }
 
     @Composable
-    private fun TestTasksScreen(harness: Harness, variants: DesignVariants = DesignVariants()) {
-        DesignVariantsProvider(initial = variants) {
-            AppTheme(darkTheme = false) {
-                TasksScreen(
-                    state = harness.state,
-                    onRefresh = {},
-                    onRetryTasks = { harness.retries += 1 },
-                    onRetryWorkspaces = {},
-                    onWorkspaceSelected = {},
-                    onSwitcherQueryChanged = { harness.state = harness.state.copy(switcherQuery = it) },
-                    onSearchQueryChanged = { harness.state = harness.state.copy(searchQuery = it) },
-                    onSearchActiveChanged = { active ->
-                        harness.state = harness.state.copy(
-                            isSearchActive = active,
-                            searchQuery = if (active) harness.state.searchQuery else "",
-                        )
-                    },
-                    onToggleDrafts = {
-                        harness.state = harness.state.copy(draftsExpanded = !harness.state.draftsExpanded)
-                    },
-                    onToggleDone = {
-                        harness.state = harness.state.copy(doneExpanded = !harness.state.doneExpanded)
-                    },
-                    onTaskClick = { harness.clicked += it },
-                    onScanDifferentCode = { harness.scans += 1 },
-                )
-            }
+    private fun TestTasksScreen(harness: Harness) {
+        AppTheme(darkTheme = false) {
+            TasksScreen(
+                state = harness.state,
+                onRefresh = {},
+                onRetryTasks = { harness.retries += 1 },
+                onRetryWorkspaces = {},
+                onWorkspaceSelected = {},
+                onSwitcherQueryChanged = { harness.state = harness.state.copy(switcherQuery = it) },
+                onSearchQueryChanged = { harness.state = harness.state.copy(searchQuery = it) },
+                onSearchActiveChanged = { active ->
+                    harness.state = harness.state.copy(
+                        isSearchActive = active,
+                        searchQuery = if (active) harness.state.searchQuery else "",
+                    )
+                },
+                onToggleDrafts = {
+                    harness.state = harness.state.copy(draftsExpanded = !harness.state.draftsExpanded)
+                },
+                onToggleDone = {
+                    harness.state = harness.state.copy(doneExpanded = !harness.state.doneExpanded)
+                },
+                onTaskClick = { harness.clicked += it },
+                onScanDifferentCode = { harness.scans += 1 },
+            )
         }
     }
 
-    private fun setContent(harness: Harness, variants: DesignVariants = DesignVariants()) {
-        composeRule.setContent { TestTasksScreen(harness, variants) }
+    private fun setContent(harness: Harness) {
+        composeRule.setContent { TestTasksScreen(harness) }
     }
 
     @Test
@@ -188,17 +182,14 @@ class TasksScreenJvmTest {
     }
 
     @Test
-    fun bottomAccessTopChipsSitBelowTheListAndSelectDraftsAndDone() {
-        val variants = DesignVariants(
-            bucketPresentation = BucketPresentation.TOP_CHIPS,
-            collapsedAccess = CollapsedAccess.BOTTOM,
-        )
-        setContent(Harness(loadedState()), variants)
+    fun filterChipsSitAboveTheListAndShowOneBucketAtATime() {
+        setContent(Harness(loadedState()))
 
-        val listBottom = composeRule.onNodeWithTag("task-list").getUnclippedBoundsInRoot().bottom
-        val chipsTop = composeRule.onNodeWithTag("drafts-toggle").getUnclippedBoundsInRoot().top
-        assertTrue("filter chips at $chipsTop should be below the list ending at $listBottom", chipsTop >= listBottom)
-        openTaskIds.forEach { composeRule.assertFullyVisible("task-$it") }
+        val listTop = composeRule.onNodeWithTag("task-list").getUnclippedBoundsInRoot().top
+        val chipsBottom = composeRule.onNodeWithTag("drafts-toggle").getUnclippedBoundsInRoot().bottom
+        assertTrue("filter chips ending at $chipsBottom should be above the list starting at $listTop", chipsBottom <= listTop)
+        composeRule.onNodeWithText("Needs attention").assertDoesNotExist()
+        composeRule.onNodeWithText("Active").assertDoesNotExist()
         composeRule.onNodeWithTag("task-draft-1").assertDoesNotExist()
 
         composeRule.onNodeWithTag("drafts-toggle").performClick()
@@ -208,6 +199,10 @@ class TasksScreenJvmTest {
         composeRule.onNodeWithTag("done-toggle").performClick()
         composeRule.onNodeWithTag("task-done-1").assertIsDisplayed()
         composeRule.onNodeWithTag("task-draft-1").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("open-filter").performClick()
+        composeRule.onNodeWithTag("task-review-1").assertIsDisplayed()
+        composeRule.onNodeWithTag("task-done-1").assertDoesNotExist()
     }
 
     @Test
@@ -268,19 +263,6 @@ class TasksScreenJvmTest {
         composeRule.onNodeWithTag("scan-different-code").performClick()
 
         assertEquals(1, harness.scans)
-    }
-
-    @Test
-    fun debugVariantSwitcherChangesTheListPresentation() {
-        setContent(Harness(loadedState()), DesignVariants(bucketPresentation = BucketPresentation.NO_HEADERS))
-        composeRule.onNodeWithText("Needs attention").assertDoesNotExist()
-
-        composeRule.onNodeWithTag("overflow-menu").performClick()
-        composeRule.onNodeWithTag("design-variants").performClick()
-        composeRule.onNodeWithText("Headers").performClick()
-        composeRule.onNodeWithTag("design-variants-done").performClick()
-
-        composeRule.onNodeWithText("Needs attention").assertIsDisplayed()
     }
 
     @Test

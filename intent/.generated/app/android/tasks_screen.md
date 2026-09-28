@@ -3,14 +3,23 @@ intent_links:
   - intent: "#landing-on-tasks"
     code:
       - app/android/app/src/main/kotlin/com/example/app/MainActivity.kt
+      - app/android/app/src/main/kotlin/com/example/app/AppNavHost.kt
       - app/android/app/src/main/kotlin/com/example/app/feature/pairing/PairingViewModel.kt:PairingViewModel
+      - app/android/app/src/main/kotlin/com/example/app/feature/pairing/PairingScreen.kt:PairingScreen
+      - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TasksRoute.kt
       - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TasksViewModel.kt:TasksViewModel
       - app/android/app/src/main/kotlin/com/example/app/core/remote/WorkspaceSelectionStore.kt:WorkspaceSelectionStore
+      - app/android/app/src/test/kotlin/com/example/app/AppNavHostJvmTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/PairingViewModelTest.kt
       - app/android/app/src/test/kotlin/com/example/app/TasksViewModelTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/core/remote/DataStoreWorkspaceSelectionStoreTest.kt
   - intent: "#workspace-switcher"
     code:
-      - app/android/app/src/main/kotlin/com/example/app/feature/tasks/WorkspaceSwitcher.kt
+      - app/android/app/src/main/kotlin/com/example/app/feature/tasks/WorkspaceSwitcher.kt:WorkspaceTitle
+      - app/android/app/src/main/kotlin/com/example/app/feature/tasks/WorkspaceSwitcher.kt:WorkspaceSwitcher
+      - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TasksViewModel.kt:TasksViewModel
       - app/android/app/src/test/kotlin/com/example/app/WorkspaceSwitcherJvmTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/TasksScreenScreenshotTest.kt
   - intent: "#task-ordering"
     code:
       - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TaskRanking.kt:rankTasks
@@ -19,22 +28,36 @@ intent_links:
   - intent: "#task-list"
     code:
       - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TasksScreen.kt:TasksScreen
-      - app/android/app/src/main/kotlin/com/example/app/core/ui/TaskStatusUi.kt
-      - app/android/app/src/main/kotlin/com/example/app/core/ui/RelativeTime.kt
+      - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TasksScreen.kt:TaskRow
+      - app/android/app/src/main/kotlin/com/example/app/core/ui/TaskStatusUi.kt:TaskStatusChip
+      - app/android/app/src/main/kotlin/com/example/app/core/ui/TaskStatusUi.kt:statusLabel
+      - app/android/app/src/main/kotlin/com/example/app/core/ui/RelativeTime.kt:relativeTime
       - app/android/app/src/test/kotlin/com/example/app/TasksScreenJvmTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/TasksScreenScreenshotTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/core/ui/TaskStatusUiTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/core/ui/RelativeTimeTest.kt
   - intent: "#search"
     code:
       - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TaskRanking.kt:searchTasks
+      - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TasksUiState.kt:TasksUiState
       - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TasksScreen.kt:TasksScreen
+      - app/android/app/src/test/kotlin/com/example/app/feature/tasks/TaskRankingTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/TasksScreenJvmTest.kt
   - intent: "#placeholders"
     code:
       - app/android/app/src/main/kotlin/com/example/app/feature/taskdetail/TaskDetailScreen.kt
+      - app/android/app/src/main/kotlin/com/example/app/feature/tasks/TasksScreen.kt:TasksScreen
+      - app/android/app/src/main/kotlin/com/example/app/AppNavHost.kt
       - app/android/app/src/test/kotlin/com/example/app/TaskDetailScreenJvmTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/AppNavHostJvmTest.kt
+      - app/android/app/src/test/kotlin/com/example/app/EntryScreensScreenshotTest.kt
   - intent: "#visual-style"
     code:
       - app/android/app/src/main/kotlin/com/example/app/core/ui/theme/Color.kt
       - app/android/app/src/main/kotlin/com/example/app/core/ui/theme/Theme.kt:AppTheme
       - app/android/app/src/main/kotlin/com/example/app/core/ui/theme/Type.kt
+      - app/android/app/src/main/kotlin/com/example/app/core/ui/TaskStatusUi.kt:statusColor
+      - app/android/app/src/test/kotlin/com/example/app/ThemeScreenshotTest.kt
       - intent/.generated/app/android/tasks_screen_wireframe.html
 ---
 # Android Tasks Screen
@@ -50,9 +73,8 @@ task detail. It should land on the work that matters, fit several tasks on a
 phone screen, and use the Sidekick brand rather than the stock Material palette,
 while staying simple given the app's limited functionality.
 
-The approved layout is captured in [the wireframe](tasks_screen_wireframe.html);
-its defaults are the approved choices and its other toggle values exist only
-for comparison.
+The approved layout is captured in [the wireframe](tasks_screen_wireframe.html)
+with its default settings.
 
 ## Landing on tasks
 
