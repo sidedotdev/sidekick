@@ -3,6 +3,15 @@ import { enableAutoUnmount } from '@vue/test-utils'
 
 enableAutoUnmount(afterEach)
 
+// jsdom has no layout engine, so Range lacks the geometry methods CodeMirror
+// uses when measuring cursor and selection positions.
+const emptyRect = (): DOMRect =>
+  ({ x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) }) as DOMRect
+Range.prototype.getClientRects ??= function () {
+  return Object.assign([], { item: () => null }) as unknown as DOMRectList
+}
+Range.prototype.getBoundingClientRect ??= emptyRect
+
 // Create storage mocks that work with vi.spyOn(Storage.prototype, ...) in tests.
 // We define methods on Storage.prototype and create objects that inherit from it.
 const createStorageMock = (): Storage => {

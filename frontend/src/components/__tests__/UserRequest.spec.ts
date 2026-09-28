@@ -39,6 +39,10 @@ describe('UserRequest', () => {
     localStorage.clear()
   })
 
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   const createMockFlowAction = (overrides = {}): FlowAction => ({
     id: 'test-action-id',
     flowId: 'test-flow-id',
@@ -155,6 +159,7 @@ describe('UserRequest', () => {
   it('displays network error message when fetch fails', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'))
     global.fetch = fetchMock
+    vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const flowAction = createMockFlowAction()
     mountComponent(flowAction)

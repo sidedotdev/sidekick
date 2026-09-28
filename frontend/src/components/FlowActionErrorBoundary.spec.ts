@@ -12,6 +12,8 @@ describe('FlowActionErrorBoundary', () => {
       const showNext = ref(false)
       const failure = new Error('Broken action renderer')
       const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+      // Vue warns about the missing render function when setup throws.
+      const vueWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const uncaught = vi.fn()
       const BrokenAction = defineComponent({
         setup() {
@@ -60,6 +62,7 @@ describe('FlowActionErrorBoundary', () => {
       } finally {
         wrapper.unmount()
         report.mockRestore()
+        vueWarn.mockRestore()
       }
     },
   )

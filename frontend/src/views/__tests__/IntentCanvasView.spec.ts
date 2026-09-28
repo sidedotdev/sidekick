@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { config, mount, flushPromises } from '@vue/test-utils'
+import { config, mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
 import PrimeVue from 'primevue/config'
 import IntentCanvasView from '../IntentCanvasView.vue'
 
 config.global.plugins.push(PrimeVue)
+config.global.stubs.RouterLink = RouterLinkStub
 
 const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }))
 
@@ -15,33 +16,6 @@ vi.mock('vue-router', () => ({
 vi.mock('../../lib/store', () => ({
   store: { workspaceId: 'ws-1' },
 }))
-
-vi.mock('codemirror', () => {
-  class EditorView {
-    state = { doc: { length: 0, toString: () => '' } }
-    dispatch() {}
-    destroy() {}
-    static theme() {
-      return {}
-    }
-    static lineWrapping = {}
-    static updateListener = { of: () => ({}) }
-  }
-  return { EditorView, basicSetup: {} }
-})
-
-vi.mock('@codemirror/state', () => ({
-  EditorState: { create: () => ({}) },
-  Compartment: class {
-    of() {
-      return {}
-    }
-    reconfigure() {
-      return {}
-    }
-  },
-}))
-vi.mock('@codemirror/lang-markdown', () => ({ markdown: () => ({}) }))
 
 vi.mock('../FlowView.vue', () => ({
   default: {
@@ -55,7 +29,7 @@ vi.mock('../FlowView.vue', () => ({
 }))
 
 vi.mock('../../lib/intent_diff_editor', () => ({
-  uncommittedHighlightExtension: () => ({}),
+  uncommittedHighlightExtension: () => [],
   applyUncommittedHighlight: () => {},
 }))
 
@@ -206,7 +180,7 @@ describe('IntentCanvasView', () => {
   })
 
   it('renders ongoing sub-tasks and clarifications from persisted flows', async () => {
-    installFetch((url, opts) => {
+    installFetch((url) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
         return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
@@ -256,7 +230,7 @@ describe('IntentCanvasView', () => {
   it('groups sub-tasks by status and orders them newest-first within a group', async () => {
     const now = Date.now()
     const iso = (msAgo: number) => new Date(now - msAgo).toISOString()
-    installFetch((url, opts) => {
+    installFetch((url) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
         return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
@@ -305,7 +279,7 @@ describe('IntentCanvasView', () => {
       { id: 'active', title: 'active0', status: 'in_progress', updated: recent },
       ...makeSubtasks(2),
     ]
-    installFetch((url, opts) => {
+    installFetch((url) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
         return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))

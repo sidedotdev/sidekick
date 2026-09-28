@@ -626,9 +626,6 @@ async function submitUserResponse(approved: boolean) {
       return false;
     }
     
-    // Success case - parse response once
-    const result = await response.json();
-    console.debug(result);
     clearDraft();
     return true;
   } catch (error) {

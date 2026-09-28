@@ -29,6 +29,7 @@ async function fetchMessages(): Promise<void> {
 }
 
 // helps test the UI, use it in place of submitMessage. simulates the backend's events without invoking it.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function fakeSubmitMessage(content: string): Promise<void> {
   let state = { currentId: 'pending' }
   messages.value.push({ id: state.currentId, content, role: 'user' })

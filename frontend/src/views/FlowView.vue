@@ -71,7 +71,7 @@ import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Subflow, Workspac
 import { SubflowStatus } from '../lib/models'
 import { Llm2ActionStream, type Llm2StreamSnapshot } from '../lib/llm2ActionStream'
 import { buildSubflowTrees } from '../lib/subflow'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
 import { viewCache } from '../lib/viewCache'
 import { isFlowModelConfigVisible } from '../lib/flowModelConfig'
@@ -103,7 +103,6 @@ const modelConfigModalOpen = ref(false)
 const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
-const router = useRouter()
 
 const effectiveFlowId = computed(() => props.flowId ?? (route.params.id as string | undefined))
 

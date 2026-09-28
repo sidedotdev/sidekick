@@ -5,7 +5,7 @@
         v-for="item in virtualizer.getVirtualItems()"
         :key="tasks[item.index].id"
         :data-index="item.index"
-        :ref="(el) => measureRef(el as HTMLElement | null, item)"
+        :ref="(el) => measureRef(el as HTMLElement | null)"
         :style="{
           position: 'absolute',
           top: 0,
@@ -90,7 +90,7 @@ watch(() => props.tasks.length, () => {
   virtualizer.value.measure()
 })
 
-const measureRef = (el: HTMLElement | null, item: { index: number }) => {
+const measureRef = (el: HTMLElement | null) => {
   if (el) {
     virtualizer.value.measureElement(el)
   }

@@ -1,6 +1,7 @@
 import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { routeLocationKey } from 'vue-router'
 import FlowView from '../FlowView.vue'
 import type { FlowAction, FlowStatus, SubflowTree } from '../../lib/models'
 import { store } from '../../lib/store'
@@ -76,7 +77,7 @@ const mountFlow = async ({
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
     const url = String(input)
     if (url.endsWith(`/flows/${flowId}/actions`)) {
-      return { ok: true, json: async () => ({ actions: [] }) }
+      return { ok: true, json: async () => ({ flowActions: [] }) }
     }
     if (url.endsWith(`/flows/${flowId}/subflows`)) {
       return { ok: true, json: async () => ({ subflows: [] }) }
@@ -122,9 +123,8 @@ const mountFlow = async ({
         SubflowContainer: true,
         IdeSelectorDialog: true,
       },
-      mocks: {
-        $route: { params: {} },
-        $router: { replace: vi.fn() },
+      provide: {
+        [routeLocationKey as symbol]: { params: {}, query: {} },
       },
     },
   })

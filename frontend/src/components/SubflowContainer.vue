@@ -88,7 +88,6 @@ function toggleAccordion() {
   nextTick(() => {
     if (accordionState.value.expanded && container.value) {
       const scrollTo = container.value.scrollHeight > window.innerHeight - 100 ? 'start' : 'nearest';
-      console.log({scrollTo})
       container.value.scrollIntoView({ behavior: 'instant', block: scrollTo })
     } else if (!accordionState.value.expanded) {
       useEventBus('flow-view-collapse').emit()

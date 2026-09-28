@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { evaluateOffHours, isTimeInWindow, type OffHoursConfig, type OffHoursWindow } from '../offHours'
 
 describe('isTimeInWindow', () => {

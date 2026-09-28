@@ -20,7 +20,7 @@
       <h3>Params</h3>
       <JsonTree :data="flowAction.actionParams" />
       <h3>Result</h3>
-      <JsonTree :data="actionResult" />
+      <JsonTree v-if="actionResult !== null" :data="actionResult" />
       <pre v-if="unparsedActionResult">{{ unparsedActionResult }}</pre>
     </div>
   </div>
@@ -83,7 +83,6 @@ function toggle() {
   nextTick(() => {
     if (expand.value && container.value) {
       const scrollTo = container.value.scrollHeight > window.innerHeight - 100 ? 'start' : 'nearest';
-      console.log({scrollTo})
       container.value.scrollIntoView({ behavior: 'instant', block: scrollTo })
     } else if (!expand.value) {
       useEventBus('flow-view-collapse').emit()

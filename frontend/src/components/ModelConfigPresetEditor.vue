@@ -2,7 +2,7 @@
   <div class="model-config-preset-editor">
     <div class="preset-section">
       <label>Model Config</label>
-      <Dropdown
+      <Select
         ref="presetDropdownRef"
         v-model="selectedPresetValue"
         :options="editor.presetOptions.value"
@@ -41,7 +41,7 @@
             </div>
           </div>
         </template>
-      </Dropdown>
+      </Select>
     </div>
 
     <div v-if="showConfigEditor" class="add-preset-section">
@@ -64,7 +64,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import Dropdown from 'primevue/dropdown'
+import Select from 'primevue/select'
 import LlmConfigEditor from './LlmConfigEditor.vue'
 import { getModelSummary } from '../lib/llmPresets'
 import type { ModelConfigPresetEditorState } from '../composables/useModelConfigPresets'
@@ -77,7 +77,7 @@ const props = withDefaults(defineProps<{
   alwaysShowEditor: false,
 })
 
-const presetDropdownRef = ref<InstanceType<typeof Dropdown> | null>(null)
+const presetDropdownRef = ref<InstanceType<typeof Select> | null>(null)
 
 const selectedPresetValue = computed({
   get: () => props.editor.selectedPresetValue.value,
