@@ -54,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,15 +83,15 @@ import kotlinx.coroutines.launch
 private const val NOT_AVAILABLE_MESSAGE = "Not available yet"
 private val ScreenHorizontalPadding = 16.dp
 
-/**
- * Stateless Tasks landing screen. The [title] slot hosts the workspace name; the workspace
- * switcher plugs into it.
- */
+/** Stateless Tasks landing screen; the top bar title doubles as the workspace switcher. */
 @Composable
 fun TasksScreen(
     state: TasksUiState,
     onRefresh: () -> Unit,
     onRetryTasks: () -> Unit,
+    onRetryWorkspaces: () -> Unit,
+    onWorkspaceSelected: (String) -> Unit,
+    onSwitcherQueryChanged: (String) -> Unit,
     onSearchQueryChanged: (String) -> Unit,
     onSearchActiveChanged: (Boolean) -> Unit,
     onToggleDrafts: () -> Unit,
@@ -99,7 +100,6 @@ fun TasksScreen(
     onScanDifferentCode: () -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
-    title: @Composable () -> Unit = { WorkspaceTitlePlaceholder(state.currentWorkspace?.name) },
 ) {
     val scope = rememberCoroutineScope()
     val showNotAvailable: () -> Unit = {
@@ -108,6 +108,12 @@ fun TasksScreen(
     // Separate list states so leaving search returns to the bucketed scroll position.
     val bucketListState = rememberLazyListState()
     val searchListState = rememberLazyListState()
+    var switcherOpen by rememberSaveable { mutableStateOf(false) }
+    // Reopening starts from the full list rather than a stale filter.
+    val closeSwitcher: () -> Unit = {
+        switcherOpen = false
+        onSwitcherQueryChanged("")
+    }
 
     Scaffold(
         modifier = modifier,
@@ -120,7 +126,27 @@ fun TasksScreen(
                 )
             } else {
                 TasksTopBar(
-                    title = title,
+                    title = {
+                        Box {
+                            WorkspaceTitle(state = state, onClick = { switcherOpen = true })
+                            if (switcherOpen) {
+                                WorkspaceSwitcher(
+                                    state = state,
+                                    onQueryChanged = onSwitcherQueryChanged,
+                                    onSelect = { id ->
+                                        closeSwitcher()
+                                        onWorkspaceSelected(id)
+                                    },
+                                    onRetry = onRetryWorkspaces,
+                                    onScanDifferentCode = {
+                                        closeSwitcher()
+                                        onScanDifferentCode()
+                                    },
+                                    onDismiss = closeSwitcher,
+                                )
+                            }
+                        }
+                    },
                     onSearch = { onSearchActiveChanged(true) },
                     onNewTask = showNotAvailable,
                     onScanDifferentCode = onScanDifferentCode,
@@ -147,17 +173,6 @@ fun TasksScreen(
             )
         }
     }
-}
-
-@Composable
-internal fun WorkspaceTitlePlaceholder(name: String?) {
-    Text(
-        text = name ?: "Sidekick",
-        style = MaterialTheme.typography.titleLarge,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.testTag("workspace-title"),
-    )
 }
 
 @Composable
@@ -845,7 +860,7 @@ internal fun sampleTasks(now: Instant = Instant.now()): List<Task> {
 }
 
 internal fun sampleTasksUiState(now: Instant = Instant.now()): TasksUiState = TasksUiState(
-    workspaces = listOf(SampleWorkspace),
+    workspaces = sampleWorkspaces(),
     isLoadingWorkspaces = false,
     currentWorkspace = SampleWorkspace,
     tasks = sampleTasks(now),
@@ -863,6 +878,9 @@ private fun TasksScreenPreview(variants: DesignVariants, darkTheme: Boolean) {
                 state = sampleTasksUiState(),
                 onRefresh = {},
                 onRetryTasks = {},
+                onRetryWorkspaces = {},
+                onWorkspaceSelected = {},
+                onSwitcherQueryChanged = {},
                 onSearchQueryChanged = {},
                 onSearchActiveChanged = {},
                 onToggleDrafts = {},

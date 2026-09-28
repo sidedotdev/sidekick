@@ -92,6 +92,9 @@ class TasksScreenJvmTest {
                     state = harness.state,
                     onRefresh = {},
                     onRetryTasks = { harness.retries += 1 },
+                    onRetryWorkspaces = {},
+                    onWorkspaceSelected = {},
+                    onSwitcherQueryChanged = { harness.state = harness.state.copy(switcherQuery = it) },
                     onSearchQueryChanged = { harness.state = harness.state.copy(searchQuery = it) },
                     onSearchActiveChanged = { active ->
                         harness.state = harness.state.copy(
