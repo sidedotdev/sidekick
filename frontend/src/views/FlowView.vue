@@ -67,8 +67,9 @@ import SubflowContainer from '@/components/SubflowContainer.vue'
 import IdeSelectorDialog from '@/components/IdeSelectorDialog.vue'
 import FlowEditorLinks from '@/components/FlowEditorLinks.vue'
 import FlowModelConfigModal from '@/components/FlowModelConfigModal.vue'
-import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Subflow, Workspace } from '../lib/models'
+import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Subflow, Workspace, Llm2StreamEvent } from '../lib/models'
 import { SubflowStatus } from '../lib/models'
+import { Llm2ActionStream, type Llm2StreamSnapshot } from '../lib/llm2ActionStream'
 import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
@@ -151,6 +152,9 @@ let actionChangesSocketClosed = false
 let eventsSocket: WebSocket | null = null
 let eventsSocketClosed = false;
 let pendingEventSubscriptions: string[] = [];
+// Per-flow-action llm2 streaming state, keyed by flow action id. Kept outside
+// the flow actions themselves since those get replaced by action-change updates.
+let llm2ActionStreams = new Map<string, Llm2ActionStream>();
 let shortContent = ref(true);
 let currentFlowIdForSockets: string | null = null;
 let isLoadingFlow = ref(false);
@@ -183,6 +187,48 @@ const sendEventSubscription = (parentId: string) => {
   } else {
     pendingEventSubscriptions.push(parentId);
   }
+};
+
+const applyLlm2StreamSnapshot = (flowActionId: string, snapshot: Llm2StreamSnapshot) => {
+  const action = flowActions.value.find(a => a.id === flowActionId);
+  if (!action) {
+    console.error(`FlowAction with id ${flowActionId} not found.`);
+    return;
+  }
+  action.streamingData = {
+    content: action.streamingData?.content ?? '',
+    toolCalls: action.streamingData?.toolCalls ?? [],
+    blocks: snapshot.blocks,
+    toolArguments: snapshot.toolArguments,
+  };
+};
+
+const handleLlm2StreamEvent = (flowEvent: Llm2StreamEvent) => {
+  const action = flowActions.value.find(a => a.id === flowEvent.flowActionId);
+  if (!action) {
+    console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);
+    return;
+  }
+  // Events that trail the action's completion must not resurrect its disposed stream.
+  if (action.actionStatus !== 'started') return;
+  let stream = llm2ActionStreams.get(flowEvent.flowActionId);
+  if (!stream) {
+    stream = new Llm2ActionStream((snapshot) => applyLlm2StreamSnapshot(flowEvent.flowActionId, snapshot));
+    llm2ActionStreams.set(flowEvent.flowActionId, stream);
+  }
+  stream.applyEvent(flowEvent);
+};
+
+const disposeLlm2ActionStream = (flowActionId: string) => {
+  llm2ActionStreams.get(flowActionId)?.dispose();
+  llm2ActionStreams.delete(flowActionId);
+};
+
+const disposeAllLlm2ActionStreams = () => {
+  for (const stream of llm2ActionStreams.values()) {
+    stream.dispose();
+  }
+  llm2ActionStreams.clear();
 };
 
 const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Promise<Response>) => {
@@ -241,6 +287,10 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
           } else {
             console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);
           }
+          break;
+        }
+        case 'llm2_stream_event': {
+          handleLlm2StreamEvent(flowEvent as Llm2StreamEvent);
           break;
         }
         case 'status_change': {
@@ -373,14 +423,23 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
 
       const index = flowActions.value.findIndex((action) => action.id === flowAction.id);
       if (index !== -1) {
-        if (flowAction.updated < flowActions.value[index].updated) {
+        const existing = flowActions.value[index];
+        if (flowAction.updated < existing.updated) {
           // events may be out of order at this point, even though the backend
           // provides them in order, if we do any awaits in the event handlers
           return;
         }
+        // Action-change updates never carry streaming state, so carry over
+        // what the events socket accumulated while the action is still running.
+        if (flowAction.actionStatus === 'started' && existing.streamingData && !flowAction.streamingData) {
+          flowAction.streamingData = existing.streamingData;
+        }
         flowActions.value[index] = flowAction;
       } else {
         flowActions.value.push(flowAction);
+      }
+      if (flowAction.actionStatus !== 'started') {
+        disposeLlm2ActionStream(flowAction.id);
       }
       
       clearTimeout(subflowTreeDebounceTimer);
@@ -496,6 +555,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
   actionChangesSocketClosed = false; // Reset for new connections
   eventsSocketClosed = false;
   pendingEventSubscriptions = [];
+  disposeAllLlm2ActionStreams();
   currentFlowIdForSockets = null; // Reset
 
   if (!newFlowId) {
@@ -673,6 +733,7 @@ onUnmounted(() => {
   if (eventsSocket) {
     eventsSocket.close();
   }
+  disposeAllLlm2ActionStreams();
   // Clear any pending subflow status update timers on unmount
   Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
     clearTimeout(subflowStatusUpdateDebounceTimers[key]);

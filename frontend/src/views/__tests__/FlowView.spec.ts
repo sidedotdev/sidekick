@@ -1,22 +1,29 @@
 import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import FlowView from '../FlowView.vue'
-import type { FlowStatus } from '../../lib/models'
+import type { FlowAction, FlowStatus, SubflowTree } from '../../lib/models'
 import { store } from '../../lib/store'
 
 class MockWebSocket {
   static OPEN = 1
+  static instances: MockWebSocket[] = []
   readyState = MockWebSocket.OPEN
   onopen: (() => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror: ((event: Event) => void) | null = null
   onclose: ((event: CloseEvent) => void) | null = null
 
-  constructor(public url: string) {}
+  constructor(public url: string) {
+    MockWebSocket.instances.push(this)
+  }
 
   send() {}
   close() {}
+
+  receive(payload: unknown) {
+    this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent)
+  }
 }
 
 const FlowEditorLinksStub = defineComponent({
@@ -190,6 +197,116 @@ describe('FlowView model configuration integration', () => {
 
     expect(wrapper.getComponent(FlowEditorLinksStub).props('showModelConfiguration')).toBe(false)
     expect(wrapper.find('.open-model-configuration').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+describe('FlowView llm2 streaming events', () => {
+  beforeEach(() => {
+    store.workspaceId = 'route-workspace'
+    MockWebSocket.instances = []
+    vi.stubGlobal('WebSocket', MockWebSocket)
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  // Action-change handling and subflow tree rebuilds are debounced by 100ms.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 150))
+
+  const socket = (fragment: string) => {
+    const found = MockWebSocket.instances.find((ws) => ws.url.includes(fragment))
+    if (!found) throw new Error(`No websocket matching ${fragment}`)
+    return found
+  }
+
+  const action = (id: string, actionStatus: FlowAction['actionStatus'], updated: string): FlowAction => ({
+    id,
+    flowId: 'flow',
+    workspaceId: 'route-workspace',
+    created: '2024-01-01T00:00:00Z' as unknown as Date,
+    updated: updated as unknown as Date,
+    actionType: 'chat_completion',
+    actionStatus,
+    actionParams: {},
+    actionResult: '',
+    subflow: 'dev',
+    isHumanAction: false,
+  })
+
+  const renderedActions = (wrapper: VueWrapper): FlowAction[] => {
+    const trees = wrapper.findAllComponents({ name: 'SubflowContainer' }).map((c) => c.props('subflowTree') as SubflowTree)
+    return trees.flatMap((tree) => tree.children.filter((child): child is FlowAction => 'actionStatus' in child))
+  }
+
+  const findAction = (wrapper: VueWrapper, id: string): FlowAction => {
+    const found = renderedActions(wrapper).find((a) => a.id === id)
+    if (!found) throw new Error(`Action ${id} not rendered`)
+    return found
+  }
+
+  it('accumulates blocks per action and preserves them across started updates', async () => {
+    const { wrapper } = await mountFlow({ status: 'in_progress' })
+    const actions = socket('action_changes_ws')
+    const events = socket('/events')
+
+    actions.receive(action('a', 'started', '2024-01-01T00:00:01Z'))
+    actions.receive(action('b', 'started', '2024-01-01T00:00:01Z'))
+    await settle()
+
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'a', type: 'block_started', index: 0, contentBlock: { type: 'text' } })
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'a', type: 'text_delta', index: 0, delta: 'Hello' })
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'b', type: 'block_started', index: 0, contentBlock: { type: 'tool_use', toolUse: { id: 'tc', name: 'search', arguments: '' } } })
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'b', type: 'text_delta', index: 0, delta: '{"query":"te' })
+    await settle()
+
+    expect(findAction(wrapper, 'a').streamingData?.blocks).toEqual([{ type: 'text', text: 'Hello' }])
+    expect(findAction(wrapper, 'a').streamingData?.toolArguments).toEqual({})
+    expect(findAction(wrapper, 'b').streamingData?.blocks).toEqual([
+      { type: 'tool_use', toolUse: { id: 'tc', name: 'search', arguments: '{"query":"te' } }
+    ])
+    expect(findAction(wrapper, 'b').streamingData?.toolArguments).toEqual({ 0: { query: 'te' } })
+
+    // A fresh started update replaces the action object but must keep the streamed state.
+    actions.receive(action('a', 'started', '2024-01-01T00:00:02Z'))
+    await settle()
+    expect(findAction(wrapper, 'a').streamingData?.blocks).toEqual([{ type: 'text', text: 'Hello' }])
+
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'a', type: 'text_delta', index: 0, delta: ' world' })
+    await settle()
+    expect(findAction(wrapper, 'a').streamingData?.blocks).toEqual([{ type: 'text', text: 'Hello world' }])
+
+    wrapper.unmount()
+  })
+
+  it('ignores stale completions but stops accumulating once an action really completes', async () => {
+    const { wrapper } = await mountFlow({ status: 'in_progress' })
+    const actions = socket('action_changes_ws')
+    const events = socket('/events')
+
+    actions.receive(action('a', 'started', '2024-01-01T00:00:05Z'))
+    await settle()
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'a', type: 'block_started', index: 0, contentBlock: { type: 'text' } })
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'a', type: 'text_delta', index: 0, delta: 'Hello' })
+    await settle()
+
+    // An out-of-order older completion is dropped and must not tear down the stream.
+    actions.receive(action('a', 'complete', '2024-01-01T00:00:01Z'))
+    await settle()
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'a', type: 'text_delta', index: 0, delta: '!' })
+    await settle()
+    expect(findAction(wrapper, 'a').actionStatus).toBe('started')
+    expect(findAction(wrapper, 'a').streamingData?.blocks).toEqual([{ type: 'text', text: 'Hello!' }])
+
+    actions.receive(action('a', 'complete', '2024-01-01T00:00:06Z'))
+    await settle()
+    events.receive({ eventType: 'llm2_stream_event', flowActionId: 'a', type: 'text_delta', index: 0, delta: ' late' })
+    await settle()
+    expect(findAction(wrapper, 'a').actionStatus).toBe('complete')
+    expect(findAction(wrapper, 'a').streamingData).toBeUndefined()
+
     wrapper.unmount()
   })
 })

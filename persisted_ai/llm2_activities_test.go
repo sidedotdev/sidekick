@@ -1,15 +1,164 @@
 package persisted_ai
 
 import (
+	"context"
 	"encoding/json"
+	"sync"
 	"testing"
+	"time"
 
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/secret_manager"
+	"sidekick/srv"
+
+	"github.com/stretchr/testify/require"
 )
+
+// recordingFlowEventStreamer captures flow events added during Stream and
+// signals when the flow event stream is ended, since Stream may return before
+// its event-forwarding goroutine has drained.
+type recordingFlowEventStreamer struct {
+	srv.Streamer
+	mu     sync.Mutex
+	events []domain.FlowEvent
+	ended  chan struct{}
+}
+
+func newRecordingFlowEventStreamer() *recordingFlowEventStreamer {
+	return &recordingFlowEventStreamer{ended: make(chan struct{})}
+}
+
+func (r *recordingFlowEventStreamer) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, flowEvent)
+	return nil
+}
+
+func (r *recordingFlowEventStreamer) EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error {
+	close(r.ended)
+	return nil
+}
+
+func (r *recordingFlowEventStreamer) waitForEvents(t *testing.T) []domain.FlowEvent {
+	t.Helper()
+	select {
+	case <-r.ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("flow event stream was never ended")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]domain.FlowEvent(nil), r.events...)
+}
+
+func TestStreamActivity_ForwardsLlm2StreamEventsAlongsideLegacyEvents(t *testing.T) {
+	t.Parallel()
+
+	reasoningStart := llm2.Event{Type: llm2.EventBlockStarted, Index: 0, ContentBlock: &llm2.ContentBlock{
+		Type: llm2.ContentBlockTypeReasoning, Reasoning: &llm2.ReasoningBlock{},
+	}}
+	reasoningDelta := llm2.Event{Type: llm2.EventTextDelta, Index: 0, Delta: "Let me think."}
+	summaryDelta := llm2.Event{Type: llm2.EventSummaryTextDelta, Index: 0, Delta: "Thinking summary"}
+	signatureDelta := llm2.Event{Type: llm2.EventSignatureDelta, Index: 0, Signature: []byte("sig")}
+	reasoningDone := llm2.Event{Type: llm2.EventBlockDone, Index: 0, ContentBlock: &llm2.ContentBlock{
+		Type: llm2.ContentBlockTypeReasoning, Reasoning: &llm2.ReasoningBlock{Text: "Let me think.", Summary: "Thinking summary"},
+	}}
+	textStart := llm2.Event{Type: llm2.EventBlockStarted, Index: 1, ContentBlock: &llm2.ContentBlock{Type: llm2.ContentBlockTypeText}}
+	textDeltaEvent := llm2.Event{Type: llm2.EventTextDelta, Index: 1, Delta: "Hello"}
+	textDone := llm2.Event{Type: llm2.EventBlockDone, Index: 1, ContentBlock: &llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello"}}
+	builtinUseStart := llm2.Event{Type: llm2.EventBlockStarted, Index: 2, ContentBlock: &llm2.ContentBlock{
+		Type:           llm2.ContentBlockTypeBuiltinToolUse,
+		BuiltinToolUse: &llm2.BuiltinToolUseBlock{Id: "ws_1", Name: "web_search", Arguments: `{"query":"sidekick"}`},
+	}}
+	builtinUseDone := llm2.Event{Type: llm2.EventBlockDone, Index: 2, ContentBlock: builtinUseStart.ContentBlock}
+	builtinResultStart := llm2.Event{Type: llm2.EventBlockStarted, Index: 3, ContentBlock: &llm2.ContentBlock{
+		Type:              llm2.ContentBlockTypeBuiltinToolResult,
+		BuiltinToolResult: &llm2.BuiltinToolResultBlock{ToolCallId: "ws_1", Name: "web_search", Content: "done"},
+	}}
+	builtinResultDone := llm2.Event{Type: llm2.EventBlockDone, Index: 3, ContentBlock: builtinResultStart.ContentBlock}
+	toolUseStartEvent := llm2.Event{Type: llm2.EventBlockStarted, Index: 4, ContentBlock: &llm2.ContentBlock{
+		Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "call_1", Name: "read_file"},
+	}}
+	toolArgsDelta := llm2.Event{Type: llm2.EventTextDelta, Index: 4, Delta: `{"path":"README.md"}`}
+	toolUseDone := llm2.Event{Type: llm2.EventBlockDone, Index: 4, ContentBlock: &llm2.ContentBlock{
+		Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "call_1", Name: "read_file", Arguments: `{"path":"README.md"}`},
+	}}
+	heartbeat := llm2.Event{Type: llm2.EventHeartbeat}
+
+	scripted := []llm2.Event{
+		heartbeat,
+		reasoningStart, reasoningDelta, summaryDelta, signatureDelta, reasoningDone,
+		textStart, textDeltaEvent, textDone,
+		builtinUseStart, builtinUseDone,
+		builtinResultStart, builtinResultDone,
+		toolUseStartEvent, toolArgsDelta, toolUseDone,
+	}
+	provider := &scriptedProvider{attempts: [][]llm2.Event{scripted}}
+	streamer := newRecordingFlowEventStreamer()
+	la := &Llm2Activities{
+		Streamer: streamer,
+		providerFactory: func(common.ModelConfig, []common.ModelProviderPublicConfig) (llm2.Provider, error) {
+			return provider, nil
+		},
+	}
+
+	input := newRunawayStreamActivityInput(t)
+	input.FlowActionId = "action-1"
+	response, err := la.Stream(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, response)
+
+	events := streamer.waitForEvents(t)
+
+	var forwarded []llm2.Event
+	var legacyDeltas []domain.ChatMessageDeltaEvent
+	var progressEvents []domain.ProgressTextEvent
+	for _, event := range events {
+		switch e := event.(type) {
+		case domain.Llm2StreamEvent:
+			require.Equal(t, domain.Llm2StreamEventType, e.EventType)
+			require.Equal(t, "action-1", e.FlowActionId)
+			forwarded = append(forwarded, e.Event)
+		case domain.ChatMessageDeltaEvent:
+			legacyDeltas = append(legacyDeltas, e)
+		case domain.ProgressTextEvent:
+			progressEvents = append(progressEvents, e)
+		default:
+			t.Fatalf("unexpected flow event type %T", event)
+		}
+	}
+
+	// Every content-relevant llm2 event is forwarded verbatim in order;
+	// heartbeats and signature deltas are not.
+	var expectedForwarded []llm2.Event
+	for _, event := range scripted {
+		switch event.Type {
+		case llm2.EventBlockStarted, llm2.EventTextDelta, llm2.EventSummaryTextDelta, llm2.EventBlockDone:
+			expectedForwarded = append(expectedForwarded, event)
+		}
+	}
+	require.Equal(t, expectedForwarded, forwarded)
+
+	// Legacy emissions for other consumers remain alongside the new events.
+	require.NotEmpty(t, legacyDeltas, "chat_message_delta events must still be emitted")
+	var legacyText string
+	var legacyToolCallIds []string
+	for _, delta := range legacyDeltas {
+		legacyText += delta.ChatMessageDelta.Content
+		for _, call := range delta.ChatMessageDelta.ToolCalls {
+			if call.Id != "" {
+				legacyToolCallIds = append(legacyToolCallIds, call.Id)
+			}
+		}
+	}
+	require.Equal(t, "Hello", legacyText)
+	require.Contains(t, legacyToolCallIds, "call_1")
+	require.NotEmpty(t, progressEvents, "progress_text events for summaries/builtin results must still be emitted")
+}
 
 func newTestStreamInput(options llm2.Options) StreamInput {
 	return StreamInput{

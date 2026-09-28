@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, shallowMount, flushPromises } from '@vue/test-utils'
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue'
-import type { FlowAction, Llm2Message } from '../lib/models'
+import Llm2ContentBlocks from './Llm2ContentBlocks.vue'
+import JsonTree from './JsonTree.vue'
+import type { FlowAction, Llm2Message, Llm2ContentBlock } from '../lib/models'
 
 describe('ChatCompletionFlowAction', () => {
   const flowAction: FlowAction = {
@@ -442,6 +444,94 @@ describe('ChatCompletionFlowAction', () => {
       await wrapper.vm.$nextTick()
       expect(wrapper.find('.model-usage').text()).toContain('1.5k in')
       expect(wrapper.find('.model-usage').text()).toContain('300 out')
+    })
+  })
+
+  describe('streaming', () => {
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ messages: [] }), { status: 200 })))
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    const streamingBlocks: Llm2ContentBlock[] = [
+      { type: 'reasoning', reasoning: { text: 'Thinking about it', summary: 'Brief' } },
+      { type: 'text', text: 'Let me search' },
+      { type: 'tool_use', toolUse: { id: 'tc1', name: 'search', arguments: '{"query":"te' } }
+    ]
+
+    // Block-level class names of everything the shared renderer produced, in order.
+    const blockStructure = (wrapper: ReturnType<typeof mount>) =>
+      wrapper.findAll('.action-result [class*="llm2-"]').map((el) => el.classes().filter((c) => c.startsWith('llm2-')).join(' '))
+
+    it('renders legacy content and tool calls when only chat_message_delta data is present', async () => {
+      const fa: FlowAction = {
+        ...flowAction,
+        actionStatus: 'started',
+        actionResult: '',
+        streamingData: { content: 'Partial answer', toolCalls: [{ id: 'tc1', name: 'search', arguments: '{"query":' }] }
+      }
+      const wrapper = mount(ChatCompletionFlowAction, { props: { flowAction: fa, expand: true } })
+      await flushPromises()
+      expect(wrapper.find('.action-result .message-content').text()).toBe('Partial answer')
+      expect(wrapper.find('.action-result .streaming-tool-call .action-result-function-name').text()).toBe('Tool Call: search')
+      expect(wrapper.findComponent(Llm2ContentBlocks).exists()).toBe(false)
+    })
+
+    it('renders llm2 blocks with incrementally parsed tool arguments instead of the legacy markup', async () => {
+      const fa: FlowAction = {
+        ...flowAction,
+        actionStatus: 'started',
+        actionResult: '',
+        streamingData: {
+          content: 'Let me search',
+          toolCalls: [{ id: 'tc1', name: 'search', arguments: '{"query":"te' }],
+          blocks: streamingBlocks,
+          toolArguments: { 2: { query: 'te' } }
+        }
+      }
+      const wrapper = mount(ChatCompletionFlowAction, { props: { flowAction: fa, expand: true } })
+      await flushPromises()
+
+      expect(wrapper.find('.streaming-tool-call').exists()).toBe(false)
+      expect(wrapper.findAll('.action-result .message-content').map((el) => el.text())).toEqual(['Thinking about it', 'Let me search'])
+      expect(wrapper.find('.action-result .reasoning-summary').text()).toBe('Summary: Brief')
+      expect(wrapper.find('.action-result .llm2-tool-use-block .action-result-function-name').text()).toBe('Tool Call: search')
+      expect(wrapper.find('.action-result .llm2-tool-use-block').findComponent(JsonTree).props('data')).toEqual({ query: 'te' })
+    })
+
+    it('renders the completed response with the same block structure as during streaming', async () => {
+      const fa: FlowAction = {
+        ...flowAction,
+        actionStatus: 'started',
+        actionResult: '',
+        streamingData: { content: '', toolCalls: [], blocks: streamingBlocks, toolArguments: { 2: { query: 'te' } } }
+      }
+      const wrapper = mount(ChatCompletionFlowAction, { props: { flowAction: fa, expand: true } })
+      await flushPromises()
+      const streamingStructure = blockStructure(wrapper)
+      expect(streamingStructure).toEqual(['llm2-text-block', 'llm2-text-block', 'llm2-tool-use-block'])
+
+      const finalBlocks: Llm2ContentBlock[] = [
+        { type: 'reasoning', reasoning: { text: 'Thinking about it', summary: 'Brief' } },
+        { type: 'text', text: 'Let me search' },
+        { type: 'tool_use', toolUse: { id: 'tc1', name: 'search', arguments: '{"query":"test"}' } }
+      ]
+      await wrapper.setProps({
+        flowAction: {
+          ...fa,
+          actionStatus: 'complete',
+          streamingData: undefined,
+          actionResult: JSON.stringify({ output: { role: 'assistant', content: finalBlocks }, stopReason: 'tool_use' })
+        }
+      })
+      await flushPromises()
+
+      expect(blockStructure(wrapper)).toEqual(streamingStructure)
+      expect(wrapper.find('.action-result .llm2-tool-use-block').findComponent(JsonTree).props('data')).toEqual({ query: 'test' })
+      expect(wrapper.find('.action-result .action-result-stop-reason').text()).toBe('Stop Reason: tool_use')
     })
   })
 })

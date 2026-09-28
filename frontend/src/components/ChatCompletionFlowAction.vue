@@ -140,11 +140,15 @@
 
       <!-- Streaming state: render partial content -->
       <template v-if="isStreaming && streamingData">
-        <vue-markdown v-if="streamingData.content" :options="{ breaks: true }" :source="streamingData.content" class="message-content markdown"/>
-        <div v-for="toolCall in streamingData.toolCalls" :key="toolCall.id" class="streaming-tool-call">
-          <p v-if="toolCall.name" class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
-          <vue-markdown :options="{ breaks: true }" :source="'```tool_call\n' + (toolCall.arguments || '') + '\n```'" class="tool-call-arguments"/>
-        </div>
+        <!-- llm2 block events supersede the flat legacy deltas, which carry the same content -->
+        <Llm2ContentBlocks v-if="streamingData.blocks" :blocks="streamingData.blocks" :tool-arguments="streamingData.toolArguments" :json-tree-depth="jsonTreeDepth" />
+        <template v-else>
+          <vue-markdown v-if="streamingData.content" :options="{ breaks: true }" :source="streamingData.content" class="message-content markdown"/>
+          <div v-for="toolCall in streamingData.toolCalls" :key="toolCall.id" class="streaming-tool-call">
+            <p v-if="toolCall.name" class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
+            <vue-markdown :options="{ breaks: true }" :source="'```tool_call\n' + (toolCall.arguments || '') + '\n```'" class="tool-call-arguments"/>
+          </div>
+        </template>
       </template>
 
       <!-- Completed state: render from parsed actionResult -->
@@ -158,27 +162,7 @@
 
         <!-- llm2 MessageResponse format -->
         <template v-if="isLlm2Response">
-          <template v-for="(block, blockIndex) in llm2ResponseBlocks" :key="blockIndex">
-            <div v-if="block.type === 'text' && block.text" class="llm2-text-block">
-              <vue-markdown :options="{ breaks: true }" :source="block.text" class="message-content markdown"/>
-            </div>
-            <div v-else-if="block.type === 'image' && block.image?.url" class="llm2-image-block">
-              <ImagePreview :src="block.image.url" />
-            </div>
-            <div v-else-if="block.type === 'tool_use' && block.toolUse" class="llm2-tool-use-block">
-              <p class="action-result-function-name">Tool Call: {{ block.toolUse.name }}</p>
-              <JsonTree :deep="jsonTreeDepth" :data="parseLlm2ToolArguments(block.toolUse.arguments)" class="action-result-function-args"/>
-            </div>
-            <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
-              <vue-markdown v-if="block.reasoning?.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
-              <p v-else class="reasoning-redacted"><em>Reasoning (content not available)</em></p>
-              <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
-            </div>
-            <BuiltinToolBlock v-else-if="block.type === 'builtin_tool_use'" :block="block" :json-tree-depth="jsonTreeDepth" />
-            <div v-else-if="block.type !== 'text'" class="llm2-unknown-block">
-              <JsonTree :deep="jsonTreeDepth" :data="block"/>
-            </div>
-          </template>
+          <Llm2ContentBlocks :blocks="llm2ResponseBlocks" :json-tree-depth="jsonTreeDepth" />
           <div v-if="parsedActionResult && !llm2ResponseBlocks.length && !completionParseFailure">
             <JsonTree :deep="jsonTreeDepth" :data="parsedActionResult" class="action-result-parsed"/>
           </div>
@@ -210,11 +194,13 @@
 import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage, StreamingData, Llm2Message, Llm2ContentBlock, ChatHistoryParamPayload } from '../lib/models';
 import { isLlm2ChatHistoryWrapper } from '../lib/models';
 import { useProfiles } from '../lib/profiles';
+import { parseLlm2ToolArguments } from '../lib/toolArguments';
 import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
 import ImagePreview from './ImagePreview.vue'
 import VueMarkdown from 'vue-markdown-render'
 import BuiltinToolBlock from './BuiltinToolBlock.vue'
+import Llm2ContentBlocks from './Llm2ContentBlocks.vue'
 
 const props = defineProps({
   flowAction: {
@@ -299,14 +285,6 @@ watch(
   { immediate: true }
 );
 
-function parseLlm2ToolArguments(args: string): object {
-  try {
-    return JSON.parse(args) as object;
-  } catch {
-    return { raw: args };
-  }
-}
-
 function getTextBlockText(block: Llm2ContentBlock): string {
   return block.type === 'text' && typeof block.text === 'string' ? block.text : '';
 }
@@ -340,10 +318,10 @@ const isLlm2Response = computed(() => {
   return result && result.output && Array.isArray(result.output.content);
 });
 
-const llm2ResponseBlocks = computed(() => {
+const llm2ResponseBlocks = computed<Llm2ContentBlock[]>(() => {
   const result = parsedActionResult.value;
   if (!result?.output?.content) return [];
-  return result.output.content as Array<Record<string, any>>;
+  return result.output.content as Llm2ContentBlock[];
 });
 
 const effectiveModel = computed(() => props.flowAction.actionParams.model || parsedActionResult.value?.model || completion.value?.model || '')
