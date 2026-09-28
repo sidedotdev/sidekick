@@ -15,7 +15,7 @@
       <p v-else class="reasoning-redacted"><em>Reasoning (content not available)</em></p>
       <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
     </div>
-    <BuiltinToolBlock v-else-if="block.type === 'builtin_tool_use'" :block="block" :json-tree-depth="jsonTreeDepth" />
+    <BuiltinToolBlock v-else-if="block.type === 'builtin_tool_use' || block.type === 'builtin_tool_result'" :block="block" :json-tree-depth="jsonTreeDepth" />
     <div v-else-if="block.type !== 'text'" class="llm2-unknown-block">
       <JsonTree :deep="jsonTreeDepth" :data="block"/>
     </div>

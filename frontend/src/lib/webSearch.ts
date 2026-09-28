@@ -39,7 +39,8 @@ export function parseWebSearchBlock(block: unknown): WebSearchAction | null {
   if (!isRecord(action)) return null
   const status = tool.status as string | undefined
 
-  if (action.type === 'search') {
+  // Anthropic ({query}) and Google ({queries}) omit the OpenAI-style action type.
+  if (action.type === 'search' || action.type === undefined) {
     if (action.query !== undefined && !isNonemptyString(action.query)) return null
     if (action.queries !== undefined &&
         (!Array.isArray(action.queries) || !action.queries.every(isNonemptyString))) return null
@@ -59,4 +60,43 @@ export function parseWebSearchBlock(block: unknown): WebSearchAction | null {
   }
 
   return null
+}
+
+export type WebSearchResultItem = {
+  url: string
+  title: string
+  pageAge?: string
+}
+
+export type WebSearchResults = {
+  isError: boolean
+  content?: string
+  results: WebSearchResultItem[]
+}
+
+function parseWebSearchResultItem(value: unknown): WebSearchResultItem | null {
+  if (!isRecord(value) || !isWebUrl(value.url) || typeof value.title !== 'string') return null
+  if (value.pageAge !== undefined && typeof value.pageAge !== 'string') return null
+  return { url: value.url, title: value.title, pageAge: value.pageAge || undefined }
+}
+
+export function parseWebSearchResultBlock(block: unknown): WebSearchResults | null {
+  if (!isRecord(block) || block.type !== 'builtin_tool_result') return null
+  const result = block.builtinToolResult
+  if (!isRecord(result) || result.name !== 'web_search') return null
+  if (result.isError !== undefined && typeof result.isError !== 'boolean') return null
+  if (result.content !== undefined && typeof result.content !== 'string') return null
+  if (result.searchResults !== undefined && !Array.isArray(result.searchResults)) return null
+
+  const results: WebSearchResultItem[] = []
+  for (const item of (result.searchResults as unknown[] | undefined) ?? []) {
+    const parsed = parseWebSearchResultItem(item)
+    if (!parsed) return null
+    results.push(parsed)
+  }
+  return {
+    isError: result.isError === true,
+    content: (result.content as string | undefined) || undefined,
+    results
+  }
 }
