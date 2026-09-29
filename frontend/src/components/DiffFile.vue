@@ -27,15 +27,28 @@
             ></div>
           </div>
           <div class="line-counts">
-            <span v-if="fileData.linesAdded > 0" class="added-count">+{{ fileData.linesAdded }}</span>
-            <span v-if="fileData.linesRemoved > 0" class="removed-count">-{{ fileData.linesRemoved }}</span>
+            <span v-if="displayData.linesAdded > 0" class="added-count">+{{ displayData.linesAdded }}</span>
+            <span v-if="displayData.linesRemoved > 0" class="removed-count">-{{ displayData.linesRemoved }}</span>
           </div>
         </div>
       </div>
     </div>
     <div v-if="isExpanded" class="diff-content" tabindex="-1">
+      <div v-if="combinedParentCount" class="combined-diff-bar">
+        <span class="combined-diff-note">
+          Unmerged file: showing changes from the selected side to the working tree.
+          Only regions git recorded in the combined diff are included.
+        </span>
+        <SegmentedControl v-model="combinedView" :options="combinedViewOptions" />
+      </div>
+      <pre v-if="showRawPatch" class="raw-diff">{{ rawPatch }}</pre>
+      <div v-else-if="projectedIsEmpty" class="combined-diff-empty">
+        No differences from this side within the recorded regions.
+      </div>
       <DiffView
-        :data="fileData"
+        v-else
+        :key="combinedView"
+        :data="displayData"
         :diff-view-font-size="14"
         :diff-view-mode="viewMode"
         :diff-view-highlight="true"
@@ -48,10 +61,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, inject } from 'vue'
+import { computed, ref, inject, onErrorCaptured, watch } from 'vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import OpenIcon from './icons/OpenIcon.vue'
-import type { ParsedDiff } from '../lib/diffUtils'
+import SegmentedControl from './SegmentedControl.vue'
+import { combinedDiffParentCount, parseDiff, projectCombinedDiff, type ParsedDiff } from '../lib/diffUtils'
 import "@git-diff-view/vue/styles/diff-view.css"
 import { DiffView, DiffModeEnum } from "@git-diff-view/vue"
 import { IDE_OPENER_KEY } from '../composables/useIdeOpener'
@@ -84,6 +98,52 @@ const filePath = computed(() => {
 
 const viewMode = computed(() => {
   return props.diffMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified
+})
+
+// The rich viewer only understands two-way unified diffs. Git's combined diffs
+// for unmerged files are projected onto one parent at a time (stage 2 is
+// always HEAD, stage 3 the side being merged in); anything the viewer still
+// rejects at render time falls back to the original patch text so the diff is
+// never hidden behind an error.
+const rawPatch = computed(() => props.fileData.hunks.join('\n'))
+const renderFailed = ref(false)
+
+const combinedParentCount = computed(() => combinedDiffParentCount(rawPatch.value))
+const combinedView = ref('0')
+const combinedViewOptions = computed(() => {
+  const count = combinedParentCount.value ?? 0
+  const parents = count === 2
+    ? [{ label: 'HEAD (ours)', value: '0' }, { label: 'Incoming (theirs)', value: '1' }]
+    : Array.from({ length: count }, (_, i) => ({ label: `Parent ${i + 1}`, value: String(i) }))
+  return [...parents, { label: 'Raw', value: 'raw' }]
+})
+
+const projectedData = computed<ParsedDiff | null>(() => {
+  if (!combinedParentCount.value || combinedView.value === 'raw') return null
+  const projected = projectCombinedDiff(rawPatch.value, Number(combinedView.value))
+  if (projected === null) return null
+  const parsed = parseDiff(projected)[0]
+  return parsed ? { ...parsed, isRename: props.fileData.isRename } : null
+})
+const projectedIsEmpty = computed(() => projectedData.value !== null && !/^@@ /m.test(projectedData.value.hunks[0]))
+const displayData = computed(() => projectedData.value ?? props.fileData)
+const showRawPatch = computed(() => renderFailed.value || (combinedParentCount.value !== null && projectedData.value === null))
+
+watch(() => props.fileData, () => {
+  renderFailed.value = false
+  combinedView.value = '0'
+})
+watch(combinedView, () => {
+  renderFailed.value = false
+})
+
+onErrorCaptured((error) => {
+  if (renderFailed.value) {
+    return false
+  }
+  renderFailed.value = true
+  console.warn(`Falling back to raw patch for ${filePath.value}:`, error)
+  return false
 })
 
 const toggleExpanded = () => {
@@ -276,5 +336,45 @@ const getTheme = () => {
 
 .diff-content {
   padding: 0;
+}
+
+.combined-diff-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+}
+
+.combined-diff-note {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.combined-diff-bar :deep(.segmented-control button) {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.combined-diff-empty {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+.raw-diff {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--color-text);
+  background: var(--color-background);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
 }
 </style>
