@@ -26,7 +26,6 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/rs/zerolog"
@@ -65,10 +64,9 @@ func loadBlacklist() map[string]struct{} {
 }
 
 type listedWorkflow struct {
-	id              string
-	runID           string
-	status          enums.WorkflowExecutionStatus
-	sidekickVersion string
+	id     string
+	runID  string
+	status enums.WorkflowExecutionStatus
 }
 
 func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int) ([]listedWorkflow, error) {
@@ -84,17 +82,10 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 			return nil, err
 		}
 		for _, wfExec := range resp.Executions {
-			var version string
-			if wfExec.Memo != nil {
-				if payload, ok := wfExec.Memo.Fields["sidekickVersion"]; ok {
-					_ = converter.GetDefaultDataConverter().FromPayload(payload, &version)
-				}
-			}
 			results = append(results, listedWorkflow{
-				id:              wfExec.Execution.WorkflowId,
-				runID:           wfExec.Execution.RunId,
-				status:          wfExec.Status,
-				sidekickVersion: version,
+				id:     wfExec.Execution.WorkflowId,
+				runID:  wfExec.Execution.RunId,
+				status: wfExec.Status,
 			})
 			if len(results) >= limit {
 				return results, nil
@@ -108,17 +99,19 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 	return results, nil
 }
 
-// isReplayableVersion reports whether the workflow's version ref is in the
-// current branch's history, meaning it is safe to replay. The refs can be
-// commit SHAs, tags, or any other valid git ref. Returns true when either ref
-// is empty (graceful fallback) or when the workflow ref is an ancestor of (or
-// equal to) the current ref.
+// isReplayableVersion requires full commit IDs and a proper ancestor. The
+// latest worker build is a practical filter, not an audit of earlier workers.
 func isReplayableVersion(currentRef, workflowRef string) bool {
-	if currentRef == "" || workflowRef == "" {
-		return true
+	for _, ref := range []string{currentRef, workflowRef} {
+		if len(ref) != 40 && len(ref) != 64 {
+			return false
+		}
+		if strings.Trim(ref, "0123456789abcdef") != "" {
+			return false
+		}
 	}
 	if currentRef == workflowRef {
-		return true
+		return false
 	}
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", workflowRef, currentRef)
 	return cmd.Run() == nil
@@ -186,12 +179,16 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		t.Logf("WARNING: %d/%d workflows returned by Running query were not actually Running", nonRunning, len(listed))
 	}
 
-	currentSha := common.GetBuildCommitSha()
-	if currentSha != "" {
-		t.Logf("Current build commit: %s", currentSha)
-	} else {
-		t.Logf("Current build commit SHA unavailable; skipping version-based filtering")
+	head, err := exec.Command("git", "rev-parse", "--verify", "HEAD^{commit}").Output()
+	if err != nil {
+		t.Skipf("Cannot resolve HEAD: %v", err)
 	}
+	status, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil || len(status) != 0 {
+		t.Skipf("Replay requires a clean checkout: status=%q, error=%v", status, err)
+	}
+	currentSha := strings.TrimSpace(string(head))
+	t.Logf("Current HEAD: %s", currentSha)
 
 	var filtered []listedWorkflow
 	for _, wf := range listed {
@@ -202,11 +199,6 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			t.Logf("Skipping blacklisted workflow: %s", wf.id)
 			continue
 		}
-		if !isReplayableVersion(currentSha, wf.sidekickVersion) {
-			t.Logf("Skipping workflow %s: version %s is not in current branch history", wf.id, wf.sidekickVersion)
-			continue
-		}
-		t.Logf("Replaying workflow %s: sidekickVersion=%q", wf.id, wf.sidekickVersion)
 		filtered = append(filtered, wf)
 		if len(filtered) >= maxWorkflowsToReplay {
 			break
@@ -239,6 +231,10 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	var mu sync.Mutex
 	histories := make(map[string]*historyResult)
 	var wg sync.WaitGroup
+
+	// HEAD is fixed for this invocation; only ancestry results are cached.
+	var ancestryMu sync.Mutex
+	ancestry := make(map[string]bool)
 
 	// Limit concurrent replays to avoid CPU contention that triggers the
 	// deadlock detector (which measures wall-clock time between yields).
@@ -289,6 +285,24 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			if resumedFromCache {
 				t.Logf("Workflow %s: history fetch resumed from local cache", wf.id)
 			}
+			description, err := c.DescribeWorkflowExecution(ctx, wf.id, wf.runID)
+			if err != nil {
+				result.skipReason = fmt.Sprintf("latest worker build lookup: %v", err)
+				return
+			}
+			buildID := description.GetWorkflowExecutionInfo().GetMostRecentWorkerVersionStamp().GetBuildId()
+			ancestryMu.Lock()
+			replayable, known := ancestry[buildID]
+			if !known {
+				replayable = isReplayableVersion(currentSha, buildID)
+				ancestry[buildID] = replayable
+			}
+			ancestryMu.Unlock()
+			if !replayable {
+				result.skipReason = fmt.Sprintf("latest worker build %q is missing, unknown, unavailable, or not a proper ancestor of HEAD (including Git errors)", buildID)
+				return
+			}
+			t.Logf("Replaying workflow %s: latest worker build=%q", wf.id, buildID)
 			if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
 				result.skipReason = "completed before replay"
 				return

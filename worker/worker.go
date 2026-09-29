@@ -174,6 +174,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	}
 
 	w := worker.New(temporalClient, taskQueue, worker.Options{
+		BuildID:                  common.GetWorkerBuildID(),
 		DeadlockDetectionTimeout: 5 * time.Second,
 		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor()},
 		OnFatalError: func(err error) {
