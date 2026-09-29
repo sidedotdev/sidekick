@@ -10,12 +10,24 @@ import (
 	"sidekick/common"
 )
 
+// socketTempDir is a private temporary directory short enough for unix socket
+// paths, which t.TempDir exceeds on macOS for long test names.
+func socketTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestServiceSocketRecovery(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{"stale", "file", "symlink", "live"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
-			dir := t.TempDir()
+			dir := socketTempDir(t)
 			if err := os.Chmod(dir, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -88,7 +100,7 @@ func TestServiceSocketRecovery(t *testing.T) {
 
 func TestServiceConcurrentStart(t *testing.T) {
 	t.Parallel()
-	socket := filepath.Join(t.TempDir(), "private", "control.sock")
+	socket := filepath.Join(socketTempDir(t), "private", "control.sock")
 	var wg sync.WaitGroup
 	services := make(chan *Service, 8)
 	start := make(chan struct{})
@@ -125,7 +137,7 @@ func TestServiceRejectsUnsafeLock(t *testing.T) {
 	for _, kind := range []string{"symlink", "directory"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
-			dir := t.TempDir()
+			dir := socketTempDir(t)
 			if err := os.Chmod(dir, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +171,7 @@ func TestServiceRejectsUnsafeLock(t *testing.T) {
 
 func TestServiceClosePreservesReplacementPath(t *testing.T) {
 	t.Parallel()
-	socket := filepath.Join(t.TempDir(), "private", "control.sock")
+	socket := filepath.Join(socketTempDir(t), "private", "control.sock")
 	service, err := StartService(0, socket, func() (map[string]common.CredentialProxyConfig, error) {
 		return nil, nil
 	}, func() bool { return false })

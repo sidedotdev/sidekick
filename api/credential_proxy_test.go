@@ -12,6 +12,18 @@ import (
 	"github.com/adrg/xdg"
 )
 
+// socketTempDir is a private temporary directory short enough for unix socket
+// paths, which t.TempDir exceeds on macOS for long test names.
+func socketTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestCredentialProxyStartupPolicy(t *testing.T) {
 	const providerConfig = `
 credential_proxies:
@@ -51,7 +63,7 @@ credential_proxies:
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("SIDE_APP_ENV", tc.appEnv)
 			t.Setenv("SIDE_CREDENTIAL_PROXY_SIDE_AUTH_ENABLED", tc.enabled)
-			dir := t.TempDir()
+			dir := socketTempDir(t)
 			configPath := filepath.Join(dir, "config.yml")
 			if err := os.WriteFile(configPath, []byte(tc.config), 0600); err != nil {
 				t.Fatal(err)
@@ -79,7 +91,7 @@ credential_proxies:
 func TestRepositoryCredentialProxyAuthorization(t *testing.T) {
 	t.Setenv("SIDE_APP_ENV", "production")
 	t.Setenv("SIDE_CREDENTIAL_PROXY_SIDE_AUTH_ENABLED", "")
-	dir := t.TempDir()
+	dir := socketTempDir(t)
 	repoPath := filepath.Join(dir, "side.yml")
 	if err := os.WriteFile(repoPath, []byte(`
 credential_proxies:

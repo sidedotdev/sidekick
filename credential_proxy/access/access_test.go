@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,16 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 )
+
+// socketTempDir is a private temporary directory short enough for unix socket
+// paths, which t.TempDir exceeds on macOS for long test names.
+func socketTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "cp")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 
 func testInput() Input {
 	return Input{
@@ -263,7 +274,7 @@ func TestBindingUsesTemporalWorkflowIdentity(t *testing.T) {
 func TestBindingAcquiresThroughAuthorizedControlService(t *testing.T) {
 	t.Parallel()
 	input := testInput()
-	input.Socket = filepath.Join(t.TempDir(), "private", "control.sock")
+	input.Socket = filepath.Join(socketTempDir(t), "private", "control.sock")
 	service, err := server.StartService(0, input.Socket, func() (map[string]common.CredentialProxyConfig, error) {
 		return input.RepoConfig.CredentialProxies, nil
 	}, func() bool { return false })

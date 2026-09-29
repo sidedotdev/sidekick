@@ -49,7 +49,13 @@ func matchHookActions(event string, rules []common.HookRuleConfig, envType strin
 // non-secret hook data to place on an EnvRunCommandActivityInput. Call sites
 // that skip this helper run no command hooks.
 func runCommandHooks(dCtx DevContext, envType env.EnvType) ([]env.CommandHookAction, env.CommandHookContext) {
-	matched := matchHookActions(common.HookEventRunCommand, dCtx.RepoConfig.Hooks.RunCommand, string(envType))
+	return RunCommandHooks(dCtx.RepoConfig, dCtx.WorkspaceId, envType)
+}
+
+// RunCommandHooks is the workflow-independent form of runCommandHooks, for
+// callers that run commands outside a dev workflow.
+func RunCommandHooks(repoConfig common.RepoConfig, workspaceId string, envType env.EnvType) ([]env.CommandHookAction, env.CommandHookContext) {
+	matched := matchHookActions(common.HookEventRunCommand, repoConfig.Hooks.RunCommand, string(envType))
 	if len(matched) == 0 {
 		return nil, env.CommandHookContext{}
 	}
@@ -64,8 +70,8 @@ func runCommandHooks(dCtx DevContext, envType env.EnvType) ([]env.CommandHookAct
 		})
 	}
 	return hooks, env.CommandHookContext{
-		WorkspaceId: dCtx.WorkspaceId,
-		RepoConfig:  dCtx.RepoConfig,
+		WorkspaceId: workspaceId,
+		RepoConfig:  repoConfig,
 	}
 }
 

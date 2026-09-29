@@ -13,7 +13,7 @@ import (
 func TestServiceOwnsControlAndInferenceListeners(t *testing.T) {
 	t.Parallel()
 
-	socket := filepath.Join(t.TempDir(), "private", "control.sock")
+	socket := filepath.Join(socketTempDir(t), "private", "control.sock")
 	load := func() (map[string]common.CredentialProxyConfig, error) {
 		return map[string]common.CredentialProxyConfig{
 			"internal": {

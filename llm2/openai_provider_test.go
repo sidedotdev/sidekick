@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
 	"sidekick/utils"
@@ -340,10 +339,6 @@ func TestOpenAIProvider_UsageOnSeparateFinalChunk(t *testing.T) {
 
 func TestOpenAIProvider_Integration(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
-		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
-	}
-
 	ctx := context.Background()
 
 	mockTool := &common.Tool{
@@ -520,10 +515,6 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 
 func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
-		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
-	}
-
 	ctx := context.Background()
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
@@ -595,10 +586,6 @@ func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 
 func TestOpenAIProvider_ToolResultImageIntegration(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
-		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
-	}
-
 	ctx := context.Background()
 
 	expectedText, dataURL := GenerateVisionTestImage(6)

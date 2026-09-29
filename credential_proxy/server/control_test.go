@@ -45,7 +45,7 @@ func TestControlIssuesCapabilityForOwningListener(t *testing.T) {
 		loads.Add(1)
 		return definitions, nil
 	}, func() bool { return false })
-	socket := filepath.Join(t.TempDir(), "control.sock")
+	socket := filepath.Join(socketTempDir(t), "control.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestPrivateControlCapabilityLifecycle(t *testing.T) {
 	control := NewControlHandler(registry, func() (map[string]common.CredentialProxyConfig, error) {
 		return definitions, nil
 	}, func() bool { return false })
-	socket := filepath.Join(t.TempDir(), "control.sock")
+	socket := filepath.Join(socketTempDir(t), "control.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestControlRenewalRechecksAuthorization(t *testing.T) {
 			control := NewControlHandler(registry, func() (map[string]common.CredentialProxyConfig, error) {
 				return tc.current, nil
 			}, func() bool { return tc.allowSideSources })
-			socket := filepath.Join(t.TempDir(), "control.sock")
+			socket := filepath.Join(socketTempDir(t), "control.sock")
 			listener, err := net.Listen("unix", socket)
 			if err != nil {
 				t.Fatal(err)
