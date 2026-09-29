@@ -86,7 +86,6 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 	if err != nil {
 		return "", err
 	}
-	refspecs := syncRefspecs(headRef, extraBranches)
 
 	exists, err := remoteRepoExists(ctx, sshArgs, containerRepoDir)
 	if err != nil {
@@ -101,12 +100,26 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 		}
 	}
 
+	if err := pushRepoSyncWithRecoveryOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, extraBranches); err != nil {
+		return "", err
+	}
+	if err := syncGitRemotesOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir); err != nil {
+		return "", err
+	}
+	return containerRepoDir, nil
+}
+
+// pushRepoSyncWithRecoveryOverSSH pushes the synced refs into the remote repo,
+// recovering from remote unpack failures by retrying with a self-contained
+// pack and, if the remote repo is provably corrupted, re-seeding it.
+func pushRepoSyncWithRecoveryOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir, headRef string, extraBranches []string) error {
+	refspecs := syncRefspecs(headRef, extraBranches)
 	pushErr := pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, false)
 	if pushErr == nil {
-		return containerRepoDir, nil
+		return nil
 	}
 	if !remoteUnpackFailed(pushErr) {
-		return "", pushErr
+		return pushErr
 	}
 	// An unpack failure proves only that the remote could not resolve this
 	// pack: the cause may be a thin-pack delta base it lacks, a truncated
@@ -117,24 +130,24 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 		Msg("remote could not unpack pushed pack; retrying with a self-contained pack")
 	pushErr = pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, true)
 	if pushErr == nil {
-		return containerRepoDir, nil
+		return nil
 	}
 	if !remoteUnpackFailed(pushErr) {
-		return "", pushErr
+		return pushErr
 	}
 	// Replace the repo only when its object store is provably broken;
 	// anything else deserves the error rather than discarded remote state.
 	corrupted, fsckErr := remoteRepoCorrupted(ctx, sshArgs, containerRepoDir)
 	if fsckErr != nil {
-		return "", fmt.Errorf("%w (fsck: %v)", pushErr, fsckErr)
+		return fmt.Errorf("%w (fsck: %v)", pushErr, fsckErr)
 	}
 	if !corrupted {
-		return "", pushErr
+		return pushErr
 	}
 	log.Warn().Err(pushErr).Str("remoteRepoDir", containerRepoDir).
 		Msg("remote repo failed fsck; quarantining and re-seeding")
 	if qErr := quarantineRemoteRepo(ctx, sshArgs, containerRepoDir); qErr != nil {
-		return "", fmt.Errorf("%w (quarantine: %v)", pushErr, qErr)
+		return fmt.Errorf("%w (quarantine: %v)", pushErr, qErr)
 	}
 	if seedErr := seedRepoOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, extraBranches); seedErr != nil {
 		// The push below seeds the repo too (with the full history of the
@@ -142,10 +155,7 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 		log.Warn().Err(seedErr).Str("remoteRepoDir", containerRepoDir).
 			Msg("shallow repo seed failed; falling back to seeding via push")
 	}
-	if err := pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, false); err != nil {
-		return "", err
-	}
-	return containerRepoDir, nil
+	return pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, false)
 }
 
 // remoteUnpackFailed reports whether a push failed because the remote side
@@ -248,7 +258,7 @@ func seedRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 				quotedRepo, seedCloneDepth, url, shellQuote(spec)))
 		}
 		// The origin remote points at the tunnel, which is gone after this
-		// command; remove it so nothing in the sandbox tries to use it.
+		// command; remove it so the local repo's real remotes can replace it.
 		script.WriteString(fmt.Sprintf(" && git -C %s remote remove origin", quotedRepo))
 		script.WriteString(fmt.Sprintf(" && git -C %s config user.name 'Sidekick' && git -C %s config user.email 'sidekick@side.dev'",
 			quotedRepo, quotedRepo))
