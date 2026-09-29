@@ -40,6 +40,9 @@ type Endpoint struct {
 // Additional iroh options may be supplied (e.g. to bind a specific address in
 // tests); they are applied after the identity and ALPN defaults.
 func NewEndpoint(ctx context.Context, opts ...iroh.Option) (*Endpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sk, err := loadOrCreateSecretKey()
 	if err != nil {
 		return nil, err

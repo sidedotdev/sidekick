@@ -37,7 +37,7 @@ func TestIsReplayableVersion(t *testing.T) {
 		want    bool
 	}{
 		{"ancestor", head, ancestor, true},
-		{"equal", head, head, false},
+		{"equal", head, head, true},
 		{"divergent", head, divergent, false},
 		{"missing current", "", ancestor, false},
 		{"missing build", head, "", false},

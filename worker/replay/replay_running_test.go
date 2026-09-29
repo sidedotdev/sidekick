@@ -99,8 +99,8 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 	return results, nil
 }
 
-// isReplayableVersion requires full commit IDs and a proper ancestor. The
-// latest worker build is a practical filter, not an audit of earlier workers.
+// isReplayableVersion requires full commit IDs and an ancestor or equal commit.
+// The latest worker build is a practical filter, not an audit of earlier workers.
 func isReplayableVersion(currentRef, workflowRef string) bool {
 	for _, ref := range []string{currentRef, workflowRef} {
 		if len(ref) != 40 && len(ref) != 64 {
@@ -109,9 +109,6 @@ func isReplayableVersion(currentRef, workflowRef string) bool {
 		if strings.Trim(ref, "0123456789abcdef") != "" {
 			return false
 		}
-	}
-	if currentRef == workflowRef {
-		return false
 	}
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", workflowRef, currentRef)
 	return cmd.Run() == nil
@@ -233,8 +230,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// HEAD is fixed for this invocation; only ancestry results are cached.
-	var ancestryMu sync.Mutex
-	ancestry := make(map[string]bool)
+	buildFilter := newLatestBuildFilter(currentSha)
 
 	// Limit concurrent replays to avoid CPU contention that triggers the
 	// deadlock detector (which measures wall-clock time between yields).
@@ -285,21 +281,9 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			if resumedFromCache {
 				t.Logf("Workflow %s: history fetch resumed from local cache", wf.id)
 			}
-			description, err := c.DescribeWorkflowExecution(ctx, wf.id, wf.runID)
-			if err != nil {
-				result.skipReason = fmt.Sprintf("latest worker build lookup: %v", err)
-				return
-			}
-			buildID := description.GetWorkflowExecutionInfo().GetMostRecentWorkerVersionStamp().GetBuildId()
-			ancestryMu.Lock()
-			replayable, known := ancestry[buildID]
-			if !known {
-				replayable = isReplayableVersion(currentSha, buildID)
-				ancestry[buildID] = replayable
-			}
-			ancestryMu.Unlock()
-			if !replayable {
-				result.skipReason = fmt.Sprintf("latest worker build %q is missing, unknown, unavailable, or not a proper ancestor of HEAD (including Git errors)", buildID)
+			buildID, skipReason := buildFilter.check(ctx, c.DescribeWorkflowExecution, wf.id, wf.runID)
+			if skipReason != "" {
+				result.skipReason = skipReason
 				return
 			}
 			t.Logf("Replaying workflow %s: latest worker build=%q", wf.id, buildID)
@@ -506,4 +490,37 @@ func TestRetryTransient(t *testing.T) {
 			t.Errorf("expected 3 calls, got %d", calls)
 		}
 	})
+}
+
+type latestBuildFilter struct {
+	head     string
+	mu       sync.Mutex
+	ancestry map[string]bool
+}
+
+func newLatestBuildFilter(head string) *latestBuildFilter {
+	return &latestBuildFilter{head: head, ancestry: make(map[string]bool)}
+}
+
+func (f *latestBuildFilter) check(
+	ctx context.Context,
+	describe func(context.Context, string, string) (*workflowservice.DescribeWorkflowExecutionResponse, error),
+	id, runID string,
+) (buildID, skipReason string) {
+	description, err := describe(ctx, id, runID)
+	if err != nil {
+		return "", fmt.Sprintf("latest worker build lookup: %v", err)
+	}
+	buildID = description.GetWorkflowExecutionInfo().GetMostRecentWorkerVersionStamp().GetBuildId()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	replayable, known := f.ancestry[buildID]
+	if !known {
+		replayable = isReplayableVersion(f.head, buildID)
+		f.ancestry[buildID] = replayable
+	}
+	if !replayable {
+		return buildID, fmt.Sprintf("latest worker build %q is missing, unknown, unavailable, or neither an ancestor of nor equal to HEAD (including Git errors)", buildID)
+	}
+	return buildID, ""
 }
