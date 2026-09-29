@@ -336,6 +336,98 @@ func TestEnsureTestCommands_UserEntersCommand(t *testing.T) {
 	data, err := os.ReadFile(configPath)
 	assert.NoError(t, err)
 	assert.Contains(t, string(data), "command: pytest")
+
+	savedConfig, _, err := checkConfig(tmpDir)
+	assert.NoError(t, err)
+	result, _ := common.EvaluateCommandPermission(savedConfig.CommandPermissions, "pytest")
+	assert.Equal(t, common.PermissionAutoApprove, result)
+}
+
+func TestEnsureTestCommands_AutoApprovalTreatsCommandLiterally(t *testing.T) {
+	testCases := []struct {
+		name        string
+		testCommand string
+		approved    []string
+		notApproved []string
+	}{
+		{
+			name:        "quoted regex alternation",
+			testCommand: "go test ./... -run 'TestFoo|TestBar'",
+			approved:    []string{"go test ./... -run 'TestFoo|TestBar'"},
+			notApproved: []string{"rm -rf important -- 'TestBar'"},
+		},
+		{
+			name:        "dots are not wildcards",
+			testCommand: "go test ./...",
+			approved:    []string{"go test ./...", "go test ./... -v"},
+			notApproved: []string{"go test a/bcd"},
+		},
+		{
+			name:        "word boundary after metacharacters",
+			testCommand: "go test ./pkg/foo",
+			approved:    []string{"go test ./pkg/foo", "go test ./pkg/foo -v"},
+			notApproved: []string{"go test ./pkg/foobar"},
+		},
+		{
+			name:        "plain command",
+			testCommand: "pytest",
+			approved:    []string{"pytest", "pytest -x"},
+			notApproved: []string{"pytestfake"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir, cleanup := setupTempDir(t)
+			defer cleanup()
+
+			restoreStdin := mockStdin(tc.testCommand + "\n")
+			defer restoreStdin()
+
+			err := ensureTestCommands(&common.RepoConfig{}, filepath.Join(tmpDir, "side.yml"))
+			assert.NoError(t, err)
+
+			savedConfig, _, err := checkConfig(tmpDir)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.testCommand, savedConfig.TestCommands[0].Command)
+
+			for _, command := range tc.approved {
+				result, _ := common.EvaluateCommandPermission(savedConfig.CommandPermissions, command)
+				assert.Equal(t, common.PermissionAutoApprove, result, "expected %q to be auto-approved", command)
+			}
+			for _, command := range tc.notApproved {
+				result, _ := common.EvaluateCommandPermission(savedConfig.CommandPermissions, command)
+				assert.NotEqual(t, common.PermissionAutoApprove, result, "expected %q not to be auto-approved", command)
+			}
+		})
+	}
+}
+
+func TestEnsureTestCommands_AutoApprovesTestCommandWithoutDuplicates(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.yml")
+	restoreStdin := mockStdin("go test ./...\n")
+	defer restoreStdin()
+
+	config := &common.RepoConfig{
+		CommandPermissions: common.CommandPermissionConfig{
+			AutoApprove: []common.CommandPattern{
+				{Pattern: "make lint"},
+				{Pattern: "go test ./..."},
+			},
+		},
+	}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+
+	savedConfig, _, err := checkConfig(tmpDir)
+	assert.NoError(t, err)
+	assert.Equal(t, []common.CommandPattern{
+		{Pattern: "make lint"},
+		{Pattern: "go test ./..."},
+	}, savedConfig.CommandPermissions.AutoApprove)
 }
 
 func TestEnsureTestCommands_UserSkips(t *testing.T) {
