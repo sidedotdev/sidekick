@@ -128,10 +128,18 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 	assumeAnthropicModelNames := !p.AnthropicCompatible
 
+	authType := common.NormalizeProviderAuthType(string(p.AuthType))
+	if p.AnthropicCompatible {
+		if authType == common.ProviderAuthTypeSubscription {
+			return nil, fmt.Errorf("Anthropic subscription auth is only supported by anthropic provider types, not anthropic_compatible")
+		}
+		authType = common.ProviderAuthTypeAPI
+	}
+
 	oauthCreds, token, useOAuth, err := anthropicCredentialsForRequest(
 		request.SecretManager,
 		options.ModelConfig.NormalizedProviderName(),
-		p.AuthType,
+		authType,
 	)
 	if err != nil {
 		return nil, err
@@ -460,7 +468,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		reportedEffort = "none"
 	}
 
-	authType := common.ProviderAuthTypeAPI
+	authType = common.ProviderAuthTypeAPI
 	if useOAuth {
 		authType = common.ProviderAuthTypeSubscription
 	}
