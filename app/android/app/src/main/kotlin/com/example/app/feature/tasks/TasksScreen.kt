@@ -159,6 +159,7 @@ fun TasksScreen(
                 bucketListState = bucketListState,
                 searchListState = searchListState,
                 onRetryTasks = onRetryTasks,
+                onRetryWorkspaces = onRetryWorkspaces,
                 onToggleDrafts = onToggleDrafts,
                 onToggleDone = onToggleDone,
                 onTaskClick = onTaskClick,
@@ -257,30 +258,39 @@ private fun TasksBody(
     bucketListState: LazyListState,
     searchListState: LazyListState,
     onRetryTasks: () -> Unit,
+    onRetryWorkspaces: () -> Unit,
     onToggleDrafts: () -> Unit,
     onToggleDone: () -> Unit,
     onTaskClick: (Task) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val error = state.tasksError
+    val workspacesError = state.workspacesError
     when {
         state.isLoadingTasks -> CenteredContent(modifier) {
             CircularProgressIndicator(modifier = Modifier.testTag("tasks-loading"))
         }
 
+        // Without a workspace there are no tasks to fail on, so the workspace
+        // failure is the one worth showing and retrying from the main screen.
+        workspacesError != null && state.currentWorkspace == null -> CenteredContent(modifier) {
+            LoadFailure(
+                message = workspacesError,
+                detail = state.workspacesErrorDetail,
+                onRetry = onRetryWorkspaces,
+                messageTag = "tasks-error",
+                retryTag = "retry-workspaces-from-tasks",
+            )
+        }
+
         error != null -> CenteredContent(modifier) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.testTag("tasks-error"),
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(onClick = onRetryTasks, modifier = Modifier.testTag("retry-tasks")) {
-                    Text("Retry")
-                }
-            }
+            LoadFailure(
+                message = error,
+                detail = state.tasksErrorDetail,
+                onRetry = onRetryTasks,
+                messageTag = "tasks-error",
+                retryTag = "retry-tasks",
+            )
         }
 
         state.isSearchActive && state.searchQuery.isNotBlank() -> SearchResults(
@@ -309,6 +319,41 @@ private fun TasksBody(
             onTaskClick = onTaskClick,
             modifier = modifier,
         )
+    }
+}
+
+@Composable
+private fun LoadFailure(
+    message: String,
+    detail: String?,
+    onRetry: () -> Unit,
+    messageTag: String,
+    retryTag: String,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = 24.dp),
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.testTag(messageTag),
+        )
+        if (detail != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.testTag("tasks-error-detail"),
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(onClick = onRetry, modifier = Modifier.testTag(retryTag)) {
+            Text("Retry")
+        }
     }
 }
 

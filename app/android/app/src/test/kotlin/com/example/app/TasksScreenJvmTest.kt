@@ -77,6 +77,7 @@ class TasksScreenJvmTest {
         var state by mutableStateOf(initial)
         val clicked = mutableListOf<Task>()
         var retries = 0
+        var workspaceRetries = 0
         var scans = 0
     }
 
@@ -87,7 +88,7 @@ class TasksScreenJvmTest {
                 state = harness.state,
                 onRefresh = {},
                 onRetryTasks = { harness.retries += 1 },
-                onRetryWorkspaces = {},
+                onRetryWorkspaces = { harness.workspaceRetries += 1 },
                 onWorkspaceSelected = {},
                 onSwitcherQueryChanged = { harness.state = harness.state.copy(switcherQuery = it) },
                 onSearchQueryChanged = { harness.state = harness.state.copy(searchQuery = it) },
@@ -118,6 +119,45 @@ class TasksScreenJvmTest {
         setContent(Harness(loadedState()))
 
         openTaskIds.forEach { composeRule.assertFullyVisible("task-$it") }
+    }
+
+    @Test
+    fun workspaceLoadFailureWithoutAWorkspaceIsShownOnTheMainScreenWithItsCauseAndRetry() {
+        val harness = Harness(
+            TasksUiState(
+                isLoadingWorkspaces = false,
+                workspacesError = "Workspaces could not be loaded.",
+                workspacesErrorDetail = "SocketTimeoutException: failed to connect to /::1 (port 45705)",
+            ),
+        )
+        setContent(harness)
+
+        composeRule.onNodeWithTag("empty-tasks").assertDoesNotExist()
+        composeRule.onNodeWithText("Workspaces could not be loaded.").assertIsDisplayed()
+        composeRule.onNodeWithTag("tasks-error-detail")
+            .assertIsDisplayed()
+            .assertTextEquals("SocketTimeoutException: failed to connect to /::1 (port 45705)")
+
+        composeRule.onNodeWithTag("retry-workspaces-from-tasks").performClick()
+
+        assertEquals(1, harness.workspaceRetries)
+        assertEquals(0, harness.retries)
+    }
+
+    @Test
+    fun taskLoadFailureShowsItsCauseUnderTheMessage() {
+        setContent(
+            Harness(
+                loadedState().copy(
+                    tasks = emptyList(),
+                    tasksError = "Tasks could not be loaded.",
+                    tasksErrorDetail = "IOException: unexpected end of stream",
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithTag("tasks-error").assertTextEquals("Tasks could not be loaded.")
+        composeRule.onNodeWithTag("tasks-error-detail").assertTextEquals("IOException: unexpected end of stream")
     }
 
     @Test

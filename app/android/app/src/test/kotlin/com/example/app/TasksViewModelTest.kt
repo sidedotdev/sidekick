@@ -170,6 +170,7 @@ class TasksViewModelTest {
         val failed = viewModel.uiState.value
         assertFalse(failed.isLoadingWorkspaces)
         assertEquals("Workspaces could not be loaded.", failed.workspacesError)
+        assertEquals("IOException: offline", failed.workspacesErrorDetail)
         assertNull(failed.currentWorkspace)
         assertTrue(api.requestedWorkspaceIds.isEmpty())
 
@@ -178,6 +179,7 @@ class TasksViewModelTest {
 
         assertTrue(viewModel.uiState.value.isLoadingWorkspaces)
         assertNull(viewModel.uiState.value.workspacesError)
+        assertNull(viewModel.uiState.value.workspacesErrorDetail)
 
         advanceUntilIdle()
 
@@ -202,6 +204,7 @@ class TasksViewModelTest {
         assertEquals(alpha, failed.currentWorkspace)
         assertFalse(failed.isLoadingTasks)
         assertEquals("Tasks could not be loaded.", failed.tasksError)
+        assertEquals("IOException: offline", failed.tasksErrorDetail)
         assertNull(failed.workspacesError)
 
         api.tasksError = null
@@ -210,6 +213,7 @@ class TasksViewModelTest {
 
         assertTrue(viewModel.uiState.value.isLoadingTasks)
         assertNull(viewModel.uiState.value.tasksError)
+        assertNull(viewModel.uiState.value.tasksErrorDetail)
 
         advanceUntilIdle()
 
@@ -218,6 +222,36 @@ class TasksViewModelTest {
         assertNull(recovered.tasksError)
         assertEquals(listOf("retry"), recovered.tasks.map { it.id })
         assertEquals(2, api.requestedWorkspaceIds.size)
+    }
+
+    @Test
+    fun `error details chain causes and never quote pairing credentials`() = runTest {
+        val api = FakeRemoteApi(
+            workspaces = listOf(alpha),
+            tasksError = IOException(
+                "failed to connect to proxy for ticket secret-ticket",
+                java.net.SocketTimeoutException("Bearer secret-token timed out"),
+            ),
+        )
+        val reported = mutableListOf<String>()
+        val viewModel = createViewModel(
+            api,
+            credentials = PairingCredentials("secret-ticket", "secret-token"),
+            onFailure = { message -> reported += message },
+        )
+
+        advanceUntilIdle()
+
+        val detail = viewModel.uiState.value.tasksErrorDetail
+        assertEquals(
+            "IOException: failed to connect to proxy for ticket <redacted> <- SocketTimeoutException: Bearer <redacted> timed out",
+            detail,
+        )
+        assertEquals(
+            listOf("task load failed for workspace alpha: $detail"),
+            reported,
+        )
+        assertFalse(reported.single().contains("secret-"))
     }
 
     @Test
@@ -486,6 +520,7 @@ class TasksViewModelTest {
         credentials: PairingCredentials? = PairingCredentials("ticket", "token"),
         credentialStore: FakeCredentialStore = FakeCredentialStore(initialCredentials = credentials),
         remoteResources: AutoCloseable? = null,
+        onFailure: (String) -> Unit = {},
     ) = TasksViewModel(
         hintedWorkspaceId = hintedWorkspaceId,
         credentialStore = credentialStore,
@@ -496,6 +531,7 @@ class TasksViewModelTest {
         },
         dispatchers = TestDispatcherProvider(StandardTestDispatcher(testScheduler)),
         remoteResources = remoteResources,
+        onFailure = onFailure,
     )
 
     private fun TestScope.advanceUntilIdle() = testScheduler.advanceUntilIdle()

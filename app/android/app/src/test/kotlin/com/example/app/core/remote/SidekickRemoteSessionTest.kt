@@ -54,6 +54,24 @@ class SidekickRemoteSessionTest {
     }
 
     @Test
+    fun `response body failures include proxy diagnostics and preserve the cause`() {
+        val response = (
+            "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial"
+        ).encodeToByteArray()
+        val session = createSession(CannedHttpConnector(response))
+
+        val error = assertThrows(IOException::class.java) {
+            session.okHttpClient.newCall(
+                okhttp3.Request.Builder().url(session.baseUrl).build(),
+            ).execute().use { it.body!!.string() }
+        }
+
+        assertTrue(error.message.orEmpty(), error.message.orEmpty().contains("response-body"))
+        assertTrue(error.message.orEmpty(), error.message.orEmpty().contains("listener="))
+        assertTrue(error.cause is IOException)
+    }
+
+    @Test
     fun `server errors through the tunnel surface as http exceptions`() = runBlocking {
         val connector = CannedHttpConnector(httpResponse(401, """{"error":"invalid device token"}"""))
         val session = createSession(connector)
@@ -164,7 +182,7 @@ class SidekickRemoteSessionTest {
         token: String = "secret-token",
         scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     ): SidekickRemoteSession {
-        val proxy = IrohLoopbackProxy("ticket-1", connector, Dispatchers.IO) { _, _ -> }
+        val proxy = IrohLoopbackProxy("ticket-1", connector, Dispatchers.IO, onStreamFinished = {}) { _, _ -> }
         return SidekickRemoteSession(token, proxy, scope = scope).also { sessions += it }
     }
 

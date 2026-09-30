@@ -71,7 +71,7 @@ func diagnose(baseURL string) (result error) {
 	if err != nil {
 		return fmt.Errorf("ticket decoding failed")
 	}
-	fmt.Printf("relayPresent=%t directAddressCount=%d\n", len(address.RelayURLs()) > 0, len(address.IPAddrs()))
+	fmt.Printf("endpointId=%s relayPresent=%t directAddressCount=%d\n", address.ID, len(address.RelayURLs()) > 0, len(address.IPAddrs()))
 	for _, direct := range address.IPAddrs() {
 		ip := direct.Addr()
 		class := "global"

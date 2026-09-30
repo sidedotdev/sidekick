@@ -1,6 +1,7 @@
 package com.example.app.feature.tasks
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -14,6 +15,8 @@ import com.example.app.core.remote.RemoteSessionProvider
 import com.example.app.core.remote.SidekickRemoteApi
 import com.example.app.core.remote.Workspace
 import com.example.app.core.remote.WorkspaceSelectionStore
+import com.example.app.core.remote.describeCauseChain
+import com.example.app.core.remote.redactSecrets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +26,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+private const val TAG = "TasksViewModel"
+
 class TasksViewModel(
     private val hintedWorkspaceId: String?,
     private val credentialStore: PairingCredentialStore,
@@ -30,12 +35,20 @@ class TasksViewModel(
     private val remoteApiFactory: (PairingCredentials) -> SidekickRemoteApi,
     private val dispatchers: DispatcherProvider = DefaultDispatcherProvider(),
     private val remoteResources: AutoCloseable? = null,
+    /**
+     * Receives every load failure as a single line with the cause chain, with
+     * pairing credentials already redacted. The raw exception is deliberately
+     * withheld: transport errors quote the ticket and request-framing errors
+     * quote the bearer header.
+     */
+    private val onFailure: (message: String) -> Unit = { message -> Log.w(TAG, message) },
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TasksUiState())
     val uiState: StateFlow<TasksUiState> = _uiState.asStateFlow()
 
     private var remoteApi: SidekickRemoteApi? = null
+    private var secrets: List<String> = emptyList()
     private var workspacesJob: Job? = null
     private var tasksJob: Job? = null
     private var persistSelectionJob: Job? = null
@@ -60,6 +73,7 @@ class TasksViewModel(
                 switcherQuery = "",
                 tasks = emptyList(),
                 tasksError = null,
+                tasksErrorDetail = null,
             )
         }
         persistSelection(workspace.id)
@@ -115,6 +129,7 @@ class TasksViewModel(
             it.copy(
                 isLoadingWorkspaces = true,
                 workspacesError = null,
+                workspacesErrorDetail = null,
             )
         }
         workspacesJob = viewModelScope.launch(dispatchers.io) {
@@ -132,6 +147,7 @@ class TasksViewModel(
                         isLoadingWorkspaces = false,
                         workspaces = workspaces,
                         workspacesError = null,
+                        workspacesErrorDetail = null,
                         currentWorkspace = selected,
                         tasks = if (workspaceChanged) emptyList() else it.tasks,
                     )
@@ -146,11 +162,13 @@ class TasksViewModel(
                 }
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                val detail = reportFailure("workspace load failed", error)
                 _uiState.update {
                     it.copy(
                         isLoadingWorkspaces = false,
                         workspacesError = "Workspaces could not be loaded.",
+                        workspacesErrorDetail = detail,
                     )
                 }
             }
@@ -164,6 +182,7 @@ class TasksViewModel(
                 isLoadingTasks = !refresh,
                 isRefreshing = refresh,
                 tasksError = null,
+                tasksErrorDetail = null,
             )
         }
         tasksJob = viewModelScope.launch(dispatchers.io) {
@@ -180,12 +199,14 @@ class TasksViewModel(
                             isRefreshing = false,
                             tasks = tasks,
                             tasksError = null,
+                            tasksErrorDetail = null,
                         )
                     }
                 }
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                val detail = reportFailure("task load failed for workspace $workspaceId", error)
                 _uiState.update {
                     if (it.currentWorkspace?.id != workspaceId) {
                         it
@@ -194,6 +215,7 @@ class TasksViewModel(
                             isLoadingTasks = false,
                             isRefreshing = false,
                             tasksError = "Tasks could not be loaded.",
+                            tasksErrorDetail = detail,
                         )
                     }
                 }
@@ -209,8 +231,16 @@ class TasksViewModel(
                 isLoadingTasks = false,
                 isRefreshing = false,
                 tasksError = null,
+                tasksErrorDetail = null,
             )
         }
+    }
+
+    /** Reports the failure and returns its sanitized technical description for the UI. */
+    private fun reportFailure(message: String, error: Throwable): String {
+        val detail = error.describeCauseChain().redactSecrets(secrets)
+        onFailure("$message: $detail")
+        return detail
     }
 
     private suspend fun resolveRemoteApi(): SidekickRemoteApi? {
@@ -235,6 +265,7 @@ class TasksViewModel(
             return null
         }
         _uiState.update { it.copy(credentialsMissing = false) }
+        secrets = listOf(credentials.ticket, credentials.token)
         return remoteApiFactory(credentials).also { remoteApi = it }
     }
 
