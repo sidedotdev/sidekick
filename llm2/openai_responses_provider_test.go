@@ -73,6 +73,10 @@ func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
 
 func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
 	fmt.Println("\n=== OpenAI Responses Provider Integration Test ===")
@@ -265,6 +269,10 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 
 func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
 	fmt.Println("\n=== OpenAI Responses Reasoning Test ===")
@@ -559,6 +567,10 @@ func debugPrintAllContentBlocks(blocks []ContentBlock) {
 
 func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
 	ctx := context.Background()
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)

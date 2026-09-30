@@ -122,6 +122,10 @@ func TestAnthropicProvider_WebSearchIntegration(t *testing.T) {
 
 func TestOpenAIResponsesProvider_WebSearchIntegration(t *testing.T) {
 	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
 	provider, secretManager := requireOpenAIResponsesIntegration(t, OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI})
 
 	request := StreamRequest{
@@ -203,6 +207,10 @@ func TestGoogleProvider_WebSearchIntegration(t *testing.T) {
 // one provider are accepted by another via client-style tool pair conversion.
 func TestWebSearchCrossProviderIntegration(t *testing.T) {
 	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
 	// Anthropic-origin history (native ids) replayed through OpenAI.
 	anthropicHistory := []Message{
 		{

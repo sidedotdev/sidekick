@@ -68,11 +68,12 @@ func requireOpenAIChatIntegration(t *testing.T, provider OpenAIProvider) (Provid
 	return requireOpenAIIntegrationProvider(t, provider, common.ProviderAuthTypeAPI)
 }
 
-// A provisioned credential proxy opts the test in by itself: the host is
-// explicitly lending credentials, so no SIDE_INTEGRATION_TEST is needed.
 func requireOpenAIIntegrationProvider(t *testing.T, provider Provider, authType common.ProviderAuthType) (Provider, secret_manager.SecretManager) {
 	t.Helper()
 
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
 	if IntegrationProviderAdapter != nil {
 		if environment, adapted := IntegrationProviderAdapter(provider, authType); adapted {
 			if environment.Err != nil {

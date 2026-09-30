@@ -9,21 +9,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A provisioned credential proxy is the host explicitly lending credentials
-// for these tests, so it opts them in without SIDE_INTEGRATION_TEST.
+// A provisioned credential proxy makes integration tests runnable, but only
+// SIDE_INTEGRATION_TEST opts in to running them.
 func TestOpenAIIntegrationGating(t *testing.T) {
 	proxied := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeSubscription}
 	cases := []struct {
 		name        string
+		optIn       string
 		provisioned bool
 		wantRun     bool
 	}{
-		{name: "provisioned proxy runs without opt-in", provisioned: true, wantRun: true},
-		{name: "unprovisioned without opt-in skips", provisioned: false, wantRun: false},
+		{name: "provisioned proxy with opt-in runs", optIn: "true", provisioned: true, wantRun: true},
+		{name: "provisioned proxy without opt-in skips", optIn: "", provisioned: true, wantRun: false},
+		{name: "unprovisioned without opt-in skips", optIn: "", provisioned: false, wantRun: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("SIDE_INTEGRATION_TEST", "")
+			t.Setenv("SIDE_INTEGRATION_TEST", tc.optIn)
 			original := IntegrationProviderAdapter
 			t.Cleanup(func() { IntegrationProviderAdapter = original })
 			IntegrationProviderAdapter = func(Provider, common.ProviderAuthType) (IntegrationEnvironment, bool) {
