@@ -1,10 +1,5 @@
 <template>
   <div class="llm-config-editor">
-    <!-- Error state for providers fetch -->
-    <div v-if="providersError" class="providers-error">
-      Failed to load providers. Please refresh the page.
-    </div>
-
     <!-- Default Model -->
     <div class="model-row">
       <span class="model-label">Default</span>
@@ -42,6 +37,10 @@
         :aria-pressed="defaultConfig.speed === 'fast'"
         @click="toggleSpeed(defaultConfig)"
       >⚡</button>
+    </div>
+
+    <div v-if="providersError" class="providers-error" role="alert">
+      {{ providersError }}
     </div>
 
     <!-- Use Case Models -->
@@ -135,7 +134,7 @@ const getProviderLabel = (provider: string): string => {
 }
 
 const providerOptions = ref<string[]>([])
-const providersError = ref(false)
+const providersError = ref('')
 const reasoningEffortOptions = ['', 'lowest', 'low', 'medium', 'high', 'highest'] as const
 
 // When a workspaceId is provided, providers are filtered authoritatively by
@@ -156,20 +155,25 @@ let latestProvidersRequestId = 0
 
 const fetchProviders = async () => {
   const requestId = ++latestProvidersRequestId
+  const fallbackError = 'Failed to load providers. Please check your local configuration and refresh the page.'
   try {
     const response = await fetch(providersUrl())
     if (requestId !== latestProvidersRequestId) return
+    const data = await response.json()
+    if (requestId !== latestProvidersRequestId) return
     if (response.ok) {
-      const data = await response.json()
-      if (requestId !== latestProvidersRequestId) return
       providerOptions.value = data.providers || []
-      providersError.value = false
+      providersError.value = ''
     } else {
-      providersError.value = true
+      providerOptions.value = []
+      providersError.value = typeof data?.error === 'string' && data.error
+        ? data.error
+        : fallbackError
     }
   } catch {
     if (requestId !== latestProvidersRequestId) return
-    providersError.value = true
+    providerOptions.value = []
+    providersError.value = fallbackError
   }
 }
 
@@ -401,10 +405,10 @@ watch(() => props.modelValue, (newValue) => {
 .providers-error {
   padding: 0.5rem;
   margin-bottom: 0.75rem;
-  border: 1px solid var(--color-error, #dc3545);
+  border: 0.0625rem solid var(--color-error-border);
   border-radius: 0.25rem;
-  background-color: var(--color-error-bg, rgba(220, 53, 69, 0.1));
-  color: var(--color-error, #dc3545);
+  background-color: var(--color-error-background);
+  color: var(--color-error-text);
   font-size: 0.875rem;
 }
 </style>

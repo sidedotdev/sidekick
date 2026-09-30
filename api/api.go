@@ -372,7 +372,12 @@ func NewController() (Controller, error) {
 // configuring a workspace's profile before it's created.
 func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 	profileId := common.NormalizeProfileId(c.Query("profileId"))
-	c.JSON(http.StatusOK, gin.H{"providers": ctrl.resolveProviders(profileId)})
+	providers, err := ctrl.resolveProviders(profileId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"providers": providers})
 }
 
 // GetWorkspaceProvidersHandler returns providers available to a workspace,
@@ -391,25 +396,30 @@ func (ctrl *Controller) GetWorkspaceProvidersHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"providers": ctrl.resolveProviders(workspace.EffectiveProfileId())})
+	providers, err := ctrl.resolveProviders(workspace.EffectiveProfileId())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"providers": providers})
 }
 
 // resolveProviders lists the providers available to a profile, combining
 // explicitly configured providers with builtin providers detected via
 // available credentials.
-func (ctrl *Controller) resolveProviders(profileId string) []string {
+func (ctrl *Controller) resolveProviders(profileId string) ([]string, error) {
 	providers := []string{}
 	seen := make(map[string]bool)
 
 	config, err := ctrl.localConfig()
 	if err != nil {
-		log.Warn().Err(err).Msg("Failed to load sidekick config")
-	} else {
-		for _, p := range config.Providers {
-			if p.Name != "" && !seen[p.Name] && p.MatchesProfile(profileId) {
-				providers = append(providers, p.Name)
-				seen[p.Name] = true
-			}
+		log.Error().Err(err).Msg("Failed to load sidekick config")
+		return nil, fmt.Errorf("Failed to load sidekick config: %w", err)
+	}
+	for _, p := range config.Providers {
+		if p.Name != "" && !seen[p.Name] && p.MatchesProfile(profileId) {
+			providers = append(providers, p.Name)
+			seen[p.Name] = true
 		}
 	}
 
@@ -439,7 +449,7 @@ func (ctrl *Controller) resolveProviders(profileId string) []string {
 		}
 	}
 
-	return providers
+	return providers, nil
 }
 
 // GetProfilesHandler returns the declared profiles, always including the
