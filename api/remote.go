@@ -24,18 +24,19 @@ import (
 	irohlib "github.com/tmc/go-iroh/iroh"
 )
 
-// currentRemoteTicket holds the iroh connection ticket of the running remote
-// server, so pairing handlers on the local HTTP server can hand it out for QR
-// rendering without holding a direct reference to the endpoint.
-var currentRemoteTicket atomic.Value // string
+// Pairing must read the current address because iroh can change its home relay
+// after startup or when the network changes.
+var currentRemoteTicket atomic.Value // func() string
 
-func setRemoteTicket(ticket string) {
+func setRemoteTicketProvider(ticket func() string) {
 	currentRemoteTicket.Store(ticket)
 }
 
 func getRemoteTicket() string {
 	if v := currentRemoteTicket.Load(); v != nil {
-		return v.(string)
+		if ticket := v.(func() string); ticket != nil {
+			return ticket()
+		}
 	}
 	return ""
 }
@@ -214,7 +215,7 @@ func (s *RemoteServer) Ticket() string {
 
 // Shutdown gracefully stops serving over iroh and closes the endpoint.
 func (s *RemoteServer) Shutdown(ctx context.Context) error {
-	setRemoteTicket("")
+	setRemoteTicketProvider(nil)
 	err := s.httpServer.Shutdown(ctx)
 	if closeErr := s.endpoint.Close(ctx); closeErr != nil && err == nil {
 		err = closeErr
@@ -237,7 +238,17 @@ func RunRemoteServer(ctx context.Context) (*RemoteServer, error) {
 		return nil, fmt.Errorf("failed to initialize controller: %w", err)
 	}
 
-	return serveRemote(ctx, ctrl, allowedOrigins)
+	server, err := serveRemote(ctx, ctrl, allowedOrigins)
+	if err != nil {
+		return nil, err
+	}
+	if err := server.endpoint.EnableDiscovery(); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(cleanupCtx)
+		return nil, fmt.Errorf("failed to enable iroh discovery: %w", err)
+	}
+	return server, nil
 }
 
 // serveRemote wraps the existing REST API with device-token authentication and
@@ -262,7 +273,7 @@ func serveRemote(ctx context.Context, ctrl Controller, allowedOrigins *AllowedOr
 	if err != nil {
 		return nil, fmt.Errorf("failed to start iroh endpoint: %w", err)
 	}
-	setRemoteTicket(endpoint.Ticket())
+	setRemoteTicketProvider(endpoint.Ticket)
 
 	httpServer := &http.Server{Handler: authRouter.Handler()}
 	listener := endpoint.Listener()

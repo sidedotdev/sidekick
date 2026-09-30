@@ -8,11 +8,15 @@ data class TasksUiState(
     val workspaces: List<Workspace> = emptyList(),
     val isLoadingWorkspaces: Boolean = true,
     val workspacesError: String? = null,
+    /** Sanitized technical cause of [workspacesError], for diagnostics and bug reports. */
+    val workspacesErrorDetail: String? = null,
     val currentWorkspace: Workspace? = null,
     val tasks: List<Task> = emptyList(),
     val isLoadingTasks: Boolean = false,
     val isRefreshing: Boolean = false,
     val tasksError: String? = null,
+    /** Sanitized technical cause of [tasksError], for diagnostics and bug reports. */
+    val tasksErrorDetail: String? = null,
     val searchQuery: String = "",
     val isSearchActive: Boolean = false,
     val draftsExpanded: Boolean = false,

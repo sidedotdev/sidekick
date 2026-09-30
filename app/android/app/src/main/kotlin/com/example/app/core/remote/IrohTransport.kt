@@ -17,6 +17,9 @@ interface IrohConnector {
 
 interface IrohConnection : AutoCloseable {
     suspend fun openBidirectionalStream(): IrohStream
+
+    /** Human-readable summary of the network paths in use, for diagnostics only. */
+    fun pathSummary(): String = "unknown"
 }
 
 interface IrohStream : AutoCloseable {
@@ -62,6 +65,26 @@ private class FfiIrohConnection(
 ) : IrohConnection {
     override suspend fun openBidirectionalStream(): IrohStream =
         FfiIrohStream(connection.openBi())
+
+    override fun pathSummary(): String = try {
+        connection.paths().joinToString(prefix = "[", postfix = "]") { path ->
+            val kind = when {
+                path.isRelay -> "relay"
+                path.isIp -> "ip"
+                else -> "other"
+            }
+            val stats = path.stats
+            buildString {
+                if (path.isSelected) append('*')
+                append(kind).append(" rtt=").append(path.rttMs).append("ms")
+                append(" lost=").append(stats.lostPackets)
+                append(" cwnd=").append(stats.cwnd)
+                append(" mtu=").append(stats.currentMtu)
+            }
+        }
+    } catch (error: Exception) {
+        "unavailable (${error.javaClass.simpleName})"
+    }
 
     override fun close() {
         connection.close()

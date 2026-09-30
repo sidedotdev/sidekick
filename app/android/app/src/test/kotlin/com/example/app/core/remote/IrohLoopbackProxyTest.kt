@@ -193,7 +193,9 @@ class IrohLoopbackProxyTest {
 
         socket.assertClosedByPeer()
         awaitCondition("stream closed") { stream.closed }
-        awaitCondition("failure reported") { reportedErrors.any { it.first == "proxied connection failed" } }
+        awaitCondition("failure reported") {
+            reportedErrors.any { it.first.startsWith("proxied connection failed") && it.second is IOException }
+        }
 
         val next = connect(proxy)
         next.getOutputStream().apply {
@@ -229,7 +231,7 @@ class IrohLoopbackProxyTest {
     }
 
     private fun startProxy(connector: IrohConnector): IrohLoopbackProxy =
-        IrohLoopbackProxy("ticket", connector, Dispatchers.IO) { message, error ->
+        IrohLoopbackProxy("ticket", connector, Dispatchers.IO, onStreamFinished = {}) { message, error ->
             reportedErrors += message to error
         }.also {
             it.start()
