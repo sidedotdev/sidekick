@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"sidekick/common"
@@ -35,6 +36,10 @@ const secretKeyFileName = "iroh_secret.key"
 // persistent identity key.
 type Endpoint struct {
 	ep *iroh.Endpoint
+
+	mu             sync.Mutex
+	closed         bool
+	closeDiscovery func() error
 }
 
 // NewEndpoint loads or generates a persistent iroh identity key under the
@@ -92,8 +97,15 @@ func (e *Endpoint) Listener() net.Listener {
 	return newListener(e.ep)
 }
 
-// Close shuts down the underlying iroh endpoint.
+// Close shuts down discovery and the underlying iroh endpoint.
 func (e *Endpoint) Close(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.closed = true
+	if e.closeDiscovery != nil {
+		_ = e.closeDiscovery()
+		e.closeDiscovery = nil
+	}
 	return e.ep.Shutdown(ctx)
 }
 

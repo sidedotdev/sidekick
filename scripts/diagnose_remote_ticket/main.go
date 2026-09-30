@@ -15,14 +15,22 @@ import (
 
 func main() {
 	baseURL := flag.String("url", "http://127.0.0.1:8855", "Local Sidekick API URL")
+	workspace := flag.String("workspace", "", "Read this workspace's tasks over iroh")
+	mode := flag.String("address-mode", "fresh", "Address hints: fresh, relay-only, stale, identity-only")
+	discovery := flag.Bool("discovery", false, "Enable N0 DNS discovery on the diagnostic client")
 	flag.Parse()
-	if err := diagnose(strings.TrimRight(*baseURL, "/")); err != nil {
+	options := probeOptions{workspace: *workspace, mode: *mode, discovery: *discovery}
+	if err := options.validate(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := diagnose(strings.TrimRight(*baseURL, "/"), options); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func diagnose(baseURL string) (result error) {
+func diagnose(baseURL string, options probeOptions) (result error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	response, err := client.Post(
 		baseURL+"/api/v1/remote/pairings/",
@@ -41,6 +49,7 @@ func diagnose(baseURL string) (result error) {
 			ID string `json:"id"`
 		} `json:"device"`
 		Ticket string `json:"ticket"`
+		Token  string `json:"token"`
 	}
 	decodeErr := json.NewDecoder(response.Body).Decode(&pairing)
 	if pairing.Device.ID == "" {
@@ -88,6 +97,9 @@ func diagnose(baseURL string) (result error) {
 			class = "non-unicast"
 		}
 		fmt.Printf("directAddressClass=%s ipv4=%t\n", class, ip.Is4())
+	}
+	if options.workspace != "" {
+		return probeTasks(address, pairing.Token, options)
 	}
 	return nil
 }
