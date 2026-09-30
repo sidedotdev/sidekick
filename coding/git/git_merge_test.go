@@ -998,11 +998,56 @@ func (e *hostTargetMergeEnv) SSHConnConfig(context.Context) (env.SSHConnConfig, 
 	return env.SSHConnConfig{}, errors.New("native SSH is not used by this fixture")
 }
 
-func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
+// installMergeTestSSH routes ssh to the "merge-test-host" destination through
+// a local shell, so SSH-based merge ref transport works against local repos.
+func installMergeTestSSH(t *testing.T) {
+	t.Helper()
 	sshDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "ssh"), []byte("#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -o|-p|-i) shift 2 ;;\n    merge-test-host) shift; exec sh -c \"$*\" ;;\n    *) exit 2 ;;\n  esac\ndone\nexit 2\n"), 0755))
 	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GIT_SSH_VARIANT", "ssh")
+}
+
+// A remote env's own copy of the target branch lags the host. After resolving
+// a host conflict recreated remotely, review diffs taken against the target
+// branch name must show only the flow's work, not base changes merged in.
+func TestGitMergeActivityHostConflictReviewDiffExcludesBaseChanges(t *testing.T) {
+	installMergeTestSSH(t)
+	ctx := context.Background()
+
+	fixture := setupIddChildMergeFixture(t)
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "branch", iddBranch, "origin/"+iddBranch)
+	createCommitWithFile(t, fixture.childRepoDir, "Conflicting intent", "intent.md", "child intent\n")
+	createCommitWithFile(t, fixture.hostWorktreeDir, "Base only", "base-only.txt", "base only\n")
+	childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
+	require.NoError(t, err)
+	container := env.EnvContainer{Env: &hostTargetMergeEnv{mergeResultSyncerEnv: &mergeResultSyncerEnv{
+		Env: childEnv, t: t, childRepoDir: fixture.childRepoDir, hostRepoDir: fixture.hostRepoDir,
+	}}}
+
+	result, err := testActivities().Merge(ctx, container, GitMergeParams{
+		SourceBranch: iddChildBranch, TargetBranch: iddBranch,
+	})
+	require.NoError(t, err)
+	require.True(t, result.HasConflicts)
+	require.Equal(t, evalSymlinks(t, fixture.childRepoDir), evalSymlinks(t, result.ConflictDirPath))
+
+	require.NoError(t, os.WriteFile(filepath.Join(fixture.childRepoDir, "intent.md"), []byte("resolved intent\n"), 0644))
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "add", "intent.md")
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "commit", "--no-edit")
+
+	diff, err := testActivities().Diff(ctx, container, GitDiffParams{
+		BaseRef: iddBranch, ThreeDotDiff: true, Staged: true,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, diff, "base-only.txt")
+	assert.Contains(t, diff, "+child work")
+	assert.Contains(t, diff, "-updated intent")
+	assert.Contains(t, diff, "+resolved intent")
+}
+
+func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
+	installMergeTestSSH(t)
 	ctx := context.Background()
 
 	// The parent keeps the environment above in place until every subtest
