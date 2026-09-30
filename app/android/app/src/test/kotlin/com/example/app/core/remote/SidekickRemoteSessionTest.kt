@@ -6,7 +6,9 @@ import java.net.InetAddress
 import java.net.Socket
 import java.net.URI
 import com.example.app.core.remote.realtime.ConnectionState
+import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.zip.GZIPOutputStream
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +30,21 @@ import retrofit2.HttpException
 
 private const val TIMEOUT_MILLIS = 5_000L
 private const val HEADER_TERMINATOR = "\r\n\r\n"
+
+private val COMPRESSED_WORKSPACE_IDS = listOf("workspace-zstd-1", "workspace-zstd-2", "workspace-zstd-3")
+private val COMPRESSED_WORKSPACES_JSON = COMPRESSED_WORKSPACE_IDS.joinToString(
+    prefix = """{"workspaces":[""",
+    postfix = "]}",
+    separator = ",",
+) { """{"id":"$it","name":"Zstd"}""" }
+
+/**
+ * [COMPRESSED_WORKSPACES_JSON] encoded by github.com/klauspost/compress/zstd, the encoder
+ * the Go server uses, so decoding it proves interop rather than a library round trip.
+ */
+private val ZSTD_WORKSPACES_FRAME: ByteArray = Base64.getDecoder().decode(
+    "KLUv/QQABQIAFAN7IndvcmtzcGFjZXMiOlt7ImlkIjotenN0ZC0xIiwibmFtZSI6IlpzdGQifSwyM119BAAAEUuVl6XUeNu8AxjIF1w=",
+)
 
 class SidekickRemoteSessionTest {
     private val sessions = mutableListOf<SidekickRemoteSession>()
@@ -54,6 +71,38 @@ class SidekickRemoteSessionTest {
     }
 
     @Test
+    fun `requests advertise zstd and gzip`() = runBlocking {
+        val connector = CannedHttpConnector(httpResponse(200, """{"workspaces":[]}"""))
+        val session = createSession(connector)
+
+        session.api.getWorkspaces()
+
+        val acceptEncoding = connector.awaitRequest()
+            .split("\r\n")
+            .firstOrNull { it.startsWith("Accept-Encoding:", ignoreCase = true) }
+            ?.substringAfter(':')
+        assertNotNull("Accept-Encoding header missing", acceptEncoding)
+        val encodings = acceptEncoding!!.split(',').map { it.trim().substringBefore(';') }
+        assertTrue(acceptEncoding, encodings.containsAll(listOf("zstd", "gzip")))
+    }
+
+    @Test
+    fun `compressed api responses are decoded`() = runBlocking {
+        val cases = mapOf(
+            "gzip" to gzip(COMPRESSED_WORKSPACES_JSON),
+            "zstd" to ZSTD_WORKSPACES_FRAME,
+        )
+
+        for ((encoding, payload) in cases) {
+            val session = createSession(CannedHttpConnector(httpResponse(200, payload, contentEncoding = encoding)))
+
+            val workspaces = session.api.getWorkspaces().workspaces
+
+            assertEquals(encoding, COMPRESSED_WORKSPACE_IDS, workspaces.map(Workspace::id))
+        }
+    }
+
+    @Test
     fun `response body failures include proxy diagnostics and preserve the cause`() {
         val response = (
             "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial"
@@ -63,7 +112,7 @@ class SidekickRemoteSessionTest {
         val error = assertThrows(IOException::class.java) {
             session.okHttpClient.newCall(
                 okhttp3.Request.Builder().url(session.baseUrl).build(),
-            ).execute().use { it.body!!.string() }
+            ).execute().use { it.body.string() }
         }
 
         assertTrue(error.message.orEmpty(), error.message.orEmpty().contains("response-body"))
@@ -193,15 +242,23 @@ class SidekickRemoteSessionTest {
         }
     }
 
-    private fun httpResponse(status: Int, body: String): ByteArray {
-        val payload = body.encodeToByteArray()
+    private fun httpResponse(status: Int, body: String): ByteArray = httpResponse(status, body.encodeToByteArray())
+
+    private fun httpResponse(status: Int, payload: ByteArray, contentEncoding: String? = null): ByteArray {
         val reason = if (status == 200) "OK" else "Error"
         val head = "HTTP/1.1 $status $reason\r\n" +
             "Content-Type: application/json\r\n" +
+            (contentEncoding?.let { "Content-Encoding: $it\r\n" } ?: "") +
             "Content-Length: ${payload.size}\r\n" +
             "Connection: close" +
             HEADER_TERMINATOR
         return head.encodeToByteArray() + payload
+    }
+
+    private fun gzip(text: String): ByteArray {
+        val out = ByteArrayOutputStream()
+        GZIPOutputStream(out).use { it.write(text.encodeToByteArray()) }
+        return out.toByteArray()
     }
 
     /** Answers the first complete HTTP request head on every stream with the same canned response, then EOF. */
