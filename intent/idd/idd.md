@@ -36,6 +36,17 @@ intent_links:
     code:
       - api/intent_api.go:StartIntentSubtaskHandler
       - dev/idd_workflow.go:runIntentSubtask
+      - domain/flow.go:Flow
+      - api/api.go:GetTaskFlowsHandler
+      - dev/idd_workflow.go:persistSubtaskFlow
+      - frontend/src/views/IntentCanvasView.vue
+  - intent: "#finish-ui"
+    code:
+      - dev/idd_merge_approval.go:startIddMergeApproval
+      - dev/idd_merge_approval.go:iddMergeApproval
+      - dev/idd_workflow.go:cancelPendingSubtasks
+      - frontend/src/views/IntentCanvasView.vue
+      - frontend/src/components/UserRequest.vue
   - intent: "#idd-instructions-for-coding-agents"
     code:
       - dev/prompts/author_edit_block/idd_instructions.mustache
@@ -44,7 +55,9 @@ intent_links:
       - dev/intent_requirements.go:renderIntentRequirements
   - intent: "#background-orchestrator-agent"
     code:
-      - dev/idd_workflow.go:IddState
+      - domain/flow.go:Flow
+      - api/api.go:GetTaskFlowsHandler
+      - dev/idd_workflow.go:persistIddFlowMetadata
       - dev/idd_workflow.go:SetIddAutoModeSignal
       - dev/idd_workflow.go:RunIddOrchestratorSignal
       - dev/idd_workflow.go:IddWorkflow

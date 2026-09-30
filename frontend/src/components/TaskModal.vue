@@ -53,7 +53,7 @@
 
       <div class="project-row">
         <label for="project">Project</label>
-        <Dropdown
+        <Select
           id="project"
           v-model="projectId"
           :options="projects"
@@ -121,7 +121,7 @@ import AutogrowTextarea from './AutogrowTextarea.vue'
 import Button from 'primevue/button'
 import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
-import Dropdown from 'primevue/dropdown'
+import Select from 'primevue/select'
 import ModelConfigPresetEditor from './ModelConfigPresetEditor.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ShortcutHint from './ShortcutHint.vue'
@@ -177,7 +177,6 @@ const description = ref(initialDescriptionValue)
 const descriptionRef = ref<{ focus: () => void } | null>(null)
 const title = ref(props.task?.title ?? '')
 const titleRef = ref<HTMLInputElement | null>(null)
-const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(
   props.task?.flowType
     || loadWorkspacePreference('lastUsedFlowType', workspaceId.value)
@@ -945,14 +944,12 @@ label {
   min-width: 12rem;
 }
 
-:deep(.project-pill.p-select),
-:deep(.project-pill.p-dropdown) {
+:deep(.project-pill.p-select) {
   border-radius: 100rem;
   background-color: var(--color-background);
 }
 
-:deep(.project-pill .p-select-label),
-:deep(.project-pill .p-dropdown-label) {
+:deep(.project-pill .p-select-label) {
   padding: 0.375rem 0.5rem 0.375rem 1rem;
 }
 

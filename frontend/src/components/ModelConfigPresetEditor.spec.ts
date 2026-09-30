@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { config, mount } from '@vue/test-utils'
 import PrimeVue from 'primevue/config'
-import Dropdown from 'primevue/dropdown'
+import Select from 'primevue/select'
 import ModelConfigPresetEditor from './ModelConfigPresetEditor.vue'
 import { useModelConfigPresets } from '../composables/useModelConfigPresets'
 import type { LLMConfig } from '../lib/models'
@@ -34,7 +34,7 @@ describe('ModelConfigPresetEditor', () => {
       },
     })
 
-    const dropdown = wrapper.findComponent(Dropdown)
+    const dropdown = wrapper.findComponent(Select)
     expect(dropdown.props('overlayClass')).toBe('preset-dropdown-overlay')
   })
 })

@@ -6,7 +6,6 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -20,14 +19,10 @@ interface PairingCredentialStore {
     suspend fun clear()
 }
 
-private val Context.pairingDataStore: DataStore<Preferences> by preferencesDataStore(
-    name = "remote_pairing",
-)
-
 class DataStorePairingCredentialStore(
     private val dataStore: DataStore<Preferences>,
 ) : PairingCredentialStore {
-    constructor(context: Context) : this(context.applicationContext.pairingDataStore)
+    constructor(context: Context) : this(context.applicationContext.appDataStore)
 
     override val credentials: Flow<PairingCredentials?> = dataStore.data
         .catch { error ->

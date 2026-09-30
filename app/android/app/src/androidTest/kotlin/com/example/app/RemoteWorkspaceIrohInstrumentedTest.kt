@@ -1,24 +1,19 @@
 package com.example.app
 
-import android.os.SystemClock
-import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.app.core.remote.FfiIrohConnector
 import com.example.app.core.remote.IrohConnection
 import com.example.app.core.remote.IrohStream
 import com.example.app.core.remote.PairingCredentials
-import com.example.app.core.remote.SidekickRemoteApiFactory
+import com.example.app.core.remote.SidekickRemoteSession
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-
-private const val LOG_TAG = "SidekickPhoneE2E"
 
 private const val CONNECT_TIMEOUT_MS = 30_000L
 private const val OPEN_STREAM_TIMEOUT_MS = 20_000L
@@ -62,16 +57,20 @@ class RemoteWorkspaceIrohInstrumentedTest {
             runBlocking {
                 probeRawTransport(stages, ticket, token)
 
-                val api = stages.stage("api-build-client", API_TIMEOUT_MS) {
-                    SidekickRemoteApiFactory().create(
+                val session = stages.stage("api-build-client", API_TIMEOUT_MS) {
+                    SidekickRemoteSession(
                         PairingCredentials(ticket = ticket, token = token),
                         FfiIrohConnector(),
                     )
                 }
-                val workspaces = stages.stage("api-get-workspaces", API_TIMEOUT_MS) {
-                    api.getWorkspaces().workspaces
+                try {
+                    val workspaces = stages.stage("api-get-workspaces", API_TIMEOUT_MS) {
+                        session.api.getWorkspaces().workspaces
+                    }
+                    stages.note("api returned ${workspaces.size} workspace(s)")
+                } finally {
+                    stages.closeQuietly("remote-session", session)
                 }
-                stages.note("api returned ${workspaces.size} workspace(s)")
             }
         } catch (error: Throwable) {
             // Re-thrown redacted: transport errors quote the ticket, and request
@@ -155,104 +154,3 @@ private fun statusLine(response: ByteArray): String {
     val text = response.decodeToString()
     return text.substringBefore("\r\n").ifEmpty { "<empty>" }
 }
-
-private fun StageLog.closeQuietly(name: String, resource: AutoCloseable?) {
-    if (resource == null) {
-        return
-    }
-    start(name)
-    val startedAt = SystemClock.elapsedRealtime()
-    try {
-        resource.close()
-        record("$name | ok after ${SystemClock.elapsedRealtime() - startedAt}ms")
-    } catch (error: Throwable) {
-        record("$name | failed after ${SystemClock.elapsedRealtime() - startedAt}ms | ${error.describe()}")
-    }
-}
-
-private class Box<T>(val value: T)
-
-/**
- * Records the progress of each connection stage to logcat and test output,
- * with pairing credentials stripped so captured diagnostics can be shared.
- */
-private class StageLog(private val secrets: List<String> = emptyList()) {
-    private val entries = mutableListOf<String>()
-
-    fun record(entry: String) {
-        val safeEntry = redact(entry)
-        entries += safeEntry
-        Log.i(LOG_TAG, safeEntry)
-        println("$LOG_TAG $safeEntry")
-    }
-
-    fun start(stage: String) = record("$stage | START")
-
-    fun note(message: String) = record("note | $message")
-
-    fun dumpSummary() = record("stage summary:\n$this")
-
-    fun redact(text: String): String =
-        secrets.filter(String::isNotEmpty).fold(text) { redacted, secret ->
-            redacted.replace(secret, "<redacted>")
-        }
-
-    override fun toString(): String = entries.joinToString(separator = "\n")
-}
-
-/** Runs a stage, failing the test when it times out or throws. */
-private suspend fun <T> StageLog.stage(
-    name: String,
-    timeoutMillis: Long,
-    block: suspend () -> T,
-): T {
-    start(name)
-    val startedAt = SystemClock.elapsedRealtime()
-    val box = try {
-        withTimeoutOrNull(timeoutMillis) { Box(block()) }
-    } catch (error: Throwable) {
-        record("$name | FAILED after ${SystemClock.elapsedRealtime() - startedAt}ms | ${error.describe()}")
-        throw AssertionError(redact("Stage '$name' failed\n$this"))
-    }
-
-    if (box == null) {
-        record("$name | TIMED OUT after ${timeoutMillis}ms")
-        throw AssertionError(redact("Stage '$name' timed out after ${timeoutMillis}ms\n$this"))
-    }
-
-    record("$name | ok after ${SystemClock.elapsedRealtime() - startedAt}ms")
-    return box.value
-}
-
-/**
- * Runs a diagnostic stage whose failure is informative rather than fatal, so
- * later stages still get a chance to expose their own behavior.
- */
-private suspend fun <T> StageLog.softStage(
-    name: String,
-    timeoutMillis: Long,
-    block: suspend () -> T,
-): T? {
-    start(name)
-    val startedAt = SystemClock.elapsedRealtime()
-    val box = try {
-        withTimeoutOrNull(timeoutMillis) { Box(block()) }
-    } catch (error: Throwable) {
-        record("$name | failed after ${SystemClock.elapsedRealtime() - startedAt}ms | ${error.describe()}")
-        return null
-    }
-
-    if (box == null) {
-        record("$name | timed out after ${timeoutMillis}ms")
-        return null
-    }
-
-    record("$name | ok after ${SystemClock.elapsedRealtime() - startedAt}ms")
-    return box.value
-}
-
-private fun Throwable.describe(): String =
-    generateSequence<Throwable>(this) { current -> current.cause?.takeIf { it !== current } }
-        .joinToString(separator = " <- ") { error ->
-            "${error.javaClass.name}: ${error.message ?: "<no message>"}"
-        }

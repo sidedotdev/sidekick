@@ -32,6 +32,12 @@ side.{yml/json/toml} config file if present. In particular, also avoid "cd .."
 or similar: if still within repo, you can use pushd, then cd then popd to get
 back, which ensures no false positives in command permissions.
 
+Prefer writing to real, non-scratch files in the repo where feasible. For
+genuine scratch files, use `.side/tmp` instead of system temp directories such
+as `/tmp` or `/var/tmp`. Sidekick creates `.side/tmp` and keeps it git-ignored.
+Files under `.side/tmp` need no cleanup, but any scratch files created elsewhere
+in-repo must be removed with `git rm` once you're done with them.
+
 For fixing bugs, ensure regression tests. Whenever adding tests, whether for
 new functionality or regression tests, you must follow a red-green process to
 ensure we're testing what we think we're testing.

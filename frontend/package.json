@@ -13,7 +13,7 @@
     "build-dev": "vite build --mode development && git checkout dist/.gitignore",
     "type-check": "vue-tsc --noEmit -p tsconfig.vitest.json --composite false",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
-    "lint:check": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --ignore-path .gitignore",
+    "lint:check": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --ignore-path .gitignore --max-warnings 0",
     "format": "prettier --write src/"
   },
   "dependencies": {
@@ -27,6 +27,7 @@
     "@tanstack/vue-virtual": "^3.13.23",
     "@vueuse/core": "^11.1.0",
     "codemirror": "^6.0.2",
+    "jsonriver": "^1.1.1",
     "primevue": "4.1.0",
     "qrcode": "^1.5.4",
     "sse-ts": "^1.0.2",

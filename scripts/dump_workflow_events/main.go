@@ -376,6 +376,87 @@ func main() {
 					}
 				}
 			}
+		case enums.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_INITIATED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetStartChildWorkflowExecutionInitiatedEventAttributes()
+			fmt.Printf("%s StartChildWorkflowExecutionInitiated workflowId=%s type=%s\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowId(), attrs.GetWorkflowType().GetName())
+		case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetChildWorkflowExecutionStartedEventAttributes()
+			fmt.Printf("%s ChildWorkflowExecutionStarted workflowId=%s runId=%s initiated=%d\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(),
+				attrs.GetWorkflowExecution().GetRunId(), attrs.GetInitiatedEventId())
+		case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetChildWorkflowExecutionCompletedEventAttributes()
+			fmt.Printf("%s ChildWorkflowExecutionCompleted workflowId=%s initiated=%d\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(), attrs.GetInitiatedEventId())
+		case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_FAILED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetChildWorkflowExecutionFailedEventAttributes()
+			fmt.Printf("%s ChildWorkflowExecutionFailed workflowId=%s initiated=%d\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(), attrs.GetInitiatedEventId())
+			if attrs.GetFailure() != nil {
+				fmt.Printf("    Failure: %s\n", attrs.GetFailure().GetMessage())
+			}
+		case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_CANCELED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetChildWorkflowExecutionCanceledEventAttributes()
+			fmt.Printf("%s ChildWorkflowExecutionCanceled workflowId=%s initiated=%d\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(), attrs.GetInitiatedEventId())
+		case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TERMINATED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetChildWorkflowExecutionTerminatedEventAttributes()
+			fmt.Printf("%s ChildWorkflowExecutionTerminated workflowId=%s initiated=%d\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(), attrs.GetInitiatedEventId())
+		case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TIMED_OUT:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetChildWorkflowExecutionTimedOutEventAttributes()
+			fmt.Printf("%s ChildWorkflowExecutionTimedOut workflowId=%s initiated=%d\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(), attrs.GetInitiatedEventId())
+		case enums.EVENT_TYPE_REQUEST_CANCEL_EXTERNAL_WORKFLOW_EXECUTION_INITIATED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetRequestCancelExternalWorkflowExecutionInitiatedEventAttributes()
+			fmt.Printf("%s RequestCancelExternalWorkflowExecutionInitiated workflowId=%s\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId())
+		case enums.EVENT_TYPE_EXTERNAL_WORKFLOW_EXECUTION_CANCEL_REQUESTED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetExternalWorkflowExecutionCancelRequestedEventAttributes()
+			fmt.Printf("%s ExternalWorkflowExecutionCancelRequested workflowId=%s initiated=%d\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(), attrs.GetInitiatedEventId())
+		case enums.EVENT_TYPE_REQUEST_CANCEL_EXTERNAL_WORKFLOW_EXECUTION_FAILED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetRequestCancelExternalWorkflowExecutionFailedEventAttributes()
+			fmt.Printf("%s RequestCancelExternalWorkflowExecutionFailed workflowId=%s cause=%s\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(), attrs.GetCause())
+		case enums.EVENT_TYPE_SIGNAL_EXTERNAL_WORKFLOW_EXECUTION_INITIATED:
+			if eid < int64(startEvent) || eid > int64(endEvent) {
+				continue
+			}
+			attrs := event.GetSignalExternalWorkflowExecutionInitiatedEventAttributes()
+			fmt.Printf("%s SignalExternalWorkflowExecutionInitiated workflowId=%s signal=%s\n",
+				eventPrefix(eid, event.EventTime), attrs.GetWorkflowExecution().GetWorkflowId(), attrs.GetSignalName())
 		case enums.EVENT_TYPE_MARKER_RECORDED:
 			if eid < int64(startEvent) || eid > int64(endEvent) {
 				continue

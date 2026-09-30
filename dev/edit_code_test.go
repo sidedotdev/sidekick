@@ -23,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -284,9 +286,19 @@ func (s *AuthorEditBlocksTestSuite) testModelUpdateRebuildsAuthoringTools(prompt
 	}, nil).Once()
 
 	callbacks := &modelConfigUpdateCallbacks{}
-	s.env.RegisterDelayedCallback(func() {
-		s.env.UpdateWorkflow(UpdateNameModelConfig, "authoring-model-update", callbacks, updatedConfig)
-	}, 100*time.Millisecond)
+	s.env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, args converter.EncodedValues) {
+		if info.ActivityType.Name != "Stream" {
+			return
+		}
+		var input persisted_ai.StreamInput
+		s.Require().NoError(args.Get(&input))
+		if input.Options.ModelConfig.Model != "initial-coding" {
+			return
+		}
+		s.env.RegisterDelayedCallback(func() {
+			s.env.UpdateWorkflow(UpdateNameModelConfig, "authoring-model-update", callbacks, updatedConfig)
+		}, 0)
+	})
 
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{PromptInfo: promptInfo})
 

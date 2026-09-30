@@ -230,9 +230,10 @@ func (r DevRequirements) String() string {
 }
 
 type buildDevRequirementsState struct {
-	contextSizeExtension int
-	devRequirements      DevRequirements
-	advisor              *Advisor
+	contextSizeExtension      int
+	devRequirements           DevRequirements
+	advisor                   *Advisor
+	toolFreeResponseUserInput toolFreeResponseUserInputState
 }
 
 func BuildDevRequirements(dCtx DevContext, initialInfo InitialDevRequirementsInfo) (*DevRequirements, error) {
@@ -354,11 +355,18 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	if err != nil {
 		return nil, err
 	}
-	if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, chatResponse.GetMessage()); err != nil {
+	message := chatResponse.GetMessage()
+	if workflow.GetVersion(iteration.ExecCtx, "dev-requirements-no-tool-help", workflow.DefaultVersion, 1) == 1 {
+		message, err = state.toolFreeResponseUserInput.convertToHelpRequest(message)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, message); err != nil {
 		return nil, err
 	}
 
-	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
+	if len(message.GetToolCalls()) > 0 {
 		var recordedReqs *DevRequirements
 
 		customHandlers := map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
@@ -417,7 +425,10 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			},
 		}
 
-		toolCallResults, err := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
+		options := toolCallOptions{
+			ForwardedAssistantResponse: len(chatResponse.GetMessage().GetToolCalls()) == 0,
+		}
+		toolCallResults, err := handleToolCallsWithOptions(iteration.ExecCtx, message.GetToolCalls(), iteration.ChatHistory, customHandlers, options)
 		if err != nil {
 			return nil, err
 		}

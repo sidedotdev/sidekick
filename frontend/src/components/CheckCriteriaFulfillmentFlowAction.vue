@@ -20,7 +20,7 @@
         />
       </div>
     </div>
-    <div v-else-if="flowAction.actionStatus == 'complete'">
+    <div v-else-if="flowAction.actionStatus == 'complete' && expansionCount === null">
       Unable to parse criteria fulfillment data:
       <pre>{{ flowAction.actionResult }}</pre>
     </div>
@@ -30,7 +30,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { FlowAction, CriteriaFulfillment } from '@/lib/models';
-import { parseCriteriaFulfillment } from '@/lib/criteriaFulfillment';
+import { parseCriteriaFulfillment, parseCriteriaExpansionCount } from '@/lib/criteriaFulfillment';
 import VueMarkdown from 'vue-markdown-render';
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue';
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
@@ -40,6 +40,14 @@ const props = defineProps<{
   expand: boolean;
   level?: number;
 }>();
+
+const expansionCount = computed(() => {
+  try {
+    return parseCriteriaExpansionCount(JSON.parse(props.flowAction.actionResult));
+  } catch {
+    return null;
+  }
+});
 
 const criteriaFulfillment = computed<CriteriaFulfillment | null>(() => {
   try {

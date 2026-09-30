@@ -37,10 +37,14 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 })
 
-// Mock the parseDiff function
-vi.mock('../../lib/diffUtils', () => ({
-  parseDiff: vi.fn()
-}))
+// Mock only parseDiff; DiffFile still relies on the real helpers.
+vi.mock('../../lib/diffUtils', async (importOriginal) => {
+  const actual: Record<string, unknown> = await importOriginal()
+  return {
+    ...actual,
+    parseDiff: vi.fn()
+  }
+})
 
 import { parseDiff } from '../../lib/diffUtils'
 const mockParseDiff = vi.mocked(parseDiff)
@@ -429,8 +433,8 @@ index 1234567..abcdefg 100644
         }
       })
 
-      expect(wrapper.findAllComponents(DiffFile)).toHaveLength(1)
-      // Should not throw an error when generating keys with null file names
+      expect(wrapper.findAllComponents(DiffFile)).toHaveLength(0)
+      expect(wrapper.find('[role="status"]').text()).toBe('diff content')
     })
   })
 

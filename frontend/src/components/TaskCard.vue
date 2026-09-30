@@ -284,7 +284,6 @@ const cancelTask = async () => {
     method: 'POST',
   })
   if (response.status === 200) {
-    const data = await response.json()
     emit('canceled', id)
     emit('updated', id)
   } else {

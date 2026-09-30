@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"sidekick/common"
+	"sidekick/llm2"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -194,6 +195,69 @@ func TestFlowEventContainer_MarshalUnmarshal_RoundTrip(t *testing.T) {
 					DevRunId:  "devrun_456",
 					CommandId: "dev-server",
 					Signal:    "SIGINT",
+				},
+			},
+		},
+		{
+			name: "Llm2StreamEvent block_started with tool_use block",
+			original: FlowEventContainer{
+				FlowEvent: Llm2StreamEvent{
+					EventType:    Llm2StreamEventType,
+					FlowActionId: "fa_456",
+					Event: llm2.Event{
+						Type:  llm2.EventBlockStarted,
+						Index: 1,
+						ContentBlock: &llm2.ContentBlock{
+							Id:   "blk_1",
+							Type: llm2.ContentBlockTypeToolUse,
+							ToolUse: &llm2.ToolUseBlock{
+								Id:   "call_1",
+								Name: "get_weather",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Llm2StreamEvent text_delta",
+			original: FlowEventContainer{
+				FlowEvent: Llm2StreamEvent{
+					EventType:    Llm2StreamEventType,
+					FlowActionId: "fa_456",
+					Event: llm2.Event{
+						Type:  llm2.EventTextDelta,
+						Index: 0,
+						Delta: "Hello, ",
+					},
+				},
+			},
+		},
+		{
+			name: "Llm2StreamEvent summary_text_delta",
+			original: FlowEventContainer{
+				FlowEvent: Llm2StreamEvent{
+					EventType:    Llm2StreamEventType,
+					FlowActionId: "fa_456",
+					Event: llm2.Event{
+						Type:  llm2.EventSummaryTextDelta,
+						Index: 2,
+						Delta: "Thinking about",
+					},
+				},
+			},
+		},
+		{
+			name: "Llm2StreamEvent block_done with signature",
+			original: FlowEventContainer{
+				FlowEvent: Llm2StreamEvent{
+					EventType:    Llm2StreamEventType,
+					FlowActionId: "fa_456",
+					Event: llm2.Event{
+						Type:      llm2.EventBlockDone,
+						Index:     2,
+						Signature: []byte{0x01, 0x02, 0x03},
+					},
 				},
 			},
 		},
@@ -572,4 +636,33 @@ func TestDevRunEvents_GetParentId(t *testing.T) {
 		}
 		assert.Equal(t, "flow_123", event.GetParentId())
 	})
+}
+
+func TestUnmarshalFlowEvent_Llm2StreamEvent_FlattensLlm2EventFields(t *testing.T) {
+	t.Parallel()
+
+	data := []byte(`{
+		"eventType": "llm2_stream_event",
+		"flowActionId": "fa_789",
+		"type": "block_started",
+		"index": 3,
+		"contentBlock": {
+			"id": "blk_3",
+			"type": "reasoning",
+			"reasoning": {"text": "", "summary": ""}
+		}
+	}`)
+
+	event, err := UnmarshalFlowEvent(data)
+	assert.NoError(t, err)
+
+	llm2Stream, ok := event.(Llm2StreamEvent)
+	assert.True(t, ok, "expected Llm2StreamEvent, got %T", event)
+	assert.Equal(t, Llm2StreamEventType, llm2Stream.GetEventType())
+	assert.Equal(t, "fa_789", llm2Stream.GetParentId())
+	assert.Equal(t, llm2.EventBlockStarted, llm2Stream.Type)
+	assert.Equal(t, 3, llm2Stream.Index)
+	assert.NotNil(t, llm2Stream.ContentBlock)
+	assert.Equal(t, llm2.ContentBlockTypeReasoning, llm2Stream.ContentBlock.Type)
+	assert.NotNil(t, llm2Stream.ContentBlock.Reasoning)
 }

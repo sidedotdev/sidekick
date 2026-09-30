@@ -1,0 +1,5 @@
+Find every positive integer triple a <= b <= c such that
+
+1/a + 1/b + 1/c = 1/30.
+
+Work out the enumeration yourself without executing code or using tools. Give the complete list of triples grouped by a, the total count, and a concise proof that no triples are missing. Use the identity (b - n)(c - n) = n^2 where applicable, or its generalized integer-factorization equivalent, to independently check the enumeration. Carefully verify divisibility, ordering, and boundary cases before giving the final list. Do not substitute an algorithm or code for the actual list.

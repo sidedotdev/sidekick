@@ -24,7 +24,7 @@ const providersForUrl = (url: string) => {
 };
 
 const createMockFetch = (workspaceResponse: object) => {
-  return vi.fn((url: string, options?: RequestInit) => {
+  return vi.fn((url: string, _options?: RequestInit) => {
     if (url.startsWith('/api/v1/providers')) {
       return Promise.resolve({
         ok: true,

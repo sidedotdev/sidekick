@@ -9,13 +9,20 @@ import (
 
 // record that is 1:1 with a temporal workflow
 type Flow struct {
-	WorkspaceId string    `json:"workspaceId"`
-	Id          string    `json:"id"`
-	Type        FlowType  `json:"type"`     // flow type
-	ParentId    string    `json:"parentId"` // parent id of arbitrary type (eg task)
-	Status      string    `json:"status"`   // flow status
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
+	WorkspaceId string   `json:"workspaceId"`
+	Id          string   `json:"id"`
+	Type        FlowType `json:"type"`            // flow type
+	ParentId    string   `json:"parentId"`        // parent id of arbitrary type (eg task)
+	Status      string   `json:"status"`          // flow status
+	Title       string   `json:"title,omitempty"` // human-readable flow title
+
+	// Metadata is a generic container for arbitrary flow-specific data, with
+	// no meaning ascribed to it here: writers (the flow's own workflow, an
+	// orchestrating parent flow, external tooling) define their own keys.
+	Metadata map[string]any `json:"metadata,omitempty"`
+
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"`
 }
 
 func (f Flow) MarshalJSON() ([]byte, error) {

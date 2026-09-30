@@ -1,17 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import WorkspaceView from '@/views/WorkspaceView.vue'
-import FlowView from '@/views/FlowView.vue'
-import WorkflowResetView from '@/views/WorkflowResetView.vue'
 import KanbanView from '@/views/KanbanView.vue'
-import ChatView from '@/views/ChatView.vue'
-import ArchivedTasksView from '@/views/ArchivedTasksView.vue'
 import BlockedView from '@/views/BlockedView.vue'
 import { isBlockedNow } from '@/lib/offHours'
-import EvalDataValidatorView from '@/views/EvalDataValidatorView.vue'
-import IntentCanvasView from '@/views/IntentCanvasView.vue'
-import ProjectsView from '@/views/ProjectsView.vue'
-import ProjectFormView from '@/views/ProjectFormView.vue'
-import RemoteControlView from '@/views/RemoteControlView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -23,7 +13,7 @@ const router = createRouter({
     {
       path: '/chat/:id?',
       name: 'chat-with-id',
-      component: ChatView,
+      component: () => import('@/views/ChatView.vue'),
     },
     {
       path: '/kanban',
@@ -33,53 +23,53 @@ const router = createRouter({
     {
       path: '/projects',
       name: 'projects',
-      component: ProjectsView,
+      component: () => import('@/views/ProjectsView.vue'),
     },
     {
       path: '/projects/new',
       name: 'project-new',
-      component: ProjectFormView,
+      component: () => import('@/views/ProjectFormView.vue'),
     },
     {
       path: '/projects/:id/edit',
       name: 'project-edit',
-      component: ProjectFormView,
+      component: () => import('@/views/ProjectFormView.vue'),
     },
     {
       path: '/flows/:id/intent',
       name: 'intent-canvas',
-      component: IntentCanvasView,
+      component: () => import('@/views/IntentCanvasView.vue'),
     },
     {
       path: '/flows/:id',
       name: 'flow',
-      component: FlowView,
+      component: () => import('@/views/FlowView.vue'),
     },
     {
       path: '/flows/:id/reset',
       name: 'flow-reset',
-      component: WorkflowResetView,
+      component: () => import('@/views/WorkflowResetView.vue'),
     },
     {
       path: '/workspaces/new',
       name: 'create-workspace',
-      component: WorkspaceView,
+      component: () => import('@/views/WorkspaceView.vue'),
     },
     {
       path: '/workspaces/:id',
       name: 'workspace',
-      component: WorkspaceView,
+      component: () => import('@/views/WorkspaceView.vue'),
       props: true
     },
     {
       path: '/archived-tasks',
       name: 'archived-tasks',
-      component: ArchivedTasksView,
+      component: () => import('@/views/ArchivedTasksView.vue'),
     },
     {
       path: '/remote-control',
       name: 'remote-control',
-      component: RemoteControlView,
+      component: () => import('@/views/RemoteControlView.vue'),
     },
     {
       path: '/blocked',
@@ -89,7 +79,7 @@ const router = createRouter({
     {
       path: '/dev/evaldata',
       name: 'eval-data-validator',
-      component: EvalDataValidatorView,
+      component: () => import('@/views/EvalDataValidatorView.vue'),
     },
   ],
 })
