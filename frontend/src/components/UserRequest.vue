@@ -10,13 +10,14 @@
         class="markdown"
       />
     </div>
-    <div v-if="flowAction.actionParams.command">
+    <PermissionEvaluationDetails
+      v-if="showPermissionEvaluation"
+      :evaluation="flowAction.actionParams.permissionEvaluation"
+      :script="flowAction.actionParams.command"
+    />
+    <div v-else-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
-    <PermissionEvaluationDetails
-      v-if="devMode && flowAction.actionParams.permissionEvaluation"
-      :evaluation="flowAction.actionParams.permissionEvaluation"
-    />
     <div v-if="flowAction.actionParams.mergeApprovalInfo?.diff" class="diff-container" @click="restoreFocus">
       <div v-if="showEmptyDiffMessage" class="empty-diff-message">
         No changes since last review
@@ -149,13 +150,14 @@
         class="markdown"
       />
     </div>
-    <div v-if="flowAction.actionParams.command">
+    <PermissionEvaluationDetails
+      v-if="showPermissionEvaluation"
+      :evaluation="flowAction.actionParams.permissionEvaluation"
+      :script="flowAction.actionParams.command"
+    />
+    <div v-else-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
-    <PermissionEvaluationDetails
-      v-if="devMode && flowAction.actionParams.permissionEvaluation"
-      :evaluation="flowAction.actionParams.permissionEvaluation"
-    />
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
       <div class="diff-options-row">
         <label for="diffScopeNonPending">Show</label>
@@ -239,6 +241,9 @@ const textareaRef = ref<{ focus: () => void } | null>(null);
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const hasResponseText = computed(() => responseContent.value.trim() !== '');
 const devMode = computed(() => import.meta.env.MODE === 'development');
+const showPermissionEvaluation = computed(() =>
+  devMode.value && !!props.flowAction.actionParams.permissionEvaluation && !!props.flowAction.actionParams.command
+);
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
 const diffScope = ref<'all' | 'since_last_review'>('all');
