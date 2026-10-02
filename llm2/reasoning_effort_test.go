@@ -256,3 +256,18 @@ func TestResolveGoogleReasoningEffort(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveOpenAIReasoningEffortFutureGenerations(t *testing.T) {
+	t.Parallel()
+	for _, model := range []string{
+		"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol",
+		"gpt-6", "gpt-6-astra", "gpt-6.5", "gpt-7", "gpt-10",
+	} {
+		t.Run(model, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, "xhigh", resolveOpenAIReasoningEffort("highest", model))
+			assert.Equal(t, "none", resolveOpenAIReasoningEffort("lowest", model))
+			assert.Equal(t, "high", resolveOpenAIReasoningEffort("high", model))
+		})
+	}
+}

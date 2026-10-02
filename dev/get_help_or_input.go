@@ -79,13 +79,14 @@ func isMeaningfulContent(content string) bool {
 }
 
 func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, error) {
-	return getHelpOrInputWithProvenance(dCtx, requests, nil)
+	return getHelpOrInputWithProvenance(dCtx, requests, nil, false)
 }
 
-func getHelpOrInputWithProvenance(dCtx DevContext, requests []HelpOrInputRequest, human *bool) (string, error) {
+func getHelpOrInputWithProvenance(dCtx DevContext, requests []HelpOrInputRequest, human *bool, forwardedAssistantResponse bool) (string, error) {
 	validRequests := make([]HelpOrInputRequest, 0, len(requests))
 	for _, r := range requests {
-		if isMeaningfulContent(r.Content) {
+		// Forwarded assistant prose must reach the user even if it resembles a placeholder.
+		if isMeaningfulContent(r.Content) || (forwardedAssistantResponse && strings.TrimSpace(r.Content) != "") {
 			validRequests = append(validRequests, r)
 		}
 	}

@@ -1,4 +1,4 @@
-import { NightwatchCustomAssertions, NightwatchCustomCommands } from 'nightwatch'
+import 'nightwatch'
 
 declare module 'nightwatch' {
   interface NightwatchCustomAssertions {

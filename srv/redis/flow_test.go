@@ -23,6 +23,7 @@ func TestPersistFlowAndGetFlowsForTask(t *testing.T) {
 			Type:        "testType1",
 			ParentId:    parentId,
 			Status:      "testStatus1",
+			Title:       "first subtask",
 		},
 		{
 			WorkspaceId: workspaceId,
@@ -30,6 +31,8 @@ func TestPersistFlowAndGetFlowsForTask(t *testing.T) {
 			Type:        "testType2",
 			ParentId:    parentId,
 			Status:      "testStatus2",
+			Title:       "second subtask",
+			Metadata:    map[string]any{"autoMode": true, "nudges": []any{"keep going"}},
 		},
 	}
 
@@ -42,12 +45,22 @@ func TestPersistFlowAndGetFlowsForTask(t *testing.T) {
 	assert.Nil(t, err)
 	require.Len(t, retrievedWorkflows, 2)
 
-	for i, retrieved := range retrievedWorkflows {
+	// redis sets are unordered, so match retrieved flows back to their source
+	retrievedById := map[string]domain.Flow{}
+	for _, retrieved := range retrievedWorkflows {
+		retrievedById[retrieved.Id] = retrieved
+	}
+
+	for i := range flows {
+		retrieved, ok := retrievedById[flows[i].Id]
+		require.True(t, ok, "expected flow %s to be retrieved", flows[i].Id)
 		assert.Equal(t, flows[i].WorkspaceId, retrieved.WorkspaceId)
 		assert.Equal(t, flows[i].Id, retrieved.Id)
 		assert.Equal(t, flows[i].Type, retrieved.Type)
 		assert.Equal(t, flows[i].ParentId, retrieved.ParentId)
 		assert.Equal(t, flows[i].Status, retrieved.Status)
+		assert.Equal(t, flows[i].Title, retrieved.Title)
+		assert.Equal(t, flows[i].Metadata, retrieved.Metadata)
 		assert.False(t, retrieved.Created.IsZero())
 		assert.False(t, retrieved.Updated.IsZero())
 		assert.Equal(t, time.UTC, retrieved.Created.Location())

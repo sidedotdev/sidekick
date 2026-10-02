@@ -29,3 +29,26 @@ export function parseCriteriaFulfillment(response: any): CriteriaFulfillment | n
   }
   return null
 }
+
+export function parseCriteriaExpansionCount(response: any): number | null {
+  const calls = Array.isArray(response?.output?.content)
+    ? response.output.content
+      .filter((block: any) => block?.type === 'tool_use')
+      .map((block: any) => block.toolUse)
+    : response?.toolCalls
+  if (!Array.isArray(calls)) return null
+
+  let count = 0
+  for (const call of calls) {
+    if (call?.name !== 'expand_tool_call' || typeof call.arguments !== 'string') continue
+    try {
+      const args = JSON.parse(call.arguments)
+      if (!Array.isArray(args?.ids) || !args.ids.length ||
+        !args.ids.every((id: unknown) => typeof id === 'string')) continue
+      count += args.ids.length
+    } catch {
+      // Incomplete streamed arguments are not yet an expansion request.
+    }
+  }
+  return count > 0 ? count : null
+}

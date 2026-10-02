@@ -274,6 +274,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	taskRoutes.POST("/", ctrl.CreateTaskHandler)
 	taskRoutes.GET("/", ctrl.GetTasksHandler)
 	taskRoutes.GET("/:id", ctrl.GetTaskHandler)
+	taskRoutes.GET("/:id/flows", ctrl.GetTaskFlowsHandler)
 	taskRoutes.PUT("/:id", ctrl.UpdateTaskHandler)
 	taskRoutes.DELETE("/:id", ctrl.DeleteTaskHandler)
 	taskRoutes.POST("/:id/archive", ctrl.ArchiveTaskHandler)
@@ -306,8 +307,6 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.PUT("/:id/intent/file", ctrl.WriteIntentFileHandler)
 	flowRoutes.POST("/:id/intent/start_subtask", ctrl.StartIntentSubtaskHandler)
 	flowRoutes.GET("/:id/intent/branches", ctrl.ListIntentBranchesHandler)
-	flowRoutes.GET("/:id/intent/finish_diff", ctrl.FinishIntentDiffHandler)
-	flowRoutes.POST("/:id/intent/finish", ctrl.FinishIntentHandler)
 	flowRoutes.POST("/:id/intent/auto_mode", ctrl.SetIddAutoModeHandler)
 	flowRoutes.POST("/:id/intent/run_orchestrator", ctrl.RunIddOrchestratorHandler)
 
@@ -1125,6 +1124,40 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"task": response})
 }
 
+// GetTaskFlowsHandler returns all flows belonging to a task, including child
+// flows such as IDD subtask flows.
+func (ctrl *Controller) GetTaskFlowsHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	taskId := c.Param("id")
+
+	if workspaceId == "" || taskId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Task ID are required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	_, err := ctrl.service.GetTask(ctx, workspaceId, taskId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, taskId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if flows == nil {
+		flows = []domain.Flow{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"flows": flows})
+}
+
 // FlowWithWorktrees represents a Flow with its associated Worktrees
 type FlowWithWorktrees struct {
 	domain.Flow
@@ -1527,11 +1560,44 @@ func (r *parentResetResult) rollback(ctx context.Context, ctrl *Controller) {
 	}
 }
 
+// taskMonitoredFlowId resolves which flow the task workflow for flowId's task
+// actually supervises. Flows the task workflow started directly are its own
+// Temporal children. A flow nested under another flow (an IDD sub-task under
+// its IDD workflow) shares the task as ParentId in storage, yet the task
+// workflow only tracks the enclosing flow, which must still be running for the
+// nested flow's reset to be supervised at all.
+func (ctrl *Controller) taskMonitoredFlowId(ctx context.Context, flowId, taskWfId string) (string, error) {
+	desc, err := ctrl.temporalClient.DescribeWorkflowExecution(ctx, flowId, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to describe flow %s: %w", flowId, err)
+	}
+	parent := desc.WorkflowExecutionInfo.GetParentExecution().GetWorkflowId()
+	if parent == "" || parent == taskWfId {
+		return flowId, nil
+	}
+	parentDesc, err := ctrl.temporalClient.DescribeWorkflowExecution(ctx, parent, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to describe parent flow %s of %s: %w", parent, flowId, err)
+	}
+	if grandparent := parentDesc.WorkflowExecutionInfo.GetParentExecution().GetWorkflowId(); grandparent != taskWfId {
+		return "", fmt.Errorf("cannot reset %s: its parent flow %s is not a child of task workflow %s", flowId, parent, taskWfId)
+	}
+	if parentDesc.WorkflowExecutionInfo.Status != enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
+		return "", fmt.Errorf("cannot reset %s: its parent flow %s is not running", flowId, parent)
+	}
+	return parent, nil
+}
+
 // resetParentTaskWorkflow re-executes the parent TaskWorkflow in monitor mode
 // so it can listen for signals from the new child run after a flow reset.
 // Instead of resetting the Temporal workflow (which fails when there are pending
 // child workflows), we terminate the old execution and start a fresh one with
 // ExistingFlowId set.
+//
+// A reset only severs the task workflow's link to a flow it started itself;
+// for a flow nested under another flow, a running task workflow stays bound to
+// the enclosing flow and is left alone. Should that task workflow be gone, the
+// replacement adopts the enclosing flow rather than the flow being reset.
 // Returns a rollback handle that can undo the change if the child reset fails.
 func (ctrl *Controller) resetParentTaskWorkflow(ctx context.Context, workspaceId, flowId string) (*parentResetResult, error) {
 	result := &parentResetResult{workspaceId: workspaceId}
@@ -1550,15 +1616,31 @@ func (ctrl *Controller) resetParentTaskWorkflow(ctx context.Context, workspaceId
 	taskWfId := dev.TaskWorkflowId(flow.ParentId)
 	result.taskWfId = taskWfId
 
-	desc, err := ctrl.temporalClient.DescribeWorkflowExecution(ctx, taskWfId, "")
+	monitoredFlowId, err := ctrl.taskMonitoredFlowId(ctx, flowId, taskWfId)
 	if err != nil {
-		log.Warn().Err(err).Str("taskWfId", taskWfId).Msg("Could not describe task workflow for reset")
-		return result, nil
+		return result, err
+	}
+
+	// A task workflow that was never started or has been purged is recreated
+	// like a closed one; any other lookup failure leaves its state unknown.
+	taskWfRunning := false
+	desc, err := ctrl.temporalClient.DescribeWorkflowExecution(ctx, taskWfId, "")
+	var notFound *serviceerror.NotFound
+	switch {
+	case err == nil:
+		taskWfRunning = desc.WorkflowExecutionInfo.Status == enums.WORKFLOW_EXECUTION_STATUS_RUNNING
+	case errors.As(err, &notFound):
+		log.Warn().Str("taskWfId", taskWfId).Msg("Task workflow not found for reset; recreating monitor")
+	default:
+		return result, fmt.Errorf("failed to describe task workflow %s: %w", taskWfId, err)
 	}
 
 	// If the parent is still running, terminate it so we can start a fresh
 	// monitor instance. If it's already closed, termination is a no-op.
-	if desc.WorkflowExecutionInfo.Status == enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
+	if taskWfRunning {
+		if monitoredFlowId != flowId {
+			return result, nil
+		}
 		_ = ctrl.temporalClient.TerminateWorkflow(ctx, taskWfId, "", "re-executing for flow reset")
 	}
 
@@ -1579,7 +1661,7 @@ func (ctrl *Controller) resetParentTaskWorkflow(ctx context.Context, workspaceId
 	}, dev.TaskWorkflow, dev.TaskWorkflowInput{
 		WorkspaceId:    workspaceId,
 		TaskId:         flow.ParentId,
-		ExistingFlowId: flowId,
+		ExistingFlowId: monitoredFlowId,
 	})
 	if err != nil {
 		return result, fmt.Errorf("failed to start monitor task workflow %s: %w", taskWfId, err)

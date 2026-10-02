@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDiff, getFileLanguage } from '../diffUtils';
+import { parseDiff, getFileLanguage, isCombinedDiff, combinedDiffParentCount, projectCombinedDiff } from '../diffUtils';
 
 describe('getFileLanguage', () => {
   it('should return correct language for common file extensions', () => {
@@ -269,6 +269,148 @@ without proper headers`;
     expect(result[0].linesAdded).toBe(0);
     expect(result[0].linesRemoved).toBe(0);
     expect(result[0].linesUnchanged).toBe(0);
+  });
+
+  describe('isCombinedDiff', () => {
+    it('detects hunks with combined (multi-parent) headers', () => {
+      expect(isCombinedDiff(['diff --cc a.txt\n@@@ -1,2 -1,2 +1,3 @@@\n +ours\n+ theirs\n  shared'])).toBe(true);
+      expect(isCombinedDiff(['diff --combined a.txt\n@@@@ -1 -1 -1 +1,2 @@@@\n+++x'])).toBe(true);
+    });
+
+    it('does not flag two-way hunks, even in a diff --cc file or with @@@ inside content', () => {
+      expect(isCombinedDiff(['diff --cc a.txt\n@@ -1,2 +1,3 @@\n ours\n+theirs'])).toBe(false);
+      expect(isCombinedDiff(['diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-x\n+@@@ not a header'])).toBe(false);
+      expect(isCombinedDiff([])).toBe(false);
+    });
+  });
+
+  describe('projectCombinedDiff', () => {
+    // Real merge-conflict resolution diff: `- ` is a line only parent 1 had,
+    // ` -` a line only parent 2 had, `++` a line neither had, ` +` a line
+    // parent 1 already had, `+ ` a line parent 2 already had.
+    const combinedDiff = [
+      'diff --cc Justfile',
+      'index 07a3b20,2a11cd1..0000000',
+      '--- a/Justfile',
+      '+++ b/Justfile',
+      '@@@ -7,5 -7,6 +7,9 @@@ install',
+      '  release *args:',
+      '  \t./scripts/release.sh {{args}}',
+      '  ',
+      ' +publish-web *args:',
+      '- \t./scripts/publish-web.sh {{args}}',
+      '++\t./scripts/publish-web.sh {{args}}',
+      '++',
+      '+ # Publish placeholder',
+      '+ publish-node-placeholder *args:',
+      ' -\tcd node && npm publish {{args}}',
+      '++\tcd node && npm publish {{args}}',
+      '',
+    ].join('\n');
+
+    it('reports the number of parents from the hunk header', () => {
+      expect(combinedDiffParentCount(combinedDiff)).toBe(2);
+      expect(combinedDiffParentCount('diff --cc a\n@@@@ -1 -1 -1 +1,2 @@@@\n+++x')).toBe(3);
+      expect(combinedDiffParentCount('diff --git a/a b/a\n@@ -1 +1 @@\n-x\n+y')).toBe(null);
+    });
+
+    it('projects onto parent 1, dropping rows that only parent 2 removed', () => {
+      expect(projectCombinedDiff(combinedDiff, 0)).toBe([
+        'diff --git a/Justfile b/Justfile',
+        '--- a/Justfile',
+        '+++ b/Justfile',
+        '@@ -7,5 +7,9 @@ install',
+        ' release *args:',
+        ' \t./scripts/release.sh {{args}}',
+        ' ',
+        ' publish-web *args:',
+        '-\t./scripts/publish-web.sh {{args}}',
+        '+\t./scripts/publish-web.sh {{args}}',
+        '+',
+        '+# Publish placeholder',
+        '+publish-node-placeholder *args:',
+        '+\tcd node && npm publish {{args}}',
+        '',
+      ].join('\n'));
+    });
+
+    it('projects onto parent 2, dropping rows that only parent 1 removed', () => {
+      expect(projectCombinedDiff(combinedDiff, 1)).toBe([
+        'diff --git a/Justfile b/Justfile',
+        '--- a/Justfile',
+        '+++ b/Justfile',
+        '@@ -7,6 +7,9 @@ install',
+        ' release *args:',
+        ' \t./scripts/release.sh {{args}}',
+        ' ',
+        '+publish-web *args:',
+        '+\t./scripts/publish-web.sh {{args}}',
+        '+',
+        ' # Publish placeholder',
+        ' publish-node-placeholder *args:',
+        '-\tcd node && npm publish {{args}}',
+        '+\tcd node && npm publish {{args}}',
+        '',
+      ].join('\n'));
+    });
+
+    it('handles multiple hunks, three parents and no-newline markers', () => {
+      const diff = [
+        'diff --combined a.txt',
+        '@@@@ -1,2 -1,1 -1,2 +1,2 @@@@',
+        '   shared',
+        '- - gone',
+        '+++new',
+        '@@@@ -10,1 -9,1 -10,1 +9,1 @@@@',
+        '---last',
+        '\\ No newline at end of file',
+        '+++LAST',
+        '\\ No newline at end of file',
+        '',
+      ].join('\n');
+      expect(projectCombinedDiff(diff, 1)).toBe([
+        'diff --git a/a.txt b/a.txt',
+        '--- a/a.txt',
+        '+++ b/a.txt',
+        '@@ -1,1 +1,2 @@',
+        ' shared',
+        '+new',
+        '@@ -9,1 +9,1 @@',
+        '-last',
+        '\\ No newline at end of file',
+        '+LAST',
+        '\\ No newline at end of file',
+        '',
+      ].join('\n'));
+    });
+
+    it('omits hunks that are empty from the selected parent\'s point of view', () => {
+      const diff = [
+        'diff --cc a.txt',
+        '@@@ -1,0 -1,1 +1,0 @@@',
+        ' -only parent 2 had this',
+        '@@@ -5,1 -6,1 +5,1 @@@',
+        '- x',
+        '++y',
+        '',
+      ].join('\n');
+      expect(projectCombinedDiff(diff, 0)).toBe([
+        'diff --git a/a.txt b/a.txt',
+        '--- a/a.txt',
+        '+++ b/a.txt',
+        '@@ -5,1 +5,1 @@',
+        '-x',
+        '+y',
+        '',
+      ].join('\n'));
+    });
+
+    it('returns null for parents out of range, malformed rows or inconsistent counts', () => {
+      expect(projectCombinedDiff(combinedDiff, 2)).toBe(null);
+      expect(projectCombinedDiff('diff --cc a\n@@@ -1,1 -1,1 +1,1 @@@\n?!x\n', 0)).toBe(null);
+      expect(projectCombinedDiff('diff --cc a\n@@@ -1,1 -1,1 +1,2 @@@\n  x\n', 0)).toBe(null);
+      expect(projectCombinedDiff('diff --git a/a b/a\n@@ -1 +1 @@\n-x\n+y\n', 0)).toBe(null);
+    });
   });
 
   it('should handle combined diff format (diff --cc)', () => {

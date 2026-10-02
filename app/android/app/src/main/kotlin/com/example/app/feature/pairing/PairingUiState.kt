@@ -1,12 +1,9 @@
 package com.example.app.feature.pairing
 
-import com.example.app.core.remote.Workspace
-
 data class PairingUiState(
+    val isCheckingStoredPairing: Boolean = true,
     val isPaired: Boolean = false,
-    val isLoading: Boolean = true,
-    val workspaces: List<Workspace> = emptyList(),
-    val selectedWorkspaceId: String? = null,
+    /** Workspace the scanned QR code pointed at, forwarded to the Tasks screen. */
+    val hintedWorkspaceId: String? = null,
     val errorMessage: String? = null,
-    val workspaceToOpen: Workspace? = null,
 )

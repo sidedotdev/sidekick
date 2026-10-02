@@ -194,3 +194,40 @@ func TestReviewAndResolveRealFlow(t *testing.T) {
 		assert.NotContains(t, diff, "previously removed", name)
 	}
 }
+
+func TestReviewAndResolvePreservesFullDiffAcrossNoOpReviews(t *testing.T) {
+	t.Parallel()
+
+	h := newReviewDiffsFlowHarness(t)
+	h.repos.work.stage("pre_feedback.txt", "PRE_FEEDBACK_WORK\n")
+
+	target := "main"
+	h.runFlowWithUserResponses(func(ctx workflow.Context) error {
+		dCtx := h.devContext(ctx)
+		dCtx.ExecContext.GlobalState.SetValue(common.KeyCurrentTargetBranch, target)
+		return reviewAndResolve(dCtx, MergeWithReviewParams{
+			Requirements:   "original requirements",
+			StartBranch:    &target,
+			CommitRequired: true,
+		})
+	}, &realFlowUserResponder{
+		rejectionMessage: "please reconsider the existing work",
+		approveAfter:     2,
+	})
+
+	require.Len(t, h.mergeApprovals, 3)
+	firstDiff := h.mergeApprovals[0].Diff
+	require.Contains(t, firstDiff, "PRE_FEEDBACK_WORK")
+	for round, approval := range h.mergeApprovals {
+		assert.Equal(t, firstDiff, approval.Diff, "review round %d must retain the full diff", round)
+		assert.Empty(t, approval.DiffSinceLastReview, "review round %d has no new changes", round)
+	}
+
+	require.Len(t, h.fulfillmentDiffs, 2)
+	for round, diff := range h.fulfillmentDiffs {
+		prompt := h.fulfillmentPromptContaining(diff)
+		assert.Contains(t, prompt, "PRE_FEEDBACK_WORK", "reviewer round %d needs the prior work", round)
+		assert.Contains(t, prompt, "Here are the changes since the last review", "reviewer round %d must remain incremental", round)
+		assert.Contains(t, prompt, "No changes since the last review.", "reviewer round %d has no new changes", round)
+	}
+}

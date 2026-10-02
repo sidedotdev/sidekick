@@ -61,7 +61,7 @@ func (a *Activities) GitMergeIntoWorktreeActivity(ctx context.Context, envContai
 	return a.MergeIntoWorktree(ctx, envContainer, params)
 }
 
-func (a *Activities) GitTransferWorktreeChangesActivity(ctx context.Context, envContainer env.EnvContainer, params GitTransferWorktreeChangesParams) error {
+func (a *Activities) GitTransferWorktreeChangesActivity(ctx context.Context, envContainer env.EnvContainer, params GitTransferWorktreeChangesParams) (GitTransferWorktreeChangesResult, error) {
 	return a.TransferWorktreeChanges(ctx, envContainer, params)
 }
 

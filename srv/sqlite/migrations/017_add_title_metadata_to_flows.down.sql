@@ -1,0 +1,2 @@
+ALTER TABLE flows DROP COLUMN metadata;
+ALTER TABLE flows DROP COLUMN title;

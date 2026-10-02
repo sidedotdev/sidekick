@@ -441,6 +441,9 @@ func (da *DevActivities) tryBatchApply(
 			} else {
 				batchReport.Error = errMsg
 			}
+		} else {
+			batchReport.CheckResult.Success = true
+			batchReport.CheckResult.Message = "Skipped"
 		}
 	}
 
@@ -915,9 +918,17 @@ func (da *DevActivities) checkAndStageOrRestoreFile(ctx context.Context, envCont
 	return checkResult, nil
 }
 
+// gitAdd stages an applied edit. Git-ignored paths (e.g. the .side/tmp scratch
+// directory) can't be staged and don't belong in review diffs, so skipping them
+// is not an error.
 func (da *DevActivities) gitAdd(envContainer env.EnvContainer, filePath string) error {
 	input := git.GitAddActivityInput{EnvContainer: envContainer, Path: filePath}
-	return da.Git.Add(context.Background(), input)
+	err := da.Git.Add(context.Background(), input)
+	if errors.Is(err, git.ErrPathIgnored) {
+		log.Debug().Str("filePath", filePath).Msg("skipped staging git-ignored file")
+		return nil
+	}
+	return err
 }
 
 func ApplyCreateEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {

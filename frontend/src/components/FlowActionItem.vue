@@ -20,7 +20,7 @@
       <h3>Params</h3>
       <JsonTree :data="flowAction.actionParams" />
       <h3>Result</h3>
-      <JsonTree :data="actionResult" />
+      <JsonTree v-if="actionResult !== null" :data="actionResult" />
       <pre v-if="unparsedActionResult">{{ unparsedActionResult }}</pre>
     </div>
   </div>
@@ -34,7 +34,7 @@ import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue'
 import RunTestsFlowAction from './RunTestsFlowAction.vue'
 import JsonTree from './JsonTree.vue'
 import CheckCriteriaFulfillmentFlowAction from './CheckCriteriaFulfillmentFlowAction.vue'
-import { parseCriteriaFulfillment } from '@/lib/criteriaFulfillment';
+import { parseCriteriaFulfillment, parseCriteriaExpansionCount } from '@/lib/criteriaFulfillment';
 import ApplyEditBlocksFlowAction, { type ApplyEditBlockResult } from './ApplyEditBlocksFlowAction.vue';
 import PlaintextResultFlowAction from './PlaintextResultFlowAction.vue';
 import ToolFlowAction from './ToolFlowAction.vue';
@@ -83,7 +83,6 @@ function toggle() {
   nextTick(() => {
     if (expand.value && container.value) {
       const scrollTo = container.value.scrollHeight > window.innerHeight - 100 ? 'start' : 'nearest';
-      console.log({scrollTo})
       container.value.scrollIntoView({ behavior: 'instant', block: scrollTo })
     } else if (!expand.value) {
       useEventBus('flow-view-collapse').emit()
@@ -290,7 +289,11 @@ const summary = computed<Summary | null>(() => {
       try {
         const criteriaFulfillment = parseCriteriaFulfillment(actionResult.value);
         if (criteriaFulfillment === null) {
-          return null;
+          const count = parseCriteriaExpansionCount(actionResult.value);
+          return count === null ? null : {
+            text: `View ${count} tool call${count === 1 ? '' : 's'}`,
+            emoji: '',
+          };
         }
         return {
           text: criteriaFulfillment.isFulfilled ? 'Yes' : 'No',
@@ -351,6 +354,14 @@ const summary = computed<Summary | null>(() => {
 
 <style scoped>
 .action-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 0.85em;
   margin-left: 0px;
   padding: 2px 5px;
@@ -402,6 +413,11 @@ h3 + p {
 }
 
 a h3 {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  min-width: 0;
+  white-space: nowrap;
   cursor: pointer;
   font-size: 1.0rem;
 }
