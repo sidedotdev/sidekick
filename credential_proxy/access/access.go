@@ -115,6 +115,8 @@ func (b *Binding) operation(ctx context.Context, data json.RawMessage) (any, err
 
 // Acquire reauthorizes every selection through the host service. Flow activation
 // owns lease reuse and recovery; this binding has no cache or renewal lifecycle.
+// Not caching is deliberate: per-command calls are a local unix-socket exchange
+// that reuses the flow's lease, so their cost is negligible.
 func (b *Binding) Acquire(actionCtx context.Context, names []string) (Result, error) {
 	if err := b.parent.Err(); err != nil {
 		return Result{}, err
