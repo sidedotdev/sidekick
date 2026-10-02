@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -254,4 +255,20 @@ func TestPrepareImageDataURLForLimits(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot be decoded for resizing")
 	})
+}
+
+func TestPrepareImageDataURLForLimits_WebP(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/blue-purple-pink.lossy.webp")
+	require.NoError(t, err)
+	dataURL := BuildDataURL("image/webp", raw)
+
+	_, mime, data, err := PrepareImageDataURLForLimits(dataURL, 1024*1024, 10)
+	require.NoError(t, err)
+	assert.Equal(t, "image/jpeg", mime)
+
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	require.NoError(t, err)
+	assert.Equal(t, "jpeg", format)
+	assert.LessOrEqual(t, max(cfg.Width, cfg.Height), 10)
 }

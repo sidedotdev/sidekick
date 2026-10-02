@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 )
 
 // ParseDataURL splits a data URL into its mime type and decoded raw bytes.
@@ -52,7 +53,7 @@ func BuildDataURL(mimeType string, raw []byte) string {
 }
 
 // decodeImage decodes raw bytes into an image.Image.
-// Supports PNG, JPEG, and GIF.
+// Supports PNG, JPEG, GIF, and WebP.
 func decodeImage(raw []byte) (image.Image, string, error) {
 	img, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
