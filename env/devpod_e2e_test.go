@@ -88,6 +88,7 @@ func TestDevPodIntegration(t *testing.T) {
 	if _, err := exec.LookPath("devpod"); err != nil {
 		t.Skip("devpod command not found in PATH")
 	}
+	t.Parallel()
 
 	// Key the cached workspace + built image by the fixture Dockerfile hash so
 	// repeated runs reuse them. The workspace is intentionally not deleted on

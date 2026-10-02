@@ -60,12 +60,13 @@ func TestModalNativeConnectionRecovery(t *testing.T) {
 				_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
 				return err
 			})
-			assert.Equal(t, 1, refreshes)
 			if recoverEndpoint {
 				require.NoError(t, err)
+				assert.Equal(t, 1, refreshes)
 				assert.Equal(t, 1, operations)
 			} else {
 				require.Error(t, err)
+				assert.Equal(t, maxModalRecoveryRounds, refreshes, "refreshing is bounded like RunCommand's recovery rounds")
 				assert.Zero(t, operations)
 			}
 		})

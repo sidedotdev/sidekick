@@ -1011,18 +1011,12 @@ func (r modalEndpointRefresh) restoreNotice(sandboxName string) string {
 		sandboxName, r.previousSandboxDescription(), r.snapshotDescription())
 }
 
-// refreshModalEndpoint re-resolves a sandbox's SSH tunnel endpoint after a
-// connection failure. If the sandbox no longer exists but the guard holds a
-// filesystem snapshot of it (taken by the idle watchdog), the sandbox is
-// recreated from that snapshot first.
-func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int, error) {
-	refresh, err := refreshModalEndpointDetailed(ctx, sandboxName)
-	return refresh.SSHHost, refresh.SSHPort, err
-}
-
-// refreshModalEndpointDetailed is refreshModalEndpoint reporting whether the
-// sandbox was restored from a snapshot; a seam so RunCommand tests can drive
-// the restore outcome without a Modal client.
+// refreshModalEndpointDetailed re-resolves a sandbox's SSH tunnel endpoint
+// after a connection failure, reporting whether the sandbox had to be restored
+// from a snapshot: if it no longer exists but the guard holds a filesystem
+// snapshot of it (taken by the idle watchdog), it is recreated from that
+// snapshot first. A package variable so tests can drive the restore outcome
+// without a Modal client.
 var refreshModalEndpointDetailed = func(ctx context.Context, sandboxName string) (modalEndpointRefresh, error) {
 	client, err := getModalClient()
 	if err != nil {

@@ -482,9 +482,13 @@ func (t *nativeSSHTransport) connConfig(ctx context.Context) (SSHConnConfig, err
 func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativeSSHConn, client *ssh.Client) error) error {
 	// The loop is bounded so that a shutdown storm cannot spin here: each pass
 	// either runs the operation or re-acquires an entry shutdown took away.
-	const maxAttempts = 4
+	// Connection recovery is itself bounded per operation (one key repair and
+	// a limited number of endpoint refreshes), and only ever wraps acquiring
+	// the connection, never the operation, so nothing is replayed after it may
+	// have run.
+	const maxAttempts = 6
 	opAttempts := 0
-	recoveryAttempted := false
+	var recovery sshTransportRecovery
 	var lastErr error
 	for range maxAttempts {
 		config, err := t.connConfig(ctx)
@@ -500,11 +504,13 @@ func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativ
 				continue
 			}
 			recoverer, ok := t.sshEnv.(sshTransportRecoverer)
-			if !ok || recoveryAttempted || ctx.Err() != nil {
+			if !ok || ctx.Err() != nil {
 				return err
 			}
-			recoveryAttempted = true
-			recovered, recoveryErr := recoverer.recoverSSHTransport(ctx, err)
+			if recovery == nil {
+				recovery = recoverer.newSSHTransportRecovery()
+			}
+			recovered, recoveryErr := recovery.recover(ctx, err)
 			if recoveryErr != nil {
 				return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
 			}

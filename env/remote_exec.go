@@ -176,21 +176,11 @@ func (ac *agentExecConn) beginOp(ctx context.Context, sshEnv SSHCapableEnv) (*ag
 	ac = ac.lockLive()
 	defer ac.mu.Unlock()
 	if ac.client == nil {
-		if err := ac.dialLocked(ctx, sshEnv); err != nil {
-			recoverer, ok := sshEnv.(sshTransportRecoverer)
-			if !ok {
-				return ac, nil, err
-			}
-			recovered, recoverErr := recoverer.recoverSSHTransport(ctx, err)
-			if recoverErr != nil {
-				return ac, nil, fmt.Errorf("%w (recover SSH transport: %v)", err, recoverErr)
-			}
-			if !recovered {
-				return ac, nil, err
-			}
-			if retryErr := ac.dialLocked(ctx, sshEnv); retryErr != nil {
-				return ac, nil, fmt.Errorf("%w (retry after recovering SSH transport: %v)", err, retryErr)
-			}
+		err := RunWithSSHTransportRecovery(ctx, sshEnv, func() error {
+			return ac.dialLocked(ctx, sshEnv)
+		})
+		if err != nil {
+			return ac, nil, err
 		}
 	}
 	ac.resetIdleTimerLocked()

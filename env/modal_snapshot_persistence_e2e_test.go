@@ -20,6 +20,7 @@ func TestModalStagedSnapshotPersistenceIntegration(t *testing.T) {
 	if common.IsActiveEnvNonLocal() {
 		t.Skip("Modal credentials are unavailable in non-local environments")
 	}
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 

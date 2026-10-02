@@ -1005,9 +1005,13 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 	t.Setenv("GIT_SSH_VARIANT", "ssh")
 	ctx := context.Background()
 
+	// The parent keeps the environment above in place until every subtest
+	// has finished, and each subtest works in its own repositories, so the
+	// scenarios can run concurrently.
 	for _, strategy := range []MergeStrategy{MergeStrategyMerge, MergeStrategySquash} {
 		for _, scenario := range []string{"clean", "dirty", "stash conflict", "ordinary conflict", "no host worktree", "backup failure"} {
 			t.Run(string(strategy)+"/"+scenario, func(t *testing.T) {
+				t.Parallel()
 				fixture := setupIddChildMergeFixture(t)
 				childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
 				require.NoError(t, err)

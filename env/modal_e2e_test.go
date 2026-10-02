@@ -32,6 +32,7 @@ func TestModalIntegration(t *testing.T) {
 	if common.IsActiveEnvNonLocal() {
 		t.Skip("skipping Modal e2e test; credentials are unavailable in non-local sidekick environments")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	if deadline, ok := t.Deadline(); ok {
 		var cancel context.CancelFunc
@@ -263,6 +264,7 @@ func TestModalActiveSnapshotIntegration(t *testing.T) {
 	if common.IsActiveEnvNonLocal() {
 		t.Skip("skipping Modal e2e test; credentials are unavailable in non-local sidekick environments")
 	}
+	t.Parallel()
 	testDeadline := time.Now().Add(5 * time.Minute)
 	if deadline, ok := t.Deadline(); ok && deadline.Before(testDeadline) {
 		testDeadline = deadline
@@ -398,6 +400,7 @@ func TestModalSnapshotVolumeRestoreIntegration(t *testing.T) {
 	if common.IsActiveEnvNonLocal() {
 		t.Skip("skipping Modal e2e test; credentials are unavailable in non-local sidekick environments")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	if deadline, ok := t.Deadline(); ok {
 		var cancel context.CancelFunc
