@@ -26,7 +26,7 @@ const (
 	anthropicDangerousBrowserAccessHeaderValue = "true"
 	// matches interactive-mode, print mode sends "(external, sdk-cli)" instead
 	// NOTE: the API rejects newer models (e.g. claude-fable-5-1) for versions < 2.1.251
-	anthropicClaudeCLIUserAgent                 = "claude-cli/2.1.258 (external, cli)"
+	anthropicClaudeCLIUserAgent                 = "claude-cli/2.1.280 (external, cli)"
 	anthropicCLIAppHeaderValue                  = "cli"
 	anthropicClaudeCodeBetaHeader               = "claude-code-20250219"
 	anthropicOAuthBetaHeader                    = "oauth-2025-04-20"
