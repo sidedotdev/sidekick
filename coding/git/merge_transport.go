@@ -122,10 +122,6 @@ func syncMergeRefOverSSH(ctx context.Context, sshArgs []string, workingDirectory
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
 	dest, opts := sshArgs[n-1], sshArgs[:n-1]
-	gitSSH := "ssh"
-	for _, arg := range opts {
-		gitSSH += " " + shellQuote(arg)
-	}
 	args := []string{"-C", localRepoDir}
 	if toHost {
 		args = append(args, "fetch", "--no-tags", "--no-write-fetch-head")
@@ -134,9 +130,9 @@ func syncMergeRefOverSSH(ctx context.Context, sshArgs []string, workingDirectory
 	}
 	args = append(args, dest+":"+workingDirectory, ref+":"+ref)
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH, "LC_ALL=C")
+	cmd.Env = append(os.Environ(), env.GitSSHEnv(opts)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git transfer merge ref %s (to host: %t): %w: %s", ref, toHost, err, out)
+		return fmt.Errorf("git transfer merge ref %s (to host: %t): %w: %s", ref, toHost, env.GitSSHFailure(err, out), out)
 	}
 	return nil
 }

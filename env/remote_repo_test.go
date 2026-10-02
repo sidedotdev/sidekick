@@ -814,6 +814,61 @@ func TestRunSSHScriptClassifiesSilentTransportFailure(t *testing.T) {
 		"classification must survive the wrapping callers add")
 }
 
+// TestFetchRemoteRefClassifiesSilentSSHTransportFailure reproduces a git fetch
+// whose ssh connection is dropped before the banner exchange: under
+// LogLevel=ERROR ssh prints nothing, and git reduces the failure to a generic
+// "Could not read from remote repository", which transport recovery must
+// still recognize.
+func TestFetchRemoteRefClassifiesSilentSSHTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	t.Cleanup(func() { listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	sshArgs := []string{
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=5",
+		"-p", strconv.Itoa(port),
+		"root@127.0.0.1",
+	}
+	err = syncFlowBranchToLocalOverSSH(context.Background(), sshArgs, "/root/repo", setupTestGitRepo(t), "side/branch")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Could not read from remote repository")
+	assert.True(t, isModalSSHTransportFailure(err.Error()),
+		"a silent ssh failure under git must trigger ssh transport recovery: %v", err)
+}
+
+// TestFetchRemoteRefDoesNotClassifyRemoteGitFailure guards the other side of
+// the boundary: the remote git failing after ssh connected is a real error,
+// not a transport failure worth an endpoint refresh.
+func TestFetchRemoteRefDoesNotClassifyRemoteGitFailure(t *testing.T) {
+	// Not parallel: installFakeSSH sets PATH.
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+	missingRepoDir := filepath.Join(t.TempDir(), "missing")
+	err := syncFlowBranchToLocalOverSSH(context.Background(), []string{"fake-host"}, missingRepoDir, setupTestGitRepo(t), "side/branch")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Could not read from remote repository")
+	assert.False(t, isModalSSHTransportFailure(err.Error()), "%v", err)
+}
+
 // TestSSHScriptFailureClassification pins the boundary between a remote
 // script failing (a real error the caller must surface) and ssh itself
 // failing (worth an endpoint refresh and retry).

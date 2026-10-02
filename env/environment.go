@@ -1432,6 +1432,9 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 		// Marker emitted by sshScriptTransportError: a one-off ssh session
 		// exited 255, which only ssh itself does, possibly with no stderr.
 		"transport failure before remote script ran",
+		// Marker emitted by gitSSHTransportError: git's ssh exited 255 before
+		// the remote git sent anything.
+		"transport failure before remote git responded",
 	} {
 		if strings.Contains(diagnostics, fragment) {
 			return true
