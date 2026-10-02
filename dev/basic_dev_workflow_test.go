@@ -130,6 +130,8 @@ func (s *AutoMergeApprovalTestSuite) setupMergeMocks() {
 		Return(coding.GenerateReviewDiffsResult{FullDiff: "diff content"}, nil).Maybe()
 	s.env.OnActivity(ga.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil).Maybe()
 	s.env.OnActivity(ga.CleanupWorktreeActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	var ima *DevAgentManagerActivities
+	s.env.OnActivity(ima.GetFlowTaskTitle, mock.Anything, mock.Anything).Return(GetFlowTaskTitleOutput{}, nil).Maybe()
 }
 
 func (s *AutoMergeApprovalTestSuite) mergeWorkflow(autoMerge bool, startBranch *string) func(ctx workflow.Context) (MergeApprovalResponse, error) {
@@ -200,10 +202,11 @@ func (s *AutoMergeApprovalTestSuite) TestAutoMergeMergesIntoConfiguredBranch() {
 // TestMergeCommitUsesTaskTitleGeneratedAfterFlowStart covers flows started
 // before their task title was generated: the commit must still use the title.
 func (s *AutoMergeApprovalTestSuite) TestMergeCommitUsesTaskTitleGeneratedAfterFlowStart() {
-	s.setupMergeMocks()
+	// Registered before the defaults so this title wins over their fallback.
 	var ima *DevAgentManagerActivities
 	s.env.OnActivity(ima.GetFlowTaskTitle, mock.Anything, mock.Anything).
 		Return(GetFlowTaskTitleOutput{Title: "Rename npm package"}, nil)
+	s.setupMergeMocks()
 
 	var commitMessage string
 	s.env.OnActivity(ga.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).

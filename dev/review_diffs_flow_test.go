@@ -181,6 +181,9 @@ func (h *reviewDiffsFlowHarness) registerMocks() {
 	h.env.OnActivity(srvActivities.GetFlow, mock.Anything, mock.Anything, mock.Anything).Return(domain.Flow{}, nil).Maybe()
 	h.env.OnActivity(srvActivities.PersistFlow, mock.Anything, mock.Anything).Return(nil).Maybe()
 
+	var ima *DevAgentManagerActivities
+	h.env.OnActivity(ima.GetFlowTaskTitle, mock.Anything, mock.Anything).Return(GetFlowTaskTitleOutput{}, nil).Maybe()
+
 	var meta *temporalmeta.TemporalMetaActivities
 	h.env.OnActivity(meta.FetchFlowActionActivities, mock.Anything, mock.Anything).
 		Return([]domain.TemporalActivityRef{}, nil).Maybe()
