@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import UserRequest from '../UserRequest.vue'
 import type { FlowAction } from '../../lib/models'
+import { TOOLTIP_OPEN_DELAY_MS } from '../../composables/useTooltipTrigger'
 
 // Mock PrimeVue Select component
 vi.mock('primevue/select', () => ({
@@ -391,16 +392,44 @@ describe('UserRequest', () => {
       expect(evalBlock.text()).not.toContain('Prefer .side/tmp over /tmp')
     })
 
-    it('explains a flagged item in a tooltip on hover', async () => {
-      mountComponent(createCommandApprovalFlowAction())
+    it('explains a flagged item in a tooltip after the hover delay', async () => {
+      vi.useFakeTimers()
+      try {
+        mountComponent(createCommandApprovalFlowAction())
 
-      await wrapper.find('.permission-evaluation .perm-flagged').trigger('mouseover')
-      await new Promise((resolve) => setTimeout(resolve, 0))
+        await wrapper.find('.permission-evaluation .perm-flagged').trigger('mouseover')
+        expect(document.body.querySelector('.perm-tooltip')).toBeNull()
+        await vi.advanceTimersByTimeAsync(TOOLTIP_OPEN_DELAY_MS)
 
-      const tooltip = document.body.querySelector('.perm-tooltip')
-      expect(tooltip?.textContent).toContain('Rule ^rm\\b (repo config) requires approval')
-      expect(tooltip?.textContent).toContain('rm is risky')
-      wrapper.unmount()
+        const tooltip = document.body.querySelector('.perm-tooltip')
+        expect(tooltip?.textContent).toContain('Rule ^rm\\b (repo config) requires approval')
+        expect(tooltip?.textContent).toContain('rm is risky')
+      } finally {
+        wrapper.unmount()
+        vi.runOnlyPendingTimers()
+        vi.useRealTimers()
+      }
+    })
+
+    it.each([
+      ['leaving the script', (w: VueWrapper) => w.find('.permission-evaluation .perm-script').trigger('mouseleave')],
+      ['moving onto a non-target segment', (w: VueWrapper) => w.find('.permission-evaluation .perm-line-code span:not([data-target-ids])').trigger('mouseover')],
+    ])('does not show the tooltip after %s just before the hover delay elapses', async (_, leaveTarget) => {
+      vi.useFakeTimers()
+      try {
+        mountComponent(createCommandApprovalFlowAction())
+
+        await wrapper.find('.permission-evaluation .perm-flagged').trigger('mouseover')
+        await vi.advanceTimersByTimeAsync(TOOLTIP_OPEN_DELAY_MS - 50)
+        await leaveTarget(wrapper)
+        await vi.advanceTimersByTimeAsync(TOOLTIP_OPEN_DELAY_MS * 2)
+
+        expect(document.body.querySelector('.perm-tooltip')).toBeNull()
+      } finally {
+        wrapper.unmount()
+        vi.runOnlyPendingTimers()
+        vi.useRealTimers()
+      }
     })
 
     it('reveals full details on expand', async () => {
