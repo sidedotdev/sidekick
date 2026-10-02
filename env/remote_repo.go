@@ -330,10 +330,6 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
-	gitSSH := "ssh"
-	for _, a := range opts {
-		gitSSH += " " + shellQuote(a)
-	}
 
 	// Prepare the remote repo: init when missing, and allow pushes to (and
 	// deletions of) checked-out branches; the working tree is realigned
@@ -364,9 +360,9 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 	pushArgs = append(pushArgs, dest+":"+containerRepoDir)
 	pushArgs = append(pushArgs, refspecs...)
 	cmd := exec.CommandContext(ctx, "git", pushArgs...)
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
+	cmd.Env = append(os.Environ(), GitSSHEnv(opts)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git push to %s: %w: %s", containerRepoDir, err, string(out))
+		return fmt.Errorf("git push to %s: %w: %s", containerRepoDir, GitSSHFailure(err, out), string(out))
 	}
 	pushDur := time.Since(pushStart)
 
@@ -488,18 +484,66 @@ func fetchRemoteRefToLocal(ctx context.Context, sshArgs []string, workingDirecto
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
-	gitSSH := "ssh"
-	for _, a := range opts {
-		gitSSH += " " + shellQuote(a)
-	}
 	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir,
 		"fetch", "--no-tags", "--no-write-fetch-head", dest+":"+workingDirectory, refspec)
 	// Tag conflict detection relies on Git's diagnostic text.
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH, "LC_ALL=C")
+	cmd.Env = append(os.Environ(), GitSSHEnv(opts)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch %s %s: %w: %s", workingDirectory, refspec, err, string(out))
+		return fmt.Errorf("git fetch %s %s: %w: %s", workingDirectory, refspec, GitSSHFailure(err, out), string(out))
 	}
 	return nil
+}
+
+// gitSSHExit255Marker is printed by the GitSSHEnv wrapper when ssh itself
+// exits 255, a status git otherwise hides behind its own exit 128.
+const gitSSHExit255Marker = "sidekick: ssh exited 255"
+
+// GitSSHEnv returns environment variables making git run ssh with opts for
+// its transport. Under LogLevel=ERROR, ssh can fail without printing anything,
+// so the wrapper marks ssh's own failure status on stderr for GitSSHFailure.
+// LC_ALL=C keeps git's diagnostics in the English wording callers match on.
+func GitSSHEnv(opts []string) []string {
+	ssh := "ssh"
+	for _, a := range opts {
+		ssh += " " + shellQuote(a)
+	}
+	// Git appends ` "$@"` to a GIT_SSH_COMMAND containing shell syntax, so the
+	// wrapper must be a function invoked last.
+	wrapper := "side_git_ssh() { " + ssh + ` "$@"; s=$?; if [ "$s" -eq 255 ]; then echo '` +
+		gitSSHExit255Marker + `' >&2; fi; return "$s"; }; side_git_ssh`
+	return []string{
+		"GIT_SSH_COMMAND=" + wrapper,
+		// The wrapper's name hides that it is OpenSSH from git's detection.
+		"GIT_SSH_VARIANT=ssh",
+		"LC_ALL=C",
+	}
+}
+
+// gitSSHTransportError reports a git-over-ssh command whose ssh connection
+// failed before the remote git sent anything, so it is safe to retry once the
+// transport is recovered.
+type gitSSHTransportError struct {
+	cause error
+}
+
+func (e *gitSSHTransportError) Error() string {
+	return "ssh transport failure before remote git responded: " + e.cause.Error()
+}
+
+func (e *gitSSHTransportError) Unwrap() error {
+	return e.cause
+}
+
+// GitSSHFailure classifies the error of a git command run with GitSSHEnv,
+// given its combined output. Git's initial-contact message alone is ambiguous
+// (the remote git may have failed instead), so it only denotes a transport
+// failure alongside ssh's own exit status.
+func GitSSHFailure(err error, output []byte) error {
+	text := string(output)
+	if strings.Contains(text, gitSSHExit255Marker) && strings.Contains(text, "Could not read from remote repository") {
+		return &gitSSHTransportError{cause: err}
+	}
+	return err
 }
 
 // syncBranchToRemoteOverSSH force-updates a single branch in a remote
@@ -527,10 +571,6 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
-	gitSSH := "ssh"
-	for _, a := range opts {
-		gitSSH += " " + shellQuote(a)
-	}
 
 	// Allow updating the branch even while it is checked out remotely; the
 	// affected worktree is realigned right after the push.
@@ -546,9 +586,9 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
 	pushStart := time.Now()
 	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir, "push", "--quiet", dest+":"+workingDirectory, refspec)
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
+	cmd.Env = append(os.Environ(), GitSSHEnv(opts)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git push branch %s to %s: %w: %s", branch, workingDirectory, err, string(out))
+		return fmt.Errorf("git push branch %s to %s: %w: %s", branch, workingDirectory, GitSSHFailure(err, out), string(out))
 	}
 
 	// The push only moved the ref, so realign any remote worktree that has the
