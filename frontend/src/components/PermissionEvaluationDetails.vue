@@ -545,7 +545,7 @@ onUnmounted(() => {
 /* Mirrors Tooltip.vue so tooltips look the same across the app. */
 .perm-tooltip {
   position: fixed;
-  z-index: 200;
+  z-index: var(--z-index-tooltip);
   max-width: min(24rem, calc(100vw - 1rem));
   padding: 0.375rem 0.625rem;
   background: var(--color-background-mute);
