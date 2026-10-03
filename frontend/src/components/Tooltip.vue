@@ -48,7 +48,7 @@ const trigger = useTooltipTrigger({
   gap: 0.5rem;
   font-size: 0.8125rem;
   color: var(--color-text);
-  z-index: 200;
+  z-index: var(--z-index-tooltip);
   pointer-events: none;
   box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.15);
 }
