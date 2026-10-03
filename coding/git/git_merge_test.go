@@ -1025,7 +1025,7 @@ func TestGitMergeActivityHostConflictReviewDiffExcludesBaseChanges(t *testing.T)
 		Env: childEnv, t: t, childRepoDir: fixture.childRepoDir, hostRepoDir: fixture.hostRepoDir,
 	}}}
 
-	result, err := testActivities().Merge(ctx, container, GitMergeParams{
+	result, err := GitMergeActivity(ctx, container, GitMergeParams{
 		SourceBranch: iddChildBranch, TargetBranch: iddBranch,
 	})
 	require.NoError(t, err)
@@ -1036,7 +1036,7 @@ func TestGitMergeActivityHostConflictReviewDiffExcludesBaseChanges(t *testing.T)
 	runGitCommandInTestRepo(t, fixture.childRepoDir, "add", "intent.md")
 	runGitCommandInTestRepo(t, fixture.childRepoDir, "commit", "--no-edit")
 
-	diff, err := testActivities().Diff(ctx, container, GitDiffParams{
+	diff, err := GitDiffActivity(ctx, container, GitDiffParams{
 		BaseRef: iddBranch, ThreeDotDiff: true, Staged: true,
 	})
 	require.NoError(t, err)
