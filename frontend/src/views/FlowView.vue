@@ -667,10 +667,6 @@ onMounted(async () => {
   if (initialFlowId) {
     await setupFlow(initialFlowId);
   }
-  
-  useEventBus('flow-view-collapse').on(() => {
-    shortContent.value = true;
-  });
 });
 
 watch(effectiveFlowId, async (newFlowId, oldFlowId) => {
@@ -699,17 +695,34 @@ const goToNextStep = async () => {
   }
 };
 
-let setShortContent = () => {
-  const innerSet = () => {
-    const contentHeight = scrollContainerRef.value?.scrollHeight || 0
-    const containerHeight = flowActionsContainerRef.value?.clientHeight || 0
-    shortContent.value = contentHeight <= containerHeight
-  }
-  // HACK: set it fast to get immediate feedback, but slower too when rendering takes longer
-  setTimeout(innerSet, 10)
-  setTimeout(innerSet, 50)
-  setTimeout(innerSet, 250)
+const contentFitsContainer = () => {
+  const contentHeight = scrollContainerRef.value?.scrollHeight || 0
+  const containerHeight = flowActionsContainerRef.value?.clientHeight || 0
+  return contentHeight <= containerHeight
 }
+
+// HACK: run fast to get immediate feedback, but slower too when rendering takes longer
+const afterRender = (fn: () => void) => {
+  setTimeout(fn, 10)
+  setTimeout(fn, 50)
+  setTimeout(fn, 250)
+}
+
+let setShortContent = () => {
+  afterRender(() => {
+    shortContent.value = contentFitsContainer()
+  })
+}
+
+// Flipping flex-direction while content overflows resets the scroll position,
+// so a collapse may only switch to the short layout once nothing can scroll.
+useEventBus('flow-view-collapse').on(() => {
+  afterRender(() => {
+    if (contentFitsContainer()) {
+      shortContent.value = true
+    }
+  })
+})
 
 const pauseFlow = async () => {
   if (!flow.value) return

@@ -1,4 +1,5 @@
 import { defineComponent } from 'vue'
+import { useEventBus } from '@vueuse/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { routeLocationKey } from 'vue-router'
@@ -307,6 +308,51 @@ describe('FlowView llm2 streaming events', () => {
     expect(findAction(wrapper, 'a').actionStatus).toBe('complete')
     expect(findAction(wrapper, 'a').streamingData).toBeUndefined()
 
+    wrapper.unmount()
+  })
+})
+describe('FlowView collapse layout', () => {
+  beforeEach(() => {
+    store.workspaceId = 'route-workspace'
+    vi.stubGlobal('WebSocket', MockWebSocket)
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  // Content-height measurements are retried for up to 250ms to allow rendering to finish.
+  const settleLayout = () => new Promise((resolve) => setTimeout(resolve, 300))
+
+  const setLayout = (wrapper: VueWrapper, { contentHeight, containerHeight }: { contentHeight: number, containerHeight: number }) => {
+    Object.defineProperty(wrapper.get('.scroll-container').element, 'scrollHeight', { configurable: true, value: contentHeight })
+    Object.defineProperty(wrapper.get('.flow-actions-container').element, 'clientHeight', { configurable: true, value: containerHeight })
+  }
+
+  it('keeps the scrollable layout when content still overflows after a collapse', async () => {
+    const { wrapper } = await mountFlow({ status: 'in_progress' })
+    setLayout(wrapper, { contentHeight: 5000, containerHeight: 800 })
+    await settleLayout()
+    expect(wrapper.get('.flow-actions-container').classes()).not.toContain('short-content')
+
+    useEventBus('flow-view-collapse').emit()
+    await settleLayout()
+
+    expect(wrapper.get('.flow-actions-container').classes()).not.toContain('short-content')
+    wrapper.unmount()
+  })
+
+  it('switches to the short layout when content fits after a collapse', async () => {
+    const { wrapper } = await mountFlow({ status: 'in_progress' })
+    setLayout(wrapper, { contentHeight: 5000, containerHeight: 800 })
+    await settleLayout()
+
+    setLayout(wrapper, { contentHeight: 600, containerHeight: 800 })
+    useEventBus('flow-view-collapse').emit()
+    await settleLayout()
+
+    expect(wrapper.get('.flow-actions-container').classes()).toContain('short-content')
     wrapper.unmount()
   })
 })
