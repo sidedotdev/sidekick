@@ -10,16 +10,16 @@ than every minor detail that will show up in the code itself.
 
 When writing generated intent, write it as a well-written tech spec. It must:
 
+- Reflect the user's actual intent: ground every statement in what the user
+  has said, and omit anything their words don't at least partly support.
 - State the problem clearly, when there is one.
 - State requirements (product and technical, as relevant).
 - State goals and constraints, as necessary.
 - Be declarative, concise and matter-of-fact.
-- Be live, not historical: describe only what the system is and must be. No
-  analysis, no description of previous state, and no alternatives considered.
-- Avoid over-specification: no low-level implementation details unless they are
-  crucial to communicate actual intent, i.e. the user's intent explicitly
-  hard-requires a specific implementation rather than being expressible in terms
-  of higher-level requirements, goals and constraints.
+- Be live, not historical: state only what is. No analysis, prior state or
+  alternatives.
+- Avoid over-specification: omit implementation details unless the user
+  explicitly requires a specific implementation.
 - Have intent links (see below).
 
 LLMs are NOT ALLOWED to author/edit intent/* files (exception: intent links in
