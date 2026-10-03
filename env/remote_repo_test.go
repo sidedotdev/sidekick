@@ -2,6 +2,7 @@ package env
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -424,6 +425,85 @@ exec sh -c "$cmd"
 
 	assert.Equal(t, localTip, gitRun(t, remoteRepoDir, "rev-parse", branchName))
 	assert.FileExists(t, filepath.Join(remoteWorktreePath, "local.txt"))
+}
+
+// TestSyncBranchToRemoteOverSSHRetriesMidStreamDisconnect reproduces a push
+// whose connection drops after the remote received the pack, which git reports
+// as an unexpected sideband disconnect. The forced push is replay-safe, so it
+// must be retried rather than failing the merge. Not parallel: PATH is set.
+func TestSyncBranchToRemoteOverSSHRetriesMidStreamDisconnect(t *testing.T) {
+	ctx := context.Background()
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+
+	gitRun := func(t *testing.T, repoDir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", repoDir}, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), string(out))
+		return strings.TrimSpace(string(out))
+	}
+
+	remoteRepoDir := setupTestGitRepo(t)
+	branchName := "devpod"
+	gitRun(t, remoteRepoDir, "branch", branchName)
+
+	localRepoDir := filepath.Join(t.TempDir(), "local")
+	cloneOut, err := exec.Command("git", "clone", "--branch", branchName, remoteRepoDir, localRepoDir).CombinedOutput()
+	require.NoError(t, err, "git clone failed: %s", string(cloneOut))
+	gitRun(t, localRepoDir, "config", "user.name", "Test User")
+	gitRun(t, localRepoDir, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(localRepoDir, "local.txt"), []byte("local content"), 0644))
+	gitRun(t, localRepoDir, "add", "local.txt")
+	gitRun(t, localRepoDir, "commit", "-m", "local commit")
+	localTip := gitRun(t, localRepoDir, "rev-parse", branchName)
+
+	// Kill receive-pack once, after the pack has arrived, to sever the
+	// connection mid-stream.
+	marker := filepath.Join(t.TempDir(), "disconnected")
+	hook := fmt.Sprintf("#!/bin/sh\nif [ ! -e %s ]; then touch %s; kill -9 $PPID; fi\n", shellQuote(marker), shellQuote(marker))
+	require.NoError(t, os.WriteFile(filepath.Join(remoteRepoDir, ".git", "hooks", "pre-receive"), []byte(hook), 0755))
+
+	err = syncBranchToRemoteOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, branchName)
+	require.NoError(t, err)
+
+	require.FileExists(t, marker, "test premise: the first push must have been disconnected")
+	assert.Equal(t, localTip, gitRun(t, remoteRepoDir, "rev-parse", branchName))
+}
+
+func TestGitTransferDisconnected(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		err    error
+		output string
+		want   bool
+	}{
+		{
+			name:   "sideband disconnect mid-push",
+			err:    errors.New("exit status 128"),
+			output: "send-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\n",
+			want:   true,
+		},
+		{
+			name:   "remote git failure",
+			err:    errors.New("exit status 128"),
+			output: "fatal: '/missing' does not appear to be a git repository\nfatal: Could not read from remote repository.\n",
+			want:   false,
+		},
+		{
+			name:   "pre-execution transport failure is left to transport recovery",
+			err:    &gitSSHTransportError{cause: errors.New("exit status 128")},
+			output: "the remote end hung up unexpectedly",
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, gitTransferDisconnected(tt.err, []byte(tt.output)))
+		})
+	}
 }
 
 func TestSyncRefspecs(t *testing.T) {

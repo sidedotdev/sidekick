@@ -3,7 +3,6 @@ package git
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -129,10 +128,8 @@ func syncMergeRefOverSSH(ctx context.Context, sshArgs []string, workingDirectory
 		args = append(args, "push", "--quiet")
 	}
 	args = append(args, dest+":"+workingDirectory, ref+":"+ref)
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = append(os.Environ(), env.GitSSHEnv(opts)...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git transfer merge ref %s (to host: %t): %w: %s", ref, toHost, env.GitSSHFailure(err, out), out)
+	if out, err := env.RunGitOverSSH(ctx, opts, args...); err != nil {
+		return fmt.Errorf("git transfer merge ref %s (to host: %t): %w: %s", ref, toHost, err, out)
 	}
 	return nil
 }
