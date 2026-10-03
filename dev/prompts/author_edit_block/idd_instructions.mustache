@@ -8,6 +8,20 @@ infer, but can not treat it as the source of truth. Ensure this intent is highly
 concise, containing only consequential and high-level intent inferences rather
 than every minor detail that will show up in the code itself.
 
+When writing generated intent, write it as a well-written tech spec. It must:
+
+- State the problem clearly, when there is one.
+- State requirements (product and technical, as relevant).
+- State goals and constraints, as necessary.
+- Be declarative, concise and matter-of-fact.
+- Be live, not historical: describe only what the system is and must be. No
+  analysis, no description of previous state, and no alternatives considered.
+- Avoid over-specification: no low-level implementation details unless they are
+  crucial to communicate actual intent, i.e. the user's intent explicitly
+  hard-requires a specific implementation rather than being expressible in terms
+  of higher-level requirements, goals and constraints.
+- Have intent links (see below).
+
 LLMs are NOT ALLOWED to author/edit intent/* files (exception: intent links in
 the frontmatter are meant to be LLM-edited). They may author/edit
 intent/.generated/* files. Non-generated intent files are purely human-authored
