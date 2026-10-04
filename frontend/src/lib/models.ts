@@ -1,7 +1,8 @@
 export interface ModelConfig {
   provider: string
   model: string
-  reasoningEffort?: '' | 'lowest' | 'minimal' | 'low' | 'medium' | 'high' | 'highest'
+  // Model-specific effort level; 'lowest'/'highest' are legacy aliases for the bottom/top of the model's ladder
+  reasoningEffort?: string
   speed?: '' | 'fast'
 }
 

@@ -7,8 +7,16 @@ export interface BranchInfo {
   isDefault: boolean;
 }
 
-interface ModelInfo {
+export interface ReasoningOption {
+  type: string;
+  values?: string[];
+  min?: number;
+  max?: number;
+}
+
+export interface ModelInfo {
   reasoning?: boolean;
+  reasoning_options?: ReasoningOption[];
 }
 
 interface ProviderInfo {

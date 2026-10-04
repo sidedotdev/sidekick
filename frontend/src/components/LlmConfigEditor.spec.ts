@@ -11,7 +11,7 @@ import { store } from '../lib/store'
 const mockModelsData = {
   openai: {
     models: {
-      'o1': { reasoning: true },
+      'o1': { reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }] },
       'gpt-4': { reasoning: false },
     }
   },
@@ -240,6 +240,30 @@ describe('LlmConfigEditor', () => {
     const emittedEvents = wrapper.emitted('update:modelValue')!
     const lastEmittedValue = emittedEvents[emittedEvents.length - 1][0] as LLMConfig
     expect(lastEmittedValue.defaults[0].reasoningEffort).toBe('high')
+  })
+
+  it('renders the model ladder as reasoning options and emits the selected level', async () => {
+    const llmConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'o1', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: llmConfig }
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.reasoning-select-inline').exists()).toBe(true)
+    })
+
+    const reasoningSelect = wrapper.find('.reasoning-select-inline')
+    const options = reasoningSelect.findAll('option')
+    expect(options.map((o) => o.attributes('value'))).toEqual(['', 'low', 'medium', 'high'])
+    expect(options.map((o) => o.text())).toEqual(['Default', 'Low', 'Medium', 'High'])
+
+    await reasoningSelect.setValue('medium')
+
+    const lastEmittedValue = wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig
+    expect(lastEmittedValue.defaults[0].reasoningEffort).toBe('medium')
   })
 
   it('hides reasoning selector when model does not support reasoning', async () => {
