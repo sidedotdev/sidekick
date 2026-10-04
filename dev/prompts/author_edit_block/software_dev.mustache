@@ -34,7 +34,7 @@ back, which ensures no false positives in command permissions.
 
 Prefer writing to real, non-scratch files in the repo where feasible. For
 genuine scratch files, use `.side/tmp` instead of system temp directories such
-as `/tmp` or `/var/tmp`. Sidekick creates `.side/tmp` and keeps it git-ignored.
+as `/tmp` or `/var/tmp`. `.side/tmp` already exists (don't create it) and is git-ignored.
 Files under `.side/tmp` need no cleanup, but any scratch files created elsewhere
 in-repo must be removed with `git rm` once you're done with them.
 
