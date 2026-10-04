@@ -73,7 +73,6 @@ export const useModelConfigPresets = (
     if (initialConfig) return 'add_preset'
 
     const lastSelection = loadLastPresetSelection(options.workspaceId)
-    if (lastSelection === 'add_preset') return lastSelection
     if (lastSelection === 'default' && options.useDefaultWhenMissing !== false) return lastSelection
     if (lastSelection && presets.value.some((preset) => preset.id === lastSelection)) return lastSelection
 
@@ -157,6 +156,11 @@ export const useModelConfigPresets = (
 
   const setSelectedPresetValue = (value: string) => {
     selectedPresetValue.value = value
+  }
+
+  // Only selections actually used to start a task are remembered, so browsing
+  // or abandoning edits never replaces the configuration restored next time.
+  const rememberSelection = (value: string) => {
     saveLastPresetSelection(value, options.workspaceId)
   }
 
@@ -212,7 +216,10 @@ export const useModelConfigPresets = (
   }
 
   const saveOrUpdatePreset = ({ finalSave = false }: { finalSave?: boolean } = {}): boolean => {
-    if (!isAddPresetMode.value && !currentPresetId.value) return true
+    if (!isAddPresetMode.value && !currentPresetId.value) {
+      if (finalSave) rememberSelection(selectedPresetValue.value)
+      return true
+    }
 
     if (!validateLlmConfig(llmConfig.value)) {
       if (finalSave) {
@@ -246,6 +253,7 @@ export const useModelConfigPresets = (
     // must be selected here for the next task to restore it.
     if (finalSave) {
       setSelectedPresetValue(currentPresetId.value!)
+      rememberSelection(currentPresetId.value!)
     }
     return true
   }
