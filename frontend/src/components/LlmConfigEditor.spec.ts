@@ -11,7 +11,7 @@ import { store } from '../lib/store'
 const mockModelsData = {
   openai: {
     models: {
-      'o1': { reasoning: true },
+      'o1': { reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }] },
       'gpt-4': { reasoning: false },
     }
   },
