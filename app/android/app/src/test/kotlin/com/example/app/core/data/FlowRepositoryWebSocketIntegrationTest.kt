@@ -128,6 +128,12 @@ private class ServerSideSocket : WebSocketListener() {
         opened.complete(webSocket)
     }
 
+    // OkHttp leaves the close reply to the listener; without it the server connection never
+    // finishes and MockWebServer's shutdown times out waiting for it.
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        webSocket.close(code, null)
+    }
+
     override fun onMessage(webSocket: WebSocket, text: String) {
         received.trySend(text)
     }

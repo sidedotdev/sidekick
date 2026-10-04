@@ -10,10 +10,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import okhttp3.CompressionInterceptor
+import okhttp3.Gzip
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.ResponseBody
+import okhttp3.zstd.Zstd
 import okio.Buffer
 import okio.ForwardingSource
 import okio.buffer
@@ -56,6 +59,8 @@ class SidekickRemoteSession internal constructor(
         get() = proxy.baseUrl
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
+        // Outermost so proxy failure diagnostics count wire bytes against the compressed Content-Length.
+        .addInterceptor(CompressionInterceptor(Zstd, Gzip))
         .addInterceptor(BearerTokenInterceptor(token))
         .addInterceptor(ProxyStateOnFailureInterceptor(proxy))
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -140,7 +145,7 @@ private class ProxyStateOnFailureInterceptor(private val proxy: IrohLoopbackProx
         } catch (error: IOException) {
             throw failure("before-response-headers", error)
         }
-        val body = response.body ?: return response
+        val body = response.body
         val source = object : ForwardingSource(body.source()) {
             private var received = 0L
 

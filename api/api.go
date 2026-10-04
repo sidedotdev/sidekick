@@ -240,6 +240,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	}
 
 	r.Use(CORSMiddleware(allowedOrigins))
+	r.Use(CompressionMiddleware())
 
 	// Store allowedOrigins in controller for websocket handlers
 	ctrl.allowedOrigins = allowedOrigins

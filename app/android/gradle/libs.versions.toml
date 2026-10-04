@@ -9,7 +9,7 @@ navigation = "2.9.6"
 dataStore = "1.2.0"
 iroh = "1.1.0"
 retrofit = "2.11.0"
-okhttp = "4.12.0"
+okhttp = "5.5.0"
 serialization = "1.9.0"
 zxingEmbedded = "4.3.0"
 desugarJdkLibs = "2.1.5"
@@ -40,6 +40,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 retrofit-kotlinx-serialization = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "retrofit" }
 okhttp-core = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-zstd = { group = "com.squareup.okhttp3", name = "okhttp-zstd", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
 zxing-android-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxingEmbedded" }
 android-desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
