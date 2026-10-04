@@ -239,12 +239,14 @@ export const useModelConfigPresets = (
         name: newPresetName.value.trim(),
         config: cloneConfig(llmConfig.value),
       })
-      if (finalSave) {
-        setSelectedPresetValue(newId)
-      }
     }
 
     savePresets(presets.value)
+    // The preset may already exist from an earlier auto-save or an edit, so it
+    // must be selected here for the next task to restore it.
+    if (finalSave) {
+      setSelectedPresetValue(currentPresetId.value!)
+    }
     return true
   }
 
