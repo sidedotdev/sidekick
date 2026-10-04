@@ -44,33 +44,6 @@ func (t *customHeadersTransport) RoundTrip(req *http.Request) (*http.Response, e
 	return t.base.RoundTrip(req)
 }
 
-func resolveGoogleReasoningEffort(effort, model string) string {
-	if effort != "lowest" && effort != "highest" {
-		return effort
-	}
-
-	// Google-compatible endpoints can proxy GPT models, such as LiteLLM routing OpenAI models through another provider API.
-	if resolvedEffort, ok := resolveGPTReasoningEffort(effort, model); ok {
-		return resolvedEffort
-	}
-
-	modelLower := strings.ToLower(model)
-	if !strings.Contains(modelLower, "gemini") {
-		if effort == "lowest" {
-			// Some Google models/configs separate enabling thinking from tuning its strength.
-			// Returning "" maps "lowest" to "default effort + no thinking" without guessing provider-specific values.
-			return ""
-		}
-		return "high"
-	}
-
-	if effort == "lowest" {
-		return "none"
-	}
-	// highest
-	return "max"
-}
-
 func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options
@@ -140,7 +113,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 		}
 	}
 
-	resolvedGoogleEffort := resolveGoogleReasoningEffort(options.ReasoningEffort, model)
+	resolvedGoogleEffort := resolveReasoningEffort(providerName, model, options.ReasoningEffort)
 	var actualReasoningEffort string
 	if isReasoningModel {
 		if resolvedGoogleEffort == "none" || resolvedGoogleEffort == "" {

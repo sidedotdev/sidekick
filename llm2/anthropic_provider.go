@@ -233,7 +233,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		params.System = systemMessages
 	}
 
-	resolvedEffort := resolveAnthropicReasoningEffort(options.ReasoningEffort, model)
+	resolvedEffort := resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 
 	// Anthropic does not allow thinking when tool_choice forces tool use
 	forcesTool := options.ToolChoice.Type == common.ToolChoiceTypeRequired || options.ToolChoice.Type == common.ToolChoiceTypeTool
@@ -294,8 +294,6 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			params.Thinking = anthropic.ThinkingConfigParamUnion{OfEnabled: &enabled}
 		}
 	}
-	// When resolvedEffort is "" and ReasoningEffort was "lowest", thinking is
-	// intentionally skipped (no params.Thinking set).
 
 	var streamOpts []option.RequestOption
 	if fastMode && strings.Contains(model, "opus-4-8") {
@@ -461,13 +459,6 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
 	}
 
-	// Report the resolved effort. When "lowest" resolved to "" (thinking off),
-	// report "none" so consumers know thinking was intentionally skipped.
-	reportedEffort := resolvedEffort
-	if options.ReasoningEffort == "lowest" && resolvedEffort == "" {
-		reportedEffort = "none"
-	}
-
 	authType = common.ProviderAuthTypeAPI
 	if useOAuth {
 		authType = common.ProviderAuthTypeSubscription
@@ -482,40 +473,10 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		StopSequence:    finalMessage.StopSequence,
 		Usage:           usage,
 		AuthType:        authType,
-		ReasoningEffort: reportedEffort,
+		ReasoningEffort: resolvedEffort,
 	}
 
 	return response, nil
-}
-
-func resolveAnthropicReasoningEffort(effort, model string) string {
-	if effort != "lowest" && effort != "highest" {
-		return effort
-	}
-
-	// Anthropic-compatible endpoints can proxy GPT models, such as LiteLLM routing OpenAI models through its Anthropic API.
-	if resolvedEffort, ok := resolveGPTReasoningEffort(effort, model); ok {
-		return resolvedEffort
-	}
-
-	modelLower := strings.ToLower(model)
-	if !strings.Contains(modelLower, "claude") {
-		if effort == "lowest" {
-			// Anthropic doesn't have a "none" effort; thinking is controlled separately from effort.
-			// Returning "" is a reliable way to map "lowest" to "default effort + no thinking".
-			return ""
-		}
-		return "high"
-	}
-
-	if effort == "lowest" {
-		return ""
-	}
-	// highest
-	if anthropicSupportsAdaptiveThinking(model) {
-		return "max"
-	}
-	return "high"
 }
 
 // anthropicSupportsAdaptiveThinking returns true for models where adaptive
