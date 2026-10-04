@@ -6,8 +6,9 @@ type ModelConfig struct {
 	// Provider here is the provider name, not the provider type (though they may be the same)
 	Provider string `koanf:"provider" json:"provider"`
 	Model    string `koanf:"model,omitempty" json:"model,omitempty"`
-	// Optional hint for models that support dedicated reasoning modes.
-	// Allowed values: lowest | minimal | low | medium | high | highest
+	// Optional provider/model-specific reasoning effort, normally one of the
+	// model's effort levels (see GetEffortLadder). The legacy aliases "lowest"
+	// and "highest" (and "max") resolve to the bottom/top of the model's ladder.
 	ReasoningEffort string `koanf:"reasoning_effort" json:"reasoningEffort,omitempty"`
 	// Optional maximum number of tokens to generate. Values <= 0 are treated as unset.
 	MaxTokens int `koanf:"max_tokens" json:"maxTokens,omitempty"`
