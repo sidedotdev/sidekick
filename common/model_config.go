@@ -8,7 +8,9 @@ type ModelConfig struct {
 	Model    string `koanf:"model,omitempty" json:"model,omitempty"`
 	// Optional provider/model-specific reasoning effort, normally one of the
 	// model's effort levels (see GetEffortLadder). The legacy aliases "lowest"
-	// and "highest" (and "max") resolve to the bottom/top of the model's ladder.
+	// and "highest" resolve to the bottom/top of the model's ladder. "max" is
+	// sent as-is unless the model's known ladder lacks it, in which case it
+	// resolves to the top of that ladder.
 	ReasoningEffort string `koanf:"reasoning_effort" json:"reasoningEffort,omitempty"`
 	// Optional maximum number of tokens to generate. Values <= 0 are treated as unset.
 	MaxTokens int `koanf:"max_tokens" json:"maxTokens,omitempty"`

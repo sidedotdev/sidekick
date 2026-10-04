@@ -143,7 +143,10 @@ func TestResolveReasoningEffort(t *testing.T) {
 		{"family gemini budget-only model", "google", "gemini-2.5-pro", "highest", "high"},
 		{"family unknown gemini", "google", "gemini-4-pro", "lowest", "minimal"},
 		{"family bedrock prefixed claude highest", "bedrock", "us.anthropic.claude-sonnet-5", "highest", "xhigh"},
-		{"family bedrock prefixed claude max", "bedrock", "eu.anthropic.claude-opus-5-v1", "max", "xhigh"},
+		{"family bedrock prefixed claude max passes through", "bedrock", "eu.anthropic.claude-opus-5-v1", "max", "max"},
+		{"family o4-mini max passes through", "openai", "o4-mini", "max", "max"},
+		{"family gpt-7 max passes through", "openai", "gpt-7", "max", "max"},
+		{"budget-only model max passes through", "anthropic", "claude-sonnet-4-5", "max", "max"},
 
 		{"default claude-opus-5 highest", "anthropic", "claude-opus-5", "highest", "max"},
 		{"default claude-opus-5 lowest", "anthropic", "claude-opus-5", "lowest", "low"},
