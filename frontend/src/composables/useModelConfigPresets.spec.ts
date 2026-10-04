@@ -152,6 +152,7 @@ describe('model configuration presets', () => {
 
     const firstEditor = useModelConfigPresets(undefined, { workspaceId: 'workspace-1' })
     firstEditor.handlePresetChange('zebra')
+    expect(firstEditor.saveOrUpdatePreset({ finalSave: true })).toBe(true)
 
     expect(localStorage.getItem('sidekick_last_model_preset_selection')).toBe('zebra')
     expect(localStorage.getItem('sidekick_last_model_preset_selection_workspace-1')).toBe('zebra')

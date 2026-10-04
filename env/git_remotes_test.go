@@ -31,19 +31,26 @@ exec sh -c "$cmd"
 	gitRun(t, localRepoDir, "remote", "add", "origin", "git@github.com:acme/widgets.git")
 	gitRun(t, localRepoDir, "remote", "add", "upstream", "https://gitlab.com/acme/widgets.git")
 
+	// The raw configured URL is read because `git remote get-url` applies the
+	// host's url.<base>.insteadOf rewrites.
+	remoteURL := func(t *testing.T, repoDir, remote string) string {
+		t.Helper()
+		return gitRun(t, repoDir, "config", "--get", "remote."+remote+".url")
+	}
+
 	remoteRepoDir := filepath.Join(t.TempDir(), "remote")
 	_, err := syncRepoOverSSH(ctx, []string{"fake-host"}, localRepoDir, remoteRepoDir, nil)
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://github.com/acme/widgets.git", gitRun(t, remoteRepoDir, "remote", "get-url", "origin"))
-	assert.Equal(t, "https://gitlab.com/acme/widgets.git", gitRun(t, remoteRepoDir, "remote", "get-url", "upstream"))
+	assert.Equal(t, "https://github.com/acme/widgets.git", remoteURL(t, remoteRepoDir, "origin"))
+	assert.Equal(t, "https://gitlab.com/acme/widgets.git", remoteURL(t, remoteRepoDir, "upstream"))
 
 	gitRun(t, localRepoDir, "remote", "set-url", "origin", "ssh://git@github.com/acme/renamed.git")
 	_, err = syncRepoOverSSH(ctx, []string{"fake-host"}, localRepoDir, remoteRepoDir, nil)
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://github.com/acme/renamed.git", gitRun(t, remoteRepoDir, "remote", "get-url", "origin"))
-	assert.Equal(t, "https://gitlab.com/acme/widgets.git", gitRun(t, remoteRepoDir, "remote", "get-url", "upstream"))
+	assert.Equal(t, "https://github.com/acme/renamed.git", remoteURL(t, remoteRepoDir, "origin"))
+	assert.Equal(t, "https://gitlab.com/acme/widgets.git", remoteURL(t, remoteRepoDir, "upstream"))
 }
 
 func TestSandboxRemoteURL(t *testing.T) {
