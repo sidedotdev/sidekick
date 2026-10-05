@@ -101,3 +101,12 @@ describe('Llm2ContentBlocks', () => {
     expect(wrapper.find('.llm2-unknown-block').exists()).toBe(false)
   })
 })
+
+describe('Llm2ContentBlocks markdown tables', () => {
+  it('wraps rendered tables in a scroll container', () => {
+    const wrapper = mount(Llm2ContentBlocks, {
+      props: { blocks: [{ type: 'text', text: '| a |\n| - |\n| 1 |' }] }
+    })
+    expect(wrapper.find('.llm2-text-block .markdown .markdown-table-scroll > table').exists()).toBe(true)
+  })
+})

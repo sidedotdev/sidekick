@@ -7,6 +7,7 @@
       <vue-markdown
         :source="flowAction.actionParams.requestContent"
         :options="{ breaks: true }"
+        :plugins="markdownPlugins"
         class="markdown"
       />
     </div>
@@ -147,6 +148,7 @@
       <vue-markdown
         :source="flowAction.actionParams.requestContent"
         :options="{ breaks: true }"
+        :plugins="markdownPlugins"
         class="markdown"
       />
     </div>
@@ -204,6 +206,7 @@ import type { FlowAction } from '../lib/models';
 import AutogrowTextarea from './AutogrowTextarea.vue';
 import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
+import { markdownPlugins } from '../lib/markdownTables'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';

@@ -47,6 +47,7 @@
                 <vue-markdown v-if="message.role === 'assistant' && getTextBlockText(block)"
                   :source="getTextBlockText(block)"
                   :options="{ breaks: true }"
+                  :plugins="markdownPlugins"
                   class="markdown"
                 />
                 <pre v-else v-text="getTextBlockText(block)"></pre>
@@ -81,7 +82,7 @@
 
               <!-- reasoning block -->
               <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
-                <vue-markdown v-if="block.reasoning?.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+                <vue-markdown v-if="block.reasoning?.text" :options="{ breaks: true }" :plugins="markdownPlugins" :source="block.reasoning.text" class="message-content markdown reasoning"/>
                 <p v-else class="reasoning-redacted"><em>Reasoning (content not available)</em></p>
                 <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
               </div>
@@ -116,6 +117,7 @@
             <vue-markdown v-if="message.role == 'assistant' && typeof message.content === 'string'"
               :source="message.content"
               :options="{ breaks: true }"
+              :plugins="markdownPlugins"
               class="markdown"
             />
             <pre v-else v-text="message.content"></pre>
@@ -143,7 +145,7 @@
         <!-- llm2 block events supersede the flat legacy deltas, which carry the same content -->
         <Llm2ContentBlocks v-if="streamingData.blocks" :blocks="streamingData.blocks" :tool-arguments="streamingData.toolArguments" :json-tree-depth="jsonTreeDepth" />
         <template v-else>
-          <vue-markdown v-if="streamingData.content" :options="{ breaks: true }" :source="streamingData.content" class="message-content markdown"/>
+          <vue-markdown v-if="streamingData.content" :options="{ breaks: true }" :plugins="markdownPlugins" :source="streamingData.content" class="message-content markdown"/>
           <div v-for="toolCall in streamingData.toolCalls" :key="toolCall.id" class="streaming-tool-call">
             <p v-if="toolCall.name" class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
             <vue-markdown :options="{ breaks: true }" :source="'```tool_call\n' + (toolCall.arguments || '') + '\n```'" class="tool-call-arguments"/>
@@ -170,7 +172,7 @@
 
         <!-- Legacy ChatCompletionChoice format -->
         <template v-else>
-          <vue-markdown v-if="typeof completion?.content === 'string' && completion.content" :options="{ breaks: true }" :source="completion.content" class="message-content markdown"/>
+          <vue-markdown v-if="typeof completion?.content === 'string' && completion.content" :options="{ breaks: true }" :plugins="markdownPlugins" :source="completion.content" class="message-content markdown"/>
           <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
             <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
             <JsonTree :deep="jsonTreeDepth" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
@@ -199,6 +201,7 @@ import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
 import ImagePreview from './ImagePreview.vue'
 import VueMarkdown from 'vue-markdown-render'
+import { markdownPlugins } from '../lib/markdownTables'
 import BuiltinToolBlock from './BuiltinToolBlock.vue'
 import Llm2ContentBlocks from './Llm2ContentBlocks.vue'
 
