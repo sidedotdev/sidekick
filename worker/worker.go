@@ -31,6 +31,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/persisted_ai"
 	"sidekick/poll_failures"
+	"sidekick/provider_auth"
 )
 
 // Worker wraps a Temporal worker with telemetry shutdown
@@ -196,6 +197,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.SnapshotEnvironmentActivity)
 	w.RegisterActivity(env.CreateRemoteWorktreeActivity)
 	w.RegisterActivity(&srv.Activities{Service: service})
+	w.RegisterActivity(&provider_auth.Activities{})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)
 	w.RegisterActivity(llmActivities)
 	w.RegisterActivity(pollFailuresActivities)

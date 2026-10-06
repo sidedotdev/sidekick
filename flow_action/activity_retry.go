@@ -58,6 +58,9 @@ func (ContinuePromptFailureHandler) HandleActivityFailure(eCtx ExecContext, acti
 
 // UserRetryOptions configures PerformWithUserRetryOptions.
 type UserRetryOptions struct {
+	// ResolveArgs, when set, rebuilds the activity arguments before every
+	// attempt so a retry picks up state changed by OnFailure.
+	ResolveArgs func() ([]interface{}, error)
 	// OnFailure handles activity failures; nil uses ContinuePromptFailureHandler.
 	OnFailure ActivityFailureHandler
 	// PropagateCancellation returns activity cancellation errors immediately
@@ -106,8 +109,16 @@ func performWithUserRetry(eCtx ExecContext, actionName string, opts UserRetryOpt
 	}
 
 	for {
+		attemptArgs := args
+		if opts.ResolveArgs != nil {
+			resolvedArgs, err := opts.ResolveArgs()
+			if err != nil {
+				return err
+			}
+			attemptArgs = resolvedArgs
+		}
 		// Execute the activity
-		activityFuture := workflow.ExecuteActivity(eCtx, activity, args...)
+		activityFuture := workflow.ExecuteActivity(eCtx, activity, attemptArgs...)
 		err := activityFuture.Get(eCtx, valuePtr)
 		if err == nil {
 			return nil
