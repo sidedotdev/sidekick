@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"sidekick/common"
 	"sidekick/llm"
-	"sidekick/openai_oauth"
+	"sidekick/provider_auth"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,22 +18,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type credentialsUpdatedCall struct {
+	provider   string
+	profileIds []string
+	method     provider_auth.Method
+}
+
 // stubCredentialPrompts wires deterministic stand-ins for the interactive
-// prompts and keyring access used by the auth flows, returning the map of
-// secrets written during the test.
+// prompts, keyring access and server notification used by the auth flows,
+// returning the map of secrets written during the test.
 func stubCredentialPrompts(t *testing.T, profiles []common.Profile, selectedProfileIds []string, existingSecrets map[string]string) map[string]string {
+	t.Helper()
+	written, _ := stubCredentialPromptsWithNotifications(t, profiles, selectedProfileIds, existingSecrets)
+	return written
+}
+
+func stubCredentialPromptsWithNotifications(t *testing.T, profiles []common.Profile, selectedProfileIds []string, existingSecrets map[string]string) (map[string]string, *[]credentialsUpdatedCall) {
 	t.Helper()
 
 	origLoad := loadDeclaredProfiles
 	origSelect := promptProfileSelection
-	origGet := keyringGet
-	origSet := keyringSet
+	origGet := provider_auth.KeyringGet
+	origSet := provider_auth.KeyringSet
+	origNotify := notifyCredentialsUpdated
 	t.Cleanup(func() {
 		loadDeclaredProfiles = origLoad
 		promptProfileSelection = origSelect
-		keyringGet = origGet
-		keyringSet = origSet
+		provider_auth.KeyringGet = origGet
+		provider_auth.KeyringSet = origSet
+		notifyCredentialsUpdated = origNotify
 	})
+
+	notifications := &[]credentialsUpdatedCall{}
+	notifyCredentialsUpdated = func(provider string, profileIds []string, method provider_auth.Method) {
+		*notifications = append(*notifications, credentialsUpdatedCall{provider: provider, profileIds: profileIds, method: method})
+	}
 
 	loadDeclaredProfiles = func() ([]common.Profile, error) {
 		return profiles, nil
@@ -41,14 +63,14 @@ func stubCredentialPrompts(t *testing.T, profiles []common.Profile, selectedProf
 		}
 		return selectedProfileIds, nil
 	}
-	keyringGet = newMockKeyringGet(existingSecrets)
+	provider_auth.KeyringGet = newMockKeyringGet(existingSecrets)
 
 	written := map[string]string{}
-	keyringSet = func(service, key, value string) error {
+	provider_auth.KeyringSet = func(service, key, value string) error {
 		written[key] = value
 		return nil
 	}
-	return written
+	return written, notifications
 }
 
 // stubDefaultProfileOnly keeps profile-dependent lookups from reading the
@@ -254,39 +276,82 @@ func TestHandleManualAPIKeyAuthStoresForProfilesMissingTheKey(t *testing.T) {
 	}, written, "keeping an existing key for one profile must not skip profiles without one")
 }
 
-func TestSaveOpenAIOAuthCredentialsPerProfile(t *testing.T) {
-	written := stubCredentialPrompts(t, nil, nil, nil)
-
-	creds := &openai_oauth.Credentials{
-		AccessToken:  "access",
-		RefreshToken: "refresh",
-		AccountID:    "account",
+func TestHandleManualAPIKeyAuthNotifiesServerOfSavedProfiles(t *testing.T) {
+	profiles := []common.Profile{
+		{Id: common.DefaultProfileId, Name: common.DefaultProfileName},
+		{Id: "work", Name: "Work"},
 	}
-	require.NoError(t, saveOpenAIOAuthCredentials(creds, []string{common.DefaultProfileId, "work"}))
 
-	credsJSON, err := json.Marshal(creds)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{
-		openai_oauth.SecretName:           string(credsJSON),
-		"WORK-" + openai_oauth.SecretName: string(credsJSON),
-	}, written)
+	tests := []struct {
+		name     string
+		existing map[string]string
+		expected []credentialsUpdatedCall
+	}{
+		{
+			name: "saved key notifies for its profiles",
+			expected: []credentialsUpdatedCall{
+				{provider: "openai", profileIds: []string{"work"}, method: provider_auth.MethodAPIKey},
+			},
+		},
+		{
+			name:     "kept existing key does not notify",
+			existing: map[string]string{"WORK-" + llm.OpenaiApiKeySecretName: "existing-work-key"},
+			expected: []credentialsUpdatedCall{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, notifications := stubCredentialPromptsWithNotifications(t, profiles, []string{"work"}, tc.existing)
+
+			origPromptAPIKey := promptAPIKey
+			origConfirm := confirmOverwriteExisting
+			t.Cleanup(func() {
+				promptAPIKey = origPromptAPIKey
+				confirmOverwriteExisting = origConfirm
+			})
+			promptAPIKey = func(providerName string) (string, error) { return "new-api-key", nil }
+			confirmOverwriteExisting = func(subject string, existingProfileIds []string) (bool, error) { return false, nil }
+
+			require.NoError(t, handleManualAPIKeyAuth("OpenAI", llm.OpenaiApiKeySecretName))
+			assert.Equal(t, tc.expected, *notifications)
+		})
+	}
 }
 
-func TestSaveAnthropicOAuthCredentialsPerProfile(t *testing.T) {
-	written := stubCredentialPrompts(t, nil, nil, nil)
+func TestPostCredentialUpdatedEvents(t *testing.T) {
+	t.Parallel()
 
-	creds := OAuthCredentials{
-		AccessToken:  "access",
-		RefreshToken: "refresh",
-		ExpiresAt:    123,
-	}
-	require.NoError(t, saveAnthropicOAuthCredentials(creds, []string{"work"}))
+	var mu sync.Mutex
+	var received []provider_auth.CredentialUpdatedEvent
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/v1/provider_auth/credential_updated", r.URL.Path)
+		var event provider_auth.CredentialUpdatedEvent
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&event))
+		mu.Lock()
+		received = append(received, event)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
 
-	credsJSON, err := json.Marshal(creds)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{
-		"WORK-" + AnthropicOAuthSecretName: string(credsJSON),
-	}, written)
+	postCredentialUpdatedEvents(server.URL, provider_auth.ProviderAnthropic, []string{common.DefaultProfileId, "work"}, provider_auth.MethodOAuthSubscription)
+
+	assert.Equal(t, []provider_auth.CredentialUpdatedEvent{
+		{Provider: "anthropic", ProfileId: common.DefaultProfileId, Method: provider_auth.MethodOAuthSubscription, AuthType: common.ProviderAuthTypeSubscription},
+		{Provider: "anthropic", ProfileId: "work", Method: provider_auth.MethodOAuthSubscription, AuthType: common.ProviderAuthTypeSubscription},
+	}, received)
+}
+
+func TestPostCredentialUpdatedEventsIgnoresUnreachableServer(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	unreachableURL := server.URL
+	server.Close()
+
+	postCredentialUpdatedEvents(unreachableURL, provider_auth.ProviderOpenAI, []string{"work"}, provider_auth.MethodAPIKey)
 }
 
 func TestConfiguredSecretExistsAcrossProfiles(t *testing.T) {
