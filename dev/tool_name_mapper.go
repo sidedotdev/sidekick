@@ -49,6 +49,10 @@ type ResolveToolNameMappingResult struct {
 func ResolveToolNameMappingActivity(_ context.Context, input ResolveToolNameMappingInput) (ResolveToolNameMappingResult, error) {
 	_, useOAuth, err := llm.GetAnthropicOAuthCredentials(input.Secrets.SecretManager)
 	if err != nil {
+		// Wrapping would hide the non-retryable type and details from Temporal.
+		if _, ok := common.AsProviderAuthError(err); ok {
+			return ResolveToolNameMappingResult{}, err
+		}
 		return ResolveToolNameMappingResult{}, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
 	}
 	return ResolveToolNameMappingResult{UseMapping: useOAuth}, nil
