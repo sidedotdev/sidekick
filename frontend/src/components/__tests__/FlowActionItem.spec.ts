@@ -172,4 +172,70 @@ describe('FlowActionItem', () => {
       body: JSON.stringify({ userResponse: {content: responseContent} }),
     })
   })
+
+  describe('run command approval', () => {
+    const runCommandApproval = (overrides: Partial<FlowAction> = {}): FlowAction => ({
+      ...flowAction,
+      actionType: 'user_request.approve.run_command',
+      isHumanAction: true,
+      actionParams: {
+        requestKind: 'approval',
+        requestContent: 'Allow running the following command?',
+        command: 'rm -rf build',
+      },
+      ...overrides,
+    })
+
+    it.each([
+      { approved: true, content: '', status: 'Approved' },
+      { approved: false, content: 'use make clean instead', status: 'Rejected' },
+    ])('collapses a completed request showing $status, and shows the original request on expand', async ({ approved, content, status }) => {
+      const wrapper = mount(FlowActionItem, {
+        props: {
+          flowAction: runCommandApproval({
+            actionStatus: 'complete',
+            actionResult: JSON.stringify({ Approved: approved, Content: content }),
+          }),
+        },
+      })
+
+      expect(wrapper.classes()).not.toContain('expanded-action')
+      expect(wrapper.find('.action-summary').text()).toContain(status)
+      expect(wrapper.text()).not.toContain('rm -rf build')
+
+      await wrapper.find('a').trigger('click')
+
+      expect(wrapper.classes()).toContain('expanded-action')
+      expect(wrapper.text()).toContain('Allow running the following command?')
+      expect(wrapper.find('pre').text()).toBe('rm -rf build')
+      if (content) {
+        expect(wrapper.text()).toContain(content)
+      }
+    })
+
+    it('stays expanded while pending and collapses once responded to', async () => {
+      const pending = runCommandApproval({ actionStatus: 'pending' })
+      const wrapper = mount(FlowActionItem, { props: { flowAction: pending } })
+
+      expect(wrapper.classes()).toContain('expanded-action')
+      await wrapper.find('a').trigger('click')
+      expect(wrapper.classes()).toContain('expanded-action')
+
+      await wrapper.setProps({
+        flowAction: {
+          ...pending,
+          actionStatus: 'complete',
+          actionResult: JSON.stringify({ Approved: false, Content: 'not now' }),
+        },
+      })
+
+      expect(wrapper.classes()).not.toContain('expanded-action')
+      expect(wrapper.find('.action-summary').text()).toContain('Rejected')
+
+      await wrapper.find('a').trigger('click')
+      expect(wrapper.classes()).toContain('expanded-action')
+      expect(wrapper.text()).toContain('rm -rf build')
+      expect(wrapper.text()).toContain('not now')
+    })
+  })
 })
