@@ -138,8 +138,7 @@
       </button>
     </div>
   </form>
-  <!-- TODO move approved/rejected to FlowActionItem summary. Only show content here -->
-  <div v-if="expand && !isPending && (!flowAction.actionParams.command || !parsedActionResult?.Approved)">
+  <div v-if="expand && !isPending">
     <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />

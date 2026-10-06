@@ -27,7 +27,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue';
+import { ref, computed, nextTick, watch } from 'vue';
 import type { FlowAction } from '../lib/models';
 import UserRequest from './UserRequest.vue'
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue'
@@ -64,14 +64,27 @@ const props = defineProps({
   },
 });
 
+// Responded-to command approvals are noise in the flow, so they only stay
+// expanded while awaiting a response.
+const collapsesWhenResponded = computed(() => props.flowAction.actionType === 'user_request.approve.run_command');
+const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+
 const disableToggle = ref(false);
 const expand = ref(props.defaultExpanded);
 if (props.flowAction.isHumanAction) {
-  expand.value = true;
-  if (props.flowAction.actionStatus === 'pending') {
-    disableToggle.value = true;
-  }
+  expand.value = isPending.value || !collapsesWhenResponded.value;
+  disableToggle.value = isPending.value;
 }
+
+watch(isPending, (pending, wasPending) => {
+  if (!props.flowAction.isHumanAction || pending || !wasPending) {
+    return
+  }
+  disableToggle.value = false;
+  if (collapsesWhenResponded.value) {
+    expand.value = false;
+  }
+})
 
 const container = ref<HTMLDivElement | null>(null)
 const actionComponentRef = ref<{ summary?: { text: string, emoji: string } | null } | null>(null)
@@ -324,7 +337,8 @@ const summary = computed<Summary | null>(() => {
       }
     }
 
-    case 'user_request.approve.merge': {
+    case 'user_request.approve.merge':
+    case 'user_request.approve.run_command': {
       if (props.flowAction.actionStatus !== 'complete') {
         return null;
       }
