@@ -134,7 +134,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 			}
 		}
 	}
-	envVars := buildGitEnvVars(committerName, committerEmail)
+	envVars := BuildGitEnvVars(committerName, committerEmail)
 
 	repoDir := envContainer.Env.GetWorkingDirectory()
 	if repoDir == "" {
