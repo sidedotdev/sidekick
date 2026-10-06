@@ -225,6 +225,7 @@ require (
 	github.com/charmbracelet/lipgloss v0.13.0
 	github.com/cloudflare/circl v1.3.7 // indirect
 	github.com/coreos/go-oidc/v3 v3.11.0 // indirect
+	github.com/creack/pty v1.1.24
 	github.com/cyphar/filepath-securejoin v0.3.5 // indirect
 	github.com/danieljoos/wincred v1.2.0 // indirect
 	github.com/danwakefield/fnmatch v0.0.0-20160403171240-cbb64ac3d964 // indirect
