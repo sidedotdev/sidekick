@@ -2,6 +2,7 @@ package persisted_ai
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -1168,4 +1169,107 @@ func TestManageLlm2ChatHistory_IntentStartPairs(t *testing.T) {
 	got, err := (&ChatHistoryActivities{}).ManageLlm2ChatHistory(messages, 1, common.ModelConfig{})
 	require.NoError(t, err)
 	require.Equal(t, expected, got)
+}
+
+func TestManageLlm2ChatHistoryWithPolicy_TriggerBoundary(t *testing.T) {
+	t.Parallel()
+	first := textMsgWithCtx(llm2.RoleUser, "instructions", ContextTypeInitialInstructions)
+	orphan := toolUseMsg("orphan", "search", "{}")
+	old := textMsg(llm2.RoleAssistant, strings.Repeat("o", 100))
+	last := textMsg(llm2.RoleUser, "latest")
+	messages := []llm2.Message{first, orphan, old, last}
+	total := MeasureLlm2Messages("", messages)
+	keep := MeasureLlm2Messages("", []llm2.Message{first, last})
+
+	cases := []struct {
+		name    string
+		trigger int
+		want    []llm2.Message
+	}{
+		// Below the trigger only orphaned tool calls are repaired.
+		{"below trigger", total + 1, []llm2.Message{first, old, last}},
+		// Reaching the trigger drops everything the keep budget can't hold.
+		{"at trigger", total, []llm2.Message{first, last}},
+		{"zero trigger", 0, []llm2.Message{first, last}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{KeepLength: keep, TruncationTrigger: tc.trigger}, common.ModelConfig{})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestManageLlm2ChatHistoryWithPolicy_MinRecentTurns(t *testing.T) {
+	t.Parallel()
+	first := textMsgWithCtx(llm2.RoleUser, "instructions", ContextTypeInitialInstructions)
+	oldTurn := []llm2.Message{
+		toolUseMsg("old", "search", strings.Repeat("o", 2000)),
+		toolResultMsg("old", "search", strings.Repeat("o", 2000)),
+	}
+	// The second-last turn issues parallel tool calls answered across two
+	// user messages; all of them belong to that turn.
+	parallel := toolUseMsg("p1", "read_file", strings.Repeat("p", 2000))
+	parallel.Content = append(parallel.Content, toolUseMsg("p2", "read_file", strings.Repeat("q", 2000)).Content...)
+	turnTwo := []llm2.Message{
+		parallel,
+		toolResultMsg("p1", "read_file", strings.Repeat("r", 2000)),
+		toolResultMsg("p2", "read_file", strings.Repeat("s", 2000)),
+	}
+	// The pending turn: assistant tool call and its result, no reply yet.
+	turnOne := []llm2.Message{
+		toolUseMsg("latest", "run_tests", strings.Repeat("t", 2000)),
+		toolResultMsg("latest", "run_tests", strings.Repeat("u", 2000)),
+	}
+	messages := []llm2.Message{first}
+	messages = append(messages, oldTurn...)
+	messages = append(messages, turnTwo...)
+	messages = append(messages, turnOne...)
+
+	cases := []struct {
+		name  string
+		turns int
+		want  []llm2.Message
+	}{
+		{"no floor keeps only the mandatory tail", 0, append([]llm2.Message{first}, turnOne...)},
+		{"one turn is the pending turn", 1, append([]llm2.Message{first}, turnOne...)},
+		{"two turns include parallel results", 2, append(append([]llm2.Message{first}, turnTwo...), turnOne...)},
+		{"more turns than exist keeps everything", 5, messages},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{
+				KeepLength: 0, TruncationTrigger: 0, MinRecentTurns: tc.turns,
+			}, common.ModelConfig{})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestManageLlm2ChatHistoryWithPolicy_DoesNotMutateInput(t *testing.T) {
+	t.Parallel()
+	modelConfig := common.ModelConfig{Provider: "anthropic", Model: "claude-opus-5-5"}
+	threshold := common.MaxCharsForModel(modelConfig.Provider, modelConfig.Model) / 4
+	require.Greater(t, threshold, 0)
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "instructions", ContextTypeInitialInstructions),
+		toolUseMsg("orphan", "search", "{}"),
+		toolUseMsg("big", "read_file", "{}"),
+		toolResultMsg("big", "read_file", strings.Repeat("x", threshold+1)),
+	}
+	before, err := json.Marshal(messages)
+	require.NoError(t, err)
+
+	got, err := ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{KeepLength: 1, TruncationTrigger: 1}, modelConfig)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Contains(t, got[2].Content[0].ToolResult.TextContent(), "truncated", "oversized retained result is truncated")
+
+	after, err := json.Marshal(messages)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(before), string(after))
 }
