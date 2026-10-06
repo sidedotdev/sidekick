@@ -201,8 +201,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, inject } from 'vue';
 import type { FlowAction } from '../lib/models';
+import { USER_REQUEST_SHORTCUT_SUBMITTED_KEY } from '../lib/userRequestShortcut';
 import AutogrowTextarea from './AutogrowTextarea.vue';
 import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
@@ -353,14 +354,14 @@ onMounted(() => {
   }
 
   if (isPending.value) {
-    registerGlobalShortcut(props.flowAction.id, props.flowAction.created, () => {
+    registerGlobalShortcut(props.flowAction.id, props.flowAction.created, (event) => {
       const requestKind = props.flowAction.actionParams.requestKind
       if (requestKind === 'free_form' && responseContent.value.length > 0) {
-        submitAndRetainFocus(true)
+        submitViaShortcut(true, event)
       } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
-        submitAndRetainFocus(!hasResponseText.value)
+        submitViaShortcut(!hasResponseText.value, event)
       } else if (requestKind === 'continue') {
-        submitAndRetainFocus(true)
+        submitViaShortcut(true, event)
       }
     })
 
@@ -402,15 +403,15 @@ const handleKeyDown = (event: KeyboardEvent) => {
     if (requestKind === 'free_form' && responseContent.value.length > 0) {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(true)
+      submitViaShortcut(true, event)
     } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(!hasResponseText.value)
+      submitViaShortcut(!hasResponseText.value, event)
     } else if (requestKind === 'continue') {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(true)
+      submitViaShortcut(true, event)
     }
   }
 }
@@ -418,13 +419,27 @@ const handleKeyDown = (event: KeyboardEvent) => {
 // When a keyboard shortcut submits the response, the action collapses and the
 // form unmounts, dropping focus. Move focus to the nearest subflow heading so
 // subsequent keyboard events keep bubbling to the flow view.
-const submitAndRetainFocus = async (approved: boolean) => {
+const submitAndRetainFocus = async (approved: boolean): Promise<boolean> => {
   const heading = formRef.value
     ?.closest('.subflow-container')
     ?.querySelector<HTMLElement>('.subflow-name-container')
   const result = await submitUserResponse(approved)
   if (result !== false) {
     heading?.focus()
+  }
+  return result === true
+}
+
+const onShortcutSubmitted = inject(USER_REQUEST_SHORTCUT_SUBMITTED_KEY, null)
+
+// Holding Shift opts out of any navigation the flow view performs after a
+// shortcut submission.
+const submitViaShortcut = async (approved: boolean, event: KeyboardEvent) => {
+  const allowNavigation = !event.shiftKey
+  const flowAction = props.flowAction
+  const submitted = await submitAndRetainFocus(approved)
+  if (submitted && allowNavigation) {
+    onShortcutSubmitted?.(flowAction)
   }
 }
 

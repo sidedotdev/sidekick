@@ -11,6 +11,7 @@ import ArchiveIcon from './components/icons/ArchiveIcon.vue'
 import ProjectsIcon from './components/icons/ProjectsIcon.vue'
 import PlusIcon from './components/icons/PlusIcon.vue'
 import SmartphoneIcon from './components/icons/SmartphoneIcon.vue'
+import SlidersIcon from './components/icons/SlidersIcon.vue'
 import ShortcutTooltip from './components/ShortcutTooltip.vue'
 import FuzzySelect from './components/FuzzySelect.vue'
 
@@ -110,7 +111,7 @@ onMounted(async () => {
   }
 })
 
-const kanbanAndSettingsRoutes = new Set(['kanban', 'workspace'])
+const kanbanAndSettingsRoutes = new Set(['kanban', 'workspace', 'settings'])
 
 const selectedWorkspace = () => {
   console.log('selectedWorkspace', store.workspaceId)
@@ -162,6 +163,9 @@ onUnmounted(() => {
         </ShortcutTooltip>
         <ShortcutTooltip label="Remote Control">
           <RouterLink to="/remote-control" class="nav-icon-link" aria-label="Remote Control"><SmartphoneIcon /></RouterLink>
+        </ShortcutTooltip>
+        <ShortcutTooltip v-if="mode === 'development'" label="Local Settings">
+          <RouterLink to="/settings" class="nav-icon-link" aria-label="Local Settings"><SlidersIcon /></RouterLink>
         </ShortcutTooltip>
       </nav>
     </div>

@@ -75,6 +75,7 @@
         v-show="isGroupExpanded(project.id)"
         :tasks="tasksByProjectId[project.id] ?? []"
         :show-headings="false"
+        :highlighted-task-id="highlightedTaskId"
         @add-task="(agentType: AgentType) => addTask(agentType, project.id)"
         @archive-finished="confirmArchiveFinished(project)"
         @refresh="refresh"
@@ -117,6 +118,7 @@
         :tasks="unassignedTasks"
         :new-task-shortcut-label="newTaskShortcutLabel"
         :show-headings="false"
+        :highlighted-task-id="highlightedTaskId"
         @add-task="(agentType: AgentType) => addTask(agentType)"
         @archive-finished="confirmArchiveFinished()"
         @refresh="refresh"
@@ -130,6 +132,7 @@
       :tasks="unassignedTasks"
       :new-task-shortcut-label="newTaskShortcutLabel"
       :show-headings="false"
+      :highlighted-task-id="highlightedTaskId"
       @add-task="(agentType: AgentType) => addTask(agentType)"
       @archive-finished="confirmArchiveFinished()"
       @refresh="refresh"
@@ -150,6 +153,23 @@ import TaskModal from './TaskModal.vue'
 import { store } from '../lib/store'
 import { isInteractiveElement } from '../lib/dom'
 import { viewCache } from '../lib/viewCache'
+import {
+  getKanbanKeyBindings,
+  isKanbanKeyboardControlEnabled,
+  KANBAN_DIRECTIONS,
+  KANBAN_NEW_TASK_SHORTCUT_KEY,
+} from '../lib/localSettings'
+import {
+  buildBoardGroup,
+  defaultBoardPosition,
+  findTaskPosition,
+  moveBoardPosition,
+  taskAtPosition,
+  type BoardDirection,
+  type BoardGroup,
+  type BoardPosition,
+} from '../lib/kanbanNavigation'
+import { openTaskFlow } from '../lib/taskNavigation'
 
 const props = defineProps<{
   tasks: FullTask[],
@@ -418,7 +438,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
   const isSearchShortcut = modKey && event.key === 'f'
   const hasAnyModifier = event.metaKey || event.ctrlKey || event.altKey
-  const isNewTaskShortcut = !hasAnyModifier && (event.key === 't' || event.key === 'T')
+  const isNewTaskShortcut = !hasAnyModifier && event.key.toLowerCase() === KANBAN_NEW_TASK_SHORTCUT_KEY
   
   if (!isSearchShortcut && !isNewTaskShortcut) {
     return
@@ -454,14 +474,94 @@ const clearSearch = () => {
   isSearchVisible.value = false
 }
 
+const keyboardControlEnabled = computed(() => isKanbanKeyboardControlEnabled())
+
+// Mirrors the displayed board: expanded groups in display order, each with
+// its columns sorted as rendered
+const visibleBoardGroups = computed<BoardGroup[]>(() => {
+  if (!keyboardControlEnabled.value) return []
+  if (projects.value.length === 0) {
+    return [buildBoardGroup(EVERYTHING_ELSE_KEY, unassignedTasks.value)]
+  }
+  return [
+    ...projects.value.map(project => ({ key: project.id, tasks: tasksByProjectId.value[project.id] ?? [] })),
+    { key: EVERYTHING_ELSE_KEY, tasks: unassignedTasks.value },
+  ]
+    .filter(group => isGroupExpanded(group.key))
+    .map(group => buildBoardGroup(group.key, group.tasks))
+})
+
+// Until the user moves the highlight, it stays on the top-left card as tasks
+// change; afterwards it follows the chosen task while that task is visible.
+const steeredTaskId = ref<string | null>(null)
+
+const highlightedPosition = computed<BoardPosition | null>(() => {
+  const groups = visibleBoardGroups.value
+  const steered = steeredTaskId.value ? findTaskPosition(groups, steeredTaskId.value) : null
+  return steered ?? defaultBoardPosition(groups)
+})
+
+const highlightedTask = computed<FullTask | null>(() =>
+  highlightedPosition.value ? taskAtPosition(visibleBoardGroups.value, highlightedPosition.value) ?? null : null,
+)
+
+const highlightedTaskId = computed(() => highlightedTask.value?.id ?? null)
+
+const ARROW_KEY_DIRECTIONS: Record<string, BoardDirection> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+}
+
+const directionForKey = (key: string): BoardDirection | null => {
+  const arrowDirection = ARROW_KEY_DIRECTIONS[key]
+  if (arrowDirection) return arrowDirection
+  const bindings = getKanbanKeyBindings()
+  const lowered = key.toLowerCase()
+  return KANBAN_DIRECTIONS.find(direction => bindings[direction].toLowerCase() === lowered) ?? null
+}
+
+const isTaskModalOpen = () => isModalOpen.value || editingTask.value !== null || copyingTask.value !== null
+
+const handleKeyboardControl = (event: KeyboardEvent) => {
+  if (!keyboardControlEnabled.value) return
+  if (event.metaKey || event.ctrlKey || event.altKey) return
+  const target = event.target instanceof HTMLElement ? event.target : null
+  if (isInteractiveElement(target) || isTaskModalOpen()) return
+
+  const position = highlightedPosition.value
+  const task = highlightedTask.value
+  if (!position || !task) return
+
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    if (!openTaskFlow(task)) {
+      openEditModal(task)
+    }
+    return
+  }
+
+  const direction = directionForKey(event.key)
+  if (!direction) return
+  event.preventDefault()
+  const next = moveBoardPosition(visibleBoardGroups.value, position, direction)
+  const nextTask = next ? taskAtPosition(visibleBoardGroups.value, next) : undefined
+  if (nextTask) {
+    steeredTaskId.value = nextTask.id
+  }
+}
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('keydown', handleEscape)
+  window.addEventListener('keydown', handleKeyboardControl)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('keydown', handleEscape)
+  window.removeEventListener('keydown', handleKeyboardControl)
   if (debounceTimeout) {
     clearTimeout(debounceTimeout)
   }
