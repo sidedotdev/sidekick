@@ -1,4 +1,4 @@
-type ShortcutHandler = () => void
+type ShortcutHandler = (event: KeyboardEvent) => void
 
 interface RegisteredHandler {
   created: Date | string
@@ -26,7 +26,7 @@ function onGlobalKeyDown(event: KeyboardEvent) {
 
   if (latest) {
     event.preventDefault()
-    latest.handler()
+    latest.handler(event)
   }
 }
 

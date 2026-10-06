@@ -12,6 +12,7 @@
       </h2>
       <VirtualTaskList
         :tasks="groupedTasks[agentType] ?? []"
+        :highlighted-task-id="highlightedTaskId"
         draggable
         @deleted="emit('refresh')"
         @canceled="emit('refresh')"
@@ -35,6 +36,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { FullTask, AgentType, Task } from '../lib/models'
+import { groupTasksByAgentType } from '../lib/kanbanNavigation'
 import VirtualTaskList from './VirtualTaskList.vue'
 import ShortcutHint from './ShortcutHint.vue'
 
@@ -45,8 +47,10 @@ const props = withDefaults(defineProps<{
   // groups), the per-column headings are omitted and the columns lose their
   // boxed styling; the add-task buttons remain visible in each column
   showHeadings?: boolean
+  highlightedTaskId?: string | null
 }>(), {
   showHeadings: true,
+  highlightedTaskId: null,
 })
 
 const emit = defineEmits<{
@@ -64,26 +68,7 @@ const columnNames = {
   none: 'Finished',
 }
 
-const groupedTasks = computed(() => {
-  const grouped = props.tasks.reduce((acc, task) => {
-    if (!acc[task.agentType]) {
-      acc[task.agentType] = [];
-    }
-    acc[task.agentType].push(task);
-    return acc;
-  }, {} as Record<AgentType, FullTask[]>);
-
-  for (const agentType in grouped) {
-    grouped[agentType as AgentType].sort((a: FullTask, b: FullTask) => {
-      if (b.updated === a.updated) {
-        return b.id > a.id ? 1 : -1;
-      }
-      return b.updated > a.updated ? 1 : -1;
-    });
-  }
-
-  return grouped;
-})
+const groupedTasks = computed(() => groupTasksByAgentType(props.tasks))
 </script>
 
 <style scoped>

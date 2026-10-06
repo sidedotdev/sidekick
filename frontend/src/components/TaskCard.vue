@@ -1,6 +1,6 @@
 <template>
   <div class="task-card-shell">
-    <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
+    <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title, 'keyboard-highlighted': highlighted }]" @click="cardClicked">
       <div class="actions">
         <template v-if="canEdit">
           <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
@@ -49,12 +49,16 @@ import CopyIcon from './icons/CopyIcon.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ContainerIcon from './icons/ContainerIcon.vue'
 import CloudIcon from './icons/CloudIcon.vue'
-import router from '@/router'
+import { openTaskFlow } from '../lib/taskNavigation'
 
 const props = defineProps({
   task: {
     type: Object as () => FullTask,
     required: true,
+  },
+  highlighted: {
+    type: Boolean,
+    default: false,
   },
 })
 
@@ -251,15 +255,7 @@ const cardClicked = async () => {
     return
   }
 
-  if (props.task.flows && props.task.flows.length > 0) {
-    // A task's flows may include sub-task flows (e.g. IDD sub-tasks share the
-    // task as parent), so pick the flow matching the task's flow type instead
-    // of relying on ordering.
-    const flows = props.task.flows
-    const targetFlow = flows.find((f) => f.type === props.task.flowType) ?? flows[0]
-    const routeName = props.task.flowType === 'idd' ? 'intent-canvas' : 'flow'
-    router.push({ name: routeName, params: { id: targetFlow.id } })
-  } else {
+  if (!openTaskFlow(props.task)) {
     openEditModal()
   }
 }
@@ -353,6 +349,12 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   /* room for the absolutely positioned footer/meta row */
   padding-bottom: calc(var(--task-pad) / 2 + 1.5rem);
   z-index: 10;
+}
+
+/* Matches the focused AutogrowTextarea style */
+.task-card.keyboard-highlighted {
+  border: 1px solid var(--color-primary);
+  outline: solid #ddd;
 }
 
 .status-label {
