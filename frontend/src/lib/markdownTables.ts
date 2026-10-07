@@ -1,4 +1,5 @@
 import type MarkdownIt from 'markdown-it'
+import { markdownLinks } from './markdownLinks'
 
 export const MARKDOWN_TABLE_SCROLL_CLASS = 'markdown-table-scroll'
 
@@ -22,4 +23,4 @@ export function markdownTableScroll(md: MarkdownIt): void {
 }
 
 /** Plugins shared by every rendered-markdown view in the UI. */
-export const markdownPlugins = [markdownTableScroll]
+export const markdownPlugins = [markdownTableScroll, markdownLinks]
