@@ -254,4 +254,31 @@ const task: FullTask = {
     })
     expect(wrapper.get('.env-indicator').attributes('title')).toBe(title)
   })
+  describe('model config label', () => {
+    const longModel = 'some-extremely-long-model-name-that-would-not-fit-on-a-task-card'
+    const taskWithLongLabel: FullTask = {
+      ...task,
+      flowOptions: {
+        envType: 'modal',
+        configOverrides: { llm: { defaults: [{ provider: 'openai', model: longModel }], useCaseConfigs: {} } },
+      },
+    }
+
+    it('exposes the full label as a tooltip since it may be truncated', () => {
+      const wrapper = shallowMount(TaskCard, {
+        props: { task: taskWithLongLabel },
+      })
+      expect(wrapper.get('.llm-preset-label').attributes('title')).toBe(longModel)
+    })
+
+    it('lays out the label and env indicator in the same footer row as the status label', () => {
+      const wrapper = shallowMount(TaskCard, {
+        props: { task: taskWithLongLabel },
+      })
+      const footer = wrapper.get('.card-footer')
+      expect(footer.find('.status-label').exists()).toBe(true)
+      expect(footer.find('.env-indicator').exists()).toBe(true)
+      expect(footer.find('.llm-preset-label').exists()).toBe(true)
+    })
+  })
 })
