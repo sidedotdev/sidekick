@@ -46,6 +46,11 @@ func (s sharedProviderOAuthSession) AuthorizationURL() string {
 	return s.AuthURL
 }
 
+// TODO: OAuth sessions bind a loopback callback port and write to the OS
+// keyring, so they only work when this API server runs on the user's machine.
+// Supporting a remote API server and worker means extracting such machine-local
+// work into a local server and worker that interact with the remote ones, which
+// needs substantial design work before anything can be done about it.
 func startSharedProviderOAuth(provider, profileId string, method provider_auth.Method) (providerOAuthSession, error) {
 	session, err := provider_auth.StartOAuthSession(provider, profileId, method)
 	if err != nil {
