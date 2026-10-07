@@ -491,6 +491,7 @@ const autoSave = async () => {
       if (!hasTaskId) {
         const result = await response.json()
         currentTaskId.value = result.task.id
+        emit('created')
       }
       saveStatus.value = 'saved'
       if (savedTimeoutRef.value) {

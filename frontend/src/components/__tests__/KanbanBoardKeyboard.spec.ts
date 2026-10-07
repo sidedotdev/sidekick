@@ -69,6 +69,58 @@ describe('KanbanBoard keyboard control', () => {
     return event
   }
 
+  let scrollParent: HTMLElement | null = null
+
+  // Renders the real virtualized lists (with minimal task cards) inside a
+  // scroll container, so revealing and focusing cards can be observed
+  const mountRenderedBoard = async (
+    tasks: FullTask[] = baseTasks(),
+    onScrollIntoView: (el: HTMLElement) => void = () => {},
+  ) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600)
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(600)
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(2000)
+    HTMLElement.prototype.scrollIntoView = vi.fn(function (this: HTMLElement) {
+      onScrollIntoView(this)
+    })
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ projects }) } as Response)))
+    scrollParent = document.createElement('div')
+    scrollParent.style.overflow = 'auto'
+    document.body.appendChild(scrollParent)
+    wrapper = mount(KanbanBoard, {
+      props: { tasks, showGuidedOverlay: false },
+      attachTo: scrollParent,
+      global: {
+        stubs: {
+          TaskModal: true,
+          ShortcutHint: true,
+          TaskCard: { props: ['task', 'highlighted'], template: '<div class="task-card" :data-task-id="task.id"></div>' },
+        },
+      },
+    })
+    await frames()
+    return wrapper
+  }
+
+  const frames = async () => {
+    for (let i = 0; i < 4; i++) {
+      await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
+      await flushPromises()
+    }
+  }
+
+  const focusedTaskId = () => (document.activeElement as HTMLElement | null)?.dataset?.taskId ?? null
+
+  const focusLink = () => {
+    const link = document.createElement('a')
+    link.href = '#'
+    link.textContent = 'Projects'
+    document.body.appendChild(link)
+    link.focus()
+    return link
+  }
+
   beforeEach(() => {
     vi.stubEnv('MODE', 'development')
     localStorage.clear()
@@ -82,6 +134,10 @@ describe('KanbanBoard keyboard control', () => {
   afterEach(() => {
     wrapper?.unmount()
     wrapper = null
+    scrollParent?.remove()
+    scrollParent = null
+    vi.restoreAllMocks()
+    delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
     localStorage.clear()
@@ -219,49 +275,123 @@ describe('KanbanBoard keyboard control', () => {
 
   it('reveals the highlighted card when moving into another group', async () => {
     const revealed: (string | null)[] = []
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
-    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600)
-    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(600)
-    HTMLElement.prototype.scrollIntoView = vi.fn(function (this: HTMLElement) {
-      revealed.push(this.querySelector('.task-card')?.getAttribute('data-task-id') ?? null)
+    await mountRenderedBoard(baseTasks(), el => {
+      revealed.push(el.querySelector('.task-card')?.getAttribute('data-task-id') ?? null)
     })
-    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(2000)
-    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ projects }) } as Response)))
-    const scrollParent = document.createElement('div')
-    scrollParent.style.overflow = 'auto'
-    document.body.appendChild(scrollParent)
-    try {
-      wrapper = mount(KanbanBoard, {
-        props: { tasks: baseTasks(), showGuidedOverlay: false },
-        attachTo: scrollParent,
-        global: {
-          stubs: {
-            TaskModal: true,
-            ShortcutHint: true,
-            TaskCard: { props: ['task', 'highlighted'], template: '<div class="task-card" :data-task-id="task.id"></div>' },
-          },
-        },
-      })
-      const frames = async () => {
-        for (let i = 0; i < 4; i++) {
-          await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
-          await flushPromises()
-        }
-      }
-      await frames()
-      expect(revealed).toContain('a1')
+    expect(revealed).toContain('a1')
 
-      await press('j')
-      await press('j')
+    await press('j')
+    await press('j')
+    await frames()
+    expect(revealed.at(-1)).toBe('b1')
+  })
+
+  it('focuses the highlighted card, keeping cards out of the tab order', async () => {
+    await mountRenderedBoard()
+    expect(focusedTaskId()).toBe('a1')
+
+    await press('j', {}, document.activeElement!)
+    await frames()
+    expect(focusedTaskId()).toBe('a2')
+
+    const cards = [...scrollParent!.querySelectorAll<HTMLElement>('.virtual-task-card-container')]
+    expect(cards.length).toBeGreaterThan(1)
+    expect(cards.every(card => card.tabIndex < 0)).toBe(true)
+  })
+
+  it('does not take focus from other focused elements as the highlight changes', async () => {
+    const tasks = baseTasks()
+    const w = await mountRenderedBoard(tasks)
+    await press('j', {}, document.activeElement!)
+    await frames()
+    expect(focusedTaskId()).toBe('a2')
+
+    const link = focusLink()
+    try {
+      await w.setProps({ tasks: tasks.filter(t => t.id !== 'a2') })
       await frames()
-      expect(revealed.at(-1)).toBe('b1')
+      expect(highlightedId(w)).toBe('a1')
+      expect(document.activeElement).toBe(link)
     } finally {
-      wrapper?.unmount()
-      wrapper = null
-      scrollParent.remove()
-      vi.restoreAllMocks()
-      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView
+      link.remove()
     }
+  })
+
+  it('highlights a card that receives focus', async () => {
+    const w = await mountRenderedBoard()
+    scrollParent!.querySelector<HTMLElement>('.virtual-task-card-container[data-task-id="a3"]')
+      ?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    await flushPromises()
+    expect(highlightedId(w)).toBe('a3')
+  })
+
+  it('returns focus to the highlighted card after a task modal closes', async () => {
+    const w = await mountRenderedBoard()
+    await press('Enter', {}, document.activeElement!)
+    const modal = w.findComponent(TaskModal)
+    expect(modal.props('task').id).toBe('a1')
+    ;(document.activeElement as HTMLElement).blur()
+
+    modal.vm.$emit('close')
+    await flushPromises()
+    await frames()
+    expect(focusedTaskId()).toBe('a1')
+  })
+
+  it('leaves keys to other focused elements such as navigation links', async () => {
+    const tasks = baseTasks().map(t => t.id === 'a1'
+      ? { ...t, flowType: 'basic_dev', flows: [{ id: 'flow_a1', type: 'basic_dev' }] } as FullTask
+      : t)
+    const w = await mountBoard(tasks)
+    const link = focusLink()
+    try {
+      const events = [await press('j', {}, link), await press('ArrowDown', {}, link), await press('Enter', {}, link)]
+      expect(events.map(event => event.defaultPrevented)).toEqual([false, false, false])
+      expect(highlightedId(w)).toBe('a1')
+      expect(routerPushMock).not.toHaveBeenCalled()
+    } finally {
+      link.remove()
+    }
+  })
+
+  it('resets the highlight to the top-left card once a modal creates, starts, or deletes a task', async () => {
+    const w = await mountBoard()
+    const settle = async (events: ('created' | 'updated' | 'deleted' | 'close')[]) => {
+      const modal = w.findComponent(TaskModal)
+      for (const event of events) modal.vm.$emit(event)
+      await flushPromises()
+    }
+
+    await press('j')
+    await press('t')
+    await settle(['created', 'close'])
+    expect(highlightedId(w)).toBe('a1')
+
+    await press('j')
+    await press('Enter')
+    expect(w.findComponent(TaskModal).props('task').id).toBe('a2')
+    await settle(['updated', 'close'])
+    expect(highlightedId(w)).toBe('a1')
+
+    await press('j')
+    await press('Enter')
+    await settle(['deleted', 'close'])
+    expect(highlightedId(w)).toBe('a1')
+  })
+
+  it('highlights the task whose modal was canceled', async () => {
+    const w = await mountBoard()
+    const betaList = w.findAllComponents(VirtualTaskList)
+      .find(list => (list.props('tasks') as FullTask[]).some(t => t.id === 'b1'))!
+    betaList.vm.$emit('edit', (betaList.props('tasks') as FullTask[])[0])
+    await flushPromises()
+
+    const modal = w.findComponent(TaskModal)
+    expect(modal.props('task').id).toBe('b1')
+    modal.vm.$emit('close')
+    await flushPromises()
+    expect(w.findComponent(TaskModal).exists()).toBe(false)
+    expect(highlightedId(w)).toBe('b1')
   })
 
   it('opens the edit modal on Enter for a task without flows', async () => {

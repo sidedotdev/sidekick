@@ -42,17 +42,28 @@ the board, then returning to the board after responding to a flow.
 
 ## Board highlight
 
-- When enabled, exactly one visible task card is highlighted, styled like a
-  focused text area.
+- When enabled, exactly one visible task card is highlighted with a primary
+  colored outline, leaving its border unchanged.
+- The highlight is unified with focus: the highlighted card takes focus by
+  default and focus follows it as it moves, but never taken from another
+  focused element. Focusing a card (or something within it) highlights it.
+  Tab skips task cards and follows the regular tab order.
 - Until the user moves it, the highlight is the top-left card in the current
   display order, including as tasks change or stream in. Afterwards it follows
   the chosen task, falling back to the top-left card once that task is no
   longer visible.
+- Once a task modal creates, starts or deletes a task, the highlight returns
+  to the top-left card, as if the page were reloaded. Canceling out of a
+  task's modal highlights that task. Focus returns to the highlighted card
+  when a modal closes.
+- Revealing a card scrolls it clear of the fixed and sticky headers above it.
 - Up/down move within a column and continue into the same column of adjacent
   expanded groups. Left/right move to the nearest non-empty column in the same
   group at the same position, clamped. Moves past the edges do nothing.
 - Enter opens the highlighted task, as clicking it does.
-- Board keys are ignored while typing in an input or with a task modal open.
+- Board keys only apply while a task card holds focus or nothing does, so
+  other focused elements (e.g. sidebar links) keep their own keys. They are
+  also ignored with a task modal open.
 
 ## Returning after submission
 
