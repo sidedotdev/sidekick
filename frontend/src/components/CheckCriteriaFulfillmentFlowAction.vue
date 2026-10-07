@@ -4,12 +4,12 @@
     <div v-if="criteriaFulfillment">
       <div v-if="expand" class="analysis">
         <strong>Analysis:</strong>
-        <vue-markdown :source="criteriaFulfillment.analysis"></vue-markdown>
+        <vue-markdown :source="criteriaFulfillment.analysis" :plugins="markdownPlugins" class="markdown"></vue-markdown>
       </div>
       <div v-if="!criteriaFulfillment.isFulfilled && criteriaFulfillment.feedbackMessage" class="feedback">
         <pre><strong>Feedback:</strong> {{ criteriaFulfillment.feedbackMessage }}</pre>
       </div>
-      <div v-if="expand && criteriaFulfillment.confidence <= 3" class="confidence">
+      <div v-if="expand && criteriaFulfillment.confidence != null && criteriaFulfillment.confidence <= 3" class="confidence">
         <pre><strong>Confidence:</strong> {{ criteriaFulfillment.confidence }}/5</pre>
       </div>
       <div v-if="expand && diffString" class="diff-section">
@@ -20,7 +20,7 @@
         />
       </div>
     </div>
-    <div v-else-if="flowAction.actionStatus == 'complete'">
+    <div v-else-if="flowAction.actionStatus == 'complete' && expansionCount === null">
       Unable to parse criteria fulfillment data:
       <pre>{{ flowAction.actionResult }}</pre>
     </div>
@@ -30,8 +30,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { FlowAction, CriteriaFulfillment } from '@/lib/models';
-import { extractToolCallArguments } from '@/lib/models';
+import { parseCriteriaFulfillment, parseCriteriaExpansionCount } from '@/lib/criteriaFulfillment';
 import VueMarkdown from 'vue-markdown-render';
+import { markdownPlugins } from '@/lib/markdownTables';
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue';
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 
@@ -41,11 +42,17 @@ const props = defineProps<{
   level?: number;
 }>();
 
+const expansionCount = computed(() => {
+  try {
+    return parseCriteriaExpansionCount(JSON.parse(props.flowAction.actionResult));
+  } catch {
+    return null;
+  }
+});
+
 const criteriaFulfillment = computed<CriteriaFulfillment | null>(() => {
   try {
-    const parsedResult = JSON.parse(props.flowAction.actionResult);
-    const args = extractToolCallArguments(parsedResult);
-    return JSON.parse(args || "null") as CriteriaFulfillment | null;
+    return parseCriteriaFulfillment(JSON.parse(props.flowAction.actionResult));
   } catch (error) {
     if (props.flowAction.actionStatus === 'complete') {
       console.error('Error parsing criteria fulfillment data:', error);

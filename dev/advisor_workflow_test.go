@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"sidekick/common"
 	"sidekick/domain"
@@ -687,4 +688,316 @@ func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_PauseInterruptionResumesAndRe
 	s.Require().NoError(s.env.GetWorkflowResult(&result))
 	s.True(result.Completed, "workflow must continue after the pause checkpoint")
 	s.Equal(2, result.Iterations, "the interrupted advisor cadence slot must be retried on the next normal iteration")
+}
+
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_FiltersInheritedWebSearch() {
+	executorHistory, _ := s.persistExecutorHistory("exec_flow_web_search")
+	cases := []struct {
+		providerType string
+		builtinTools []string
+		wantSearch   bool
+	}{
+		{providerType: "openai_responses_compatible"},
+		{providerType: "openai_responses_compatible", builtinTools: []string{"other_tool"}},
+		{providerType: "openai_responses_compatible", builtinTools: []string{"web_search"}, wantSearch: true},
+		{providerType: "anthropic_compatible"},
+		{providerType: "anthropic_compatible", builtinTools: []string{"web_search"}, wantSearch: true},
+		{providerType: "openai", wantSearch: true},
+		{providerType: "anthropic", wantSearch: true},
+		{providerType: "google", wantSearch: true},
+		{providerType: "openai_compatible"},
+	}
+	callIndex := 0
+	var activities *persisted_ai.Llm2Activities
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+			if callIndex >= len(cases) {
+				return nil, fmt.Errorf("unexpected advisor stream call %d", callIndex)
+			}
+			tc := cases[callIndex]
+			callIndex++
+			searchCount := 0
+			var names []string
+			for _, tool := range input.Options.Tools {
+				if tool.Type == common.ToolTypeWebSearch {
+					searchCount++
+				} else {
+					names = append(names, tool.Name)
+				}
+			}
+			wantCount := 0
+			if tc.wantSearch {
+				wantCount = 1
+			}
+			s.Equal(wantCount, searchCount, "provider %s, opt-ins %v", tc.providerType, tc.builtinTools)
+			s.ElementsMatch([]string{advisorProceedToolName, advisorGuideTool.Name, "executor_function"}, names)
+			return &llm2.MessageResponse{
+				StopReason: "tool_use",
+				Output: llm2.Message{
+					Role: "assistant",
+					Content: []llm2.ContentBlock{{
+						Type: llm2.ContentBlockTypeToolUse,
+						ToolUse: &llm2.ToolUseBlock{
+							Id:        fmt.Sprintf("call_search_%d", callIndex),
+							Name:      advisorProceedToolName,
+							Arguments: "{}",
+						},
+					}},
+				},
+			}, nil
+		}).Times(len(cases))
+
+	providers := make([]common.ModelProviderPublicConfig, 0, len(cases))
+	for _, tc := range cases {
+		providers = append(providers, common.ModelProviderPublicConfig{
+			Name:         "advisor-provider",
+			Type:         tc.providerType,
+			BuiltinTools: tc.builtinTools,
+		})
+	}
+	s.env.ExecuteWorkflow(advisorInheritedWebSearchWorkflow, executorHistory, providers)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal(len(cases), callIndex)
+	s.env.AssertExpectations(s.T())
+}
+
+func advisorInheritedWebSearchWorkflow(ctx workflow.Context, executorHistory *persisted_ai.ChatHistoryContainer, providers []common.ModelProviderPublicConfig) error {
+	ctx = utils.NoRetryCtx(ctx)
+	gs := &flow_action.GlobalState{}
+	gs.InitValues()
+	dCtx := DevContext{
+		ExecContext: flow_action.ExecContext{
+			Context:     ctx,
+			WorkspaceId: advisorTestWorkspaceId,
+			GlobalState: gs,
+			FlowScope:   &flow_action.FlowScope{SubflowName: "advisor"},
+			Secrets: &secret_manager.SecretManagerContainer{
+				SecretManager: secret_manager.MockSecretManager{},
+			},
+		},
+	}
+	advisor := &Advisor{Enabled: true, EveryNTurns: 1}
+	tools := []*llm.Tool{
+		{Type: common.ToolTypeWebSearch},
+		{Name: "executor_function", Description: "An executor function"},
+	}
+	for _, provider := range providers {
+		dCtx.Providers = []common.ModelProviderPublicConfig{provider}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "executor-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.AdvisingKey: {{Provider: "advisor-provider", Model: "advisor-model"}},
+			},
+		})
+		if err := advisor.MaybeAdvise(dCtx, executorHistory, tools, nil); err != nil {
+			return err
+		}
+		if len(tools) != 2 || tools[0].Type != common.ToolTypeWebSearch || tools[1].Name != "executor_function" {
+			return fmt.Errorf("advisor mutated executor tools")
+		}
+	}
+	return nil
+}
+
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ModelUpdateRemovesWebSearch() {
+	s.testAdvisorWebSearchModelUpdate("openai", "unopted", true, false)
+}
+
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_ModelUpdateRestoresWebSearch() {
+	s.testAdvisorWebSearchModelUpdate("unopted", "openai", false, true)
+}
+
+func (s *AdvisorWorkflowTestSuite) testAdvisorWebSearchModelUpdate(initialProvider, updatedProvider string, initialSearch, updatedSearch bool) {
+	history, _ := s.persistExecutorHistory("exec_search_update")
+	config := func(provider string) common.LLMConfig {
+		return common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "executor"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.AdvisingKey: {{Provider: provider, Model: "advisor"}},
+			},
+		}
+	}
+	response := &llm2.MessageResponse{
+		StopReason: "tool_use",
+		Output: llm2.Message{
+			Role: llm2.RoleAssistant,
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeToolUse,
+				ToolUse: &llm2.ToolUseBlock{
+					Id: "call_proceed", Name: advisorProceedToolName, Arguments: "{}",
+				},
+			}},
+		},
+	}
+	checkTools := func(input persisted_ai.StreamInput, wantSearch bool) {
+		var names []string
+		searchCount := 0
+		for _, tool := range input.Options.Tools {
+			if tool.Type == common.ToolTypeWebSearch {
+				searchCount++
+			} else {
+				names = append(names, tool.Name)
+			}
+		}
+		wantCount := 0
+		if wantSearch {
+			wantCount = 1
+		}
+		s.Equal(wantCount, searchCount, "provider %s", input.Options.ModelConfig.Provider)
+		s.ElementsMatch([]string{advisorProceedToolName, advisorGuideTool.Name, "executor_function"}, names)
+	}
+	var activities *persisted_ai.Llm2Activities
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Provider == initialProvider
+	})).Return(func(ctx context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+		checkTools(input, initialSearch)
+		return response, nil
+	}).After(time.Minute).Once()
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
+		return input.Options.ModelConfig.Provider == updatedProvider
+	})).Return(func(ctx context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+		checkTools(input, updatedSearch)
+		return response, nil
+	}).Once()
+
+	callbacks := &modelConfigUpdateCallbacks{}
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateNameModelConfig, "advisor-search-update", callbacks, config(updatedProvider))
+	}, 5*time.Second)
+	s.env.ExecuteWorkflow(advisorWebSearchUpdateWorkflow, history, config(initialProvider))
+	s.NoError(s.env.GetWorkflowError())
+	s.True(callbacks.accepted)
+	s.NoError(callbacks.rejection)
+	s.True(callbacks.completed)
+	s.NoError(callbacks.err)
+	s.env.AssertExpectations(s.T())
+}
+
+func advisorWebSearchUpdateWorkflow(ctx workflow.Context, history *persisted_ai.ChatHistoryContainer, initial common.LLMConfig) error {
+	gs := &flow_action.GlobalState{}
+	gs.InitValues()
+	dCtx := DevContext{
+		ExecContext: flow_action.ExecContext{
+			Context:     utils.NoRetryCtx(ctx),
+			WorkspaceId: advisorTestWorkspaceId,
+			GlobalState: gs,
+			FlowScope:   &flow_action.FlowScope{SubflowName: "advisor"},
+			Secrets: &secret_manager.SecretManagerContainer{
+				SecretManager: secret_manager.MockSecretManager{},
+			},
+			Providers: []common.ModelProviderPublicConfig{{
+				Name: "unopted", Type: "openai_responses_compatible",
+			}},
+		},
+	}
+	dCtx.SetLLMConfig(initial)
+	if err := SetupModelConfigHandlers(dCtx); err != nil {
+		return err
+	}
+	tools := []*llm.Tool{
+		{Type: common.ToolTypeWebSearch},
+		{Name: "executor_function", Description: "An executor function"},
+	}
+	advisor := &Advisor{Enabled: true, EveryNTurns: 1}
+	if err := advisor.MaybeAdvise(dCtx, history, tools, nil); err != nil {
+		return err
+	}
+	if len(tools) != 2 || tools[0].Type != common.ToolTypeWebSearch || tools[1].Name != "executor_function" {
+		return fmt.Errorf("advisor mutated executor tools")
+	}
+	return nil
+}
+
+func (s *AdvisorWorkflowTestSuite) testMaybeAdviseWebSearch(optIn bool) {
+	executorHistory, originalRefs := s.persistExecutorHistory("exec_flow_unsupported_search")
+	searchTool := &llm.Tool{Type: common.ToolTypeWebSearch}
+	functionTool := &llm.Tool{Name: "executor_function"}
+	executorTools := []*llm.Tool{searchTool, functionTool}
+
+	wf := func(ctx workflow.Context, history *persisted_ai.ChatHistoryContainer) (*persisted_ai.ChatHistoryContainer, error) {
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     utils.NoRetryCtx(ctx),
+				WorkspaceId: advisorTestWorkspaceId,
+				GlobalState: gs,
+				FlowScope:   &flow_action.FlowScope{SubflowName: "advisor"},
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+				Providers: []common.ModelProviderPublicConfig{{
+					Name: "advisor-provider",
+					Type: "openai_responses_compatible",
+				}},
+			},
+		}
+		if optIn {
+			dCtx.Providers[0].BuiltinTools = []string{"web_search"}
+		}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "openai", Model: "executor"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.AdvisingKey: {{Provider: "advisor-provider", Model: "advisor"}},
+			},
+		})
+		advisor := &Advisor{
+			Enabled:     true,
+			EveryNTurns: 1,
+			ChatHistory: NewVersionedChatHistory(ctx, dCtx.WorkspaceId),
+		}
+		if err := advisor.MaybeAdvise(dCtx, history, executorTools, nil); err != nil {
+			return nil, err
+		}
+		return history, nil
+	}
+
+	var activities *persisted_ai.Llm2Activities
+	s.env.OnActivity(activities.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		input := args.Get(1).(persisted_ai.StreamInput)
+		s.Equal("advisor-provider", input.Options.ModelConfig.Provider)
+		var names []string
+		searchCount := 0
+		for _, tool := range input.Options.Tools {
+			if tool.Type == common.ToolTypeWebSearch {
+				searchCount++
+				continue
+			}
+			names = append(names, tool.Name)
+		}
+		if optIn {
+			s.Equal(1, searchCount)
+		} else {
+			s.Zero(searchCount)
+		}
+		s.Equal([]string{advisorProceedToolName, advisorGuideTool.Name, functionTool.Name}, names)
+	}).Return(&llm2.MessageResponse{
+		StopReason: "tool_use",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeToolUse,
+				ToolUse: &llm2.ToolUseBlock{
+					Id:        "call_filtered_search",
+					Name:      advisorProceedToolName,
+					Arguments: "{}",
+				},
+			}},
+		},
+	}, nil).Once()
+
+	s.env.ExecuteWorkflow(wf, executorHistory)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Len(s.executorRefsFromResult(), originalRefs)
+	s.Equal([]*llm.Tool{searchTool, functionTool}, executorTools)
+}
+
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_FiltersUnsupportedWebSearch() {
+	s.testMaybeAdviseWebSearch(false)
+}
+
+func (s *AdvisorWorkflowTestSuite) TestMaybeAdvise_PreservesOptedInWebSearch() {
+	s.testMaybeAdviseWebSearch(true)
 }

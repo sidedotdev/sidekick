@@ -121,5 +121,31 @@ svg.icon {
   overflow: visible;
 }
 
+/* Rendered markdown tables; the wrapper comes from lib/markdownTables.ts */
+.markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.markdown-table-scroll table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.markdown-table-scroll th,
+.markdown-table-scroll td {
+  padding: 0.375rem 0.75rem;
+  border: 0.0625rem solid var(--color-border-contrast);
+  vertical-align: top;
+}
+
+/* Column alignment from the markdown source is an inline style, so it still wins. */
+.markdown-table-scroll th {
+  font-weight: bold;
+  text-align: start;
+  background-color: var(--color-background-mute);
+}
+
 
 /* NOTE: color variables should be defined in base.css */

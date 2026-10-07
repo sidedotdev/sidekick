@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import UserRequest from '../UserRequest.vue'
 import type { FlowAction } from '../../lib/models'
+import { TOOLTIP_OPEN_DELAY_MS } from '../../composables/useTooltipTrigger'
 
 // Mock PrimeVue Select component
 vi.mock('primevue/select', () => ({
@@ -37,6 +38,10 @@ describe('UserRequest', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   const createMockFlowAction = (overrides = {}): FlowAction => ({
@@ -155,6 +160,7 @@ describe('UserRequest', () => {
   it('displays network error message when fetch fails', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'))
     global.fetch = fetchMock
+    vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const flowAction = createMockFlowAction()
     mountComponent(flowAction)
@@ -371,18 +377,59 @@ describe('UserRequest', () => {
       vi.unstubAllEnvs()
     })
 
-    it('renders the summary in the pending form in dev mode', () => {
+    it('shows the script once, highlighting only what needs approval', () => {
       mountComponent(createCommandApprovalFlowAction())
 
       const evalBlock = wrapper.find('.permission-evaluation')
       expect(evalBlock.exists()).toBe(true)
-      expect(evalBlock.text()).toContain('require_approval')
-      expect(evalBlock.text()).toContain('auto_approve')
-      expect(evalBlock.text()).toContain('go test ./...')
-      expect(evalBlock.text()).toContain('rule ^rm\\b (repo config)')
-      // Full details hidden until expanded
+      expect(wrapper.find('pre').exists()).toBe(false)
+      expect(evalBlock.find('.perm-script').text()).toContain('go test ./... && rm -rf /data')
+      expect(evalBlock.find('.perm-headline').text()).toBe('1 item needs approval')
+      expect(evalBlock.findAll('.perm-flagged').map((s) => s.element.textContent).join('')).toBe('rm -rf /data')
+      expect(evalBlock.findAll('.perm-gutter-icon')).toHaveLength(1)
+      expect(evalBlock.find('.perm-gutter-icon').attributes('aria-label')).toBe('Rule ^rm\\b (repo config) requires approval')
       expect(evalBlock.text()).not.toContain('rm is risky')
-      expect(evalBlock.text()).not.toContain('Script factors')
+      expect(evalBlock.text()).not.toContain('Prefer .side/tmp over /tmp')
+    })
+
+    it('explains a flagged item in a tooltip after the hover delay', async () => {
+      vi.useFakeTimers()
+      try {
+        mountComponent(createCommandApprovalFlowAction())
+
+        await wrapper.find('.permission-evaluation .perm-flagged').trigger('mouseover')
+        expect(document.body.querySelector('.perm-tooltip')).toBeNull()
+        await vi.advanceTimersByTimeAsync(TOOLTIP_OPEN_DELAY_MS)
+
+        const tooltip = document.body.querySelector('.perm-tooltip')
+        expect(tooltip?.textContent).toContain('Rule ^rm\\b (repo config) requires approval')
+        expect(tooltip?.textContent).toContain('rm is risky')
+      } finally {
+        wrapper.unmount()
+        vi.runOnlyPendingTimers()
+        vi.useRealTimers()
+      }
+    })
+
+    it.each([
+      ['leaving the script', (w: VueWrapper) => w.find('.permission-evaluation .perm-script').trigger('mouseleave')],
+      ['moving onto a non-target segment', (w: VueWrapper) => w.find('.permission-evaluation .perm-line-code span:not([data-target-ids])').trigger('mouseover')],
+    ])('does not show the tooltip after %s just before the hover delay elapses', async (_, leaveTarget) => {
+      vi.useFakeTimers()
+      try {
+        mountComponent(createCommandApprovalFlowAction())
+
+        await wrapper.find('.permission-evaluation .perm-flagged').trigger('mouseover')
+        await vi.advanceTimersByTimeAsync(TOOLTIP_OPEN_DELAY_MS - 50)
+        await leaveTarget(wrapper)
+        await vi.advanceTimersByTimeAsync(TOOLTIP_OPEN_DELAY_MS * 2)
+
+        expect(document.body.querySelector('.perm-tooltip')).toBeNull()
+      } finally {
+        wrapper.unmount()
+        vi.runOnlyPendingTimers()
+        vi.useRealTimers()
+      }
     })
 
     it('reveals full details on expand', async () => {
@@ -390,14 +437,18 @@ describe('UserRequest', () => {
 
       await wrapper.find('.permission-evaluation .perm-toggle').trigger('click')
 
-      const evalBlock = wrapper.find('.permission-evaluation')
-      expect(evalBlock.text()).toContain('Matched rules')
-      expect(evalBlock.text()).toContain('rm is risky')
-      expect(evalBlock.text()).toContain('^go test\\b')
-      expect(evalBlock.text()).toContain('absolute path escalation')
-      expect(evalBlock.text()).toContain('/data')
-      expect(evalBlock.text()).toContain('Script factors')
-      expect(evalBlock.text()).toContain('Prefer .side/tmp over /tmp')
+      const details = wrapper.find('.permission-evaluation .perm-details')
+      const flaggedCard = details.find('.perm-card')
+      expect(flaggedCard.text()).toContain('Needs approval · Rule')
+      expect(flaggedCard.text()).toContain('rm -rf /data')
+      expect(flaggedCard.text()).toContain('rm is risky')
+      expect(flaggedCard.text()).toContain('Absolute path')
+      expect(flaggedCard.text()).toContain('/data')
+      expect(flaggedCard.find('.perm-check-decided').text()).toContain('^rm\\b')
+      expect(details.find('.perm-approved summary').text()).toBe('Auto-approved (1)')
+      expect(details.find('.perm-approved').text()).toContain('^go test\\b')
+      expect(details.text()).toContain('Prefer .side/tmp over /tmp')
+      expect(details.text()).not.toContain('absolute_path_escalation')
     })
 
     it('renders the summary in the expanded non-pending state in dev mode', () => {
@@ -411,19 +462,21 @@ describe('UserRequest', () => {
       expect(evalBlock.text()).toContain('go test ./...')
     })
 
-    it('renders nothing when permissionEvaluation is absent', () => {
+    it('falls back to the plain command when permissionEvaluation is absent', () => {
       const flowAction = createCommandApprovalFlowAction()
       delete flowAction.actionParams.permissionEvaluation
       mountComponent(flowAction)
 
       expect(wrapper.find('.permission-evaluation').exists()).toBe(false)
+      expect(wrapper.find('pre').text()).toBe('go test ./... && rm -rf /data')
     })
 
-    it('renders nothing outside dev mode', () => {
+    it('falls back to the plain command outside dev mode', () => {
       vi.stubEnv('MODE', 'production')
       mountComponent(createCommandApprovalFlowAction())
 
       expect(wrapper.find('.permission-evaluation').exists()).toBe(false)
+      expect(wrapper.find('pre').text()).toBe('go test ./... && rm -rf /data')
     })
   })
 })

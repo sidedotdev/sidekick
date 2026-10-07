@@ -54,10 +54,10 @@ versions.
 
    ```sh
    yes | sdkmanager --licenses
-   sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+   sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
    ```
 
-   Use the current stable platform/build-tools if 36 is no longer latest.
+   Use the current stable platform/build-tools if 37 is no longer latest.
 
 If `sdkmanager: command not found`, verify that
 `$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager` exists and that directory
@@ -78,8 +78,10 @@ SDK Manager under **SDK Tools → Android SDK Platform-Tools**).
 - Retrofit, OkHttp, and kotlinx.serialization provide the typed REST client.
   MockWebServer covers the HTTP layer in JVM tests.
 - ZXing Embedded scans the server-generated pairing QR code.
-- Navigation Compose routes between pairing, workspace selection, and task
-  screens.
+- Navigation Compose routes between pairing and the Tasks screen (which lands on
+  the last-used workspace and switches workspaces in place) plus a task detail
+  placeholder; "Scan a different pairing code" returns to pairing without
+  auto-restoring the stored credentials.
 - Preferences DataStore persists the iroh ticket and bearer token.
 
 The app requests camera permission when pairing and requires network access for
@@ -117,7 +119,13 @@ To try the app out as a developer, install a debug build on an Android device
 2. Enable **Developer options** and **USB debugging** on the device, connect it
    over USB (or use `adb pair` + `adb connect` for wireless debugging), and
    confirm it shows up in `adb devices`.
-3. Build and install the debug APK from `app/android`:
+3. From the repository root, run `just phone` to build, install, and launch the
+   debug app. This requires [Just](https://just.systems/) and selects the online
+   non-emulator device with the highest ADB transport ID (the most recently
+   registered connection in the current ADB server). Installation and launch
+   stay pinned to that connection even if another phone connects during the build.
+
+   Alternatively, build and install the debug APK from `app/android`:
 
    ```sh
    ./gradlew :app:installDebug
@@ -152,18 +160,31 @@ Do **not** run this in the container — it requires `/dev/kvm` and a
 device/emulator. For CI, use nested virtualization or a device farm such as
 Firebase Test Lab or Gradle Managed Devices.
 
-### Live remote-access test on a real phone
+### Live remote-access tests on a real phone
 
-`RemoteWorkspaceIrohInstrumentedTest` dials a running sidekick server over iroh
-from the device and loads the workspace list, first stage by stage over a raw
-iroh stream (connect → open stream → write → first response chunk → EOF) and
-then through the full Retrofit + `IrohHttpCallFactory` stack. It needs live
-pairing credentials, so it is skipped unless they are supplied as
-instrumentation arguments.
+Two instrumented tests dial a running sidekick server over iroh from the
+device. Both need live pairing credentials, so they are skipped unless those
+are supplied as instrumentation arguments.
 
-The runner script mints a throwaway pairing, targets a connected phone, bounds
-the whole run, prints the on-device stage diagnostics, and revokes the pairing
-afterwards:
+- `RemoteWorkspaceIrohInstrumentedTest` loads the workspace list, first stage
+  by stage over a raw iroh stream (connect → open stream → write → first
+  response chunk → EOF) and then through the full `SidekickRemoteSession`
+  stack (OkHttp + Retrofit over the `IrohLoopbackProxy`).
+- `RemoteFlowSyncIrohInstrumentedTest` exercises the realtime sync stack: the
+  task-changes websocket connects through the proxy, a bogus token is rejected
+  with 401 during the websocket handshake, a `basic_dev` task is created via
+  `TaskRepository` and its flow observed via `FlowRepository` until actions
+  arrive (ordered by `created`; without LLM credentials on the server the
+  first action is expected to fail and must keep its `actionResult`), then the
+  flow's sockets are stopped and restarted to prove the reconnect re-merges a
+  fresh REST snapshot (the task is cancelled while the sockets are down, so
+  the cancelled flow status can only arrive via that snapshot). The task is
+  archived afterwards. It uses the `sidekickWorkspaceId` argument when given
+  and the server's first workspace otherwise.
+
+The runner script mints a throwaway pairing, targets a connected phone, runs
+both classes, bounds the whole run, prints the on-device stage diagnostics, and
+revokes the pairing afterwards:
 
 ```sh
 side start   # server incl. the remote (iroh) component
@@ -174,9 +195,12 @@ bash -o pipefail -c 'scripts/android_phone_remote_e2e/run.sh 2>&1 | tee REPRO.tx
 phone looks like a pass.
 
 Options: `-s SERIAL` (or `ANDROID_SERIAL`) selects among several attached
-devices, `-t SECONDS` overrides the default 900s hard timeout. The pairing
-ticket and token are redacted from everything the script and the test print, so
-the captured output is safe to share.
+devices, `-t SECONDS` overrides the default 900s hard timeout, and
+`-w WORKSPACE_ID` (or `SIDEKICK_WORKSPACE_ID`) picks the workspace the flow
+sync test creates its task in. The script only reports success when the
+results show every class ran and passed (a skipped class fails the run). The
+pairing ticket and token are redacted from everything the script and the tests
+print, so the captured output is safe to share.
 
 Debugging a hang: each stage is logged to logcat under the `SidekickPhoneE2E`
 tag when it starts and again when it settles, so a stage logged as `START`

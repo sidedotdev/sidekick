@@ -304,10 +304,12 @@ func (r MessageResponse) GetOutputTokens() int {
 	return r.Usage.OutputTokens
 }
 
-// EventType enumerates provider-agnostic streaming event kinds for content blocks.
-// This is a small whitelist we can reliably map from OpenAI/Anthropic, etc.
-// No message-level start/stop or usage events are included by design.
+// EventType enumerates provider-agnostic content and liveness events.
+// Message-level lifecycle and usage payloads are not exposed.
 type EventType string
+
+// EventHeartbeat represents an explicit upstream keepalive without message content.
+const EventHeartbeat EventType = "heartbeat"
 
 const (
 	// A new content block starts. Append ContentBlock to the assistant Message.Content.

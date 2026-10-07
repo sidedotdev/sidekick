@@ -451,7 +451,7 @@ func TestAccumulateOpenaiEventsToMessage_BlockDone(t *testing.T) {
 		},
 	}
 
-	message := accumulateOpenaiEventsToMessage(events)
+	message := AccumulateEventsToMessage(events)
 
 	assert.Equal(t, RoleAssistant, message.Role)
 	assert.Len(t, message.Content, 1)

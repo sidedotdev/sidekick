@@ -67,8 +67,56 @@ func verifierFlagValues(settings VerifierSettings) fflag.EvaluateFlagsOutput {
 		},
 		IntValues: map[string]int{
 			ReviewToolResultMaxChars:     settings.ToolResultMaxChars,
+			ReviewHelpResultMaxChars:     settings.HelpResultMaxChars,
 			ReviewRecentToolResultsCount: settings.RecentToolResultsCount,
 			ReviewChatHistoryMaxSize:     settings.ChatHistoryMaxSize,
 		},
+		StringArrayValues: map[string][]string{
+			ReviewContextTypes: settings.ContextTypes,
+		},
 	}
+}
+
+func TestVerifierHelpResultLimitFlag(t *testing.T) {
+	t.Parallel()
+
+	input := verifierFlagsInput("flow", "coding", "judge")
+	require.Equal(t, 2000, input.IntFlags[ReviewHelpResultMaxChars])
+	for _, tc := range []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"custom", 3000, 3000},
+		{"disabled", 0, 0},
+		{"negative falls back", -1, 2000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			settings := verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{
+				IntValues: map[string]int{ReviewHelpResultMaxChars: tc.value},
+			})
+			require.Equal(t, tc.want, settings.HelpResultMaxChars)
+		})
+	}
+	require.Equal(t, 2000, verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{}).HelpResultMaxChars)
+}
+
+func TestVerifierContextTypeFlags(t *testing.T) {
+	t.Parallel()
+	defaults := DefaultVerifierSettings()
+	input := verifierFlagsInput("flow", "coding", "judge")
+	require.Equal(t, defaults.ContextTypes, input.StringArrayFlags[ReviewContextTypes])
+
+	for _, contextTypes := range [][]string{
+		{},
+		{ContextTypeEditBlockReport, ContextTypeTestResult, ContextTypeSummary},
+		{ContextTypeEditBlockReport, ContextTypeTestResult, ContextTypeAutoReviewFeedback, ContextTypeSummary},
+	} {
+		settings := verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{
+			StringArrayValues: map[string][]string{ReviewContextTypes: contextTypes},
+		})
+		require.Equal(t, contextTypes, settings.ContextTypes)
+	}
+	require.Equal(t, defaults, verifierSettingsFromFlags(fflag.EvaluateFlagsOutput{}))
 }

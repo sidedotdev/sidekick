@@ -1,7 +1,8 @@
 export interface ModelConfig {
   provider: string
   model: string
-  reasoningEffort?: '' | 'lowest' | 'minimal' | 'low' | 'medium' | 'high' | 'highest'
+  // Model-specific effort level; 'lowest'/'highest' are legacy aliases for the bottom/top of the model's ladder
+  reasoningEffort?: string
   speed?: '' | 'fast'
 }
 
@@ -69,8 +70,7 @@ export interface ActionData {
   actionType: string
 }
 
-// TODO add the rest
-export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'in_review' | 'complete' | 'failed'
+export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'in_review' | 'complete' | 'failed' | 'canceled'
 export type FlowStatus = 'in_progress' | 'paused' | 'completed' | 'failed' | 'canceled'
 export type AgentType = 'human' | 'llm' | 'none'
 
@@ -113,7 +113,11 @@ export interface Flow {
   type: string
   parentId: string
   status: FlowStatus
+  title?: string
+  metadata?: { [key: string]: any }
   description?: string
+  created?: Date
+  updated?: Date
   worktrees?: Worktree[]
 }
 
@@ -140,6 +144,7 @@ export interface FlowAction {
   actionStatus: ActionStatus
   actionResult: string
   isHumanAction: boolean
+  isCallbackAction?: boolean
   streamingData?: StreamingData
 }
 
@@ -201,6 +206,32 @@ export interface ChatMessageDelta {
 export interface StreamingData {
   content: string;
   toolCalls: ToolCall[];
+  // Ordered llm2 content blocks accumulated from llm2_stream_event flow
+  // events. Present only for actions streamed through the llm2 pipeline.
+  blocks?: Llm2ContentBlock[];
+  // Incrementally parsed tool_use arguments keyed by position in `blocks`.
+  toolArguments?: Record<number, object>;
+}
+
+// Mirrors llm2.EventType from the Go llm2 package.
+export type Llm2StreamEventType =
+  | 'heartbeat'
+  | 'block_started'
+  | 'block_done'
+  | 'text_delta'
+  | 'summary_text_delta'
+  | 'signature_delta'
+
+// Mirrors domain.Llm2StreamEvent: a flow event envelope around an llm2.Event
+// whose fields are flattened alongside eventType and flowActionId.
+export interface Llm2StreamEvent {
+  eventType: 'llm2_stream_event'
+  flowActionId: string
+  type: Llm2StreamEventType
+  index: number
+  contentBlock?: Llm2ContentBlock
+  delta?: string
+  signature?: string
 }
 
 // --- From Go definition ---
@@ -283,6 +314,24 @@ export type Llm2RefusalBlock = Llm2ContentBlockBase & {
   }
 }
 
+export type Llm2WebSearchResult = {
+  url: string
+  title: string
+  pageAge?: string
+  encryptedContent?: string
+}
+
+export type Llm2BuiltinToolResultBlock = Llm2ContentBlockBase & {
+  type: 'builtin_tool_result'
+  builtinToolResult: {
+    toolCallId: string
+    name: string
+    isError?: boolean
+    content?: string
+    searchResults?: Llm2WebSearchResult[]
+  }
+}
+
 export type Llm2ContentBlock =
   | Llm2TextBlock
   | Llm2ImageBlock
@@ -290,6 +339,8 @@ export type Llm2ContentBlock =
   | Llm2ToolResultBlock
   | Llm2ReasoningBlock
   | Llm2RefusalBlock
+  | Llm2BuiltinToolUseBlock
+  | Llm2BuiltinToolResultBlock
 
 export type Llm2Message = {
   role: string
@@ -314,8 +365,8 @@ export interface CriteriaFulfillment {
   whatWasActuallyDone: string;
   analysis: string;
   isFulfilled: boolean;
-  confidence: number;
-  feedbackMessage?: string;
+  confidence?: number;
+  feedbackMessage?: string | null;
 }
 
 /**
@@ -378,4 +429,14 @@ export interface ScriptPermissionEvaluation {
   outcome: PermissionResult
   commands?: CommandPermissionEvaluation[]
   factors?: PermissionFactor[]
+}
+
+export type Llm2BuiltinToolUseBlock = Llm2ContentBlockBase & {
+  type: 'builtin_tool_use'
+  builtinToolUse: {
+    id: string
+    name: string
+    arguments: string
+    status?: string
+  }
 }

@@ -605,7 +605,7 @@ func TestGitTransferWorktreeChangesActivity(t *testing.T) {
 	// Uncommitted resolved changes live in the source worktree.
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	_, err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 	})
@@ -650,7 +650,7 @@ func TestGitTransferWorktreeChangesActivityDropsPreservedBaseStash(t *testing.T)
 
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	_, err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 		BaseStashSha:       baseStashSha,
@@ -692,7 +692,7 @@ func TestGitTransferWorktreeChangesActivityDropsBaseStashOnNoOp(t *testing.T) {
 	runGitCommandInTestRepo(t, repoDir, "stash", "push", "-m", "preserved-base")
 	baseStashSha := strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "rev-parse", "stash@{0}"))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	_, err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 		BaseStashSha:       baseStashSha,
@@ -739,7 +739,7 @@ func TestGitTransferWorktreeChangesActivityPreservesExistingStash(t *testing.T) 
 
 	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("resolved content\n"), 0644))
 
-	err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
+	_, err = GitTransferWorktreeChangesActivity(ctx, envContainer, GitTransferWorktreeChangesParams{
 		SourceWorktreePath: sourceDir,
 		TargetWorktreePath: repoDir,
 	})
@@ -998,16 +998,65 @@ func (e *hostTargetMergeEnv) SSHConnConfig(context.Context) (env.SSHConnConfig, 
 	return env.SSHConnConfig{}, errors.New("native SSH is not used by this fixture")
 }
 
-func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
+// installMergeTestSSH routes ssh to the "merge-test-host" destination through
+// a local shell, so SSH-based merge ref transport works against local repos.
+func installMergeTestSSH(t *testing.T) {
+	t.Helper()
 	sshDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "ssh"), []byte("#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -o|-p|-i) shift 2 ;;\n    merge-test-host) shift; exec sh -c \"$*\" ;;\n    *) exit 2 ;;\n  esac\ndone\nexit 2\n"), 0755))
 	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GIT_SSH_VARIANT", "ssh")
+}
+
+// A remote env's own copy of the target branch lags the host. After resolving
+// a host conflict recreated remotely, review diffs taken against the target
+// branch name must show only the flow's work, not base changes merged in.
+func TestGitMergeActivityHostConflictReviewDiffExcludesBaseChanges(t *testing.T) {
+	installMergeTestSSH(t)
 	ctx := context.Background()
 
+	fixture := setupIddChildMergeFixture(t)
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "branch", iddBranch, "origin/"+iddBranch)
+	createCommitWithFile(t, fixture.childRepoDir, "Conflicting intent", "intent.md", "child intent\n")
+	createCommitWithFile(t, fixture.hostWorktreeDir, "Base only", "base-only.txt", "base only\n")
+	childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
+	require.NoError(t, err)
+	container := env.EnvContainer{Env: &hostTargetMergeEnv{mergeResultSyncerEnv: &mergeResultSyncerEnv{
+		Env: childEnv, t: t, childRepoDir: fixture.childRepoDir, hostRepoDir: fixture.hostRepoDir,
+	}}}
+
+	result, err := GitMergeActivity(ctx, container, GitMergeParams{
+		SourceBranch: iddChildBranch, TargetBranch: iddBranch,
+	})
+	require.NoError(t, err)
+	require.True(t, result.HasConflicts)
+	require.Equal(t, evalSymlinks(t, fixture.childRepoDir), evalSymlinks(t, result.ConflictDirPath))
+
+	require.NoError(t, os.WriteFile(filepath.Join(fixture.childRepoDir, "intent.md"), []byte("resolved intent\n"), 0644))
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "add", "intent.md")
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "commit", "--no-edit")
+
+	diff, err := GitDiffActivity(ctx, container, GitDiffParams{
+		BaseRef: iddBranch, ThreeDotDiff: true, Staged: true,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, diff, "base-only.txt")
+	assert.Contains(t, diff, "+child work")
+	assert.Contains(t, diff, "-updated intent")
+	assert.Contains(t, diff, "+resolved intent")
+}
+
+func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
+	installMergeTestSSH(t)
+	ctx := context.Background()
+
+	// The parent keeps the environment above in place until every subtest
+	// has finished, and each subtest works in its own repositories, so the
+	// scenarios can run concurrently.
 	for _, strategy := range []MergeStrategy{MergeStrategyMerge, MergeStrategySquash} {
 		for _, scenario := range []string{"clean", "dirty", "stash conflict", "ordinary conflict", "no host worktree", "backup failure"} {
 			t.Run(string(strategy)+"/"+scenario, func(t *testing.T) {
+				t.Parallel()
 				fixture := setupIddChildMergeFixture(t)
 				childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
 				require.NoError(t, err)
@@ -1088,8 +1137,9 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					sourceTip := runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "HEAD")
 					targetTip := runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD")
 					assert.NotEqual(t, before, targetTip)
-					assert.NotEqual(t, runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "HEAD^{tree}"),
-						runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "rev-parse", "HEAD^{tree}"))
+					// Relocation aligns the source with the merged target so the
+					// stash conflict reproduces there exactly as on the host.
+					runGitCommandInTestRepo(t, fixture.childRepoDir, "merge-base", "--is-ancestor", targetTip, "HEAD")
 					require.NoError(t, os.WriteFile(filepath.Join(fixture.childRepoDir, "child.txt"), []byte("resolved child\n"), 0644))
 					runGitCommandInTestRepo(t, fixture.childRepoDir, "add", "child.txt")
 					transfer := GitTransferWorktreeChangesParams{
@@ -1105,7 +1155,7 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					assert.Equal(t, "untracked local notes", runGitCommandInTestRepo(t, fixture.childRepoDir, "show", "refs/stash^3:notes.txt"))
 
 					require.NoError(t, os.WriteFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"), []byte("intervening host edit\n"), 0644))
-					require.Error(t, GitTransferWorktreeChangesActivity(ctx, container, transfer))
+					require.Error(t, transferWorktreeChanges(ctx, container, transfer))
 					content, err = os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"))
 					require.NoError(t, err)
 					assert.Equal(t, "intervening host edit\n", string(content))
@@ -1113,7 +1163,7 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 					runGitCommandInTestRepo(t, fixture.hostWorktreeDir, "restore", "child.txt")
 
 					for attempt := 0; attempt < 2; attempt++ {
-						require.NoError(t, GitTransferWorktreeChangesActivity(ctx, container, transfer))
+						require.NoError(t, transferWorktreeChanges(ctx, container, transfer))
 						for name, expected := range map[string]string{
 							"child.txt": "resolved child\n",
 							"intent.md": "updated intent\n",
@@ -1150,4 +1200,9 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 			})
 		}
 	}
+}
+
+func transferWorktreeChanges(ctx context.Context, container env.EnvContainer, params GitTransferWorktreeChangesParams) error {
+	_, err := GitTransferWorktreeChangesActivity(ctx, container, params)
+	return err
 }

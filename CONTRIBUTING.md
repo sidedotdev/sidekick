@@ -127,12 +127,15 @@ cmake --build build_release --config Release
 mv build_release/libusearch_static_c.a ../sidekick/libusearch_c.a 
 ```
 
-Then back in sidekick's root directory, run build_install_local_cli.sh, which will build and install (into /usr/local/bin):
+Then back in sidekick's root directory, run `just install`, which will build and install (into /usr/local/bin):
 
 ```sh
 cd ../sidekick
-./build_install_local_cli.sh
+just install
 ```
+
+Only the host platform's side-agent is pre-built. To use remote environments on
+other platforms, pass their targets too, e.g. `just install linux-amd64`.
 
 ### Updating mocks
 

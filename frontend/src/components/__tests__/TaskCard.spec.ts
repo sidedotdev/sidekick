@@ -59,6 +59,47 @@ const task: FullTask = {
     expect(wrapper.find('.action.edit').exists()).toBe(true)
   })
 
+  it.each<FullTask['status']>([
+    'drafting', 'to_do', 'in_progress', 'blocked', 'in_review',
+    'complete', 'failed', 'canceled',
+  ])('hides edit and rename buttons for archived %s tasks', (status) => {
+    const wrapper = shallowMount(TaskCard, {
+      props: { task: { ...task, status, archived: new Date() } },
+    })
+    expect(wrapper.find('.action.edit, .action.rename').exists()).toBe(false)
+  })
+
+  it.each<FullTask['status']>(['complete', 'failed', 'canceled'])(
+    'hides the pencil button for %s tasks',
+    (status) => {
+      const wrapper = shallowMount(TaskCard, {
+        props: { task: { ...task, status } },
+      })
+      expect(wrapper.find('.action.edit, .action.rename').exists()).toBe(false)
+    },
+  )
+
+  it.each<FullTask['status']>(['drafting', 'in_progress'])(
+    'hides the pencil button for finished-column tasks with status %s',
+    (status) => {
+      const wrapper = shallowMount(TaskCard, {
+        props: { task: { ...task, status, agentType: 'none' } },
+      })
+      expect(wrapper.find('.action.edit, .action.rename').exists()).toBe(false)
+    },
+  )
+
+  it.each<FullTask['status']>(['to_do', 'in_progress', 'blocked', 'in_review'])(
+    'retains the rename button for active %s tasks',
+    (status) => {
+      const wrapper = shallowMount(TaskCard, {
+        props: { task: { ...task, status } },
+      })
+      expect(wrapper.find('.action.rename').exists()).toBe(true)
+      expect(wrapper.find('.action.edit').exists()).toBe(false)
+    },
+  )
+
   it('emits an edit event with the task when the edit button is clicked', async () => {
     const wrapper = shallowMount(TaskCard, {
       props: { task },

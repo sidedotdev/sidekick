@@ -7,16 +7,18 @@
       <vue-markdown
         :source="flowAction.actionParams.requestContent"
         :options="{ breaks: true }"
+        :plugins="markdownPlugins"
         class="markdown"
       />
     </div>
-    <div v-if="flowAction.actionParams.command">
+    <PermissionEvaluationDetails
+      v-if="showPermissionEvaluation"
+      :evaluation="flowAction.actionParams.permissionEvaluation"
+      :script="flowAction.actionParams.command"
+    />
+    <div v-else-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
-    <PermissionEvaluationDetails
-      v-if="devMode && flowAction.actionParams.permissionEvaluation"
-      :evaluation="flowAction.actionParams.permissionEvaluation"
-    />
     <div v-if="flowAction.actionParams.mergeApprovalInfo?.diff" class="diff-container" @click="restoreFocus">
       <div v-if="showEmptyDiffMessage" class="empty-diff-message">
         No changes since last review
@@ -137,8 +139,7 @@
       </button>
     </div>
   </form>
-  <!-- TODO move approved/rejected to FlowActionItem summary. Only show content here -->
-  <div v-if="expand && !isPending && (!flowAction.actionParams.command || !parsedActionResult?.Approved)">
+  <div v-if="expand && !isPending">
     <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
@@ -146,16 +147,18 @@
       <vue-markdown
         :source="flowAction.actionParams.requestContent"
         :options="{ breaks: true }"
+        :plugins="markdownPlugins"
         class="markdown"
       />
     </div>
-    <div v-if="flowAction.actionParams.command">
+    <PermissionEvaluationDetails
+      v-if="showPermissionEvaluation"
+      :evaluation="flowAction.actionParams.permissionEvaluation"
+      :script="flowAction.actionParams.command"
+    />
+    <div v-else-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
-    <PermissionEvaluationDetails
-      v-if="devMode && flowAction.actionParams.permissionEvaluation"
-      :evaluation="flowAction.actionParams.permissionEvaluation"
-    />
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
       <div class="diff-options-row">
         <label for="diffScopeNonPending">Show</label>
@@ -197,11 +200,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, inject } from 'vue';
 import type { FlowAction } from '../lib/models';
+import { USER_REQUEST_SHORTCUT_SUBMITTED_KEY } from '../lib/userRequestShortcut';
 import AutogrowTextarea from './AutogrowTextarea.vue';
 import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
+import { markdownPlugins } from '../lib/markdownTables'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';
@@ -239,6 +244,9 @@ const textareaRef = ref<{ focus: () => void } | null>(null);
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const hasResponseText = computed(() => responseContent.value.trim() !== '');
 const devMode = computed(() => import.meta.env.MODE === 'development');
+const showPermissionEvaluation = computed(() =>
+  devMode.value && !!props.flowAction.actionParams.permissionEvaluation && !!props.flowAction.actionParams.command
+);
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
 const diffScope = ref<'all' | 'since_last_review'>('all');
@@ -345,14 +353,14 @@ onMounted(() => {
   }
 
   if (isPending.value) {
-    registerGlobalShortcut(props.flowAction.id, props.flowAction.created, () => {
+    registerGlobalShortcut(props.flowAction.id, props.flowAction.created, (event) => {
       const requestKind = props.flowAction.actionParams.requestKind
       if (requestKind === 'free_form' && responseContent.value.length > 0) {
-        submitAndRetainFocus(true)
+        submitViaShortcut(true, event)
       } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
-        submitAndRetainFocus(!hasResponseText.value)
+        submitViaShortcut(!hasResponseText.value, event)
       } else if (requestKind === 'continue') {
-        submitAndRetainFocus(true)
+        submitViaShortcut(true, event)
       }
     })
 
@@ -394,15 +402,15 @@ const handleKeyDown = (event: KeyboardEvent) => {
     if (requestKind === 'free_form' && responseContent.value.length > 0) {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(true)
+      submitViaShortcut(true, event)
     } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(!hasResponseText.value)
+      submitViaShortcut(!hasResponseText.value, event)
     } else if (requestKind === 'continue') {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(true)
+      submitViaShortcut(true, event)
     }
   }
 }
@@ -410,13 +418,27 @@ const handleKeyDown = (event: KeyboardEvent) => {
 // When a keyboard shortcut submits the response, the action collapses and the
 // form unmounts, dropping focus. Move focus to the nearest subflow heading so
 // subsequent keyboard events keep bubbling to the flow view.
-const submitAndRetainFocus = async (approved: boolean) => {
+const submitAndRetainFocus = async (approved: boolean): Promise<boolean> => {
   const heading = formRef.value
     ?.closest('.subflow-container')
     ?.querySelector<HTMLElement>('.subflow-name-container')
   const result = await submitUserResponse(approved)
   if (result !== false) {
     heading?.focus()
+  }
+  return result === true
+}
+
+const onShortcutSubmitted = inject(USER_REQUEST_SHORTCUT_SUBMITTED_KEY, null)
+
+// Holding Shift opts out of any navigation the flow view performs after a
+// shortcut submission.
+const submitViaShortcut = async (approved: boolean, event: KeyboardEvent) => {
+  const allowNavigation = !event.shiftKey
+  const flowAction = props.flowAction
+  const submitted = await submitAndRetainFocus(approved)
+  if (submitted && allowNavigation) {
+    onShortcutSubmitted?.(flowAction)
   }
 }
 
@@ -626,9 +648,6 @@ async function submitUserResponse(approved: boolean) {
       return false;
     }
     
-    // Success case - parse response once
-    const result = await response.json();
-    console.debug(result);
     clearDraft();
     return true;
   } catch (error) {

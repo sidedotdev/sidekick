@@ -17,6 +17,7 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+	"github.com/rs/zerolog/log"
 )
 
 const defaultModel = "gpt-5.3-codex"
@@ -150,7 +151,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	modelInfo, _ := common.GetModel(options.Provider, model)
 	if modelInfo != nil && modelInfo.Reasoning {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
-		resolved := resolveOpenAIReasoningEffort(options.ReasoningEffort, model)
+		resolved := resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 		if resolved != "" {
 			actualReasoningEffort = resolved
 			params.Reasoning.Effort = shared.ReasoningEffort(actualReasoningEffort)
@@ -169,6 +170,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	}
 
 	stream := client.Responses.NewStreaming(ctx, params, extraBodyOptions...)
+	defer stream.Close()
 
 	var events []Event
 	var stopReason string
@@ -179,6 +181,19 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 loop:
 	for stream.Next() {
 		data := stream.Current()
+		if data.Type == "keepalive" {
+			select {
+			case eventChan <- Event{Type: EventHeartbeat}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		log.Trace().
+			Str("provider", options.Provider).
+			Str("model", model).
+			Str("eventType", data.Type).
+			Str("receivedAt", time.Now().Format(time.RFC3339Nano)).
+			Msg("OpenAI Responses stream event")
 
 		switch data.AsAny().(type) {
 		case responses.ResponseCompletedEvent:
@@ -454,7 +469,7 @@ loop:
 		return nil, wrapOpenAIError(err)
 	}
 
-	outputMessage := accumulateOpenaiEventsToMessage(events)
+	outputMessage := AccumulateEventsToMessage(events)
 
 	return &MessageResponse{
 		Id:              "",
@@ -693,7 +708,11 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 	return items, nil
 }
 
-func accumulateOpenaiEventsToMessage(events []Event) Message {
+// AccumulateEventsToMessage assembles the streamed events of a response into
+// a single assistant message. It only relies on the provider-agnostic event
+// contract, so callers can also use it to recover partial output from a
+// stream that was aborted before the provider produced a response.
+func AccumulateEventsToMessage(events []Event) Message {
 	blocks := make(map[int]*ContentBlock)
 	maxIndex := -1
 

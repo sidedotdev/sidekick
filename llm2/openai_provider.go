@@ -27,30 +27,6 @@ type OpenAIProvider struct {
 	CustomHeaders map[string]string
 }
 
-func resolveOpenAIReasoningEffort(effort, model string) string {
-	if effort != "lowest" && effort != "highest" {
-		return effort
-	}
-
-	if resolvedEffort, ok := resolveGPTReasoningEffort(effort, model); ok {
-		return resolvedEffort
-	}
-
-	modelLower := strings.ToLower(model)
-
-	if strings.HasPrefix(modelLower, "o1") || strings.HasPrefix(modelLower, "o3") || strings.HasPrefix(modelLower, "o4-mini") {
-		if effort == "lowest" {
-			return "low"
-		}
-		return "high"
-	}
-
-	if effort == "lowest" {
-		return "none"
-	}
-	return "high"
-}
-
 func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options
@@ -122,7 +98,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		params.ParallelToolCalls = param.NewOpt(*options.ParallelToolCalls)
 	}
 
-	actualReasoningEffort := resolveOpenAIReasoningEffort(options.ReasoningEffort, model)
+	actualReasoningEffort := resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 	if actualReasoningEffort != "" {
 		params.ReasoningEffort = shared.ReasoningEffort(actualReasoningEffort)
 	}

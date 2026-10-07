@@ -470,7 +470,7 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 			}
 		}
 	}
-	envVars := buildGitEnvVars(committerName, committerEmail)
+	envVars := BuildGitEnvVars(committerName, committerEmail)
 
 	msg := strings.TrimSpace(params.CommitMessage)
 	if msg == "" {
@@ -558,7 +558,7 @@ func GitMergeIntoWorktreeActivity(ctx context.Context, envContainer env.EnvConta
 			}
 		}
 	}
-	envVars := buildGitEnvVars(committerName, committerEmail)
+	envVars := BuildGitEnvVars(committerName, committerEmail)
 
 	cmd := fmt.Sprintf(
 		"cd %s && git merge --no-commit --no-ff %s",

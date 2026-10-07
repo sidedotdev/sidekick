@@ -1215,16 +1215,16 @@ func TestManageChatHistoryV2_SupersededTypes(t *testing.T) {
 			},
 		},
 		{
-			name:        "Latest SelfReviewFeedback kept",
-			contextType: ContextTypeSelfReviewFeedback,
+			name:        "Latest AutoReviewFeedback kept",
+			contextType: ContextTypeAutoReviewFeedback,
 			chatHistory: []llm.ChatMessage{
-				{Content: "SRF1", ContextType: ContextTypeSelfReviewFeedback},
+				{Content: "SRF1", ContextType: ContextTypeAutoReviewFeedback},
 				{Content: "U1"},
-				{Content: "SRF2", ContextType: ContextTypeSelfReviewFeedback},
+				{Content: "SRF2", ContextType: ContextTypeAutoReviewFeedback},
 				{Content: "U2"},
 			},
 			expected: []llm.ChatMessage{
-				{Content: "SRF2", ContextType: ContextTypeSelfReviewFeedback},
+				{Content: "SRF2", ContextType: ContextTypeAutoReviewFeedback},
 				{Content: "U2"},
 			},
 		},

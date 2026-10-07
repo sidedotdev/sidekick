@@ -1,10 +1,5 @@
 <template>
   <div class="llm-config-editor">
-    <!-- Error state for providers fetch -->
-    <div v-if="providersError" class="providers-error">
-      Failed to load providers. Please refresh the page.
-    </div>
-
     <!-- Default Model -->
     <div class="model-row">
       <span class="model-label">Default</span>
@@ -25,14 +20,13 @@
         @input="emitUpdate"
         @keydown.enter.stop
       />
-      <select
-        v-if="modelSupportsReasoning(defaultConfig.provider, defaultConfig.model)"
+      <ReasoningEffortControl
         v-model="defaultConfig.reasoningEffort"
-        class="reasoning-select-inline"
-        @change="emitUpdate"
-      >
-        <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Reasoning' }}</option>
-      </select>
+        :provider="defaultConfig.provider"
+        :model="defaultConfig.model"
+        :models-data="modelsData"
+        @update:model-value="emitUpdate"
+      />
       <button
         v-if="providerSupportsSpeed(defaultConfig.provider)"
         type="button"
@@ -42,6 +36,10 @@
         :aria-pressed="defaultConfig.speed === 'fast'"
         @click="toggleSpeed(defaultConfig)"
       >⚡</button>
+    </div>
+
+    <div v-if="providersError" class="providers-error" role="alert">
+      {{ providersError }}
     </div>
 
     <!-- Use Case Models -->
@@ -74,14 +72,14 @@
           @input="emitUpdate"
           @keydown.enter.stop
         />
-        <select
-          v-if="useCaseStates[useCase].enabled && modelSupportsReasoning(useCaseStates[useCase].config.provider, useCaseStates[useCase].config.model)"
+        <ReasoningEffortControl
+          v-if="useCaseStates[useCase].enabled"
           v-model="useCaseStates[useCase].config.reasoningEffort"
-          class="reasoning-select-inline"
-          @change="emitUpdate"
-        >
-          <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Reasoning' }}</option>
-        </select>
+          :provider="useCaseStates[useCase].config.provider"
+          :model="useCaseStates[useCase].config.model"
+          :models-data="modelsData"
+          @update:model-value="emitUpdate"
+        />
         <button
           v-if="useCaseStates[useCase].enabled && providerSupportsSpeed(useCaseStates[useCase].config.provider)"
           type="button"
@@ -97,8 +95,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import AutoComplete from 'primevue/autocomplete'
+import ReasoningEffortControl from './ReasoningEffortControl.vue'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
 
@@ -135,8 +134,7 @@ const getProviderLabel = (provider: string): string => {
 }
 
 const providerOptions = ref<string[]>([])
-const providersError = ref(false)
-const reasoningEffortOptions = ['', 'lowest', 'low', 'medium', 'high', 'highest'] as const
+const providersError = ref('')
 
 // When a workspaceId is provided, providers are filtered authoritatively by
 // that workspace's persisted profile; otherwise the profileId prop (if any)
@@ -156,20 +154,25 @@ let latestProvidersRequestId = 0
 
 const fetchProviders = async () => {
   const requestId = ++latestProvidersRequestId
+  const fallbackError = 'Failed to load providers. Please check your local configuration and refresh the page.'
   try {
     const response = await fetch(providersUrl())
     if (requestId !== latestProvidersRequestId) return
+    const data = await response.json()
+    if (requestId !== latestProvidersRequestId) return
     if (response.ok) {
-      const data = await response.json()
-      if (requestId !== latestProvidersRequestId) return
       providerOptions.value = data.providers || []
-      providersError.value = false
+      providersError.value = ''
     } else {
-      providersError.value = true
+      providerOptions.value = []
+      providersError.value = typeof data?.error === 'string' && data.error
+        ? data.error
+        : fallbackError
     }
   } catch {
     if (requestId !== latestProvidersRequestId) return
-    providersError.value = true
+    providerOptions.value = []
+    providersError.value = fallbackError
   }
 }
 
@@ -222,17 +225,6 @@ const loadModelsData = () => {
   } else {
     fetchModelsData()
   }
-}
-
-const modelSupportsReasoning = (provider: string, model: string): boolean => {
-  if (!model) return false
-  const providerInfo = modelsData.value[provider]
-  if (!providerInfo?.models) {
-    // for unknown providers, check against all providers, any matching model is acceptable
-    return Object.values(modelsData.value).some((p) => p.models?.[model]?.reasoning === true)
-  }
-  const modelInfo = providerInfo.models[model]
-  return modelInfo?.reasoning === true
 }
 
 const providerSupportsSpeed = (provider: string): boolean => provider === 'anthropic'
@@ -370,16 +362,6 @@ watch(() => props.modelValue, (newValue) => {
   color: var(--color-text);
 }
 
-.reasoning-select-inline {
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-  background-color: var(--color-background);
-  color: var(--color-text);
-  font-size: 0.875rem;
-  min-width: 5.5rem;
-}
-
 .speed-toggle {
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--color-border);
@@ -401,10 +383,10 @@ watch(() => props.modelValue, (newValue) => {
 .providers-error {
   padding: 0.5rem;
   margin-bottom: 0.75rem;
-  border: 1px solid var(--color-error, #dc3545);
+  border: 0.0625rem solid var(--color-error-border);
   border-radius: 0.25rem;
-  background-color: var(--color-error-bg, rgba(220, 53, 69, 0.1));
-  color: var(--color-error, #dc3545);
+  background-color: var(--color-error-background);
+  color: var(--color-error-text);
   font-size: 0.875rem;
 }
 </style>

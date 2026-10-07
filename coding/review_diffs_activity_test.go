@@ -464,3 +464,105 @@ func TestGenerateReviewDiffsActivity_Reversions(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateReviewDiffsActivity_WhitespaceChangesPreserveBaseline(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	createFileAndCommit(t, repoDir, "fields.txt", "first int\nsecond int\n", "initial commit")
+	runGit(t, repoDir, "checkout", "-b", "feature")
+	envContainer := newReviewDiffsTestEnv(t, ctx, repoDir)
+	ca := &CodingActivities{}
+	review := func(prior string, ignoreWhitespace bool) GenerateReviewDiffsResult {
+		t.Helper()
+		result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
+			EnvContainer:     envContainer,
+			StartPoint:       "main",
+			PriorReviewDiff:  prior,
+			IgnoreWhitespace: ignoreWhitespace,
+		})
+		require.NoError(t, err)
+		require.Empty(t, result.SinceDiffError)
+		return result
+	}
+
+	writeAndStage(t, repoDir, "fields.txt", "first int\nsecond int\nthird int\n")
+	first := review("", false)
+	writeAndStage(t, repoDir, "fields.txt", "first  int\nsecond int\nthird int\n")
+	second := review(first.FullDiff, true)
+	require.Contains(t, second.FullDiff, "-first int")
+	require.Contains(t, second.FullDiff, "+first  int")
+	require.Contains(t, second.SinceDiff, "-first int")
+	require.Contains(t, second.SinceDiff, "+first  int")
+
+	patchPath := filepath.Join(t.TempDir(), "since.patch")
+	require.NoError(t, os.WriteFile(patchPath, []byte(second.SinceDiff), 0600))
+	writeAndStage(t, repoDir, "fields.txt", "first int\nsecond int\nthird int\n")
+	runGit(t, repoDir, "apply", "--index", patchPath)
+	actual, err := os.ReadFile(filepath.Join(repoDir, "fields.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "first  int\nsecond int\nthird int\n", string(actual))
+
+	third := review(second.FullDiff, false)
+	require.Equal(t, second.FullDiff, third.FullDiff)
+	require.Empty(t, third.SinceDiff)
+}
+
+// Work done before a pinned step start point may include changes no unified
+// diff can express (empty files, mode-only changes). Those must not push the
+// step's review back to the whole branch diff, with or without base branch
+// merges in between.
+func TestGenerateReviewDiffsActivity_PinnedStartPointExcludesNonTextPriorWork(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		mergeBaseWork bool
+	}{
+		{name: "no base branch changes since start point"},
+		{name: "base branch merged in since start point", mergeBaseWork: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
+
+			createFileAndCommit(t, repoDir, "previous_step.go", "package feature\n\nfunc PreviousStep() {}\n", "previous step work")
+			createFileAndCommit(t, repoDir, "placeholder.txt", "", "previous step placeholder")
+			createFileAndCommit(t, repoDir, "image.bin", "\x00\x01\x02binary", "previous step binary")
+			require.NoError(t, os.Chmod(filepath.Join(repoDir, "shared.go"), 0755))
+			runGit(t, repoDir, "update-index", "--chmod=+x", "shared.go")
+			runGit(t, repoDir, "commit", "-m", "previous step mode change")
+			startPoint := strings.TrimSpace(runGit(t, repoDir, "rev-parse", "HEAD"))
+
+			if tt.mergeBaseWork {
+				runGit(t, repoDir, "checkout", "main")
+				createFileAndCommit(t, repoDir, "upstream.go", "package shared\n\nfunc UpstreamWork() {}\n", "upstream work")
+				runGit(t, repoDir, "checkout", "feature")
+				runGit(t, repoDir, "merge", "main", "-m", "merge main")
+			}
+
+			createFileAndCommit(t, repoDir, "step.go", "package feature\n\nfunc ThisStep() {}\n", "this step's work")
+			writeAndStage(t, repoDir, "step_more.go", "package feature\n\nfunc ThisStepMore() {}\n")
+
+			ca := &CodingActivities{}
+			result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
+				EnvContainer: envContainer,
+				StartPoint:   startPoint,
+				BaseBranch:   "main",
+			})
+			require.NoError(t, err)
+
+			assert.Contains(t, result.FullDiff, "ThisStep")
+			assert.Contains(t, result.FullDiff, "ThisStepMore")
+			assert.NotContains(t, result.FullDiff, "PreviousStep", "work before the step start point is not this step's")
+			assert.NotContains(t, result.FullDiff, "placeholder.txt")
+			assert.NotContains(t, result.FullDiff, "image.bin")
+			assert.NotContains(t, result.FullDiff, "shared.go")
+			assert.NotContains(t, result.FullDiff, "UpstreamWork", "changes merged in from the base branch are not this step's")
+		})
+	}
+}

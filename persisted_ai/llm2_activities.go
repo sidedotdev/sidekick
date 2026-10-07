@@ -37,6 +37,11 @@ func (si StreamInput) ActionParams() map[string]any {
 		params = map[string]any{}
 	}
 	params["messages"] = si.ChatHistory
+	if si.ChatHistory != nil {
+		// Activity metadata can repersist this action after the live history advances.
+		history := si.ChatHistory.Clone()
+		params["messages"] = &history
+	}
 	params["secretManagerType"] = si.Secrets.GetType()
 	return params
 }
@@ -45,6 +50,17 @@ func (si StreamInput) ActionParams() map[string]any {
 type Llm2Activities struct {
 	Streamer srv.Streamer
 	Storage  common.KeyValueStorage
+
+	// providerFactory overrides provider resolution; tests use it to drive
+	// Stream with scripted output. Nil means resolve from model config.
+	providerFactory func(common.ModelConfig, []common.ModelProviderPublicConfig) (llm2.Provider, error)
+}
+
+func (la *Llm2Activities) resolveProvider(config common.ModelConfig, providers []common.ModelProviderPublicConfig) (llm2.Provider, error) {
+	if la.providerFactory != nil {
+		return la.providerFactory(config, providers)
+	}
+	return getLlm2Provider(config, providers)
 }
 
 // Stream executes an LLM streaming request and sends events to the flow event stream.
@@ -58,20 +74,27 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
 	}
 
-	// Background heartbeat keeps the activity alive during long provider calls
-	// where no events are emitted (e.g. extended thinking).
+	// Providers without observed keepalive support may remain silent during
+	// extended thinking. Once support is observed, upstream silence is bounded.
+	var heartbeat streamHeartbeat
+	streamCtx, cancelStream := context.WithCancelCause(ctx)
+	defer cancelStream(nil)
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-done:
 				return
-			case <-ctx.Done():
+			case <-streamCtx.Done():
 				return
 			case <-ticker.C:
+				if !heartbeat.active(time.Now()) {
+					cancelStream(fmt.Errorf("LLM stream received no upstream events for %s", upstreamSilenceGrace))
+					return
+				}
 				if activity.IsActivity(ctx) {
 					activity.RecordHeartbeat(ctx, nil)
 				}
@@ -94,11 +117,28 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 
 		streamedBlocks := make(map[int]llm2.ContentBlock)
 		for event := range eventChan {
+			heartbeat.observe(event.Type == llm2.EventHeartbeat, time.Now())
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, event)
 			}
-			if input.FlowActionId == "" {
+			if event.Type == llm2.EventHeartbeat || input.FlowActionId == "" {
 				continue
+			}
+
+			if isContentRelevantLlm2Event(event.Type) {
+				streamEvent := domain.Llm2StreamEvent{
+					EventType:    domain.Llm2StreamEventType,
+					FlowActionId: input.FlowActionId,
+					Event:        event,
+				}
+				err := la.Streamer.AddFlowEvent(context.Background(), input.WorkspaceId, input.FlowId, streamEvent)
+				if err != nil {
+					log.Error().Err(err).
+						Str("workspaceId", input.WorkspaceId).
+						Str("flowId", input.FlowId).
+						Str("flowActionId", input.FlowActionId).
+						Msg("failed to add llm2 stream event to flow event stream")
+				}
 			}
 
 			flowEvent := convertLlm2EventToFlowEvent(event, input.FlowActionId, streamedBlocks)
@@ -117,7 +157,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		}
 	}()
 
-	provider, err := getLlm2Provider(input.Options.ModelConfig, input.Providers)
+	provider, err := la.resolveProvider(input.Options.ModelConfig, input.Providers)
 	if err != nil {
 		close(eventChan)
 		log.Error().Err(err).Msg("failed to get llm2 provider")
@@ -145,8 +185,17 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		SecretManager: secretManager,
 	}
 
-	response, err := provider.Stream(ctx, request, eventChan)
+	if capability, ok := provider.(interface {
+		ExpectsKeepalives(llm2.StreamRequest) bool
+	}); ok && capability.ExpectsKeepalives(request) {
+		heartbeat.observe(true, time.Now())
+	}
+
+	response, err := streamWithRetry(streamCtx, provider, request, eventChan)
 	close(eventChan)
+	if cause := context.Cause(streamCtx); cause != nil {
+		return nil, cause
+	}
 
 	if response != nil {
 		response.Provider = input.Options.ModelConfig.Provider
@@ -157,6 +206,18 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	}
 
 	return response, err
+}
+
+// isContentRelevantLlm2Event reports whether an llm2 event carries content the
+// UI needs to render blocks live. Signature deltas are opaque replay bytes and
+// heartbeats carry nothing, so neither is forwarded.
+func isContentRelevantLlm2Event(eventType llm2.EventType) bool {
+	switch eventType {
+	case llm2.EventBlockStarted, llm2.EventTextDelta, llm2.EventSummaryTextDelta, llm2.EventBlockDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // convertLlm2EventToFlowEvent converts an llm2.Event to a domain.FlowEvent for streaming.

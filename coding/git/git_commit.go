@@ -39,7 +39,7 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 		}
 	}
 
-	envVars := buildGitEnvVars(committerName, committerEmail)
+	envVars := BuildGitEnvVars(committerName, committerEmail)
 	args := []string{"commit", "-m", params.CommitMessage}
 	if params.CommitAll {
 		args = append(args, "-a")
@@ -133,7 +133,9 @@ func getGitUserConfig(ctx context.Context, envContainer env.EnvContainer) (name 
 	return config.Name, config.Email, nil
 }
 
-func buildGitEnvVars(committerName, committerEmail string) []string {
+// BuildGitEnvVars returns the git identity env vars for Sidekick-made commits:
+// Sidekick as author, and the developer as committer when known.
+func BuildGitEnvVars(committerName, committerEmail string) []string {
 	envVars := []string{
 		"GIT_AUTHOR_NAME=Sidekick",
 		"GIT_AUTHOR_EMAIL=sidekick@side.dev",

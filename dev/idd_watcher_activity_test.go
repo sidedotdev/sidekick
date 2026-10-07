@@ -36,9 +36,11 @@ func TestIddWatchEditIdleActivity_ReturnsAfterIdleOnIntentEdit(t *testing.T) {
 	resCh := make(chan result, 1)
 	go func() {
 		out, err := IddWatchEditIdleActivity(ctx, IddWatchEditIdleInput{
-			WorktreeDir:  worktree,
-			WatchSubdir:  "intent",
-			IdleDuration: 150 * time.Millisecond,
+			WorktreeDir: worktree,
+			WatchSubdir: "intent",
+			// Generous relative to the 40ms gap between burst writes so
+			// scheduler stalls under a loaded test run don't split the burst.
+			IdleDuration: 750 * time.Millisecond,
 			MaxWait:      10 * time.Second,
 		})
 		resCh <- result{out, err}
@@ -50,7 +52,8 @@ func TestIddWatchEditIdleActivity_ReturnsAfterIdleOnIntentEdit(t *testing.T) {
 	}
 	writeEdit()
 
-	retryTicker := time.NewTicker(500 * time.Millisecond)
+	// Must exceed IdleDuration, otherwise retries keep the batch from settling.
+	retryTicker := time.NewTicker(2 * time.Second)
 	defer retryTicker.Stop()
 	deadline := time.After(12 * time.Second)
 	for {

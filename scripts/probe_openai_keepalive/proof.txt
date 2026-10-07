@@ -1,0 +1,5 @@
+Let n >= 2 be an integer. Let a_1, ..., a_n be distinct positive integers with gcd(a_1, ..., a_n) = 1. Suppose that for every i, a_i divides the sum of all the other a_j squared.
+
+Prove or disprove that there must exist an index i for which a_i <= n - 1.
+
+Give a rigorous, self-contained argument. Do not assume the assertion is true. Explore both a proof and possible counterexamples, and verify any proposed counterexample against every divisibility condition and the gcd condition. If you cannot settle the general case, state precisely what you established and where the argument remains incomplete; do not invent a proof. Focus on structural number-theoretic reasoning rather than listing cases or writing code.

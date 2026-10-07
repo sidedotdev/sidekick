@@ -2,10 +2,13 @@ package env
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -424,6 +427,85 @@ exec sh -c "$cmd"
 	assert.FileExists(t, filepath.Join(remoteWorktreePath, "local.txt"))
 }
 
+// TestSyncBranchToRemoteOverSSHRetriesMidStreamDisconnect reproduces a push
+// whose connection drops after the remote received the pack, which git reports
+// as an unexpected sideband disconnect. The forced push is replay-safe, so it
+// must be retried rather than failing the merge. Not parallel: PATH is set.
+func TestSyncBranchToRemoteOverSSHRetriesMidStreamDisconnect(t *testing.T) {
+	ctx := context.Background()
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+
+	gitRun := func(t *testing.T, repoDir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", repoDir}, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), string(out))
+		return strings.TrimSpace(string(out))
+	}
+
+	remoteRepoDir := setupTestGitRepo(t)
+	branchName := "devpod"
+	gitRun(t, remoteRepoDir, "branch", branchName)
+
+	localRepoDir := filepath.Join(t.TempDir(), "local")
+	cloneOut, err := exec.Command("git", "clone", "--branch", branchName, remoteRepoDir, localRepoDir).CombinedOutput()
+	require.NoError(t, err, "git clone failed: %s", string(cloneOut))
+	gitRun(t, localRepoDir, "config", "user.name", "Test User")
+	gitRun(t, localRepoDir, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(localRepoDir, "local.txt"), []byte("local content"), 0644))
+	gitRun(t, localRepoDir, "add", "local.txt")
+	gitRun(t, localRepoDir, "commit", "-m", "local commit")
+	localTip := gitRun(t, localRepoDir, "rev-parse", branchName)
+
+	// Kill receive-pack once, after the pack has arrived, to sever the
+	// connection mid-stream.
+	marker := filepath.Join(t.TempDir(), "disconnected")
+	hook := fmt.Sprintf("#!/bin/sh\nif [ ! -e %s ]; then touch %s; kill -9 $PPID; fi\n", shellQuote(marker), shellQuote(marker))
+	require.NoError(t, os.WriteFile(filepath.Join(remoteRepoDir, ".git", "hooks", "pre-receive"), []byte(hook), 0755))
+
+	err = syncBranchToRemoteOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, branchName)
+	require.NoError(t, err)
+
+	require.FileExists(t, marker, "test premise: the first push must have been disconnected")
+	assert.Equal(t, localTip, gitRun(t, remoteRepoDir, "rev-parse", branchName))
+}
+
+func TestGitTransferDisconnected(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		err    error
+		output string
+		want   bool
+	}{
+		{
+			name:   "sideband disconnect mid-push",
+			err:    errors.New("exit status 128"),
+			output: "send-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\n",
+			want:   true,
+		},
+		{
+			name:   "remote git failure",
+			err:    errors.New("exit status 128"),
+			output: "fatal: '/missing' does not appear to be a git repository\nfatal: Could not read from remote repository.\n",
+			want:   false,
+		},
+		{
+			name:   "pre-execution transport failure is left to transport recovery",
+			err:    &gitSSHTransportError{cause: errors.New("exit status 128")},
+			output: "the remote end hung up unexpectedly",
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, gitTransferDisconnected(tt.err, []byte(tt.output)))
+		})
+	}
+}
+
 func TestSyncRefspecs(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t,
@@ -763,4 +845,146 @@ exec sh -c "$cmd"
 	err = syncGitRefToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepoDir, localRepoDir, "refs/tags/missing")
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrGitTagConflict)
+}
+
+// TestRunSSHScriptClassifiesSilentTransportFailure reproduces the failure
+// seen in production: ssh exits 255 with empty stderr before the remote
+// script runs, which must be reported as a transport failure that Modal's
+// endpoint recovery recognizes rather than as the script itself failing.
+func TestRunSSHScriptClassifiesSilentTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	// Accept and immediately close connections so the ssh client dies in the
+	// identification exchange; with quiet logging it prints nothing.
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	t.Cleanup(func() { listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	sshArgs := []string{
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=QUIET",
+		"-o", "ConnectTimeout=5",
+		"-p", strconv.Itoa(port),
+		"nobody@127.0.0.1",
+	}
+	output, err := runSSHScript(context.Background(), sshArgs, "echo EXISTS")
+
+	require.Error(t, err)
+	assert.Equal(t, 255, output.ExitStatus)
+	assert.Empty(t, strings.TrimSpace(output.Stderr), "test premise: quiet ssh leaves no diagnostics")
+	var transportErr *sshScriptTransportError
+	assert.ErrorAs(t, err, &transportErr)
+	assert.True(t, isModalSSHTransportFailure(err.Error()),
+		"a silent exit 255 must trigger ssh transport recovery: %v", err)
+
+	wrapped := fmt.Errorf("failed to check for remote repo: %w", err)
+	assert.True(t, isModalSSHTransportFailure(wrapped.Error()),
+		"classification must survive the wrapping callers add")
+}
+
+// TestFetchRemoteRefClassifiesSilentSSHTransportFailure reproduces a git fetch
+// whose ssh connection is dropped before the banner exchange: under
+// LogLevel=ERROR ssh prints nothing, and git reduces the failure to a generic
+// "Could not read from remote repository", which transport recovery must
+// still recognize.
+func TestFetchRemoteRefClassifiesSilentSSHTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	t.Cleanup(func() { listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	sshArgs := []string{
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=5",
+		"-p", strconv.Itoa(port),
+		"root@127.0.0.1",
+	}
+	err = syncFlowBranchToLocalOverSSH(context.Background(), sshArgs, "/root/repo", setupTestGitRepo(t), "side/branch")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Could not read from remote repository")
+	assert.True(t, isModalSSHTransportFailure(err.Error()),
+		"a silent ssh failure under git must trigger ssh transport recovery: %v", err)
+}
+
+// TestFetchRemoteRefDoesNotClassifyRemoteGitFailure guards the other side of
+// the boundary: the remote git failing after ssh connected is a real error,
+// not a transport failure worth an endpoint refresh.
+func TestFetchRemoteRefDoesNotClassifyRemoteGitFailure(t *testing.T) {
+	// Not parallel: installFakeSSH sets PATH.
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+	missingRepoDir := filepath.Join(t.TempDir(), "missing")
+	err := syncFlowBranchToLocalOverSSH(context.Background(), []string{"fake-host"}, missingRepoDir, setupTestGitRepo(t), "side/branch")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Could not read from remote repository")
+	assert.False(t, isModalSSHTransportFailure(err.Error()), "%v", err)
+}
+
+// TestSSHScriptFailureClassification pins the boundary between a remote
+// script failing (a real error the caller must surface) and ssh itself
+// failing (worth an endpoint refresh and retry).
+func TestSSHScriptFailureClassification(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "silent exit 255",
+			err:  fmt.Errorf("failed to check for remote repo: %w", &sshScriptTransportError{}),
+			want: true,
+		},
+		{
+			name: "exit 255 with diagnostics",
+			err:  fmt.Errorf("failed to fsck remote repo: %w", &sshScriptTransportError{stderr: "Connection closed by UNKNOWN port 65535"}),
+			want: true,
+		},
+		{
+			name: "script exit status",
+			err:  fmt.Errorf("checking for remote repo failed (exit 1): fatal: not a git repository"),
+			want: false,
+		},
+		{
+			name: "script exit 255 text without marker",
+			err:  fmt.Errorf("realigning remote repo after push failed (exit 255): "),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isModalSSHTransportFailure(tt.err.Error()))
+		})
+	}
 }

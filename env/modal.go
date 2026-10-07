@@ -1011,18 +1011,12 @@ func (r modalEndpointRefresh) restoreNotice(sandboxName string) string {
 		sandboxName, r.previousSandboxDescription(), r.snapshotDescription())
 }
 
-// refreshModalEndpoint re-resolves a sandbox's SSH tunnel endpoint after a
-// connection failure. If the sandbox no longer exists but the guard holds a
-// filesystem snapshot of it (taken by the idle watchdog), the sandbox is
-// recreated from that snapshot first.
-func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int, error) {
-	refresh, err := refreshModalEndpointDetailed(ctx, sandboxName)
-	return refresh.SSHHost, refresh.SSHPort, err
-}
-
-// refreshModalEndpointDetailed is refreshModalEndpoint reporting whether the
-// sandbox was restored from a snapshot; a seam so RunCommand tests can drive
-// the restore outcome without a Modal client.
+// refreshModalEndpointDetailed re-resolves a sandbox's SSH tunnel endpoint
+// after a connection failure, reporting whether the sandbox had to be restored
+// from a snapshot: if it no longer exists but the guard holds a filesystem
+// snapshot of it (taken by the idle watchdog), it is recreated from that
+// snapshot first. A package variable so tests can drive the restore outcome
+// without a Modal client.
 var refreshModalEndpointDetailed = func(ctx context.Context, sandboxName string) (modalEndpointRefresh, error) {
 	client, err := getModalClient()
 	if err != nil {
@@ -1270,6 +1264,18 @@ func recycleModalSandbox(ctx context.Context, name string) error {
 	return nil
 }
 
+func modalLookupRestoreSource(name, source string, lookup func(string) (*modalSnapshotRecord, error)) (*modalSnapshotRecord, error) {
+	record, err := lookup(source)
+	if err != nil {
+		if source == name {
+			return nil, fmt.Errorf("cannot determine restore snapshot for modal sandbox %s: %w", name, err)
+		}
+		log.Warn().Err(err).Str("sandbox", source).Msg("failed to check for modal seed snapshot")
+		return nil, nil
+	}
+	return record, nil
+}
+
 func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error) {
 	_, publicKey, err := ensureModalSSHKey(ctx)
 	if err != nil {
@@ -1306,10 +1312,11 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 			}
 		}
 		for _, snapName := range modalSnapshotSources(input, name) {
-			record, snapErr := modalLatestSnapshot(ctx, client, snapName)
+			record, snapErr := modalLookupRestoreSource(name, snapName, func(source string) (*modalSnapshotRecord, error) {
+				return modalLatestSnapshot(ctx, client, source)
+			})
 			if snapErr != nil {
-				log.Warn().Err(snapErr).Str("sandbox", snapName).Msg("failed to check for modal snapshot")
-				continue
+				return ModalCreateSandboxOutput{}, snapErr
 			}
 			if record == nil {
 				continue

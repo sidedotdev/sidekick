@@ -149,14 +149,6 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 
 	output := accumulateBedrockEventsToMessage(collected)
 
-	// Report the resolved effort. When "lowest" resolved to "" (thinking off),
-	// report "none" so consumers know thinking was intentionally skipped.
-	reportedEffort := resolvedEffort
-	if strings.Contains(strings.ToLower(model), "claude") &&
-		request.Options.ReasoningEffort == "lowest" && resolvedEffort == "" {
-		reportedEffort = "none"
-	}
-
 	return &MessageResponse{
 		Model:           model,
 		Provider:        bedrockProviderName,
@@ -164,7 +156,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		StopReason:      stopReason,
 		Usage:           usage,
 		AuthType:        common.ProviderAuthTypeAPI,
-		ReasoningEffort: reportedEffort,
+		ReasoningEffort: resolvedEffort,
 	}, nil
 }
 
@@ -210,7 +202,7 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 		return nil, maxTokens, ""
 	}
 
-	resolvedEffort = resolveAnthropicReasoningEffort(options.ReasoningEffort, model)
+	resolvedEffort = resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 
 	// Anthropic does not allow thinking when tool_choice forces tool use
 	forcesTool := options.ToolChoice.Type == common.ToolChoiceTypeRequired || options.ToolChoice.Type == common.ToolChoiceTypeTool
@@ -240,7 +232,6 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 		return map[string]any{"thinking": adaptiveThinking}, maxTokens, resolvedEffort
 	}
 	if resolvedEffort == "" {
-		// "lowest" resolved to "": thinking is intentionally skipped.
 		return nil, maxTokens, resolvedEffort
 	}
 

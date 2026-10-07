@@ -1,13 +1,13 @@
 <template>
   <div
     class="tooltip-wrapper"
-    @mouseenter="show = true"
-    @mouseleave="show = false"
-    @focusin="show = true"
-    @focusout="show = false"
+    @mouseenter="trigger.hover()"
+    @mouseleave="trigger.leave"
+    @focusin="trigger.focus()"
+    @focusout="trigger.leave"
   >
     <slot />
-    <div v-if="show" class="tooltip-popup" :class="positionClass">
+    <div v-if="visible" class="tooltip-popup" :class="positionClass">
       <slot name="content" />
     </div>
   </div>
@@ -15,6 +15,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useTooltipTrigger } from '../composables/useTooltipTrigger'
 
 const props = withDefaults(defineProps<{
   position?: 'right' | 'top' | 'bottom' | 'left'
@@ -22,8 +23,12 @@ const props = withDefaults(defineProps<{
   position: 'right'
 })
 
-const show = ref(false)
+const visible = ref(false)
 const positionClass = computed(() => `tooltip-${props.position}`)
+const trigger = useTooltipTrigger({
+  show: () => { visible.value = true },
+  hide: () => { visible.value = false },
+})
 </script>
 
 <style scoped>
@@ -43,7 +48,7 @@ const positionClass = computed(() => `tooltip-${props.position}`)
   gap: 0.5rem;
   font-size: 0.8125rem;
   color: var(--color-text);
-  z-index: 200;
+  z-index: var(--z-index-tooltip);
   pointer-events: none;
   box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.15);
 }

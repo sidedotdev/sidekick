@@ -626,6 +626,113 @@ func TestApplyEditBlocks_StagesAppliedEditsWithoutChecks(t *testing.T) {
 	})
 }
 
+// TestApplyEditBlocks_GitIgnoredPath covers edits to Sidekick's git-ignored
+// scratch directory, which cannot be staged but must still count as applied.
+func TestApplyEditBlocks_GitIgnoredPath(t *testing.T) {
+	t.Parallel()
+
+	const createdPath = ".side/tmp/created.txt"
+	const existingPath = ".side/tmp/existing.txt"
+
+	testCases := []struct {
+		name         string
+		enabledFlags []string
+		editBlocks   []EditBlock
+	}{
+		{
+			name:         "sequential without checks",
+			enabledFlags: []string{},
+			editBlocks: []EditBlock{
+				{EditType: "create", FilePath: createdPath, NewLines: []string{"created content"}},
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"first"}, NewLines: []string{"first updated"}},
+			},
+		},
+		{
+			name:         "sequential with checks",
+			enabledFlags: []string{fflag.CheckEdits},
+			editBlocks: []EditBlock{
+				{EditType: "create", FilePath: createdPath, NewLines: []string{"created content"}},
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"first"}, NewLines: []string{"first updated"}},
+			},
+		},
+		{
+			name:         "batch without checks",
+			enabledFlags: []string{},
+			editBlocks: []EditBlock{
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"first"}, NewLines: []string{"first updated"}},
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"second"}, NewLines: []string{"second updated"}},
+			},
+		},
+		{
+			name:         "batch with checks",
+			enabledFlags: []string{fflag.CheckEdits},
+			editBlocks: []EditBlock{
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"first"}, NewLines: []string{"first updated"}},
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"second"}, NewLines: []string{"second updated"}},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmpDir := t.TempDir()
+
+			runGitCommand(t, tmpDir, "init")
+			runGitCommand(t, tmpDir, "config", "user.email", "test@example.com")
+			runGitCommand(t, tmpDir, "config", "user.name", "Test User")
+			require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "tracked.txt"), []byte("tracked\n"), 0644))
+			runGitCommand(t, tmpDir, "add", ".")
+			runGitCommand(t, tmpDir, "commit", "-m", "Initial commit")
+
+			excludePath := filepath.Join(tmpDir, ".git", "info", "exclude")
+			require.NoError(t, os.MkdirAll(filepath.Dir(excludePath), 0755))
+			require.NoError(t, os.WriteFile(excludePath, []byte("/.side/tmp/\n"), 0644))
+			require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".side", "tmp"), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(tmpDir, existingPath), []byte("first\nsecond\n"), 0644))
+
+			da := &DevActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(languageName string) lsp.LSPClient {
+						return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+			}
+
+			reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+				EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tmpDir}},
+				EditBlocks:   tc.editBlocks,
+				EnabledFlags: tc.enabledFlags,
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, reports)
+
+			for _, report := range reports {
+				assert.True(t, report.DidApply, "report for %s should be applied", report.FilePath())
+				assert.Empty(t, report.Error, "report for %s should have no error", report.FilePath())
+				assert.True(t, report.CheckResult.Success, "report for %s should have a successful check result", report.FilePath())
+				for _, diff := range []string{report.InitialDiff, report.FinalDiff} {
+					assert.NotContains(t, diff, "ignored by one of your .gitignore files")
+					assert.NotContains(t, diff, "hint:")
+					if diff != "" {
+						assert.NotEmpty(t, getLineEditsFromDiff(diff), "diff should be a parseable unified diff: %q", diff)
+					}
+				}
+			}
+
+			feedback := feedbackFromApplyEditBlockReports(reports)
+			assert.Contains(t, feedback, "application succeeded")
+			assert.NotContains(t, feedback, "git add")
+			assert.NotContains(t, feedback, "gitignore")
+
+			existingContent, err := os.ReadFile(filepath.Join(tmpDir, existingPath))
+			require.NoError(t, err)
+			assert.Contains(t, string(existingContent), "first updated")
+		})
+	}
+}
+
 func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()

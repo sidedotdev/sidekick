@@ -38,7 +38,7 @@ const (
 	ContextTypeUserFeedback        = persisted_ai.ContextTypeUserFeedback
 	ContextTypeTestResult          = persisted_ai.ContextTypeTestResult
 	ContextTypeEditBlockReport     = persisted_ai.ContextTypeEditBlockReport
-	ContextTypeSelfReviewFeedback  = persisted_ai.ContextTypeSelfReviewFeedback
+	ContextTypeAutoReviewFeedback  = persisted_ai.ContextTypeAutoReviewFeedback
 	ContextTypeSummary             = persisted_ai.ContextTypeSummary
 	// ContextTypeIntentTaskStart marks an assistant tool-call message (and its
 	// matching tool result) where the background IDD orchestrator launched an
@@ -53,7 +53,7 @@ const (
 	RetainReasonInitialInstructions      = "InitialInstructions"
 	RetainReasonUserFeedback             = "UserFeedback"
 	RetainReasonLatestTestResult         = "LatestTestResult"
-	RetainReasonLatestSelfReviewFeedback = "LatestSelfReviewFeedback"
+	RetainReasonLatestAutoReviewFeedback = "LatestAutoReviewFeedback"
 	RetainReasonLatestSummary            = "LatestSummary"
 	RetainReasonLatestEditBlockReport    = "LatestEditBlockReport"
 	RetainReasonEditBlockProposal        = "EditBlockProposal"
@@ -416,7 +416,7 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 // Each ContextType has different retention rules:
 // - InitialInstructions: System prompts/instructions; always retained.
 // - UserFeedback: User corrections/guidance; all instances retained with their response blocks.
-// - TestResult, SelfReviewFeedback, Summary: Status messages; only the most recent of each type retained with its response block.
+// - TestResult, AutoReviewFeedback, Summary: Status messages; only the most recent of each type retained with its response block.
 // - EditBlockReport: Feedback on applied edit blocks; only the most recent retained, along with the original proposals it references and all subsequent messages.
 //
 // Messages without ContextType are retained if they fall within a retained block (between a ContextType message and the next ContextType message),
@@ -485,7 +485,7 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 	latestEditBlockReportIndex := -1
 	for i, msg := range chatHistory {
 		switch msg.ContextType {
-		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
+		case ContextTypeTestResult, ContextTypeAutoReviewFeedback, ContextTypeSummary:
 			latestIndices[msg.ContextType] = i
 		case ContextTypeEditBlockReport:
 			latestIndices[msg.ContextType] = i
@@ -506,9 +506,9 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 				primaryReason = RetainReasonLatestTestResult
 				shouldMarkAndExtendBlock = true
 			}
-		case ContextTypeSelfReviewFeedback:
+		case ContextTypeAutoReviewFeedback:
 			if latestIdx, ok := latestIndices[msg.ContextType]; ok && i == latestIdx {
-				primaryReason = RetainReasonLatestSelfReviewFeedback
+				primaryReason = RetainReasonLatestAutoReviewFeedback
 				shouldMarkAndExtendBlock = true
 			}
 		case ContextTypeSummary:

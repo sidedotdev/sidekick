@@ -20,22 +20,21 @@
       <h3>Params</h3>
       <JsonTree :data="flowAction.actionParams" />
       <h3>Result</h3>
-      <JsonTree :data="actionResult" />
+      <JsonTree v-if="actionResult !== null" :data="actionResult" />
       <pre v-if="unparsedActionResult">{{ unparsedActionResult }}</pre>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue';
+import { ref, computed, nextTick, watch } from 'vue';
 import type { FlowAction } from '../lib/models';
 import UserRequest from './UserRequest.vue'
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue'
 import RunTestsFlowAction from './RunTestsFlowAction.vue'
 import JsonTree from './JsonTree.vue'
 import CheckCriteriaFulfillmentFlowAction from './CheckCriteriaFulfillmentFlowAction.vue'
-import type { CriteriaFulfillment } from '@/lib/models';
-import { extractToolCallArguments } from '@/lib/models';
+import { parseCriteriaFulfillment, parseCriteriaExpansionCount } from '@/lib/criteriaFulfillment';
 import ApplyEditBlocksFlowAction, { type ApplyEditBlockResult } from './ApplyEditBlocksFlowAction.vue';
 import PlaintextResultFlowAction from './PlaintextResultFlowAction.vue';
 import ToolFlowAction from './ToolFlowAction.vue';
@@ -65,14 +64,27 @@ const props = defineProps({
   },
 });
 
+// Responded-to command approvals are noise in the flow, so they only stay
+// expanded while awaiting a response.
+const collapsesWhenResponded = computed(() => props.flowAction.actionType === 'user_request.approve.run_command');
+const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+
 const disableToggle = ref(false);
 const expand = ref(props.defaultExpanded);
 if (props.flowAction.isHumanAction) {
-  expand.value = true;
-  if (props.flowAction.actionStatus === 'pending') {
-    disableToggle.value = true;
-  }
+  expand.value = isPending.value || !collapsesWhenResponded.value;
+  disableToggle.value = isPending.value;
 }
+
+watch(isPending, (pending, wasPending) => {
+  if (!props.flowAction.isHumanAction || pending || !wasPending) {
+    return
+  }
+  disableToggle.value = false;
+  if (collapsesWhenResponded.value) {
+    expand.value = false;
+  }
+})
 
 const container = ref<HTMLDivElement | null>(null)
 const actionComponentRef = ref<{ summary?: { text: string, emoji: string } | null } | null>(null)
@@ -84,7 +96,6 @@ function toggle() {
   nextTick(() => {
     if (expand.value && container.value) {
       const scrollTo = container.value.scrollHeight > window.innerHeight - 100 ? 'start' : 'nearest';
-      console.log({scrollTo})
       container.value.scrollIntoView({ behavior: 'instant', block: scrollTo })
     } else if (!expand.value) {
       useEventBus('flow-view-collapse').emit()
@@ -289,10 +300,13 @@ const summary = computed<Summary | null>(() => {
         return null;
       }
       try {
-        const args = extractToolCallArguments(actionResult.value);
-        const criteriaFulfillment = JSON.parse(args || "null") as CriteriaFulfillment | null;
+        const criteriaFulfillment = parseCriteriaFulfillment(actionResult.value);
         if (criteriaFulfillment === null) {
-          return null;
+          const count = parseCriteriaExpansionCount(actionResult.value);
+          return count === null ? null : {
+            text: `View ${count} tool call${count === 1 ? '' : 's'}`,
+            emoji: '',
+          };
         }
         return {
           text: criteriaFulfillment.isFulfilled ? 'Yes' : 'No',
@@ -323,7 +337,8 @@ const summary = computed<Summary | null>(() => {
       }
     }
 
-    case 'user_request.approve.merge': {
+    case 'user_request.approve.merge':
+    case 'user_request.approve.run_command': {
       if (props.flowAction.actionStatus !== 'complete') {
         return null;
       }
@@ -353,6 +368,14 @@ const summary = computed<Summary | null>(() => {
 
 <style scoped>
 .action-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 0.85em;
   margin-left: 0px;
   padding: 2px 5px;
@@ -404,6 +427,11 @@ h3 + p {
 }
 
 a h3 {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  min-width: 0;
+  white-space: nowrap;
   cursor: pointer;
   font-size: 1.0rem;
 }

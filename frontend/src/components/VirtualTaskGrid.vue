@@ -5,7 +5,7 @@
         v-for="item in virtualizer.getVirtualItems()"
         :key="item.index"
         :data-index="item.index"
-        :ref="(el) => measureRef(el as HTMLElement | null, item)"
+        :ref="(el) => measureRef(el as HTMLElement | null)"
         class="grid-row"
         :style="{
           position: 'absolute',
@@ -101,7 +101,7 @@ watch([() => rows.value.length, columns], () => {
   virtualizer.value.measure()
 })
 
-const measureRef = (el: HTMLElement | null, item: { index: number }) => {
+const measureRef = (el: HTMLElement | null) => {
   if (el) {
     virtualizer.value.measureElement(el)
   }
@@ -141,7 +141,7 @@ onUnmounted(() => {
 
 .grid-row {
   display: grid;
-  grid-template-columns: repeat(v-bind(columns), 1fr);
+  grid-template-columns: repeat(v-bind(columns), minmax(0, 1fr));
   gap: 1rem;
 }
 </style>

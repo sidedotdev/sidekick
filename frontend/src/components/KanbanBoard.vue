@@ -1,7 +1,7 @@
 <template>
-  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" @updated="refresh" @deleted="refresh" :task="newTask" />
-  <TaskModal v-if="editingTask" :task="editingTask" @close="editingTask = null" @updated="refresh" @deleted="refresh" />
-  <TaskModal v-if="copyingTask" :task="copyingTask" @close="copyingTask = null" @created="refresh" @updated="refresh" />
+  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refreshFromTop" @updated="refresh" @deleted="refreshFromTop" :task="newTask" />
+  <TaskModal v-if="editingTask" :task="editingTask" @close="closeEditModal" @updated="settleEditingTask" @deleted="settleEditingTask" />
+  <TaskModal v-if="copyingTask" :task="copyingTask" @close="closeCopyModal" @created="refreshFromTop" @updated="refresh" />
   <div v-if="showGuidedOverlay" class="guided-overlay">
     <div class="guided-text">
       Get started by adding your first task to the AI Sidekick queue!
@@ -10,6 +10,7 @@
   <div
     ref="boardRef"
     class="kanban-board"
+    @focusin="onBoardFocusIn"
     @dragover="onBoardDragOver"
     @dragleave="onBoardDragLeave"
     @drop="onBoardDrop"
@@ -75,6 +76,7 @@
         v-show="isGroupExpanded(project.id)"
         :tasks="tasksByProjectId[project.id] ?? []"
         :show-headings="false"
+        :highlighted-task-id="highlightedTaskId"
         @add-task="(agentType: AgentType) => addTask(agentType, project.id)"
         @archive-finished="confirmArchiveFinished(project)"
         @refresh="refresh"
@@ -117,6 +119,7 @@
         :tasks="unassignedTasks"
         :new-task-shortcut-label="newTaskShortcutLabel"
         :show-headings="false"
+        :highlighted-task-id="highlightedTaskId"
         @add-task="(agentType: AgentType) => addTask(agentType)"
         @archive-finished="confirmArchiveFinished()"
         @refresh="refresh"
@@ -130,6 +133,7 @@
       :tasks="unassignedTasks"
       :new-task-shortcut-label="newTaskShortcutLabel"
       :show-headings="false"
+      :highlighted-task-id="highlightedTaskId"
       @add-task="(agentType: AgentType) => addTask(agentType)"
       @archive-finished="confirmArchiveFinished()"
       @refresh="refresh"
@@ -141,15 +145,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, nextTick, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Project, Task, TaskStatus } from '../lib/models'
 import KanbanColumnGroup from './KanbanColumnGroup.vue'
 import ArchiveIcon from './icons/ArchiveIcon.vue'
 import ProjectsIcon from './icons/ProjectsIcon.vue'
 import TaskModal from './TaskModal.vue'
 import { store } from '../lib/store'
-import { isInteractiveElement } from '../lib/dom'
+import { canMoveNavigationFocus, isFocusUnclaimed, isInteractiveElement } from '../lib/dom'
 import { viewCache } from '../lib/viewCache'
+import {
+  getKanbanKeyBindings,
+  isKanbanKeyboardControlEnabled,
+  KANBAN_DIRECTIONS,
+  KANBAN_NEW_TASK_SHORTCUT_KEY,
+} from '../lib/localSettings'
+import {
+  BOARD_CARD_SELECTOR,
+  buildBoardGroup,
+  defaultBoardPosition,
+  findTaskPosition,
+  moveBoardPosition,
+  taskAtPosition,
+  type BoardDirection,
+  type BoardGroup,
+  type BoardPosition,
+} from '../lib/kanbanNavigation'
+import { openTaskFlow } from '../lib/taskNavigation'
 
 const props = defineProps<{
   tasks: FullTask[],
@@ -395,6 +417,7 @@ const closeModal = () => {
     status: 'drafting',
     projectId: undefined,
   }
+  restoreBoardFocus()
 }
 
 // Edit/copy modals are owned here rather than by the task cards, so that
@@ -403,8 +426,13 @@ const closeModal = () => {
 const editingTask = ref<FullTask | null>(null)
 const copyingTask = ref<Task | null>(null)
 
+// Set once the edit modal's task is started or deleted, so closing the modal
+// moves on instead of returning to that task
+let editingTaskSettled = false
+
 const openEditModal = (task: FullTask) => {
   editingTask.value = task
+  editingTaskSettled = false
 }
 
 const openCopyModal = (task: Task) => {
@@ -418,7 +446,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
   const isSearchShortcut = modKey && event.key === 'f'
   const hasAnyModifier = event.metaKey || event.ctrlKey || event.altKey
-  const isNewTaskShortcut = !hasAnyModifier && (event.key === 't' || event.key === 'T')
+  const isNewTaskShortcut = !hasAnyModifier && event.key.toLowerCase() === KANBAN_NEW_TASK_SHORTCUT_KEY
   
   if (!isSearchShortcut && !isNewTaskShortcut) {
     return
@@ -454,14 +482,150 @@ const clearSearch = () => {
   isSearchVisible.value = false
 }
 
+const keyboardControlEnabled = computed(() => isKanbanKeyboardControlEnabled())
+
+// Mirrors the displayed board: expanded groups in display order, each with
+// its columns sorted as rendered
+const visibleBoardGroups = computed<BoardGroup[]>(() => {
+  if (!keyboardControlEnabled.value) return []
+  if (projects.value.length === 0) {
+    return [buildBoardGroup(EVERYTHING_ELSE_KEY, unassignedTasks.value)]
+  }
+  return [
+    ...projects.value.map(project => ({ key: project.id, tasks: tasksByProjectId.value[project.id] ?? [] })),
+    { key: EVERYTHING_ELSE_KEY, tasks: unassignedTasks.value },
+  ]
+    .filter(group => isGroupExpanded(group.key))
+    .map(group => buildBoardGroup(group.key, group.tasks))
+})
+
+// Until the user moves the highlight, it stays on the top-left card as tasks
+// change; afterwards it follows the chosen task while that task is visible.
+const steeredTaskId = ref<string | null>(null)
+
+const highlightedPosition = computed<BoardPosition | null>(() => {
+  const groups = visibleBoardGroups.value
+  const steered = steeredTaskId.value ? findTaskPosition(groups, steeredTaskId.value) : null
+  return steered ?? defaultBoardPosition(groups)
+})
+
+const highlightedTask = computed<FullTask | null>(() =>
+  highlightedPosition.value ? taskAtPosition(visibleBoardGroups.value, highlightedPosition.value) ?? null : null,
+)
+
+const highlightedTaskId = computed(() => highlightedTask.value?.id ?? null)
+
+// Steering only on an actual change keeps the default top-left highlight
+// tracking the board until the user picks another task
+const highlightTask = (taskId: string) => {
+  if (taskId !== highlightedTaskId.value) {
+    steeredTaskId.value = taskId
+  }
+}
+
+// Behaves as if the page were reloaded: the highlight returns to the top-left card
+const refreshFromTop = () => {
+  steeredTaskId.value = null
+  refresh()
+}
+
+const settleEditingTask = () => {
+  editingTaskSettled = true
+  refreshFromTop()
+}
+
+const closeEditModal = () => {
+  if (editingTask.value && !editingTaskSettled) {
+    highlightTask(editingTask.value.id)
+  }
+  editingTask.value = null
+  restoreBoardFocus()
+}
+
+const closeCopyModal = () => {
+  copyingTask.value = null
+  restoreBoardFocus()
+}
+
+// A closing modal drops focus to the document, which would otherwise leave
+// the highlighted card unfocused until the highlight next moves
+const restoreBoardFocus = () => {
+  if (!keyboardControlEnabled.value) return
+  void nextTick(() => {
+    if (!canMoveNavigationFocus(BOARD_CARD_SELECTOR)) return
+    boardRef.value?.querySelector<HTMLElement>(`${BOARD_CARD_SELECTOR}[tabindex]`)?.focus({ preventScroll: true })
+  })
+}
+
+const onBoardFocusIn = (event: FocusEvent) => {
+  if (!keyboardControlEnabled.value) return
+  const card = event.target instanceof Element ? event.target.closest<HTMLElement>(BOARD_CARD_SELECTOR) : null
+  const taskId = card?.dataset.taskId
+  if (taskId) {
+    highlightTask(taskId)
+  }
+}
+
+// Board keys only apply while a board card holds focus, or nothing does, so
+// that other focused elements (e.g. sidebar links) keep their own keys
+const isBoardKeyTarget = (target: EventTarget | null): boolean =>
+  isFocusUnclaimed(target)
+  || (target instanceof HTMLElement && target.matches(BOARD_CARD_SELECTOR) && !!boardRef.value?.contains(target))
+
+const ARROW_KEY_DIRECTIONS: Record<string, BoardDirection> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+}
+
+const directionForKey = (key: string): BoardDirection | null => {
+  const arrowDirection = ARROW_KEY_DIRECTIONS[key]
+  if (arrowDirection) return arrowDirection
+  const bindings = getKanbanKeyBindings()
+  const lowered = key.toLowerCase()
+  return KANBAN_DIRECTIONS.find(direction => bindings[direction].toLowerCase() === lowered) ?? null
+}
+
+const isTaskModalOpen = () => isModalOpen.value || editingTask.value !== null || copyingTask.value !== null
+
+const handleKeyboardControl = (event: KeyboardEvent) => {
+  if (!keyboardControlEnabled.value) return
+  if (event.metaKey || event.ctrlKey || event.altKey) return
+  if (!isBoardKeyTarget(event.target) || isTaskModalOpen()) return
+
+  const position = highlightedPosition.value
+  const task = highlightedTask.value
+  if (!position || !task) return
+
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    if (!openTaskFlow(task)) {
+      openEditModal(task)
+    }
+    return
+  }
+
+  const direction = directionForKey(event.key)
+  if (!direction) return
+  event.preventDefault()
+  const next = moveBoardPosition(visibleBoardGroups.value, position, direction)
+  const nextTask = next ? taskAtPosition(visibleBoardGroups.value, next) : undefined
+  if (nextTask) {
+    steeredTaskId.value = nextTask.id
+  }
+}
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('keydown', handleEscape)
+  window.addEventListener('keydown', handleKeyboardControl)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('keydown', handleEscape)
+  window.removeEventListener('keydown', handleKeyboardControl)
   if (debounceTimeout) {
     clearTimeout(debounceTimeout)
   }
@@ -512,6 +676,11 @@ async function confirmArchiveFinished(project?: Project) {
 
   --kanban-column-gap: 0.75rem;
   --kanban-column-heading-height: 2.6875rem;
+  --kanban-group-header-height: 2.5rem;
+  /* Revealed cards must clear the fixed app header and sticky column headings */
+  --task-list-scroll-margin-top: calc(
+    var(--app-header-height, 0rem) + var(--kanban-column-heading-height) + var(--kanban-gap)
+  );
   margin-bottom: 2rem;
 }
 
@@ -598,6 +767,15 @@ async function confirmArchiveFinished(project?: Project) {
   background-color: var(--color-background-hover);
 }
 
+/* Within a group, revealed cards must also clear its sticky header and the
+   gap below it */
+.project-group {
+  --task-list-scroll-margin-top: calc(
+    var(--app-header-height, 0rem) + var(--kanban-column-heading-height)
+      + var(--kanban-group-header-height) + 0.5rem + var(--kanban-gap)
+  );
+}
+
 .project-group + .project-group {
   margin-top: 1rem;
 }
@@ -611,6 +789,7 @@ async function confirmArchiveFinished(project?: Project) {
   position: sticky;
   top: var(--kanban-column-heading-height);
   z-index: 2;
+  min-height: var(--kanban-group-header-height);
   display: flex;
   align-items: stretch;
   font-family: sans-serif;

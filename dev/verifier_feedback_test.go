@@ -22,7 +22,7 @@ import (
 
 func TestVerifierFeedbackSourceMarkers(t *testing.T) {
 	t.Parallel()
-	for _, feedbackType := range []string{FeedbackTypePause, FeedbackTypeUserGuidance, FeedbackTypeApplyError, FeedbackTypeSystemError} {
+	for _, feedbackType := range []string{FeedbackTypePause, FeedbackTypeUserGuidance, FeedbackTypeApplyError, FeedbackTypeSystemError, FeedbackTypeTestFailure, FeedbackTypeAutoReview} {
 		t.Run(feedbackType, func(t *testing.T) {
 			t.Parallel()
 			var suite testsuite.WorkflowTestSuite
@@ -48,6 +48,12 @@ func TestVerifierFeedbackSourceMarkers(t *testing.T) {
 			expected := ""
 			if feedbackType == FeedbackTypeApplyError {
 				expected = ContextTypeEditBlockReport
+			}
+			if feedbackType == FeedbackTypeTestFailure {
+				expected = ContextTypeTestResult
+			}
+			if feedbackType == FeedbackTypeAutoReview {
+				expected = ContextTypeAutoReviewFeedback
 			}
 			if feedbackType == FeedbackTypePause || feedbackType == FeedbackTypeUserGuidance {
 				expected = ContextTypeUserFeedback

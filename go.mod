@@ -49,10 +49,10 @@ require (
 	github.com/sashabaranov/go-openai v1.41.0
 	github.com/segmentio/ksuid v1.0.4
 	github.com/sourcegraph/jsonrpc2 v0.2.0
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.1
 	github.com/temporalio/ui-server/v2 v2.40.1
 	github.com/thomaspoignant/go-feature-flag v1.26.0
-	github.com/tmc/go-iroh v0.0.0-20260702234417-d5b13786f0ee
+	github.com/tmc/go-iroh v0.2.2
 	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0
 	github.com/tree-sitter-grammars/tree-sitter-markdown v0.0.0-00010101000000-000000000000
 	github.com/tree-sitter/go-tree-sitter v0.25.0
@@ -72,7 +72,7 @@ require (
 	go.temporal.io/sdk/contrib/opentelemetry v0.6.0
 	go.temporal.io/server v1.31.1
 	golang.org/x/image v0.36.0
-	golang.org/x/tools v0.45.0
+	golang.org/x/tools v0.48.0
 	google.golang.org/genai v1.63.0
 	logur.dev/adapter/zerolog v0.6.0
 	logur.dev/logur v0.17.0
@@ -148,7 +148,7 @@ require (
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.59.1 // indirect
+	github.com/quic-go/quic-go v0.62.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sourcegraph/go-diff v0.6.0 // indirect
 	github.com/spf13/cast v1.7.0 // indirect
@@ -162,9 +162,9 @@ require (
 	go.temporal.io/auto-scaled-workers v0.0.0-20260407181057-edd947d743d2 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/mod v0.36.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	k8s.io/api v0.35.1 // indirect
 	k8s.io/apimachinery v0.35.1 // indirect
@@ -188,7 +188,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.57.0
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.18.0
 	github.com/minio/highwayhash v1.0.3 // indirect
 	github.com/nats-io/jwt/v2 v2.7.3 // indirect
 	github.com/nats-io/nkeys v0.4.10 // indirect
@@ -225,6 +225,7 @@ require (
 	github.com/charmbracelet/lipgloss v0.13.0
 	github.com/cloudflare/circl v1.3.7 // indirect
 	github.com/coreos/go-oidc/v3 v3.11.0 // indirect
+	github.com/creack/pty v1.1.24
 	github.com/cyphar/filepath-securejoin v0.3.5 // indirect
 	github.com/danieljoos/wincred v1.2.0 // indirect
 	github.com/danwakefield/fnmatch v0.0.0-20160403171240-cbb64ac3d964 // indirect
@@ -313,7 +314,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/skeema/knownhosts v1.3.0 // indirect
 	github.com/sony/gobreaker v1.0.0 // indirect
-	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/temporalio/ringpop-go v0.0.0-20250130211428-b97329e994f7 // indirect
 	github.com/temporalio/sqlparser v0.0.0-20231115171017-f4060bcfa6cb // indirect
 	github.com/temporalio/tchannel-go v1.22.1-0.20240528171429-1db37fdea938 // indirect
@@ -343,14 +344,14 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	golang.org/x/arch v0.23.0 // indirect
-	golang.org/x/crypto v0.53.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
-	golang.org/x/net v0.55.0
+	golang.org/x/net v0.57.0
 	golang.org/x/oauth2 v0.34.0
-	golang.org/x/sync v0.21.0
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/term v0.44.0 // indirect
-	golang.org/x/text v0.38.0
+	golang.org/x/sync v0.22.0
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/term v0.45.0 // indirect
+	golang.org/x/text v0.41.0
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/api v0.256.0 // indirect
 	google.golang.org/genproto v0.0.0-20250603155806-513f23925822 // indirect

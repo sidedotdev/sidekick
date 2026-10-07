@@ -110,7 +110,7 @@ func debugModalSnapshotRecord(ctx context.Context, w io.Writer, client *modal.Cl
 		fmt.Fprintf(w, "%s Guard: app=%s volume=%s namespace=%q deployedSourceHash=%s wantSourceHash=%s\n",
 			now, identity.AppName, identity.VolumeName, identity.Namespace, identity.SourceHash, modalGuardScriptHash())
 	}
-	record, err := modalLatestSnapshot(ctx, client, name)
+	record, err := modalReadLatestSnapshot(ctx, client, name)
 	switch {
 	case err != nil:
 		fmt.Fprintf(w, "%s Snapshot error: %v\n", now, err)

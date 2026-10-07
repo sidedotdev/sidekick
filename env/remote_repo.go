@@ -24,6 +24,41 @@ import (
 // first sync fast even for repos with large histories.
 const seedCloneDepth = 25
 
+// sshScriptTransportError marks a one-off ssh session that exited 255, which
+// OpenSSH reserves for its own failures: the remote script never ran, or its
+// exit status was lost with the connection. Under LogLevel=ERROR the client
+// can exit that way with empty stderr, so the exit status is the only
+// reliable signal for ssh transport recovery to act on.
+type sshScriptTransportError struct {
+	stderr string
+}
+
+func (e *sshScriptTransportError) Error() string {
+	msg := "ssh transport failure before remote script ran"
+	if e.stderr != "" {
+		msg += ": " + e.stderr
+	}
+	return msg
+}
+
+// runSSHScript runs script in the remote environment over a one-off ssh
+// session. A non-zero exit from the script itself is returned in the output
+// for the caller to interpret; an ssh-level failure is returned as an error.
+func runSSHScript(ctx context.Context, sshArgs []string, script string) (unix.RunCommandActivityOutput, error) {
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       append(slices.Clone(sshArgs), script),
+	})
+	if err != nil {
+		return output, err
+	}
+	if output.ExitStatus == 255 {
+		return output, &sshScriptTransportError{stderr: strings.TrimSpace(output.Stderr)}
+	}
+	return output, nil
+}
+
 // syncRepoOverSSH mirrors the local HEAD branch (plus any extraBranches) of
 // a local git repository into a remote environment reachable via the given
 // ssh args (ending with the destination). A missing remote repo is first
@@ -33,16 +68,12 @@ const seedCloneDepth = 25
 // remote $HOME; the resolved directory is returned.
 func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir string, extraBranches []string) (string, error) {
 	if containerRepoDir == "" {
-		homeArgs := make([]string, len(sshArgs))
-		copy(homeArgs, sshArgs)
-		homeArgs = append(homeArgs, "echo $HOME")
-		homeOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-			WorkingDir: ".",
-			Command:    "ssh",
-			Args:       homeArgs,
-		})
+		homeOutput, err := runSSHScript(ctx, sshArgs, "echo $HOME")
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve $HOME in sandbox: %w", err)
+		}
+		if homeOutput.ExitStatus != 0 {
+			return "", fmt.Errorf("resolving $HOME in sandbox failed (exit %d): %s", homeOutput.ExitStatus, homeOutput.Stderr)
 		}
 		home := strings.TrimSpace(homeOutput.Stdout)
 		if home == "" {
@@ -55,7 +86,6 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 	if err != nil {
 		return "", err
 	}
-	refspecs := syncRefspecs(headRef, extraBranches)
 
 	exists, err := remoteRepoExists(ctx, sshArgs, containerRepoDir)
 	if err != nil {
@@ -70,12 +100,26 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 		}
 	}
 
+	if err := pushRepoSyncWithRecoveryOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, extraBranches); err != nil {
+		return "", err
+	}
+	if err := syncGitRemotesOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir); err != nil {
+		return "", err
+	}
+	return containerRepoDir, nil
+}
+
+// pushRepoSyncWithRecoveryOverSSH pushes the synced refs into the remote repo,
+// recovering from remote unpack failures by retrying with a self-contained
+// pack and, if the remote repo is provably corrupted, re-seeding it.
+func pushRepoSyncWithRecoveryOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir, headRef string, extraBranches []string) error {
+	refspecs := syncRefspecs(headRef, extraBranches)
 	pushErr := pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, false)
 	if pushErr == nil {
-		return containerRepoDir, nil
+		return nil
 	}
 	if !remoteUnpackFailed(pushErr) {
-		return "", pushErr
+		return pushErr
 	}
 	// An unpack failure proves only that the remote could not resolve this
 	// pack: the cause may be a thin-pack delta base it lacks, a truncated
@@ -86,24 +130,24 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 		Msg("remote could not unpack pushed pack; retrying with a self-contained pack")
 	pushErr = pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, true)
 	if pushErr == nil {
-		return containerRepoDir, nil
+		return nil
 	}
 	if !remoteUnpackFailed(pushErr) {
-		return "", pushErr
+		return pushErr
 	}
 	// Replace the repo only when its object store is provably broken;
 	// anything else deserves the error rather than discarded remote state.
 	corrupted, fsckErr := remoteRepoCorrupted(ctx, sshArgs, containerRepoDir)
 	if fsckErr != nil {
-		return "", fmt.Errorf("%w (fsck: %v)", pushErr, fsckErr)
+		return fmt.Errorf("%w (fsck: %v)", pushErr, fsckErr)
 	}
 	if !corrupted {
-		return "", pushErr
+		return pushErr
 	}
 	log.Warn().Err(pushErr).Str("remoteRepoDir", containerRepoDir).
 		Msg("remote repo failed fsck; quarantining and re-seeding")
 	if qErr := quarantineRemoteRepo(ctx, sshArgs, containerRepoDir); qErr != nil {
-		return "", fmt.Errorf("%w (quarantine: %v)", pushErr, qErr)
+		return fmt.Errorf("%w (quarantine: %v)", pushErr, qErr)
 	}
 	if seedErr := seedRepoOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, extraBranches); seedErr != nil {
 		// The push below seeds the repo too (with the full history of the
@@ -111,10 +155,7 @@ func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 		log.Warn().Err(seedErr).Str("remoteRepoDir", containerRepoDir).
 			Msg("shallow repo seed failed; falling back to seeding via push")
 	}
-	if err := pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, false); err != nil {
-		return "", err
-	}
-	return containerRepoDir, nil
+	return pushRepoSyncOverSSH(ctx, sshArgs, localRepoDir, containerRepoDir, headRef, refspecs, false)
 }
 
 // remoteUnpackFailed reports whether a push failed because the remote side
@@ -136,14 +177,7 @@ func remoteUnpackFailed(err error) bool {
 // with some other cause.
 func remoteRepoCorrupted(ctx context.Context, sshArgs []string, containerRepoDir string) (bool, error) {
 	script := fmt.Sprintf("git -C %s fsck --full --no-progress", shellQuote(containerRepoDir))
-	fsckArgs := make([]string, len(sshArgs))
-	copy(fsckArgs, sshArgs)
-	fsckArgs = append(fsckArgs, script)
-	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       fsckArgs,
-	})
+	output, err := runSSHScript(ctx, sshArgs, script)
 	if err != nil {
 		return false, fmt.Errorf("failed to fsck remote repo: %w", err)
 	}
@@ -161,14 +195,7 @@ func remoteRepoCorrupted(ctx context.Context, sshArgs []string, containerRepoDir
 func quarantineRemoteRepo(ctx context.Context, sshArgs []string, containerRepoDir string) error {
 	quarantineDir := containerRepoDir + ".corrupt." + time.Now().UTC().Format("20060102T150405Z")
 	script := fmt.Sprintf("mv %s %s", shellQuote(containerRepoDir), shellQuote(quarantineDir))
-	moveArgs := make([]string, len(sshArgs))
-	copy(moveArgs, sshArgs)
-	moveArgs = append(moveArgs, script)
-	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       moveArgs,
-	})
+	output, err := runSSHScript(ctx, sshArgs, script)
 	if err != nil {
 		return fmt.Errorf("failed to quarantine remote repo: %w", err)
 	}
@@ -204,14 +231,7 @@ func syncRefspecs(headRef string, extraBranches []string) []string {
 // containerRepoDir in the remote environment.
 func remoteRepoExists(ctx context.Context, sshArgs []string, containerRepoDir string) (bool, error) {
 	script := fmt.Sprintf("if [ -d %s/.git ]; then echo EXISTS; else echo MISSING; fi", shellQuote(containerRepoDir))
-	checkArgs := make([]string, len(sshArgs))
-	copy(checkArgs, sshArgs)
-	checkArgs = append(checkArgs, script)
-	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       checkArgs,
-	})
+	output, err := runSSHScript(ctx, sshArgs, script)
 	if err != nil {
 		return false, fmt.Errorf("failed to check for remote repo: %w", err)
 	}
@@ -238,7 +258,7 @@ func seedRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, contai
 				quotedRepo, seedCloneDepth, url, shellQuote(spec)))
 		}
 		// The origin remote points at the tunnel, which is gone after this
-		// command; remove it so nothing in the sandbox tries to use it.
+		// command; remove it so the local repo's real remotes can replace it.
 		script.WriteString(fmt.Sprintf(" && git -C %s remote remove origin", quotedRepo))
 		script.WriteString(fmt.Sprintf(" && git -C %s config user.name 'Sidekick' && git -C %s config user.email 'sidekick@side.dev'",
 			quotedRepo, quotedRepo))
@@ -310,10 +330,6 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
-	gitSSH := "ssh"
-	for _, a := range opts {
-		gitSSH += " " + shellQuote(a)
-	}
 
 	// Prepare the remote repo: init when missing, and allow pushes to (and
 	// deletions of) checked-out branches; the working tree is realigned
@@ -326,15 +342,8 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 			"git -C %s config receive.denyDeleteCurrent ignore",
 		quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo,
 	)
-	prepArgs := make([]string, len(sshArgs))
-	copy(prepArgs, sshArgs)
-	prepArgs = append(prepArgs, prepScript)
 	prepStart := time.Now()
-	prepOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       prepArgs,
-	})
+	prepOutput, err := runSSHScript(ctx, sshArgs, prepScript)
 	if err != nil {
 		return fmt.Errorf("failed to prepare remote repo for push: %w", err)
 	}
@@ -350,9 +359,7 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 	}
 	pushArgs = append(pushArgs, dest+":"+containerRepoDir)
 	pushArgs = append(pushArgs, refspecs...)
-	cmd := exec.CommandContext(ctx, "git", pushArgs...)
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := RunGitOverSSH(ctx, opts, pushArgs...); err != nil {
 		return fmt.Errorf("git push to %s: %w: %s", containerRepoDir, err, string(out))
 	}
 	pushDur := time.Since(pushStart)
@@ -360,15 +367,8 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 	applyScript := "cd " + quotedRepo +
 		" && git symbolic-ref HEAD " + shellQuote(headRef) +
 		" && git reset --hard"
-	applyArgs := make([]string, len(sshArgs))
-	copy(applyArgs, sshArgs)
-	applyArgs = append(applyArgs, applyScript)
 	applyStart := time.Now()
-	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       applyArgs,
-	})
+	applyOutput, err := runSSHScript(ctx, sshArgs, applyScript)
 	if err != nil {
 		return fmt.Errorf("failed to realign remote repo after push: %w", err)
 	}
@@ -482,18 +482,120 @@ func fetchRemoteRefToLocal(ctx context.Context, sshArgs []string, workingDirecto
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
-	gitSSH := "ssh"
-	for _, a := range opts {
-		gitSSH += " " + shellQuote(a)
-	}
-	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir,
-		"fetch", "--no-tags", "--no-write-fetch-head", dest+":"+workingDirectory, refspec)
 	// Tag conflict detection relies on Git's diagnostic text.
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH, "LC_ALL=C")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := RunGitOverSSH(ctx, opts, "-C", localRepoDir,
+		"fetch", "--no-tags", "--no-write-fetch-head", dest+":"+workingDirectory, refspec)
+	if err != nil {
 		return fmt.Errorf("git fetch %s %s: %w: %s", workingDirectory, refspec, err, string(out))
 	}
 	return nil
+}
+
+// gitSSHExit255Marker is printed by the GitSSHEnv wrapper when ssh itself
+// exits 255, a status git otherwise hides behind its own exit 128.
+const gitSSHExit255Marker = "sidekick: ssh exited 255"
+
+// GitSSHEnv returns environment variables making git run ssh with opts for
+// its transport. Under LogLevel=ERROR, ssh can fail without printing anything,
+// so the wrapper marks ssh's own failure status on stderr for GitSSHFailure.
+// LC_ALL=C keeps git's diagnostics in the English wording callers match on.
+func GitSSHEnv(opts []string) []string {
+	ssh := "ssh"
+	for _, a := range opts {
+		ssh += " " + shellQuote(a)
+	}
+	// Git appends ` "$@"` to a GIT_SSH_COMMAND containing shell syntax, so the
+	// wrapper must be a function invoked last.
+	wrapper := "side_git_ssh() { " + ssh + ` "$@"; s=$?; if [ "$s" -eq 255 ]; then echo '` +
+		gitSSHExit255Marker + `' >&2; fi; return "$s"; }; side_git_ssh`
+	return []string{
+		"GIT_SSH_COMMAND=" + wrapper,
+		// The wrapper's name hides that it is OpenSSH from git's detection.
+		"GIT_SSH_VARIANT=ssh",
+		"LC_ALL=C",
+	}
+}
+
+// gitSSHTransportError reports a git-over-ssh command whose ssh connection
+// failed before the remote git sent anything, so it is safe to retry once the
+// transport is recovered.
+type gitSSHTransportError struct {
+	cause error
+}
+
+func (e *gitSSHTransportError) Error() string {
+	return "ssh transport failure before remote git responded: " + e.cause.Error()
+}
+
+func (e *gitSSHTransportError) Unwrap() error {
+	return e.cause
+}
+
+// GitSSHFailure classifies the error of a git command run with GitSSHEnv,
+// given its combined output. Git's initial-contact message alone is ambiguous
+// (the remote git may have failed instead), so it only denotes a transport
+// failure alongside ssh's own exit status.
+func GitSSHFailure(err error, output []byte) error {
+	text := string(output)
+	if strings.Contains(text, gitSSHExit255Marker) && strings.Contains(text, "Could not read from remote repository") {
+		return &gitSSHTransportError{cause: err}
+	}
+	return err
+}
+
+// gitTransferAttempts bounds how many times a replay-safe git transfer is
+// attempted when its connection drops mid-stream.
+const gitTransferAttempts = 3
+
+// RunGitOverSSH runs git with args using ssh opts as its transport and returns
+// the combined output, with failures classified by GitSSHFailure. A connection
+// dropped mid-transfer is retried a bounded number of times, so callers must
+// only use it for replay-safe transfers: fetches and pushes of explicit
+// refspecs, which converge on the same refs when repeated.
+func RunGitOverSSH(ctx context.Context, opts []string, args ...string) ([]byte, error) {
+	for attempt := 1; ; attempt++ {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Env = append(os.Environ(), GitSSHEnv(opts)...)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return out, nil
+		}
+		err = GitSSHFailure(err, out)
+		if attempt >= gitTransferAttempts || ctx.Err() != nil || !gitTransferDisconnected(err, out) {
+			return out, err
+		}
+		log.Warn().Err(err).Int("attempt", attempt).Str("output", strings.TrimSpace(string(out))).
+			Msg("git transfer connection dropped mid-stream; retrying")
+		select {
+		case <-ctx.Done():
+			return out, err
+		case <-time.After(time.Duration(attempt) * time.Second):
+		}
+	}
+}
+
+// gitTransferDisconnected reports whether a git transfer failed because its
+// connection dropped after the remote git started responding. Failures before
+// that point are left to ssh transport recovery, which can repair causes (a
+// moved endpoint, a rejected key) that a plain retry cannot.
+func gitTransferDisconnected(err error, output []byte) bool {
+	var transportErr *gitSSHTransportError
+	if errors.As(err, &transportErr) {
+		return false
+	}
+	text := strings.ToLower(string(output))
+	for _, fragment := range []string{
+		"unexpected disconnect while reading sideband packet",
+		"the remote end hung up unexpectedly",
+		"early eof",
+		"connection reset by peer",
+		"broken pipe",
+	} {
+		if strings.Contains(text, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // syncBranchToRemoteOverSSH force-updates a single branch in a remote
@@ -521,20 +623,11 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
-	gitSSH := "ssh"
-	for _, a := range opts {
-		gitSSH += " " + shellQuote(a)
-	}
 
 	// Allow updating the branch even while it is checked out remotely; the
 	// affected worktree is realigned right after the push.
 	prepScript := fmt.Sprintf("git -C %s config receive.denyCurrentBranch ignore", shellQuote(workingDirectory))
-	prepArgs := append(slices.Clone(sshArgs), prepScript)
-	prepOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       prepArgs,
-	})
+	prepOutput, err := runSSHScript(ctx, sshArgs, prepScript)
 	if err != nil {
 		return fmt.Errorf("failed to prepare remote repo for branch sync: %w", err)
 	}
@@ -544,9 +637,7 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
 	pushStart := time.Now()
-	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir, "push", "--quiet", dest+":"+workingDirectory, refspec)
-	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := RunGitOverSSH(ctx, opts, "-C", localRepoDir, "push", "--quiet", dest+":"+workingDirectory, refspec); err != nil {
 		return fmt.Errorf("git push branch %s to %s: %w: %s", branch, workingDirectory, err, string(out))
 	}
 
@@ -557,12 +648,7 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 			`if [ -n "$wt" ]; then git -C "$wt" reset --hard refs/heads/%s; fi`,
 		shellQuote(workingDirectory), shellQuote(branch), shellQuote(branch),
 	)
-	applyArgs := append(slices.Clone(sshArgs), applyScript)
-	applyOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: os.TempDir(),
-		Command:    "ssh",
-		Args:       applyArgs,
-	})
+	applyOutput, err := runSSHScript(ctx, sshArgs, applyScript)
 	if err != nil {
 		return fmt.Errorf("failed to realign remote worktree after branch sync: %w", err)
 	}
@@ -834,14 +920,8 @@ func DeepenRepoActivity(ctx context.Context, input DeepenRepoInput) (DeepenRepoO
 		}
 
 		quotedRepo := shellQuote(input.RemoteRepoDir)
-		checkArgs := make([]string, len(sshArgs))
-		copy(checkArgs, sshArgs)
-		checkArgs = append(checkArgs, fmt.Sprintf("if [ -f %s/.git/shallow ]; then echo SHALLOW; else echo COMPLETE; fi", quotedRepo))
-		checkOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-			WorkingDir: os.TempDir(),
-			Command:    "ssh",
-			Args:       checkArgs,
-		})
+		checkOutput, err := runSSHScript(ctx, sshArgs,
+			fmt.Sprintf("if [ -f %s/.git/shallow ]; then echo SHALLOW; else echo COMPLETE; fi", quotedRepo))
 		if err != nil {
 			return false, fmt.Errorf("failed to check for shallow remote repo: %w", err)
 		}

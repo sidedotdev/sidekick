@@ -367,8 +367,9 @@ Here is the test result output to summarize:
 	// Create a versioned chat history with just the prompt
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
-		Role:    llm.ChatMessageRoleUser,
-		Content: prompt,
+		Role:        llm.ChatMessageRoleUser,
+		Content:     prompt,
+		ContextType: ContextTypeTestResult,
 	}); err != nil {
 		return "", err
 	}

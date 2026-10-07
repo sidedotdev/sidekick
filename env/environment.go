@@ -147,31 +147,43 @@ type SSHCapableEnv interface {
 	SSHConnConfig(ctx context.Context) (SSHConnConfig, error)
 }
 
+// sshTransportRecoverer is implemented by envs that can repair their SSH
+// transport (reinstalling a rejected key, re-resolving a moved endpoint) after
+// a failure that proves nothing ran remotely.
 type sshTransportRecoverer interface {
-	recoverSSHTransport(ctx context.Context, cause error) (bool, error)
+	newSSHTransportRecovery() sshTransportRecovery
 }
 
-// RunWithSSHTransportRecovery retries an operation once when an environment can
-// identify and recover the underlying SSH transport failure. It is intended for
-// operations that must bypass Env.RunCommand and are safe to replay.
-func RunWithSSHTransportRecovery(ctx context.Context, e Env, operation func() error) error {
-	err := operation()
-	if err == nil {
-		return nil
-	}
+// sshTransportRecovery is one operation's recovery budget. recover reports
+// whether cause was repaired well enough to make retrying worthwhile; each
+// kind of repair is attempted a bounded number of times per operation, so a
+// retry loop driven by it always terminates.
+type sshTransportRecovery interface {
+	recover(ctx context.Context, cause error) (bool, error)
+}
 
+// RunWithSSHTransportRecovery retries an operation while the environment can
+// recover the underlying SSH transport failure. It is intended for operations
+// that must bypass Env.RunCommand and are safe to replay.
+func RunWithSSHTransportRecovery(ctx context.Context, e Env, operation func() error) error {
 	recoverer, ok := e.(sshTransportRecoverer)
 	if !ok {
-		return err
+		return operation()
 	}
-	recovered, recoveryErr := recoverer.recoverSSHTransport(ctx, err)
-	if recoveryErr != nil {
-		return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+	recovery := recoverer.newSSHTransportRecovery()
+	for {
+		err := operation()
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		recovered, recoveryErr := recovery.recover(ctx, err)
+		if recoveryErr != nil {
+			return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+		}
+		if !recovered {
+			return err
+		}
 	}
-	if !recovered {
-		return err
-	}
-	return operation()
 }
 
 // nonRecoveringSSHEnv hides an env's sshTransportRecoverer implementation, for
@@ -1204,14 +1216,6 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 	if e.runModalAPICommand != nil {
 		runAPICommand = e.runModalAPICommand
 	}
-	refreshEndpoint := refreshModalEndpointDetailed
-	if e.refreshModalEndpoint != nil {
-		injected := e.refreshModalEndpoint
-		refreshEndpoint = func(ctx context.Context, name string) (modalEndpointRefresh, error) {
-			host, port, err := injected(ctx, name)
-			return modalEndpointRefresh{SSHHost: host, SSHPort: port}, err
-		}
-	}
 
 	output, diagnostics, err := runCommand(ctx, input)
 	appendDiagnostics := func() {
@@ -1235,32 +1239,40 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 	}
 
 	// The stored tunnel endpoint may be stale because the idle watchdog
-	// snapshotted and terminated the sandbox; refreshing restores it. The
-	// idle timeout is short enough that the sandbox can be terminated again
-	// between a refresh and the retry, which the API fallback exposes as "not
-	// running": since nothing ran, that is grounds for another round rather
-	// than a hard failure. Every round ends with its own API fallback so the
-	// decision to go again rests on current evidence, never on a previous
-	// round's lookup.
+	// snapshotted and terminated the sandbox; refreshing restores it, and a
+	// key still rejected at the refreshed endpoint is reinstalled so the
+	// command can go over SSH rather than the API fallback, which drops the
+	// reverse port forwards. The idle timeout is short enough that the
+	// sandbox can be terminated again between a refresh and the retry, which
+	// the API fallback exposes as "not running": since nothing ran, that is
+	// grounds for another round rather than a hard failure. A round that
+	// reaches the API fallback decides on its own lookup, never on a
+	// previous round's.
 	// A refresh that restored the sandbox from a snapshot rolled its
 	// filesystem back; the command's caller must learn that alongside the
 	// output rather than discovering missing files later.
+	recovery := &modalSSHTransportRecovery{env: e}
 	var restoreNotice string
 	var refreshErr, apiErr error
 	for round := 1; round <= maxModalRecoveryRounds; round++ {
 		var refresh modalEndpointRefresh
-		refresh, refreshErr = refreshEndpoint(ctx, e.SandboxName)
+		refresh, refreshErr = recovery.restoreAccess(ctx, diagnostics)
+		if refresh.Restored {
+			restoreNotice = refresh.restoreNotice(e.SandboxName)
+		}
 		if refreshErr != nil {
-			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to refresh modal sandbox endpoint")
+			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to restore modal SSH access")
 		} else {
-			if refresh.Restored {
-				restoreNotice = refresh.restoreNotice(e.SandboxName)
-			}
-			e.SSHHost, e.SSHPort = refresh.SSHHost, refresh.SSHPort
 			output, diagnostics, err = runCommand(ctx, input)
 			appendDiagnostics()
 			if !transportFailed() {
 				return withRestoreNotice(output, restoreNotice), restoreNotice, err
+			}
+			// A key rejected at an endpoint that was only just re-resolved
+			// has not been repaired yet; the next round confirms the
+			// endpoint and reinstalls it, keeping the command on SSH.
+			if round < maxModalRecoveryRounds && !recovery.repaired && isModalSSHAuthFailure(diagnostics) {
+				continue
 			}
 		}
 
@@ -1288,7 +1300,7 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 	// output that no command produced.
 	failure := fmt.Errorf("modal sandbox %s is unreachable: modal API fallback after SSH transport failure: %w: ssh diagnostics: %s", e.SandboxName, apiErr, diagnostics)
 	if refreshErr != nil {
-		failure = fmt.Errorf("%w; endpoint refresh failed: %v", failure, refreshErr)
+		failure = fmt.Errorf("%w; SSH access recovery failed: %v", failure, refreshErr)
 	}
 	// Only the refresh that performed a restore reports it: once the sandbox
 	// is running again, later refreshes see nothing to restore. Dropping the
@@ -1315,25 +1327,159 @@ func withRestoreNotice(output EnvRunCommandOutput, notice string) EnvRunCommandO
 const maxModalRecoveryRounds = 2
 
 func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
-	return e.RunCommand(ctx, EnvRunCommandInput{
+	// Guard credentials live in the sandbox process environment, which
+	// Modal exec inherits but SSH sessions do not.
+	run := e.runModalAPICommand
+	if run == nil {
+		run = e.runAPICommandInner
+	}
+	return run(ctx, EnvRunCommandInput{
 		Command: "/usr/local/bin/sidekick-snapshot",
 	})
 }
 
-func (e *ModalEnv) recoverSSHTransport(ctx context.Context, cause error) (bool, error) {
-	if cause == nil || !isModalSSHTransportFailure(cause.Error()) {
+// endpointRefresher returns the endpoint refresh in effect for this env,
+// honouring the injected test seam.
+func (e *ModalEnv) endpointRefresher() func(context.Context, string) (modalEndpointRefresh, error) {
+	if e.refreshModalEndpoint == nil {
+		return refreshModalEndpointDetailed
+	}
+	injected := e.refreshModalEndpoint
+	return func(ctx context.Context, name string) (modalEndpointRefresh, error) {
+		host, port, err := injected(ctx, name)
+		return modalEndpointRefresh{SSHHost: host, SSHPort: port}, err
+	}
+}
+
+func (e *ModalEnv) newSSHTransportRecovery() sshTransportRecovery {
+	return &modalSSHTransportRecovery{env: e}
+}
+
+// modalSSHTransportRecovery sequences the repairs available to one operation,
+// bounded by the same number of rounds as RunCommand: the endpoint is
+// re-resolved (restoring the sandbox when it is gone), and a key still
+// rejected at an endpoint confirmed to be the sandbox's own is reinstalled.
+type modalSSHTransportRecovery struct {
+	env       *ModalEnv
+	repaired  bool
+	refreshes int
+}
+
+// errModalKeyStillRejected reports that the sandbox's own endpoint keeps
+// rejecting a key that has already been reinstalled, so nothing is left to try.
+var errModalKeyStillRejected = errors.New("modal sandbox still rejects the reinstalled SSH key")
+
+// restoreAccess re-resolves the sandbox's endpoint and, when the endpoint is
+// confirmed unchanged yet rejected this host's key, reinstalls the key. The
+// refresh comes first because sandbox host keys are unpinned: a clobbered
+// authorized_keys and a tunnel endpoint Modal has since handed to another
+// sandbox reject the key identically, and only the sandbox's API can tell
+// which endpoint is currently its own. The returned refresh carries the
+// restore notice even when the error is set, so a rollback is never buried.
+func (r *modalSSHTransportRecovery) restoreAccess(ctx context.Context, message string) (modalEndpointRefresh, error) {
+	authFailure := isModalSSHAuthFailure(message)
+	r.refreshes++
+	refresh, err := r.env.endpointRefresher()(ctx, r.env.SandboxName)
+	if err != nil {
+		if !authFailure || r.repaired || ctx.Err() != nil {
+			return modalEndpointRefresh{}, err
+		}
+		// The lookup can fail (e.g. the readiness probe) while the sandbox's
+		// exec API still works, and a repair is then the only remedy left.
+		log.Warn().Err(err).Str("sandbox", r.env.SandboxName).Msg("failed to refresh modal sandbox endpoint; repairing SSH key at the recorded one")
+		r.repaired = true
+		if repairErr := r.env.repairSSHAuthorizedKey(ctx); repairErr != nil {
+			return modalEndpointRefresh{}, fmt.Errorf("%w; key repair failed: %v", err, repairErr)
+		}
+		return modalEndpointRefresh{SSHHost: r.env.SSHHost, SSHPort: r.env.SSHPort}, nil
+	}
+	moved := refresh.SSHHost != r.env.SSHHost || refresh.SSHPort != r.env.SSHPort
+	r.env.SSHHost, r.env.SSHPort = refresh.SSHHost, refresh.SSHPort
+	if moved || !authFailure {
+		return refresh, nil
+	}
+	if r.repaired {
+		return refresh, errModalKeyStillRejected
+	}
+	// Authentication precedes any remote execution, so a rejected key is as
+	// safe to retry as a failed dial once the key is reinstalled.
+	r.repaired = true
+	if repairErr := r.env.repairSSHAuthorizedKey(ctx); repairErr != nil {
+		return refresh, repairErr
+	}
+	return refresh, nil
+}
+
+func (r *modalSSHTransportRecovery) recover(ctx context.Context, cause error) (bool, error) {
+	if cause == nil {
 		return false, nil
 	}
-	refreshEndpoint := refreshModalEndpoint
-	if e.refreshModalEndpoint != nil {
-		refreshEndpoint = e.refreshModalEndpoint
+	message := cause.Error()
+	if !isModalSSHAuthFailure(message) && !isModalSSHTransportFailure(message) {
+		return false, nil
 	}
-	host, port, err := refreshEndpoint(ctx, e.SandboxName)
+	if r.refreshes >= maxModalRecoveryRounds {
+		return false, nil
+	}
+	refresh, err := r.restoreAccess(ctx, message)
+	if refresh.Restored {
+		// File operations have no stderr to carry the rollback notice, so the
+		// log is the only place the lost work is recorded.
+		log.Ctx(ctx).Warn().Str("sandbox", r.env.SandboxName).Msg(refresh.restoreNotice(r.env.SandboxName))
+	}
+	if errors.Is(err, errModalKeyStillRejected) {
+		return false, nil
+	}
 	if err != nil {
 		return true, err
 	}
-	e.SSHHost, e.SSHPort = host, port
 	return true, nil
+}
+
+// modalAuthorizedKeyRepairScript reinstalls the host's key the way the sshd
+// startup command does, and removes group/other write access from the paths
+// sshd's StrictModes checks, since either can be clobbered by work running as
+// root inside the sandbox after boot.
+const modalAuthorizedKeyRepairScript = `mkdir -p /root/.ssh && ` +
+	`printf '%s\n' "$SIDE_SSH_PUBKEY" > /root/.ssh/authorized_keys && ` +
+	`chown root:root /root /root/.ssh /root/.ssh/authorized_keys && ` +
+	`chmod go-w /root && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys`
+
+// repairSSHAuthorizedKey restores key authorization through the Modal API,
+// which does not depend on the SSH access being repaired. Already
+// authenticated connections survive a clobbered authorized_keys, so only new
+// sessions notice the damage.
+func (e *ModalEnv) repairSSHAuthorizedKey(ctx context.Context) error {
+	_, publicKey, err := ensureModalSSHKey(ctx)
+	if err != nil {
+		return err
+	}
+	run := e.runModalAPICommand
+	if run == nil {
+		run = e.runAPICommandInner
+	}
+	output, err := run(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", modalAuthorizedKeyRepairScript},
+		EnvVars: []string{"SIDE_SSH_PUBKEY=" + publicKey},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to repair SSH authorized key in modal sandbox %s: %w", e.SandboxName, err)
+	}
+	if output.ExitStatus != 0 {
+		return fmt.Errorf("failed to repair SSH authorized key in modal sandbox %s (exit %d): %s",
+			e.SandboxName, output.ExitStatus, strings.TrimSpace(output.Stderr+output.Stdout))
+	}
+	log.Warn().Str("sandbox", e.SandboxName).Msg("repaired SSH authorized key after the sandbox rejected it")
+	return nil
+}
+
+// isModalSSHAuthFailure reports whether ssh diagnostics show the sandbox's
+// sshd rejecting our key, from either the OpenSSH client or the native one.
+func isModalSSHAuthFailure(diagnostics string) bool {
+	diagnostics = strings.ToLower(diagnostics)
+	return strings.Contains(diagnostics, "permission denied (publickey") ||
+		strings.Contains(diagnostics, "ssh: unable to authenticate")
 }
 
 // isModalSSHTransportFailure reports whether ssh client diagnostics describe a
@@ -1355,6 +1501,12 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 		// Marker emitted by sshDialTransportError: the ssh client exited 255
 		// before the agent protocol answered, sometimes with no stderr at all.
 		"transport failure before agent channel established",
+		// Marker emitted by sshScriptTransportError: a one-off ssh session
+		// exited 255, which only ssh itself does, possibly with no stderr.
+		"transport failure before remote script ran",
+		// Marker emitted by gitSSHTransportError: git's ssh exited 255 before
+		// the remote git sent anything.
+		"transport failure before remote git responded",
 	} {
 		if strings.Contains(diagnostics, fragment) {
 			return true

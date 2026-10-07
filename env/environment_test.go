@@ -998,7 +998,7 @@ func TestModalRecoverSSHTransport(t *testing.T) {
 				},
 			}
 
-			recovered, err := modalEnv.recoverSSHTransport(context.Background(), tt.cause)
+			recovered, err := modalEnv.newSSHTransportRecovery().recover(context.Background(), tt.cause)
 
 			assert.Equal(t, tt.wantRecovered, recovered)
 			assert.Equal(t, tt.wantRefreshes, refreshes)

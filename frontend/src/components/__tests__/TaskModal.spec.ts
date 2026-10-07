@@ -3,9 +3,6 @@ import { config, mount, VueWrapper, flushPromises } from '@vue/test-utils'
 import PrimeVue from 'primevue/config'
 import TaskModal from '../TaskModal.vue'
 import type { Task } from '../../lib/models'
-import { nextTick } from 'process'
-import { wrap } from 'module'
-import { h } from 'vue'
 import { invalidatePresetsCache } from '../../lib/llmPresetStorage'
 
 config.global.plugins.push(PrimeVue)
@@ -87,7 +84,7 @@ const createTestTask = (overrides: Partial<Task> = {}): Task => ({
 })
 
 const DropdownStub = {
-  name: 'Dropdown',
+  name: 'Select',
   props: ['modelValue', 'options', 'optionLabel', 'optionValue'],
   emits: ['update:modelValue', 'change'],
   template: `<select :value="modelValue" @change="$emit('change', { value: $event.target.value }); $emit('update:modelValue', $event.target.value)">
@@ -112,6 +109,11 @@ describe('TaskModal', () => {
     localStorage.clear()
     vi.clearAllMocks()
     vi.spyOn(window, 'alert').mockImplementation(() => {})
+    vi.stubGlobal('fetch', createMockFetch())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   const mountComponent = (props = {}) => {
@@ -119,7 +121,7 @@ describe('TaskModal', () => {
       props,
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -169,7 +171,7 @@ describe('TaskModal', () => {
   })
 
   it('submits form with correct API call for create', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
+    const fetchMock = createMockFetch()
     global.fetch = fetchMock
 
     mountComponent()
@@ -188,7 +190,7 @@ describe('TaskModal', () => {
   })
 
   it('submits form with correct API call for edit', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
+    const fetchMock = createMockFetch()
     global.fetch = fetchMock
 
     const task: Task = {
@@ -236,7 +238,7 @@ describe('TaskModal', () => {
   })
 
   it('emits created event when a new task is successfully created', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
+    const fetchMock = createMockFetch()
     global.fetch = fetchMock
 
     mountComponent()
@@ -248,7 +250,7 @@ describe('TaskModal', () => {
   })
 
   it('emits updated event when an existing task is successfully updated', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
+    const fetchMock = createMockFetch()
     global.fetch = fetchMock
 
     const task: Task = {
@@ -267,7 +269,7 @@ describe('TaskModal', () => {
   })
 
   it('updates global and workspace-scoped defaults after form submission', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    const fetchMock = createMockFetch()
     global.fetch = fetchMock
 
     mountComponent()
@@ -457,12 +459,14 @@ describe('TaskModal localStorage behavior', () => {
       await wrapper.vm.$nextTick()
       vi.advanceTimersByTime(1600)
       await flushPromises()
+      expect(wrapper.emitted('created')).toHaveLength(1)
       
       // Second change should trigger PUT
       await textarea.setValue('Updated description')
       await wrapper.vm.$nextTick()
       vi.advanceTimersByTime(1600)
       await flushPromises()
+      expect(wrapper.emitted('created')).toHaveLength(1)
       
       const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
       expect(taskCalls.length).toBeGreaterThanOrEqual(2)
@@ -791,7 +795,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -832,7 +836,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -864,7 +868,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -894,7 +898,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -922,7 +926,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -942,7 +946,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -982,7 +986,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -1027,7 +1031,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -1084,7 +1088,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -1108,7 +1112,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -1140,7 +1144,7 @@ describe('TaskModal localStorage behavior', () => {
       const wrapper = mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -1192,7 +1196,7 @@ describe('TaskModal determineRequirements behavior', () => {
       props: { task },
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -1213,7 +1217,7 @@ describe('TaskModal determineRequirements behavior', () => {
     const wrapper = mountModal({
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -1234,7 +1238,7 @@ describe('TaskModal determineRequirements behavior', () => {
     const wrapper = mountModal({
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -1254,7 +1258,7 @@ describe('TaskModal determineRequirements behavior', () => {
     const wrapper = mountModal({
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -1297,7 +1301,7 @@ describe('TaskModal determineRequirements behavior', () => {
     const wrapper = mountModal({
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -1347,7 +1351,7 @@ describe('TaskModal determineRequirements behavior', () => {
     const wrapper = mountModal({
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -1371,7 +1375,7 @@ describe('TaskModal determineRequirements behavior', () => {
     const wrapper = mountModal({
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -1386,7 +1390,7 @@ describe('TaskModal determineRequirements behavior', () => {
       mountModal({
         global: {
           stubs: {
-            Dropdown: DropdownStub,
+            Select: DropdownStub,
             LlmConfigEditor: LlmConfigEditorStub
           }
         }
@@ -1510,7 +1514,7 @@ describe('TaskModal context gathering option', () => {
       props: task ? { task } : {},
       global: {
         stubs: {
-          Dropdown: DropdownStub,
+          Select: DropdownStub,
           LlmConfigEditor: LlmConfigEditorStub
         }
       }
@@ -1669,7 +1673,7 @@ describe('TaskModal project selection', () => {
     })
 
   const ProjectDropdownStub = {
-    name: 'Dropdown',
+    name: 'Select',
     props: ['modelValue', 'options', 'optionLabel', 'optionValue', 'placeholder'],
     emits: ['update:modelValue'],
     template: '<div class="dropdown-stub"></div>',
@@ -1680,7 +1684,7 @@ describe('TaskModal project selection', () => {
       props,
       global: {
         stubs: {
-          Dropdown: ProjectDropdownStub,
+          Select: ProjectDropdownStub,
         },
       },
     })

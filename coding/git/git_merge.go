@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sidekick/env"
 	"strings"
@@ -133,7 +134,7 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 			}
 		}
 	}
-	envVars := buildGitEnvVars(committerName, committerEmail)
+	envVars := BuildGitEnvVars(committerName, committerEmail)
 
 	repoDir := envContainer.Env.GetWorkingDirectory()
 	if repoDir == "" {
@@ -162,95 +163,117 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 			return restoreOwnedMergeStash(ctx, container, dir, stashSha, stashRef, vars)
 		}
 
-		if refreshErr := syncTargetBranchFromLocal(ctx, envContainer, params.TargetBranch); refreshErr != nil {
-			if baseDirty {
-				_, _ = restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars)
+		// A retry after the merge already landed must resume restoring the
+		// owned stash rather than merge again: the worktree may still hold a
+		// conflicted restore, and refreshing the target could discard the
+		// merge before it reached the host.
+		alreadyMerged := false
+		if baseDirty {
+			landed, landedErr := target.mergeLanded(ctx, targetWorktree.Path, stashRef)
+			if landedErr != nil {
+				resultErr = landedErr
+				return
 			}
-			resultErr = refreshErr
-			return
+			alreadyMerged = landed
 		}
 
-		// Use worktree path for merge
-		mergeArgs := shellQuote(params.SourceBranch)
-		if params.MergeStrategy == MergeStrategySquash {
-			mergeArgs = "--squash " + shellQuote(params.SourceBranch)
-		}
-		mergeCmd := fmt.Sprintf("cd %s && git merge %s", shellQuote(targetWorktree.Path), mergeArgs)
-		mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
-			EnvContainer: envContainer,
-			Command:      "sh",
-			Args:         []string{"-c", mergeCmd},
-			EnvVars:      envVars,
-		})
-		if mergeErr != nil {
-			if baseDirty {
-				if _, restoreErr := restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars); restoreErr != nil {
-					resultErr = fmt.Errorf("failed to execute merge command in worktree (%v); also failed to restore stash: %w", mergeErr, restoreErr)
-					return
+		if !alreadyMerged {
+			if refreshErr := syncTargetBranchFromLocal(ctx, envContainer, params.TargetBranch); refreshErr != nil {
+				if baseDirty {
+					_, _ = restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars)
 				}
-			}
-			resultErr = fmt.Errorf("failed to execute merge command in worktree: %v", mergeErr)
-			return
-		}
-		if mergeOutput.ExitStatus != 0 {
-			isConflict := strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict")
-			if fromHost {
-				if err := GitMergeAbortActivity(ctx, envContainer, GitMergeAbortParams{WorktreePath: targetWorktree.Path}); err != nil {
-					return result, err
-				}
-			}
-			if baseDirty {
-				// Abort the in-progress merge so the index is clean enough to
-				// restore the user's stashed changes. A conflict is still
-				// reported below and gets resolved on the flow's own worktree,
-				// so nothing is lost by aborting here.
-				abortWorktreeMerge(ctx, envContainer, targetWorktree.Path)
-				if _, restoreErr := restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars); restoreErr != nil {
-					resultErr = fmt.Errorf("merge failed in worktree and restoring stash failed: %w", restoreErr)
-					return
-				}
-			}
-			if isConflict {
-				if fromHost {
-					return c.recreateHostConflict(ctx, transport, target, targetWorktree.Path, params)
-				}
-				result.HasConflicts = true
-				result.ConflictDirPath = targetWorktree.Path
-				result.ConflictOnTargetBranch = true
-				// Without stashed changes the conflicted merge is left in place;
-				// it is contained within the worktree and resolved separately.
+				resultErr = refreshErr
 				return
 			}
-			resultErr = fmt.Errorf("merge failed in worktree: %s", mergeOutput.Stderr)
-			return
-		}
-		// Merge successful, no conflicts.
-		// For squash merge, we need to commit the staged changes
-		if params.MergeStrategy == MergeStrategySquash {
-			commitMsg := params.CommitMessage
-			if commitMsg == "" {
-				commitMsg = fmt.Sprintf("Squash merge branch %s", shellQuote(params.SourceBranch))
+
+			// Use worktree path for merge
+			mergeArgs := shellQuote(params.SourceBranch)
+			if params.MergeStrategy == MergeStrategySquash {
+				mergeArgs = "--squash " + shellQuote(params.SourceBranch)
 			}
-			commitCmd := fmt.Sprintf("cd %s && git commit -m %s", shellQuote(targetWorktree.Path), shellQuote(commitMsg))
-			commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			mergeCmd := fmt.Sprintf("cd %s && git merge %s", shellQuote(targetWorktree.Path), mergeArgs)
+			mergeOutput, mergeErr := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
 				Command:      "sh",
-				Args:         []string{"-c", commitCmd},
+				Args:         []string{"-c", mergeCmd},
 				EnvVars:      envVars,
-			})
-			if commitErr != nil {
+			}, targetWorktree.Path)
+			if mergeErr != nil {
 				if baseDirty {
-					_, _ = restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars)
+					if _, restoreErr := restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars); restoreErr != nil {
+						resultErr = fmt.Errorf("failed to execute merge command in worktree (%v); also failed to restore stash: %w", mergeErr, restoreErr)
+						return
+					}
 				}
-				resultErr = fmt.Errorf("failed to commit squash merge in worktree: %v", commitErr)
+				resultErr = fmt.Errorf("failed to execute merge command in worktree: %v", mergeErr)
 				return
 			}
-			if commitOutput.ExitStatus != 0 && !isNothingToCommitOutput(commitOutput.Stdout, commitOutput.Stderr) {
-				if baseDirty {
-					_, _ = restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars)
+			if mergeOutput.ExitStatus != 0 {
+				isConflict := gitMergeConflicted(mergeOutput)
+				if fromHost {
+					if err := GitMergeAbortActivity(ctx, envContainer, GitMergeAbortParams{WorktreePath: targetWorktree.Path}); err != nil {
+						return result, err
+					}
 				}
-				resultErr = fmt.Errorf("failed to commit squash merge in worktree: %s", commitOutput.Stderr)
+				if baseDirty {
+					// Abort the in-progress merge so the index is clean enough to
+					// restore the user's stashed changes. A conflict is still
+					// reported below and gets resolved on the flow's own worktree,
+					// so nothing is lost by aborting here.
+					abortWorktreeMerge(ctx, envContainer, targetWorktree.Path)
+					if _, restoreErr := restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars); restoreErr != nil {
+						resultErr = fmt.Errorf("merge failed in worktree and restoring stash failed: %w", restoreErr)
+						return
+					}
+				}
+				if isConflict {
+					if fromHost {
+						return c.recreateHostConflict(ctx, transport, target, targetWorktree.Path, params)
+					}
+					result.HasConflicts = true
+					result.ConflictDirPath = targetWorktree.Path
+					result.ConflictOnTargetBranch = true
+					// Without stashed changes the conflicted merge is left in place;
+					// it is contained within the worktree and resolved separately.
+					return
+				}
+				resultErr = fmt.Errorf("merge failed in worktree: %s", mergeOutput.Stderr+mergeOutput.Stdout)
 				return
+			}
+			// Merge successful, no conflicts.
+			// For squash merge, we need to commit the staged changes
+			if params.MergeStrategy == MergeStrategySquash {
+				commitMsg := params.CommitMessage
+				if commitMsg == "" {
+					commitMsg = fmt.Sprintf("Squash merge branch %s", shellQuote(params.SourceBranch))
+				}
+				commitCmd := fmt.Sprintf("cd %s && git commit -m %s", shellQuote(targetWorktree.Path), shellQuote(commitMsg))
+				commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+					EnvContainer: envContainer,
+					Command:      "sh",
+					Args:         []string{"-c", commitCmd},
+					EnvVars:      envVars,
+				})
+				if commitErr != nil {
+					if baseDirty {
+						_, _ = restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars)
+					}
+					resultErr = fmt.Errorf("failed to commit squash merge in worktree: %v", commitErr)
+					return
+				}
+				if commitOutput.ExitStatus != 0 && !isNothingToCommitOutput(commitOutput.Stdout, commitOutput.Stderr) {
+					if baseDirty {
+						_, _ = restoreWorktreeStash(ctx, envContainer, targetWorktree.Path, envVars)
+					}
+					resultErr = fmt.Errorf("failed to commit squash merge in worktree: %s", commitOutput.Stderr)
+					return
+				}
+			}
+			if baseDirty {
+				if err := target.recordMergeLanded(ctx, targetWorktree.Path, stashRef); err != nil {
+					resultErr = fmt.Errorf("failed to record landed merge: %w", err)
+					return
+				}
 			}
 		}
 
@@ -420,6 +443,17 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 	return
 }
 
+// gitMergeConflicted reports whether a failed git merge stopped on content
+// conflicts. Git also refuses to start a merge while the index holds unmerged
+// entries, saying it is "Exiting because of an unresolved conflict"; that is
+// pre-existing worktree state, not a conflict produced by this merge.
+func gitMergeConflicted(output env.EnvRunCommandActivityOutput) bool {
+	if strings.Contains(output.Stderr, "unmerged files") || strings.Contains(output.Stderr, "unresolved conflict") {
+		return false
+	}
+	return strings.Contains(output.Stdout, "CONFLICT") || strings.Contains(output.Stderr, "conflict")
+}
+
 // restoreWorktreeStash pops the most recent stash in the given worktree. It
 // reports whether the restore produced conflicts; a non-conflict failure is
 // returned as an error.
@@ -547,13 +581,30 @@ type GitTransferWorktreeChangesParams struct {
 	BaseStashSha string
 }
 
+// GitTransferWorktreeChangesResult reports the outcome of transferring a
+// resolution. HasConflicts means the target changed since the resolution was
+// made so it no longer applies cleanly; the conflict has been relocated back
+// onto the source worktree at ConflictDirPath for another round of resolution,
+// after which the transfer should be attempted again.
+type GitTransferWorktreeChangesResult struct {
+	HasConflicts    bool   `json:"hasConflicts"`
+	ConflictDirPath string `json:"conflictDirPath"`
+}
+
 // GitTransferWorktreeChangesActivity moves the uncommitted changes from the
 // source worktree onto the target worktree as uncommitted changes, leaving the
 // source worktree clean. It is used after conflict resolution to carry resolved
 // base-worktree changes (resolved on the flow's own worktree) back to the base
-// worktree where the merge already completed.
-func GitTransferWorktreeChangesActivity(ctx context.Context, envContainer env.EnvContainer, params GitTransferWorktreeChangesParams) error {
-	return newMergeCoordinator(envContainer).ReturnResolution(ctx, params)
+// worktree where the merge already completed. A resolution that conflicts with
+// the target is a result, not a failure: retrying cannot help, and the caller
+// must resolve the relocated conflict first.
+func GitTransferWorktreeChangesActivity(ctx context.Context, envContainer env.EnvContainer, params GitTransferWorktreeChangesParams) (GitTransferWorktreeChangesResult, error) {
+	err := newMergeCoordinator(envContainer).ReturnResolution(ctx, params)
+	var conflict *resolutionConflictError
+	if errors.As(err, &conflict) {
+		return GitTransferWorktreeChangesResult{HasConflicts: true, ConflictDirPath: conflict.ConflictDirPath}, nil
+	}
+	return GitTransferWorktreeChangesResult{}, err
 }
 
 func (c *mergeCoordinator) ReturnResolution(ctx context.Context, params GitTransferWorktreeChangesParams) error {

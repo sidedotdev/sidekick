@@ -90,7 +90,9 @@ func TestEndpointWaitsForRelayTicket(t *testing.T) {
 	address, err := endpointticket.Decode(completed.endpoint.Ticket())
 	require.NoError(t, err)
 	require.Equal(t, []netaddr.RelayURL{relayURL}, address.RelayURLs())
-	require.Empty(t, address.IPAddrs())
+	for _, direct := range address.IPAddrs() {
+		require.False(t, direct.Addr().IsUnspecified())
+	}
 }
 
 func TestEndpointReadinessFailureReleasesSocket(t *testing.T) {
@@ -149,4 +151,70 @@ func TestReachableAddressPreservesTransportAddresses(t *testing.T) {
 	filtered := reachableAddress(address)
 	require.Equal(t, address.ID, filtered.ID)
 	require.Equal(t, expected, filtered.Addrs())
+}
+
+func TestReachableAddressExpandsWildcardCandidates(t *testing.T) {
+	t.Parallel()
+	localIPs := []netip.Addr{
+		netip.MustParseAddr("192.168.101.100"),
+		netip.MustParseAddr("172.16.3.159"),
+		netip.MustParseAddr("2001:db8::1"),
+		netip.MustParseAddr("fd00::1"),
+		netip.MustParseAddr("::ffff:192.168.101.100"),
+		netip.MustParseAddr("127.0.0.1"),
+		netip.MustParseAddr("::1"),
+		netip.MustParseAddr("169.254.1.1"),
+		netip.MustParseAddr("fe80::1"),
+		netip.MustParseAddr("fe80::1%en0"),
+		netip.MustParseAddr("ff02::1"),
+		netip.IPv4Unspecified(),
+		netip.IPv6Unspecified(),
+		{},
+	}
+	tests := []struct {
+		name string
+		bind string
+		want []string
+	}{
+		{
+			name: "dual stack includes both interfaces",
+			bind: "[::]:1234",
+			want: []string{"192.168.101.100:1234", "172.16.3.159:1234", "[2001:db8::1]:1234", "[fd00::1]:1234"},
+		},
+		{
+			name: "IPv4 only",
+			bind: "0.0.0.0:1234",
+			want: []string{"192.168.101.100:1234", "172.16.3.159:1234"},
+		},
+		{
+			name: "mapped IPv4 wildcard",
+			bind: "[::ffff:0.0.0.0]:1234",
+			want: []string{"192.168.101.100:1234", "172.16.3.159:1234"},
+		},
+		{
+			name: "explicit bind is not expanded",
+			bind: "127.0.0.1:1234",
+			want: []string{"127.0.0.1:1234"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			relayURL, err := netaddr.ParseRelayURL("https://relay.example.com")
+			require.NoError(t, err)
+			input := netaddr.EndpointAddr{}.
+				WithIP(netip.MustParseAddrPort(tt.bind)).
+				WithRelayURL(relayURL).
+				WithAddrs(netaddr.NewCustomAddr(42, []byte("custom")))
+			got := reachableAddress(input, localIPs...)
+			var want []netip.AddrPort
+			for _, addr := range tt.want {
+				want = append(want, netip.MustParseAddrPort(addr))
+			}
+			require.ElementsMatch(t, want, got.IPAddrs())
+			require.Equal(t, input.ID, got.ID)
+			require.Equal(t, input.RelayURLs(), got.RelayURLs())
+			require.Contains(t, got.Addrs(), netaddr.NewCustomAddr(42, []byte("custom")))
+		})
+	}
 }

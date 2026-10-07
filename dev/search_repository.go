@@ -185,6 +185,164 @@ type searchContext struct {
 	useManualGlobFiltering bool
 	sideIgnoreExists       bool
 	gitIgnoreExists        bool
+	// includeIgnoredTargets is set for path-specific globs: files matching the
+	// glob are searched even when ignored, while hints about matches outside
+	// the glob keep respecting ignores.
+	includeIgnoredTargets bool
+	// hiddenIgnoredDirs are ignored directories that the glob's leading
+	// wildcard could descend into but which stayed excluded from the search;
+	// they are reported so the caller can target them explicitly.
+	hiddenIgnoredDirs []string
+}
+
+// ignoredEntriesSeparator terminates the ignored entry listing that precedes
+// the search output in the same shell command (see explicitTargetRgCmd).
+const ignoredEntriesSeparator = "__SIDEKICK_IGNORED_ENTRIES__"
+
+// splitIgnoredEntriesListing separates the ignored entries listed by
+// explicitTargetRgCmd from the output of the rg command that followed them.
+func splitIgnoredEntriesListing(stdout string) (ignoredEntries []string, rest string) {
+	before, after, found := strings.Cut(stdout, ignoredEntriesSeparator+"\n")
+	if !found {
+		return nil, stdout
+	}
+	if trimmed := strings.TrimSpace(before); trimmed != "" {
+		ignoredEntries = strings.Split(trimmed, "\n")
+	}
+	return ignoredEntries, after
+}
+
+// hiddenIgnoredDirs returns the ignored directories, from a git ls-files
+// listing, that one of the glob's leading directory patterns matches. Such
+// directories cannot be re-included by targetUnignorePatterns without
+// re-including every directory the wildcard matches, so they stay excluded.
+// Directories nested under an already-reported one are dropped, as are
+// Sidekick's core-ignored internals, which would otherwise be reported in
+// every repository despite never being a useful search target.
+func hiddenIgnoredDirs(ignoredEntries []string, glob string) []string {
+	segments := strings.Split(glob, "/")
+	var dirs []string
+	for _, entry := range ignoredEntries {
+		dir, isDir := strings.CutSuffix(entry, "/")
+		if !isDir || isCoreIgnoredDir(dir) || hasReportedAncestor(dirs, dir) {
+			continue
+		}
+		for i := 1; i < len(segments); i++ {
+			if ok, _ := doublestar.Match(strings.Join(segments[:i], "/"), dir); ok {
+				dirs = append(dirs, dir)
+				break
+			}
+		}
+	}
+	return dirs
+}
+
+func hasReportedAncestor(reported []string, dir string) bool {
+	for _, r := range reported {
+		if strings.HasPrefix(dir, r+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// isCoreIgnoredDir reports whether dir is covered by a core ignore pattern or
+// is an ancestor of one; git lists an ancestor when all of its contents are
+// ignored.
+func isCoreIgnoredDir(dir string) bool {
+	for _, pattern := range strings.Fields(coreIgnoreFileContent) {
+		if dir == pattern || strings.HasPrefix(dir, pattern+"/") || strings.HasPrefix(pattern, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// hiddenIgnoredDirsNote describes ignored directories left out of a search and
+// how to reach them, or returns "" when there are none.
+func (sCtx *searchContext) hiddenIgnoredDirsNote() string {
+	dirs := sCtx.hiddenIgnoredDirs
+	if len(dirs) == 0 {
+		return ""
+	}
+	const maxListed = 10
+	listed := dirs
+	if len(listed) > maxListed {
+		listed = listed[:maxListed]
+	}
+	lines := utils.Map(listed, func(dir string) string { return "\t" + dir + "/" })
+	note := fmt.Sprintf("\n\nNote: %d ignored directories reachable only through the leading wildcard of '%s' were not searched:\n%s",
+		len(dirs), sCtx.input.PathGlob, strings.Join(lines, "\n"))
+	if len(dirs) > maxListed {
+		note += fmt.Sprintf("\n\t... and %d more", len(dirs)-maxListed)
+	}
+
+	first, rest, _ := strings.Cut(sCtx.input.PathGlob, "/")
+	example := dirs[0] + "/" + rest
+	if first == "**" {
+		example = dirs[0] + "/" + sCtx.input.PathGlob
+	}
+	return note + fmt.Sprintf("\nTo search them, start the path glob with a literal directory (e.g. '%s'), or run rg --no-ignore via a shell command.", example)
+}
+
+// targetUnignorePatterns returns gitignore-format negations that re-include
+// files matching a path-specific glob. Ancestor directories are negated too,
+// since an excluded directory is never descended into, so its children could
+// not be re-included on their own. Leading pure-wildcard ancestors ("*",
+// "**") are skipped as negating them would re-include every ignored directory.
+func targetUnignorePatterns(glob string) []string {
+	segments := strings.Split(glob, "/")
+	var patterns []string
+	hasLiteralAncestor := false
+	for i := 1; i < len(segments); i++ {
+		if strings.Trim(segments[i-1], "*") != "" {
+			hasLiteralAncestor = true
+		}
+		if hasLiteralAncestor {
+			patterns = append(patterns, "!"+strings.Join(segments[:i], "/")+"/")
+		}
+	}
+	return append(patterns, "!"+glob)
+}
+
+// startsWithWildcardDir reports whether a glob's first directory segment is a
+// pure wildcard such as "*" or "**", in which case targetUnignorePatterns
+// cannot re-include files under excluded directories matched by it.
+func startsWithWildcardDir(glob string) bool {
+	first, _, hasDir := strings.Cut(glob, "/")
+	return hasDir && strings.Trim(first, "*") == ""
+}
+
+// explicitTargetRgCmd builds a shell command running rg with the given
+// arguments so that files matching the target glob are listed even when
+// ignored. It reuses the precedence mechanism behind .sideignore overrides:
+// rg's own ignore file discovery is disabled and a single generated ignore
+// file stands in for every root-level ignore source, followed by the target
+// negations, which win as the last patterns. Discovery must be fully disabled
+// because rg gives .ignore/.rgignore precedence over any --ignore-file. The
+// file is created and removed within the one shell command to avoid extra
+// round-trips. As with .sideignore overrides, ignore files in subdirectories
+// are not applied in this mode. Like git itself, this cannot re-include files
+// whose excluded ancestor directory is only reachable through wildcard
+// segments of the glob; the empty-result NoIgnore fallback still covers those.
+//
+// When listIgnoredDirs is set, the directories excluded by that same generated
+// file are first printed from the git index (without descending into them,
+// each with a trailing slash), followed by ignoredEntriesSeparator, so the
+// caller can report which directories the search skipped. Outside a git
+// repository nothing is listed.
+func (sCtx *searchContext) explicitTargetRgCmd(listIgnoredDirs bool, rgArgs ...string) string {
+	patterns := utils.Map(targetUnignorePatterns(sCtx.input.PathGlob), escapeShellArg)
+	listCmd := ""
+	if listIgnoredDirs {
+		listCmd = `git ls-files --others --ignored --directory --exclude-from="$f" 2>/dev/null; echo ` + ignoredEntriesSeparator + `; `
+	}
+	// Sources are concatenated in ascending precedence, with .sideignore last
+	// so that it keeps overriding the others as in normal searches.
+	ignoreSources := escapeShellArg(sCtx.coreIgnorePath) + " .git/info/exclude .gitignore .ignore .rgignore .sideignore"
+	return fmt.Sprintf(
+		`f=$(mktemp) && { for i in %s; do [ -f "$i" ] && cat "$i" && echo; done; printf '%%s\n' %s; } > "$f" && { %srg --no-ignore --ignore-file "$f" %s; }; s=$?; rm -f "$f"; exit $s`,
+		ignoreSources, strings.Join(patterns, " "), listCmd, strings.Join(rgArgs, " "))
 }
 
 func initSearchContext(runner searchRunner, envContainer env.EnvContainer, input SearchRepositoryInput) (*searchContext, error) {
@@ -215,12 +373,28 @@ func initSearchContext(runner searchRunner, envContainer env.EnvContainer, input
 
 	sCtx.escapedSearchTerm = escapeShellArg(input.SearchTerm)
 
+	// Determine if manual glob filtering should be used
+	// Version guard for manual glob filtering logic
+	v := sCtx.runner.getVersion("manual-search-glob-filtering", workflow.DefaultVersion, 1)
+	sCtx.useManualGlobFiltering = isSpecificPathGlob(sCtx.input.PathGlob) && v >= 1
+
+	// A glob with a literal path segment names its target explicitly, so
+	// ignored files matching it are searched from the outset instead of only
+	// via the empty-result NoIgnore fallback.
+	explicitTargetVersion := sCtx.runner.getVersion("explicit-target-ignore-bypass", workflow.DefaultVersion, 1)
+	sCtx.includeIgnoredTargets = explicitTargetVersion >= 1 && !input.NoIgnore &&
+		sCtx.useManualGlobFiltering && hasLiteralPathSegment(sCtx.input.PathGlob)
+
 	// Base rgArgs
 	sCtx.rgArgs = "--files-with-matches --hidden"
 	if input.NoIgnore {
 		sCtx.rgArgs += " --no-ignore"
 	}
-	sCtx.rgArgs += " --ignore-file " + escapeShellArg(sCtx.coreIgnorePath)
+	if !sCtx.includeIgnoredTargets {
+		// explicitTargetRgCmd folds the core ignore file into its own
+		// generated ignore file, where the target negations can override it.
+		sCtx.rgArgs += " --ignore-file " + escapeShellArg(sCtx.coreIgnorePath)
+	}
 
 	// Base gitGrepArgs
 	sCtx.gitGrepArgs = fmt.Sprintf("git grep --no-index --show-function --heading --line-number --context %d", input.ContextLines)
@@ -234,12 +408,9 @@ func initSearchContext(runner searchRunner, envContainer env.EnvContainer, input
 		sCtx.gitGrepArgs += " --fixed-strings"
 	}
 
-	// Determine if manual glob filtering should be used
-	// Version guard for manual glob filtering logic
-	v := sCtx.runner.getVersion("manual-search-glob-filtering", workflow.DefaultVersion, 1)
-	sCtx.useManualGlobFiltering = isSpecificPathGlob(sCtx.input.PathGlob) && v >= 1
-
-	if input.NoIgnore {
+	// Explicit-target searches supply .gitignore/.sideignore themselves via
+	// explicitTargetRgCmd, so the existence probes below are unnecessary.
+	if input.NoIgnore || sCtx.includeIgnoredTargets {
 		return sCtx, nil
 	}
 
@@ -420,6 +591,10 @@ func (sCtx *searchContext) executeMainSearch() (string, string, []string, []stri
 		// 2. Filter them manually using the glob pattern
 		// 3. Run git grep on the filtered files
 		listFilesCmd := fmt.Sprintf(`rg %s --files-with-matches -- %s`, sCtx.rgArgs, sCtx.escapedSearchTerm)
+		reportHiddenIgnoredDirs := sCtx.includeIgnoredTargets && startsWithWildcardDir(sCtx.input.PathGlob)
+		if sCtx.includeIgnoredTargets {
+			listFilesCmd = sCtx.explicitTargetRgCmd(reportHiddenIgnoredDirs, sCtx.rgArgs, "--", sCtx.escapedSearchTerm)
+		}
 
 		listFilesOutput, err = sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
 			EnvContainer:       sCtx.envContainer,
@@ -431,8 +606,15 @@ func (sCtx *searchContext) executeMainSearch() (string, string, []string, []stri
 			return "", "", nil, nil, fmt.Errorf("failed to list files for manual glob filtering: %w", err)
 		}
 
+		filesStdout := listFilesOutput.Stdout
+		if reportHiddenIgnoredDirs {
+			var ignoredEntries []string
+			ignoredEntries, filesStdout = splitIgnoredEntriesListing(filesStdout)
+			sCtx.hiddenIgnoredDirs = hiddenIgnoredDirs(ignoredEntries, sCtx.input.PathGlob)
+		}
+
 		var allFilesMatchingSearchTerm []string
-		if trimmedStdout := strings.TrimSpace(listFilesOutput.Stdout); trimmedStdout != "" {
+		if trimmedStdout := strings.TrimSpace(filesStdout); trimmedStdout != "" {
 			allFilesMatchingSearchTerm = strings.Split(trimmedStdout, "\n")
 		} else {
 			allFilesMatchingSearchTerm = []string{}
@@ -610,6 +792,22 @@ func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string, globMatche
 // This approach is consistent with how matchingFiles are determined in executeMainSearch when useManualGlobFiltering is true.
 func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
 	rgFilesCmdParts := []string{"--files", "--hidden"}
+	if sCtx.includeIgnoredTargets {
+		// Ignored target files are listed as well, so the no-results message
+		// names them as searched.
+		rgFilesOutput, err := sCtx.runner.runCommand(env.EnvRunCommandActivityInput{
+			EnvContainer:       sCtx.envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "sh",
+			Args:               []string{"-c", sCtx.explicitTargetRgCmd(false, rgFilesCmdParts...)},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("activity execution failed for rg to list files for glob '%s': %w", sCtx.input.PathGlob, err)
+		}
+		files := strings.Split(strings.TrimSpace(rgFilesOutput.Stdout), "\n")
+		return filterFilesByGlob(files, sCtx.input.PathGlob)
+	}
+
 	if sCtx.input.NoIgnore {
 		rgFilesCmdParts = append(rgFilesCmdParts, "--no-ignore")
 	}
@@ -874,7 +1072,7 @@ func searchRepository(runner searchRunner, envContainer env.EnvContainer, input 
 		return "", err
 	}
 	if shouldReturnEarlyWithMsg {
-		return addSearchPrefix(sCtx.input, processedOutput), nil
+		return addSearchPrefix(sCtx.input, processedOutput+sCtx.hiddenIgnoredDirsNote()), nil
 	}
 
 	// Output is genuinely empty (or cleared due to length checks but not returned early)
@@ -895,7 +1093,10 @@ func searchRepository(runner searchRunner, envContainer env.EnvContainer, input 
 
 		// Retry with ignore files disabled for path-specific globs, so that
 		// files in .gitignored or .sideignored directories can still be found.
-		if !sCtx.input.NoIgnore && hasLiteralPathSegment(sCtx.input.PathGlob) {
+		// Explicit-target searches already include ignored files, except under
+		// excluded directories that the glob reaches only through a wildcard.
+		if !sCtx.input.NoIgnore && hasLiteralPathSegment(sCtx.input.PathGlob) &&
+			(!sCtx.includeIgnoredTargets || startsWithWildcardDir(sCtx.input.PathGlob)) {
 			v := runner.getVersion("search-no-ignore-fallback", workflow.DefaultVersion, 1)
 			if v >= 1 {
 				return searchRepository(runner, envContainer, updatedInputWithNoIgnore(sCtx.input))
@@ -922,6 +1123,6 @@ func searchRepository(runner searchRunner, envContainer env.EnvContainer, input 
 		}
 	} else {
 		// Main search yielded results, and they were of acceptable length (or truncated and accepted).
-		return addSearchPrefix(sCtx.input, processedOutput), nil
+		return addSearchPrefix(sCtx.input, processedOutput+sCtx.hiddenIgnoredDirsNote()), nil
 	}
 }

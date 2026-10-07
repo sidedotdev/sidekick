@@ -46,8 +46,12 @@ func verifierFlagsInput(flowId, flowType, modelId string) fflag.EvaluateFlagsInp
 		},
 		IntFlags: map[string]int{
 			ReviewToolResultMaxChars:     defaults.ToolResultMaxChars,
+			ReviewHelpResultMaxChars:     defaults.HelpResultMaxChars,
 			ReviewRecentToolResultsCount: defaults.RecentToolResultsCount,
 			ReviewChatHistoryMaxSize:     defaults.ChatHistoryMaxSize,
+		},
+		StringArrayFlags: map[string][]string{
+			ReviewContextTypes: defaults.ContextTypes,
 		},
 	}
 }
@@ -63,11 +67,17 @@ func verifierSettingsFromFlags(output fflag.EvaluateFlagsOutput) VerifierSetting
 	if value, ok := output.IntValues[ReviewToolResultMaxChars]; ok && value >= 0 {
 		settings.ToolResultMaxChars = value
 	}
+	if value, ok := output.IntValues[ReviewHelpResultMaxChars]; ok && value >= 0 {
+		settings.HelpResultMaxChars = value
+	}
 	if value, ok := output.IntValues[ReviewRecentToolResultsCount]; ok && value >= 0 {
 		settings.RecentToolResultsCount = value
 	}
 	if value, ok := output.IntValues[ReviewChatHistoryMaxSize]; ok && value >= 0 {
 		settings.ChatHistoryMaxSize = value
+	}
+	if value, ok := output.StringArrayValues[ReviewContextTypes]; ok {
+		settings.ContextTypes = value
 	}
 	return settings
 }
