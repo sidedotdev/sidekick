@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"sidekick/common"
+	"sidekick/fflag"
 )
 
 // plannedStepOutcome is what a plan step's review showed: its first auto-review
@@ -108,6 +109,23 @@ func (h *reviewDiffsFlowHarness) runPlannedDevPlan(requirements string, stepWork
 	require.Equal(h.t, len(stepWork), h.codingRounds, "every step must have run its work")
 	require.Len(h.t, h.fulfillmentDiffs, len(stepWork), "every step must have been auto-reviewed once")
 	return h.fulfillmentDiffs
+}
+
+// TestPlannedDevStepWorkIsCommittedByCommitSubflow shows that a step's work is
+// committed by the commit subflow, which writes its own messages, rather than
+// with a message made from the step's title.
+func TestPlannedDevStepWorkIsCommittedByCommitSubflow(t *testing.T) {
+	t.Parallel()
+
+	h := newReviewDiffsFlowHarness(t)
+	h.enabledFlags = map[string]bool{fflag.CheckEdits: true}
+	h.runPlannedDevPlan("do the work", func(t *testing.T, repos *flowRepos) {
+		repos.work.stage("step_one.txt", "STEP_ONE_WORK\n")
+	})
+
+	assert.Equal(t, 1, h.commitSubflowRuns, "the step's work must be committed by the commit subflow")
+	assert.Equal(t, []string{"feat: commit round 1"}, h.branchCommitSubjects())
+	assert.Empty(t, runCmd(t, h.dir, "git", "status", "--porcelain"), "the step must leave nothing uncommitted")
 }
 
 // TestPlannedDevPlanPinsEachStepWhereItStarted drives plan execution through the

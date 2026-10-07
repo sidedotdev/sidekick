@@ -763,6 +763,14 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 		return "", err
 	}
 
+	// Step 6: commit the work while its coding context is still fresh. Files
+	// are not staged beforehand so the model can group them into commits.
+	if workflow.GetVersion(dCtx, "commit-subflow-after-coding", workflow.DefaultVersion, 1) >= 1 {
+		if err := commitPendingWork(dCtx, chatHistory); err != nil {
+			return "", fmt.Errorf("failed to commit coding changes: %w", err)
+		}
+	}
+
 	// NOTE: this version applies when the env type is not git worktree too,
 	// since it affects when/where workflow closure occurs (moves it to after
 	// coding subflow ends)
@@ -1134,6 +1142,34 @@ func transferResolvedBaseChanges(dCtx DevContext, params git.GitTransferWorktree
 	})
 }
 
+// commitAndComposeMergeMessage makes sure nothing is left uncommitted before
+// merging and returns the merge commit message. Coding already commits its own
+// work, so committing here only catches stragglers, e.g. after the user
+// skipped ahead mid-coding or edited files during review.
+func commitAndComposeMergeMessage(dCtx DevContext, params MergeWithReviewParams, mergeInfo MergeApprovalResponse) (string, error) {
+	state, err := collectGitWorkingState(dCtx)
+	if err != nil {
+		return "", err
+	}
+	if !state.IsClean() {
+		chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
+			Role:    llm.ChatMessageRoleUser,
+			Content: fmt.Sprintf("The work for this task is complete and about to be merged.\n\n# Task Title\n\n%s\n\n# Requirements\n\n%s", params.Title, params.Requirements),
+		}); err != nil {
+			return "", err
+		}
+		if err := commitPendingWork(dCtx, chatHistory); err != nil {
+			return "", fmt.Errorf("failed to commit pending changes before merge: %w", err)
+		}
+	}
+
+	if git.MergeStrategy(mergeInfo.MergeStrategy) == git.MergeStrategySquash {
+		return squashMergeCommitMessage(dCtx, params, mergeInfo.TargetBranch)
+	}
+	return commitMessageForMerge(params), nil
+}
+
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string, lastReviewDiff string) (string, MergeApprovalResponse, string, error) {
 	switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 	case 2:
@@ -1183,49 +1219,45 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		"targetBranch": mergeInfo.TargetBranch,
 	}
 
-	// Commit any pending changes first.
-	//
-	// This is needed due to the fact that basic dev doesn't commit itself, but
-	// planned dev does, while we need a way to get a git diff. We solved this
-	// before by parameterizing the git diff function, but this has issues since
-	// the review and resolve workflow works like basic dev, but is used in
-	// conjunction with planned dev. If we wanted to support not committing
-	// here, we'd need to make the review/resolve workflow sometimes commit and
-	// sometimes not commit, depending on the parent workflow, by setting a
-	// param. Instead, we'll just commit to... committing.
-	//
-	// TODO /task -P In fact, we should move this committing to the end of the
-	// relevant subflow instead, i.e. at the end of the coding subflow. That
-	// way, the commit message can be more relevant, eg it'll be related to
-	// handling review feedback in the review and resolve flow, and related to
-	// the overall requirements in the initial basic dev flow.
-
-	params.Title = resolveCommitTitle(dCtx, params)
-	commitMessage := commitMessageForMerge(params)
-
 	committerName := dCtx.GlobalState.GetStringValue("committerName")
 	committerEmail := dCtx.GlobalState.GetStringValue("committerEmail")
 
-	gitCommitVersion := workflow.GetVersion(dCtx, "git-commit-in-flow-action", workflow.DefaultVersion, 1)
-	if gitCommitVersion < 1 {
-		err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
-			CommitMessage:  commitMessage,
-			CommitterName:  committerName,
-			CommitterEmail: committerEmail,
-		}).Get(dCtx, nil)
+	var commitMessage string
+	commitInMergeAction := false
+	if workflow.GetVersion(dCtx, "llm-commit-messages", workflow.DefaultVersion, 1) >= 1 {
+		params.Title = resolveCommitTitle(dCtx, params)
+		commitMessage, err = commitAndComposeMergeMessage(dCtx, params, mergeInfo)
 		if err != nil {
-			if strings.Contains(err.Error(), "nothing to commit") {
-				workflow.GetLogger(dCtx).Warn("nothing to commit during merge workflow")
-			} else {
-				return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to commit changes: %w", err)
+			return "", MergeApprovalResponse{}, "", err
+		}
+	} else {
+		// Legacy executions commit all pending changes here with a message
+		// derived from the task title, since coding did not commit itself.
+		params.Title = resolveCommitTitle(dCtx, params)
+		commitMessage = commitMessageForMerge(params)
+
+		gitCommitVersion := workflow.GetVersion(dCtx, "git-commit-in-flow-action", workflow.DefaultVersion, 1)
+		if gitCommitVersion < 1 {
+			err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+				CommitMessage:  commitMessage,
+				CommitterName:  committerName,
+				CommitterEmail: committerEmail,
+			}).Get(dCtx, nil)
+			if err != nil {
+				if strings.Contains(err.Error(), "nothing to commit") {
+					workflow.GetLogger(dCtx).Warn("nothing to commit during merge workflow")
+				} else {
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to commit changes: %w", err)
+				}
 			}
 		}
+		commitInMergeAction = gitCommitVersion >= 1 && params.CommitRequired
 	}
 
 	mergeResult, err := Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 		var mergeResult git.MergeActivityResult
 
-		if gitCommitVersion >= 1 && params.CommitRequired {
+		if commitInMergeAction {
 			var commitOutput string
 			if err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitCommitActivity, &commitOutput, trackedCtx.EnvContainer, git.GitCommitParams{
 				CommitMessage:         commitMessage,
