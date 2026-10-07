@@ -1,4 +1,4 @@
-package main
+package provider_auth
 
 import (
 	"context"
@@ -56,13 +56,13 @@ func TestOpenAIDeviceAuthorization(t *testing.T) {
 		openai_oauth.HTTPClient = originalHTTPClient
 	}()
 
-	device, err := startOpenAIDeviceAuth(context.Background())
+	device, err := StartOpenAIDeviceAuth(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "device-id", device.DeviceAuthID)
 	assert.Equal(t, "ABCD-EFGH", device.UserCode)
 	assert.Equal(t, openai_oauth.ClientID, userCodeRequest["client_id"])
 
-	token, err := pollOpenAIDeviceAuth(context.Background(), device)
+	token, err := PollOpenAIDeviceAuth(context.Background(), device)
 	require.NoError(t, err)
 	assert.Equal(t, "authorization-code", token.AuthorizationCode)
 	assert.Equal(t, "code-verifier", token.CodeVerifier)
@@ -106,7 +106,7 @@ func TestPollOpenAIDeviceAuthDoesNotRetryTerminalErrors(t *testing.T) {
 				openai_oauth.HTTPClient = originalHTTPClient
 			}()
 
-			_, err := pollOpenAIDeviceAuth(context.Background(), &openAIDeviceAuthInfo{
+			_, err := PollOpenAIDeviceAuth(context.Background(), &OpenAIDeviceAuthInfo{
 				DeviceAuthID: "device-id",
 				UserCode:     "ABCD-EFGH",
 			})

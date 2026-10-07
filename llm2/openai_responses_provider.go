@@ -54,10 +54,11 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		}
 	}
 
-	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
+	credentials, err := openAICredentialsForRequest(request.SecretManager, options.ModelConfig.Provider, authType)
 	if err != nil {
 		return nil, err
 	}
+	requestAuth := newProviderRequestAuth(request.SecretManager, options.ModelConfig.Provider, authType, credentials.useOAuth)
 
 	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	clientOptions := []option.RequestOption{
@@ -466,7 +467,7 @@ loop:
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, wrapOpenAIError(err)
+		return nil, requestAuth.classifyHTTPError(err, wrapOpenAIError(err))
 	}
 
 	outputMessage := AccumulateEventsToMessage(events)

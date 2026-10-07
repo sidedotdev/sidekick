@@ -364,6 +364,9 @@ func anthropicToChatMessageResponse(message anthropic.Message, provider string) 
 	return response, nil
 }
 
+// GetAnthropicOAuthCredentials returns (nil, false, nil) when no OAuth
+// credential is configured. Unusable credentials surface as a
+// common.ProviderAuthErrorReasonInvalidOAuth provider auth error.
 func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (string, error) }) (*OAuthCredentials, bool, error) {
 	oauthJSON, err := secretManager.GetSecret(AnthropicOAuthSecretName)
 	if err != nil {
@@ -371,13 +374,15 @@ func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (st
 		return nil, false, nil
 	}
 
+	profileId := secret_manager.ProfileIdOf(secretManager)
+
 	var creds OAuthCredentials
 	if err := json.Unmarshal([]byte(oauthJSON), &creds); err != nil {
-		return nil, false, fmt.Errorf("failed to parse OAuth credentials: %w", err)
+		return nil, false, invalidAnthropicOAuthError(profileId, fmt.Errorf("failed to parse OAuth credentials: %w", err))
 	}
 
 	if creds.AccessToken == "" {
-		return nil, false, fmt.Errorf("OAuth credentials missing access token")
+		return nil, false, invalidAnthropicOAuthError(profileId, fmt.Errorf("OAuth credentials missing access token"))
 	}
 
 	// Refresh token proactively if it expires within 5 minutes
@@ -385,9 +390,8 @@ func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (st
 		log.Info().Msg("OAuth token expiring soon, refreshing proactively")
 		newCreds, err := RefreshAnthropicOAuthToken(creds.RefreshToken)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to refresh OAuth token: %w", err)
+			return nil, false, invalidAnthropicOAuthError(profileId, fmt.Errorf("failed to refresh OAuth token: %w", err))
 		}
-		profileId := secret_manager.ProfileIdOf(secretManager)
 		if storeErr := storeAnthropicOAuthCredentialsForProfile(profileId, newCreds); storeErr != nil {
 			log.Warn().Err(storeErr).Msg("Failed to store refreshed OAuth credentials")
 		}
@@ -395,6 +399,15 @@ func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (st
 	}
 
 	return &creds, true, nil
+}
+
+func invalidAnthropicOAuthError(profileId string, cause error) error {
+	return common.NewProviderAuthError(common.ProviderAuthErrorDetails{
+		Provider:  "anthropic",
+		ProfileId: profileId,
+		AuthType:  common.ProviderAuthTypeSubscription,
+		Reason:    common.ProviderAuthErrorReasonInvalidOAuth,
+	}, cause)
 }
 
 // AnthropicOAuthBetaHeaders returns the beta headers required for OAuth authentication

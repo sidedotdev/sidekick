@@ -1,4 +1,4 @@
-package main
+package provider_auth
 
 import (
 	"errors"
@@ -10,29 +10,29 @@ import (
 // Port and path match what other Claude Code-compatible clients register for
 // the loopback redirect; the redirect URI must be exactly this for the
 // authorization server to accept it.
-const (
-	anthropicOAuthCallbackListenAddress = "127.0.0.1:53692"
-	anthropicClaudeAIRedirectURI        = "http://localhost:53692/callback"
-)
+const anthropicClaudeAIRedirectURI = "http://localhost:53692/callback"
 
-type anthropicOAuthCallbackResult struct {
+// Overridable in tests so sessions don't contend for the fixed port.
+var anthropicOAuthCallbackListenAddress = "127.0.0.1:53692"
+
+type callbackResult struct {
 	code  string
 	state string
 	err   error
 }
 
-func startAnthropicOAuthCallbackServer(expectedState string) (*http.Server, string, <-chan anthropicOAuthCallbackResult, error) {
+func startAnthropicOAuthCallbackServer(expectedState string) (*http.Server, string, <-chan callbackResult, error) {
 	return startAnthropicOAuthCallbackServerAt(anthropicOAuthCallbackListenAddress, expectedState)
 }
 
-func startAnthropicOAuthCallbackServerAt(listenAddress, expectedState string) (*http.Server, string, <-chan anthropicOAuthCallbackResult, error) {
+func startAnthropicOAuthCallbackServerAt(listenAddress, expectedState string) (*http.Server, string, <-chan callbackResult, error) {
 	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("cannot listen on Anthropic OAuth callback address %s: %w", listenAddress, err)
 	}
 
-	results := make(chan anthropicOAuthCallbackResult, 1)
-	deliverResult := func(result anthropicOAuthCallbackResult) {
+	results := make(chan callbackResult, 1)
+	deliverResult := func(result callbackResult) {
 		select {
 		case results <- result:
 		default:
@@ -45,7 +45,7 @@ func startAnthropicOAuthCallbackServerAt(listenAddress, expectedState string) (*
 		if oauthErr := query.Get("error"); oauthErr != "" {
 			description := query.Get("error_description")
 			http.Error(w, "Anthropic authentication failed. You can close this tab.", http.StatusBadRequest)
-			deliverResult(anthropicOAuthCallbackResult{
+			deliverResult(callbackResult{
 				err: fmt.Errorf("Anthropic OAuth failed: %s: %s", oauthErr, description),
 			})
 			return
@@ -55,7 +55,7 @@ func startAnthropicOAuthCallbackServerAt(listenAddress, expectedState string) (*
 		state := query.Get("state")
 		if code == "" || state == "" {
 			http.Error(w, "Anthropic callback is missing required parameters.", http.StatusBadRequest)
-			deliverResult(anthropicOAuthCallbackResult{
+			deliverResult(callbackResult{
 				err: fmt.Errorf("Anthropic OAuth callback missing code or state"),
 			})
 			return
@@ -74,13 +74,13 @@ func startAnthropicOAuthCallbackServerAt(listenAddress, expectedState string) (*
 <p>You can close this tab and return to Sidekick.</p>
 </body>
 </html>`)
-		deliverResult(anthropicOAuthCallbackResult{code: code, state: state})
+		deliverResult(callbackResult{code: code, state: state})
 	})
 
 	server := &http.Server{Handler: mux}
 	go func() {
 		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			deliverResult(anthropicOAuthCallbackResult{
+			deliverResult(callbackResult{
 				err: fmt.Errorf("Anthropic OAuth callback server failed: %w", serveErr),
 			})
 		}

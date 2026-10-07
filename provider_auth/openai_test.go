@@ -1,4 +1,4 @@
-package main
+package provider_auth
 
 import (
 	"net/url"
@@ -84,7 +84,7 @@ func TestParseOpenAIPastedInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			code, state, err := parseOpenAIPastedInput(tt.input)
+			code, state, err := ParseOpenAIPastedInput(tt.input)
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("expected error but got nil")
@@ -109,9 +109,9 @@ func TestParseOpenAIPastedInput_StateValidation(t *testing.T) {
 
 	t.Run("state mismatch is detected by caller", func(t *testing.T) {
 		t.Parallel()
-		// parseOpenAIPastedInput itself doesn't validate state; the caller does.
+		// ParseOpenAIPastedInput itself doesn't validate state; the caller does.
 		// This test verifies state is correctly extracted for caller validation.
-		code, state, err := parseOpenAIPastedInput("http://localhost:8855/auth/openai/callback?code=abc&state=wrong")
+		code, state, err := ParseOpenAIPastedInput("http://localhost:8855/auth/openai/callback?code=abc&state=wrong")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -129,7 +129,7 @@ func TestParseOpenAIPastedInput_StateValidation(t *testing.T) {
 
 	t.Run("absent state is permissive", func(t *testing.T) {
 		t.Parallel()
-		_, state, err := parseOpenAIPastedInput("rawcode")
+		_, state, err := ParseOpenAIPastedInput("rawcode")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -140,7 +140,7 @@ func TestParseOpenAIPastedInput_StateValidation(t *testing.T) {
 
 	t.Run("code#state extracts both parts", func(t *testing.T) {
 		t.Parallel()
-		code, state, err := parseOpenAIPastedInput("thecode#thestate")
+		code, state, err := ParseOpenAIPastedInput("thecode#thestate")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -159,7 +159,7 @@ func TestBuildOpenAIAuthorizeURL(t *testing.T) {
 	verifier := "test_verifier_value"
 	state := "test_state_value"
 	redirectURI := "http://localhost:43210/auth/callback"
-	rawURL := buildOpenAIAuthorizeURL(verifier, state, redirectURI)
+	rawURL := BuildOpenAIAuthorizeURL(verifier, state, redirectURI)
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
