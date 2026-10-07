@@ -3,6 +3,13 @@ import type { AgentType, FullTask } from './models'
 export const KANBAN_COLUMN_AGENT_TYPES: readonly AgentType[] = ['human', 'llm', 'none']
 
 /**
+ * Matches the wrapper of each rendered board card, which carries the task id
+ * as data-task-id. Only the highlighted card's wrapper is focusable, and only
+ * programmatically, so cards stay out of the tab order.
+ */
+export const BOARD_CARD_SELECTOR = '[data-board-card]'
+
+/**
  * Groups tasks into kanban columns, each ordered most recently updated first.
  * Columns without tasks are absent.
  */

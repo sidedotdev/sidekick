@@ -1,7 +1,7 @@
 <template>
-  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" @updated="refresh" @deleted="refresh" :task="newTask" />
-  <TaskModal v-if="editingTask" :task="editingTask" @close="editingTask = null" @updated="refresh" @deleted="refresh" />
-  <TaskModal v-if="copyingTask" :task="copyingTask" @close="copyingTask = null" @created="refresh" @updated="refresh" />
+  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refreshFromTop" @updated="refresh" @deleted="refreshFromTop" :task="newTask" />
+  <TaskModal v-if="editingTask" :task="editingTask" @close="closeEditModal" @updated="settleEditingTask" @deleted="settleEditingTask" />
+  <TaskModal v-if="copyingTask" :task="copyingTask" @close="closeCopyModal" @created="refreshFromTop" @updated="refresh" />
   <div v-if="showGuidedOverlay" class="guided-overlay">
     <div class="guided-text">
       Get started by adding your first task to the AI Sidekick queue!
@@ -10,6 +10,7 @@
   <div
     ref="boardRef"
     class="kanban-board"
+    @focusin="onBoardFocusIn"
     @dragover="onBoardDragOver"
     @dragleave="onBoardDragLeave"
     @drop="onBoardDrop"
@@ -144,14 +145,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, nextTick, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Project, Task, TaskStatus } from '../lib/models'
 import KanbanColumnGroup from './KanbanColumnGroup.vue'
 import ArchiveIcon from './icons/ArchiveIcon.vue'
 import ProjectsIcon from './icons/ProjectsIcon.vue'
 import TaskModal from './TaskModal.vue'
 import { store } from '../lib/store'
-import { isInteractiveElement } from '../lib/dom'
+import { canMoveNavigationFocus, isFocusUnclaimed, isInteractiveElement } from '../lib/dom'
 import { viewCache } from '../lib/viewCache'
 import {
   getKanbanKeyBindings,
@@ -160,6 +161,7 @@ import {
   KANBAN_NEW_TASK_SHORTCUT_KEY,
 } from '../lib/localSettings'
 import {
+  BOARD_CARD_SELECTOR,
   buildBoardGroup,
   defaultBoardPosition,
   findTaskPosition,
@@ -415,6 +417,7 @@ const closeModal = () => {
     status: 'drafting',
     projectId: undefined,
   }
+  restoreBoardFocus()
 }
 
 // Edit/copy modals are owned here rather than by the task cards, so that
@@ -423,8 +426,13 @@ const closeModal = () => {
 const editingTask = ref<FullTask | null>(null)
 const copyingTask = ref<Task | null>(null)
 
+// Set once the edit modal's task is started or deleted, so closing the modal
+// moves on instead of returning to that task
+let editingTaskSettled = false
+
 const openEditModal = (task: FullTask) => {
   editingTask.value = task
+  editingTaskSettled = false
 }
 
 const openCopyModal = (task: Task) => {
@@ -507,6 +515,63 @@ const highlightedTask = computed<FullTask | null>(() =>
 
 const highlightedTaskId = computed(() => highlightedTask.value?.id ?? null)
 
+// Steering only on an actual change keeps the default top-left highlight
+// tracking the board until the user picks another task
+const highlightTask = (taskId: string) => {
+  if (taskId !== highlightedTaskId.value) {
+    steeredTaskId.value = taskId
+  }
+}
+
+// Behaves as if the page were reloaded: the highlight returns to the top-left card
+const refreshFromTop = () => {
+  steeredTaskId.value = null
+  refresh()
+}
+
+const settleEditingTask = () => {
+  editingTaskSettled = true
+  refreshFromTop()
+}
+
+const closeEditModal = () => {
+  if (editingTask.value && !editingTaskSettled) {
+    highlightTask(editingTask.value.id)
+  }
+  editingTask.value = null
+  restoreBoardFocus()
+}
+
+const closeCopyModal = () => {
+  copyingTask.value = null
+  restoreBoardFocus()
+}
+
+// A closing modal drops focus to the document, which would otherwise leave
+// the highlighted card unfocused until the highlight next moves
+const restoreBoardFocus = () => {
+  if (!keyboardControlEnabled.value) return
+  void nextTick(() => {
+    if (!canMoveNavigationFocus(BOARD_CARD_SELECTOR)) return
+    boardRef.value?.querySelector<HTMLElement>(`${BOARD_CARD_SELECTOR}[tabindex]`)?.focus({ preventScroll: true })
+  })
+}
+
+const onBoardFocusIn = (event: FocusEvent) => {
+  if (!keyboardControlEnabled.value) return
+  const card = event.target instanceof Element ? event.target.closest<HTMLElement>(BOARD_CARD_SELECTOR) : null
+  const taskId = card?.dataset.taskId
+  if (taskId) {
+    highlightTask(taskId)
+  }
+}
+
+// Board keys only apply while a board card holds focus, or nothing does, so
+// that other focused elements (e.g. sidebar links) keep their own keys
+const isBoardKeyTarget = (target: EventTarget | null): boolean =>
+  isFocusUnclaimed(target)
+  || (target instanceof HTMLElement && target.matches(BOARD_CARD_SELECTOR) && !!boardRef.value?.contains(target))
+
 const ARROW_KEY_DIRECTIONS: Record<string, BoardDirection> = {
   ArrowUp: 'up',
   ArrowDown: 'down',
@@ -527,8 +592,7 @@ const isTaskModalOpen = () => isModalOpen.value || editingTask.value !== null ||
 const handleKeyboardControl = (event: KeyboardEvent) => {
   if (!keyboardControlEnabled.value) return
   if (event.metaKey || event.ctrlKey || event.altKey) return
-  const target = event.target instanceof HTMLElement ? event.target : null
-  if (isInteractiveElement(target) || isTaskModalOpen()) return
+  if (!isBoardKeyTarget(event.target) || isTaskModalOpen()) return
 
   const position = highlightedPosition.value
   const task = highlightedTask.value
@@ -612,6 +676,11 @@ async function confirmArchiveFinished(project?: Project) {
 
   --kanban-column-gap: 0.75rem;
   --kanban-column-heading-height: 2.6875rem;
+  --kanban-group-header-height: 2.5rem;
+  /* Revealed cards must clear the fixed app header and sticky column headings */
+  --task-list-scroll-margin-top: calc(
+    var(--app-header-height, 0rem) + var(--kanban-column-heading-height) + var(--kanban-gap)
+  );
   margin-bottom: 2rem;
 }
 
@@ -698,6 +767,15 @@ async function confirmArchiveFinished(project?: Project) {
   background-color: var(--color-background-hover);
 }
 
+/* Within a group, revealed cards must also clear its sticky header and the
+   gap below it */
+.project-group {
+  --task-list-scroll-margin-top: calc(
+    var(--app-header-height, 0rem) + var(--kanban-column-heading-height)
+      + var(--kanban-group-header-height) + 0.5rem + var(--kanban-gap)
+  );
+}
+
 .project-group + .project-group {
   margin-top: 1rem;
 }
@@ -711,6 +789,7 @@ async function confirmArchiveFinished(project?: Project) {
   position: sticky;
   top: var(--kanban-column-heading-height);
   z-index: 2;
+  min-height: var(--kanban-group-header-height);
   display: flex;
   align-items: stretch;
   font-family: sans-serif;

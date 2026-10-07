@@ -459,12 +459,14 @@ describe('TaskModal localStorage behavior', () => {
       await wrapper.vm.$nextTick()
       vi.advanceTimersByTime(1600)
       await flushPromises()
+      expect(wrapper.emitted('created')).toHaveLength(1)
       
       // Second change should trigger PUT
       await textarea.setValue('Updated description')
       await wrapper.vm.$nextTick()
       vi.advanceTimersByTime(1600)
       await flushPromises()
+      expect(wrapper.emitted('created')).toHaveLength(1)
       
       const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
       expect(taskCalls.length).toBeGreaterThanOrEqual(2)

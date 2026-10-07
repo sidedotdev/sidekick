@@ -14,6 +14,9 @@
           transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
         }"
         class="virtual-task-card-container"
+        data-board-card
+        :data-task-id="tasks[item.index].id"
+        :tabindex="item.index === highlightedIndex ? -1 : undefined"
         :draggable="draggable || undefined"
         @dragstart="(event: DragEvent) => onDragStart(event, tasks[item.index])"
       >
@@ -33,6 +36,8 @@ import { computed, nextTick, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import TaskCard from './TaskCard.vue'
 import type { FullTask } from '../lib/models'
+import { canMoveNavigationFocus } from '../lib/dom'
+import { BOARD_CARD_SELECTOR } from '../lib/kanbanNavigation'
 
 const props = withDefaults(defineProps<{
   tasks: FullTask[]
@@ -108,11 +113,15 @@ const REVEAL_MAX_FRAMES = 3
 
 // The virtualizer only scrolls the nearest scroll parent, so the mounted card
 // is revealed directly to also bring it into outer board/page viewports.
+// Focus follows the highlight unless something else on the page holds it.
 function revealHighlightedCard(index: number, framesLeft = REVEAL_MAX_FRAMES) {
   if (highlightedIndex.value !== index) return
   const card = containerRef.value?.querySelector<HTMLElement>(`[data-index="${index}"]`)
   if (card) {
     card.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    if (canMoveNavigationFocus(BOARD_CARD_SELECTOR)) {
+      card.focus({ preventScroll: true })
+    }
   } else if (framesLeft > 0) {
     requestAnimationFrame(() => revealHighlightedCard(index, framesLeft - 1))
   }
@@ -164,6 +173,13 @@ onUnmounted(() => {
 }
 .virtual-task-card-container {
   z-index: 0;
+  /* Lets the surrounding layout keep revealed cards clear of headers
+     overlaying the top of the scrollport */
+  scroll-margin-top: var(--task-list-scroll-margin-top, 0);
+}
+/* The highlighted task card draws its own focus outline */
+.virtual-task-card-container:focus {
+  outline: none;
 }
 /* Each transformed row is its own stacking context, so the hovered row must
    be raised for its expanded card to paint over later sibling rows. */

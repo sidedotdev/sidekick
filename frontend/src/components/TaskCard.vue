@@ -351,10 +351,8 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   z-index: 10;
 }
 
-/* Matches the focused AutogrowTextarea style */
 .task-card.keyboard-highlighted {
-  border: 1px solid var(--color-primary);
-  outline: solid #ddd;
+  outline: 2px solid var(--color-primary);
 }
 
 .status-label {

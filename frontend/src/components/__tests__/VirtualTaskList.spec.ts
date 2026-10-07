@@ -101,7 +101,7 @@ describe('VirtualTaskList highlighted task visibility', () => {
     await nextFrames()
 
     expect(w.get('.scroll-parent').element.scrollTop).toBeGreaterThan(0)
-    expect(w.get('[data-task-id="t30"]').classes()).toContain('highlighted')
+    expect(w.get('.task-card[data-task-id="t30"]').classes()).toContain('highlighted')
     expect(revealedTaskIds.at(-1)).toBe('t30')
   })
 })
