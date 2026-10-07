@@ -73,6 +73,10 @@ type MergeWithReviewParams struct {
 	// specifically to address that feedback. Empty on the initial pre-review
 	// merge.
 	PreviousReview string
+
+	// WorkSummary describes the plan and the work done for it, when the work
+	// followed a dev plan, to inform the squash merge commit message.
+	WorkSummary string
 }
 
 // getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes.
