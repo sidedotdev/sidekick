@@ -428,3 +428,28 @@ func (m *mockClient) QueryFlow(workspaceID, flowID, query string, queryArgs any)
 	args := m.Called(workspaceID, flowID, query, queryArgs)
 	return args.Get(0), args.Error(1)
 }
+
+func (c *mockClient) StartProviderOAuth(req client.StartProviderOAuthRequest) (client.StartProviderOAuthResponse, error) {
+	args := c.Called(req)
+	return args.Get(0).(client.StartProviderOAuthResponse), args.Error(1)
+}
+
+func (c *mockClient) GetProviderOAuthStatus(sessionID string) (client.ProviderOAuthStatus, error) {
+	args := c.Called(sessionID)
+	return args.Get(0).(client.ProviderOAuthStatus), args.Error(1)
+}
+
+func (c *mockClient) SubmitProviderOAuthCode(sessionID, input string) error {
+	args := c.Called(sessionID, input)
+	return args.Error(0)
+}
+
+func (c *mockClient) ProviderAPIKeyExists(provider, profileID string) (bool, error) {
+	args := c.Called(provider, profileID)
+	return args.Bool(0), args.Error(1)
+}
+
+func (c *mockClient) SaveProviderAPIKey(req client.SaveProviderAPIKeyRequest) error {
+	args := c.Called(req)
+	return args.Error(0)
+}

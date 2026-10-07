@@ -21,6 +21,11 @@ type Client interface {
 	SendUserAction(workspaceID, flowID, actionType string) error
 	GetSubflow(workspaceID, subflowID string) (domain.Subflow, error)
 	QueryFlow(workspaceID, flowID, query string, args any) (any, error)
+	StartProviderOAuth(req StartProviderOAuthRequest) (StartProviderOAuthResponse, error)
+	GetProviderOAuthStatus(sessionID string) (ProviderOAuthStatus, error)
+	SubmitProviderOAuthCode(sessionID, input string) error
+	ProviderAPIKeyExists(provider, profileID string) (bool, error)
+	SaveProviderAPIKey(req SaveProviderAPIKeyRequest) error
 }
 
 type clientImpl struct {
