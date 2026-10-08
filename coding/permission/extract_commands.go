@@ -56,8 +56,7 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 	case "command":
 		cmdText := getFullCommandText(node, sourceCode)
 		if cmdText != "" {
-			*commands = append(*commands, cmdText)
-			handleSpecialCommands(cmdText, commands, opts)
+			addCommand(cmdText, commands, opts)
 		}
 		// Recurse into children to find command substitutions (may be nested in concatenations)
 		for i := uint(0); i < node.ChildCount(); i++ {
@@ -89,8 +88,7 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 		// Check for background operator at parent level
 		cmdText = appendBackgroundIfPresent(node, sourceCode, cmdText)
 		if cmdText != "" {
-			*commands = append(*commands, cmdText)
-			handleSpecialCommands(cmdText, commands, opts)
+			addCommand(cmdText, commands, opts)
 		}
 		// Recurse into children to find command substitutions (may be nested)
 		for i := uint(0); i < node.ChildCount(); i++ {
@@ -164,6 +162,21 @@ func appendBackgroundIfPresent(node *sitter.Node, sourceCode []byte, cmdText str
 	return cmdText
 }
 
+// addCommand records cmdText along with the commands it runs. An xargs
+// invocation is replaced by the command it runs, since xargs itself has no
+// permission-relevant effect. When that command can't be determined, the xargs
+// invocation itself is recorded so it can't be auto-approved.
+func addCommand(cmdText string, commands *[]string, opts extractOpts) {
+	if !opts.legacy {
+		if innerCmd, ok := xargsWrappedCommand(parseCommandParts(cmdText)); ok {
+			addCommand(innerCmd, commands, opts)
+			return
+		}
+	}
+	*commands = append(*commands, cmdText)
+	handleSpecialCommands(cmdText, commands, opts)
+}
+
 // handleSpecialCommands handles commands that execute other commands:
 // sh/bash/zsh -c, eval, exec, xargs
 func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts) {
@@ -182,7 +195,10 @@ func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts)
 	case "exec", "lima":
 		handleExecCommand(parts, commands, opts)
 	case "xargs":
-		handleXargsCommand(parts, commands, opts)
+		// Outside legacy mode, addCommand already unwrapped xargs if it could.
+		if opts.legacy {
+			handleXargsCommandLegacy(parts, commands)
+		}
 
 	// Privilege/user context wrappers
 	case "sudo":
@@ -409,8 +425,104 @@ func handleExecCommand(parts []string, commands *[]string, opts extractOpts) {
 	}
 }
 
-// handleXargsCommand handles xargs ... patterns
-func handleXargsCommand(parts []string, commands *[]string, opts extractOpts) {
+const (
+	xargsShortFlagsWithoutArg = "0oprtx"
+	xargsShortFlagsWithArg    = "adEILnPsJRS"
+	// Deprecated GNU flags whose argument may only be attached (e.g. -i{}).
+	xargsShortFlagsWithOptionalArg = "eil"
+)
+
+var xargsLongFlagsWithoutArg = map[string]bool{
+	"--null": true, "--no-run-if-empty": true, "--verbose": true,
+	"--interactive": true, "--exit": true, "--open-tty": true, "--show-limits": true,
+}
+
+var xargsLongFlagsWithArg = map[string]bool{
+	"--arg-file": true, "--delimiter": true, "--max-args": true,
+	"--max-procs": true, "--max-chars": true, "--process-slot-var": true,
+}
+
+// xargsLongFlagsWithOptionalArg only accept a value via --flag=value.
+var xargsLongFlagsWithOptionalArg = map[string]bool{
+	"--replace": true, "--eof": true, "--max-lines": true,
+}
+
+// xargsWrappedCommand returns the command an xargs invocation runs, reporting
+// false when parts aren't an xargs invocation or its options can't be parsed.
+func xargsWrappedCommand(parts []string) (string, bool) {
+	if len(parts) == 0 || parts[0] != "xargs" {
+		return "", false
+	}
+	i := 1
+	for i < len(parts) {
+		part := parts[i]
+		if part == "--" {
+			i++
+			break
+		}
+		if !strings.HasPrefix(part, "-") {
+			break
+		}
+		separateArgs, ok := xargsOptionSeparateArgCount(part)
+		if !ok {
+			return "", false
+		}
+		i += 1 + separateArgs
+	}
+	if i > len(parts) {
+		return "", false
+	}
+	if i == len(parts) {
+		return "echo", true
+	}
+	return strings.Join(parts[i:], " "), true
+}
+
+// xargsOptionSeparateArgCount reports how many following parts an xargs option
+// consumes as its value, and false if the option is not recognized.
+func xargsOptionSeparateArgCount(option string) (int, bool) {
+	if strings.HasPrefix(option, "--") {
+		name, _, hasValue := strings.Cut(option, "=")
+		switch {
+		case xargsLongFlagsWithoutArg[name]:
+			return 0, !hasValue
+		case xargsLongFlagsWithOptionalArg[name]:
+			return 0, true
+		case xargsLongFlagsWithArg[name]:
+			if hasValue {
+				return 0, true
+			}
+			return 1, true
+		}
+		return 0, false
+	}
+
+	cluster := option[1:]
+	if cluster == "" {
+		return 0, false
+	}
+	for j := 0; j < len(cluster); j++ {
+		c := cluster[j]
+		switch {
+		case strings.IndexByte(xargsShortFlagsWithoutArg, c) >= 0:
+			continue
+		case strings.IndexByte(xargsShortFlagsWithOptionalArg, c) >= 0:
+			return 0, true
+		case strings.IndexByte(xargsShortFlagsWithArg, c) >= 0:
+			if j+1 < len(cluster) {
+				return 0, true
+			}
+			return 1, true
+		default:
+			return 0, false
+		}
+	}
+	return 0, true
+}
+
+// handleXargsCommandLegacy preserves the original xargs extraction for
+// workflow determinism.
+func handleXargsCommandLegacy(parts []string, commands *[]string) {
 	if len(parts) < 2 {
 		return
 	}
@@ -495,12 +607,7 @@ func handleWrapperWithFlags(parts []string, commands *[]string, flagsWithArgs ma
 	if cmdStart < len(parts) {
 		innerCmd := strings.Join(parts[cmdStart:], " ")
 		if innerCmd != "" {
-			*commands = append(*commands, innerCmd)
-			// Recursively handle the inner command for nested wrappers
-			innerParts := parseCommandParts(innerCmd)
-			if len(innerParts) > 0 {
-				handleSpecialCommands(innerCmd, commands, opts)
-			}
+			addCommand(innerCmd, commands, opts)
 		}
 	}
 }
@@ -543,13 +650,11 @@ func handleWrapperWithPositionalArg(parts []string, commands *[]string, flagsWit
 			if len(parts[cmdStart:]) == 1 {
 				unquoted := unquoteString(innerCmd)
 				if unquoted != innerCmd {
-					*commands = append(*commands, unquoted)
-					handleSpecialCommands(unquoted, commands, opts)
+					addCommand(unquoted, commands, opts)
 					return
 				}
 			}
-			*commands = append(*commands, innerCmd)
-			handleSpecialCommands(innerCmd, commands, opts)
+			addCommand(innerCmd, commands, opts)
 		}
 	}
 }
@@ -669,12 +774,7 @@ func handleEnvCommand(parts []string, commands *[]string, opts extractOpts) {
 	if cmdStart < len(parts) {
 		innerCmd := strings.Join(parts[cmdStart:], " ")
 		if innerCmd != "" {
-			*commands = append(*commands, innerCmd)
-			// Recursively handle the inner command for nested wrappers
-			innerParts := parseCommandParts(innerCmd)
-			if len(innerParts) > 0 {
-				handleSpecialCommands(innerCmd, commands, opts)
-			}
+			addCommand(innerCmd, commands, opts)
 		}
 	}
 }
