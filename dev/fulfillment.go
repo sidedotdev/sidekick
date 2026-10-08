@@ -6,7 +6,6 @@ import (
 	"sidekick/coding"
 	"sidekick/coding/git"
 	"sidekick/common"
-	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
@@ -127,17 +126,11 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 				*reviewedFullDiff = fullDiff
 			}
 		}
-	} else if v == 6 && fflag.IsEnabled(dCtx, fflag.CheckEdits) {
-		// Legacy path: reviews relied on CheckEdits staging the current step's
-		// work, which misses anything the agent committed and anything merged
-		// in from the target branch. Generated review diffs cover those cases,
+	} else if v == 6 {
+		// Legacy path: reviews relied on staging the current step's work,
+		// which misses anything the agent committed and anything merged in
+		// from the target branch. Generated review diffs cover those cases,
 		// so this remains only to keep older workflows replay-deterministic.
-		//
-		// We deliberately re-evaluate the CheckEdits flag below to preserve
-		// the exact activity command sequence previously emitted by
-		// git.GitDiff (which internally checks the flag again before
-		// running GitDiffActivity).
-		_ = fflag.IsEnabled(dCtx, fflag.CheckEdits)
 		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get staged git diff: %v", err)

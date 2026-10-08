@@ -37,6 +37,7 @@ func main() {
 	testFilePath := filepath.Join(tempDir, "test.go")
 	err := os.WriteFile(testFilePath, []byte(initialContent), 0644)
 	require.NoError(t, err)
+	initCommittedGitRepo(t, tempDir)
 
 	// Create LSPActivities with real Jsonrpc2LSPClient - this will be reused
 	// across both FindReferencesActivity calls to reproduce the caching issue
@@ -99,7 +100,6 @@ func main() {
 	applyInput := ApplyEditBlockActivityInput{
 		EnvContainer: envContainer,
 		EditBlocks:   []EditBlock{editBlock},
-		EnabledFlags: []string{}, // check-edits flag not passed in, thus no git repo is needed
 	}
 
 	devActivities := &DevActivities{LSPActivities: lspa} // should use same lspa

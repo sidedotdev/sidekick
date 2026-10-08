@@ -151,20 +151,6 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 		})
 	}
 
-	checksEnabled := slices.Contains(input.EnabledFlags, fflag.CheckEdits)
-
-	// Applied edits are staged so that diffs of staged changes, which is what
-	// reviews are based on, cover all of the work. Editing a directory that is
-	// not version controlled remains supported, and skips staging.
-	stageEdits := checksEnabled
-	if !checksEnabled {
-		insideWorkTree, err := git.IsInsideWorkTree(ctx, input.EnvContainer)
-		if err != nil {
-			log.Warn().Err(err).Msg("Failed to determine whether edits are inside a git work tree")
-		}
-		stageEdits = insideWorkTree
-	}
-
 	// Git operations (add, restore, diff) lock the repo index, so we
 	// serialize them across all file groups sharing the same working directory.
 	var gitMu sync.Mutex
@@ -182,7 +168,7 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 		wg.Add(1)
 		go func(fi int, blocks []indexedBlock) {
 			defer wg.Done()
-			iReports := da.applyEditBlocksForFile(ctx, input, blocks, checksEnabled, stageEdits, &gitMu)
+			iReports := da.applyEditBlocksForFile(ctx, input, blocks, &gitMu)
 			mu.Lock()
 			fileResults[fi] = fileResult{fileIndex: fi, reports: iReports}
 			mu.Unlock()
@@ -224,8 +210,6 @@ func (da *DevActivities) applyEditBlocksForFile(
 	ctx context.Context,
 	input ApplyEditBlockActivityInput,
 	blocks []indexedBlock,
-	checksEnabled bool,
-	stageEdits bool,
 	gitMu *sync.Mutex,
 ) []indexedReport {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
@@ -233,7 +217,7 @@ func (da *DevActivities) applyEditBlocksForFile(
 	// Try batch mode: apply all blocks, check once, fall back to sequential
 	// if the check fails.
 	if len(blocks) > 1 {
-		batchReports := da.tryBatchApply(ctx, input, blocks, baseDir, checksEnabled, stageEdits, gitMu)
+		batchReports := da.tryBatchApply(ctx, input, blocks, baseDir, gitMu)
 		if batchReports != nil {
 			return batchReports
 		}
@@ -241,7 +225,7 @@ func (da *DevActivities) applyEditBlocksForFile(
 	}
 
 	// Sequential mode: apply and check each block individually.
-	return da.applyBlocksSequentially(ctx, input, blocks, baseDir, checksEnabled, stageEdits, gitMu)
+	return da.applyBlocksSequentially(ctx, input, blocks, baseDir, gitMu)
 }
 
 // tryBatchApply applies all edit blocks for a file, then runs checks once. If
@@ -252,8 +236,6 @@ func (da *DevActivities) tryBatchApply(
 	input ApplyEditBlockActivityInput,
 	blocks []indexedBlock,
 	baseDir string,
-	checksEnabled bool,
-	stageEdits bool,
 	gitMu *sync.Mutex,
 ) []indexedReport {
 	filePath := blocks[0].block.FilePath
@@ -330,7 +312,7 @@ func (da *DevActivities) tryBatchApply(
 		return nil
 	}
 
-	// All blocks applied successfully. Now stage (and optionally check).
+	// All blocks applied successfully. Now check and stage.
 	isExistingFile := firstEditType != "create"
 	hasDeleteOnly := true
 	for _, ib := range blocks {
@@ -389,58 +371,33 @@ func (da *DevActivities) tryBatchApply(
 		Staged:    false,
 	})
 
-	if checksEnabled {
-		checkResult, checkErr := checkAndStageOrRestoreFile(
-			ctx, input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors, input.goBuildCheckEnabled(),
-		)
+	checkResult, checkErr := checkAndStageOrRestoreFile(
+		ctx, input.EnvContainer, input.CheckCommands, filePath, isExistingFile, preEditFileHadErrors, input.goBuildCheckEnabled(),
+	)
 
-		if !checkResult.Success {
-			// Batch check failed — restore and fall back to sequential processing.
-			// Note: checkAndStageOrRestoreFile already restored the file.
-			da.restoreFileForBatchFallback(input.EnvContainer, filePath, blocks)
-			gitMu.Unlock()
-			return nil
-		}
+	if !checkResult.Success {
+		// Batch check failed — restore and fall back to sequential processing.
+		// Note: checkAndStageOrRestoreFile already restored the file.
+		da.restoreFileForBatchFallback(input.EnvContainer, filePath, blocks)
 		gitMu.Unlock()
+		return nil
+	}
+	gitMu.Unlock()
 
-		batchReport.FinalDiff = combinedDiff
-		batchReport.CheckResult = checkResult
-		if preEditFileHadErrors {
-			batchReport.CheckWarning = "file had pre-existing syntax errors; base file validity check was skipped"
-		}
-		if scdErr != nil {
-			batchReport.Error = fmt.Sprintf("Failure when getting unstaged git diff for block: %v", scdErr)
-		}
-		if checkErr != nil {
-			errMsg := fmt.Sprintf("Failure when checking/staging/restoring file: %v", checkErr)
-			if batchReport.Error != "" {
-				batchReport.Error += "\n" + errMsg
-			} else {
-				batchReport.Error = errMsg
-			}
-		}
-	} else {
-		// Checks disabled — just stage the file and populate diffs.
-		var gitAddErr error
-		if stageEdits {
-			gitAddErr = gitAdd(input.EnvContainer, filePath)
-		}
-		gitMu.Unlock()
-
-		batchReport.FinalDiff = combinedDiff
-		if scdErr != nil {
-			batchReport.Error = fmt.Sprintf("Failure when getting unstaged git diff for block: %v", scdErr)
-		}
-		if gitAddErr != nil {
-			errMsg := fmt.Sprintf("Failed to git add file: %v", gitAddErr)
-			if batchReport.Error != "" {
-				batchReport.Error += "\n" + errMsg
-			} else {
-				batchReport.Error = errMsg
-			}
+	batchReport.FinalDiff = combinedDiff
+	batchReport.CheckResult = checkResult
+	if preEditFileHadErrors {
+		batchReport.CheckWarning = "file had pre-existing syntax errors; base file validity check was skipped"
+	}
+	if scdErr != nil {
+		batchReport.Error = fmt.Sprintf("Failure when getting unstaged git diff for block: %v", scdErr)
+	}
+	if checkErr != nil {
+		errMsg := fmt.Sprintf("Failure when checking/staging/restoring file: %v", checkErr)
+		if batchReport.Error != "" {
+			batchReport.Error += "\n" + errMsg
 		} else {
-			batchReport.CheckResult.Success = true
-			batchReport.CheckResult.Message = "Skipped"
+			batchReport.Error = errMsg
 		}
 	}
 
@@ -476,8 +433,6 @@ func (da *DevActivities) applyBlocksSequentially(
 	input ApplyEditBlockActivityInput,
 	blocks []indexedBlock,
 	baseDir string,
-	checksEnabled bool,
-	stageEdits bool,
 	gitMu *sync.Mutex,
 ) []indexedReport {
 	editBlockSlice := make([]EditBlock, len(blocks))
@@ -533,7 +488,7 @@ func (da *DevActivities) applyBlocksSequentially(
 		}
 		report.DidApply = true
 
-		if report.Error == "" && stageEdits {
+		if report.Error == "" {
 			gitMu.Lock()
 			var currentBlockError string
 			pathForDiff := filepath.Join(baseDir, block.FilePath)
@@ -556,12 +511,9 @@ func (da *DevActivities) applyBlocksSequentially(
 			}
 			report.FinalDiff = unstagedChangesDiff
 
-			if block.EditType == "delete" || !checksEnabled {
-				// Stage directly instead of using checkAndStageOrRestoreFile:
-				// checking a deleted file is not possible, and with checks
-				// disabled there is nothing to check before staging. Staging
-				// every applied edit keeps the review diffs, which are based on
-				// staged changes, complete.
+			if block.EditType == "delete" {
+				// Stage directly instead of using checkAndStageOrRestoreFile,
+				// since checking a deleted file is not possible.
 				gitAddErr := gitAdd(input.EnvContainer, block.FilePath)
 				if gitAddErr != nil {
 					errMsg := fmt.Sprintf("Failed to git add file: %v", gitAddErr)
@@ -1083,9 +1035,6 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		}
 
 		enabledFlags := make([]string, 0)
-		if fflag.IsEnabled(trackedCtx, fflag.CheckEdits) {
-			enabledFlags = append(enabledFlags, fflag.CheckEdits)
-		}
 		goBuildCheckVersion := workflow.GetVersion(trackedCtx, "check-go-build", workflow.DefaultVersion, 1)
 		if goBuildCheckVersion >= 1 && fflag.IsEnabled(trackedCtx, fflag.CheckGoBuild) {
 			enabledFlags = append(enabledFlags, fflag.CheckGoBuild)

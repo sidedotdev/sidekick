@@ -147,7 +147,6 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	// Defaults match flags.yml production defaults.
 	var ffa *fflag.FFlagActivities
 	knownFlags := map[string]bool{
-		fflag.CheckEdits:                        true,
 		fflag.InfoNeeds:                         false,
 		fflag.DisableContextCodeVisibilityCheck: true,
 		fflag.InitialRepoSummary:                true,
