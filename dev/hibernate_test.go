@@ -74,3 +74,62 @@ func TestHibernateSignalDoesNotBlockSelectorCallback(t *testing.T) {
 	assert.Equal(t, true, gs.GetValue(globalStateKeyHibernated))
 	assert.True(t, gs.Paused)
 }
+
+// TestHibernateSignalIgnoredForModal verifies that a Modal flow neither runs the
+// hibernation activity nor marks itself hibernated/paused, since Modal worktrees
+// are never hibernated.
+func TestHibernateSignalIgnoredForModal(t *testing.T) {
+	t.Parallel()
+	testSuite := &testsuite.WorkflowTestSuite{}
+	wfEnv := testSuite.NewTestWorkflowEnvironment()
+
+	gs := &flow_action.GlobalState{}
+	gs.InitValues()
+
+	testWorkflow := func(ctx workflow.Context) error {
+		activityCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 10 * time.Second,
+		})
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     activityCtx,
+				WorkspaceId: "test-workspace",
+				GlobalState: gs,
+				EnvContainer: &env.EnvContainer{
+					Env: &env.ModalEnv{
+						WorkingDirectory: "/root/repo/worktrees/side/test-branch",
+						SandboxName:      "sb-test",
+					},
+				},
+			},
+			Worktree: &domain.Worktree{
+				Name: "side/test-branch",
+			},
+		}
+
+		SetupHibernateHandler(dCtx)
+		_ = workflow.Sleep(ctx, 100*time.Millisecond)
+		return nil
+	}
+
+	wfEnv.RegisterWorkflow(testWorkflow)
+
+	hibernateCalls := 0
+	wfEnv.OnActivity(git.HibernateWorktreeActivity, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { hibernateCalls++ }).
+		Return(git.HibernateWorktreeOutput{}, nil).Maybe()
+
+	for _, delay := range []time.Duration{10 * time.Millisecond, 20 * time.Millisecond} {
+		wfEnv.RegisterDelayedCallback(func() {
+			wfEnv.SignalWorkflow(SignalNameHibernate, HibernateSignal{})
+		}, delay)
+	}
+
+	wfEnv.ExecuteWorkflow(testWorkflow)
+
+	require.True(t, wfEnv.IsWorkflowCompleted())
+	require.NoError(t, wfEnv.GetWorkflowError())
+	assert.Zero(t, hibernateCalls)
+	assert.Nil(t, gs.GetValue(globalStateKeyHibernated))
+	assert.False(t, gs.Paused)
+}
