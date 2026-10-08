@@ -29,11 +29,16 @@ func TestOpenAIResponsesExpectsKeepalives(t *testing.T) {
 		{"unrelated name", "other-7", "", common.ProviderAuthTypeAPI, false},
 		{"invalid major", "gpt-6foo", "", common.ProviderAuthTypeAPI, false},
 		{"astra custom endpoint", "gpt-6-astra", "https://example.com/v1", common.ProviderAuthTypeAPI, false},
-		{"astra subscription", "gpt-6-astra", "", common.ProviderAuthTypeSubscription, false},
+		{"astra subscription", "gpt-6-astra", "", common.ProviderAuthTypeSubscription, true},
 		{"different version", "gpt-5.60", "", common.ProviderAuthTypeAPI, false},
 		{"custom endpoint", "gpt-5.6-sol", "https://example.com/v1", common.ProviderAuthTypeAPI, false},
 		{"explicit direct endpoint", "gpt-5.6-sol", "https://api.openai.com/v1/", common.ProviderAuthTypeAPI, true},
-		{"subscription", "gpt-5.6-sol", "", common.ProviderAuthTypeSubscription, false},
+		{"subscription", "gpt-5.6-sol", "", common.ProviderAuthTypeSubscription, true},
+		{"subscription older model", "gpt-5.5", "", common.ProviderAuthTypeSubscription, true},
+		{"subscription explicit codex endpoint", "gpt-5.5", "https://chatgpt.com/backend-api/codex/", common.ProviderAuthTypeSubscription, true},
+		{"subscription custom endpoint", "gpt-5.6-sol", "https://example.com/v1", common.ProviderAuthTypeSubscription, false},
+		{"any auth falls back to api key", "gpt-5.6-sol", "", common.ProviderAuthTypeAny, true},
+		{"any auth older model via api key", "gpt-5.5", "", common.ProviderAuthTypeAny, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

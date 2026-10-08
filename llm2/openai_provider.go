@@ -45,9 +45,9 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 	requestAuth := newProviderRequestAuth(request.SecretManager, options.ModelConfig.Provider, authType, credentials.useOAuth)
 
-	httpClient := &http.Client{
+	httpClient := withResponseDump(&http.Client{
 		Timeout: 45 * time.Minute,
-	}
+	})
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
@@ -648,6 +648,10 @@ func wrapOpenAIError(err error) error {
 	return err
 }
 func openAICacheWriteTokens(usage openai.CompletionUsage) (int, bool) {
+	if usage.PromptTokensDetails.JSON.CacheWriteTokens.Valid() {
+		return int(usage.PromptTokensDetails.CacheWriteTokens), true
+	}
+
 	fields := []map[string]openaiRespJSON.Field{
 		usage.PromptTokensDetails.JSON.ExtraFields,
 		usage.JSON.ExtraFields,

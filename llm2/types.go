@@ -311,6 +311,11 @@ type EventType string
 // EventHeartbeat represents an explicit upstream keepalive without message content.
 const EventHeartbeat EventType = "heartbeat"
 
+// EventUpstreamActivity reports that response bytes arrived, including bytes
+// SDK decoders discard such as SSE comment keepalives. Unlike EventHeartbeat,
+// it does not imply the route sends keepalives regularly.
+const EventUpstreamActivity EventType = "upstream_activity"
+
 const (
 	// A new content block starts. Append ContentBlock to the assistant Message.Content.
 	EventBlockStarted EventType = "block_started"
