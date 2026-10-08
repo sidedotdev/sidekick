@@ -996,7 +996,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		// code that isn't just in code blocks (e.g. raw excerpts and git
 		// diffs), then we may consider bringing back this validation.
 		visibilityVersion := workflow.GetVersion(trackedCtx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
-		if visibilityVersion >= 1 && fflag.IsEnabled(trackedCtx, fflag.DisableContextCodeVisibilityCheck) {
+		if visibilityVersion >= 1 && fflag.IsEnabledWithoutVersioning(trackedCtx, fflag.DisableContextCodeVisibilityCheck) {
 			validEditBlocks = editBlocks
 		} else {
 			validEditBlocks, invalidReports = validateEditBlocks(editBlocks)
@@ -1037,7 +1037,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		fflag.EvalRetiredCheckEditsFlag(trackedCtx)
 		enabledFlags := make([]string, 0)
 		goBuildCheckVersion := workflow.GetVersion(trackedCtx, "check-go-build", workflow.DefaultVersion, 1)
-		if goBuildCheckVersion >= 1 && fflag.IsEnabled(trackedCtx, fflag.CheckGoBuild) {
+		if goBuildCheckVersion >= 1 && fflag.IsEnabledWithoutVersioning(trackedCtx, fflag.CheckGoBuild) {
 			enabledFlags = append(enabledFlags, fflag.CheckGoBuild)
 		}
 

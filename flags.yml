@@ -40,6 +40,12 @@ context-gathering-forget:
     c: false
   defaultRule:
     variation: t1
+llm-commit-messages:
+  variations:
+    t1: true
+    c: false
+  defaultRule:
+    variation: t1
 review_chat_history_enabled:
   variations:
     enabled: true

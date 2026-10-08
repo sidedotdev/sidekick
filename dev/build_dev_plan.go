@@ -302,7 +302,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 	if !seededInitialPrompt {
 		// prepend a concise repository summary to the other code context in the initial prompt
 		version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-		if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		if version >= 2 && fflag.IsEnabledWithoutVersioning(dCtx, fflag.InitialRepoSummary) {
 			repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get repo summary: %w", err)

@@ -79,7 +79,9 @@ func TestIddWatchEditIdleActivity_IgnoresEditsOutsideWatchSubdir(t *testing.T) {
 	otherDir := filepath.Join(worktree, "src")
 	require.NoError(t, os.MkdirAll(otherDir, 0o755))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Far above MaxWait so a starved scheduler in loaded runs can't race the
+	// context deadline against the MaxWait timer.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	type result struct {
@@ -108,7 +110,7 @@ func TestIddWatchEditIdleActivity_IgnoresEditsOutsideWatchSubdir(t *testing.T) {
 		require.NoError(t, r.err)
 		assert.True(t, r.out.TimedOut, "expected MaxWait timeout when no intent edits occurred")
 		assert.Empty(t, r.out.ChangedPaths)
-	case <-time.After(3 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("watcher did not return on MaxWait timeout")
 	}
 }
@@ -119,7 +121,9 @@ func TestIddWatchEditIdleActivity_IgnoresUnwatchedExtensions(t *testing.T) {
 	intentDir := filepath.Join(worktree, "intent")
 	require.NoError(t, os.MkdirAll(intentDir, 0o755))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Far above MaxWait so a starved scheduler in loaded runs can't race the
+	// context deadline against the MaxWait timer.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	type result struct {
@@ -148,7 +152,7 @@ func TestIddWatchEditIdleActivity_IgnoresUnwatchedExtensions(t *testing.T) {
 		require.NoError(t, r.err)
 		assert.True(t, r.out.TimedOut)
 		assert.Empty(t, r.out.ChangedPaths)
-	case <-time.After(3 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("watcher did not return on MaxWait timeout")
 	}
 }

@@ -157,6 +157,7 @@ Here is the plan for meeting the requirements, along with updates per step:
 			Title:       input.Title,
 			StartBranch: input.StartBranch,
 			AutoMerge:   input.AutoMerge,
+			WorkSummary: planExecutionSummary(planExec),
 		})
 		if err != nil {
 			return DevPlanExecution{}, err

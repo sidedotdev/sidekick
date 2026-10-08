@@ -160,6 +160,9 @@ func TestReviewAndResolveRealFlow(t *testing.T) {
 	require.True(t, h.codingResponseSent, "the coding round must have run and authored its changes")
 	require.GreaterOrEqual(t, len(h.mergeApprovals), 2, "the loop must review twice: once rejected, once approved")
 	require.NotEmpty(t, h.fulfillmentDiffs)
+	assert.Equal(t, []string{"merge_approval", "commit", "merge_approval"}, h.events,
+		"the coding round must commit its work before it is reviewed again")
+	assert.Equal(t, []string{"feat: commit round 1"}, h.branchCommitSubjects())
 
 	firstApproval := h.mergeApprovals[0]
 	assert.Contains(t, firstApproval.Diff, "PRE_FEEDBACK_WORK")

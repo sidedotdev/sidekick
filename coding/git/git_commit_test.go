@@ -242,3 +242,128 @@ func TestGetGitUserConfigActivity(t *testing.T) {
 	require.Equal(t, "Test User", config.Name)
 	require.Equal(t, "test@example.com", config.Email)
 }
+
+func TestGitCommitActivity_Identity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		params         GitCommitParams
+		expectedFormat string
+	}{
+		{
+			name: "author overrides with explicit committer",
+			params: GitCommitParams{
+				AuthorName:     "Human Dev",
+				AuthorEmail:    "human@example.com",
+				CommitterName:  "Sidekick",
+				CommitterEmail: "sidekick@side.dev",
+			},
+			expectedFormat: "Human Dev|human@example.com|Sidekick|sidekick@side.dev",
+		},
+		{
+			name: "no author overrides defaults author to Sidekick",
+			params: GitCommitParams{
+				CommitterName:  "Human Dev",
+				CommitterEmail: "human@example.com",
+			},
+			expectedFormat: "Sidekick|sidekick@side.dev|Human Dev|human@example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repoDir, cleanup := createTempGitRepo(t)
+			defer cleanup()
+
+			require.NoError(t, os.WriteFile(filepath.Join(repoDir, "test.txt"), []byte("test"), fs.FileMode(0644)))
+			runGit(t, repoDir, "add", ".")
+
+			ctx := context.Background()
+			devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+			require.NoError(t, err)
+
+			params := tt.params
+			params.CommitMessage = "identity test"
+			_, err = GitCommitActivity(ctx, env.EnvContainer{Env: devEnv}, params)
+			require.NoError(t, err)
+
+			cmd := exec.Command("git", "log", "-1", "--format=%an|%ae|%cn|%ce")
+			cmd.Dir = repoDir
+			output, err := cmd.Output()
+			require.NoError(t, err)
+			require.Equal(t, tt.expectedFormat, strings.TrimSpace(string(output)))
+		})
+	}
+}
+
+func TestBuildGitEnvVarsWithAuthor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		authorName     string
+		authorEmail    string
+		committerName  string
+		committerEmail string
+		expected       []string
+	}{
+		{
+			name: "all empty defaults author to Sidekick",
+			expected: []string{
+				"GIT_AUTHOR_NAME=Sidekick",
+				"GIT_AUTHOR_EMAIL=sidekick@side.dev",
+			},
+		},
+		{
+			name:           "committer only keeps Sidekick author",
+			committerName:  "Human Dev",
+			committerEmail: "human@example.com",
+			expected: []string{
+				"GIT_AUTHOR_NAME=Sidekick",
+				"GIT_AUTHOR_EMAIL=sidekick@side.dev",
+				"GIT_COMMITTER_NAME=Human Dev",
+				"GIT_COMMITTER_EMAIL=human@example.com",
+			},
+		},
+		{
+			name:           "author and committer overrides",
+			authorName:     "Human Dev",
+			authorEmail:    "human@example.com",
+			committerName:  "Sidekick",
+			committerEmail: "sidekick@side.dev",
+			expected: []string{
+				"GIT_AUTHOR_NAME=Human Dev",
+				"GIT_AUTHOR_EMAIL=human@example.com",
+				"GIT_COMMITTER_NAME=Sidekick",
+				"GIT_COMMITTER_EMAIL=sidekick@side.dev",
+			},
+		},
+		{
+			name:       "partial author falls back per field",
+			authorName: "Human Dev",
+			expected: []string{
+				"GIT_AUTHOR_NAME=Human Dev",
+				"GIT_AUTHOR_EMAIL=sidekick@side.dev",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := BuildGitEnvVarsWithAuthor(tt.authorName, tt.authorEmail, tt.committerName, tt.committerEmail)
+			require.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestBuildGitEnvVarsDefaultsAuthorToSidekick(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, []string{
+		"GIT_AUTHOR_NAME=Sidekick",
+		"GIT_AUTHOR_EMAIL=sidekick@side.dev",
+		"GIT_COMMITTER_NAME=Human Dev",
+	}, BuildGitEnvVars("Human Dev", ""))
+}

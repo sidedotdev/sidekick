@@ -13,6 +13,6 @@ const retiredCheckEditsFlag = "check-edits"
 // on replay. Its result is irrelevant: the flag is always considered enabled.
 func EvalRetiredCheckEditsFlag(ctx workflow.Context) {
 	if workflow.GetVersion(ctx, "retire-check-edits-flag", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
-		IsEnabled(ctx, retiredCheckEditsFlag)
+		IsEnabledWithoutVersioning(ctx, retiredCheckEditsFlag)
 	}
 }

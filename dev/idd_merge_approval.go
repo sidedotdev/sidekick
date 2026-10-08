@@ -57,6 +57,10 @@ type iddMergeApproval struct {
 	// advanced, across as many retries as a failing finish takes.
 	mergeBase string
 
+	// finishMessage is the merge commit message generated for the current
+	// finish, shared by all of its merges.
+	finishMessage string
+
 	// refreshCh coalesces requests to regenerate the pending request's diff.
 	refreshCh workflow.Channel
 
@@ -268,6 +272,8 @@ func (ma *iddMergeApproval) finish(dCtx DevContext) (err error) {
 	if _, commitErr := commitIntent(dCtx, ma.input.Title, true); commitErr != nil {
 		return fmt.Errorf("failed to commit pending intent before merge: %w", commitErr)
 	}
+	// a retried finish may carry intent committed since the last attempt
+	ma.finishMessage = ""
 
 	if err := ma.mergeIntoTarget(dCtx, target); err != nil {
 		return err
@@ -309,11 +315,29 @@ func (ma *iddMergeApproval) mergeIntoTarget(dCtx DevContext, target string) erro
 	ma.mergedDiff = diff
 	ma.params.Diff = diff
 
+	commitMessage := fmt.Sprintf("Finish IDD: %s", ma.input.Title)
+	if llmCommitMessagesEnabled(dCtx) {
+		if ma.finishMessage == "" {
+			// the original intent base is only known once the orchestrator
+			// has snapshotted intent; the pinned target tip stands in for it
+			intentBase := ma.state.intentBaseTree
+			if intentBase == "" {
+				intentBase = ma.mergeBase
+			}
+			message, err := generateIddFinishMessage(dCtx, intentBase)
+			if err != nil {
+				return fmt.Errorf("failed to generate the message for merging into %s: %w", target, err)
+			}
+			ma.finishMessage = message
+		}
+		commitMessage = ma.finishMessage
+	}
+
 	var mergeResult git.MergeActivityResult
 	err = workflow.ExecuteActivity(dCtx, git.GitMergeActivity, *dCtx.EnvContainer, git.GitMergeParams{
 		SourceBranch:  dCtx.Worktree.Name,
 		TargetBranch:  target,
-		CommitMessage: fmt.Sprintf("Finish IDD: %s", ma.input.Title),
+		CommitMessage: commitMessage,
 		MergeStrategy: git.MergeStrategyMerge,
 	}).Get(dCtx, &mergeResult)
 	if err != nil {
