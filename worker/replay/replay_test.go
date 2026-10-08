@@ -108,8 +108,6 @@ func TestReplayFromS3Integration(t *testing.T) {
 	}
 
 	if testedVersions == 0 {
-		// Histories are retired once they depend on removed workflow code;
-		// store replacements with `go run ./worker/replay store`.
-		t.Skip("No replay histories recorded in replay_test_data.json")
+		t.Fatalf("No versions provided for replay testing")
 	}
 }

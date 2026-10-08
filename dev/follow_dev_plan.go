@@ -546,6 +546,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			return result, fmt.Errorf("failed to git add all: %w", err)
 		}
 
+		fflag.EvalRetiredCheckEditsFlag(dCtx)
 		// TODO use an LLM to write a better commit message
 		err = git.GitCommit(dCtx.ExecContext, fmt.Sprintf("%s\n\n%s", step.Title, step.Definition))
 		if err != nil {

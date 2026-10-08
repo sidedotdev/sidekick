@@ -1034,6 +1034,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 			editBlock.VisibleCodeBlocks = utils.Unique(editBlock.VisibleCodeBlocks)
 		}
 
+		fflag.EvalRetiredCheckEditsFlag(trackedCtx)
 		enabledFlags := make([]string, 0)
 		goBuildCheckVersion := workflow.GetVersion(trackedCtx, "check-go-build", workflow.DefaultVersion, 1)
 		if goBuildCheckVersion >= 1 && fflag.IsEnabled(trackedCtx, fflag.CheckGoBuild) {

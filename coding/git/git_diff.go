@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"strings"
 
@@ -25,6 +26,7 @@ type GitDiffParams struct {
 // GitDiff returns the diff of the current, staged changes in the working tree.
 // Edits are staged as they are applied, so staged changes cover all of them.
 func GitDiff(eCtx flow_action.ExecContext) (string, error) {
+	fflag.EvalRetiredCheckEditsFlag(eCtx)
 	var diff string
 	err := workflow.ExecuteActivity(eCtx, GitDiffActivity, *eCtx.EnvContainer, GitDiffParams{
 		Staged: true,
