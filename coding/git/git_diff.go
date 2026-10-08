@@ -27,7 +27,7 @@ type GitDiffParams struct {
 func GitDiff(eCtx flow_action.ExecContext) (string, error) {
 	var diff string
 	var err error
-	if fflag.IsEnabled(eCtx, fflag.CheckEdits) {
+	if fflag.IsEnabledWithoutVersioning(eCtx, fflag.CheckEdits) {
 		err = workflow.ExecuteActivity(eCtx, GitDiffActivity, *eCtx.EnvContainer, GitDiffParams{
 			Staged: true, // when check_edits is enabled, changes are staged as they are applied, so the diff must look at staged changes
 		}).Get(eCtx, &diff)

@@ -316,7 +316,7 @@ func (ma *iddMergeApproval) mergeIntoTarget(dCtx DevContext, target string) erro
 	ma.params.Diff = diff
 
 	commitMessage := fmt.Sprintf("Finish IDD: %s", ma.input.Title)
-	if workflow.GetVersion(dCtx, "idd-llm-finish-message", workflow.DefaultVersion, 1) >= 1 {
+	if llmCommitMessagesEnabled(dCtx) {
 		if ma.finishMessage == "" {
 			// the original intent base is only known once the orchestrator
 			// has snapshotted intent; the pinned target tip stands in for it

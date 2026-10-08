@@ -127,7 +127,7 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 				*reviewedFullDiff = fullDiff
 			}
 		}
-	} else if v == 6 && fflag.IsEnabled(dCtx, fflag.CheckEdits) {
+	} else if v == 6 && fflag.IsEnabledWithoutVersioning(dCtx, fflag.CheckEdits) {
 		// Legacy path: reviews relied on CheckEdits staging the current step's
 		// work, which misses anything the agent committed and anything merged
 		// in from the target branch. Generated review diffs cover those cases,
@@ -137,7 +137,7 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 		// the exact activity command sequence previously emitted by
 		// git.GitDiff (which internally checks the flag again before
 		// running GitDiffActivity).
-		_ = fflag.IsEnabled(dCtx, fflag.CheckEdits)
+		_ = fflag.IsEnabledWithoutVersioning(dCtx, fflag.CheckEdits)
 		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Generate git diff", git.GitDiffActivity, &diff, *dCtx.EnvContainer, git.GitDiffParams{Staged: true})
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get staged git diff: %v", err)

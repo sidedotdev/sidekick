@@ -332,7 +332,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	}
 
-	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2); v >= 1 && !gatherHandoff && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2); v >= 1 && !gatherHandoff && fflag.IsEnabledWithoutVersioning(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 		if err != nil {
 			return result, fmt.Errorf("failed to retrieve repo summary: %v", err)
@@ -568,8 +568,8 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			return result, fmt.Errorf("failed to git add all: %w", err)
 		}
 
-		if fflag.IsEnabled(dCtx, fflag.CheckEdits) {
-			if workflow.GetVersion(dCtx, "commit-subflow-after-step", workflow.DefaultVersion, 1) >= 1 {
+		if fflag.IsEnabledWithoutVersioning(dCtx, fflag.CheckEdits) {
+			if llmCommitMessagesEnabled(dCtx) {
 				if err := commitPendingWork(dCtx, chatHistory); err != nil {
 					return result, fmt.Errorf("failed to commit step changes: %w", err)
 				}

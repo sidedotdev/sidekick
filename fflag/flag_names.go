@@ -23,3 +23,8 @@ const InitialRepoSummary = "initial-repo-summary"
 const ManageHistoryWithContextMarkers = "manage-history-with-context-markers"
 const DisableDoneCoding = "disable-done-coding"
 const ContextGatheringForget = "context-gathering-forget"
+
+// LlmCommitMessages has an LLM commit coding work and write commit and merge
+// messages, instead of committing with messages derived from task and step
+// titles. It defaults to on.
+const LlmCommitMessages = "llm-commit-messages"

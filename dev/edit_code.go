@@ -608,7 +608,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 // The done protocol is enabled by default for new workflow versions unless explicitly disabled.
 func IsDoneRequiredProtocol(ctx workflow.Context) bool {
 	doneRequiredVersion := workflow.GetVersion(ctx, "done-required-protocol", workflow.DefaultVersion, 1)
-	return doneRequiredVersion >= 1 && !fflag.IsEnabled(ctx, fflag.DisableDoneCoding)
+	return doneRequiredVersion >= 1 && !fflag.IsEnabledWithoutVersioning(ctx, fflag.DisableDoneCoding)
 }
 
 // appendEditFeedback renders feedback and appends it directly to chat history.

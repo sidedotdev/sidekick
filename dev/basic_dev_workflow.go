@@ -562,7 +562,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 
 	// prepend a concise repository summary to the other code context in the initial prompt
 	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-	if version >= 1 && !gatherHandoff && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+	if version >= 1 && !gatherHandoff && fflag.IsEnabledWithoutVersioning(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000, weightedRankQueries...)
 		if err != nil {
 			return "", fmt.Errorf("failed to get repo summary: %w", err)
@@ -765,7 +765,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 
 	// Step 6: commit the work while its coding context is still fresh. Files
 	// are not staged beforehand so the model can group them into commits.
-	if workflow.GetVersion(dCtx, "commit-subflow-after-coding", workflow.DefaultVersion, 1) >= 1 {
+	if llmCommitMessagesEnabled(dCtx) {
 		if err := commitPendingWork(dCtx, chatHistory); err != nil {
 			return "", fmt.Errorf("failed to commit coding changes: %w", err)
 		}
@@ -1224,15 +1224,15 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 
 	var commitMessage string
 	commitInMergeAction := false
-	if workflow.GetVersion(dCtx, "llm-commit-messages", workflow.DefaultVersion, 1) >= 1 {
+	if llmCommitMessagesEnabled(dCtx) {
 		params.Title = resolveCommitTitle(dCtx, params)
 		commitMessage, err = commitAndComposeMergeMessage(dCtx, params, mergeInfo)
 		if err != nil {
 			return "", MergeApprovalResponse{}, "", err
 		}
 	} else {
-		// Legacy executions commit all pending changes here with a message
-		// derived from the task title, since coding did not commit itself.
+		// Without LLM commits, all pending changes are committed here with a
+		// message derived from the task title, since coding did not commit.
 		params.Title = resolveCommitTitle(dCtx, params)
 		commitMessage = commitMessageForMerge(params)
 

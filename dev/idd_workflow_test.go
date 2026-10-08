@@ -46,7 +46,7 @@ type IddWorkflowTestSuite struct {
 	// single sub-task dispatch performs.
 	titleGenerationCalls int
 	sideTmpSetupCalls    []env.EnvRunCommandActivityInput
-	// llmCommitVersion selects the intent commit and finish message gates.
+	// llmCommitVersion selects the LLM commit messages flag's version gate.
 	// Tests default to the legacy messages so replayed executions stay
 	// covered; tests of LLM-written messages opt in.
 	llmCommitVersion workflow.Version
@@ -75,13 +75,11 @@ func (s *IddWorkflowTestSuite) SetupTest() {
 	s.env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
 }
 
-// executeWorkflow runs the workflow with the LLM commit message gates pinned to
+// executeWorkflow runs the workflow with the LLM commit messages gate pinned to
 // llmCommitVersion. Pinning happens here because workflow mocks must follow
 // every workflow registration.
 func (s *IddWorkflowTestSuite) executeWorkflow(workflowFn interface{}, args ...interface{}) {
-	for _, changeID := range []string{"idd-llm-intent-commit", "idd-llm-finish-message"} {
-		s.env.OnGetVersion(changeID, workflow.DefaultVersion, 1).Return(s.llmCommitVersion).Maybe()
-	}
+	s.env.OnGetVersion(fflag.VersionChangeId(fflag.LlmCommitMessages), workflow.DefaultVersion, 1).Return(s.llmCommitVersion).Maybe()
 	s.env.ExecuteWorkflow(workflowFn, args...)
 }
 

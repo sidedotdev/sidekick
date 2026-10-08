@@ -899,7 +899,7 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		CommitAll:             true,
 		IgnoreNothingToCommit: true,
 	}
-	if workflow.GetVersion(dCtx, "idd-llm-intent-commit", workflow.DefaultVersion, 1) >= 1 {
+	if llmCommitMessagesEnabled(dCtx) {
 		var err error
 		commitParams, err = intentCommitParams(dCtx)
 		if err != nil {

@@ -43,6 +43,8 @@ type AutoMergeApprovalTestSuite struct {
 	events []string
 	// prompts are the user messages appended to chat histories.
 	prompts []string
+	// llmCommitMessagesOff turns the LLM commit messages flag off.
+	llmCommitMessagesOff bool
 }
 
 const generatedSquashMessage = "feat: publish under the new npm package name\n\nRenames the package in the manifest."
@@ -53,6 +55,7 @@ func (s *AutoMergeApprovalTestSuite) SetupTest() {
 	s.uncommitted = ""
 	s.events = nil
 	s.prompts = nil
+	s.llmCommitMessagesOff = false
 }
 
 func (s *AutoMergeApprovalTestSuite) AfterTest(suiteName, testName string) {
@@ -174,6 +177,12 @@ func (s *AutoMergeApprovalTestSuite) setupLlmCommitMocks() {
 		Return(common.ModelMetadata{}, nil).Maybe()
 	var flagActivities *fflag.FFlagActivities
 	s.env.OnActivity(flagActivities.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	s.env.OnActivity(flagActivities.EvaluateFlags, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ fflag.EvaluateFlagsInput) (fflag.EvaluateFlagsOutput, error) {
+			return fflag.EvaluateFlagsOutput{BoolValues: map[string]bool{
+				fflag.LlmCommitMessages: !s.llmCommitMessagesOff,
+			}}, nil
+		}).Maybe()
 	var chatHistoryActivities *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(chatHistoryActivities.AppendMessage, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, input persisted_ai.AppendMessageInput) (*persisted_ai.MessageRef, error) {
@@ -284,7 +293,7 @@ func (s *AutoMergeApprovalTestSuite) TestAutoMergeMergesIntoConfiguredBranch() {
 // commit messages, the commit must still use the title.
 func (s *AutoMergeApprovalTestSuite) TestMergeCommitUsesTaskTitleGeneratedAfterFlowStart() {
 	s.setupMergeMocks()
-	s.env.OnGetVersion("llm-commit-messages", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+	s.env.OnGetVersion(fflag.VersionChangeId(fflag.LlmCommitMessages), workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 	var ima *DevAgentManagerActivities
 	s.env.OnActivity(ima.GetFlowTaskTitle, mock.Anything, mock.Anything).
 		Return(GetFlowTaskTitleOutput{Title: "Rename npm package"}, nil)
@@ -304,6 +313,38 @@ func (s *AutoMergeApprovalTestSuite) TestMergeCommitUsesTaskTitleGeneratedAfterF
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 	s.Equal("Rename npm package", commitMessage)
+}
+
+// With the LLM commit messages flag off, a squash merge commits pending work
+// and merges with the title-based message, without asking the model.
+func (s *AutoMergeApprovalTestSuite) TestSquashMergeUsesTitleWhenLlmCommitMessagesOff() {
+	s.setupMergeMocks()
+	s.llmCommitMessagesOff = true
+	s.uncommitted = " M package.json\n"
+	var ima *DevAgentManagerActivities
+	s.env.OnActivity(ima.GetFlowTaskTitle, mock.Anything, mock.Anything).
+		Return(GetFlowTaskTitleOutput{Title: "Rename npm package"}, nil)
+
+	var mergeParams git.GitMergeParams
+	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			mergeParams = args.Get(2).(git.GitMergeParams)
+			s.events = append(s.events, "merge")
+		}).
+		Return(git.MergeActivityResult{HasConflicts: false}, nil)
+
+	startBranch := "main"
+	testWorkflow := s.mergeWorkflow(true, &startBranch)
+	s.env.RegisterWorkflow(testWorkflow)
+	s.env.ExecuteWorkflow(testWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	s.Equal(git.MergeStrategySquash, mergeParams.MergeStrategy)
+	s.Equal("Rename npm package", mergeParams.CommitMessage)
+	s.Equal([]string{"merge"}, s.events)
+	s.env.AssertActivityNumberOfCalls(s.T(), "GitCommitActivity", 1)
+	s.Empty(s.prompts)
 }
 
 // A squash merge is described by an LLM-written message informed by the task
