@@ -652,7 +652,7 @@ func codingTools(dCtx DevContext, codingModelConfig common.ModelConfig, doneRequ
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	return appendWebSearchToolIfNonLocal(dCtx, tools, codingModelConfig)
+	return appendWebSearchTool(dCtx, tools, codingModelConfig)
 }
 
 // resolveCodingOptions rebuilds the LLM options for a single stream

@@ -8,27 +8,35 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// appendWebSearchToolIfNonLocal adds the provider-native web search tool for
-// agent loops that benefit from live web results. It is enabled only when the
-// flow's execution environment is non-local: local environments run against
-// the user's machine where unexpected network access is undesirable by
-// default, while remote environments (e.g. devpod) are sandboxed.
-func appendWebSearchToolIfNonLocal(dCtx DevContext, tools []*llm.Tool, modelConfig common.ModelConfig) []*llm.Tool {
-	v := workflow.GetVersion(dCtx, "web-search-tool", workflow.DefaultVersion, 2)
+const webSearchToolMaxVersion workflow.Version = 3
+
+// appendWebSearchTool adds the provider-native web search tool for agent loops
+// that benefit from live web results, when the selected provider supports it.
+func appendWebSearchTool(dCtx DevContext, tools []*llm.Tool, modelConfig common.ModelConfig) []*llm.Tool {
+	v := workflow.GetVersion(dCtx, "web-search-tool", workflow.DefaultVersion, webSearchToolMaxVersion)
 	if v < 1 {
 		return tools
 	}
-	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
-		return tools
-	}
-	switch dCtx.EnvContainer.Env.GetType() {
-	case env.EnvTypeLocal, env.EnvTypeLocalGitWorktree:
+	if v < 3 && !isNonLocalEnv(dCtx) {
 		return tools
 	}
 	if v >= 2 && !providerSupportsWebSearch(modelConfig, dCtx.GetProviders()) {
 		return tools
 	}
 	return append(tools, &llm.Tool{Type: common.ToolTypeWebSearch})
+}
+
+// isNonLocalEnv preserves the pre-v3 restriction of web search to remote
+// environments for replaying workflows started before that restriction was lifted.
+func isNonLocalEnv(dCtx DevContext) bool {
+	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
+		return false
+	}
+	switch dCtx.EnvContainer.Env.GetType() {
+	case env.EnvTypeLocal, env.EnvTypeLocalGitWorktree:
+		return false
+	}
+	return true
 }
 
 func providerSupportsWebSearch(modelConfig common.ModelConfig, providers []common.ModelProviderPublicConfig) bool {
