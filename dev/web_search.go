@@ -2,13 +2,12 @@ package dev
 
 import (
 	"sidekick/common"
-	"sidekick/env"
 	"sidekick/llm"
 
 	"go.temporal.io/sdk/workflow"
 )
 
-const webSearchToolMaxVersion workflow.Version = 3
+const webSearchToolMaxVersion workflow.Version = 2
 
 // appendWebSearchTool adds the provider-native web search tool for agent loops
 // that benefit from live web results, when the selected provider supports it.
@@ -17,26 +16,10 @@ func appendWebSearchTool(dCtx DevContext, tools []*llm.Tool, modelConfig common.
 	if v < 1 {
 		return tools
 	}
-	if v < 3 && !isNonLocalEnv(dCtx) {
-		return tools
-	}
 	if v >= 2 && !providerSupportsWebSearch(modelConfig, dCtx.GetProviders()) {
 		return tools
 	}
 	return append(tools, &llm.Tool{Type: common.ToolTypeWebSearch})
-}
-
-// isNonLocalEnv preserves the pre-v3 restriction of web search to remote
-// environments for replaying workflows started before that restriction was lifted.
-func isNonLocalEnv(dCtx DevContext) bool {
-	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
-		return false
-	}
-	switch dCtx.EnvContainer.Env.GetType() {
-	case env.EnvTypeLocal, env.EnvTypeLocalGitWorktree:
-		return false
-	}
-	return true
 }
 
 func providerSupportsWebSearch(modelConfig common.ModelConfig, providers []common.ModelProviderPublicConfig) bool {

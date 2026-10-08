@@ -103,30 +103,6 @@ func TestAppendWebSearchTool(t *testing.T) {
 			wantAdded:    true,
 		},
 		{
-			name:         "legacy version keeps local env disabled",
-			envContainer: &env.EnvContainer{Env: &env.LocalEnv{}},
-			version:      versionPtr(2),
-			wantAdded:    false,
-		},
-		{
-			name:         "legacy version keeps local git worktree env disabled",
-			envContainer: &env.EnvContainer{Env: &env.LocalGitWorktreeEnv{}},
-			version:      versionPtr(2),
-			wantAdded:    false,
-		},
-		{
-			name:         "legacy version keeps missing env disabled",
-			envContainer: nil,
-			version:      versionPtr(2),
-			wantAdded:    false,
-		},
-		{
-			name:         "legacy version enables devpod env",
-			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
-			version:      versionPtr(2),
-			wantAdded:    true,
-		},
-		{
 			name:         "legacy version without provider check ignores unsupported provider",
 			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
 			providerType: "unknown",
