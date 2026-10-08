@@ -33,11 +33,23 @@
     <div class="board-column-headings">
       <h2>
         You
-        <button type="button" class="mini-button" title="Draft task" @click="addTask('human')">+</button>
+        <button
+          type="button"
+          class="mini-button"
+          title="Draft task"
+          :data-board-nav="boardControlIds.headingAddTask('human')"
+          @click="addTask('human')"
+        >+</button>
       </h2>
       <h2>
         AI Sidekick
-        <button type="button" class="mini-button" title="Queue task" @click="addTask('llm')">+</button>
+        <button
+          type="button"
+          class="mini-button"
+          title="Queue task"
+          :data-board-nav="boardControlIds.headingAddTask('llm')"
+          @click="addTask('llm')"
+        >+</button>
       </h2>
       <h2>Finished</h2>
     </div>
@@ -56,6 +68,7 @@
           type="button"
           class="project-group-toggle"
           :aria-expanded="isGroupExpanded(project.id)"
+          :data-board-nav="boardControlIds.groupToggle(project.id)"
           @click="toggleGroup(project.id)"
         >
           <ProjectsIcon class="project-group-icon" />
@@ -68,6 +81,7 @@
             class="project-group-archive"
             title="Archive all finished tasks in this project"
             aria-label="Archive all finished tasks in this project"
+            :data-board-nav="boardControlIds.groupArchive(project.id)"
             @click="confirmArchiveFinished(project)"
           ><ArchiveIcon /></button>
         </div>
@@ -76,7 +90,7 @@
         v-show="isGroupExpanded(project.id)"
         :tasks="tasksByProjectId[project.id] ?? []"
         :show-headings="false"
-        :highlighted-task-id="highlightedTaskId"
+        :group-key="project.id"
         @add-task="(agentType: AgentType) => addTask(agentType, project.id)"
         @archive-finished="confirmArchiveFinished(project)"
         @refresh="refresh"
@@ -99,6 +113,7 @@
           type="button"
           class="project-group-toggle"
           :aria-expanded="isGroupExpanded(EVERYTHING_ELSE_KEY)"
+          :data-board-nav="boardControlIds.groupToggle(EVERYTHING_ELSE_KEY)"
           @click="toggleGroup(EVERYTHING_ELSE_KEY)"
         >
           <span>Everything else</span>
@@ -110,6 +125,7 @@
             class="project-group-archive"
             title="Archive all finished tasks not in a project"
             aria-label="Archive all finished tasks not in a project"
+            :data-board-nav="boardControlIds.groupArchive(EVERYTHING_ELSE_KEY)"
             @click="confirmArchiveFinished()"
           ><ArchiveIcon /></button>
         </div>
@@ -119,7 +135,7 @@
         :tasks="unassignedTasks"
         :new-task-shortcut-label="newTaskShortcutLabel"
         :show-headings="false"
-        :highlighted-task-id="highlightedTaskId"
+        :group-key="EVERYTHING_ELSE_KEY"
         @add-task="(agentType: AgentType) => addTask(agentType)"
         @archive-finished="confirmArchiveFinished()"
         @refresh="refresh"
@@ -133,7 +149,7 @@
       :tasks="unassignedTasks"
       :new-task-shortcut-label="newTaskShortcutLabel"
       :show-headings="false"
-      :highlighted-task-id="highlightedTaskId"
+      :group-key="EVERYTHING_ELSE_KEY"
       @add-task="(agentType: AgentType) => addTask(agentType)"
       @archive-finished="confirmArchiveFinished()"
       @refresh="refresh"
@@ -145,32 +161,44 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, nextTick, provide, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Project, Task, TaskStatus } from '../lib/models'
 import KanbanColumnGroup from './KanbanColumnGroup.vue'
 import ArchiveIcon from './icons/ArchiveIcon.vue'
 import ProjectsIcon from './icons/ProjectsIcon.vue'
 import TaskModal from './TaskModal.vue'
 import { store } from '../lib/store'
-import { canMoveNavigationFocus, isFocusUnclaimed, isInteractiveElement } from '../lib/dom'
+import { isFocusUnclaimed, isInteractiveElement } from '../lib/dom'
 import { viewCache } from '../lib/viewCache'
+import { isKanbanKeyboardControlEnabled, KANBAN_NEW_TASK_SHORTCUT_KEY } from '../lib/localSettings'
 import {
-  getKanbanKeyBindings,
-  isKanbanKeyboardControlEnabled,
-  KANBAN_DIRECTIONS,
-  KANBAN_NEW_TASK_SHORTCUT_KEY,
-} from '../lib/localSettings'
-import {
+  BOARD_CARD_LISTS_KEY,
   BOARD_CARD_SELECTOR,
-  buildBoardGroup,
+  BOARD_CONTROL_SELECTOR,
+  boardControlIds,
+  boardItemAt,
+  buildBoardRows,
   defaultBoardPosition,
+  findCardCursor,
+  findControlCursor,
   findTaskPosition,
-  moveBoardPosition,
+  firstBoardCursor,
+  moveBoardCursor,
   taskAtPosition,
-  type BoardDirection,
-  type BoardGroup,
+  visibleBoardGroups,
+  type BoardCardList,
+  type BoardCursor,
+  type BoardGroupLayout,
   type BoardPosition,
+  type BoardRow,
 } from '../lib/kanbanNavigation'
+import {
+  focusHeader,
+  focusSidebar,
+  hasNavigationModifier,
+  navigationDirectionForKey,
+  registerBoardNavigation,
+} from '../lib/pageNavigation'
 import { openTaskFlow } from '../lib/taskNavigation'
 
 const props = defineProps<{
@@ -484,46 +512,48 @@ const clearSearch = () => {
 
 const keyboardControlEnabled = computed(() => isKanbanKeyboardControlEnabled())
 
-// Mirrors the displayed board: expanded groups in display order, each with
-// its columns sorted as rendered
-const visibleBoardGroups = computed<BoardGroup[]>(() => {
+// Mirrors the displayed board as navigable rows, in display order
+const boardRows = computed<BoardRow[]>(() => {
   if (!keyboardControlEnabled.value) return []
   if (projects.value.length === 0) {
-    return [buildBoardGroup(EVERYTHING_ELSE_KEY, unassignedTasks.value)]
+    return buildBoardRows([{ key: EVERYTHING_ELSE_KEY, tasks: unassignedTasks.value, header: null, expanded: true }])
   }
-  return [
+  const groups: BoardGroupLayout[] = [
     ...projects.value.map(project => ({ key: project.id, tasks: tasksByProjectId.value[project.id] ?? [] })),
     { key: EVERYTHING_ELSE_KEY, tasks: unassignedTasks.value },
-  ]
-    .filter(group => isGroupExpanded(group.key))
-    .map(group => buildBoardGroup(group.key, group.tasks))
+  ].map(group => ({
+    ...group,
+    header: { archivable: hasFinishedTasks(group.tasks) },
+    expanded: isGroupExpanded(group.key),
+  }))
+  return buildBoardRows(groups)
 })
 
-// Until the user moves the highlight, it stays on the top-left card as tasks
-// change; afterwards it follows the chosen task while that task is visible.
+// The remembered card is where focus enters or returns to the board. Until
+// the user steers it, it is the top-left card as tasks change; afterwards it
+// follows the chosen task while that task is visible.
 const steeredTaskId = ref<string | null>(null)
 
-const highlightedPosition = computed<BoardPosition | null>(() => {
-  const groups = visibleBoardGroups.value
+const rememberedPosition = computed<BoardPosition | null>(() => {
+  const groups = visibleBoardGroups(boardRows.value)
   const steered = steeredTaskId.value ? findTaskPosition(groups, steeredTaskId.value) : null
   return steered ?? defaultBoardPosition(groups)
 })
 
-const highlightedTask = computed<FullTask | null>(() =>
-  highlightedPosition.value ? taskAtPosition(visibleBoardGroups.value, highlightedPosition.value) ?? null : null,
-)
+const rememberedTaskId = computed<string | null>(() => {
+  const position = rememberedPosition.value
+  return position ? taskAtPosition(visibleBoardGroups(boardRows.value), position)?.id ?? null : null
+})
 
-const highlightedTaskId = computed(() => highlightedTask.value?.id ?? null)
-
-// Steering only on an actual change keeps the default top-left highlight
-// tracking the board until the user picks another task
-const highlightTask = (taskId: string) => {
-  if (taskId !== highlightedTaskId.value) {
+// Steering only on an actual change keeps the default top-left card tracking
+// the board until the user picks another task
+const rememberTask = (taskId: string) => {
+  if (taskId !== rememberedTaskId.value) {
     steeredTaskId.value = taskId
   }
 }
 
-// Behaves as if the page were reloaded: the highlight returns to the top-left card
+// Behaves as if the page were reloaded: focus returns to the top-left card
 const refreshFromTop = () => {
   steeredTaskId.value = null
   refresh()
@@ -536,7 +566,7 @@ const settleEditingTask = () => {
 
 const closeEditModal = () => {
   if (editingTask.value && !editingTaskSettled) {
-    highlightTask(editingTask.value.id)
+    rememberTask(editingTask.value.id)
   }
   editingTask.value = null
   restoreBoardFocus()
@@ -547,58 +577,125 @@ const closeCopyModal = () => {
   restoreBoardFocus()
 }
 
-// A closing modal drops focus to the document, which would otherwise leave
-// the highlighted card unfocused until the highlight next moves
+const boardCardLists = new Set<BoardCardList>()
+
+// Lists remount as the layout changes (e.g. once projects load), dropping any
+// pending reveal of the remembered card they held
+provide(BOARD_CARD_LISTS_KEY, {
+  register(list) {
+    boardCardLists.add(list)
+    void nextTick(() => {
+      const taskId = rememberedTaskId.value
+      if (keyboardControlEnabled.value && taskId && boardCardLists.has(list) && list.hasCard(taskId)) {
+        focusCard(taskId, false)
+      }
+    })
+    return () => boardCardLists.delete(list)
+  },
+})
+
+// Bumped by every focus move and pointer press, so that a card still being
+// revealed can't take focus after the user has moved on
+let focusMoveCount = 0
+
+const supersedePendingCardFocus = () => {
+  ++focusMoveCount
+}
+
+// Forced focus moves from any element, as on a key press; otherwise focus
+// moves only while a card holds it or nothing does
+const focusCard = (taskId: string, force: boolean): boolean => {
+  const move = ++focusMoveCount
+  const request = { taskId, force, isCurrent: () => move === focusMoveCount }
+  return [...boardCardLists].some(list => list.revealCard(request))
+}
+
+const focusRememberedCard = (force: boolean): boolean =>
+  rememberedTaskId.value !== null && focusCard(rememberedTaskId.value, force)
+
+const rememberedCardKey = computed(() => {
+  const position = rememberedPosition.value
+  return position && `${rememberedTaskId.value}@${position.group}:${position.column}:${position.index}`
+})
+
+watch(rememberedCardKey, () => {
+  if (keyboardControlEnabled.value) focusRememberedCard(false)
+}, { flush: 'post' })
+
+// A closing modal drops focus to the document
 const restoreBoardFocus = () => {
   if (!keyboardControlEnabled.value) return
-  void nextTick(() => {
-    if (!canMoveNavigationFocus(BOARD_CARD_SELECTOR)) return
-    boardRef.value?.querySelector<HTMLElement>(`${BOARD_CARD_SELECTOR}[tabindex]`)?.focus({ preventScroll: true })
-  })
+  void nextTick(() => focusRememberedCard(false))
+}
+
+// The column a vertical move arrived at a group header from, so moving on
+// vertically continues in that column
+let headerArrival: { controlId: string, column: number } | null = null
+
+const boardControl = (controlId: string): HTMLElement | undefined =>
+  [...boardRef.value?.querySelectorAll<HTMLElement>(BOARD_CONTROL_SELECTOR) ?? []]
+    .find(el => el.dataset.boardNav === controlId)
+
+const focusCursor = (cursor: BoardCursor): boolean => {
+  const rows = boardRows.value
+  const item = boardItemAt(rows, cursor)
+  if (!item) return false
+  if (item.kind === 'card') return focusCard(item.task.id, true)
+  const control = boardControl(item.id)
+  if (!control) return false
+  ++focusMoveCount
+  headerArrival = rows[cursor.row].kind === 'header' ? { controlId: item.id, column: cursor.column } : null
+  control.focus()
+  return true
+}
+
+const enterBoard = (): boolean => {
+  if (!keyboardControlEnabled.value) return false
+  if (focusRememberedCard(true)) return true
+  const first = firstBoardCursor(boardRows.value)
+  return first !== null && focusCursor(first)
+}
+
+const cursorForElement = (el: EventTarget | null): BoardCursor | null => {
+  if (!(el instanceof HTMLElement) || !boardRef.value?.contains(el)) return null
+  if (el.matches(BOARD_CARD_SELECTOR)) {
+    return el.dataset.taskId ? findCardCursor(boardRows.value, el.dataset.taskId) : null
+  }
+  const controlId = el.matches(BOARD_CONTROL_SELECTOR) ? el.dataset.boardNav : undefined
+  if (controlId === undefined) return null
+  const column = headerArrival?.controlId === controlId ? headerArrival.column : undefined
+  return findControlCursor(boardRows.value, controlId, column)
 }
 
 const onBoardFocusIn = (event: FocusEvent) => {
   if (!keyboardControlEnabled.value) return
-  const card = event.target instanceof Element ? event.target.closest<HTMLElement>(BOARD_CARD_SELECTOR) : null
-  const taskId = card?.dataset.taskId
-  if (taskId) {
-    highlightTask(taskId)
+  const target = event.target instanceof HTMLElement ? event.target : null
+  if (headerArrival && target?.dataset.boardNav !== headerArrival.controlId) {
+    headerArrival = null
   }
-}
-
-// Board keys only apply while a board card holds focus, or nothing does, so
-// that other focused elements (e.g. sidebar links) keep their own keys
-const isBoardKeyTarget = (target: EventTarget | null): boolean =>
-  isFocusUnclaimed(target)
-  || (target instanceof HTMLElement && target.matches(BOARD_CARD_SELECTOR) && !!boardRef.value?.contains(target))
-
-const ARROW_KEY_DIRECTIONS: Record<string, BoardDirection> = {
-  ArrowUp: 'up',
-  ArrowDown: 'down',
-  ArrowLeft: 'left',
-  ArrowRight: 'right',
-}
-
-const directionForKey = (key: string): BoardDirection | null => {
-  const arrowDirection = ARROW_KEY_DIRECTIONS[key]
-  if (arrowDirection) return arrowDirection
-  const bindings = getKanbanKeyBindings()
-  const lowered = key.toLowerCase()
-  return KANBAN_DIRECTIONS.find(direction => bindings[direction].toLowerCase() === lowered) ?? null
+  const taskId = target?.closest<HTMLElement>(BOARD_CARD_SELECTOR)?.dataset.taskId
+  if (taskId) {
+    rememberTask(taskId)
+  }
 }
 
 const isTaskModalOpen = () => isModalOpen.value || editingTask.value !== null || copyingTask.value !== null
 
-const handleKeyboardControl = (event: KeyboardEvent) => {
-  if (!keyboardControlEnabled.value) return
-  if (event.metaKey || event.ctrlKey || event.altKey) return
-  if (!isBoardKeyTarget(event.target) || isTaskModalOpen()) return
+const focusedBoardCard = (target: EventTarget | null): HTMLElement | null =>
+  target instanceof HTMLElement && target.matches(BOARD_CARD_SELECTOR) && boardRef.value?.contains(target)
+    ? target
+    : null
 
-  const position = highlightedPosition.value
-  const task = highlightedTask.value
-  if (!position || !task) return
+// Applies to board items, or when nothing holds focus; keys on other elements
+// are left to them (or to the page-wide sidebar/header navigation)
+const handleKeyboardControl = (event: KeyboardEvent) => {
+  if (!keyboardControlEnabled.value || event.defaultPrevented) return
+  if (hasNavigationModifier(event) || isTaskModalOpen()) return
 
   if (event.key === 'Enter') {
+    const taskId = focusedBoardCard(event.target)?.dataset.taskId
+    const task = taskId ? props.tasks.find(t => t.id === taskId) : undefined
+    if (!task) return
     event.preventDefault()
     if (!openTaskFlow(task)) {
       openEditModal(task)
@@ -606,26 +703,45 @@ const handleKeyboardControl = (event: KeyboardEvent) => {
     return
   }
 
-  const direction = directionForKey(event.key)
+  const direction = navigationDirectionForKey(event.key)
   if (!direction) return
-  event.preventDefault()
-  const next = moveBoardPosition(visibleBoardGroups.value, position, direction)
-  const nextTask = next ? taskAtPosition(visibleBoardGroups.value, next) : undefined
-  if (nextTask) {
-    steeredTaskId.value = nextTask.id
+  if (isFocusUnclaimed(event.target)) {
+    if (enterBoard()) event.preventDefault()
+    return
   }
+  const cursor = cursorForElement(event.target)
+  if (!cursor) return
+  event.preventDefault()
+  const move = moveBoardCursor(boardRows.value, cursor, direction)
+  if (!move) return
+  if ('exit' in move) {
+    ++focusMoveCount
+    if (move.exit === 'left') focusSidebar()
+    else focusHeader()
+    return
+  }
+  focusCursor(move)
 }
+
+let unregisterBoardNavigation: (() => void) | null = null
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('keydown', handleEscape)
   window.addEventListener('keydown', handleKeyboardControl)
+  document.addEventListener('focusin', supersedePendingCardFocus, true)
+  document.addEventListener('pointerdown', supersedePendingCardFocus, true)
+  unregisterBoardNavigation = registerBoardNavigation({ enter: enterBoard, isSuspended: isTaskModalOpen })
+  if (keyboardControlEnabled.value) focusRememberedCard(false)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('keydown', handleEscape)
   window.removeEventListener('keydown', handleKeyboardControl)
+  document.removeEventListener('focusin', supersedePendingCardFocus, true)
+  document.removeEventListener('pointerdown', supersedePendingCardFocus, true)
+  unregisterBoardNavigation?.()
   if (debounceTimeout) {
     clearTimeout(debounceTimeout)
   }
@@ -758,7 +874,8 @@ async function confirmArchiveFinished(project?: Project) {
 }
 
 .board-column-headings h2:hover .mini-button,
-.board-column-headings .mini-button:focus-visible {
+.board-column-headings .mini-button:focus-visible,
+:root.keyboard-modality .board-column-headings .mini-button:focus {
   opacity: 1;
 }
 
@@ -829,6 +946,8 @@ async function confirmArchiveFinished(project?: Project) {
   align-items: center;
   cursor: pointer;
   user-select: none;
+  /* keeps the keyboard focus outline within the rounded group header */
+  outline-offset: -0.125rem;
 }
 
 /* Occupies the header segment above the Finished column, hosting the
@@ -861,7 +980,8 @@ async function confirmArchiveFinished(project?: Project) {
 }
 
 .project-group-finished-segment:hover .project-group-archive,
-.project-group-archive:focus-visible {
+.project-group-archive:focus-visible,
+:root.keyboard-modality .project-group-archive:focus {
   opacity: 1;
 }
 

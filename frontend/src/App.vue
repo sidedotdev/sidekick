@@ -14,6 +14,7 @@ import SmartphoneIcon from './components/icons/SmartphoneIcon.vue'
 import SlidersIcon from './components/icons/SlidersIcon.vue'
 import ShortcutTooltip from './components/ShortcutTooltip.vue'
 import FuzzySelect from './components/FuzzySelect.vue'
+import { installPageNavigation } from './lib/pageNavigation'
 
 const router = useRouter()
 const route = useRoute()
@@ -78,8 +79,11 @@ const handleGlobalKeyDown = (event: KeyboardEvent) => {
   }
 }
 
+let uninstallPageNavigation: (() => void) | null = null
+
 onMounted(async () => {
   document.addEventListener('keydown', handleGlobalKeyDown)
+  uninstallPageNavigation = installPageNavigation()
   if (mode === 'development') {
     document.title = 'Sidekick Dev'
     let metaThemeColor = document.querySelector('meta[name="theme-color"]')
@@ -135,6 +139,7 @@ watch(() => route.query.workspaceId, (newWorkspaceId) => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleGlobalKeyDown)
+  uninstallPageNavigation?.()
 })
 
 </script>
@@ -150,22 +155,22 @@ onUnmounted(() => {
 
       <nav class="container">
         <ShortcutTooltip label="Board" :shortcut="isMac ? '⌘B' : 'Ctrl+B'">
-          <RouterLink to="/kanban" class="nav-icon-link" aria-label="Board"><BoardIcon /></RouterLink>
+          <RouterLink to="/kanban" class="nav-icon-link" aria-label="Board" data-nav-item><BoardIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="Projects">
-          <RouterLink to="/projects" class="nav-icon-link" aria-label="Projects"><ProjectsIcon /></RouterLink>
+          <RouterLink to="/projects" class="nav-icon-link" aria-label="Projects" data-nav-item><ProjectsIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="Archived Tasks">
-          <RouterLink to="/archived-tasks" class="nav-icon-link" aria-label="Archived Tasks"><ArchiveIcon /></RouterLink>
+          <RouterLink to="/archived-tasks" class="nav-icon-link" aria-label="Archived Tasks" data-nav-item><ArchiveIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="New Space">
-          <RouterLink to="/workspaces/new" class="nav-icon-link" aria-label="New Space"><PlusIcon /></RouterLink>
+          <RouterLink to="/workspaces/new" class="nav-icon-link" aria-label="New Space" data-nav-item><PlusIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="Remote Control">
-          <RouterLink to="/remote-control" class="nav-icon-link" aria-label="Remote Control"><SmartphoneIcon /></RouterLink>
+          <RouterLink to="/remote-control" class="nav-icon-link" aria-label="Remote Control" data-nav-item><SmartphoneIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip v-if="mode === 'development'" label="Local Settings">
-          <RouterLink to="/settings" class="nav-icon-link" aria-label="Local Settings"><SlidersIcon /></RouterLink>
+          <RouterLink to="/settings" class="nav-icon-link" aria-label="Local Settings" data-nav-item><SlidersIcon /></RouterLink>
         </ShortcutTooltip>
       </nav>
     </div>
@@ -188,7 +193,7 @@ onUnmounted(() => {
                 <span>{{ workspaces.find(w => w.id === store.workspaceId)?.name || '' }}</span>
               </template>
             </FuzzySelect>
-            <RouterLink v-if="mode === 'development'" :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button"><GearIcon /></RouterLink>
+            <RouterLink v-if="mode === 'development'" :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button" data-nav-item><GearIcon /></RouterLink>
           </div>
 
           <!--RouterLink to="/kanban">Kanban</RouterLink-->
@@ -351,6 +356,8 @@ nav a {
   margin: 0 -1rem;
   padding: 1rem;
   border-left: 1px solid var(--color-border);
+  /* keeps the keyboard focus outline within the sidebar */
+  outline-offset: -0.125rem;
 }
 
 nav > :first-child a {

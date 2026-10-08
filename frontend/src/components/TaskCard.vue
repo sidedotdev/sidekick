@@ -1,6 +1,6 @@
 <template>
   <div class="task-card-shell">
-    <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title, 'keyboard-highlighted': highlighted }]" @click="cardClicked">
+    <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
       <div class="actions">
         <template v-if="canEdit">
           <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
@@ -55,10 +55,6 @@ const props = defineProps({
   task: {
     type: Object as () => FullTask,
     required: true,
-  },
-  highlighted: {
-    type: Boolean,
-    default: false,
   },
 })
 
@@ -349,10 +345,6 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   /* room for the absolutely positioned footer/meta row */
   padding-bottom: calc(var(--task-pad) / 2 + 1.5rem);
   z-index: 10;
-}
-
-.task-card.keyboard-highlighted {
-  outline: 2px solid var(--color-primary);
 }
 
 .status-label {

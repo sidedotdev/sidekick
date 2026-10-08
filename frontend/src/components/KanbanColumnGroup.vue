@@ -12,7 +12,6 @@
       </h2>
       <VirtualTaskList
         :tasks="groupedTasks[agentType] ?? []"
-        :highlighted-task-id="highlightedTaskId"
         draggable
         @deleted="emit('refresh')"
         @canceled="emit('refresh')"
@@ -22,11 +21,11 @@
         @copy="(task: Task) => emit('copy', task)"
         @error="(e: any) => emit('error', e)"
       />
-      <button class="new-task" v-if="agentType == 'human'" @click="emit('addTask', agentType)">
+      <button class="new-task" v-if="agentType == 'human'" :data-board-nav="addTaskControlId(agentType)" @click="emit('addTask', agentType)">
         + Draft Task
         <ShortcutHint v-if="newTaskShortcutLabel" :label="newTaskShortcutLabel" />
       </button>
-      <button class="new-task" v-if="agentType == 'llm'" @click="emit('addTask', agentType)">
+      <button class="new-task" v-if="agentType == 'llm'" :data-board-nav="addTaskControlId(agentType)" @click="emit('addTask', agentType)">
         + Queue Task
       </button>
     </div>
@@ -36,7 +35,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { FullTask, AgentType, Task } from '../lib/models'
-import { groupTasksByAgentType } from '../lib/kanbanNavigation'
+import { boardControlIds, groupTasksByAgentType } from '../lib/kanbanNavigation'
 import VirtualTaskList from './VirtualTaskList.vue'
 import ShortcutHint from './ShortcutHint.vue'
 
@@ -47,11 +46,15 @@ const props = withDefaults(defineProps<{
   // groups), the per-column headings are omitted and the columns lose their
   // boxed styling; the add-task buttons remain visible in each column
   showHeadings?: boolean
-  highlightedTaskId?: string | null
+  // Identifies the add-task buttons for board keyboard navigation
+  groupKey?: string
 }>(), {
   showHeadings: true,
-  highlightedTaskId: null,
+  groupKey: undefined,
 })
+
+const addTaskControlId = (agentType: AgentType): string | undefined =>
+  props.groupKey === undefined ? undefined : boardControlIds.groupAddTask(props.groupKey, agentType)
 
 const emit = defineEmits<{
   (e: 'addTask', agentType: AgentType): void
