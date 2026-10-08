@@ -70,6 +70,11 @@ describe('scanShell', () => {
     ],
     ['comments only at word starts', 'echo a#b # trailing', 'comment', ['# trailing']],
     ['fd redirections as operators', 'go test 2>&1 >out', 'operator', ['2>&1', '>']],
+    ['commands after leading redirections', '2>errors.log git status', 'command', ['git']],
+    ['commands after leading quoted redirections', '> "output.log" git status', 'command', ['git']],
+    ['commands after fd duplication', '2>&1 git status', 'command', ['git']],
+    ['commands in redirection targets', 'git status >"$(get_log_path)"', 'command', ['git', 'get_log_path']],
+    ['commands in backtick redirection targets', 'git status >`get_log_path`', 'command', ['git', 'get_log_path']],
   ])('recognizes %s', (_name, script, kind, expected) => {
     expect(tokensOf(script, kind as ShellTokenKind)).toEqual(expected)
   })
@@ -134,6 +139,43 @@ describe('annotatePermissionEvaluation', () => {
     expect(flaggedTexts(layoutAnnotatedScript(script, annotation.marks))).toEqual({ 0: '/home/me/repo', 1: 'mytool sync' })
   })
 
+  it.concurrent.each([false, true])('highlights checkout in the reported script (continued lines: %s)', (continuedLines) => {
+    const displayedScript = String.raw`cd .side/tmp/builderhub \
+  && git checkout -q main 2>/dev/null;
+grep -rn "initialize" src server --include=*.ts --include=*.tsx --include=*.go \
+  | grep -v test \
+  | grep -i "command\|initializeConfigChat" \
+  | head;
+cd - >/dev/null;
+grep -rln "command=initialize\|\"initialize\"\|MUPPET_COMMAND_INITIALIZE" --include=*.go --include=*.py --include=*.ts --include=*.sh --include=Dockerfile . \
+  | grep -v "^./.side\|node_modules" \
+  | head`
+    const script = continuedLines ? displayedScript : displayedScript.replace(/\\\n\s*/g, '').replace(/\n/g, ' ')
+    const command = 'git checkout -q main'
+    const evaluation: ScriptPermissionEvaluation = {
+      outcome: 'require_approval',
+      commands: [
+        auto('cd .side/tmp/builderhub', '^cd\\b'),
+        noRule(command),
+        auto('grep -rn "initialize" src server --include=*.ts --include=*.tsx --include=*.go', '^grep\\b'),
+        auto('grep -v test', '^grep\\b'),
+        auto(String.raw`grep -i "command\|initializeConfigChat"`, '^grep\\b'),
+        auto('head', '^head\\b'),
+        auto('cd - >/dev/null', '^cd\\b'),
+        auto(String.raw`grep -rln "command=initialize\|\"initialize\"\|MUPPET_COMMAND_INITIALIZE" --include=*.go --include=*.py --include=*.ts --include=*.sh --include=Dockerfile .`, '^grep\\b'),
+        auto(String.raw`grep -v "^./.side\|node_modules"`, '^grep\\b'),
+        auto('head', '^head\\b'),
+      ],
+    }
+
+    const annotation = annotatePermissionEvaluation(evaluation, script)
+    const start = script.indexOf(command)
+
+    expect(annotation.targets).toMatchObject([{ command, located: true }])
+    expect(annotation.marks).toEqual([{ start, end: start + command.length, targetId: 0 }])
+    expect(flaggedTexts(layoutAnnotatedScript(script, annotation.marks))).toEqual({ 0: command })
+  })
+
   it('locates repeated commands in extraction order', () => {
     const script = 'ls /etc && ls'
     const evaluation: ScriptPermissionEvaluation = {
@@ -142,6 +184,37 @@ describe('annotatePermissionEvaluation', () => {
     }
     const annotation = annotatePermissionEvaluation(evaluation, script)
     expect(annotation.marks).toEqual([{ start: 11, end: 13, targetId: 0 }])
+  })
+
+  it.concurrent.each([
+    '2>/dev/null',
+    '>/dev/null',
+    '>>output.log 2>&1',
+    '<input.txt >output.txt',
+    '&>output.log',
+    '2> "errors with spaces.log"',
+    '2>errors.log \\\n  >output.log',
+    '2>errors.log"$SUFFIX"',
+    '2>"$(printf \'%s\' errors.log)"',
+    '2>$(printf \'%s\' errors.log)',
+    '2>`printf \'%s\' errors.log`',
+    '2>&"$FD"',
+    '0<&3 2>&- 1>&2-',
+    '<<<"main"',
+    "<<'EOF'\nmain\nEOF",
+  ])('locates commands followed by trailing redirections: %s', (redirections) => {
+    const command = 'git checkout -q main'
+    const script = `${command} ${redirections}\ngit status`
+    const evaluation: ScriptPermissionEvaluation = {
+      outcome: 'require_approval',
+      commands: [noRule(command), auto('git status', '^git status\\b')],
+    }
+
+    const annotation = annotatePermissionEvaluation(evaluation, script)
+
+    expect(annotation.targets).toMatchObject([{ command, located: true }])
+    expect(annotation.marks).toEqual([{ start: 0, end: command.length, targetId: 0 }])
+    expect(flaggedTexts(layoutAnnotatedScript(script, annotation.marks))).toEqual({ 0: command })
   })
 
   it.concurrent.each([
@@ -169,6 +242,30 @@ describe('annotatePermissionEvaluation', () => {
     }
     const annotation = annotatePermissionEvaluation(evaluation, script)
     expect(annotation.targets).toMatchObject([{ command: 'rm -rf build', located: false }])
+    expect(annotation.marks).toEqual([])
+  })
+
+  it.concurrent.each([
+    'git checkout -q main 2>/dev/null other-branch',
+    'git checkout -q main>output.log other-branch',
+    'git checkout -q main 2>errors.log" suffix" other-branch',
+    'git checkout -q main 2>errors.log#not-a-comment other-branch',
+    'git checkout -q main &>output.log other-branch',
+    'git checkout -q main 2>"$(printf \'%s\' errors.log)" other-branch',
+    'git checkout -q main 2>`printf \'%s\' errors.log` other-branch',
+    'echo "git checkout -q main 2>/dev/null"',
+    '# git checkout -q main 2>/dev/null',
+    "cat <<'EOF'\ngit checkout -q main 2>/dev/null\nEOF",
+  ])('does not locate an incomplete or non-executed command before a redirection: %s', (script) => {
+    const command = 'git checkout -q main'
+    const evaluation: ScriptPermissionEvaluation = {
+      outcome: 'require_approval',
+      commands: [noRule(command)],
+    }
+
+    const annotation = annotatePermissionEvaluation(evaluation, script)
+
+    expect(annotation.targets).toMatchObject([{ command, located: false }])
     expect(annotation.marks).toEqual([])
   })
 

@@ -35,6 +35,7 @@ export interface ShellScan {
   heredocStarts: number[]
   /** Offsets where an executed simple command or compound command begins. */
   commandStarts: number[]
+  redirections: TextRange[]
 }
 
 const OPERATORS = ['&&', '||', '|&', ';;', '&>>', '&>', '>>', '>&', '<<<', '<<-', '<<', '<>', '>|', '<&', '>', '<', '|', ';', '&', '(', ')']
@@ -62,12 +63,12 @@ export function scanShell(script: string): ShellScan {
   const topLevelOperators: ShellOperator[] = []
   const heredocStarts: number[] = []
   const commandStarts: number[] = []
+  const redirections: TextRange[] = []
   let pendingHeredocs: { delimiter: string; stripTabs: boolean }[] = []
   // expectCommand values to restore when the matching ")" closes.
   const groupStack: boolean[] = []
   let expectCommand = true
-  let expectRedirectTarget = false
-  let quotedSubstitutionDepth = 0
+  let substitutionDepth = 0
 
   const push = (start: number, end: number, kind: ShellTokenKind) => {
     if (end > start) tokens.push({ start, end, kind })
@@ -95,17 +96,14 @@ export function scanShell(script: string): ShellScan {
     return script.charAt(at) === '$' && (script.charAt(at + 1) === '(' || variableEnd(at) > at + 1)
   }
 
-  // Scans the code of a `$(...)` nested in double quotes with fresh command
-  // state, returning the offset just past its closing ")".
-  function scanQuotedSubstitution(from: number): number {
-    const saved = { expectCommand, expectRedirectTarget, groups: groupStack.splice(0) }
+  // Substitutions have their own command state, independent of the enclosing word.
+  function scanSubstitution(from: number, closing: ')' | '`'): number {
+    const saved = { expectCommand, groups: groupStack.splice(0) }
     expectCommand = true
-    expectRedirectTarget = false
-    quotedSubstitutionDepth++
-    const end = scanCode(from)
-    quotedSubstitutionDepth--
+    substitutionDepth++
+    const end = scanCode(from, closing)
+    substitutionDepth--
     expectCommand = saved.expectCommand
-    expectRedirectTarget = saved.expectRedirectTarget
     groupStack.splice(0, groupStack.length, ...saved.groups)
     return end
   }
@@ -123,10 +121,11 @@ export function scanShell(script: string): ShellScan {
         j++
         break
       }
-      if (c === '$' && script.charAt(j + 1) === '(') {
+      if (c === '`' || (c === '$' && script.charAt(j + 1) === '(')) {
+        const width = c === '`' ? 1 : 2
         push(segmentStart, j, 'string')
-        push(j, j + 2, 'operator')
-        j = scanQuotedSubstitution(j + 2)
+        push(j, j + width, 'operator')
+        j = scanSubstitution(j + width, c === '`' ? '`' : ')')
         segmentStart = j
         continue
       }
@@ -214,7 +213,7 @@ export function scanShell(script: string): ShellScan {
     return { start: at, end, text }
   }
 
-  function scanWord(from: number): number {
+  function scanWord(from: number, redirectTarget = false): number {
     let j = from
     while (j < n) {
       const c = script.charAt(j)
@@ -229,10 +228,7 @@ export function scanShell(script: string): ShellScan {
     j = Math.max(from + 1, Math.min(j, n))
     const word = script.slice(from, j)
 
-    if (expectRedirectTarget) {
-      expectRedirectTarget = false
-      return j
-    }
+    if (redirectTarget) return j
     if (expectCommand && isWordStart(from)) {
       commandStarts.push(from)
       const assignment = ASSIGNMENT.exec(word)
@@ -259,14 +255,42 @@ export function scanShell(script: string): ShellScan {
   // position; one glued to a preceding word (e.g. `FOO="x"`) does not.
   function consumeWordPosition(at: number) {
     if (isWordStart(at)) {
-      if (expectCommand && !expectRedirectTarget) commandStarts.push(at)
+      if (expectCommand) commandStarts.push(at)
       expectCommand = false
     }
-    expectRedirectTarget = false
   }
 
-  // Inside a quoted substitution, returns at its unmatched closing ")".
-  function scanCode(from: number): number {
+  function scanRedirectionTarget(from: number): number | null {
+    const start = skipShellBlanks(script, from)
+    if (script.charAt(start) === '#') return null
+    let j = start
+    while (j < n) {
+      const c = script.charAt(j)
+      if (c === "'") {
+        const close = script.indexOf("'", j + 1)
+        const end = close === -1 ? n : close + 1
+        push(j, end, 'string')
+        j = end
+      } else if (c === '"') {
+        j = scanDoubleQuoted(j)
+      } else if (c === '`' || (c === '$' && script.charAt(j + 1) === '(')) {
+        const width = c === '`' ? 1 : 2
+        push(j, j + width, 'operator')
+        j = scanSubstitution(j + width, c === '`' ? '`' : ')')
+      } else if (c === '$' && variableEnd(j) > j + 1) {
+        const end = variableEnd(j)
+        push(j, end, 'variable')
+        j = end
+      } else if (/[\s;&|()<>]/.test(c)) {
+        break
+      } else {
+        j = scanWord(j, true)
+      }
+    }
+    return j > start ? j : null
+  }
+
+  function scanCode(from: number, closing?: ')' | '`'): number {
     let i = from
     while (i < n) {
       const c = script.charAt(i)
@@ -274,7 +298,6 @@ export function scanShell(script: string): ShellScan {
         i++
         if (pendingHeredocs.length > 0) i = consumeHeredocBodies(i)
         expectCommand = true
-        expectRedirectTarget = false
         continue
       }
       if (c === ' ' || c === '\t' || c === '\r') {
@@ -308,8 +331,9 @@ export function scanShell(script: string): ShellScan {
       }
       if (c === '`') {
         push(i, i + 1, 'operator')
-        i++
-        expectCommand = true
+        if (closing === '`') return i + 1
+        consumeWordPosition(i)
+        i = scanSubstitution(i + 1, '`')
         continue
       }
       if (c === '$') {
@@ -335,17 +359,22 @@ export function scanShell(script: string): ShellScan {
         if (operator.text === '<<' || operator.text === '<<-') {
           heredocStarts.push(operator.start)
           i = scanHeredocDelimiter(i, operator.text === '<<-')
+          redirections.push({ start: operator.start, end: i })
         } else if (REDIRECTS.has(operator.text)) {
-          expectRedirectTarget = !script.endsWith(operator.text, operator.end)
+          const end = script.endsWith(operator.text, operator.end) ? scanRedirectionTarget(i) : i
+          if (end !== null) {
+            i = end
+            redirections.push({ start: operator.start, end })
+          }
         } else if (operator.text === '(') {
           groupStack.push(false)
           expectCommand = true
         } else if (operator.text === ')') {
-          if (groupStack.length === 0 && quotedSubstitutionDepth > 0) return i
+          if (groupStack.length === 0 && closing === ')') return i
           expectCommand = groupStack.pop() ?? false
         } else {
           expectCommand = true
-          if (groupStack.length === 0 && quotedSubstitutionDepth === 0 && BREAKABLE_OPERATORS.has(operator.text)) {
+          if (groupStack.length === 0 && substitutionDepth === 0 && BREAKABLE_OPERATORS.has(operator.text)) {
             topLevelOperators.push(operator)
           }
         }
@@ -357,7 +386,16 @@ export function scanShell(script: string): ShellScan {
   }
 
   scanCode(0)
-  return { tokens, topLevelOperators, heredocStarts, commandStarts }
+  return { tokens, topLevelOperators, heredocStarts, commandStarts, redirections }
+}
+
+function skipShellBlanks(script: string, from: number): number {
+  let j = from
+  for (;;) {
+    while (/[ \t\r]/.test(script.charAt(j))) j++
+    if (!script.startsWith('\\\n', j)) return j
+    j += 2
+  }
 }
 
 interface Replacement extends TextRange {
@@ -552,16 +590,19 @@ export function describeChecks(cmd: CommandPermissionEvaluation): PermissionChec
 const COMMAND_TERMINATOR = /[;&|)\n`]/
 
 /** Whether an executed command can end at `end`, rather than continuing with more words. */
-function endsCommand(script: string, end: number): boolean {
+function endsCommand(script: string, end: number, redirectionEnds: Map<number, number>): boolean {
   let j = end
   for (;;) {
-    while (/[ \t\r]/.test(script.charAt(j))) j++
-    if (!script.startsWith('\\\n', j)) break
-    j += 2
+    const next = skipShellBlanks(script, j)
+    const redirectionEnd = redirectionEnds.get(next)
+    if (redirectionEnd !== undefined) {
+      j = redirectionEnd
+      continue
+    }
+    if (next >= script.length) return true
+    const c = script.charAt(next)
+    return (COMMAND_TERMINATOR.test(c) && !script.startsWith('&>', next)) || (c === '#' && next > j)
   }
-  if (j >= script.length) return true
-  const next = script.charAt(j)
-  return COMMAND_TERMINATOR.test(next) || (next === '#' && j > end)
 }
 
 /**
@@ -569,13 +610,13 @@ function endsCommand(script: string, end: number): boolean {
  * position and end at a command boundary, so identical text inside quoted
  * arguments, comments, heredoc bodies or longer commands never matches.
  */
-function executedRanges(script: string, text: string, commandStarts: Set<number>): TextRange[] {
+function executedRanges(script: string, text: string, commandStarts: Set<number>, redirectionEnds: Map<number, number>): TextRange[] {
   const variants = [text, text.replace(/\s*&$/, '')].filter((variant, i, all) => variant && all.indexOf(variant) === i)
   const ranges: TextRange[] = []
   for (const variant of variants) {
     for (let start = script.indexOf(variant, 0); start !== -1; start = script.indexOf(variant, start + 1)) {
       const end = start + variant.length
-      if (commandStarts.has(start) && endsCommand(script, end)) ranges.push({ start, end })
+      if (commandStarts.has(start) && endsCommand(script, end, redirectionEnds)) ranges.push({ start, end })
     }
   }
   return ranges.sort((a, b) => a.start - b.start)
@@ -590,8 +631,10 @@ function executedRanges(script: string, text: string, commandStarts: Set<number>
  * parent, so a later executable copy of its text belongs to a later command.
  */
 function locateCommands(script: string, commands: string[]): (TextRange | null)[] {
-  const commandStarts = new Set(scanShell(script).commandStarts)
-  const candidates = commands.map((command) => executedRanges(script, command, commandStarts))
+  const scan = scanShell(script)
+  const commandStarts = new Set(scan.commandStarts)
+  const redirectionEnds = new Map(scan.redirections.map(({ start, end }) => [start, end]))
+  const candidates = commands.map((command) => executedRanges(script, command, commandStarts, redirectionEnds))
   const memo = new Map<number, number>()
 
   // Most commands from index i onward that can be located with starts > after.
