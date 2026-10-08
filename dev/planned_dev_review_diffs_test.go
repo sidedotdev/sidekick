@@ -9,7 +9,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"sidekick/common"
-	"sidekick/fflag"
 )
 
 // plannedStepOutcome is what a plan step's review showed: its first auto-review
@@ -118,7 +117,6 @@ func TestPlannedDevStepWorkIsCommittedByCommitSubflow(t *testing.T) {
 	t.Parallel()
 
 	h := newReviewDiffsFlowHarness(t)
-	h.enabledFlags = map[string]bool{fflag.CheckEdits: true}
 	h.runPlannedDevPlan("do the work", func(t *testing.T, repos *flowRepos) {
 		repos.work.stage("step_one.txt", "STEP_ONE_WORK\n")
 	})

@@ -227,6 +227,14 @@ func isHibernatedExitError(err error) bool {
 	return false
 }
 
+// SupportsWorktreeHibernation reports whether worktrees in the given environment
+// type are ever hibernated, deferring to the env type's registered provider via
+// WorktreeHibernationPolicy.
+func SupportsWorktreeHibernation(envType EnvType) bool {
+	policy, ok := sandboxProviders[envType].(WorktreeHibernationPolicy)
+	return !ok || policy.SupportsWorktreeHibernation()
+}
+
 // IsHibernated reports whether the given local directory contains the
 // hibernation sentinel.
 func IsHibernated(workDir string) bool {
@@ -469,11 +477,7 @@ func HibernateEnv(ctx context.Context, e Env, branchName string) (HibernationMet
 		return HibernationMetadata{}, fmt.Errorf("branch name is required for hibernation")
 	}
 
-	// Worktree hibernation is a disk-space-saving mechanism for environments
-	// backed by local storage. Modal sandboxes already snapshot their entire
-	// filesystem and terminate when idle, so hibernating their worktrees buys
-	// nothing and only adds overhead.
-	if _, isModal := e.(*ModalEnv); isModal {
+	if !SupportsWorktreeHibernation(e.GetType()) {
 		return HibernationMetadata{}, nil
 	}
 

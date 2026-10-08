@@ -24,56 +24,17 @@ type GitDiffParams struct {
 }
 
 // GitDiff returns the diff of the current, staged changes in the working tree.
+// Edits are staged as they are applied, so staged changes cover all of them.
 func GitDiff(eCtx flow_action.ExecContext) (string, error) {
+	fflag.EvalRetiredCheckEditsFlag(eCtx)
 	var diff string
-	var err error
-	if fflag.IsEnabledWithoutVersioning(eCtx, fflag.CheckEdits) {
-		err = workflow.ExecuteActivity(eCtx, GitDiffActivity, *eCtx.EnvContainer, GitDiffParams{
-			Staged: true, // when check_edits is enabled, changes are staged as they are applied, so the diff must look at staged changes
-		}).Get(eCtx, &diff)
-		if err != nil {
-			return "", fmt.Errorf("error getting git diff: %w", err)
-		}
-	} else {
-		diff, err = GitDiffLegacy(eCtx)
-		if err != nil {
-			return "", fmt.Errorf("error getting git diff: %w", err)
-		}
+	err := workflow.ExecuteActivity(eCtx, GitDiffActivity, *eCtx.EnvContainer, GitDiffParams{
+		Staged: true,
+	}).Get(eCtx, &diff)
+	if err != nil {
+		return "", fmt.Errorf("error getting git diff: %w", err)
 	}
 	return diff, nil
-}
-
-/* This vesion of git diff is used when CheckEdits flag is disabled and works
- * when we don't git add after each and every edit application. We expect to
- * sunset this eventually, so this function shouldn't be used directly. */
-func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
-	envContainer := *eCtx.EnvContainer
-	var gitDiffOutput env.EnvRunCommandActivityOutput
-	err := workflow.ExecuteActivity(eCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-		EnvContainer:       envContainer,
-		RelativeWorkingDir: "./",
-		Command:            "git",
-		Args:               []string{"diff", "--no-ext-diff"},
-	}).Get(eCtx, &gitDiffOutput)
-	if err != nil {
-		return "", fmt.Errorf("failed to git diff: %v", err)
-	}
-
-	if gitDiffOutput.ExitStatus != 0 {
-		return "", fmt.Errorf("git diff failed: %v", gitDiffOutput.Stderr)
-	}
-
-	// Get diff of untracked files using temp index approach (respects .gitattributes)
-	var untrackedDiff string
-	err = workflow.ExecuteActivity(eCtx, DiffUntrackedFilesActivity, envContainer, []string(nil)).Get(eCtx, &untrackedDiff)
-	if err != nil {
-		return "", fmt.Errorf("failed to get untracked files diff: %v", err)
-	}
-
-	if untrackedDiff != "" {
-		return gitDiffOutput.Stdout + "\n" + untrackedDiff, nil
-	}
-	return gitDiffOutput.Stdout, nil
 }
 
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {

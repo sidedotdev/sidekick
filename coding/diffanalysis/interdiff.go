@@ -660,7 +660,10 @@ func (r reviewImages) postLine(line int, other reviewImages) (imageLine, bool) {
 
 // The interdiff library can count lines that are identical in both post-images
 // without emitting them, whether they trail a hunk or sit between two changes,
-// and can drop the marker of a final line that lacks a trailing newline.
+// and can drop the marker of a final line that lacks a trailing newline. For a
+// hunk that only one review changed, it can also keep that review's base line
+// numbers on the other side of the header instead of that side's post-image
+// line numbers.
 // Recover only what both post-images prove, verifying every emitted line
 // against them so the repaired hunk cannot misrepresent the reviewed content.
 // Sections that cannot be fully verified are returned unchanged.
@@ -671,12 +674,89 @@ func restoreOmittedCommonLines(section string, prior, current FileDiff) string {
 	}
 	oldImages, newImages := newReviewImages(prior), newReviewImages(current)
 
+	lines := strings.Split(strings.TrimSuffix(section, "\n"), "\n")
 	var out strings.Builder
-	hunkIndex := -1
-	oldPos, newPos, oldEnd, newEnd := 0, 0, 0, 0
+	i := 0
+	for ; i < len(lines) && !hunkHeaderRegex.MatchString(lines[i]); i++ {
+		out.WriteString(lines[i] + "\n")
+	}
+
+	// Both post-images agree between hunks, so each hunk begins at the same
+	// distance between them at which the previous one ended.
+	offset := 0
+	for i < len(lines) {
+		end := i + 1
+		for end < len(lines) && !hunkHeaderRegex.MatchString(lines[end]) {
+			end++
+		}
+		header := parseHunkHeader(hunkHeaderRegex.FindStringSubmatch(lines[i]))
+		restored := false
+		for _, hunk := range hunkPlacements(header, offset) {
+			body, ok := restoreHunk(hunk, lines[i+1:end], oldImages, newImages)
+			if !ok {
+				continue
+			}
+			if hunk == header {
+				out.WriteString(lines[i] + "\n")
+			} else {
+				out.WriteString(hunkHeader(hunk) + "\n")
+			}
+			out.WriteString(body)
+			offset = firstHunkLine(hunk.oldStart, hunk.oldCount) + hunk.oldCount -
+				firstHunkLine(hunk.newStart, hunk.newCount) - hunk.newCount
+			restored = true
+			break
+		}
+		if !restored {
+			return section
+		}
+		i = end
+	}
+	return out.String()
+}
+
+// hunkPlacements lists where a hunk may sit given the offset between the
+// post-images that precedes it. A header that disagrees with that offset has
+// one side in base coordinates, and either side may be the correct one.
+func hunkPlacements(header hunkRange, offset int) []hunkRange {
+	oldFirst := firstHunkLine(header.oldStart, header.oldCount)
+	newFirst := firstHunkLine(header.newStart, header.newCount)
+	if oldFirst-newFirst == offset {
+		return []hunkRange{header}
+	}
+	fromNew, fromOld := header, header
+	fromNew.oldStart = hunkStartAt(newFirst+offset, header.oldCount)
+	fromOld.newStart = hunkStartAt(oldFirst-offset, header.newCount)
+	return []hunkRange{fromNew, fromOld}
+}
+
+// firstHunkLine is the first line a hunk side covers, or for an empty side,
+// the line it would be inserted before.
+func firstHunkLine(start, count int) int {
+	if count == 0 {
+		return start + 1
+	}
+	return start
+}
+
+func hunkStartAt(firstLine, count int) int {
+	if count == 0 {
+		return firstLine - 1
+	}
+	return firstLine
+}
+
+// restoreHunk renders a hunk body with every counted line present, or reports
+// false when the body cannot be verified against both post-images at the
+// hunk's placement.
+func restoreHunk(hunk hunkRange, body []string, oldImages, newImages reviewImages) (string, bool) {
+	var out strings.Builder
+	oldPos := firstHunkLine(hunk.oldStart, hunk.oldCount)
+	newPos := firstHunkLine(hunk.newStart, hunk.newCount)
+	oldEnd, newEnd := oldPos+hunk.oldCount, newPos+hunk.newCount
 	wroteMarker := false
 
-	// verify writes a section line once both images it belongs to confirm it,
+	// verify writes a hunk line once both images it belongs to confirm it,
 	// along with the no-newline marker when they call for one. A context line
 	// whose two images disagree on the ending is not truly shared.
 	verify := func(line string) bool {
@@ -684,6 +764,9 @@ func restoreOmittedCommonLines(section string, prior, current FileDiff) string {
 		inOld, inNew := line[0] != '+', line[0] != '-'
 		var endsOld, endsNew bool
 		if inOld {
+			if oldPos >= oldEnd {
+				return false
+			}
 			old, ok := oldImages.postLine(oldPos, newImages)
 			if !ok || old.content != content {
 				return false
@@ -691,6 +774,9 @@ func restoreOmittedCommonLines(section string, prior, current FileDiff) string {
 			endsOld = old.noNewline
 		}
 		if inNew {
+			if newPos >= newEnd {
+				return false
+			}
 			new, ok := newImages.postLine(newPos, oldImages)
 			if !ok || new.content != content {
 				return false
@@ -720,57 +806,32 @@ func restoreOmittedCommonLines(section string, prior, current FileDiff) string {
 		old, ok := oldImages.postLine(oldPos, newImages)
 		return ok && verify(" "+old.content)
 	}
-	fillToHunkEnd := func() bool {
-		for oldPos < oldEnd || newPos < newEnd {
-			if !fillCommon() {
-				return false
-			}
-		}
-		return true
-	}
 
-	lines := strings.Split(strings.TrimSuffix(section, "\n"), "\n")
-	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-		if hunkHeaderRegex.MatchString(line) {
-			if !fillToHunkEnd() {
-				return section
-			}
-			hunkIndex++
-			if hunkIndex >= len(files[0].Hunks) {
-				return section
-			}
-			hunk := files[0].Hunks[hunkIndex]
-			oldPos, newPos = hunk.OldStart, hunk.NewStart
-			oldEnd, newEnd = oldPos+hunk.OldCount, newPos+hunk.NewCount
-			out.WriteString(line + "\n")
-			continue
-		}
-		if hunkIndex < 0 {
-			out.WriteString(line + "\n")
-			continue
-		}
+	for i := 0; i < len(body); i++ {
+		line := body[i]
 		if len(line) == 0 || !strings.ContainsRune(" -+", rune(line[0])) {
-			return section
+			return "", false
 		}
 		for !verify(line) {
 			if !fillCommon() {
-				return section
+				return "", false
 			}
 		}
 		// Markers are re-derived from the post-images, so an emitted marker
 		// is consumed and must agree with them.
-		if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "\\") {
+		if i+1 < len(body) && strings.HasPrefix(body[i+1], "\\") {
 			i++
 			if !wroteMarker {
-				return section
+				return "", false
 			}
 		}
 	}
-	if !fillToHunkEnd() {
-		return section
+	for oldPos < oldEnd || newPos < newEnd {
+		if !fillCommon() {
+			return "", false
+		}
 	}
-	return out.String()
+	return out.String(), true
 }
 
 // hunkRange is a parsed hunk header, with the trailing header text kept verbatim.

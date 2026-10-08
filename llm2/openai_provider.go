@@ -39,11 +39,11 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		authType = common.ProviderAuthTypeAPI
 	}
 
-	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
-	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
+	credentials, err := openAICredentialsForRequest(request.SecretManager, options.ModelConfig.Provider, authType)
 	if err != nil {
 		return nil, err
 	}
+	requestAuth := newProviderRequestAuth(request.SecretManager, options.ModelConfig.Provider, authType, credentials.useOAuth)
 
 	httpClient := &http.Client{
 		Timeout: 45 * time.Minute,
@@ -242,7 +242,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, wrapOpenAIError(err)
+		return nil, requestAuth.classifyHTTPError(err, wrapOpenAIError(err))
 	}
 
 	// Emit block_done events for all blocks

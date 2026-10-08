@@ -2,6 +2,10 @@ package common
 
 import "runtime/debug"
 
+// DirtyWorkerBuildSuffix marks the build ID of a worker built with uncommitted
+// changes on top of the preceding revision.
+const DirtyWorkerBuildSuffix = "-dirty"
+
 // GetWorkerBuildID uses embedded provenance because the running binary may not
 // match the checkout on disk.
 func GetWorkerBuildID() string {
@@ -24,8 +28,11 @@ func workerBuildID(settings []debug.BuildSetting) string {
 			modified = setting.Value
 		}
 	}
-	if vcs != "git" || modified != "false" || revision == "" {
+	if vcs != "git" || revision == "" {
 		return "unknown"
+	}
+	if modified != "false" {
+		return revision + DirtyWorkerBuildSuffix
 	}
 	return revision
 }

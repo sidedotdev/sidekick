@@ -99,19 +99,21 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 	return results, nil
 }
 
-// isReplayableVersion requires full commit IDs and an ancestor or equal commit.
-// The latest worker build is a practical filter, not an audit of earlier workers.
-func isReplayableVersion(currentRef, workflowRef string) bool {
-	for _, ref := range []string{currentRef, workflowRef} {
-		if len(ref) != 40 && len(ref) != 64 {
-			return false
-		}
-		if strings.Trim(ref, "0123456789abcdef") != "" {
-			return false
-		}
+// isDivergentBuild reports whether buildID names a commit, possibly built with
+// uncommitted changes, that is neither head nor one of its ancestors, including
+// commits this checkout lacks. Build IDs that don't name a commit, such as
+// "unknown" or the Temporal SDK's binary checksum fallback, are never divergent.
+func isDivergentBuild(head, buildID string) bool {
+	commit := strings.TrimSuffix(buildID, common.DirtyWorkerBuildSuffix)
+	if !isFullCommitID(head) || !isFullCommitID(commit) {
+		return false
 	}
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", workflowRef, currentRef)
-	return cmd.Run() == nil
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", commit, head)
+	return cmd.Run() != nil
+}
+
+func isFullCommitID(ref string) bool {
+	return (len(ref) == 40 || len(ref) == 64) && strings.Trim(ref, "0123456789abcdef") == ""
 }
 
 // TestReplayRunningWorkflows connects to the local Temporal server, fetches
@@ -178,11 +180,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 	head, err := exec.Command("git", "rev-parse", "--verify", "HEAD^{commit}").Output()
 	if err != nil {
-		t.Skipf("Cannot resolve HEAD: %v", err)
-	}
-	status, err := exec.Command("git", "status", "--porcelain").Output()
-	if err != nil || len(status) != 0 {
-		t.Skipf("Replay requires a clean checkout: status=%q, error=%v", status, err)
+		t.Logf("Cannot resolve HEAD, so no replay failure will be excused: %v", err)
 	}
 	currentSha := strings.TrimSpace(string(head))
 	t.Logf("Current HEAD: %s", currentSha)
@@ -281,12 +279,6 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			if resumedFromCache {
 				t.Logf("Workflow %s: history fetch resumed from local cache", wf.id)
 			}
-			buildID, skipReason := buildFilter.check(ctx, c.DescribeWorkflowExecution, wf.id, wf.runID)
-			if skipReason != "" {
-				result.skipReason = skipReason
-				return
-			}
-			t.Logf("Replaying workflow %s: latest worker build=%q", wf.id, buildID)
 			if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
 				result.skipReason = "completed before replay"
 				return
@@ -328,10 +320,17 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			}
 			sidekick_worker.RegisterWorkflows(replayer)
 			replaySem <- struct{}{}
-			if replayErr := replayer.ReplayWorkflowHistory(nil, hist); replayErr != nil {
-				result.err = fmt.Errorf("replay: %w", replayErr)
-			}
+			replayErr := replayer.ReplayWorkflowHistory(nil, hist)
 			<-replaySem
+			if replayErr == nil {
+				return
+			}
+			buildID, excuse := buildFilter.excuse(ctx, c.DescribeWorkflowExecution, wf.id, wf.runID)
+			if excuse != "" {
+				result.skipReason = fmt.Sprintf("replay failure excused (%s): %v", excuse, replayErr)
+				return
+			}
+			result.err = fmt.Errorf("replay (latest worker build %q): %w", buildID, replayErr)
 		}(wf)
 	}
 
@@ -339,8 +338,12 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 	pruneHistoryCache(historyCacheDir, historyCacheMaxBytes, historyCacheMaxAge)
 
+	conclusive := 0
 	for _, wf := range filtered {
 		result := histories[wf.id]
+		if result.skipReason == "" {
+			conclusive++
+		}
 		t.Run(wf.id, func(t *testing.T) {
 			t.Parallel()
 			if result.skipReason != "" {
@@ -350,6 +353,10 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				t.Errorf("Replay failed for workflow %s: %v", result.id, result.err)
 			}
 		})
+	}
+	// A run where every workflow is skipped verifies nothing and must not pass.
+	if conclusive == 0 {
+		t.Errorf("None of the %d running workflows were conclusively replayed; see subtest skip reasons", len(filtered))
 	}
 }
 
@@ -492,35 +499,40 @@ func TestRetryTransient(t *testing.T) {
 	})
 }
 
+// latestBuildFilter excuses replay failures of workflows last run by a worker
+// built from code HEAD lacks, since those may legitimately depend on it. It
+// only excuses provably divergent builds: excusing unidentifiable ones too
+// would let real nondeterminism pass silently. The latest worker build is a
+// practical signal, not an audit of earlier workers.
 type latestBuildFilter struct {
-	head     string
-	mu       sync.Mutex
-	ancestry map[string]bool
+	head      string
+	mu        sync.Mutex
+	divergent map[string]bool
 }
 
 func newLatestBuildFilter(head string) *latestBuildFilter {
-	return &latestBuildFilter{head: head, ancestry: make(map[string]bool)}
+	return &latestBuildFilter{head: head, divergent: make(map[string]bool)}
 }
 
-func (f *latestBuildFilter) check(
+func (f *latestBuildFilter) excuse(
 	ctx context.Context,
 	describe func(context.Context, string, string) (*workflowservice.DescribeWorkflowExecutionResponse, error),
 	id, runID string,
-) (buildID, skipReason string) {
+) (buildID, excuse string) {
 	description, err := describe(ctx, id, runID)
 	if err != nil {
-		return "", fmt.Sprintf("latest worker build lookup: %v", err)
+		return "", ""
 	}
 	buildID = description.GetWorkflowExecutionInfo().GetMostRecentWorkerVersionStamp().GetBuildId()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	replayable, known := f.ancestry[buildID]
+	divergent, known := f.divergent[buildID]
 	if !known {
-		replayable = isReplayableVersion(f.head, buildID)
-		f.ancestry[buildID] = replayable
+		divergent = isDivergentBuild(f.head, buildID)
+		f.divergent[buildID] = divergent
 	}
-	if !replayable {
-		return buildID, fmt.Sprintf("latest worker build %q is missing, unknown, unavailable, or neither an ancestor of nor equal to HEAD (including Git errors)", buildID)
+	if divergent {
+		return buildID, fmt.Sprintf("latest worker build %q is neither HEAD nor an ancestor of it", buildID)
 	}
 	return buildID, ""
 }

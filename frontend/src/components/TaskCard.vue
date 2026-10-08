@@ -28,13 +28,13 @@
       <div class="card-footer">
         <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
         <span v-if="task.archived" class="archived-label">Archived</span>
-      </div>
 
-      <div v-if="envIndicator || llmPresetLabel" class="card-meta">
-        <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
-          <component :is="envIndicator.icon"/>
-        </span>
-        <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
+        <div v-if="envIndicator || llmPresetLabel" class="card-meta">
+          <span v-if="envIndicator" class="env-indicator" :title="envIndicator.title">
+            <component :is="envIndicator.icon"/>
+          </span>
+          <span v-if="llmPresetLabel" class="llm-preset-label" :title="llmPresetLabel">{{ llmPresetLabel }}</span>
+        </div>
       </div>
     </div>
   </div>
@@ -356,6 +356,8 @@ const handleDescriptionBlur = (event: FocusEvent) => {
 }
 
 .status-label {
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 0px 7px;
   border-radius: 1px;
   font-size: 1em;
@@ -463,6 +465,10 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   position: absolute;
   bottom: calc(var(--task-pad) / 2);
   left: calc(var(--task-pad) / 2);
+  right: calc(var(--task-pad) / 2);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .task-card a {
@@ -515,7 +521,8 @@ const handleDescriptionBlur = (event: FocusEvent) => {
 }
 
 .archived-label {
-  margin-left: 0.5rem;
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 0px 7px;
   border-radius: 1px;
   font-size: 13px;
@@ -525,17 +532,18 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   font-family: "JetBrains Mono", monospace;
 }
 
+/* Only the preset label may shrink, so long labels truncate instead of
+   overlapping the status label or squeezing the env indicator. */
 .card-meta {
-  position: absolute;
-  right: calc(var(--task-pad) / 2);
-  bottom: calc(var(--task-pad) / 2);
-  max-width: calc(100% - var(--task-pad));
+  margin-left: auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 0.35rem;
 }
 
 .env-indicator {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   padding: 0.1rem 0.25rem;
@@ -559,7 +567,6 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   opacity: 0.75;
   background-color: var(--color-background-mute);
   color: var(--color-text);
-  pointer-events: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

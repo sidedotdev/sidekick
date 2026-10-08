@@ -3,6 +3,7 @@ package main
 import (
 	"sidekick/llm"
 	"sidekick/openai_oauth"
+	"sidekick/provider_auth"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,7 +70,7 @@ func TestGetConfiguredBuiltinLLMProviders(t *testing.T) {
 		{
 			name: "anthropic OAuth only",
 			secrets: map[string]string{
-				AnthropicOAuthSecretName: `{"access_token":"tok","refresh_token":"ref","expires_at":9999999999}`,
+				llm.AnthropicOAuthSecretName: `{"access_token":"tok","refresh_token":"ref","expires_at":9999999999}`,
 			},
 			expected: []string{"anthropic"},
 		},
@@ -87,9 +88,9 @@ func TestGetConfiguredBuiltinLLMProviders(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			stubDefaultProfileOnly(t)
-			orig := keyringGet
-			keyringGet = newMockKeyringGet(tc.secrets)
-			t.Cleanup(func() { keyringGet = orig })
+			orig := provider_auth.KeyringGet
+			provider_auth.KeyringGet = newMockKeyringGet(tc.secrets)
+			t.Cleanup(func() { provider_auth.KeyringGet = orig })
 
 			result := getConfiguredBuiltinLLMProviders()
 			assert.Equal(t, tc.expected, result)
@@ -150,9 +151,9 @@ func TestGetConfiguredBuiltinEmbeddingProviders(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			stubDefaultProfileOnly(t)
-			orig := keyringGet
-			keyringGet = newMockKeyringGet(tc.secrets)
-			t.Cleanup(func() { keyringGet = orig })
+			orig := provider_auth.KeyringGet
+			provider_auth.KeyringGet = newMockKeyringGet(tc.secrets)
+			t.Cleanup(func() { provider_auth.KeyringGet = orig })
 
 			result := getConfiguredBuiltinEmbeddingProviders()
 			assert.Equal(t, tc.expected, result)
@@ -163,12 +164,12 @@ func TestGetConfiguredBuiltinEmbeddingProviders(t *testing.T) {
 func TestGetConfiguredBuiltinLLMProviders_NoDuplicates(t *testing.T) {
 	stubDefaultProfileOnly(t)
 
-	orig := keyringGet
-	keyringGet = newMockKeyringGet(map[string]string{
+	orig := provider_auth.KeyringGet
+	provider_auth.KeyringGet = newMockKeyringGet(map[string]string{
 		llm.OpenaiApiKeySecretName: "sk-test-key",
 		openai_oauth.SecretName:    `{"access_token":"tok"}`,
 	})
-	t.Cleanup(func() { keyringGet = orig })
+	t.Cleanup(func() { provider_auth.KeyringGet = orig })
 
 	result := getConfiguredBuiltinLLMProviders()
 	count := 0

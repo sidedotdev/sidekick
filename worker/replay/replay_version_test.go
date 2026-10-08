@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestIsReplayableVersion(t *testing.T) {
+func TestIsDivergentBuild(t *testing.T) {
 	dir := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -36,18 +36,21 @@ func TestIsReplayableVersion(t *testing.T) {
 		build   string
 		want    bool
 	}{
-		{"ancestor", head, ancestor, true},
-		{"equal", head, head, true},
-		{"divergent", head, divergent, false},
-		{"missing current", "", ancestor, false},
+		{"ancestor", head, ancestor, false},
+		{"equal", head, head, false},
+		{"dirty ancestor", head, ancestor + "-dirty", false},
+		{"divergent", head, divergent, true},
+		{"dirty divergent", head, divergent + "-dirty", true},
+		{"unavailable commit", head, strings.Repeat("1", 40), true},
+		{"missing current", "", divergent, false},
 		{"missing build", head, "", false},
 		{"unknown build", head, "unknown", false},
-		{"unavailable commit", head, strings.Repeat("1", 40), false},
+		{"sdk binary checksum", head, "8ac10dfc0d9a346a97e3f39170dc3dc8", false},
 		{"symbolic ref", head, "HEAD~1", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isReplayableVersion(tt.current, tt.build); got != tt.want {
-				t.Fatalf("isReplayableVersion(%q, %q) = %v, want %v",
+			if got := isDivergentBuild(tt.current, tt.build); got != tt.want {
+				t.Fatalf("isDivergentBuild(%q, %q) = %v, want %v",
 					tt.current, tt.build, got, tt.want)
 			}
 		})

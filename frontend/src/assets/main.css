@@ -149,3 +149,24 @@ svg.icon {
 
 
 /* NOTE: color variables should be defined in base.css */
+
+/* rendered markdown (vue-markdown-render injects raw HTML, so scoped styles can't reach it) */
+.markdown a {
+  overflow-wrap: anywhere;
+}
+
+.markdown a:hover {
+  text-decoration: underline;
+}
+
+.markdown img {
+  display: block;
+  max-width: min(100%, 40rem);
+  max-height: 28rem;
+  height: auto;
+  width: auto;
+  object-fit: contain;
+  margin: 0.5rem 0;
+  border: 0.0625rem solid var(--color-border-contrast);
+  border-radius: 0.375rem;
+}

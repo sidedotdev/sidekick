@@ -25,6 +25,28 @@ func TestSandboxActivities_UnregisteredEnvType(t *testing.T) {
 	require.ErrorContains(t, err, "no sandbox provider registered")
 }
 
+func TestSupportsWorktreeHibernation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		envType EnvType
+		want    bool
+	}{
+		{EnvTypeLocal, true},
+		{EnvTypeLocalGitWorktree, true},
+		{EnvTypeDevPod, true},
+		{EnvTypeOpenShell, true},
+		{EnvTypeModal, false},
+		{"", true},
+		{"unregistered", true},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.envType), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, SupportsWorktreeHibernation(tt.envType))
+		})
+	}
+}
+
 func TestSandboxProviderRegistry_CoversSandboxEnvTypes(t *testing.T) {
 	t.Parallel()
 	for _, envType := range []EnvType{EnvTypeDevPod, EnvTypeOpenShell, EnvTypeModal} {

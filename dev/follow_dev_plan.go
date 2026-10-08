@@ -553,31 +553,29 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 	}
 
-	// Step 4: auto-format code and add OR commit all changes to git (depending on flag)
-	// only do this if the type was edit
+	// Step 4: auto-format code and commit all changes to git, only if the type
+	// was edit
 	if step.Type == "edit" {
 		err = AutoFormatCode(dCtx)
 		if err != nil {
 			return result, fmt.Errorf("failed to auto-format code: %w", err)
 		}
 
-		// needed when check edits is enabled to ensure we commit the auto-formatting
-		// needed when check edits is disabled because staging is how we limit future diffs in that case
+		// ensures the auto-formatting is committed too
 		err = git.GitAddAll(dCtx.ExecContext)
 		if err != nil {
 			return result, fmt.Errorf("failed to git add all: %w", err)
 		}
 
-		if fflag.IsEnabledWithoutVersioning(dCtx, fflag.CheckEdits) {
-			if llmCommitMessagesEnabled(dCtx) {
-				if err := commitPendingWork(dCtx, chatHistory); err != nil {
-					return result, fmt.Errorf("failed to commit step changes: %w", err)
-				}
-			} else {
-				err = git.GitCommit(dCtx.ExecContext, fmt.Sprintf("%s\n\n%s", step.Title, step.Definition))
-				if err != nil {
-					return result, fmt.Errorf("failed to git commit: %w", err)
-				}
+		fflag.EvalRetiredCheckEditsFlag(dCtx)
+		if llmCommitMessagesEnabled(dCtx) {
+			if err := commitPendingWork(dCtx, chatHistory); err != nil {
+				return result, fmt.Errorf("failed to commit step changes: %w", err)
+			}
+		} else {
+			err = git.GitCommit(dCtx.ExecContext, fmt.Sprintf("%s\n\n%s", step.Title, step.Definition))
+			if err != nil {
+				return result, fmt.Errorf("failed to git commit: %w", err)
 			}
 		}
 	}
