@@ -96,6 +96,12 @@ func isNothingToCommitOutput(stdout, stderr string) bool {
 }
 
 // GitUserConfig holds the git user configuration
+// Sidekick's own git identity, used wherever Sidekick authors or commits.
+const (
+	SidekickGitName  = "Sidekick"
+	SidekickGitEmail = "sidekick@side.dev"
+)
+
 type GitUserConfig struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
@@ -147,10 +153,10 @@ func BuildGitEnvVars(committerName, committerEmail string) []string {
 // identity when provided, falling back to Sidekick per empty field.
 func BuildGitEnvVarsWithAuthor(authorName, authorEmail, committerName, committerEmail string) []string {
 	if authorName == "" {
-		authorName = "Sidekick"
+		authorName = SidekickGitName
 	}
 	if authorEmail == "" {
-		authorEmail = "sidekick@side.dev"
+		authorEmail = SidekickGitEmail
 	}
 	envVars := []string{
 		"GIT_AUTHOR_NAME=" + authorName,

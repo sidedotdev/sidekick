@@ -39,6 +39,13 @@ func (a commitMessageArguments) Message() string {
 // single forced tool call on a fresh history, since the instructions and
 // context given fully describe what the message needs to cover.
 func generateCommitMessage(dCtx DevContext, actionType, instructions, promptContext string) (commitMessageArguments, error) {
+	return forceCommitMessageToolCall(dCtx, actionType, instructions, promptContext, false)
+}
+
+// forceCommitMessageToolCall implements generateCommitMessage. Callers with
+// their own fallback set disableUserRetry so failures surface as errors after
+// a few quick retries instead of waiting on the user.
+func forceCommitMessageToolCall(dCtx DevContext, actionType, instructions, promptContext string, disableUserRetry bool) (commitMessageArguments, error) {
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 		Role:    llm.ChatMessageRoleUser,
@@ -53,7 +60,7 @@ func generateCommitMessage(dCtx DevContext, actionType, instructions, promptCont
 	if err != nil {
 		return commitMessageArguments{}, fmt.Errorf("failed to resolve tool name mapping: %w", err)
 	}
-	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, toolNameMapping, &commitMessageTool)
+	response, err := persisted_ai.ForceToolCallWithFallbackV2(actionCtx, flow_action.TrackOptions{}, disableUserRetry, modelConfig, chatHistory, toolNameMapping, &commitMessageTool)
 	if err != nil {
 		return commitMessageArguments{}, fmt.Errorf("failed to generate commit message: %w", err)
 	}

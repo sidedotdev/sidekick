@@ -894,11 +894,20 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		}
 	}
 
-	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitActivity, nil, *dCtx.EnvContainer, git.GitCommitParams{
+	commitParams := git.GitCommitParams{
 		CommitMessage:         commitMessage,
 		CommitAll:             true,
 		IgnoreNothingToCommit: true,
-	})
+	}
+	if workflow.GetVersion(dCtx, "idd-llm-intent-commit", workflow.DefaultVersion, 1) >= 1 {
+		var err error
+		commitParams, err = intentCommitParams(dCtx)
+		if err != nil {
+			return IntentRequirementsInfo{}, err
+		}
+	}
+
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitActivity, nil, *dCtx.EnvContainer, commitParams)
 	if err != nil {
 		return IntentRequirementsInfo{}, fmt.Errorf("failed to commit intent: %w", err)
 	}

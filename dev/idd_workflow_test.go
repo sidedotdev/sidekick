@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,7 +22,9 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/flow_action"
+	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
@@ -43,6 +46,19 @@ type IddWorkflowTestSuite struct {
 	// single sub-task dispatch performs.
 	titleGenerationCalls int
 	sideTmpSetupCalls    []env.EnvRunCommandActivityInput
+	// llmCommitVersion selects the intent commit and finish message gates.
+	// Tests default to the legacy messages so replayed executions stay
+	// covered; tests of LLM-written messages opt in.
+	llmCommitVersion workflow.Version
+	// intentCommitEnv is the flow env commitIntentWorkflow commits in; nil
+	// means a local env.
+	intentCommitEnv env.Env
+	// humanGitIdentity is the identity commitIntentWorkflow's flow captured
+	// from the human's machine at start, if any.
+	humanGitIdentity git.GitUserConfig
+	// flowEnvGitIdentity is what git user config reads in the flow's env
+	// return.
+	flowEnvGitIdentity git.GitUserConfig
 }
 
 func (s *IddWorkflowTestSuite) SetupTest() {
@@ -51,6 +67,95 @@ func (s *IddWorkflowTestSuite) SetupTest() {
 	s.ima = nil
 	s.titleGenerationCalls = 0
 	s.sideTmpSetupCalls = nil
+	s.llmCommitVersion = workflow.DefaultVersion
+	s.intentCommitEnv = nil
+	s.humanGitIdentity = git.GitUserConfig{}
+	s.flowEnvGitIdentity = git.GitUserConfig{Name: "Ada Lovelace", Email: "ada@example.com"}
+	// activities can only be registered before any is mocked
+	s.env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
+}
+
+// executeWorkflow runs the workflow with the LLM commit message gates pinned to
+// llmCommitVersion. Pinning happens here because workflow mocks must follow
+// every workflow registration.
+func (s *IddWorkflowTestSuite) executeWorkflow(workflowFn interface{}, args ...interface{}) {
+	for _, changeID := range []string{"idd-llm-intent-commit", "idd-llm-finish-message"} {
+		s.env.OnGetVersion(changeID, workflow.DefaultVersion, 1).Return(s.llmCommitVersion).Maybe()
+	}
+	s.env.ExecuteWorkflow(workflowFn, args...)
+}
+
+// gitArgs matches a git command run through EnvRunCommandActivity by its exact
+// arguments.
+func gitArgs(args ...string) func(env.EnvRunCommandActivityInput) bool {
+	return func(in env.EnvRunCommandActivityInput) bool {
+		return in.Command == "git" && strings.Join(in.Args, "\x00") == strings.Join(args, "\x00")
+	}
+}
+
+// commitMessageStreams records the commit model's forced record_commit_message
+// calls.
+type commitMessageStreams struct {
+	mu      sync.Mutex
+	options []llm2.Options
+	prompts []string
+}
+
+func (c *commitMessageStreams) snapshot() ([]llm2.Options, []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]llm2.Options(nil), c.options...), append([]string(nil), c.prompts...)
+}
+
+// mockCommitMessageStreams stubs the commit model, answering every stream with
+// the given subject, or failing it with streamErr when set.
+func (s *IddWorkflowTestSuite) mockCommitMessageStreams(subject string, streamErr error) *commitMessageStreams {
+	recorded := &commitMessageStreams{}
+
+	var cha *persisted_ai.ChatHistoryActivities
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, input persisted_ai.AppendMessageInput) (*persisted_ai.MessageRef, error) {
+			if input.Message.Role == llm2.RoleUser {
+				recorded.mu.Lock()
+				recorded.prompts = append(recorded.prompts, input.Message.GetContentString())
+				recorded.mu.Unlock()
+			}
+			return &persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: string(input.Message.Role)}, nil
+		}).Maybe()
+
+	var fa *flow_action.FlowActivities
+	s.env.OnActivity(fa.GetModelMetadata, mock.Anything, mock.Anything, mock.Anything).Return(common.ModelMetadata{}, nil).Maybe()
+	var flagActivities *fflag.FFlagActivities
+	s.env.OnActivity(flagActivities.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+
+	arguments, err := json.Marshal(commitMessageArguments{Subject: subject})
+	s.Require().NoError(err)
+	var la *persisted_ai.Llm2Activities
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+			recorded.mu.Lock()
+			recorded.options = append(recorded.options, input.Options)
+			recorded.mu.Unlock()
+			if streamErr != nil {
+				return nil, streamErr
+			}
+			return &llm2.MessageResponse{
+				StopReason: "tool_use",
+				Output: llm2.Message{
+					Role: llm2.RoleAssistant,
+					Content: []llm2.ContentBlock{{
+						Type: llm2.ContentBlockTypeToolUse,
+						ToolUse: &llm2.ToolUseBlock{
+							Id:        "message-call",
+							Name:      commitMessageTool.Name,
+							Arguments: string(arguments),
+						},
+					}},
+				},
+			}, nil
+		}).Maybe()
+
+	return recorded
 }
 
 func (s *IddWorkflowTestSuite) AfterTest(suiteName, testName string) {
@@ -183,7 +288,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskCommitsAndStartsChild() {
 	}
 	s.env.RegisterWorkflow(wrapper)
 
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -311,7 +416,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskTriggersOrchestratorOnTermina
 	}
 	s.env.RegisterWorkflow(wrapper)
 
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -414,6 +519,14 @@ func (s *IddWorkflowTestSuite) mockIntentCommitActivities(attempts int) {
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
 		return len(in.Args) > 0 && in.Args[0] == "show"
 	})).Return(env.EnvRunCommandActivityOutput{Stdout: "diff body", ExitStatus: 0}, nil).Times(2 * attempts)
+
+	if s.llmCommitVersion >= 1 {
+		// nothing left to stage, so no subject is generated
+		s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(gitArgs("diff", "--cached", "--name-only"))).
+			Return(env.EnvRunCommandActivityOutput{}, nil).Times(attempts)
+		s.env.OnActivity(git.GetGitUserConfigActivity, mock.Anything, mock.Anything).
+			Return(git.GitUserConfig{Name: "Ada Lovelace", Email: "ada@example.com"}, nil).Times(attempts)
+	}
 }
 
 // mockTargetCommit stubs resolving a branch tip, which the finish path pins
@@ -469,7 +582,7 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalReopensOnFinalDiffFailure() {
 		s.signalMergeApprovalResponse(mu, approvalActions, flow_action.UserResponse{Approved: &approved})
 	}, time.Second)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -540,7 +653,7 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalPreservesMergedDiffAcrossFini
 		s.signalMergeApprovalResponse(mu, approvalActions, flow_action.UserResponse{Approved: &approved})
 	}, 3*time.Second)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -684,7 +797,7 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalMergesWorkLandedAfterCleanupF
 		s.signalMergeApprovalResponse(mu, approvalActions, flow_action.UserResponse{Approved: &approved})
 	}, 3*time.Second)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -804,7 +917,7 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalFinishesOnApproval() {
 		})
 	}, 3*time.Second)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -868,7 +981,7 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalKeepsRequestPendingOnRejectio
 		})
 	}, time.Second)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -929,7 +1042,7 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalRegeneratesDiffOnOptionChange
 		})
 	}, time.Second)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -992,7 +1105,7 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalRefreshesDiffOnRequest() {
 	}
 	s.env.RegisterWorkflow(miniIdd)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1048,7 +1161,7 @@ func (s *IddWorkflowTestSuite) TestIntentSubtaskStartSignalIgnoredWhileFinishing
 		s.env.SignalWorkflow(SignalNameStartIntentSubtask, StartIntentSubtaskSignal{})
 	}, time.Second)
 
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1115,7 +1228,7 @@ func (s *IddWorkflowTestSuite) TestIntentSubtaskDispatchRefusedWhileFinishing() 
 		state.Finishing = true
 	}, time.Second)
 
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1164,7 +1277,7 @@ func (s *IddWorkflowTestSuite) TestIddMergeApprovalReopensOnMergeFailure() {
 		})
 	}, time.Second)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1227,7 +1340,7 @@ func (s *IddWorkflowTestSuite) TestRunOrchestratorTurn_EmptyDiffIsNoOp() {
 	}
 	s.env.RegisterWorkflow(miniIdd)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1272,7 +1385,7 @@ func (s *IddWorkflowTestSuite) TestPendingIntentDiffIncludesUntrackedFiles() {
 	}
 	s.env.RegisterWorkflow(miniIdd)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1329,7 +1442,7 @@ func (s *IddWorkflowTestSuite) TestSetAutoModeSignalTogglesState() {
 		s.env.SignalWorkflow(SignalNameSetIddAutoMode, SetIddAutoModeSignal{Enabled: true})
 	}, 0)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1377,7 +1490,7 @@ func (s *IddWorkflowTestSuite) TestReservePendingSubtaskPersistsPendingFlow() {
 	}
 	s.env.RegisterWorkflow(miniIdd)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1425,7 +1538,7 @@ func (s *IddWorkflowTestSuite) TestSubtaskStatusTransitionsPersistFlowRecords() 
 	}
 	s.env.RegisterWorkflow(miniIdd)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1478,7 +1591,7 @@ func (s *IddWorkflowTestSuite) TestNudgesPersistedToFlowMetadata() {
 	}
 	s.env.RegisterWorkflow(miniIdd)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1573,7 +1686,7 @@ func (s *IddWorkflowTestSuite) TestWorkflowGoContextSupportsCancellation() {
 	}
 	s.env.RegisterWorkflow(testWorkflow)
 
-	s.env.ExecuteWorkflow(testWorkflow)
+	s.executeWorkflow(testWorkflow)
 
 	s.True(s.env.IsWorkflowCompleted())
 	s.ErrorIs(s.env.GetWorkflowError(), workflow.ErrCanceled)
@@ -1666,7 +1779,7 @@ func (s *IddWorkflowTestSuite) TestRunIntentSubtaskPropagatesSelectedOptionsToPl
 	}
 	s.env.RegisterWorkflow(wrapper)
 
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -1858,7 +1971,7 @@ func (s *IddWorkflowTestSuite) TestIddWorkflowSetsUpLocalParentForRemoteSelectio
 		s.env.CancelWorkflow()
 	}, 2*time.Minute)
 
-	s.env.ExecuteWorkflow(IddWorkflow, IddWorkflowInput{
+	s.executeWorkflow(IddWorkflow, IddWorkflowInput{
 		WorkspaceId: "test-workspace",
 		RepoDir:     repoDir,
 		TaskId:      "task_1",
@@ -1912,7 +2025,7 @@ func (s *IddWorkflowTestSuite) TestIddWorkflowLegacyHistoryUsesSelectedParentEnv
 			sandboxInput = args.Get(1).(env.CreateSandboxInput)
 		}).Return(env.CreateSandboxOutput{}, errors.New("modal unavailable in test")).Maybe()
 
-	s.env.ExecuteWorkflow(IddWorkflow, IddWorkflowInput{
+	s.executeWorkflow(IddWorkflow, IddWorkflowInput{
 		WorkspaceId: "test-workspace",
 		RepoDir:     repoDir,
 		TaskId:      "task_1",
@@ -1932,27 +2045,190 @@ func (s *IddWorkflowTestSuite) TestIddWorkflowLegacyHistoryUsesSelectedParentEnv
 // commitIntentWorkflow drives commitIntent directly with a ready DevContext so
 // commit failure handling can be exercised without the full IDD signal loop.
 func (s *IddWorkflowTestSuite) commitIntentWorkflow(disableHumanInTheLoop bool) func(ctx workflow.Context) (IntentRequirementsInfo, error) {
+	flowEnv := s.intentCommitEnv
+	if flowEnv == nil {
+		flowEnv = &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"}
+	}
+	humanIdentity := s.humanGitIdentity
 	return func(ctx workflow.Context) (IntentRequirementsInfo, error) {
 		ctx = utils.NoRetryCtx(ctx)
 		gs := &flow_action.GlobalState{}
 		gs.InitValues()
+		if humanIdentity.Name != "" {
+			gs.SetValue("committerName", humanIdentity.Name)
+			gs.SetValue("committerEmail", humanIdentity.Email)
+		}
 		dCtx := DevContext{
 			ExecContext: flow_action.ExecContext{
-				WorkspaceId: "test-workspace",
-				Context:     ctx,
-				FlowScope:   &flow_action.FlowScope{SubflowName: "idd"},
-				GlobalState: gs,
-				Secrets:     &secret_manager.SecretManagerContainer{SecretManager: &secret_manager.EnvSecretManager{}},
-				EnvContainer: &env.EnvContainer{
-					Env: &env.LocalEnv{WorkingDirectory: "/tmp/test-repo"},
-				},
+				WorkspaceId:           "test-workspace",
+				Context:               ctx,
+				FlowScope:             &flow_action.FlowScope{SubflowName: "idd"},
+				GlobalState:           gs,
+				Secrets:               &secret_manager.SecretManagerContainer{SecretManager: &secret_manager.EnvSecretManager{}},
+				EnvContainer:          &env.EnvContainer{Env: flowEnv},
 				DisableHumanInTheLoop: disableHumanInTheLoop,
 			},
 			Worktree:   &domain.Worktree{Name: "side/idd-worktree"},
 			RepoConfig: common.RepoConfig{},
 		}
+		dCtx.SetLLMConfig(common.LLMConfig{
+			Defaults: []common.ModelConfig{{Provider: "test", Model: "default-model"}},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				common.CodingKey: {{Provider: "test", Model: "coding-model"}},
+			},
+		})
 		return commitIntent(dCtx, "My Intent", false)
 	}
+}
+
+// llmIntentCommit reports what an intent commit with LLM-written subjects did.
+type llmIntentCommit struct {
+	Info     IntentRequirementsInfo
+	Params   git.GitCommitParams
+	Commands []string
+	// UserConfigLookups counts git user config reads in the flow's env.
+	UserConfigLookups int
+}
+
+// runLlmIntentCommit commits intent with the given staged paths and staged word
+// diff, against a commit model already stubbed by the caller.
+func (s *IddWorkflowTestSuite) runLlmIntentCommit(stagedPaths, stagedDiff string) llmIntentCommit {
+	s.llmCommitVersion = 1
+	s.setupCommitIntentUserRetryMocks()
+
+	s.env.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Once()
+
+	var mu sync.Mutex
+	var commands []string
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, in env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			command := strings.Join(in.Args, " ")
+			mu.Lock()
+			commands = append(commands, command)
+			mu.Unlock()
+			switch {
+			case command == "diff --cached --name-only":
+				return env.EnvRunCommandActivityOutput{Stdout: stagedPaths}, nil
+			case command == "diff --cached --word-diff=plain --ignore-all-space":
+				return env.EnvRunCommandActivityOutput{Stdout: stagedDiff}, nil
+			case command == "rev-parse HEAD":
+				return env.EnvRunCommandActivityOutput{Stdout: "abc123\n"}, nil
+			case strings.HasPrefix(command, "show "):
+				return env.EnvRunCommandActivityOutput{Stdout: "diff body"}, nil
+			}
+			return env.EnvRunCommandActivityOutput{}, fmt.Errorf("unexpected command: git %s", command)
+		})
+
+	userConfigLookups := 0
+	s.env.OnActivity(git.GetGitUserConfigActivity, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) {
+			mu.Lock()
+			userConfigLookups++
+			mu.Unlock()
+		}).
+		Return(s.flowEnvGitIdentity, nil).Maybe()
+
+	var params git.GitCommitParams
+	s.env.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { params = args.Get(2).(git.GitCommitParams) }).
+		Return("commit-sha", nil).Once()
+
+	wrapper := s.commitIntentWorkflow(true)
+	s.env.RegisterWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
+	s.True(s.env.IsWorkflowCompleted())
+	s.Require().NoError(s.env.GetWorkflowError())
+
+	var info IntentRequirementsInfo
+	s.Require().NoError(s.env.GetWorkflowResult(&info))
+	mu.Lock()
+	defer mu.Unlock()
+	return llmIntentCommit{Info: info, Params: params, Commands: commands, UserConfigLookups: userConfigLookups}
+}
+
+// assertIntentCommitIdentity checks intent commits are authored by the human
+// and committed by Sidekick.
+func (s *IddWorkflowTestSuite) assertIntentCommitIdentity(params git.GitCommitParams) {
+	s.Equal("Ada Lovelace", params.AuthorName)
+	s.Equal("ada@example.com", params.AuthorEmail)
+	s.Equal(git.SidekickGitName, params.CommitterName)
+	s.Equal(git.SidekickGitEmail, params.CommitterEmail)
+	s.True(params.CommitAll)
+	s.True(params.IgnoreNothingToCommit)
+}
+
+func (s *IddWorkflowTestSuite) TestCommitIntentGeneratesIntentSubject() {
+	const stagedDiff = "diff --git a/intent/flows.md b/intent/flows.md\n{+Resumed flows re-resolve their profile.+}"
+	streams := s.mockCommitMessageStreams("intent: Intent: require profile re-resolution when a flow resumes", nil)
+
+	result := s.runLlmIntentCommit("intent/flows.md\n", stagedDiff)
+
+	s.Equal("intent: require profile re-resolution when a flow resumes", result.Params.CommitMessage)
+	s.assertIntentCommitIdentity(result.Params)
+	s.Equal("abc123", result.Info.Commit)
+
+	options, prompts := streams.snapshot()
+	s.Require().Len(options, 1)
+	s.Equal(llm.ToolChoiceTypeTool, options[0].ToolChoice.Type)
+	s.Equal(commitMessageTool.Name, options[0].ToolChoice.Name)
+	s.Equal("coding-model", options[0].ModelConfig.Model)
+	s.Require().Len(prompts, 1)
+	s.Contains(prompts[0], stagedDiff)
+}
+
+func (s *IddWorkflowTestSuite) TestCommitIntentFallsBackWhenSubjectGenerationFails() {
+	streams := s.mockCommitMessageStreams("", errors.New("model unavailable"))
+
+	result := s.runLlmIntentCommit("intent/flows.md\nintent/idd/idd.md\n", "{+new intent+}")
+
+	s.Equal("intent: update flows.md, idd/idd.md", result.Params.CommitMessage)
+	s.assertIntentCommitIdentity(result.Params)
+	options, _ := streams.snapshot()
+	s.NotEmpty(options, "the subject generation should have been attempted")
+}
+
+func (s *IddWorkflowTestSuite) TestCommitIntentSkipsSubjectGenerationOnCleanTree() {
+	streams := s.mockCommitMessageStreams("intent: unused", nil)
+
+	result := s.runLlmIntentCommit("", "")
+
+	options, _ := streams.snapshot()
+	s.Empty(options, "a clean tree has nothing to describe")
+	s.NotContains(result.Commands, "diff --cached --word-diff=plain --ignore-all-space")
+	s.assertIntentCommitIdentity(result.Params)
+	s.Equal("abc123", result.Info.Commit)
+}
+
+// TestCommitIntentAuthoredByHumanCapturedAtFlowStart verifies the intent author
+// is the identity captured from the human's machine, not whatever git identity
+// a remote flow env carries.
+func (s *IddWorkflowTestSuite) TestCommitIntentAuthoredByHumanCapturedAtFlowStart() {
+	s.intentCommitEnv = &env.DevPodEnv{WorkingDirectory: "/workspace", WorkspaceName: "idd"}
+	s.humanGitIdentity = git.GitUserConfig{Name: "Ada Lovelace", Email: "ada@example.com"}
+	s.flowEnvGitIdentity = git.GitUserConfig{Name: "Container User", Email: "root@container"}
+	s.mockCommitMessageStreams("intent: require profile re-resolution", nil)
+
+	result := s.runLlmIntentCommit("intent/flows.md\n", "{+new intent+}")
+
+	s.assertIntentCommitIdentity(result.Params)
+	s.Zero(result.UserConfigLookups, "the remote env's git identity must not be consulted")
+}
+
+// TestCommitIntentInRemoteEnvWithoutHumanIdentity verifies an unknown human
+// identity leaves Sidekick as the author rather than borrowing the remote
+// env's identity.
+func (s *IddWorkflowTestSuite) TestCommitIntentInRemoteEnvWithoutHumanIdentity() {
+	s.intentCommitEnv = &env.DevPodEnv{WorkingDirectory: "/workspace", WorkspaceName: "idd"}
+	s.flowEnvGitIdentity = git.GitUserConfig{Name: "Container User", Email: "root@container"}
+	s.mockCommitMessageStreams("intent: require profile re-resolution", nil)
+
+	result := s.runLlmIntentCommit("intent/flows.md\n", "{+new intent+}")
+
+	s.Empty(result.Params.AuthorName)
+	s.Empty(result.Params.AuthorEmail)
+	s.Equal(git.SidekickGitName, result.Params.CommitterName)
+	s.Equal(git.SidekickGitEmail, result.Params.CommitterEmail)
+	s.Zero(result.UserConfigLookups, "the remote env's git identity must not be consulted")
 }
 
 // setupCommitIntentUserRetryMocks stubs the persistence activities used when a
@@ -2016,7 +2292,7 @@ func (s *IddWorkflowTestSuite) TestCommitIntentRetriesCommitAfterUserContinue() 
 	}
 	s.env.RegisterWorkflow(parent)
 
-	s.env.ExecuteWorkflow(parent)
+	s.executeWorkflow(parent)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -2040,7 +2316,7 @@ func (s *IddWorkflowTestSuite) TestCommitIntentSurfacesCommitFailureWithoutHuman
 	wrapper := s.commitIntentWorkflow(true)
 	s.env.RegisterWorkflow(wrapper)
 
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.True(s.env.IsWorkflowCompleted())
 	s.Require().Error(s.env.GetWorkflowError())
 	s.Contains(s.env.GetWorkflowError().Error(), "failed to sync flow branch to local repo")
@@ -2161,7 +2437,7 @@ func (s *IddWorkflowTestSuite) TestIddFinishCompletesWithSubtaskBlockedOnUserRes
 		s.signalMergeApprovalResponse(mu, approvalActions, flow_action.UserResponse{Approved: &approved})
 	}, 10*time.Second)
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.Require().True(s.env.IsWorkflowCompleted())
 	s.Require().NoError(s.env.GetWorkflowError(), "the flow must finish once the merge has succeeded")
 
@@ -2226,7 +2502,7 @@ func (s *IddWorkflowTestSuite) TestCancelPendingSubtasksWaitsForRunnersPastClosu
 	}
 	s.env.RegisterWorkflow(wrapper)
 
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -2239,8 +2515,9 @@ func (s *IddWorkflowTestSuite) TestCancelPendingSubtasksWaitsForRunnersPastClosu
 // iddLateWorkFinish reports what a finish did when a sub-task landed work on
 // the idd branch after the finish had already taken the diff it merged.
 type iddLateWorkFinish struct {
-	MergeCalls int
-	FinalDiff  string
+	MergeCalls    int
+	MergeMessages []string
+	FinalDiff     string
 }
 
 // runIddFinishWithLateSubtaskWork finishes an IDD flow with one sub-task in
@@ -2279,11 +2556,13 @@ func (s *IddWorkflowTestSuite) runIddFinishWithLateSubtaskWork(settleDuringMerge
 	s.mockTargetCommit(targetBranch, mergeBase)
 
 	mergeCalls := 0
+	var mergeMessages []string
 	s.env.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, envContainer env.EnvContainer, params git.GitMergeParams) (git.MergeActivityResult, error) {
 			repoMu.Lock()
 			first := mergeCalls == 0
 			mergeCalls++
+			mergeMessages = append(mergeMessages, params.CommitMessage)
 			repoMu.Unlock()
 			// The workflow is blocked on this activity, which is the only
 			// moment at which a sub-task can settle between the diff this merge
@@ -2316,7 +2595,7 @@ func (s *IddWorkflowTestSuite) runIddFinishWithLateSubtaskWork(settleDuringMerge
 		s.env.RegisterDelayedCallback(landSubtaskWork, 3*time.Second)
 	}
 
-	s.env.ExecuteWorkflow(miniIdd)
+	s.executeWorkflow(miniIdd)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
@@ -2328,7 +2607,41 @@ func (s *IddWorkflowTestSuite) runIddFinishWithLateSubtaskWork(settleDuringMerge
 
 	repoMu.Lock()
 	defer repoMu.Unlock()
-	return iddLateWorkFinish{MergeCalls: mergeCalls, FinalDiff: finalDiff}
+	return iddLateWorkFinish{MergeCalls: mergeCalls, MergeMessages: mergeMessages, FinalDiff: finalDiff}
+}
+
+// TestIddFinishMergesWithGeneratedMessage verifies the finish merge message is
+// written by the commit model from the overall intent diff, and that the
+// reconciliation merge after in-flight sub-tasks settle reuses it.
+func (s *IddWorkflowTestSuite) TestIddFinishMergesWithGeneratedMessage() {
+	s.llmCommitVersion = 1
+	const subject = "feat(profiles): re-resolve profiles when flows resume"
+	const intentDiff = "{+Flows re-resolve their profile when resumed.+}"
+	streams := s.mockCommitMessageStreams(subject, nil)
+
+	var diffMu sync.Mutex
+	var intentDiffArgs []string
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(in env.EnvRunCommandActivityInput) bool {
+		return len(in.Args) > 1 && in.Args[0] == "diff" && in.Args[1] != "--cached"
+	})).Return(func(_ context.Context, in env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+		diffMu.Lock()
+		defer diffMu.Unlock()
+		intentDiffArgs = in.Args
+		return env.EnvRunCommandActivityOutput{Stdout: intentDiff}, nil
+	}).Once()
+
+	result := s.runIddFinishWithLateSubtaskWork(false)
+
+	s.Equal([]string{subject, subject}, result.MergeMessages, "both merges of a finish must use the generated message")
+	diffMu.Lock()
+	defer diffMu.Unlock()
+	s.Equal([]string{"diff", "--word-diff=plain", "--ignore-all-space", "main-tip-sha", "HEAD", "--", "intent"}, intentDiffArgs)
+
+	options, prompts := streams.snapshot()
+	s.Require().Len(options, 1, "the message is generated once per finish")
+	s.Equal(commitMessageTool.Name, options[0].ToolChoice.Name)
+	s.Require().Len(prompts, 1)
+	s.Contains(prompts[0], intentDiff)
 }
 
 // TestIddMergeApprovalMergesWorkLandedWhileSubtasksSettle verifies the finish
@@ -2359,7 +2672,7 @@ func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRejectsIncompleteIntent() {
 			RemainingWork: "Implement the remaining authentication paths.",
 		})
 	}
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.Require().Error(s.env.GetWorkflowError())
 	s.Contains(s.env.GetWorkflowError().Error(), "Implement the remaining authentication paths")
 }
@@ -2376,7 +2689,7 @@ func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRejectsDirtyIntent() {
 			RemainingWork:                  "Nothing remains.",
 		})
 	}
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.Require().Error(s.env.GetWorkflowError())
 	s.Contains(s.env.GetWorkflowError().Error(), "uncommitted intent")
 	s.Contains(s.env.GetWorkflowError().Error(), "intent/c.md")
@@ -2398,7 +2711,7 @@ func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRechecksConcurrentDispatch(
 			RemainingWork:                  "Nothing remains.",
 		})
 	}
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.Require().Error(s.env.GetWorkflowError())
 	s.Contains(s.env.GetWorkflowError().Error(), "new-subtask")
 }
@@ -2447,7 +2760,7 @@ func (s *IddWorkflowTestSuite) TestMarkReadyForReviewSignalsOnceAndRearms() {
 		err := workflow.ExecuteChildWorkflow(ctx, "review-child").Get(ctx, nil)
 		return requests, err
 	}
-	s.env.ExecuteWorkflow(parent)
+	s.executeWorkflow(parent)
 	s.Require().NoError(s.env.GetWorkflowError())
 	var requests []flow_action.RequestForUser
 	s.Require().NoError(s.env.GetWorkflowResult(&requests))
@@ -2476,7 +2789,7 @@ func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRejectsWorkCompletedDuringC
 			AllIntentChangesFullySatisfied: true, RemainingWork: "Nothing remains.",
 		})
 	}
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.Require().Error(s.env.GetWorkflowError())
 	s.Contains(s.env.GetWorkflowError().Error(), "reassess")
 }
@@ -2541,7 +2854,7 @@ func (s *IddWorkflowTestSuite) TestIntentSubtaskRefreshesPersistedApproval() {
 		}
 		return nil
 	}
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.Require().NoError(s.env.GetWorkflowError())
 	s.True(hasPersisted("intent committed"))
 	s.True(hasPersisted("child merged"))
@@ -2610,7 +2923,7 @@ func (s *IddWorkflowTestSuite) TestOrchestratorRetainsOnlyIncrementalIntentUpdat
 		}
 		return nil
 	}
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.Require().NoError(s.env.GetWorkflowError())
 	mu.Lock()
 	defer mu.Unlock()
@@ -2659,7 +2972,7 @@ func (s *IddWorkflowTestSuite) TestMarkReadyForReviewRejectsDispatchDuringNotifi
 		}
 		return markIddReadyForReview(dCtx, state, args)
 	}
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.Require().NoError(s.env.GetWorkflowError())
 }
 
@@ -2719,7 +3032,7 @@ func (s *IddWorkflowTestSuite) TestOrchestratorSnapshotRecovery() {
 		}
 		return nil
 	}
-	s.env.ExecuteWorkflow(wrapper)
+	s.executeWorkflow(wrapper)
 	s.Require().NoError(s.env.GetWorkflowError())
 	mu.Lock()
 	defer mu.Unlock()
