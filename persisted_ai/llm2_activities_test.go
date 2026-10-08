@@ -88,10 +88,11 @@ func TestStreamActivity_ForwardsLlm2StreamEventsAlongsideLegacyEvents(t *testing
 		Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "call_1", Name: "read_file", Arguments: `{"path":"README.md"}`},
 	}}
 	heartbeat := llm2.Event{Type: llm2.EventHeartbeat}
+	upstreamActivity := llm2.Event{Type: llm2.EventUpstreamActivity}
 
 	scripted := []llm2.Event{
 		heartbeat,
-		reasoningStart, reasoningDelta, summaryDelta, signatureDelta, reasoningDone,
+		reasoningStart, reasoningDelta, summaryDelta, signatureDelta, upstreamActivity, reasoningDone,
 		textStart, textDeltaEvent, textDone,
 		builtinUseStart, builtinUseDone,
 		builtinResultStart, builtinResultDone,
@@ -133,7 +134,7 @@ func TestStreamActivity_ForwardsLlm2StreamEventsAlongsideLegacyEvents(t *testing
 	}
 
 	// Every content-relevant llm2 event is forwarded verbatim in order;
-	// heartbeats and signature deltas are not.
+	// liveness events and signature deltas are not.
 	var expectedForwarded []llm2.Event
 	for _, event := range scripted {
 		switch event.Type {

@@ -30,6 +30,9 @@ type OpenAIResponsesProvider struct {
 	// BuiltinTools opts protocol-compatible proxy providers into specific
 	// provider-native tools (e.g. "web_search").
 	BuiltinTools []string
+
+	// upstreamActivityInterval overrides defaultUpstreamActivityInterval.
+	upstreamActivityInterval time.Duration
 }
 
 // webSearchToolEnabled reports whether the native web search tool may be sent.
@@ -59,11 +62,16 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		return nil, err
 	}
 
-	httpClient := &http.Client{Timeout: 45 * time.Minute}
+	activityInterval := p.upstreamActivityInterval
+	if activityInterval == 0 {
+		activityInterval = defaultUpstreamActivityInterval
+	}
+	httpClient := withResponseDump(&http.Client{Timeout: 45 * time.Minute})
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
 		option.WithMaxRetries(0),
+		option.WithMiddleware(reportUpstreamActivity(ctx, eventChan, activityInterval)),
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
@@ -177,10 +185,14 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	var usage Usage
 	reasoningItemIndexByID := make(map[string]int)
 	webSearchItemIndexByID := make(map[string]int)
+	receivedEventCount := 0
+	lastEventType := ""
 
 loop:
 	for stream.Next() {
 		data := stream.Current()
+		receivedEventCount++
+		lastEventType = data.Type
 		if data.Type == "keepalive" {
 			select {
 			case eventChan <- Event{Type: EventHeartbeat}:
@@ -466,7 +478,8 @@ loop:
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, wrapOpenAIError(err)
+		return nil, fmt.Errorf("OpenAI Responses stream (model %s) failed after %d events (last event type %q; set %s=<dir> to dump raw responses): %w",
+			model, receivedEventCount, lastEventType, ResponseDumpDirEnvVar, wrapOpenAIError(err))
 	}
 
 	outputMessage := AccumulateEventsToMessage(events)
@@ -620,11 +633,9 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				if block.ToolResult.ToolCallId == "" {
 					return nil, fmt.Errorf("tool_result block missing ToolCallId")
 				}
-				outputParts := toolResultToResponsesOutputParts(block.ToolResult)
-				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
-					openAIResponsesID(block.ToolResult.ToolCallId, "call_"),
-					outputParts,
-				))
+				item := responses.ResponseInputItemParamOfFunctionCallOutput(toolResultToResponsesOutputParts(block.ToolResult))
+				item.OfFunctionCallOutput.CallID = param.NewOpt(openAIResponsesID(block.ToolResult.ToolCallId, "call_"))
+				items = append(items, item)
 
 			case ContentBlockTypeReasoning:
 				if msg.Role != RoleAssistant {
@@ -875,15 +886,11 @@ func openaiWebSearchActionFromJSON(arguments string) (responses.ResponseFunction
 	}
 	switch raw.Type {
 	case "open_page":
-		action.OfOpenPage = &responses.ResponseFunctionWebSearchActionOpenPageParam{URL: raw.URL}
+		action.OfOpenPage = &responses.ResponseFunctionWebSearchActionOpenPageParam{URL: param.NewOpt(raw.URL)}
 	case "find", "find_in_page":
-		findParam := responses.ResponseFunctionWebSearchActionFindParam{Pattern: raw.Pattern, URL: raw.URL}
-		// The SDK serializes this action type as "find", but the API only
-		// accepts "find_in_page".
-		findParam.SetExtraFields(map[string]any{"type": "find_in_page"})
-		action.OfFind = &findParam
+		action.OfFind = &responses.ResponseFunctionWebSearchActionFindParam{Pattern: raw.Pattern, URL: raw.URL}
 	default:
-		search := responses.ResponseFunctionWebSearchActionSearchParam{Query: raw.Query}
+		search := responses.ResponseFunctionWebSearchActionSearchParam{Query: param.NewOpt(raw.Query)}
 		for _, source := range raw.Sources {
 			search.Sources = append(search.Sources, responses.ResponseFunctionWebSearchActionSearchSourceParam{URL: source.URL})
 		}

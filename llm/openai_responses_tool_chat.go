@@ -280,10 +280,9 @@ func buildStructuredInputFromMessages(messages []ChatMessage) ([]responses.Respo
 				))
 			}
 		case ChatMessageRoleTool:
-			items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
-				msg.ToolCallId,
-				msg.Content,
-			))
+			item := responses.ResponseInputItemParamOfFunctionCallOutput(msg.Content)
+			item.OfFunctionCallOutput.CallID = param.NewOpt(msg.ToolCallId)
+			items = append(items, item)
 		default:
 			log.Error().Any("message", msg).Msgf("unsupported message role in message: %s", utils.PanicJSON(msg))
 			return nil, fmt.Errorf("unsupported message role: %s", utils.PanicJSON(msg.Role))

@@ -146,7 +146,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 
 	var client anthropic.Client
-	httpClient := &http.Client{Timeout: 45 * time.Minute}
+	httpClient := withResponseDump(&http.Client{Timeout: 45 * time.Minute})
 	clientOptions := []option.RequestOption{
 		option.WithHTTPClient(httpClient),
 		// Callers own request retries. SDK retries can honor a provider's

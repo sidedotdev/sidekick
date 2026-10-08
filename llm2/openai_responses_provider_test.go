@@ -850,7 +850,7 @@ func TestMessageToResponsesInput_SanitizesItemIDs(t *testing.T) {
 	assert.Equal(t, "msg_0_0", items[0].OfOutputMessage.ID)
 	assert.Regexp(t, `^msg_[A-Za-z0-9_-]+$`, items[1].OfOutputMessage.ID)
 	assert.Regexp(t, `^call_[A-Za-z0-9_-]+$`, items[2].OfFunctionCall.CallID)
-	assert.Equal(t, items[2].OfFunctionCall.CallID, items[3].OfFunctionCallOutput.CallID)
+	assert.Equal(t, items[2].OfFunctionCall.CallID, items[3].OfFunctionCallOutput.CallID.Value)
 }
 
 func TestOpenAIResponsesID_PreservesCompatibleIDs(t *testing.T) {

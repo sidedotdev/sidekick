@@ -64,6 +64,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 			headers: p.CustomHeaders,
 		}
 	}
+	httpClient = withResponseDump(httpClient)
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
