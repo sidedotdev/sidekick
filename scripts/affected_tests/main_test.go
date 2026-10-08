@@ -410,27 +410,27 @@ func TestHashPackageFilesStable(t *testing.T) {
 		ImportPath: "example/p",
 		GoFiles:    []string{"a.go", "b.go"},
 	}
-	h1 := newSha()
-	if err := hashPackageFiles(h1, p, false); err != nil {
+	r1, err := packageFilesRecord(p, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	h2 := newSha()
-	if err := hashPackageFiles(h2, p, false); err != nil {
+	r2, err := packageFilesRecord(p, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.EqualFold(hexSum(h1), hexSum(h2)) {
-		t.Errorf("hashPackageFiles not stable: %s vs %s", hexSum(h1), hexSum(h2))
+	if string(r1) != string(r2) {
+		t.Errorf("packageFilesRecord not stable: %q vs %q", r1, r2)
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte("package p\n// changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h3 := newSha()
-	if err := hashPackageFiles(h3, p, false); err != nil {
+	r3, err := packageFilesRecord(p, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if hexSum(h1) == hexSum(h3) {
-		t.Errorf("hash should have changed after file edit")
+	if string(r1) == string(r3) {
+		t.Errorf("record should have changed after file edit")
 	}
 }
 
@@ -442,7 +442,7 @@ func TestHashPackageFilesMissingFileFailsSafe(t *testing.T) {
 		ImportPath: "example/p",
 		GoFiles:    []string{"gone.go"},
 	}
-	if err := hashPackageFiles(newSha(), p, false); err == nil {
+	if _, err := packageFilesRecord(p, false); err == nil {
 		t.Fatalf("expected error for missing file, got nil")
 	}
 }
@@ -1249,5 +1249,134 @@ godebug default=go1.21
 	}
 	if tb.DefaultGODEBUG == "" {
 		t.Error("test binary DefaultGODEBUG did not decode despite a godebug directive in go.mod")
+	}
+}
+
+// sharedDepListing builds two selected packages whose closures share a
+// third-party dependency, mirroring how sibling packages overlap in practice.
+func sharedDepListing(t *testing.T) *pkgListing {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]string{
+		"a/a.go":           "package a\n",
+		"a/a_test.go":      "package a\n// a test\n",
+		"a/x_test.go":      "package a_test\n",
+		"b/b.go":           "package b\n",
+		"b/b_test.go":      "package b\n// b test\n",
+		"shared/shared.go": "package shared\n",
+		"shared/s_test.go": "package shared\n// ignored for consumers\n",
+	}
+	for name, content := range files {
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mod := &goListModule{Path: "example.com/shared", Version: "v1.0.0", GoVersion: "1.22", Sum: "h1:s=", GoModSum: "h1:m="}
+	shared := &goListPackage{Dir: filepath.Join(dir, "shared"), ImportPath: "example.com/shared", Module: mod, GoFiles: []string{"shared.go"}, TestGoFiles: []string{"s_test.go"}}
+	fmtPkg := &goListPackage{ImportPath: "fmt", Standard: true}
+	a := &goListPackage{Dir: filepath.Join(dir, "a"), ImportPath: "example/a", GoFiles: []string{"a.go"}, TestGoFiles: []string{"a_test.go"}, Deps: []string{"example.com/shared", "fmt"}}
+	aX := &goListPackage{Dir: filepath.Join(dir, "a"), ImportPath: "example/a_test [example/a.test]", ForTest: "example/a", XTestGoFiles: []string{"x_test.go"}}
+	b := &goListPackage{Dir: filepath.Join(dir, "b"), ImportPath: "example/b", GoFiles: []string{"b.go"}, TestGoFiles: []string{"b_test.go"}, Deps: []string{"example.com/shared"}}
+	return &pkgListing{
+		byPath: map[string]*goListPackage{
+			shared.ImportPath: shared,
+			fmtPkg.ImportPath: fmtPkg,
+			a.ImportPath:      a,
+			aX.ImportPath:     aX,
+			b.ImportPath:      b,
+		},
+		testBinaries: map[string]*goListPackage{
+			"example/a": {ImportPath: "example/a.test", Deps: []string{"example.com/shared", "example/a", "fmt"}, DefaultGODEBUG: "x=1"},
+		},
+		testVariants: map[string][]*goListPackage{"example/a": {aX}},
+		matched:      []string{"example/a", "example/b"},
+	}
+}
+
+// TestHashPackagesMatchesPerPackageHashes ensures sharing file records across
+// overlapping closures yields exactly the hashes computed independently per
+// package, so batching never changes which recorded passes apply.
+func TestHashPackagesMatchesPerPackageHashes(t *testing.T) {
+	t.Parallel()
+	listing := sharedDepListing(t)
+	base := []byte("base")
+
+	got, err := hashPackages(listing.matched, listing, base)
+	if err != nil {
+		t.Fatalf("hashPackages: %v", err)
+	}
+	if len(got) != len(listing.matched) {
+		t.Fatalf("hashPackages returned %d hashes, want %d", len(got), len(listing.matched))
+	}
+	for _, pkg := range listing.matched {
+		want, err := computePackageHash(pkg, listing, base)
+		if err != nil {
+			t.Fatalf("computePackageHash(%s): %v", pkg, err)
+		}
+		if got[pkg] != want {
+			t.Errorf("hashPackages[%s] = %s, want %s", pkg, got[pkg], want)
+		}
+	}
+	if got["example/a"] == got["example/b"] {
+		t.Error("distinct packages produced identical hashes")
+	}
+}
+
+func TestHashPackagesFailsSafeOnUnreadableSharedDependency(t *testing.T) {
+	t.Parallel()
+	listing := sharedDepListing(t)
+	shared := listing.byPath["example.com/shared"]
+	if err := os.Remove(filepath.Join(shared.Dir, "shared.go")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hashPackages(listing.matched, listing, []byte("base")); err == nil {
+		t.Fatal("expected an error when a dependency file cannot be read")
+	}
+}
+
+// TestGoListDepsTestMatchedMirrorsPatternMatch pins the selected package set
+// derived from the single deps listing to what plain pattern matching yields:
+// dependencies (including test-only ones) must never be selected, and every
+// matched package must be, regardless of import order between them.
+func TestGoListDepsTestMatchedMirrorsPatternMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeModuleManifest(t, dir, "module example.com/sel\n\ngo 1.24\n", "")
+	files := map[string]string{
+		"a/a.go":          "package a\n\nimport _ \"example.com/sel/dep\"\n",
+		"a/a_test.go":     "package a\n\nimport (\n\t\"testing\"\n\n\t_ \"example.com/sel/testdep\"\n)\n\nfunc TestA(t *testing.T) {}\n",
+		"a/sub/sub.go":    "package sub\n\nimport _ \"example.com/sel/a\"\n",
+		"dep/dep.go":      "package dep\n",
+		"testdep/td.go":   "package testdep\n",
+		"other/other.go":  "package other\n",
+		"other/x_test.go": "package other_test\n\nimport (\n\t\"testing\"\n\n\t_ \"example.com/sel/other\"\n)\n\nfunc TestX(t *testing.T) {}\n",
+	}
+	for name, content := range files {
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	for _, patterns := range [][]string{{"./..."}, {"./a/..."}, {"./a", "./other"}, {"example.com/sel/dep"}} {
+		want, err := goListPackagesMatching(patterns)
+		if err != nil {
+			t.Fatalf("goListPackagesMatching(%v): %v", patterns, err)
+		}
+		sort.Strings(want)
+		listing, err := goListDepsTest(patterns)
+		if err != nil {
+			t.Fatalf("goListDepsTest(%v): %v", patterns, err)
+		}
+		if !reflect.DeepEqual(listing.matched, want) {
+			t.Errorf("patterns %v: matched = %v, want %v", patterns, listing.matched, want)
+		}
 	}
 }

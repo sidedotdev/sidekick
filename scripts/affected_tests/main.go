@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -269,7 +270,21 @@ type goListPackage struct {
 	Deps            []string
 	ForTest         string
 	DefaultGODEBUG  string
+	DepOnly         bool
 	Error           *goListError
+}
+
+// goListJSONFields restricts go list output to the fields goListPackage
+// decodes, which roughly halves go list's runtime versus full -json output.
+// Deriving it from the struct keeps newly added fields from silently decoding
+// as empty.
+func goListJSONFields() string {
+	t := reflect.TypeFor[goListPackage]()
+	names := make([]string, t.NumField())
+	for i := range names {
+		names[i] = t.Field(i).Name
+	}
+	return strings.Join(names, ",")
 }
 
 type goListModule struct {
@@ -296,6 +311,9 @@ type pkgListing struct {
 	// brackets and so wouldn't be discovered via a plain Deps walk; this
 	// index lets the hasher pick them up by base path directly.
 	testVariants map[string][]*goListPackage
+	// matched holds the sorted import paths the patterns matched directly,
+	// as opposed to those listed only as dependencies.
+	matched []string
 }
 
 func goListPackagesMatching(patterns []string) ([]string, error) {
@@ -316,7 +334,7 @@ func goListPackagesMatching(patterns []string) ([]string, error) {
 }
 
 func goListDepsTest(patterns []string) (*pkgListing, error) {
-	args := append([]string{"list", "-e", "-json", "-deps", "-test"}, patterns...)
+	args := append([]string{"list", "-e", "-json=" + goListJSONFields(), "-deps", "-test"}, patterns...)
 	out, err := exec.Command("go", args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("go list -deps -test: %w", err)
@@ -351,8 +369,12 @@ func goListDepsTest(patterns []string) (*pkgListing, error) {
 			listing.testVariants[pp.ForTest] = append(listing.testVariants[pp.ForTest], &pp)
 		default:
 			listing.byPath[pp.ImportPath] = &pp
+			if !pp.DepOnly {
+				listing.matched = append(listing.matched, pp.ImportPath)
+			}
 		}
 	}
+	sort.Strings(listing.matched)
 	return listing, nil
 }
 
@@ -407,7 +429,69 @@ func packageClosure(pkg string, listing *pkgListing) map[string]bool {
 	return closure
 }
 
-func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, error) {
+// packageFilesKey identifies one package's file record. Records depend only
+// on the package entry and whether its own test files are included, so they
+// can be shared by every hash whose closure contains the package.
+type packageFilesKey struct {
+	pkg          *goListPackage
+	includeTests bool
+}
+
+// hashInput is one package's contribution to a package hash, in fold order.
+type hashInput struct {
+	files      packageFilesKey
+	withModule bool
+}
+
+// packageHashInputs lists, in fold order, the packages whose inputs make up
+// pkg's hash: its non-standard closure followed by its test variants.
+func packageHashInputs(pkg string, listing *pkgListing) ([]hashInput, error) {
+	closure := packageClosure(pkg, listing)
+
+	sorted := make([]string, 0, len(closure))
+	for k := range closure {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+
+	inputs := make([]hashInput, 0, len(sorted))
+	for _, dep := range sorted {
+		dp := listing.byPath[dep]
+		if dp == nil {
+			// Fail safe: if a dep referenced by the closure has no
+			// corresponding go-list entry we cannot hash its inputs, so
+			// returning an error here makes the caller fall back to running
+			// every requested package rather than risking an incorrect skip.
+			return nil, fmt.Errorf("no go list entry for dependency %q of %q", dep, pkg)
+		}
+		if dp.Standard {
+			// Standard library content is covered by the Go toolchain version
+			// already mixed into the base hash; skip per-file hashing for speed.
+			continue
+		}
+		inputs = append(inputs, hashInput{
+			files:      packageFilesKey{pkg: dp, includeTests: dep == pkg},
+			withModule: true,
+		})
+	}
+
+	// Also fold in any go-list test variants targeting the selected package
+	// (e.g. a synthetic "P_test [P.test]" external test package) whose
+	// bracketed ImportPaths may not appear in the Deps closure above.
+	variants := append([]*goListPackage(nil), listing.testVariants[pkg]...)
+	sort.Slice(variants, func(i, j int) bool {
+		return variants[i].ImportPath < variants[j].ImportPath
+	})
+	for _, v := range variants {
+		if v.Standard {
+			continue
+		}
+		inputs = append(inputs, hashInput{files: packageFilesKey{pkg: v, includeTests: true}})
+	}
+	return inputs, nil
+}
+
+func foldPackageHash(pkg string, listing *pkgListing, base []byte, inputs []hashInput, records map[packageFilesKey][]byte) string {
 	h := sha256.New()
 	h.Write(base)
 
@@ -418,54 +502,87 @@ func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, e
 		fmt.Fprintf(h, "GODEBUG %s\n", tb.DefaultGODEBUG)
 	}
 
-	closure := packageClosure(pkg, listing)
-
-	sorted := make([]string, 0, len(closure))
-	for k := range closure {
-		sorted = append(sorted, k)
+	for _, in := range inputs {
+		if in.withModule {
+			hashModuleIdentity(h, in.files.pkg.Module)
+		}
+		h.Write(records[in.files])
 	}
-	sort.Strings(sorted)
+	return hex.EncodeToString(h.Sum(nil))
+}
 
-	for _, dep := range sorted {
-		dp := listing.byPath[dep]
-		if dp == nil {
-			// Fail safe: if a dep referenced by the closure has no
-			// corresponding go-list entry we cannot hash its inputs, so
-			// returning an error here makes the caller fall back to running
-			// every requested package rather than risking an incorrect skip.
-			return "", fmt.Errorf("no go list entry for dependency %q of %q", dep, pkg)
-		}
-		if dp.Standard {
-			// Standard library content is covered by the Go toolchain version
-			// already mixed into the base hash; skip per-file hashing for speed.
-			continue
-		}
-		hashModuleIdentity(h, dp.Module)
-		if err := hashPackageFiles(h, dp, dep == pkg); err != nil {
+func computePackageHash(pkg string, listing *pkgListing, base []byte) (string, error) {
+	inputs, err := packageHashInputs(pkg, listing)
+	if err != nil {
+		return "", err
+	}
+	records := make(map[packageFilesKey][]byte, len(inputs))
+	for _, in := range inputs {
+		record, err := packageFilesRecord(in.files.pkg, in.files.includeTests)
+		if err != nil {
 			return "", err
 		}
+		records[in.files] = record
 	}
+	return foldPackageHash(pkg, listing, base, inputs, records), nil
+}
 
-	// Also fold in any go-list test variants targeting the selected package
-	// (e.g. a synthetic "P_test [P.test]" external test package) whose
-	// bracketed ImportPaths may not appear in the Deps closure above.
-	variants := listing.testVariants[pkg]
-	if len(variants) > 0 {
-		sortedVariants := make([]*goListPackage, len(variants))
-		copy(sortedVariants, variants)
-		sort.Slice(sortedVariants, func(i, j int) bool {
-			return sortedVariants[i].ImportPath < sortedVariants[j].ImportPath
-		})
-		for _, v := range sortedVariants {
-			if v.Standard {
-				continue
-			}
-			if err := hashPackageFiles(h, v, true); err != nil {
-				return "", err
+// hashPackages computes the hash of every selected package. Closures of
+// sibling packages overlap heavily (a few thousand distinct packages back
+// tens of thousands of closure entries in this repo), so each package's files
+// are read once and the resulting record is shared by every hash needing it.
+func hashPackages(selected []string, listing *pkgListing, base []byte) (map[string]string, error) {
+	inputsByPkg := make(map[string][]hashInput, len(selected))
+	var keys []packageFilesKey
+	seen := map[packageFilesKey]bool{}
+	for _, pkg := range selected {
+		inputs, err := packageHashInputs(pkg, listing)
+		if err != nil {
+			return nil, err
+		}
+		inputsByPkg[pkg] = inputs
+		for _, in := range inputs {
+			if !seen[in.files] {
+				seen[in.files] = true
+				keys = append(keys, in.files)
 			}
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+
+	records, err := readPackageFileRecords(keys)
+	if err != nil {
+		return nil, err
+	}
+
+	hashes := make(map[string]string, len(selected))
+	for _, pkg := range selected {
+		hashes[pkg] = foldPackageHash(pkg, listing, base, inputsByPkg[pkg], records)
+	}
+	return hashes, nil
+}
+
+func readPackageFileRecords(keys []packageFilesKey) (map[packageFilesKey][]byte, error) {
+	results := make([][]byte, len(keys))
+	errs := make([]error, len(keys))
+	sem := make(chan struct{}, runtime.NumCPU())
+	var wg sync.WaitGroup
+	for i, k := range keys {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			results[i], errs[i] = packageFilesRecord(k.pkg, k.includeTests)
+		})
+	}
+	wg.Wait()
+
+	records := make(map[packageFilesKey][]byte, len(keys))
+	for i, k := range keys {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		records[k] = results[i]
+	}
+	return records, nil
 }
 
 // hashModuleIdentity mixes the resolved module of a dependency into h,
@@ -478,13 +595,13 @@ func hashModuleIdentity(h hash.Hash, m *goListModule) {
 	}
 }
 
-// hashPackageFiles mixes the content hashes of a package's source/embed files
-// into h. When includeTests is true, the package's own *_test.go and test
-// embed files are also included; we intentionally do NOT include test files
-// for transitive dependencies because Go forbids _test.go in one package from
-// being imported by another package, so a dependency's test files cannot
-// influence a consumer's test results.
-func hashPackageFiles(h hash.Hash, p *goListPackage, includeTests bool) error {
+// packageFilesRecord returns the bytes a package contributes to a hash: the
+// content hashes of its source/embed files. When includeTests is true, the
+// package's own *_test.go and test embed files are also included; we
+// intentionally do NOT include test files for transitive dependencies because
+// Go forbids _test.go in one package from being imported by another package,
+// so a dependency's test files cannot influence a consumer's test results.
+func packageFilesRecord(p *goListPackage, includeTests bool) ([]byte, error) {
 	files := append([]string(nil), p.GoFiles...)
 	files = append(files, p.CgoFiles...)
 	files = append(files, p.EmbedFiles...)
@@ -495,7 +612,8 @@ func hashPackageFiles(h hash.Hash, p *goListPackage, includeTests bool) error {
 		files = append(files, p.XTestEmbedFiles...)
 	}
 	sort.Strings(files)
-	fmt.Fprintf(h, "PKG %s\n", p.ImportPath)
+	var record bytes.Buffer
+	fmt.Fprintf(&record, "PKG %s\n", p.ImportPath)
 	for _, f := range files {
 		full := f
 		if !filepath.IsAbs(f) {
@@ -506,12 +624,12 @@ func hashPackageFiles(h hash.Hash, p *goListPackage, includeTests bool) error {
 			// Fail safe: if go list reported a file we cannot read, we cannot
 			// produce a trustworthy hash and the caller must fall back to
 			// running everything rather than risk an incorrect skip.
-			return fmt.Errorf("hash %s: %w", full, err)
+			return nil, fmt.Errorf("hash %s: %w", full, err)
 		}
 		sum := sha256.Sum256(data)
-		fmt.Fprintf(h, "FILE %s %s\n", f, hex.EncodeToString(sum[:]))
+		fmt.Fprintf(&record, "FILE %s %s\n", f, hex.EncodeToString(sum[:]))
 	}
-	return nil
+	return record.Bytes(), nil
 }
 
 // computeHashes resolves the requested patterns to concrete packages and
@@ -521,28 +639,18 @@ func hashPackageFiles(h hash.Hash, p *goListPackage, includeTests bool) error {
 func computeHashes(flags, patterns []string) (string, map[string]string, []string, error) {
 	profileSig := computeProfileSignature(flags, os.Getenv)
 
-	selected, err := goListPackagesMatching(patterns)
-	if err != nil {
-		return "", nil, nil, err
-	}
-	if len(selected) == 0 {
-		return profileSig, map[string]string{}, nil, nil
-	}
-
 	listing, err := goListDepsTest(patterns)
 	if err != nil {
 		return "", nil, nil, err
 	}
+	selected := listing.matched
+	if len(selected) == 0 {
+		return profileSig, map[string]string{}, nil, nil
+	}
 
-	base := commonHashBase(profileSig)
-
-	hashes := make(map[string]string, len(selected))
-	for _, p := range selected {
-		h, err := computePackageHash(p, listing, base)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		hashes[p] = h
+	hashes, err := hashPackages(selected, listing, commonHashBase(profileSig))
+	if err != nil {
+		return "", nil, nil, err
 	}
 
 	return profileSig, hashes, selected, nil
