@@ -21,14 +21,21 @@ import (
 func TestCreateRemoteWorktreeActivity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	repoDir := setupTestGitRepo(t)
 
-	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
-	require.NoError(t, err)
-	envContainer := EnvContainer{Env: localEnv}
+	// Each subtest gets its own repository: git does not support concurrent
+	// `git worktree add` in one repository, which can read another add's
+	// half-written worktree metadata.
+	setupRepo := func(t *testing.T) (string, EnvContainer) {
+		t.Helper()
+		repoDir := setupTestGitRepo(t)
+		localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		return repoDir, EnvContainer{Env: localEnv}
+	}
 
 	t.Run("creates worktree successfully", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -50,6 +57,7 @@ func TestCreateRemoteWorktreeActivity(t *testing.T) {
 
 	t.Run("creates worktree with start branch", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -64,6 +72,7 @@ func TestCreateRemoteWorktreeActivity(t *testing.T) {
 
 	t.Run("returns error for duplicate branch", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		input := CreateRemoteWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -83,6 +92,7 @@ func TestCreateRemoteWorktreeActivity(t *testing.T) {
 
 	t.Run("strips side/ prefix for directory name", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
