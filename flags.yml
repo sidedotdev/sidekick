@@ -89,3 +89,10 @@ review_context_types:
     percentage:
       withoutAutoReview: 50
       withAutoReview: 50
+
+# Case-insensitive model-name substrings; compatible providers always use auto.
+anthropic-forced-tool-choice-exclusions:
+  variations:
+    default: [haiku]
+  defaultRule:
+    variation: default

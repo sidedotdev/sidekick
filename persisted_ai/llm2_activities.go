@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/fflag"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/utils"
+	"slices"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -28,6 +30,9 @@ type StreamInput struct {
 	FlowId          string
 	FlowActionId    string
 	Providers       []common.ModelProviderPublicConfig
+	// InstructToolCall appends a transient system instruction requiring the
+	// tool choice to be honored, since some providers can't enforce it.
+	InstructToolCall bool `json:"instructToolCall,omitempty"`
 }
 
 // ActionParams returns action parameters for flow action tracking.
@@ -48,8 +53,9 @@ func (si StreamInput) ActionParams() map[string]any {
 
 // Llm2Activities provides LLM streaming activities using the llm2 package types.
 type Llm2Activities struct {
-	Streamer srv.Streamer
-	Storage  common.KeyValueStorage
+	Streamer     srv.Streamer
+	Storage      common.KeyValueStorage
+	FeatureFlags *fflag.FFlagActivities
 
 	// providerFactory overrides provider resolution; tests use it to drive
 	// Stream with scripted output. Nil means resolve from model config.
@@ -163,6 +169,17 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		log.Error().Err(err).Msg("failed to get llm2 provider")
 		return nil, err
 	}
+	if anthropicProvider, ok := provider.(llm2.AnthropicProvider); ok && !anthropicProvider.AnthropicCompatible {
+		const flagName = "anthropic-forced-tool-choice-exclusions"
+		flags, _ := la.FeatureFlags.EvaluateFlags(ctx, fflag.EvaluateFlagsInput{
+			TargetingKey: input.FlowId,
+			StringArrayFlags: map[string][]string{
+				flagName: llm2.DefaultAnthropicForcedToolChoiceExclusions(),
+			},
+		})
+		anthropicProvider.ForcedToolChoiceExclusions = flags.StringArrayValues[flagName]
+		provider = anthropicProvider
+	}
 
 	llm2History, ok := input.ChatHistory.History.(*Llm2ChatHistory)
 	if !ok {
@@ -175,6 +192,9 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	if input.ToolNameMapping != nil {
 		options = mapOptionsToolNames(options, input.ToolNameMapping)
 		messages = mapMessagesToolNames(messages, input.ToolNameMapping)
+	}
+	if input.InstructToolCall {
+		messages = appendToolCallInstruction(messages, options.ToolChoice)
 	}
 
 	secretManager := newOpenAIOAuthSecretWrapper(ctx, input.Secrets.SecretManager)
@@ -206,6 +226,24 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	}
 
 	return response, err
+}
+
+func toolCallInstruction(choice common.ToolChoice) string {
+	if choice.Type == common.ToolChoiceTypeTool && choice.Name != "" {
+		return fmt.Sprintf("You MUST respond by calling the %s tool.", choice.Name)
+	}
+	return "You MUST respond by calling one of the provided tools."
+}
+
+// appendToolCallInstruction returns a new slice so the hydrated history's
+// backing array is never mutated.
+func appendToolCallInstruction(messages []llm2.Message, choice common.ToolChoice) []llm2.Message {
+	return append(slices.Clip(messages), llm2.Message{
+		Role: llm2.RoleSystem,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: toolCallInstruction(choice)},
+		},
+	})
 }
 
 // isContentRelevantLlm2Event reports whether an llm2 event carries content the

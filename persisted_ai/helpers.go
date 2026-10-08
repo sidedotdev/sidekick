@@ -114,11 +114,12 @@ func forceToolCallWithToolsResolver(
 			ToolChoice:        toolChoice,
 			ParallelToolCalls: parallelToolCalls,
 		},
-		Secrets:     *actionCtx.Secrets,
-		ChatHistory: chatHistory,
-		WorkspaceId: actionCtx.WorkspaceId,
-		FlowId:      workflow.GetInfo(actionCtx).WorkflowExecution.ID,
-		Providers:   actionCtx.GetProviders(),
+		Secrets:          *actionCtx.Secrets,
+		ChatHistory:      chatHistory,
+		WorkspaceId:      actionCtx.WorkspaceId,
+		FlowId:           workflow.GetInfo(actionCtx).WorkflowExecution.ID,
+		Providers:        actionCtx.GetProviders(),
+		InstructToolCall: true,
 	}
 
 	executeStream := func(ctx flow_action.ActionContext) (common.MessageResponse, error) {
