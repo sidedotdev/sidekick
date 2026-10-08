@@ -1,4 +1,4 @@
-package main
+package provider_auth
 
 import (
 	"encoding/json"
@@ -20,15 +20,15 @@ func TestBuildAuthorizationURLScopes(t *testing.T) {
 	}{
 		{
 			name:            "claude.ai subscription auth requests claude code session scopes with loopback redirect",
-			baseURL:         claudeProMaxAuthURL,
+			baseURL:         ClaudeProMaxAuthURL,
 			redirectURI:     anthropicClaudeAIRedirectURI,
 			wantScope:       "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
 			wantRedirectURI: "http://localhost:53692/callback",
 		},
 		{
 			name:            "console auth requests api key creation scopes",
-			baseURL:         consoleAuthURL,
-			redirectURI:     anthropicRedirectURI,
+			baseURL:         ConsoleAuthURL,
+			redirectURI:     AnthropicManualRedirectURI,
 			wantScope:       "org:create_api_key user:profile user:inference",
 			wantRedirectURI: "https://console.anthropic.com/oauth/code/callback",
 		},
@@ -38,7 +38,7 @@ func TestBuildAuthorizationURLScopes(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			authURL := buildAuthorizationURL(tt.baseURL, tt.redirectURI, "test-verifier")
+			authURL := BuildAuthorizationURL(tt.baseURL, tt.redirectURI, "test-verifier")
 			parsed, err := url.Parse(authURL)
 			if err != nil {
 				t.Fatalf("failed to parse auth URL: %v", err)
@@ -79,7 +79,7 @@ func TestParseAnthropicAuthorizationInput(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			code, err := parseAnthropicAuthorizationInput(tt.input, verifier)
+			code, err := ParseAnthropicAuthorizationInput(tt.input, verifier)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got code %q", code)
@@ -152,14 +152,14 @@ func TestBuildTokenExchangeRequest(t *testing.T) {
 	}{
 		{
 			name:         "claude.ai subscription exchanges at platform.claude.com",
-			authBaseURL:  claudeProMaxAuthURL,
+			authBaseURL:  ClaudeProMaxAuthURL,
 			redirectURI:  anthropicClaudeAIRedirectURI,
 			wantEndpoint: "https://platform.claude.com/v1/oauth/token",
 		},
 		{
 			name:         "console exchanges at console.anthropic.com",
-			authBaseURL:  consoleAuthURL,
-			redirectURI:  anthropicRedirectURI,
+			authBaseURL:  ConsoleAuthURL,
+			redirectURI:  AnthropicManualRedirectURI,
 			wantEndpoint: "https://console.anthropic.com/v1/oauth/token",
 		},
 	}

@@ -26,7 +26,6 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/rs/zerolog"
@@ -65,10 +64,9 @@ func loadBlacklist() map[string]struct{} {
 }
 
 type listedWorkflow struct {
-	id              string
-	runID           string
-	status          enums.WorkflowExecutionStatus
-	sidekickVersion string
+	id     string
+	runID  string
+	status enums.WorkflowExecutionStatus
 }
 
 func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int) ([]listedWorkflow, error) {
@@ -84,17 +82,10 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 			return nil, err
 		}
 		for _, wfExec := range resp.Executions {
-			var version string
-			if wfExec.Memo != nil {
-				if payload, ok := wfExec.Memo.Fields["sidekickVersion"]; ok {
-					_ = converter.GetDefaultDataConverter().FromPayload(payload, &version)
-				}
-			}
 			results = append(results, listedWorkflow{
-				id:              wfExec.Execution.WorkflowId,
-				runID:           wfExec.Execution.RunId,
-				status:          wfExec.Status,
-				sidekickVersion: version,
+				id:     wfExec.Execution.WorkflowId,
+				runID:  wfExec.Execution.RunId,
+				status: wfExec.Status,
 			})
 			if len(results) >= limit {
 				return results, nil
@@ -108,20 +99,21 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 	return results, nil
 }
 
-// isReplayableVersion reports whether the workflow's version ref is in the
-// current branch's history, meaning it is safe to replay. The refs can be
-// commit SHAs, tags, or any other valid git ref. Returns true when either ref
-// is empty (graceful fallback) or when the workflow ref is an ancestor of (or
-// equal to) the current ref.
-func isReplayableVersion(currentRef, workflowRef string) bool {
-	if currentRef == "" || workflowRef == "" {
-		return true
+// isDivergentBuild reports whether buildID names a commit, possibly built with
+// uncommitted changes, that is neither head nor one of its ancestors, including
+// commits this checkout lacks. Build IDs that don't name a commit, such as
+// "unknown" or the Temporal SDK's binary checksum fallback, are never divergent.
+func isDivergentBuild(head, buildID string) bool {
+	commit := strings.TrimSuffix(buildID, common.DirtyWorkerBuildSuffix)
+	if !isFullCommitID(head) || !isFullCommitID(commit) {
+		return false
 	}
-	if currentRef == workflowRef {
-		return true
-	}
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", workflowRef, currentRef)
-	return cmd.Run() == nil
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", commit, head)
+	return cmd.Run() != nil
+}
+
+func isFullCommitID(ref string) bool {
+	return (len(ref) == 40 || len(ref) == 64) && strings.Trim(ref, "0123456789abcdef") == ""
 }
 
 // TestReplayRunningWorkflows connects to the local Temporal server, fetches
@@ -186,12 +178,12 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		t.Logf("WARNING: %d/%d workflows returned by Running query were not actually Running", nonRunning, len(listed))
 	}
 
-	currentSha := common.GetBuildCommitSha()
-	if currentSha != "" {
-		t.Logf("Current build commit: %s", currentSha)
-	} else {
-		t.Logf("Current build commit SHA unavailable; skipping version-based filtering")
+	head, err := exec.Command("git", "rev-parse", "--verify", "HEAD^{commit}").Output()
+	if err != nil {
+		t.Logf("Cannot resolve HEAD, so no replay failure will be excused: %v", err)
 	}
+	currentSha := strings.TrimSpace(string(head))
+	t.Logf("Current HEAD: %s", currentSha)
 
 	var filtered []listedWorkflow
 	for _, wf := range listed {
@@ -202,11 +194,6 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			t.Logf("Skipping blacklisted workflow: %s", wf.id)
 			continue
 		}
-		if !isReplayableVersion(currentSha, wf.sidekickVersion) {
-			t.Logf("Skipping workflow %s: version %s is not in current branch history", wf.id, wf.sidekickVersion)
-			continue
-		}
-		t.Logf("Replaying workflow %s: sidekickVersion=%q", wf.id, wf.sidekickVersion)
 		filtered = append(filtered, wf)
 		if len(filtered) >= maxWorkflowsToReplay {
 			break
@@ -239,6 +226,9 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	var mu sync.Mutex
 	histories := make(map[string]*historyResult)
 	var wg sync.WaitGroup
+
+	// HEAD is fixed for this invocation; only ancestry results are cached.
+	buildFilter := newLatestBuildFilter(currentSha)
 
 	// Limit concurrent replays to avoid CPU contention that triggers the
 	// deadlock detector (which measures wall-clock time between yields).
@@ -330,10 +320,17 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			}
 			sidekick_worker.RegisterWorkflows(replayer)
 			replaySem <- struct{}{}
-			if replayErr := replayer.ReplayWorkflowHistory(nil, hist); replayErr != nil {
-				result.err = fmt.Errorf("replay: %w", replayErr)
-			}
+			replayErr := replayer.ReplayWorkflowHistory(nil, hist)
 			<-replaySem
+			if replayErr == nil {
+				return
+			}
+			buildID, excuse := buildFilter.excuse(ctx, c.DescribeWorkflowExecution, wf.id, wf.runID)
+			if excuse != "" {
+				result.skipReason = fmt.Sprintf("replay failure excused (%s): %v", excuse, replayErr)
+				return
+			}
+			result.err = fmt.Errorf("replay (latest worker build %q): %w", buildID, replayErr)
 		}(wf)
 	}
 
@@ -341,8 +338,12 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 	pruneHistoryCache(historyCacheDir, historyCacheMaxBytes, historyCacheMaxAge)
 
+	conclusive := 0
 	for _, wf := range filtered {
 		result := histories[wf.id]
+		if result.skipReason == "" {
+			conclusive++
+		}
 		t.Run(wf.id, func(t *testing.T) {
 			t.Parallel()
 			if result.skipReason != "" {
@@ -352,6 +353,10 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				t.Errorf("Replay failed for workflow %s: %v", result.id, result.err)
 			}
 		})
+	}
+	// A run where every workflow is skipped verifies nothing and must not pass.
+	if conclusive == 0 {
+		t.Errorf("None of the %d running workflows were conclusively replayed; see subtest skip reasons", len(filtered))
 	}
 }
 
@@ -492,4 +497,42 @@ func TestRetryTransient(t *testing.T) {
 			t.Errorf("expected 3 calls, got %d", calls)
 		}
 	})
+}
+
+// latestBuildFilter excuses replay failures of workflows last run by a worker
+// built from code HEAD lacks, since those may legitimately depend on it. It
+// only excuses provably divergent builds: excusing unidentifiable ones too
+// would let real nondeterminism pass silently. The latest worker build is a
+// practical signal, not an audit of earlier workers.
+type latestBuildFilter struct {
+	head      string
+	mu        sync.Mutex
+	divergent map[string]bool
+}
+
+func newLatestBuildFilter(head string) *latestBuildFilter {
+	return &latestBuildFilter{head: head, divergent: make(map[string]bool)}
+}
+
+func (f *latestBuildFilter) excuse(
+	ctx context.Context,
+	describe func(context.Context, string, string) (*workflowservice.DescribeWorkflowExecutionResponse, error),
+	id, runID string,
+) (buildID, excuse string) {
+	description, err := describe(ctx, id, runID)
+	if err != nil {
+		return "", ""
+	}
+	buildID = description.GetWorkflowExecutionInfo().GetMostRecentWorkerVersionStamp().GetBuildId()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	divergent, known := f.divergent[buildID]
+	if !known {
+		divergent = isDivergentBuild(f.head, buildID)
+		f.divergent[buildID] = divergent
+	}
+	if divergent {
+		return buildID, fmt.Sprintf("latest worker build %q is neither HEAD nor an ancestor of it", buildID)
+	}
+	return buildID, ""
 }

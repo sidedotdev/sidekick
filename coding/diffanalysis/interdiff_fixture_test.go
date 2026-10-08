@@ -68,6 +68,61 @@ func TestInterdiffRealReviewPairWithOmittedSharedLine(t *testing.T) {
 	}
 }
 
+// Recovered from a real flow whose third review round degraded to the full
+// diff. The interdiff library omitted lines that both reviews added
+// identically while still counting them, and labeled a change made only since
+// the prior review with the base line number rather than the prior review's.
+func TestInterdiffRealReviewPairWithCountedOmittedLines(t *testing.T) {
+	t.Parallel()
+
+	fixtureDir := filepath.Join("testdata", "interdiff_counted_omitted_lines")
+	prior, err := os.ReadFile(filepath.Join(fixtureDir, "prior.diff"))
+	require.NoError(t, err)
+	current, err := os.ReadFile(filepath.Join(fixtureDir, "current.diff"))
+	require.NoError(t, err)
+
+	result, err := Interdiff(string(prior), string(current))
+	require.NoError(t, err)
+
+	files, err := ParseUnifiedDiff(result)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	file := files[0]
+
+	var removed, added []string
+	for _, hunk := range file.Hunks {
+		for _, line := range hunk.Lines {
+			switch line.Type {
+			case LineRemoved:
+				removed = append(removed, strings.TrimSpace(line.Content))
+			case LineAdded:
+				added = append(added, strings.TrimSpace(line.Content))
+			}
+		}
+	}
+	assert.ElementsMatch(t, []string{
+		"if version >= 1 && !gatherHandoff && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {",
+		`if workflow.GetVersion(dCtx, "commit-subflow-after-coding", workflow.DefaultVersion, 1) >= 1 && llmCommitMessagesEnabled(dCtx) {`,
+		`if workflow.GetVersion(dCtx, "llm-commit-messages", workflow.DefaultVersion, 1) >= 1 && llmCommitMessagesEnabled(dCtx) {`,
+	}, removed)
+	assert.ElementsMatch(t, []string{
+		"if version >= 1 && !gatherHandoff && fflag.IsEnabledWithoutVersioning(dCtx, fflag.InitialRepoSummary) {",
+		"if llmCommitMessagesEnabled(dCtx) {",
+		"if llmCommitMessagesEnabled(dCtx) {",
+	}, added)
+
+	// Both reviews made the same changes above this hunk, so it sits at the
+	// same line in both post-images.
+	require.NotEmpty(t, file.Hunks)
+	assert.Equal(t, file.Hunks[0].NewStart, file.Hunks[0].OldStart)
+
+	priorFiles, err := ParseUnifiedDiff(string(prior))
+	require.NoError(t, err)
+	currentFiles, err := ParseUnifiedDiff(string(current))
+	require.NoError(t, err)
+	assertInterdiffApplies(t, findFile(priorFiles, file.NewPath), findFile(currentFiles, file.NewPath), file)
+}
+
 func findFile(files []FileDiff, path string) *FileDiff {
 	for i := range files {
 		if files[i].NewPath == path {

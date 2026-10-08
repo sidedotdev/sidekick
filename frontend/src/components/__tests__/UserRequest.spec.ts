@@ -157,6 +157,112 @@ describe('UserRequest', () => {
     expect(errorElement.text()).toBe('Failed to complete flow action')
   })
 
+  describe('provider auth', () => {
+    const providerAuthParams = {
+      requestKind: 'provider_auth',
+      requestContent: 'No API key found for openai.',
+      provider: 'openai',
+      profileId: 'default',
+      reason: 'missing_api_key',
+      methods: [
+        { method: 'oauth_subscription', label: 'ChatGPT/Codex' },
+        { method: 'api_key', label: 'Enter API key' },
+      ],
+    }
+
+    it('submits the completed method as the choice', async () => {
+      const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(url.startsWith('/api/v1/provider_auth/api_key') ? { exists: true } : {}),
+      }))
+      global.fetch = fetchMock
+
+      mountComponent(createMockFlowAction({ actionParams: providerAuthParams }))
+      expect(wrapper.findAll('.markdown-container')).toHaveLength(0)
+
+      const apiKeyButton = wrapper.findAll('button').find(b => b.text() === 'Enter API key')
+      await apiKeyButton!.trigger('click')
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      const completeCall = fetchMock.mock.calls.find(([url]) => url.endsWith('/complete'))
+      expect(completeCall).toBeTruthy()
+      expect(JSON.parse(completeCall![1].body).userResponse.choice).toBe('api_key')
+    })
+
+    const completeCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+      fetchMock.mock.calls.filter(([url]) => url.endsWith('/flow_actions/test-action-id/complete'))
+
+    it('submits oauth_subscription as the choice once the OAuth login finishes', async () => {
+      vi.useFakeTimers()
+      try {
+        vi.spyOn(window, 'open').mockReturnValue(null)
+        const fetchMock = vi.fn().mockImplementation((url: string) => {
+          let body: unknown = {}
+          if (url === '/api/v1/provider_auth/oauth/start') body = { sessionId: 'poa_ui', authUrl: 'https://auth.openai.com/oauth/authorize' }
+          else if (url === '/api/v1/provider_auth/oauth/poa_ui') body = { status: 'succeeded' }
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
+        })
+        global.fetch = fetchMock
+
+        mountComponent(createMockFlowAction({ actionParams: providerAuthParams }))
+        await wrapper.findAll('button').find(b => b.text() === 'ChatGPT/Codex')!.trigger('click')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(completeCalls(fetchMock)).toHaveLength(0)
+
+        await vi.advanceTimersByTimeAsync(1000)
+
+        const calls = completeCalls(fetchMock)
+        expect(calls).toHaveLength(1)
+        expect(JSON.parse(calls[0][1].body).userResponse.choice).toBe('oauth_subscription')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('lets a rejected completion be retried without repeating the key check', async () => {
+      let completeAttempts = 0
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.startsWith('/api/v1/provider_auth/api_key')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ exists: true }) })
+        }
+        completeAttempts++
+        if (completeAttempts === 1) {
+          return Promise.resolve({ ok: false, json: () => Promise.resolve({ error: 'Flow action is busy' }) })
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+      })
+      global.fetch = fetchMock
+
+      mountComponent(createMockFlowAction({ actionParams: providerAuthParams }))
+      await wrapper.findAll('button').find(b => b.text() === 'Enter API key')!.trigger('click')
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      expect(wrapper.find('.provider-auth-error').text()).toContain('Flow action is busy')
+
+      await wrapper.find('button.provider-auth-retry').trigger('click')
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      const calls = completeCalls(fetchMock)
+      expect(calls).toHaveLength(2)
+      expect(JSON.parse(calls[1][1].body).userResponse.choice).toBe('api_key')
+      expect(fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/v1/provider_auth/api_key'))).toHaveLength(1)
+      expect(wrapper.find('.provider-auth-error').exists()).toBe(false)
+    })
+
+    it.each([
+      [{ method: 'oauth_subscription', authType: 'subscription', resolvedExternally: false }, 'Authenticated with: ChatGPT/Codex'],
+      [{ method: 'api_key', authType: 'api', resolvedExternally: true }, 'Resolved externally'],
+    ])('shows the resolution of a completed request', (result, expected) => {
+      mountComponent(createMockFlowAction({
+        actionStatus: 'complete',
+        actionParams: providerAuthParams,
+        actionResult: JSON.stringify(result),
+      }))
+
+      expect(wrapper.find('.provider-auth-result').text()).toBe(expected)
+    })
+  })
+
   it('displays network error message when fetch fails', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'))
     global.fetch = fetchMock

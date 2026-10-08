@@ -1489,6 +1489,13 @@ func init() {
 	RegisterSandboxProvider(EnvTypeModal, modalSandboxProvider{})
 }
 
+// SupportsWorktreeHibernation is false because an idle Modal sandbox is
+// snapshotted and terminated wholesale by its watchdog, so hibernating its
+// worktree to reclaim disk buys nothing.
+func (modalSandboxProvider) SupportsWorktreeHibernation() bool {
+	return false
+}
+
 func (modalSandboxProvider) CreateSandbox(ctx context.Context, input CreateSandboxInput) (CreateSandboxOutput, error) {
 	var config common.ModalEnvConfig
 	if len(input.Config) > 0 {

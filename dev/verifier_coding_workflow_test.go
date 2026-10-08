@@ -45,7 +45,7 @@ func testCodingSubflowVerifier(t *testing.T, reuse bool) {
 
 	var flags *fflag.FFlagActivities
 	for name, enabled := range map[string]bool{
-		fflag.CheckEdits: true, fflag.InfoNeeds: false,
+		fflag.InfoNeeds:          false,
 		fflag.InitialRepoSummary: false, fflag.DisableDoneCoding: false,
 		fflag.DisableContextCodeVisibilityCheck: true,
 		fflag.ManageHistoryWithContextMarkers:   true,

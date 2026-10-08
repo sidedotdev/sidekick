@@ -53,9 +53,11 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	if err != nil {
 		apiKey, err = request.SecretManager.GetSecret(geminiApiKeySecretName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get %s API key: %w", providerName, err)
+			return nil, apiKeyLookupError(request.SecretManager, providerName, common.ProviderAuthTypeAPI,
+				fmt.Errorf("failed to get %s API key: %w", providerName, err))
 		}
 	}
+	requestAuth := newProviderRequestAuth(request.SecretManager, providerName, common.ProviderAuthTypeAPI, false)
 
 	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	if len(p.CustomHeaders) > 0 {
@@ -160,7 +162,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 
 	for result, err := range stream {
 		if err != nil {
-			return nil, fmt.Errorf("failed to iterate on %s stream: %w", providerName, err)
+			return nil, requestAuth.classifyHTTPError(err, fmt.Errorf("failed to iterate on %s stream: %w", providerName, err))
 		}
 		lastResult = result
 		if len(result.Candidates) > 0 && result.Candidates[0].GroundingMetadata != nil {

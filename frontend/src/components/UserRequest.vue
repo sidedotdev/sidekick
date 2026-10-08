@@ -1,6 +1,6 @@
 <template>
   <form ref="formRef" tabindex="-1" v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
-    <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
+    <div v-if="flowAction.actionParams.requestContent && flowAction.actionParams.requestKind !== 'provider_auth'" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
       </button>
@@ -128,6 +128,9 @@
         <span class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
     </div>
+    <div v-else-if="flowAction.actionParams.requestKind === 'provider_auth'">
+      <ProviderAuthRequest :flow-action="flowAction" :submit-choice="submitProviderAuthChoice" />
+    </div>
     <div v-else>
       <AutogrowTextarea ref="textareaRef" v-model="responseContent"/>
       <div v-if="errorMessage" class="error-message">
@@ -196,6 +199,9 @@
     <div class="free-form" v-else-if="flowAction.actionParams.requestKind == 'free_form'">
       <p v-if="parsedActionResult?.Content"><b>You: </b>{{ parsedActionResult.Content }}</p>
     </div>
+    <div class="provider-auth-result" v-else-if="flowAction.actionParams.requestKind === 'provider_auth'">
+      <p v-if="providerAuthResultCopy">{{ providerAuthResultCopy }}</p>
+    </div>
   </div>
 </template>
 
@@ -213,6 +219,8 @@ import DiffViewOptions from './DiffViewOptions.vue';
 import Select from 'primevue/select';
 import DevRunControls from './DevRunControls.vue';
 import PermissionEvaluationDetails from './PermissionEvaluationDetails.vue';
+import ProviderAuthRequest from './ProviderAuthRequest.vue';
+import { providerAuthMethodLabel, type ProviderAuthMethod } from '../lib/providerAuth';
 import { registerGlobalShortcut, unregisterGlobalShortcut } from '../lib/globalShortcutRegistry';
 
 interface UserResponse {
@@ -388,6 +396,17 @@ const parsedActionResult = computed<keyable | null>(() => {
 });
 
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
+
+// The workflow records its resolution as the action result, whereas the raw
+// user response (with a capitalized Choice) is what's stored until then.
+const providerAuthResultCopy = computed(() => {
+  const result = parsedActionResult.value
+  if (!result) return ''
+  if (result.resolvedExternally) return 'Resolved externally'
+  const method: string | undefined = result.method || result.Choice
+  if (!method) return ''
+  return `Authenticated with: ${providerAuthMethodLabel(props.flowAction.actionParams.methods, method)}`
+})
 
 const hasDevRunConfig = ref(false)
 
@@ -604,7 +623,14 @@ const copyRequestContent = async () => {
   }
 }
 
-async function submitUserResponse(approved: boolean) {
+async function submitProviderAuthChoice(method: ProviderAuthMethod) {
+  const accepted = await submitUserResponse(true, method);
+  if (accepted === false) {
+    throw new Error(errorMessage.value || 'Failed to complete flow action');
+  }
+}
+
+async function submitUserResponse(approved: boolean, choice?: string) {
   if (props.flowAction.actionStatus !== 'pending') {
     return;
   }
@@ -615,6 +641,10 @@ async function submitUserResponse(approved: boolean) {
   const userResponse: UserResponse = {
     content: responseContent.value,
   };
+
+  if (choice) {
+    userResponse.choice = choice;
+  }
 
   if (props.flowAction.actionParams.requestKind === 'merge_approval') {
     userResponse.params = {

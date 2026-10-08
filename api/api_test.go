@@ -104,6 +104,7 @@ func NewMockController(t *testing.T) Controller {
 		// isolate handlers from whatever local config exists on the machine
 		loadLocalConfig:  func() (common.LocalConfig, error) { return common.LocalConfig{}, nil },
 		taskStartTimeout: 5 * time.Second,
+		providerOAuth:    newProviderOAuthSessions(),
 	}
 }
 

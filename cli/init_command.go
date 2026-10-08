@@ -33,14 +33,9 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 	"github.com/segmentio/ksuid"
-	"github.com/zalando/go-keyring"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
-
-// keyringGet is the function used to read secrets from the keyring.
-// Overridable in tests to avoid OS keyring dependency.
-var keyringGet = keyring.Get
 
 type InitCommandHandler struct {
 	storage srv.Storage
@@ -672,7 +667,7 @@ func getConfiguredBuiltinLLMProviders() []string {
 	}
 
 	// Check Anthropic (either API key or OAuth)
-	if configuredSecretExists(llm.AnthropicApiKeySecretName) || configuredSecretExists(AnthropicOAuthSecretName) {
+	if configuredSecretExists(llm.AnthropicApiKeySecretName) || configuredSecretExists(llm.AnthropicOAuthSecretName) {
 		providers = append(providers, "anthropic")
 	}
 

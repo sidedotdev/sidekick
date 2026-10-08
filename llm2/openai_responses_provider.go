@@ -57,10 +57,11 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		}
 	}
 
-	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
+	credentials, err := openAICredentialsForRequest(request.SecretManager, options.ModelConfig.Provider, authType)
 	if err != nil {
 		return nil, err
 	}
+	requestAuth := newProviderRequestAuth(request.SecretManager, options.ModelConfig.Provider, authType, credentials.useOAuth)
 
 	activityInterval := p.upstreamActivityInterval
 	if activityInterval == 0 {
@@ -478,8 +479,8 @@ loop:
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("OpenAI Responses stream (model %s) failed after %d events (last event type %q; set %s=<dir> to dump raw responses): %w",
-			model, receivedEventCount, lastEventType, ResponseDumpDirEnvVar, wrapOpenAIError(err))
+		return nil, requestAuth.classifyHTTPError(err, fmt.Errorf("OpenAI Responses stream (model %s) failed after %d events (last event type %q; set %s=<dir> to dump raw responses): %w",
+			model, receivedEventCount, lastEventType, ResponseDumpDirEnvVar, wrapOpenAIError(err)))
 	}
 
 	outputMessage := AccumulateEventsToMessage(events)

@@ -102,7 +102,7 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		// Handle Dev Run keys globally when context is available
-		if m.hasDevRunContext {
+		if m.hasDevRunContext && !m.approvalInput.CapturesTextInput() {
 			switch msg.String() {
 			case "d", "D":
 				if hasActiveDevRuns(m) {

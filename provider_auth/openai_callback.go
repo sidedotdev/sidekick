@@ -1,4 +1,4 @@
-package main
+package provider_auth
 
 import (
 	"errors"
@@ -7,29 +7,23 @@ import (
 	"net/http"
 )
 
-const (
-	openAIOAuthCallbackListenAddress = "127.0.0.1:1455"
-	openAIOAuthRedirectURI           = "http://localhost:1455/auth/callback"
-)
+const openAIOAuthRedirectURI = "http://localhost:1455/auth/callback"
 
-type openAIOAuthCallbackResult struct {
-	code  string
-	state string
-	err   error
-}
+// Overridable in tests so sessions don't contend for the fixed port.
+var openAIOAuthCallbackListenAddress = "127.0.0.1:1455"
 
-func startOpenAIOAuthCallbackServer() (*http.Server, string, <-chan openAIOAuthCallbackResult, error) {
+func startOpenAIOAuthCallbackServer() (*http.Server, string, <-chan callbackResult, error) {
 	return startOpenAIOAuthCallbackServerAt(openAIOAuthCallbackListenAddress)
 }
 
-func startOpenAIOAuthCallbackServerAt(listenAddress string) (*http.Server, string, <-chan openAIOAuthCallbackResult, error) {
+func startOpenAIOAuthCallbackServerAt(listenAddress string) (*http.Server, string, <-chan callbackResult, error) {
 	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		return nil, openAIOAuthRedirectURI, nil, fmt.Errorf("cannot listen on OpenAI OAuth callback port 1455: %w", err)
 	}
 
-	results := make(chan openAIOAuthCallbackResult, 1)
-	deliverResult := func(result openAIOAuthCallbackResult) {
+	results := make(chan callbackResult, 1)
+	deliverResult := func(result callbackResult) {
 		select {
 		case results <- result:
 		default:
@@ -42,7 +36,7 @@ func startOpenAIOAuthCallbackServerAt(listenAddress string) (*http.Server, strin
 		if oauthErr := query.Get("error"); oauthErr != "" {
 			description := query.Get("error_description")
 			http.Error(w, "OpenAI authentication failed. You can close this tab.", http.StatusBadRequest)
-			deliverResult(openAIOAuthCallbackResult{
+			deliverResult(callbackResult{
 				err: fmt.Errorf("OpenAI OAuth failed: %s: %s", oauthErr, description),
 			})
 			return
@@ -52,7 +46,7 @@ func startOpenAIOAuthCallbackServerAt(listenAddress string) (*http.Server, strin
 		state := query.Get("state")
 		if code == "" || state == "" {
 			http.Error(w, "OpenAI callback is missing required parameters.", http.StatusBadRequest)
-			deliverResult(openAIOAuthCallbackResult{
+			deliverResult(callbackResult{
 				err: fmt.Errorf("OpenAI OAuth callback missing code or state"),
 			})
 			return
@@ -67,13 +61,13 @@ func startOpenAIOAuthCallbackServerAt(listenAddress string) (*http.Server, strin
 <p>You can close this tab and return to Sidekick.</p>
 </body>
 </html>`)
-		deliverResult(openAIOAuthCallbackResult{code: code, state: state})
+		deliverResult(callbackResult{code: code, state: state})
 	})
 
 	server := &http.Server{Handler: mux}
 	go func() {
 		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			deliverResult(openAIOAuthCallbackResult{
+			deliverResult(callbackResult{
 				err: fmt.Errorf("OpenAI OAuth callback server failed: %w", serveErr),
 			})
 		}

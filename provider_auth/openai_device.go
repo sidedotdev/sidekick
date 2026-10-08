@@ -1,4 +1,4 @@
-package main
+package provider_auth
 
 import (
 	"context"
@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	openAIDeviceVerificationURI = "https://auth.openai.com/codex/device"
-	openAIDeviceRedirectURI     = "https://auth.openai.com/deviceauth/callback"
-	openAIDeviceCodeTimeout     = 15 * time.Minute
+	OpenAIDeviceVerificationURI = "https://auth.openai.com/codex/device"
+	OpenAIDeviceRedirectURI     = "https://auth.openai.com/deviceauth/callback"
+	OpenAIDeviceCodeTimeout     = 15 * time.Minute
 )
 
 var (
@@ -23,18 +23,18 @@ var (
 	openAIDeviceTokenEndpoint    = "https://auth.openai.com/api/accounts/deviceauth/token"
 )
 
-type openAIDeviceAuthInfo struct {
+type OpenAIDeviceAuthInfo struct {
 	DeviceAuthID    string
 	UserCode        string
 	IntervalSeconds float64
 }
 
-type openAIDeviceToken struct {
+type OpenAIDeviceToken struct {
 	AuthorizationCode string
 	CodeVerifier      string
 }
 
-func startOpenAIDeviceAuth(ctx context.Context) (*openAIDeviceAuthInfo, error) {
+func StartOpenAIDeviceAuth(ctx context.Context) (*OpenAIDeviceAuthInfo, error) {
 	body, err := json.Marshal(map[string]string{"client_id": openai_oauth.ClientID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode OpenAI device authorization request: %w", err)
@@ -83,14 +83,14 @@ func startOpenAIDeviceAuth(ctx context.Context) (*openAIDeviceAuthInfo, error) {
 		return nil, fmt.Errorf("OpenAI device code response missing required fields")
 	}
 
-	return &openAIDeviceAuthInfo{
+	return &OpenAIDeviceAuthInfo{
 		DeviceAuthID:    response.DeviceAuthID,
 		UserCode:        response.UserCode,
 		IntervalSeconds: interval,
 	}, nil
 }
 
-func pollOpenAIDeviceAuth(ctx context.Context, device *openAIDeviceAuthInfo) (*openAIDeviceToken, error) {
+func PollOpenAIDeviceAuth(ctx context.Context, device *OpenAIDeviceAuthInfo) (*OpenAIDeviceToken, error) {
 	interval := time.Duration(device.IntervalSeconds * float64(time.Second))
 
 	for {
@@ -139,7 +139,7 @@ func pollOpenAIDeviceAuth(ctx context.Context, device *openAIDeviceAuthInfo) (*o
 			if token.AuthorizationCode == "" || token.CodeVerifier == "" {
 				return nil, fmt.Errorf("OpenAI device token response missing required fields")
 			}
-			return &openAIDeviceToken{
+			return &OpenAIDeviceToken{
 				AuthorizationCode: token.AuthorizationCode,
 				CodeVerifier:      token.CodeVerifier,
 			}, nil
@@ -169,21 +169,13 @@ func pollOpenAIDeviceAuth(ctx context.Context, device *openAIDeviceAuthInfo) (*o
 	}
 }
 
-func handleOpenAIDeviceCodeOAuth() (*openai_oauth.Credentials, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), openAIDeviceCodeTimeout)
-	defer cancel()
-
-	device, err := startOpenAIDeviceAuth(ctx)
+// CompleteOpenAIDeviceAuth waits for the user to approve the device code and
+// exchanges the resulting authorization code for credentials.
+func CompleteOpenAIDeviceAuth(ctx context.Context, device *OpenAIDeviceAuthInfo) (*openai_oauth.Credentials, error) {
+	token, err := PollOpenAIDeviceAuth(ctx, device)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Printf("\nOpen %s and enter this code:\n\n%s\n\n", openAIDeviceVerificationURI, device.UserCode)
-
-	token, err := pollOpenAIDeviceAuth(ctx, device)
-	if err != nil {
-		return nil, err
-	}
-
-	return exchangeOpenAICode(token.AuthorizationCode, token.CodeVerifier, openAIDeviceRedirectURI)
+	return ExchangeOpenAICode(token.AuthorizationCode, token.CodeVerifier, OpenAIDeviceRedirectURI)
 }

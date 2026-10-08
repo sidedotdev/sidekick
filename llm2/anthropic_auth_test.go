@@ -118,3 +118,66 @@ func TestAnthropicCredentialsForRequest(t *testing.T) {
 		assert.Contains(t, err.Error(), "requires OAuth credentials")
 	})
 }
+
+func TestAnthropicCredentialsForRequest_ProviderAuthErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		authType   common.ProviderAuthType
+		secrets    map[string]string
+		wantReason common.ProviderAuthErrorReason
+		wantAuth   common.ProviderAuthType
+	}{
+		{
+			name:       "api key missing",
+			authType:   common.ProviderAuthTypeAPI,
+			secrets:    map[string]string{},
+			wantReason: common.ProviderAuthErrorReasonMissingAPIKey,
+			wantAuth:   common.ProviderAuthTypeAPI,
+		},
+		{
+			name:       "any with no credentials",
+			authType:   common.ProviderAuthTypeAny,
+			secrets:    map[string]string{},
+			wantReason: common.ProviderAuthErrorReasonMissingAPIKey,
+			wantAuth:   common.ProviderAuthTypeAny,
+		},
+		{
+			name:       "subscription without OAuth credential",
+			authType:   common.ProviderAuthTypeSubscription,
+			secrets:    map[string]string{"CLAUDE_API_KEY": "api-token"},
+			wantReason: common.ProviderAuthErrorReasonInvalidOAuth,
+			wantAuth:   common.ProviderAuthTypeSubscription,
+		},
+		{
+			name:       "malformed OAuth credential under any",
+			authType:   common.ProviderAuthTypeAny,
+			secrets:    map[string]string{llm.AnthropicOAuthSecretName: "not-json", "CLAUDE_API_KEY": "api-token"},
+			wantReason: common.ProviderAuthErrorReasonInvalidOAuth,
+			wantAuth:   common.ProviderAuthTypeAny,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, _, err := anthropicCredentialsForRequest(
+				anthropicAuthTestSecretManager{secrets: tt.secrets},
+				"claude",
+				tt.authType,
+			)
+
+			require.Error(t, err)
+			details, ok := common.AsProviderAuthError(err)
+			require.True(t, ok, "expected provider auth error, got: %v", err)
+			assert.Equal(t, common.ProviderAuthErrorDetails{
+				Provider:  "claude",
+				ProfileId: common.DefaultProfileId,
+				AuthType:  tt.wantAuth,
+				Reason:    tt.wantReason,
+			}, *details)
+		})
+	}
+}

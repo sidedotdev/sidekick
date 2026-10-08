@@ -138,12 +138,13 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 
 	oauthCreds, token, useOAuth, err := anthropicCredentialsForRequest(
 		request.SecretManager,
-		options.ModelConfig.NormalizedProviderName(),
+		options.ModelConfig.Provider,
 		authType,
 	)
 	if err != nil {
 		return nil, err
 	}
+	requestAuth := newProviderRequestAuth(request.SecretManager, options.ModelConfig.Provider, authType, useOAuth)
 
 	var client anthropic.Client
 	httpClient := withResponseDump(&http.Client{Timeout: 45 * time.Minute})
@@ -435,8 +436,8 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		}
 	}
 
-	if stream.Err() != nil {
-		return nil, stream.Err()
+	if err := stream.Err(); err != nil {
+		return nil, requestAuth.classifyHTTPError(err, err)
 	}
 
 	if startedBlocks != stoppedBlocks {

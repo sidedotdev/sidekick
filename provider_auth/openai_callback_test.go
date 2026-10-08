@@ -1,4 +1,4 @@
-package main
+package provider_auth
 
 import (
 	"io"

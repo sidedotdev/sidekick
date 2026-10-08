@@ -17,6 +17,7 @@ const (
 	RequestKindApproval       RequestKind = "approval"
 	RequestKindMergeApproval  RequestKind = "merge_approval"
 	RequestKindContinue       RequestKind = "continue"
+	RequestKindProviderAuth   RequestKind = "provider_auth"
 )
 
 const (
@@ -106,16 +107,34 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 		return nil, fmt.Errorf("can't get user response as human-in-the-loop process is disabled")
 	}
 
-	// Signal the workflow
+	if err := announceUserRequest(ctx, &req); err != nil {
+		return nil, err
+	}
+
+	userResponse, err := ReceiveUserResponse(ctx.Context, req.FlowActionId)
+	if err != nil {
+		return nil, err
+	}
+
+	signalSubtaskUnblocked(ctx)
+
+	// NOTE: unpausing of the flow is always done via the complete flow action
+	// handler, so it is omitted here
+
+	return &userResponse, nil
+}
+
+// announceUserRequest notifies the parent workflow of the request and marks
+// the flow as paused while it awaits the user.
+func announceUserRequest(ctx ExecContext, req *RequestForUser) error {
 	workflowInfo := workflow.GetInfo(ctx.Context)
-	parentWorkflow := workflowInfo.ParentWorkflowExecution
-	if parentWorkflow == nil {
-		return nil, fmt.Errorf("failed to signal external workflow: no parent workflow found")
+	if workflowInfo.ParentWorkflowExecution == nil {
+		return fmt.Errorf("failed to signal external workflow: no parent workflow found")
 	}
 	req.OriginWorkflowId = workflowInfo.WorkflowExecution.ID
 	if !req.SkipParentSignal {
-		if err := SignalParentRequestForUser(ctx, req); err != nil {
-			return nil, err
+		if err := SignalParentRequestForUser(ctx, *req); err != nil {
+			return err
 		}
 	}
 
@@ -130,28 +149,31 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 		var flow domain.Flow
 		err := workflow.ExecuteActivity(storageCtx, srv.Activities.GetFlow, ctx.WorkspaceId, req.OriginWorkflowId).Get(storageCtx, &flow)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get flow: %v", err)
+			return fmt.Errorf("failed to get flow: %v", err)
 		}
 		if flow.Status != domain.FlowStatusPaused {
 			flow.Status = domain.FlowStatusPaused
 			err := workflow.ExecuteActivity(storageCtx, srv.Activities.PersistFlow, flow).Get(storageCtx, nil)
 			if err != nil {
-				return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
+				return fmt.Errorf("failed to set flow status to paused: %v", err)
 			}
 		}
 	}
+	return nil
+}
 
-	userResponse, err := ReceiveUserResponse(ctx.Context, req.FlowActionId)
-	if err != nil {
-		return nil, err
+// signalSubtaskUnblocked notifies the parent that this workflow has been
+// unblocked so e.g. the IDD workflow can return a sub-task's displayed status
+// from "blocked" back to in-progress. Unhandled by other parent workflow types
+// and harmless there. A failure here is non-fatal (the user response was
+// already received), so we log and continue; the canvas will reconcile the
+// status when the sub-task ultimately completes.
+func signalSubtaskUnblocked(ctx ExecContext) {
+	workflowInfo := workflow.GetInfo(ctx.Context)
+	parentWorkflow := workflowInfo.ParentWorkflowExecution
+	if parentWorkflow == nil {
+		return
 	}
-
-	// Notify the parent that this workflow has been unblocked so e.g. the IDD
-	// workflow can return a sub-task's displayed status from "blocked" back to
-	// in-progress. Unhandled by other parent workflow types and harmless there.
-	// A failure here is non-fatal (the user response was already received), so
-	// we log and continue rather than failing the activity; the canvas will
-	// reconcile the status when the sub-task ultimately completes.
 	unblockedVersion := workflow.GetVersion(ctx.Context, "subtask-unblocked-signal", workflow.DefaultVersion, 1)
 	if unblockedVersion >= 1 {
 		unblockSig := SubtaskUnblocked{FlowId: workflowInfo.WorkflowExecution.ID}
@@ -162,11 +184,6 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 				"error", sigErr)
 		}
 	}
-
-	// NOTE: unpausing of the flow is always done via the complete flow action
-	// handler, so it is omitted here
-
-	return &userResponse, nil
 }
 
 // UserResponseSignalName returns the signal name a workflow should listen on
