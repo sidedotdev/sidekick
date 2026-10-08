@@ -1,0 +1,13 @@
+/* Kanban keyboard control: the focused item is the highlight, outlined only
+   for keyboard-driven focus (see KEYBOARD_MODALITY_CLASS in
+   lib/pageNavigation.ts). The UA focus ring is replaced rather than shown in
+   addition. */
+.kanban-keyboard-control :is([data-nav-item], [data-board-nav], .kanban-board [data-board-card], .workspace-selector .p-select-label):focus {
+  outline: none;
+}
+
+.kanban-keyboard-control.keyboard-modality :is([data-nav-item], [data-board-nav]):focus,
+.kanban-keyboard-control.keyboard-modality .workspace-selector .p-select:has(.p-select-label:focus),
+.kanban-keyboard-control.keyboard-modality .kanban-board [data-board-card]:focus .task-card {
+  outline: 2px solid var(--color-primary);
+}

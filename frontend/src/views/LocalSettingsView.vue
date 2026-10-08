@@ -14,8 +14,9 @@
         Keyboard control for kanban board
       </label>
       <p class="hint">
-        Move the highlighted task with the arrow keys or the keys below, and
-        press Enter to open it. Submitting the last pending request with
+        Move focus around the board, sidebar and header with the arrow keys or
+        the keys below, and press Enter to open the focused task. Submitting
+        the last pending request with
         {{ submitLabel }} returns to the board; {{ submitWithoutNavigationLabel }}
         submits without leaving.
       </p>
