@@ -1,9 +1,3 @@
-check-edits:
-  variations:
-    t1: true
-    c: false
-  defaultRule:
-    variation: t1
 check-go-build:
   variations:
     t1: true
