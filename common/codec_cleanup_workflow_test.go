@@ -34,7 +34,7 @@ func TestExtractPayloadsFromEvent_Scheduled(t *testing.T) {
 			ActivityTaskScheduledEventAttributes: &historypb.ActivityTaskScheduledEventAttributes{
 				Input: &commonpb.Payloads{
 					Payloads: []*commonpb.Payload{
-						{Metadata: map[string][]byte{codecMetadataKey: []byte("codec/abc")}, Data: nil},
+						{Metadata: map[string][]byte{CodecMetadataKey: []byte("codec/abc")}, Data: nil},
 						{Metadata: map[string][]byte{"encoding": []byte("json")}, Data: []byte("hello")},
 					},
 				},
@@ -43,7 +43,7 @@ func TestExtractPayloadsFromEvent_Scheduled(t *testing.T) {
 	}
 	payloads := extractPayloadsFromEvent(event)
 	assert.Len(t, payloads, 2)
-	assert.Equal(t, []byte("codec/abc"), payloads[0].Metadata[codecMetadataKey])
+	assert.Equal(t, []byte("codec/abc"), payloads[0].Metadata[CodecMetadataKey])
 }
 
 func TestExtractPayloadsFromEvent_WorkflowCompleted(t *testing.T) {
@@ -54,7 +54,7 @@ func TestExtractPayloadsFromEvent_WorkflowCompleted(t *testing.T) {
 			WorkflowExecutionCompletedEventAttributes: &historypb.WorkflowExecutionCompletedEventAttributes{
 				Result: &commonpb.Payloads{
 					Payloads: []*commonpb.Payload{
-						{Metadata: map[string][]byte{codecMetadataKey: []byte("codec/xyz")}},
+						{Metadata: map[string][]byte{CodecMetadataKey: []byte("codec/xyz")}},
 					},
 				},
 			},
@@ -83,7 +83,7 @@ func TestExtractPayloadsFromEvent_MarkerRecorded(t *testing.T) {
 				Details: map[string]*commonpb.Payloads{
 					"data": {
 						Payloads: []*commonpb.Payload{
-							{Metadata: map[string][]byte{codecMetadataKey: []byte("codec/marker1")}},
+							{Metadata: map[string][]byte{CodecMetadataKey: []byte("codec/marker1")}},
 						},
 					},
 				},
@@ -92,7 +92,7 @@ func TestExtractPayloadsFromEvent_MarkerRecorded(t *testing.T) {
 	}
 	payloads := extractPayloadsFromEvent(event)
 	assert.Len(t, payloads, 1)
-	assert.Equal(t, []byte("codec/marker1"), payloads[0].Metadata[codecMetadataKey])
+	assert.Equal(t, []byte("codec/marker1"), payloads[0].Metadata[CodecMetadataKey])
 }
 
 func TestExtractPayloadsFromEvent_SignalInitiated(t *testing.T) {
@@ -103,7 +103,7 @@ func TestExtractPayloadsFromEvent_SignalInitiated(t *testing.T) {
 			SignalExternalWorkflowExecutionInitiatedEventAttributes: &historypb.SignalExternalWorkflowExecutionInitiatedEventAttributes{
 				Input: &commonpb.Payloads{
 					Payloads: []*commonpb.Payload{
-						{Metadata: map[string][]byte{codecMetadataKey: []byte("codec/sig1")}},
+						{Metadata: map[string][]byte{CodecMetadataKey: []byte("codec/sig1")}},
 					},
 				},
 			},
@@ -140,9 +140,9 @@ func TestFindOrphanCodecKeys(t *testing.T) {
 	referencedID, err := ksuid.NewRandomWithTime(now.Add(-10 * 24 * time.Hour))
 	require.NoError(t, err)
 
-	oldKey := codecKeyPrefix + oldID.String()
-	recentKey := codecKeyPrefix + recentID.String()
-	referencedKey := codecKeyPrefix + referencedID.String()
+	oldKey := CodecKeyPrefix + oldID.String()
+	recentKey := CodecKeyPrefix + recentID.String()
+	referencedKey := CodecKeyPrefix + referencedID.String()
 	allKeys := []string{oldKey, recentKey, referencedKey, "codec/not-a-ksuid"}
 
 	t.Run("filters referenced and recent keys", func(t *testing.T) {
@@ -357,10 +357,10 @@ func (s *CodecCleanupWorkflowTestSuite) TestOrphanScanDeletesUnreferencedOldKeys
 	recentKsuid, _ := ksuid.NewRandomWithTime(time.Now().Add(-1 * time.Hour))
 	referencedKsuid, _ := ksuid.NewRandomWithTime(time.Now().Add(-10 * 24 * time.Hour))
 
-	oldKey1 := codecKeyPrefix + oldKsuid1.String()
-	oldKey2 := codecKeyPrefix + oldKsuid2.String()
-	recentKey := codecKeyPrefix + recentKsuid.String()
-	referencedKey := codecKeyPrefix + referencedKsuid.String()
+	oldKey1 := CodecKeyPrefix + oldKsuid1.String()
+	oldKey2 := CodecKeyPrefix + oldKsuid2.String()
+	recentKey := CodecKeyPrefix + recentKsuid.String()
+	referencedKey := CodecKeyPrefix + referencedKsuid.String()
 
 	// Set LastOrphanScanAt to trigger immediate orphan scan
 	input := CodecCleanupWorkflowInput{
@@ -440,7 +440,7 @@ func (s *CodecCleanupWorkflowTestSuite) TestEmptyWorkflowListAndHistoryHandledGr
 // by running workflows are not deleted during orphan scan.
 func (s *CodecCleanupWorkflowTestSuite) TestOrphanScanKeepsRunningWorkflowKeys() {
 	oldKsuid, _ := ksuid.NewRandomWithTime(time.Now().Add(-10 * 24 * time.Hour))
-	runningKey := codecKeyPrefix + oldKsuid.String()
+	runningKey := CodecKeyPrefix + oldKsuid.String()
 
 	input := CodecCleanupWorkflowInput{
 		LastOrphanScanAt: time.Now().Add(-8 * 24 * time.Hour),

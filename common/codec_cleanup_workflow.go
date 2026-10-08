@@ -87,7 +87,7 @@ func (a *CodecCleanupActivities) CollectCodecKeysFromHistory(ctx context.Context
 			if p == nil || p.Metadata == nil {
 				continue
 			}
-			if keyBytes, ok := p.Metadata[codecMetadataKey]; ok {
+			if keyBytes, ok := p.Metadata[CodecMetadataKey]; ok {
 				key := string(keyBytes)
 				if _, dup := seen[key]; !dup {
 					seen[key] = struct{}{}
@@ -107,7 +107,7 @@ func (a *CodecCleanupActivities) DeleteCodecKeys(ctx context.Context, keys []str
 			end = len(keys)
 		}
 		batch := keys[i:end]
-		if err := a.Storage.MDelete(ctx, codecWorkspaceID, batch); err != nil {
+		if err := a.Storage.MDelete(ctx, CodecWorkspaceID, batch); err != nil {
 			return err
 		}
 		if end < len(keys) {
@@ -123,7 +123,7 @@ func (a *CodecCleanupActivities) DeleteCodecKeys(ctx context.Context, keys []str
 
 // ListAllCodecKeys returns all codec KV keys.
 func (a *CodecCleanupActivities) ListAllCodecKeys(ctx context.Context) ([]string, error) {
-	return a.Storage.GetKeysWithPrefix(ctx, codecWorkspaceID, codecKeyPrefix)
+	return a.Storage.GetKeysWithPrefix(ctx, CodecWorkspaceID, CodecKeyPrefix)
 }
 
 // ListClosedWorkflowIDs returns workflow executions that are not running.
@@ -340,7 +340,7 @@ func GetCandidateOrphanCodecKeys(allKeys []string, referencedKeys map[string]str
 		if _, referenced := referencedKeys[key]; referenced {
 			continue
 		}
-		ksuidStr := key[len(codecKeyPrefix):]
+		ksuidStr := key[len(CodecKeyPrefix):]
 		id, err := ksuid.Parse(ksuidStr)
 		if err != nil {
 			continue
