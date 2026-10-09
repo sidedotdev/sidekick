@@ -213,12 +213,12 @@ func commitPendingWorkSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHis
 		return fmt.Errorf("failed to append commit instructions: %w", err)
 	}
 
-	initialModelConfig := dCtx.GetModelConfig(common.CommitKey, 0, common.CodingKey)
+	initialModelConfig := commitModelConfig(dCtx)
 	resolveModelConfig := func() common.ModelConfig {
 		if ModelConfigRevision(dCtx) == 0 {
 			return initialModelConfig
 		}
-		return dCtx.GetModelConfig(common.CommitKey, 0, common.CodingKey)
+		return commitModelConfig(dCtx)
 	}
 	resolveOptions := func() llm2.Options {
 		return llm2.Options{
