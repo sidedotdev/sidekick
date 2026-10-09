@@ -758,3 +758,35 @@ func TestExtractCommandsLegacy_XargsUnchanged(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, []string{"ls", "xargs -n1 sudo rm", "sudo rm"}, ExtractCommandsLegacy("ls | xargs -n1 sudo rm"))
 }
+
+func TestExtractCommands_CommandBuiltin(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		script   string
+		expected []string
+	}{
+		{name: "runs operand", script: "command cmd arg", expected: []string{"command cmd arg", "cmd arg"}},
+		{name: "-p runs operand", script: "command -p rm -rf /", expected: []string{"command -p rm -rf /", "rm -rf /"}},
+		{name: "-- ends options", script: "command -- -v", expected: []string{"command -- -v", "-v"}},
+		{name: "-v only looks up", script: "command -v go", expected: []string{"command -v go"}},
+		{name: "-V only looks up", script: "command -V go", expected: []string{"command -V go"}},
+		{name: "-p -v only looks up", script: "command -p -v rm", expected: []string{"command -p -v rm"}},
+		{name: "clustered -pv only looks up", script: "command -pv rm", expected: []string{"command -pv rm"}},
+		{name: "-v after operand is an operand arg", script: "command cmd -v", expected: []string{"command cmd -v", "cmd -v"}},
+		{name: "lookup with substitution", script: "command -v $(rm x)", expected: []string{"command -v $(rm x)", "rm x"}},
+		{name: "lookup in negated condition", script: "if ! command -v go >/dev/null; then exit 1; fi", expected: []string{"command -v go", "exit 1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, ExtractCommands(tt.script))
+		})
+	}
+}
+
+func TestExtractCommandsLegacy_CommandBuiltinUnchanged(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{"command -v go", "-v go"}, ExtractCommandsLegacy("command -v go"))
+}
