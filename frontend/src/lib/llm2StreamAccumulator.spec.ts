@@ -79,6 +79,18 @@ describe('accumulateLlm2StreamEvents', () => {
     ])
   })
 
+  it('appends argument deltas to a builtin_tool_use block', () => {
+    const blocks = accumulateLlm2StreamEvents([
+      started(0, { type: 'builtin_tool_use', builtinToolUse: { id: 'srvtoolu_1', name: 'web_search', arguments: '' } }),
+      textDelta(0, '{"query":'),
+      textDelta(0, '"go"}'),
+      done(0),
+    ])
+    expect(blocks).toEqual([
+      { type: 'builtin_tool_use', builtinToolUse: { id: 'srvtoolu_1', name: 'web_search', arguments: '{"query":"go"}' } },
+    ])
+  })
+
   it('replaces builtin_tool_use payload on block_done', () => {
     const blocks = accumulateLlm2StreamEvents([
       started(0, { type: 'builtin_tool_use', builtinToolUse: { id: 'ws_1', name: 'web_search', arguments: '', status: 'in_progress' } }),
