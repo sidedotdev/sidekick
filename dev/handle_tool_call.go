@@ -11,6 +11,7 @@ import (
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
+	"sort"
 	"strings"
 
 	"go.temporal.io/sdk/workflow"
@@ -59,6 +60,9 @@ func handleToolCallsWithOptions(dCtx DevContext, toolCalls []llm.ToolCall, chatH
 			output.Ref = nil
 		}
 
+		if output.Ref == nil {
+			output.ToolResultBlock = appendNullStringArgsNote(tc, output.ToolResultBlock)
+		}
 		results := cleanupWorkingDirFromResults(dCtx, []llm2.ToolResultBlock{output.ToolResultBlock})
 		if err := appendToolCallResult(dCtx.ExecContext, chatHistory, results[0], output.Ref); err != nil {
 			return nil, err
@@ -116,6 +120,9 @@ func handleToolCallsWithOptions(dCtx DevContext, toolCalls []llm.ToolCall, chatH
 	results := make([]llm2.ToolResultBlock, len(outputs))
 	for i, o := range outputs {
 		results[i] = o.ToolResultBlock
+		if o.Ref == nil {
+			results[i] = appendNullStringArgsNote(toolCalls[i], o.ToolResultBlock)
+		}
 	}
 	results = cleanupWorkingDirFromResults(dCtx, results)
 	for i, result := range results {
@@ -315,6 +322,84 @@ func handleErrToolCallUnmarshal(toolCallResult llm2.ToolResultBlock, err error) 
 		}
 	}
 	return toolCallResult, err
+}
+
+const unparseableNullStringArgPath = "(unknown: arguments are not valid json)"
+
+// nullStringValueRe matches a JSON string value "null" in positions where a
+// value is expected, used only when the arguments can't be parsed.
+var nullStringValueRe = regexp.MustCompile(`[:\[,]\s*"null"`)
+
+// appendNullStringArgsNote appends a hint to the tool result (whether it
+// succeeded or failed) when any argument is the literal string "null", since
+// that almost always means the model intended an absent value. Ref-backed
+// results persist their content out of band, so the activities producing them
+// apply this at persistence time instead of the workflow.
+func appendNullStringArgsNote(toolCall llm.ToolCall, result llm2.ToolResultBlock) llm2.ToolResultBlock {
+	paths := nullStringArgPaths(toolCall.Arguments)
+	if len(paths) == 0 {
+		return result
+	}
+	note := fmt.Sprintf("\n\nNote: the following tool call argument(s) were given the literal string \"null\": %s. If a real value was intended, provide it. Otherwise omit the argument or use JSON null rather than the string \"null\".", strings.Join(paths, ", "))
+
+	content := make([]llm2.ContentBlock, len(result.Content))
+	copy(content, result.Content)
+	for i := len(content) - 1; i >= 0; i-- {
+		if content[i].Type == llm2.ContentBlockTypeText {
+			content[i].Text += note
+			result.Content = content
+			return result
+		}
+	}
+	result.Content = append(content, llm2.TextContentBlocks(strings.TrimSpace(note))...)
+	return result
+}
+
+// nullStringArgPaths returns the JSON paths (e.g. requests[0].file_path) of
+// all argument values that are the literal string "null".
+func nullStringArgPaths(arguments string) []string {
+	var data interface{}
+	if err := json.Unmarshal([]byte(llm.RepairJson(arguments)), &data); err != nil {
+		if nullStringValueRe.MatchString(arguments) {
+			return []string{unparseableNullStringArgPath}
+		}
+		return nil
+	}
+	return collectNullStringPaths(data, "")
+}
+
+func collectNullStringPaths(data interface{}, path string) []string {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var paths []string
+		for _, k := range keys {
+			childPath := k
+			if path != "" {
+				childPath = path + "." + k
+			}
+			paths = append(paths, collectNullStringPaths(v[k], childPath)...)
+		}
+		return paths
+	case []interface{}:
+		var paths []string
+		for i, item := range v {
+			paths = append(paths, collectNullStringPaths(item, fmt.Sprintf("%s[%d]", path, i))...)
+		}
+		return paths
+	case string:
+		if strings.TrimSpace(v) == "null" {
+			if path == "" {
+				path = "(arguments)"
+			}
+			return []string{path}
+		}
+	}
+	return nil
 }
 
 func unmarshalAndInvoke(toolCall llm.ToolCall, target interface{}, fn func() (string, error)) (string, error) {

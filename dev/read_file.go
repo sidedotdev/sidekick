@@ -565,11 +565,11 @@ func (a *BulkReadFileActivities) BulkReadFileActivityV2(ctx context.Context, inp
 	content := strings.Join(parts, "\n\n")
 
 	textBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: content}
-	trb := llm2.ToolResultBlock{
+	trb := appendNullStringArgsNote(input.ToolCall, llm2.ToolResultBlock{
 		ToolCallId: input.ToolCall.Id,
 		Name:       input.ToolCall.Name,
 		Content:    []llm2.ContentBlock{textBlock},
-	}
+	})
 	finalBlock := llm2.ContentBlock{
 		Type:       llm2.ContentBlockTypeToolResult,
 		ToolResult: &trb,
