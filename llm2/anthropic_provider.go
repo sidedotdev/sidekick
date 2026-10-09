@@ -309,6 +309,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	streamOpts = append(streamOpts, option.WithResponseInto(&httpResponse))
 
 	finalMessage, events, err := streamAnthropicEvents(client.Messages.NewStreaming(ctx, params, streamOpts...), eventChan)
+	// TODO: Remove this auto-retry once the organization is tracked per profile/auth method and persisted, which lets replayed search results be routed to the matching organization. Until then, this best-effort detection only unblocks existing workflows.
 	if organizationId, ok := anthropicRejectedSearchResultsOrganization(err); ok {
 		log.Info().
 			Str("organizationId", organizationId).
