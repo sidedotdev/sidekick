@@ -27,15 +27,13 @@
         :models-data="modelsData"
         @update:model-value="emitUpdate"
       />
-      <button
-        v-if="providerSupportsSpeed(defaultConfig.provider)"
-        type="button"
-        class="speed-toggle"
-        :class="{ active: defaultConfig.speed === 'fast' }"
-        :title="defaultConfig.speed === 'fast' ? 'Fast mode on' : 'Fast mode off'"
-        :aria-pressed="defaultConfig.speed === 'fast'"
-        @click="toggleSpeed(defaultConfig)"
-      >⚡</button>
+      <ServiceTierControl
+        :model-value="tierSelection(defaultConfig)"
+        :provider="defaultConfig.provider"
+        :model="defaultConfig.model"
+        :models-data="modelsData"
+        @update:model-value="(tier) => applyTier(defaultConfig, tier)"
+      />
     </div>
 
     <div v-if="providersError" class="providers-error" role="alert">
@@ -80,15 +78,14 @@
           :models-data="modelsData"
           @update:model-value="emitUpdate"
         />
-        <button
-          v-if="useCaseStates[useCase].enabled && providerSupportsSpeed(useCaseStates[useCase].config.provider)"
-          type="button"
-          class="speed-toggle"
-          :class="{ active: useCaseStates[useCase].config.speed === 'fast' }"
-          :title="useCaseStates[useCase].config.speed === 'fast' ? 'Fast mode on' : 'Fast mode off'"
-          :aria-pressed="useCaseStates[useCase].config.speed === 'fast'"
-          @click="toggleSpeed(useCaseStates[useCase].config)"
-        >⚡</button>
+        <ServiceTierControl
+          v-if="useCaseStates[useCase].enabled"
+          :model-value="tierSelection(useCaseStates[useCase].config)"
+          :provider="useCaseStates[useCase].config.provider"
+          :model="useCaseStates[useCase].config.model"
+          :models-data="modelsData"
+          @update:model-value="(tier) => applyTier(useCaseStates[useCase].config, tier)"
+        />
       </div>
     </template>
   </div>
@@ -98,8 +95,10 @@
 import { ref, reactive, watch, onMounted } from 'vue'
 import AutoComplete from 'primevue/autocomplete'
 import ReasoningEffortControl from './ReasoningEffortControl.vue'
+import ServiceTierControl from './ServiceTierControl.vue'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
+import type { ServiceTierSelection } from '../lib/serviceTiers'
 
 const props = defineProps<{
   modelValue?: LLMConfig | null
@@ -227,10 +226,14 @@ const loadModelsData = () => {
   }
 }
 
-const providerSupportsSpeed = (provider: string): boolean => provider === 'anthropic'
+const tierSelection = (config: ModelConfig): ServiceTierSelection => ({
+  serviceTier: config.serviceTier ?? '',
+  speed: config.speed ?? '',
+})
 
-const toggleSpeed = (config: ModelConfig) => {
-  config.speed = config.speed === 'fast' ? '' : 'fast'
+const applyTier = (config: ModelConfig, tier: ServiceTierSelection) => {
+  config.serviceTier = tier.serviceTier
+  config.speed = tier.speed
   emitUpdate()
 }
 
@@ -243,6 +246,7 @@ const initModelConfig = (source?: ModelConfig): ModelConfig => ({
   provider: source?.provider ?? '',
   model: source?.model ?? '',
   reasoningEffort: source?.reasoningEffort ?? '',
+  serviceTier: source?.serviceTier ?? '',
   speed: source?.speed ?? '',
 })
 
@@ -286,10 +290,11 @@ const emitUpdate = () => {
 
 watch(() => props.modelValue, (newValue) => {
   if (newValue) {
-    const newDefault = newValue.defaults?.[0] || { provider: '', model: '', reasoningEffort: '', speed: '' }
+    const newDefault = newValue.defaults?.[0] || initModelConfig()
     defaultConfig.provider = newDefault.provider
     defaultConfig.model = newDefault.model
     defaultConfig.reasoningEffort = newDefault.reasoningEffort || ''
+    defaultConfig.serviceTier = newDefault.serviceTier || ''
     defaultConfig.speed = newDefault.speed || ''
 
     for (const useCase of USE_CASES) {
@@ -299,6 +304,7 @@ watch(() => props.modelValue, (newValue) => {
         useCaseStates[useCase].config.provider = existingConfig.provider
         useCaseStates[useCase].config.model = existingConfig.model
         useCaseStates[useCase].config.reasoningEffort = existingConfig.reasoningEffort || ''
+        useCaseStates[useCase].config.serviceTier = existingConfig.serviceTier || ''
         useCaseStates[useCase].config.speed = existingConfig.speed || ''
       }
     }
@@ -360,24 +366,6 @@ watch(() => props.modelValue, (newValue) => {
   border-radius: 0.25rem;
   background-color: var(--color-background);
   color: var(--color-text);
-}
-
-.speed-toggle {
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-  background-color: var(--color-background);
-  color: var(--color-text);
-  font-size: 0.875rem;
-  cursor: pointer;
-  line-height: 1;
-  opacity: 0.5;
-}
-
-.speed-toggle.active {
-  opacity: 1;
-  border-color: var(--color-accent, var(--color-text));
-  background-color: var(--color-background-mute);
 }
 
 .providers-error {
