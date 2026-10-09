@@ -21,14 +21,14 @@ type MemoryStreamer struct {
 	flowActionListeners []chan domain.FlowAction
 
 	flowEvents         map[string][]domain.FlowEvent // keyed by flowId
-	flowEventListeners map[string][]chan domain.FlowEvent
+	flowEventListeners map[string][]chan struct{}
 	endedStreams       map[string]bool // keyed by flowId+parentId
 }
 
 func NewMemoryStreamer() *MemoryStreamer {
 	return &MemoryStreamer{
 		flowEvents:         make(map[string][]domain.FlowEvent),
-		flowEventListeners: make(map[string][]chan domain.FlowEvent),
+		flowEventListeners: make(map[string][]chan struct{}),
 		endedStreams:       make(map[string]bool),
 	}
 }
@@ -113,7 +113,7 @@ func (m *MemoryStreamer) AddFlowEvent(ctx context.Context, workspaceId string, f
 	m.flowEvents[flowId] = append(m.flowEvents[flowId], flowEvent)
 	for _, ch := range m.flowEventListeners[flowId] {
 		select {
-		case ch <- flowEvent:
+		case ch <- struct{}{}:
 		default:
 		}
 	}
@@ -129,28 +129,73 @@ func (m *MemoryStreamer) EndFlowEventStream(ctx context.Context, workspaceId, fl
 }
 
 func (m *MemoryStreamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
-	m.mu.Lock()
 	eventCh := make(chan domain.FlowEvent, 100)
 	errCh := make(chan error, 1)
-	if m.flowEventListeners[flowId] == nil {
-		m.flowEventListeners[flowId] = make([]chan domain.FlowEvent, 0)
-	}
-	m.flowEventListeners[flowId] = append(m.flowEventListeners[flowId], eventCh)
+	notifyCh := make(chan struct{}, 1)
+	m.mu.Lock()
+	m.flowEventListeners[flowId] = append(m.flowEventListeners[flowId], notifyCh)
 	m.mu.Unlock()
 
 	go func() {
-		<-ctx.Done()
-		m.mu.Lock()
-		listeners := m.flowEventListeners[flowId]
-		for i, ch := range listeners {
-			if ch == eventCh {
-				m.flowEventListeners[flowId] = append(listeners[:i], listeners[i+1:]...)
-				break
+		defer close(eventCh)
+		defer close(errCh)
+		defer func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			listeners := m.flowEventListeners[flowId]
+			for i, ch := range listeners {
+				if ch == notifyCh {
+					m.flowEventListeners[flowId] = append(listeners[:i], listeners[i+1:]...)
+					break
+				}
+			}
+		}()
+
+		nextByParent := make(map[string]int)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case subscription, ok := <-subscriptionCh:
+				if !ok {
+					subscriptionCh = nil
+					continue
+				}
+				if _, subscribed := nextByParent[subscription.ParentId]; subscribed {
+					continue
+				}
+				next := 0
+				if subscription.StreamMessageStartId == "$" {
+					m.mu.RLock()
+					next = len(m.flowEvents[flowId])
+					m.mu.RUnlock()
+				}
+				nextByParent[subscription.ParentId] = next
+			case <-notifyCh:
+			}
+
+			// Notifications may coalesce; retained history is the source of truth.
+			m.mu.RLock()
+			history := m.flowEvents[flowId]
+			var pending []domain.FlowEvent
+			for i, event := range history {
+				if next, subscribed := nextByParent[event.GetParentId()]; subscribed && i >= next {
+					pending = append(pending, event)
+				}
+			}
+			for parentID := range nextByParent {
+				nextByParent[parentID] = len(history)
+			}
+			m.mu.RUnlock()
+
+			for _, event := range pending {
+				select {
+				case eventCh <- event:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
-		m.mu.Unlock()
-		close(eventCh)
-		close(errCh)
 	}()
 
 	return eventCh, errCh
