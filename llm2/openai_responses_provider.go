@@ -137,6 +137,11 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.ServiceTier)
 	}
 
+	// Compatible proxies may reject unknown OpenAI-specific fields.
+	if p.BaseURL == "" && options.PromptCacheKey != "" {
+		params.PromptCacheKey = param.NewOpt(options.PromptCacheKey)
+	}
+
 	webSearchIncluded := false
 	if len(options.Tools) > 0 {
 		toolsToUse := options.Tools
