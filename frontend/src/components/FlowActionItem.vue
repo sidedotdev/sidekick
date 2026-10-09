@@ -64,9 +64,12 @@ const props = defineProps({
   },
 });
 
-// Responded-to command approvals are noise in the flow, so they only stay
-// expanded while awaiting a response.
-const collapsesWhenResponded = computed(() => props.flowAction.actionType === 'user_request.approve.run_command');
+// Responded-to command approvals and authentication requests are noise in the
+// flow, so they only stay expanded while awaiting a response.
+const collapsesWhenResponded = computed(() =>
+  props.flowAction.actionType === 'user_request.approve.run_command'
+  || props.flowAction.actionType === 'user_request.provider_auth'
+);
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 
 const disableToggle = ref(false);
