@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sidekick/common"
@@ -263,7 +264,13 @@ func GetAndMaybeRefresh(ctx context.Context, secretManager interface{ GetSecret(
 		log.Info().Msg("OpenAI OAuth token expiring soon, refreshing proactively")
 		newCreds, refreshErr := ExchangeRefreshToken(ctx, creds.RefreshToken)
 		if refreshErr != nil {
-			return nil, false, invalidOAuthError(profileId, fmt.Errorf("failed to refresh OpenAI OAuth token: %w", refreshErr))
+			refreshErr = fmt.Errorf("failed to refresh OpenAI OAuth token: %w", refreshErr)
+			var netErr net.Error
+			if errors.Is(refreshErr, context.DeadlineExceeded) || errors.Is(refreshErr, context.Canceled) ||
+				(errors.As(refreshErr, &netErr) && netErr.Timeout()) {
+				return nil, false, refreshErr
+			}
+			return nil, false, invalidOAuthError(profileId, refreshErr)
 		}
 		if storeErr := StoreForProfileFn(secret_manager.ProfileIdOf(secretManager), newCreds); storeErr != nil {
 			return nil, false, fmt.Errorf("failed to store refreshed OpenAI OAuth credentials: %w", storeErr)

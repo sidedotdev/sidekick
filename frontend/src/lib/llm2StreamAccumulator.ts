@@ -34,6 +34,8 @@ export class Llm2StreamAccumulator {
           block.reasoning.text = (block.reasoning.text ?? '') + delta
         } else if (block.type === 'tool_use' && block.toolUse) {
           block.toolUse.arguments += delta
+        } else if (block.type === 'builtin_tool_use' && block.builtinToolUse) {
+          block.builtinToolUse.arguments += delta
         }
         break
       }

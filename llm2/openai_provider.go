@@ -272,6 +272,11 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		stopReason = "stop"
 	}
 
+	stampCoreBlockMetadata(&outputMessage, CoreBlockMetadata{
+		Provider:     options.Provider,
+		ProviderType: string(common.OpenaiCompatibleToolChatProviderType),
+	})
+
 	return &MessageResponse{
 		Model:           responseModel,
 		Provider:        options.Provider,

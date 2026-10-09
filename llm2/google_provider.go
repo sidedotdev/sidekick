@@ -189,6 +189,10 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 
 	output := reorderSyntheticGroundingBlocks(accumulateGoogleEventsToMessage(events))
+	stampCoreBlockMetadata(&output, CoreBlockMetadata{
+		Provider:     providerName,
+		ProviderType: string(common.GoogleToolChatProviderType),
+	})
 
 	usage := Usage{}
 	if lastResult != nil && lastResult.UsageMetadata != nil {

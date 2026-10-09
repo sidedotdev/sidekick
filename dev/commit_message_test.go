@@ -54,18 +54,20 @@ func TestCommitMessageArgumentsMessage(t *testing.T) {
 	}
 }
 
-func TestSquashMergeCommitMessage(t *testing.T) {
-	t.Parallel()
+type squashMergeCommitMessageRun struct {
+	message              string
+	commands             [][]string
+	streamOptions        []llm2.Options
+	persistedActionTypes []string
+	prompts              []string
+}
+
+func runSquashMergeCommitMessage(t *testing.T, params MergeWithReviewParams, llmConfig common.LLMConfig) squashMergeCommitMessageRun {
+	t.Helper()
 
 	var suite testsuite.WorkflowTestSuite
 	testEnv := suite.NewTestWorkflowEnvironment()
 	testEnv.SetWorkerOptions(utils.TestWorkerOptions())
-
-	params := MergeWithReviewParams{
-		Requirements: "Users must be able to log in with email and password.",
-		Title:        "Add email login",
-		WorkSummary:  "Step 1: Add login endpoint\nAdded POST /login.",
-	}
 
 	wrapper := func(ctx workflow.Context) (string, error) {
 		gs := &flow_action.GlobalState{}
@@ -84,12 +86,7 @@ func TestSquashMergeCommitMessage(t *testing.T) {
 				},
 			},
 		}
-		dCtx.SetLLMConfig(common.LLMConfig{
-			Defaults: []common.ModelConfig{{Provider: "test", Model: "default-model"}},
-			UseCaseConfigs: map[string][]common.ModelConfig{
-				common.CodingKey: {{Provider: "test", Model: "coding-model"}},
-			},
-		})
+		dCtx.SetLLMConfig(llmConfig)
 		if err := SetupModelConfigHandlers(dCtx); err != nil {
 			return "", err
 		}
@@ -98,12 +95,12 @@ func TestSquashMergeCommitMessage(t *testing.T) {
 	testEnv.RegisterWorkflow(wrapper)
 	testEnv.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
 
-	var persistedActionTypes []string
+	var run squashMergeCommitMessageRun
 	var flowActivities *flow_action.FlowActivities
 	testEnv.OnActivity(flowActivities.PersistSubflow, mock.Anything, mock.Anything).Return(nil).Maybe()
 	testEnv.OnActivity(flowActivities.PersistFlowAction, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, action domain.FlowAction) error {
-			persistedActionTypes = append(persistedActionTypes, action.ActionType)
+			run.persistedActionTypes = append(run.persistedActionTypes, action.ActionType)
 			return nil
 		}).Maybe()
 	testEnv.OnActivity(flowActivities.GetModelMetadata, mock.Anything, mock.Anything, mock.Anything).
@@ -121,18 +118,16 @@ func TestSquashMergeCommitMessage(t *testing.T) {
 	var flagActivities *fflag.FFlagActivities
 	testEnv.OnActivity(flagActivities.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
 
-	var commands [][]string
 	testEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
-			commands = append(commands, append([]string{input.Command}, input.Args...))
+			run.commands = append(run.commands, append([]string{input.Command}, input.Args...))
 			return env.EnvRunCommandActivityOutput{Stdout: "feat(auth): add login endpoint\n\nAdds POST /login.\n"}, nil
 		})
 
-	var streamOptions []llm2.Options
 	var llmActivities *persisted_ai.Llm2Activities
 	testEnv.OnActivity(llmActivities.Stream, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
-			streamOptions = append(streamOptions, input.Options)
+			run.streamOptions = append(run.streamOptions, input.Options)
 			return &llm2.MessageResponse{
 				StopReason: "tool_use",
 				Output: llm2.Message{
@@ -152,34 +147,105 @@ func TestSquashMergeCommitMessage(t *testing.T) {
 	testEnv.ExecuteWorkflow(wrapper)
 	require.True(t, testEnv.IsWorkflowCompleted())
 	require.NoError(t, testEnv.GetWorkflowError())
+	require.NoError(t, testEnv.GetWorkflowResult(&run.message))
 
-	var message string
-	require.NoError(t, testEnv.GetWorkflowResult(&message))
-	assert.Equal(t, "feat(auth): add email login\n\nAdds a login endpoint.", message)
+	for _, appended := range appendedMessages {
+		if appended.Role == llm2.RoleUser {
+			run.prompts = append(run.prompts, appended.GetContentString())
+		}
+	}
+	return run
+}
 
-	require.Len(t, commands, 1)
-	assert.Equal(t, []string{"git", "log", "--no-merges", "--format=%s%n%n%b", "main..HEAD"}, commands[0])
+func TestSquashMergeCommitMessage(t *testing.T) {
+	t.Parallel()
 
-	require.Len(t, streamOptions, 1)
-	options := streamOptions[0]
-	assert.Equal(t, "coding-model", options.ModelConfig.Model)
+	params := MergeWithReviewParams{
+		Requirements: "Users must be able to log in with email and password.",
+		Title:        "Add email login",
+		WorkSummary:  "Step 1: Add login endpoint\nAdded POST /login.",
+	}
+
+	run := runSquashMergeCommitMessage(t, params, common.LLMConfig{
+		Defaults: []common.ModelConfig{{Provider: "test", Model: "default-model"}},
+		UseCaseConfigs: map[string][]common.ModelConfig{
+			common.CommitKey: {{Provider: "test", Model: "commit-model"}},
+		},
+	})
+
+	assert.Equal(t, "feat(auth): add email login\n\nAdds a login endpoint.", run.message)
+
+	require.Len(t, run.commands, 1)
+	assert.Equal(t, []string{"git", "log", "--no-merges", "--format=%s%n%n%b", "main..HEAD"}, run.commands[0])
+
+	require.Len(t, run.streamOptions, 1)
+	options := run.streamOptions[0]
+	assert.Equal(t, "commit-model", options.ModelConfig.Model)
 	require.Len(t, options.Tools, 1)
 	assert.Equal(t, commitMessageTool.Name, options.Tools[0].Name)
 	assert.Equal(t, llm.ToolChoiceTypeTool, options.ToolChoice.Type)
 	assert.Equal(t, commitMessageTool.Name, options.ToolChoice.Name)
-	assert.Contains(t, persistedActionTypes, "generate.squash_commit_message")
+	assert.Contains(t, run.persistedActionTypes, "generate.squash_commit_message")
 
-	var prompts []string
-	for _, appended := range appendedMessages {
-		if appended.Role == llm2.RoleUser {
-			prompts = append(prompts, appended.GetContentString())
-		}
-	}
-	require.Len(t, prompts, 1)
-	prompt := prompts[0]
+	require.Len(t, run.prompts, 1)
+	prompt := run.prompts[0]
 	assert.Contains(t, prompt, "Conventional Commits")
 	assert.Contains(t, prompt, params.Requirements)
 	assert.Contains(t, prompt, params.Title)
 	assert.Contains(t, prompt, params.WorkSummary)
 	assert.Contains(t, prompt, "feat(auth): add login endpoint")
+}
+
+func TestCommitModelFallback(t *testing.T) {
+	t.Parallel()
+
+	defaults := []common.ModelConfig{{Provider: "test", Model: "default-model"}}
+	tests := []struct {
+		name           string
+		useCaseConfigs map[string][]common.ModelConfig
+		wantModel      string
+	}{
+		{
+			name: "commit setting takes precedence",
+			useCaseConfigs: map[string][]common.ModelConfig{
+				common.CommitKey:           {{Provider: "test", Model: "commit-model"}},
+				common.CodeLocalizationKey: {{Provider: "test", Model: "localization-model"}},
+			},
+			wantModel: "commit-model",
+		},
+		{
+			name: "falls back to code localization",
+			useCaseConfigs: map[string][]common.ModelConfig{
+				common.CodeLocalizationKey: {{Provider: "test", Model: "localization-model"}},
+				common.CodingKey:           {{Provider: "test", Model: "coding-model"}},
+			},
+			wantModel: "localization-model",
+		},
+		{
+			name: "falls back to coding without commit or code localization",
+			useCaseConfigs: map[string][]common.ModelConfig{
+				common.CodingKey:   {{Provider: "test", Model: "coding-model"}},
+				common.PlanningKey: {{Provider: "test", Model: "planning-model"}},
+			},
+			wantModel: "coding-model",
+		},
+		{
+			name: "falls back to default without commit, code localization or coding",
+			useCaseConfigs: map[string][]common.ModelConfig{
+				common.PlanningKey: {{Provider: "test", Model: "planning-model"}},
+			},
+			wantModel: "default-model",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			run := runSquashMergeCommitMessage(t, MergeWithReviewParams{Title: "Add email login"}, common.LLMConfig{
+				Defaults:       defaults,
+				UseCaseConfigs: tt.useCaseConfigs,
+			})
+			require.Len(t, run.streamOptions, 1)
+			assert.Equal(t, tt.wantModel, run.streamOptions[0].ModelConfig.Model)
+		})
+	}
 }

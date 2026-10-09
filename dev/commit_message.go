@@ -35,6 +35,17 @@ func (a commitMessageArguments) Message() string {
 	return subject + "\n\n" + body
 }
 
+// commitModelConfig resolves the commit model, falling back in order to the
+// code localization, coding and then default models when commit isn't
+// configured.
+func commitModelConfig(dCtx DevContext) common.ModelConfig {
+	fallback := common.CodingKey
+	if len(dCtx.GetLLMConfig().GetModels(common.CodeLocalizationKey)) > 0 {
+		fallback = common.CodeLocalizationKey
+	}
+	return dCtx.GetModelConfig(common.CommitKey, 0, fallback)
+}
+
 // generateCommitMessage asks the commit model for a commit message via a
 // single forced tool call on a fresh history, since the instructions and
 // context given fully describe what the message needs to cover.
@@ -54,7 +65,7 @@ func forceCommitMessageToolCall(dCtx DevContext, actionType, instructions, promp
 		return commitMessageArguments{}, fmt.Errorf("failed to build commit message prompt: %w", err)
 	}
 
-	modelConfig := dCtx.GetModelConfig(common.CommitKey, 0, common.CodingKey)
+	modelConfig := commitModelConfig(dCtx)
 	actionCtx := dCtx.ExecContext.NewActionContext("generate." + actionType)
 	toolNameMapping, err := resolveStreamToolNameMapping(actionCtx.ExecContext, modelConfig, *actionCtx.Secrets)
 	if err != nil {
