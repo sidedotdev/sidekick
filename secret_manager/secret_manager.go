@@ -169,6 +169,8 @@ func (l LocalConfigSecretManager) GetSecret(secretName string) (string, error) {
 		return l.findProviderKey(config, "", "openai")
 	case "ANTHROPIC_API_KEY":
 		return l.findProviderKey(config, "", "anthropic")
+	case "COHERE_API_KEY":
+		return l.findProviderKey(config, "COHERE", "cohere")
 	}
 
 	// For other cases, strip _API_KEY suffix and match against provider names

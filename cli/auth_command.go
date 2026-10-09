@@ -27,21 +27,7 @@ func NewAuthCommand() *cli.Command {
 }
 
 func handleAuthCommand() error {
-	provider, err := selectOption("Select your LLM API provider", []string{"OpenAI", "Google", "Anthropic"})
-	if err != nil {
-		return fmt.Errorf("provider selection failed: %w", err)
-	}
-
-	switch provider {
-	case "OpenAI":
-		return handleOpenAIAuth()
-	case "Google":
-		return handleGoogleAuth()
-	case "Anthropic":
-		return handleAnthropicAuth()
-	default:
-		return fmt.Errorf("unknown provider: %s", provider)
-	}
+	return handleProviderAuthCommand([]string{"OpenAI", "Google", "Anthropic", "Cohere"})
 }
 
 func handleOpenAIAuth() error {
@@ -256,5 +242,29 @@ func postCredentialUpdatedEvents(serverBaseURL, provider string, profileIds []st
 			return
 		}
 		resp.Body.Close()
+	}
+}
+
+func handleLLMAuthCommand() error {
+	return handleProviderAuthCommand([]string{"OpenAI", "Google", "Anthropic"})
+}
+
+func handleProviderAuthCommand(providers []string) error {
+	provider, err := selectOption("Select your LLM API provider", providers)
+	if err != nil {
+		return fmt.Errorf("provider selection failed: %w", err)
+	}
+
+	switch provider {
+	case "OpenAI":
+		return handleOpenAIAuth()
+	case "Google":
+		return handleGoogleAuth()
+	case "Anthropic":
+		return handleAnthropicAuth()
+	case "Cohere":
+		return handleManualAPIKeyAuth("Cohere", "COHERE_API_KEY")
+	default:
+		return fmt.Errorf("unknown provider: %s", provider)
 	}
 }
