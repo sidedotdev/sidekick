@@ -798,6 +798,99 @@ func TestOpenAIResponsesProvider_AnyFallsBackToAPIKey(t *testing.T) {
 	assert.Equal(t, []string{"OPENAI_OAUTH", "OPENAI_API_KEY"}, manager.calls)
 }
 
+func TestOpenAIResponsesProvider_ForwardsExtraBody(t *testing.T) {
+	t.Parallel()
+
+	var body map[string]json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	provider := OpenAIResponsesProvider{BaseURL: server.URL, AuthType: common.ProviderAuthTypeAPI}
+	request := StreamRequest{
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+		}},
+		Options: Options{
+			ModelConfig: common.ModelConfig{
+				Provider:  "openai",
+				Model:     "gpt-5-codex",
+				ExtraBody: map[string]any{"parallel_tool_calls": true, "custom_key": "custom"},
+			},
+		},
+		SecretManager: &openAIAuthTestSecretManager{secrets: map[string]string{"OPENAI_API_KEY": "api-key"}},
+	}
+
+	_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+	assert.Error(t, err)
+
+	assert.Equal(t, "true", string(body["parallel_tool_calls"]))
+	assert.Equal(t, `"custom"`, string(body["custom_key"]))
+}
+
+func TestOpenAIResponsesProvider_ForwardsParallelToolCalls(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		value *bool
+		want  string
+	}{
+		{name: "unset omits the parameter", value: nil, want: ""},
+		{name: "enabled", value: utils.Ptr(true), want: "true"},
+		{name: "disabled", value: utils.Ptr(false), want: "false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var body map[string]json.RawMessage
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				http.Error(w, "stop after request inspection", http.StatusUnauthorized)
+			}))
+			defer server.Close()
+
+			provider := OpenAIResponsesProvider{
+				BaseURL:      server.URL,
+				AuthType:     common.ProviderAuthTypeAPI,
+				BuiltinTools: []string{webSearchToolName},
+			}
+			request := StreamRequest{
+				Messages: []Message{{
+					Role:    RoleUser,
+					Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}},
+				}},
+				Options: Options{
+					ModelConfig:       common.ModelConfig{Provider: "openai", Model: "gpt-5-codex"},
+					Tools:             []*common.Tool{{Type: common.ToolTypeWebSearch}},
+					ParallelToolCalls: tc.value,
+				},
+				SecretManager: &openAIAuthTestSecretManager{secrets: map[string]string{"OPENAI_API_KEY": "api-key"}},
+			}
+
+			_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+			assert.Error(t, err)
+
+			got, present := body["parallel_tool_calls"]
+			if tc.want == "" {
+				assert.False(t, present, "parallel_tool_calls should be omitted when unset")
+				return
+			}
+			assert.True(t, present, "parallel_tool_calls missing from request body")
+			assert.Equal(t, tc.want, string(got))
+		})
+	}
+}
+
 func TestMessageToResponsesInput_SanitizesItemIDs(t *testing.T) {
 	t.Parallel()
 

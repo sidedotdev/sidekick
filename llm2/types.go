@@ -312,8 +312,10 @@ type EventType string
 const EventHeartbeat EventType = "heartbeat"
 
 // EventUpstreamActivity reports that response bytes arrived, including bytes
-// SDK decoders discard such as SSE comment keepalives. Unlike EventHeartbeat,
-// it does not imply the route sends keepalives regularly.
+// SDK decoders discard such as SSE comment keepalives, or that the provider is
+// awaiting a bounded upstream request it issued mid-stream (e.g. a client-side
+// web search). Unlike EventHeartbeat, it does not imply the route sends
+// keepalives regularly.
 const EventUpstreamActivity EventType = "upstream_activity"
 
 const (

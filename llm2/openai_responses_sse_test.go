@@ -9,6 +9,7 @@ import (
 	"sidekick/secret_manager"
 	"testing"
 
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,5 +66,30 @@ func TestOpenAIResponsesStreamDecodeErrorIncludesContext(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "after 1 events")
 	assert.Contains(t, err.Error(), `"response.created"`)
-	assert.Contains(t, err.Error(), ResponseDumpDirEnvVar)
+	assert.NotContains(t, err.Error(), ResponseDumpDirEnvVar)
+}
+
+func TestOpenAIResponsesStreamServerErrorIncludesContext(t *testing.T) {
+	t.Parallel()
+
+	rawError := `{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. Request ID req_test_failure.","param":null}`
+	rawSSE := "event: response.created\n" +
+		`data: {"type":"response.created","response":{"id":"resp_test","status":"in_progress"}}` + "\n\n" +
+		"event: response.output_item.added\n" +
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_test","type":"message","role":"assistant","status":"in_progress","content":[]}}` + "\n\n" +
+		"event: error\n" +
+		`data: {"type":"error","error":` + rawError + "}\n\n"
+
+	response, err := streamOpenAIResponsesFromRawSSE(t, rawSSE)
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "model gpt-4.1-nano")
+	assert.Contains(t, err.Error(), "after 2 events")
+	assert.Contains(t, err.Error(), `last event type "response.output_item.added"`)
+	assert.Contains(t, err.Error(), rawError)
+	assert.NotContains(t, err.Error(), ResponseDumpDirEnvVar)
+
+	var streamErr *ssestream.StreamError
+	require.ErrorAs(t, err, &streamErr)
+	assert.Contains(t, streamErr.Error(), rawError)
 }

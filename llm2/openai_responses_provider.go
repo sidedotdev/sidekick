@@ -96,8 +96,14 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		}
 	}
 
-	messages = convertForeignBuiltinToolBlocks(messages, isOpenAINativeBuiltinToolBlock)
-	inputItems, err := messageToResponsesInput(messages)
+	isNativeBuiltinTool := isOpenAINativeBuiltinToolBlock
+	if credentials.useOAuth {
+		// Subscription requests never declare the hosted web_search tool (see
+		// clientWebSearchFunctionName), so recorded searches replay as
+		// function call pairs.
+		isNativeBuiltinTool = noNativeBuiltinToolBlocks
+	}
+	inputItems, err := messageToResponsesInput(convertForeignBuiltinToolBlocks(messages, isNativeBuiltinTool))
 	if err != nil {
 		return nil, fmt.Errorf("failed to build input: %w", err)
 	}
@@ -131,15 +137,23 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	}
 
 	webSearchIncluded := false
+	var clientSearch *clientWebSearch
 	if len(options.Tools) > 0 {
 		toolsToUse := options.Tools
 		if options.ToolChoice.Type == common.ToolChoiceTypeTool {
 			toolsToUse = filterToolsByName(options.Tools, options.ToolChoice.Name)
 		}
 
-		tools, err := openaiResponsesFromTools(toolsToUse, p.webSearchToolEnabled())
+		toolsToConvert := toolsToUse
+		if credentials.useOAuth && p.webSearchToolEnabled() {
+			toolsToConvert, clientSearch = extractClientWebSearch(toolsToUse)
+		}
+		tools, err := openaiResponsesFromTools(toolsToConvert, p.webSearchToolEnabled())
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert tools: %w", err)
+		}
+		if clientSearch != nil {
+			tools = append(tools, openaiClientWebSearchTool())
 		}
 		params.Tools = tools
 		for _, tool := range tools {
@@ -152,6 +166,10 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		if toolChoice != nil {
 			params.ToolChoice = *toolChoice
 		}
+	}
+
+	if options.ParallelToolCalls != nil {
+		params.ParallelToolCalls = param.NewOpt(*options.ParallelToolCalls)
 	}
 
 	params.Store = openai.Bool(false)
@@ -178,183 +196,187 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		extraBodyOptions = append(extraBodyOptions, option.WithJSONSet(key, value))
 	}
 
-	stream := client.Responses.NewStreaming(ctx, params, extraBodyOptions...)
-	defer stream.Close()
-
 	var events []Event
 	var stopReason string
-	var usage Usage
-	reasoningItemIndexByID := make(map[string]int)
-	webSearchItemIndexByID := make(map[string]int)
-	receivedEventCount := 0
-	lastEventType := ""
+	var totalUsage Usage
+	indexOffset := 0
+	for searchRound := 1; ; searchRound++ {
+		stream := client.Responses.NewStreaming(ctx, params, extraBodyOptions...)
 
-loop:
-	for stream.Next() {
-		data := stream.Current()
-		receivedEventCount++
-		lastEventType = data.Type
-		if data.Type == "keepalive" {
-			select {
-			case eventChan <- Event{Type: EventHeartbeat}:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		log.Trace().
-			Str("provider", options.Provider).
-			Str("model", model).
-			Str("eventType", data.Type).
-			Str("receivedAt", time.Now().Format(time.RFC3339Nano)).
-			Msg("OpenAI Responses stream event")
+		roundStart := len(events)
+		var usage Usage
+		reasoningItemIndexByID := make(map[string]int)
+		webSearchItemIndexByID := make(map[string]int)
+		clientSearchIndexes := make(map[int]bool)
+		var clientSearchCalls []clientWebSearchCall
+		receivedEventCount := 0
+		lastEventType := ""
 
-		switch data.AsAny().(type) {
-		case responses.ResponseCompletedEvent:
-			response := data.Response
-			if response.IncompleteDetails.Reason != "" {
-				stopReason = string(response.IncompleteDetails.Reason)
-			} else {
-				switch response.Status {
-				case responses.ResponseStatusCompleted:
-					stopReason = "stop"
-				case responses.ResponseStatusFailed:
-					stopReason = "failed"
-				case responses.ResponseStatusCancelled:
-					stopReason = "cancelled"
-				default:
-					stopReason = fmt.Sprintf("response_status=%s", response.Status)
+	loop:
+		for stream.Next() {
+			data := stream.Current()
+			receivedEventCount++
+			lastEventType = data.Type
+			if data.Type == "keepalive" {
+				select {
+				case eventChan <- Event{Type: EventHeartbeat}:
+				case <-ctx.Done():
+					stream.Close()
+					return nil, ctx.Err()
 				}
 			}
-			if response.Usage.InputTokens > 0 {
-				usage.InputTokens = int(response.Usage.InputTokens)
-			}
-			if response.Usage.OutputTokens > 0 {
-				usage.OutputTokens = int(response.Usage.OutputTokens)
-			}
-			if response.Usage.InputTokensDetails.CachedTokens > 0 {
-				usage.CacheReadInputTokens = int(response.Usage.InputTokensDetails.CachedTokens)
-			}
+			log.Trace().
+				Str("provider", options.Provider).
+				Str("model", model).
+				Str("eventType", data.Type).
+				Str("receivedAt", time.Now().Format(time.RFC3339Nano)).
+				Msg("OpenAI Responses stream event")
 
-			for _, output := range response.Output {
-				switch output.AsAny().(type) {
-				case responses.ResponseFunctionWebSearch:
-					item := output.AsWebSearchCall()
-					if idx, ok := webSearchItemIndexByID[item.ID]; ok {
-						evt := Event{
-							Type:  EventBlockDone,
-							Index: idx,
-							ContentBlock: &ContentBlock{
-								Id:   item.ID,
-								Type: ContentBlockTypeBuiltinToolUse,
-								BuiltinToolUse: &BuiltinToolUseBlock{
-									Id:        item.ID,
-									Name:      webSearchToolName,
-									Arguments: item.Action.RawJSON(),
-									Status:    string(item.Status),
-								},
-							},
-						}
-						eventChan <- evt
-						events = append(events, evt)
-					}
-				case responses.ResponseReasoningItem:
-					item := output.AsReasoning()
-					if idx, ok := reasoningItemIndexByID[item.ID]; ok {
-						evt := Event{
-							Type:  EventBlockDone,
-							Index: idx,
-							ContentBlock: &ContentBlock{
-								Type: ContentBlockTypeReasoning,
-								Reasoning: &ReasoningBlock{
-									Text:             reasoningTextFromOpenaiContent(item.Content),
-									Summary:          reasoningSummaryFromOpenaiContent(item.Summary),
-									EncryptedContent: item.EncryptedContent,
-								},
-							},
-						}
-						eventChan <- evt
-						events = append(events, evt)
+			switch data.AsAny().(type) {
+			case responses.ResponseCompletedEvent:
+				response := data.Response
+				if response.IncompleteDetails.Reason != "" {
+					stopReason = string(response.IncompleteDetails.Reason)
+				} else {
+					switch response.Status {
+					case responses.ResponseStatusCompleted:
+						stopReason = "stop"
+					case responses.ResponseStatusFailed:
+						stopReason = "failed"
+					case responses.ResponseStatusCancelled:
+						stopReason = "cancelled"
+					default:
+						stopReason = fmt.Sprintf("response_status=%s", response.Status)
 					}
 				}
-			}
-
-			break loop
-
-		case responses.ResponseContentPartAddedEvent:
-			openaiEvent := data.AsResponseContentPartAdded()
-
-			switch openaiEvent.Part.AsAny().(type) {
-			case responses.ResponseOutputText:
-				part := openaiEvent.Part.AsOutputText()
-				evt := Event{
-					Type:  EventBlockStarted,
-					Index: int(openaiEvent.OutputIndex),
-					ContentBlock: &ContentBlock{
-						Id:   openaiEvent.ItemID,
-						Type: ContentBlockTypeText,
-						Text: part.Text,
-					},
+				if response.Usage.InputTokens > 0 {
+					usage.InputTokens = int(response.Usage.InputTokens)
 				}
-				eventChan <- evt
-				events = append(events, evt)
-			case responses.ResponseOutputRefusal:
-				part := openaiEvent.Part.AsRefusal()
-				evt := Event{
-					Type:  EventBlockStarted,
-					Index: int(openaiEvent.OutputIndex),
-					ContentBlock: &ContentBlock{
-						Id:   openaiEvent.ItemID,
-						Type: ContentBlockTypeRefusal,
-						Refusal: &RefusalBlock{
-							Reason: part.Refusal,
+				if response.Usage.OutputTokens > 0 {
+					usage.OutputTokens = int(response.Usage.OutputTokens)
+				}
+				if response.Usage.InputTokensDetails.CachedTokens > 0 {
+					usage.CacheReadInputTokens = int(response.Usage.InputTokensDetails.CachedTokens)
+				}
+
+				for _, output := range response.Output {
+					switch output.AsAny().(type) {
+					case responses.ResponseFunctionWebSearch:
+						item := output.AsWebSearchCall()
+						if idx, ok := webSearchItemIndexByID[item.ID]; ok {
+							evt := Event{
+								Type:  EventBlockDone,
+								Index: idx,
+								ContentBlock: &ContentBlock{
+									Id:   item.ID,
+									Type: ContentBlockTypeBuiltinToolUse,
+									BuiltinToolUse: &BuiltinToolUseBlock{
+										Id:        item.ID,
+										Name:      webSearchToolName,
+										Arguments: item.Action.RawJSON(),
+										Status:    string(item.Status),
+									},
+								},
+							}
+							eventChan <- evt
+							events = append(events, evt)
+						}
+					case responses.ResponseReasoningItem:
+						item := output.AsReasoning()
+						if idx, ok := reasoningItemIndexByID[item.ID]; ok {
+							evt := Event{
+								Type:  EventBlockDone,
+								Index: idx,
+								ContentBlock: &ContentBlock{
+									Type: ContentBlockTypeReasoning,
+									Reasoning: &ReasoningBlock{
+										Text:             reasoningTextFromOpenaiContent(item.Content),
+										Summary:          reasoningSummaryFromOpenaiContent(item.Summary),
+										EncryptedContent: item.EncryptedContent,
+									},
+								},
+							}
+							eventChan <- evt
+							events = append(events, evt)
+						}
+					}
+				}
+
+				break loop
+
+			case responses.ResponseContentPartAddedEvent:
+				openaiEvent := data.AsResponseContentPartAdded()
+
+				switch openaiEvent.Part.AsAny().(type) {
+				case responses.ResponseOutputText:
+					part := openaiEvent.Part.AsOutputText()
+					evt := Event{
+						Type:  EventBlockStarted,
+						Index: indexOffset + int(openaiEvent.OutputIndex),
+						ContentBlock: &ContentBlock{
+							Id:   openaiEvent.ItemID,
+							Type: ContentBlockTypeText,
+							Text: part.Text,
 						},
-					},
+					}
+					eventChan <- evt
+					events = append(events, evt)
+				case responses.ResponseOutputRefusal:
+					part := openaiEvent.Part.AsRefusal()
+					evt := Event{
+						Type:  EventBlockStarted,
+						Index: indexOffset + int(openaiEvent.OutputIndex),
+						ContentBlock: &ContentBlock{
+							Id:   openaiEvent.ItemID,
+							Type: ContentBlockTypeRefusal,
+							Refusal: &RefusalBlock{
+								Reason: part.Refusal,
+							},
+						},
+					}
+					eventChan <- evt
+					events = append(events, evt)
+				case responses.ResponseContentPartAddedEventPartReasoningText:
+					part := openaiEvent.Part.AsReasoningText()
+					evt := Event{
+						Type:  EventBlockStarted,
+						Index: indexOffset + int(openaiEvent.OutputIndex),
+						ContentBlock: &ContentBlock{
+							Id:   openaiEvent.ItemID,
+							Type: ContentBlockTypeReasoning,
+							Text: part.Text,
+						},
+					}
+					eventChan <- evt
+					events = append(events, evt)
 				}
-				eventChan <- evt
-				events = append(events, evt)
-			case responses.ResponseContentPartAddedEventPartReasoningText:
-				part := openaiEvent.Part.AsReasoningText()
-				evt := Event{
-					Type:  EventBlockStarted,
-					Index: int(openaiEvent.OutputIndex),
-					ContentBlock: &ContentBlock{
-						Id:   openaiEvent.ItemID,
-						Type: ContentBlockTypeReasoning,
-						Text: part.Text,
-					},
-				}
-				eventChan <- evt
-				events = append(events, evt)
-			}
-		case responses.ResponseOutputItemAddedEvent:
-			openaiEvent := data.AsResponseOutputItemAdded()
-			switch openaiEvent.Item.AsAny().(type) {
-			// NOTE here are the other item types we might handle in the future,
-			// leaving them here for reference:
-			//
-			//	case responses.ResponseFileSearchToolCall:
-			//	case responses.ResponseFunctionWebSearch:
-			//	case responses.ResponseComputerToolCall:
-			//	case responses.ResponseOutputItemImageGenerationCall:
-			//	case responses.ResponseCodeInterpreterToolCall:
-			//	case responses.ResponseOutputItemLocalShellCall:
-			//	case responses.ResponseOutputItemMcpCall:
-			//	case responses.ResponseOutputItemMcpListTools:
-			//	case responses.ResponseOutputItemMcpApprovalRequest:
-			//	case responses.ResponseCustomToolCall:
-			case responses.ResponseOutputMessage:
-				// NOTE we don't have a type for the message yet as we don't
-				// know if it's an output_text or a refusal, so we'll wait for
-				// "response.content_part.added" before emitting the block
-				// started event
-				continue
+			case responses.ResponseOutputItemAddedEvent:
+				openaiEvent := data.AsResponseOutputItemAdded()
+				switch openaiEvent.Item.AsAny().(type) {
+				// NOTE here are the other item types we might handle in the future,
+				// leaving them here for reference:
+				//
+				//	case responses.ResponseFileSearchToolCall:
+				//	case responses.ResponseFunctionWebSearch:
+				//	case responses.ResponseComputerToolCall:
+				//	case responses.ResponseOutputItemImageGenerationCall:
+				//	case responses.ResponseCodeInterpreterToolCall:
+				//	case responses.ResponseOutputItemLocalShellCall:
+				//	case responses.ResponseOutputItemMcpCall:
+				//	case responses.ResponseOutputItemMcpListTools:
+				//	case responses.ResponseOutputItemMcpApprovalRequest:
+				//	case responses.ResponseCustomToolCall:
+				case responses.ResponseOutputMessage:
+					// NOTE we don't have a type for the message yet as we don't
+					// know if it's an output_text or a refusal, so we'll wait for
+					// "response.content_part.added" before emitting the block
+					// started event
+					continue
 
-			case responses.ResponseFunctionToolCall:
-				item := openaiEvent.Item.AsFunctionCall()
-				evt := Event{
-					Type:  EventBlockStarted,
-					Index: int(openaiEvent.OutputIndex),
-					ContentBlock: &ContentBlock{
+				case responses.ResponseFunctionToolCall:
+					item := openaiEvent.Item.AsFunctionCall()
+					blockIndex := indexOffset + int(openaiEvent.OutputIndex)
+					block := &ContentBlock{
 						Id:   item.ID,
 						Type: ContentBlockTypeToolUse,
 						ToolUse: &ToolUseBlock{
@@ -362,125 +384,226 @@ loop:
 							Name:      item.Name,
 							Arguments: item.Arguments,
 						},
-					},
-				}
-				eventChan <- evt
-				events = append(events, evt)
+					}
+					if clientSearch != nil && item.Name == clientWebSearchFunctionName {
+						clientSearchIndexes[blockIndex] = true
+						block = &ContentBlock{
+							Id:   item.ID,
+							Type: ContentBlockTypeBuiltinToolUse,
+							BuiltinToolUse: &BuiltinToolUseBlock{
+								Id:   item.CallID,
+								Name: webSearchToolName,
+							},
+						}
+					}
+					evt := Event{
+						Type:         EventBlockStarted,
+						Index:        blockIndex,
+						ContentBlock: block,
+					}
+					eventChan <- evt
+					events = append(events, evt)
 
-			case responses.ResponseFunctionWebSearch:
-				item := openaiEvent.Item.AsWebSearchCall()
-				blockIndex := int(openaiEvent.OutputIndex)
-				webSearchItemIndexByID[item.ID] = blockIndex
-				evt := Event{
-					Type:  EventBlockStarted,
-					Index: blockIndex,
-					ContentBlock: &ContentBlock{
-						Id:   item.ID,
-						Type: ContentBlockTypeBuiltinToolUse,
-						BuiltinToolUse: &BuiltinToolUseBlock{
-							Id:     item.ID,
-							Name:   webSearchToolName,
-							Status: string(item.Status),
+				case responses.ResponseFunctionWebSearch:
+					item := openaiEvent.Item.AsWebSearchCall()
+					blockIndex := indexOffset + int(openaiEvent.OutputIndex)
+					webSearchItemIndexByID[item.ID] = blockIndex
+					evt := Event{
+						Type:  EventBlockStarted,
+						Index: blockIndex,
+						ContentBlock: &ContentBlock{
+							Id:   item.ID,
+							Type: ContentBlockTypeBuiltinToolUse,
+							BuiltinToolUse: &BuiltinToolUseBlock{
+								Id:     item.ID,
+								Name:   webSearchToolName,
+								Status: string(item.Status),
+							},
 						},
-					},
-				}
-				eventChan <- evt
-				events = append(events, evt)
+					}
+					eventChan <- evt
+					events = append(events, evt)
 
-			case responses.ResponseReasoningItem:
-				item := openaiEvent.Item.AsReasoning()
-				blockIndex := int(openaiEvent.OutputIndex)
-				reasoningItemIndexByID[item.ID] = blockIndex
+				case responses.ResponseReasoningItem:
+					item := openaiEvent.Item.AsReasoning()
+					blockIndex := indexOffset + int(openaiEvent.OutputIndex)
+					reasoningItemIndexByID[item.ID] = blockIndex
 
-				evt := Event{
-					Type:  EventBlockStarted,
-					Index: blockIndex,
-					ContentBlock: &ContentBlock{
-						Id:   item.ID,
-						Type: ContentBlockTypeReasoning,
-						Reasoning: &ReasoningBlock{
-							Text:    reasoningTextFromOpenaiContent(item.Content),
-							Summary: reasoningSummaryFromOpenaiContent(item.Summary),
+					evt := Event{
+						Type:  EventBlockStarted,
+						Index: blockIndex,
+						ContentBlock: &ContentBlock{
+							Id:   item.ID,
+							Type: ContentBlockTypeReasoning,
+							Reasoning: &ReasoningBlock{
+								Text:    reasoningTextFromOpenaiContent(item.Content),
+								Summary: reasoningSummaryFromOpenaiContent(item.Summary),
+							},
 						},
-					},
+					}
+					eventChan <- evt
+					events = append(events, evt)
 				}
-				eventChan <- evt
-				events = append(events, evt)
-			}
 
-		case responses.ResponseOutputItemDoneEvent:
-			openaiEvent := data.AsResponseOutputItemDone()
-			switch openaiEvent.Item.AsAny().(type) {
-			case responses.ResponseFunctionWebSearch:
-				// The web search action only becomes available once the item
-				// is done. It is also captured from the final output on
-				// response.completed, but the ChatGPT codex backend sends an
-				// empty output array there, so this event is the only source
-				// of the action when using subscription (OAuth) auth.
-				item := openaiEvent.Item.AsWebSearchCall()
-				evt := Event{
-					Type:  EventBlockDone,
-					Index: int(openaiEvent.OutputIndex),
-					ContentBlock: &ContentBlock{
-						Id:   item.ID,
-						Type: ContentBlockTypeBuiltinToolUse,
-						BuiltinToolUse: &BuiltinToolUseBlock{
-							Id:        item.ID,
-							Name:      webSearchToolName,
-							Arguments: item.Action.RawJSON(),
-							Status:    string(item.Status),
+			case responses.ResponseOutputItemDoneEvent:
+				openaiEvent := data.AsResponseOutputItemDone()
+				switch openaiEvent.Item.AsAny().(type) {
+				case responses.ResponseFunctionWebSearch:
+					// The web search action only becomes available once the item
+					// is done. It is also captured from the final output on
+					// response.completed, but the ChatGPT codex backend sends an
+					// empty output array there, so this event is the only source
+					// of the action when using subscription (OAuth) auth.
+					item := openaiEvent.Item.AsWebSearchCall()
+					evt := Event{
+						Type:  EventBlockDone,
+						Index: indexOffset + int(openaiEvent.OutputIndex),
+						ContentBlock: &ContentBlock{
+							Id:   item.ID,
+							Type: ContentBlockTypeBuiltinToolUse,
+							BuiltinToolUse: &BuiltinToolUseBlock{
+								Id:        item.ID,
+								Name:      webSearchToolName,
+								Arguments: item.Action.RawJSON(),
+								Status:    string(item.Status),
+							},
 						},
-					},
+					}
+					eventChan <- evt
+					events = append(events, evt)
+
+				case responses.ResponseFunctionToolCall:
+					blockIndex := indexOffset + int(openaiEvent.OutputIndex)
+					item := openaiEvent.Item.AsFunctionCall()
+					block := &ContentBlock{
+						Id:   item.ID,
+						Type: ContentBlockTypeToolUse,
+						ToolUse: &ToolUseBlock{
+							Id:        item.CallID,
+							Name:      item.Name,
+							Arguments: item.Arguments,
+						},
+					}
+					if clientSearchIndexes[blockIndex] {
+						block = &ContentBlock{
+							Id:   item.ID,
+							Type: ContentBlockTypeBuiltinToolUse,
+							BuiltinToolUse: &BuiltinToolUseBlock{
+								Id:        item.CallID,
+								Name:      webSearchToolName,
+								Arguments: item.Arguments,
+							},
+						}
+						clientSearchCalls = append(clientSearchCalls, clientWebSearchCall{callID: item.CallID, arguments: item.Arguments})
+					}
+					evt := Event{
+						Type:         EventBlockDone,
+						Index:        blockIndex,
+						ContentBlock: block,
+					}
+					eventChan <- evt
+					events = append(events, evt)
+				}
+
+			case responses.ResponseFunctionCallArgumentsDeltaEvent:
+				openaiEvent := data.AsResponseFunctionCallArgumentsDelta()
+				if clientSearchIndexes[indexOffset+int(openaiEvent.OutputIndex)] {
+					continue
+				}
+				evt := Event{
+					Type:  EventTextDelta,
+					Index: indexOffset + int(openaiEvent.OutputIndex),
+					Delta: openaiEvent.Delta,
+				}
+				eventChan <- evt
+				events = append(events, evt)
+
+			case responses.ResponseTextDeltaEvent:
+				openaiEvent := data.AsResponseOutputTextDelta()
+				evt := Event{
+					Type:  EventTextDelta,
+					Index: indexOffset + int(openaiEvent.OutputIndex),
+					Delta: openaiEvent.Delta,
+				}
+				eventChan <- evt
+				events = append(events, evt)
+
+			case responses.ResponseReasoningTextDeltaEvent:
+				openaiEvent := data.AsResponseReasoningTextDelta()
+				evt := Event{
+					Type:  EventTextDelta,
+					Index: indexOffset + int(openaiEvent.OutputIndex),
+					Delta: openaiEvent.Delta,
+				}
+				eventChan <- evt
+				events = append(events, evt)
+
+			case responses.ResponseReasoningSummaryTextDeltaEvent:
+				openaiEvent := data.AsResponseReasoningSummaryTextDelta()
+				evt := Event{
+					Type:  EventSummaryTextDelta,
+					Index: indexOffset + int(openaiEvent.OutputIndex),
+					Delta: openaiEvent.Delta,
 				}
 				eventChan <- evt
 				events = append(events, evt)
 			}
-
-		case responses.ResponseFunctionCallArgumentsDeltaEvent:
-			openaiEvent := data.AsResponseFunctionCallArgumentsDelta()
-			evt := Event{
-				Type:  EventTextDelta,
-				Index: int(openaiEvent.OutputIndex),
-				Delta: openaiEvent.Delta,
-			}
-			eventChan <- evt
-			events = append(events, evt)
-
-		case responses.ResponseTextDeltaEvent:
-			openaiEvent := data.AsResponseOutputTextDelta()
-			evt := Event{
-				Type:  EventTextDelta,
-				Index: int(openaiEvent.OutputIndex),
-				Delta: openaiEvent.Delta,
-			}
-			eventChan <- evt
-			events = append(events, evt)
-
-		case responses.ResponseReasoningTextDeltaEvent:
-			openaiEvent := data.AsResponseReasoningTextDelta()
-			evt := Event{
-				Type:  EventTextDelta,
-				Index: int(openaiEvent.OutputIndex),
-				Delta: openaiEvent.Delta,
-			}
-			eventChan <- evt
-			events = append(events, evt)
-
-		case responses.ResponseReasoningSummaryTextDeltaEvent:
-			openaiEvent := data.AsResponseReasoningSummaryTextDelta()
-			evt := Event{
-				Type:  EventSummaryTextDelta,
-				Index: int(openaiEvent.OutputIndex),
-				Delta: openaiEvent.Delta,
-			}
-			eventChan <- evt
-			events = append(events, evt)
 		}
-	}
 
-	if err := stream.Err(); err != nil {
-		return nil, requestAuth.classifyHTTPError(err, fmt.Errorf("OpenAI Responses stream (model %s) failed after %d events (last event type %q; set %s=<dir> to dump raw responses): %w",
-			model, receivedEventCount, lastEventType, ResponseDumpDirEnvVar, wrapOpenAIError(err)))
+		err := stream.Err()
+		stream.Close()
+		if err != nil {
+			return nil, requestAuth.classifyHTTPError(err, fmt.Errorf("OpenAI Responses stream (model %s) failed after %d events (last event type %q): %w",
+				model, receivedEventCount, lastEventType, wrapOpenAIError(err)))
+		}
+		totalUsage = addUsage(totalUsage, usage)
+
+		if len(clientSearchCalls) == 0 {
+			break
+		}
+		if searchRound >= maxClientWebSearchRounds {
+			return nil, fmt.Errorf("OpenAI Responses stream (model %s) requested web search after the search tool was withdrawn at round %d", model, maxClientWebSearchRounds)
+		}
+		indexOffset = nextEventIndex(events)
+		for _, call := range clientSearchCalls {
+			result, err := p.runClientWebSearch(ctx, eventChan, activityInterval, request.SecretManager, options.ModelConfig.Provider, model, clientSearch, call)
+			if err != nil {
+				return nil, err
+			}
+			for _, eventType := range []EventType{EventBlockStarted, EventBlockDone} {
+				evt := Event{
+					Type:  eventType,
+					Index: indexOffset,
+					ContentBlock: &ContentBlock{
+						Type:              ContentBlockTypeBuiltinToolResult,
+						BuiltinToolResult: &result,
+					},
+				}
+				select {
+				case eventChan <- evt:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				events = append(events, evt)
+			}
+			indexOffset++
+		}
+
+		// Workflow tool calls must be returned for execution; the completed
+		// searches stay in the output so their results replay with them.
+		if hasClientToolUseBlock(events[roundStart:]) {
+			break
+		}
+
+		continuation := append(slices.Clone(messages), AccumulateEventsToMessage(events))
+		inputItems, err := messageToResponsesInput(convertForeignBuiltinToolBlocks(continuation, isNativeBuiltinTool))
+		if err != nil {
+			return nil, fmt.Errorf("failed to build web search continuation input: %w", err)
+		}
+		params.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: inputItems}
+		if searchRound+1 >= maxClientWebSearchRounds {
+			withoutClientWebSearchTool(&params)
+		}
 	}
 
 	outputMessage := AccumulateEventsToMessage(events)
@@ -492,7 +615,7 @@ loop:
 		Output:          outputMessage,
 		StopReason:      stopReason,
 		StopSequence:    "",
-		Usage:           usage,
+		Usage:           totalUsage,
 		AuthType:        credentials.authType,
 		ReasoningEffort: actualReasoningEffort,
 	}, nil
@@ -782,6 +905,10 @@ func AccumulateEventsToMessage(events []Event) Message {
 		case EventBlockDone:
 			if evt.ContentBlock != nil {
 				if block, ok := blocks[evt.Index]; ok {
+					if block.Type == ContentBlockTypeToolUse && evt.ContentBlock.Type == ContentBlockTypeToolUse && evt.ContentBlock.ToolUse != nil {
+						toolUseCopy := *evt.ContentBlock.ToolUse
+						block.ToolUse = &toolUseCopy
+					}
 					if block.Type == ContentBlockTypeBuiltinToolUse && evt.ContentBlock.Type == ContentBlockTypeBuiltinToolUse && evt.ContentBlock.BuiltinToolUse != nil {
 						builtinToolUseCopy := *evt.ContentBlock.BuiltinToolUse
 						block.BuiltinToolUse = &builtinToolUseCopy
