@@ -24,6 +24,7 @@ export interface ModelMode {
 }
 
 export interface ModelInfo {
+  release_date?: string;
   reasoning?: boolean;
   reasoning_options?: ReasoningOption[];
   experimental?: {

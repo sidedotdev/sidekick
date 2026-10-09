@@ -27,11 +27,13 @@ const mockModelsData = {
   },
   anthropic: {
     models: {
-      'claude-3': { reasoning: false },
+      'claude-3': { reasoning: false, release_date: '2024-03-04' },
       'claude-opus-5': {
         reasoning: true,
+        release_date: '2026-05-01',
         experimental: { modes: { fast: { provider: { body: { speed: 'fast' } } } } },
       },
+      'claude-opus-4-1': { reasoning: true, release_date: '2025-08-05' },
     }
   },
   google: {
@@ -99,6 +101,55 @@ describe('LlmConfigEditor', () => {
     
     const modelInput = wrapper.find('.model-input-inner')
     expect((modelInput.element as HTMLInputElement).value).toBe('claude-3')
+  })
+
+  describe('model input', () => {
+    const typeModel = async (wrapper: ReturnType<typeof mount>, text: string, inputType: string) => {
+      const input = wrapper.find('.model-input-inner')
+      ;(input.element as HTMLInputElement).value = text
+      await input.trigger('input', { inputType })
+      return input.element as HTMLInputElement
+    }
+
+    const mountWithAnthropic = async () => {
+      const wrapper = mount(LlmConfigEditor, {
+        props: { modelValue: { defaults: [{ provider: 'anthropic', model: '' }], useCaseConfigs: {} } }
+      })
+      await vi.waitFor(() => {
+        expect(store.getModelsCache()).not.toBeNull()
+      })
+      return wrapper
+    }
+
+    it('inline-completes typed text with the newest matching model, selecting the rest', async () => {
+      const wrapper = await mountWithAnthropic()
+
+      const input = await typeModel(wrapper, 'claude-o', 'insertText')
+
+      expect(input.value).toBe('claude-opus-5')
+      expect([input.selectionStart, input.selectionEnd]).toEqual([8, 13])
+      const emitted = wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig
+      expect(emitted.defaults[0].model).toBe('claude-opus-5')
+    })
+
+    it.each(['deleteContentBackward', 'insertFromPaste'])('leaves %s input uncompleted', async (inputType) => {
+      const wrapper = await mountWithAnthropic()
+
+      const input = await typeModel(wrapper, 'claude-o', inputType)
+
+      expect(input.value).toBe('claude-o')
+      const emitted = wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig
+      expect(emitted.defaults[0].model).toBe('claude-o')
+    })
+
+    it('suggests the newest released models first', async () => {
+      const wrapper = await mountWithAnthropic()
+
+      wrapper.findComponent(AutoComplete).vm.$emit('complete', { query: 'claude' })
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.findComponent(AutoComplete).props('suggestions')).toEqual(['claude-opus-5', 'claude-opus-4-1', 'claude-3'])
+    })
   })
 
   it('marks autocomplete overlays so they stack above containing modals', () => {
@@ -436,6 +487,161 @@ describe('LlmConfigEditor', () => {
     const fast = tierSelect.findAll('option').find((o) => o.text() === 'Fast')!
     await tierSelect.setValue(fast.attributes('value'))
     expect((wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig).defaults[0].speed).toBe('fast')
+  })
+
+  it('notes that anthropic fast mode requires usage credits only while it is selected', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'anthropic', model: 'claude-opus-5', reasoningEffort: '' }],
+      useCaseConfigs: {
+        planning: [{ provider: 'openai', model: 'gpt-5.2', reasoningEffort: '', serviceTier: 'ultrafast' }],
+      },
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('.service-tier-select')).toHaveLength(2)
+    })
+    expect(wrapper.find('[role="note"]').exists()).toBe(false)
+
+    const tierSelect = wrapper.find('.service-tier-select')
+    const fast = tierSelect.findAll('option').find((o) => o.text() === 'Fast')!
+    await tierSelect.setValue(fast.attributes('value'))
+    expect(wrapper.findAll('[role="note"]')).toHaveLength(1)
+    expect(wrapper.find('[role="note"]').text()).toContain('usage credits')
+
+    const standard = tierSelect.findAll('option').find((o) => o.text() === 'Standard')!
+    await tierSelect.setValue(standard.attributes('value'))
+    expect(wrapper.find('[role="note"]').exists()).toBe(false)
+  })
+
+  it('resets a tier the newly selected model does not offer', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'gpt-5.2', reasoningEffort: '', serviceTier: 'ultrafast' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.find('.provider-select').findAll('option').length).toBeGreaterThan(1)
+      expect(selectedTierLabel(wrapper.find('.service-tier-select'))).toBe('Ultrafast')
+    })
+
+    await wrapper.find('.model-input-inner').setValue('claude-opus-5')
+    await wrapper.find('.provider-select').setValue('anthropic')
+
+    const tierSelect = wrapper.find('.service-tier-select')
+    expect(tierSelect.findAll('option').map((o) => o.text())).toEqual(['Standard', 'Fast'])
+    expect(selectedTierLabel(tierSelect)).toBe('Standard')
+    const emitted = wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig
+    expect(emitted.defaults[0]).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5', serviceTier: '', speed: '' })
+  })
+
+  it('keeps a tier when the provider changes to one that offers it for the model', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: '', model: 'claude-opus-5', reasoningEffort: '', speed: 'fast' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.find('.provider-select').findAll('option').length).toBeGreaterThan(1)
+      expect(wrapper.find('.service-tier-select').exists()).toBe(true)
+    })
+
+    await wrapper.find('.provider-select').setValue('anthropic')
+
+    expect(selectedTierLabel(wrapper.find('.service-tier-select'))).toBe('Fast')
+    const emitted = wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig
+    expect(emitted.defaults[0]).toMatchObject({ provider: 'anthropic', speed: 'fast' })
+  })
+
+  describe('remembered tier', () => {
+    // Mirrors the forms using the editor, which feed each emitted config back in
+    const mountWithParentEcho = async (initialConfig: LLMConfig) => {
+      const wrapper: ReturnType<typeof mount> = mount(LlmConfigEditor, {
+        props: {
+          modelValue: initialConfig,
+          'onUpdate:modelValue': (value: LLMConfig) => wrapper.setProps({ modelValue: value }),
+        },
+      })
+      await vi.waitFor(() => {
+        expect(store.getModelsCache()).not.toBeNull()
+        expect(wrapper.find('.provider-select').findAll('option').length).toBeGreaterThan(1)
+      })
+      return wrapper
+    }
+
+    const tierShown = (wrapper: ReturnType<typeof mount>) => {
+      const select = wrapper.find('.service-tier-select')
+      return select.exists() ? selectedTierLabel(select) : 'none'
+    }
+
+    const lastEmittedDefault = (wrapper: ReturnType<typeof mount>) =>
+      (wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig).defaults[0]
+
+    const editModel = async (wrapper: ReturnType<typeof mount>, text: string) => {
+      const input = wrapper.find('.model-input-inner')
+      ;(input.element as HTMLInputElement).value = text
+      await input.trigger('input', { inputType: 'deleteContentBackward' })
+    }
+
+    it('restores the loaded tier once the model offers it again', async () => {
+      const wrapper = await mountWithParentEcho({
+        defaults: [{ provider: 'openai', model: 'gpt-5.2', reasoningEffort: '', serviceTier: 'ultrafast' }],
+        useCaseConfigs: {},
+      })
+      expect(tierShown(wrapper)).toBe('Ultrafast')
+
+      await editModel(wrapper, 'claude-opus-5')
+      await wrapper.find('.provider-select').setValue('anthropic')
+      expect(tierShown(wrapper)).toBe('Standard')
+      expect(lastEmittedDefault(wrapper).serviceTier).toBe('')
+
+      await wrapper.find('.provider-select').setValue('openai')
+      await editModel(wrapper, 'gpt-5.')
+      expect(tierShown(wrapper)).toBe('none')
+      await editModel(wrapper, 'gpt-5.2')
+
+      expect(tierShown(wrapper)).toBe('Ultrafast')
+      expect(lastEmittedDefault(wrapper)).toMatchObject({ provider: 'openai', model: 'gpt-5.2', serviceTier: 'ultrafast', speed: '' })
+    })
+
+    it('remembers the tier chosen most recently', async () => {
+      const wrapper = await mountWithParentEcho({
+        defaults: [{ provider: 'openai', model: 'gpt-5.2', reasoningEffort: '', serviceTier: 'ultrafast' }],
+        useCaseConfigs: {},
+      })
+      expect(tierShown(wrapper)).toBe('Ultrafast')
+
+      const tierSelect = wrapper.find('.service-tier-select')
+      const flex = tierSelect.findAll('option').find((o) => o.text() === 'Flex')!
+      await tierSelect.setValue(flex.attributes('value'))
+      await editModel(wrapper, 'gpt-')
+      await editModel(wrapper, 'gpt-5.2')
+
+      expect(tierShown(wrapper)).toBe('Flex')
+      expect(lastEmittedDefault(wrapper).serviceTier).toBe('flex')
+    })
+
+    it('replaces the remembered tier when a different config is loaded', async () => {
+      const wrapper = await mountWithParentEcho({
+        defaults: [{ provider: 'openai', model: 'gpt-5.2', reasoningEffort: '', serviceTier: 'ultrafast' }],
+        useCaseConfigs: {},
+      })
+      expect(tierShown(wrapper)).toBe('Ultrafast')
+
+      await wrapper.setProps({
+        modelValue: { defaults: [{ provider: 'openai', model: 'gpt-5.2', reasoningEffort: '', serviceTier: 'flex' }], useCaseConfigs: {} },
+      })
+      await editModel(wrapper, 'gpt-')
+      await editModel(wrapper, 'gpt-5.2')
+
+      expect(tierShown(wrapper)).toBe('Flex')
+    })
   })
 
   it('initializes the tier for use case config from props.modelValue', async () => {
