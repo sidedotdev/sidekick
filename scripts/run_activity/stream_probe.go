@@ -17,16 +17,6 @@ type streamProbeOptions struct {
 	OmitTools       string
 	Model           string
 	ReasoningEffort string
-	MatrixDir       string
-	// SearchDir selects the search transport probe, which compares hosted web
-	// search across SearchModels and calls the standalone alpha/search endpoint.
-	SearchDir    string
-	SearchModels string
-	// LiteDir selects the Responses Lite search probe, which compares hosted
-	// and client-executed search in the ordinary and Lite request dialects.
-	LiteDir     string
-	LiteModel   string
-	LiteRepeats int
 	// ExtraBody is a JSON object merged over the request's extra body, letting
 	// a probe add raw provider parameters the provider does not otherwise send.
 	ExtraBody string
@@ -127,33 +117,6 @@ func executeStreamProbe(invocation activityInvocation, options streamProbeOption
 	defer cancel()
 
 	activities := persisted_ai.Llm2Activities{Storage: service}
-	selected := 0
-	for _, dir := range []string{options.MatrixDir, options.SearchDir, options.LiteDir} {
-		if dir != "" {
-			selected++
-		}
-	}
-	if selected > 1 {
-		return nil, fmt.Errorf("choose only one of a probe matrix, search transport probe or lite search probe")
-	}
-	if options.LiteDir != "" {
-		return executeLiteSearchProbe(ctx, &activities, input, options.LiteDir, options.LiteModel, options.LiteRepeats)
-	}
-	if options.MatrixDir != "" {
-		return executeProbeMatrix(ctx, &activities, input, options.MatrixDir)
-	}
-	if options.SearchDir != "" {
-		var models []string
-		for _, model := range strings.Split(options.SearchModels, ",") {
-			if model = strings.TrimSpace(model); model != "" {
-				models = append(models, model)
-			}
-		}
-		if len(models) == 0 {
-			models = []string{input.Options.Model}
-		}
-		return executeSearchTransportProbe(ctx, &activities, input, options.SearchDir, models)
-	}
 	response, err := activities.Stream(ctx, input)
 	if err != nil {
 		return nil, err

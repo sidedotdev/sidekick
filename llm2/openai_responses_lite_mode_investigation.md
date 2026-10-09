@@ -47,7 +47,5 @@ Same `gpt-6-astra`, account and subscription HTTP endpoint
   runs stopped at the probe's one-follow-up limit, without a provider error.
 
 The probes establish these outcomes, not why the backend fails. API-key
-behavior was not tested by this investigation. Reproduce using
-`scripts/run_activity --stream-probe --probe-lite-dir <new-directory>`;
-the probe records request/SSE artifacts and `report.json`. Local evidence was
-saved in `.side/tmp/lite-probe-{1,2}` (git-ignored).
+behavior was not tested by this investigation. Local evidence was saved in
+`.side/tmp/lite-probe-{1,2}` (git-ignored).

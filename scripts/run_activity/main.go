@@ -529,12 +529,6 @@ func main() {
 	flag.StringVar(&probeOptions.Model, "probe-model", "", "override stream probe model")
 	flag.StringVar(&probeOptions.ReasoningEffort, "probe-effort", "", "override stream probe reasoning effort")
 	flag.StringVar(&probeOptions.ExtraBody, "probe-extra-body", "", "JSON object of raw provider request parameters merged into the stream probe")
-	flag.StringVar(&probeOptions.SearchDir, "probe-search-dir", "", "new directory for a search transport probe comparing hosted web search across models and the standalone alpha/search endpoint")
-	flag.StringVar(&probeOptions.SearchModels, "probe-search-models", "", "comma-separated models for hosted web search controls (default: the stored model)")
-	flag.StringVar(&probeOptions.MatrixDir, "probe-matrix-dir", "", "new private output directory for matched stored/fresh history and application/SDK controls")
-	flag.StringVar(&probeOptions.LiteDir, "probe-lite-dir", "", "new private output directory for a probe comparing hosted and client-executed web search in the ordinary and Responses Lite request dialects")
-	flag.StringVar(&probeOptions.LiteModel, "probe-lite-model", "", "model for the lite search probe (default: the stored model)")
-	flag.IntVar(&probeOptions.LiteRepeats, "probe-lite-repeats", 0, "attempts per lite search probe control (default 2)")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] [--run-id id] <flow-id> <activity-id-or-scheduled-started-completed-event-id>\n", os.Args[0])
