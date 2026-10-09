@@ -13,11 +13,25 @@ const mockModelsData = {
     models: {
       'o1': { reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }] },
       'gpt-4': { reasoning: false },
+      'gpt-5.2': {
+        reasoning: false,
+        experimental: {
+          modes: {
+            fast: { provider: { body: { service_tier: 'priority' } } },
+            flex: { provider: { body: { service_tier: 'flex' } } },
+            ultrafast: { provider: { body: { service_tier: 'ultrafast' } } },
+          },
+        },
+      },
     }
   },
   anthropic: {
     models: {
       'claude-3': { reasoning: false },
+      'claude-opus-5': {
+        reasoning: true,
+        experimental: { modes: { fast: { provider: { body: { speed: 'fast' } } } } },
+      },
     }
   },
   google: {
@@ -367,7 +381,84 @@ describe('LlmConfigEditor', () => {
     })
   })
 
-  it('round-trips speed=fast for default config without further input', async () => {
+  const selectedTierLabel = (select: ReturnType<ReturnType<typeof mount>['find']>) => {
+    const el = select.element as HTMLSelectElement
+    return el.options[el.selectedIndex]?.text
+  }
+
+  it('offers the openai tiers available for the model and emits the chosen service tier', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'gpt-5.2', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.service-tier-select').exists()).toBe(true)
+    })
+
+    const tierSelect = wrapper.find('.service-tier-select')
+    expect(tierSelect.findAll('option').map((o) => o.text())).toEqual(['Standard', 'Flex', 'Fast', 'Ultrafast'])
+    expect(selectedTierLabel(tierSelect)).toBe('Standard')
+
+    for (const [label, serviceTier] of [['Flex', 'flex'], ['Fast', 'priority'], ['Ultrafast', 'ultrafast'], ['Standard', '']]) {
+      const option = tierSelect.findAll('option').find((o) => o.text() === label)!
+      await tierSelect.setValue(option.attributes('value'))
+      const emitted = wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig
+      expect(emitted.defaults[0].serviceTier).toBe(serviceTier)
+      expect(emitted.defaults[0].speed).toBe('')
+    }
+  })
+
+  it('round-trips anthropic fast mode through the tier selector', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'anthropic', model: 'claude-opus-5', reasoningEffort: '', speed: 'fast' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.service-tier-select').exists()).toBe(true)
+    })
+
+    const tierSelect = wrapper.find('.service-tier-select')
+    expect(tierSelect.findAll('option').map((o) => o.text())).toEqual(['Standard', 'Fast'])
+    expect(selectedTierLabel(tierSelect)).toBe('Fast')
+
+    const standard = tierSelect.findAll('option').find((o) => o.text() === 'Standard')!
+    await tierSelect.setValue(standard.attributes('value'))
+    expect((wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig).defaults[0].speed).toBe('')
+
+    const fast = tierSelect.findAll('option').find((o) => o.text() === 'Fast')!
+    await tierSelect.setValue(fast.attributes('value'))
+    expect((wrapper.emitted('update:modelValue')!.at(-1)![0] as LLMConfig).defaults[0].speed).toBe('fast')
+  })
+
+  it('initializes the tier for use case config from props.modelValue', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '' }],
+      useCaseConfigs: {
+        planning: [{ provider: 'openai', model: 'gpt-5.2', reasoningEffort: '', serviceTier: 'flex' }],
+      },
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.service-tier-select').exists()).toBe(true)
+    })
+
+    const tierSelects = wrapper.findAll('.service-tier-select')
+    expect(tierSelects).toHaveLength(1)
+    expect(selectedTierLabel(tierSelects[0])).toBe('Flex')
+  })
+
+  it('keeps a configured tier visible for models that do not list it', async () => {
     const initialConfig: LLMConfig = {
       defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '', speed: 'fast' }],
       useCaseConfigs: {},
@@ -377,45 +468,13 @@ describe('LlmConfigEditor', () => {
     })
 
     await vi.waitFor(() => {
-      expect(wrapper.find('.provider-select').exists()).toBe(true)
+      expect(wrapper.find('.service-tier-select').exists()).toBe(true)
     })
 
-    const speedToggle = wrapper.find('.speed-toggle')
-    expect(speedToggle.exists()).toBe(true)
-    expect(speedToggle.classes()).toContain('active')
-
-    await speedToggle.trigger('click')
-
-    const emittedEvents = wrapper.emitted('update:modelValue')!
-    const emittedValue = emittedEvents[emittedEvents.length - 1][0] as LLMConfig
-    expect(emittedValue.defaults[0].speed).toBe('')
-
-    await speedToggle.trigger('click')
-    const reEnabled = (wrapper.emitted('update:modelValue')!.at(-1)![0]) as LLMConfig
-    expect(reEnabled.defaults[0].speed).toBe('fast')
+    expect(selectedTierLabel(wrapper.find('.service-tier-select'))).toBe('Fast')
   })
 
-  it('initializes speed for use case config from props.modelValue', async () => {
-    const initialConfig: LLMConfig = {
-      defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '' }],
-      useCaseConfigs: {
-        planning: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '', speed: 'fast' }],
-      },
-    }
-    const wrapper = mount(LlmConfigEditor, {
-      props: { modelValue: initialConfig }
-    })
-
-    await vi.waitFor(() => {
-      expect(wrapper.find('.provider-select').exists()).toBe(true)
-    })
-
-    const useCaseToggles = wrapper.findAll('.speed-toggle')
-    const activeUseCaseToggle = useCaseToggles.find((t) => t.classes().includes('active'))
-    expect(activeUseCaseToggle).toBeDefined()
-  })
-
-  it('hides speed toggle for non-anthropic providers', async () => {
+  it('hides the tier selector for models without tiers', async () => {
     const initialConfig: LLMConfig = {
       defaults: [{ provider: 'openai', model: 'gpt-4', reasoningEffort: '' }],
       useCaseConfigs: {},
@@ -425,10 +484,11 @@ describe('LlmConfigEditor', () => {
     })
 
     await vi.waitFor(() => {
-      expect(wrapper.find('.provider-select').exists()).toBe(true)
+      expect(fetch).toHaveBeenCalled()
     })
+    await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('.speed-toggle').exists()).toBe(false)
+    expect(wrapper.find('.service-tier-select').exists()).toBe(false)
   })
 
   it('keeps use case checkbox checked after parent updates modelValue with emitted config', async () => {
