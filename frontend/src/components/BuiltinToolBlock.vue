@@ -90,6 +90,8 @@ const searchResults = computed(() => action.value ? null : parseWebSearchResultB
 .web-search-content {
   margin: 0.5rem 0 0;
   white-space: pre-wrap;
+  max-height: 12rem;
+  overflow-y: auto;
 }
 
 .web-search-result-list {

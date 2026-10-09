@@ -190,3 +190,31 @@ describe('Llm2StreamAccumulator', () => {
     ])
   })
 })
+
+describe('completed function arguments', () => {
+  it.each(['', '{"answer":', '{"answer":"complete"}'])(
+    'uses completed arguments without duplicating streamed arguments %j',
+    (partialArguments) => {
+      const accumulator = new Llm2StreamAccumulator()
+      const complete: Llm2ContentBlock = {
+        type: 'tool_use',
+        toolUse: {
+          id: 'call_answer',
+          name: 'advisor_guide',
+          arguments: '{"answer":"complete"}',
+        },
+      }
+
+      accumulator.applyEvent(started(0, {
+        type: 'tool_use',
+        toolUse: { id: 'call_answer', name: 'advisor_guide', arguments: '' },
+      }))
+      accumulator.applyEvent(textDelta(0, partialArguments))
+      accumulator.applyEvent(done(0, complete))
+
+      expect(accumulator.blocks).toEqual([complete])
+      accumulator.applyEvent(textDelta(0, ' '))
+      expect(complete.toolUse.arguments).toBe('{"answer":"complete"}')
+    },
+  )
+})
