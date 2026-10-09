@@ -570,3 +570,56 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestLoadModelsDev_PreservesExperimentalModes(t *testing.T) {
+	writeModelsDevFixture(t, `{
+		"openai": {"models": {
+			"gpt-5.2": {"id": "gpt-5.2", "experimental": {"modes": {
+				"flex": {"provider": {"body": {"service_tier": "flex"}}},
+				"fast": {"cost": {"input": 12.5, "output": 75}, "provider": {"body": {"service_tier": "priority"}}}
+			}}},
+			"gpt-4": {"id": "gpt-4"}
+		}}
+	}`)
+
+	data, err := LoadModelsDev()
+	if err != nil {
+		t.Fatalf("LoadModelsDev() error = %v", err)
+	}
+
+	type served struct {
+		Experimental *struct {
+			Modes map[string]struct {
+				Provider struct {
+					Body map[string]any `json:"body"`
+				} `json:"provider"`
+			} `json:"modes"`
+		} `json:"experimental"`
+	}
+	decode := func(model string) served {
+		t.Helper()
+		encoded, err := json.Marshal(data["openai"].Models[model])
+		if err != nil {
+			t.Fatalf("marshal %s: %v", model, err)
+		}
+		var out served
+		if err := json.Unmarshal(encoded, &out); err != nil {
+			t.Fatalf("unmarshal %s: %v", model, err)
+		}
+		return out
+	}
+
+	withModes := decode("gpt-5.2")
+	if withModes.Experimental == nil {
+		t.Fatalf("experimental modes dropped for gpt-5.2")
+	}
+	for mode, want := range map[string]string{"flex": "flex", "fast": "priority"} {
+		if got := withModes.Experimental.Modes[mode].Provider.Body["service_tier"]; got != want {
+			t.Errorf("mode %q service_tier = %v, want %q", mode, got, want)
+		}
+	}
+
+	if withoutModes := decode("gpt-4"); withoutModes.Experimental != nil {
+		t.Errorf("expected experimental to be omitted for gpt-4, got %+v", withoutModes.Experimental)
+	}
+}

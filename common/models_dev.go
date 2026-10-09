@@ -56,6 +56,10 @@ type ModelInfo struct {
 	// Option types other than effort, budget_tokens and toggle may appear and
 	// are ignored by consumers.
 	ReasoningOptions []ReasoningOption `json:"reasoning_options,omitempty"`
+	// Passed through unparsed so the frontend can read alternative modes (e.g.
+	// service tiers under experimental.modes) without a schema change there
+	// ever breaking decoding of the rest of models.dev.
+	Experimental json.RawMessage `json:"experimental,omitempty"`
 }
 
 const reasoningOptionTypeEffort = "effort"
