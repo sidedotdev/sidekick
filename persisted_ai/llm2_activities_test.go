@@ -161,6 +161,52 @@ func TestStreamActivity_ForwardsLlm2StreamEventsAlongsideLegacyEvents(t *testing
 	require.NotEmpty(t, progressEvents, "progress_text events for summaries/builtin results must still be emitted")
 }
 
+func TestStreamActivity_PromptCacheKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		callerKey string
+		flowId    string
+		want      string
+	}{
+		{name: "defaults to flow id", flowId: "flow-runaway", want: "flow-runaway"},
+		{name: "preserves caller key", callerKey: "custom-key", flowId: "flow-runaway", want: "custom-key"},
+		{name: "empty without flow id", flowId: "", want: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			scripted := []llm2.Event{
+				{Type: llm2.EventBlockStarted, Index: 0, ContentBlock: &llm2.ContentBlock{Type: llm2.ContentBlockTypeText}},
+				{Type: llm2.EventTextDelta, Index: 0, Delta: "Hello"},
+				{Type: llm2.EventBlockDone, Index: 0, ContentBlock: &llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
+			}
+			provider := &scriptedProvider{attempts: [][]llm2.Event{scripted}}
+			streamer := newRecordingFlowEventStreamer()
+			la := &Llm2Activities{
+				Streamer: streamer,
+				providerFactory: func(common.ModelConfig, []common.ModelProviderPublicConfig) (llm2.Provider, error) {
+					return provider, nil
+				},
+			}
+
+			input := newRunawayStreamActivityInput(t)
+			input.FlowId = tc.flowId
+			input.Options.PromptCacheKey = tc.callerKey
+			_, err := la.Stream(context.Background(), input)
+			require.NoError(t, err)
+
+			require.NotEmpty(t, provider.requests)
+			for _, request := range provider.requests {
+				require.Equal(t, tc.want, request.Options.PromptCacheKey)
+			}
+		})
+	}
+}
+
 func newTestStreamInput(options llm2.Options) StreamInput {
 	return StreamInput{
 		Options: options,
