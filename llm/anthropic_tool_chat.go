@@ -390,11 +390,7 @@ func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (st
 		log.Info().Msg("OAuth token expiring soon, refreshing proactively")
 		newCreds, err := RefreshAnthropicOAuthToken(creds.RefreshToken)
 		if err != nil {
-			err = fmt.Errorf("failed to refresh OAuth token: %w", err)
-			if common.IsOAuthCredentialRejection(err) {
-				return nil, false, invalidAnthropicOAuthError(profileId, err)
-			}
-			return nil, false, err
+			return nil, false, invalidAnthropicOAuthError(profileId, fmt.Errorf("failed to refresh OAuth token: %w", err))
 		}
 		if storeErr := storeAnthropicOAuthCredentialsForProfile(profileId, newCreds); storeErr != nil {
 			log.Warn().Err(storeErr).Msg("Failed to store refreshed OAuth credentials")
@@ -448,7 +444,7 @@ func RefreshAnthropicOAuthToken(refreshToken string) (*OAuthCredentials, error) 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, &common.OAuthRefreshError{StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var tokenResp struct {
