@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sidekick/common"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"github.com/rs/zerolog/log"
 )
@@ -209,7 +211,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		params.ServiceTier = anthropic.MessageNewParamsServiceTier(options.ServiceTier)
 	}
 
-	messages = convertForeignBuiltinToolBlocks(messages, isAnthropicNativeBuiltinToolBlock)
+	messages = convertForeignBuiltinToolBlocks(messages, nativeBuiltinToolBlockPredicate(options.Provider, p.providerType(), hasAnthropicBuiltinToolId))
 	anthropicMessages, err := messagesToAnthropicParams(messages)
 	if err != nil {
 		return nil, err
@@ -303,8 +305,95 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		// client.Messages.NewStreaming.
 		streamOpts = append(streamOpts, option.WithJSONSet("speed", anthropicSpeedFast))
 	}
-	stream := client.Messages.NewStreaming(ctx, params, streamOpts...)
+	var httpResponse *http.Response
+	streamOpts = append(streamOpts, option.WithResponseInto(&httpResponse))
 
+	finalMessage, events, err := streamAnthropicEvents(client.Messages.NewStreaming(ctx, params, streamOpts...), eventChan)
+	if organizationId, ok := anthropicRejectedSearchResultsOrganization(err); ok {
+		log.Info().
+			Str("organizationId", organizationId).
+			Msg("retrying with web search results from other organizations converted to text")
+		params.Messages, err = messagesToAnthropicParams(convertForeignBuiltinToolBlocks(messages, func(block ContentBlock) bool {
+			return blockOrganizationId(block) == organizationId
+		}))
+		if err != nil {
+			return nil, err
+		}
+		finalMessage, events, err = streamAnthropicEvents(client.Messages.NewStreaming(ctx, params, streamOpts...), eventChan)
+	}
+	if err != nil {
+		return nil, requestAuth.classifyHTTPError(err, err)
+	}
+
+	output := accumulateAnthropicEventsToMessage(events)
+	stampCoreBlockMetadata(&output, CoreBlockMetadata{
+		Provider:     options.Provider,
+		ProviderType: p.providerType(),
+		Headers:      provenanceHeaders(httpResponse),
+	})
+
+	responseModel := string(finalMessage.Model)
+	if responseModel == "" {
+		responseModel = model
+	}
+
+	// Anthropic returns non-cached tokens as InputTokens; the total prompt
+	// token count is the sum of all three fields.
+	usage := Usage{
+		InputTokens:           int(finalMessage.Usage.InputTokens) + int(finalMessage.Usage.CacheReadInputTokens) + int(finalMessage.Usage.CacheCreationInputTokens),
+		OutputTokens:          int(finalMessage.Usage.OutputTokens),
+		CacheReadInputTokens:  int(finalMessage.Usage.CacheReadInputTokens),
+		CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
+	}
+
+	authType = common.ProviderAuthTypeAPI
+	if useOAuth {
+		authType = common.ProviderAuthTypeSubscription
+	}
+
+	response := &MessageResponse{
+		Id:              finalMessage.ID,
+		Model:           responseModel,
+		Provider:        options.Provider,
+		Output:          output,
+		StopReason:      string(finalMessage.StopReason),
+		StopSequence:    finalMessage.StopSequence,
+		Usage:           usage,
+		AuthType:        authType,
+		ReasoningEffort: resolvedEffort,
+	}
+
+	return response, nil
+}
+
+const anthropicCompatibleProviderType = "anthropic_compatible"
+
+func (p AnthropicProvider) providerType() string {
+	if p.AnthropicCompatible {
+		return anthropicCompatibleProviderType
+	}
+	return string(common.AnthropicToolChatProviderType)
+}
+
+// anthropicRejectedSearchResultsOrganization detects Anthropic rejecting
+// replayed web search results, which happens when they were produced under a
+// different organization than the current credential's, and returns the
+// current organization id reported on the error response.
+func anthropicRejectedSearchResultsOrganization(err error) (string, bool) {
+	var apiErr *anthropic.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest || apiErr.Response == nil {
+		return "", false
+	}
+	if !strings.Contains(apiErr.Error(), "Invalid `encrypted_content` in `search_result` block") {
+		return "", false
+	}
+	organizationId := apiErr.Response.Header.Get(anthropicOrganizationIdHeader)
+	return organizationId, organizationId != ""
+}
+
+// streamAnthropicEvents forwards normalized events from an Anthropic stream to
+// eventChan and returns them along with the accumulated message metadata.
+func streamAnthropicEvents(stream *ssestream.Stream[anthropic.MessageStreamEventUnion], eventChan chan<- Event) (anthropic.Message, []Event, error) {
 	var finalMessage anthropic.Message
 	var events []Event
 	nextBlockIndex := 0
@@ -316,7 +405,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		event := stream.Current()
 
 		if err := accumulateAnthropicMessageMetadata(&finalMessage, event); err != nil {
-			return nil, err
+			return finalMessage, nil, err
 		}
 
 		switch evt := event.AsAny().(type) {
@@ -363,7 +452,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 					BuiltinToolResult: anthropicWebSearchResultToBlock(resultBlock),
 				}
 			default:
-				return nil, fmt.Errorf("unsupported content block type in start event: %s", evt.ContentBlock.Type)
+				return finalMessage, nil, fmt.Errorf("unsupported content block type in start event: %s", evt.ContentBlock.Type)
 			}
 
 			ev := Event{
@@ -379,7 +468,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		case anthropic.ContentBlockDeltaEvent:
 			blockIndex, ok := blockIndexMap[evt.Index]
 			if !ok {
-				return nil, fmt.Errorf("received delta for unknown block index %d", evt.Index)
+				return finalMessage, nil, fmt.Errorf("received delta for unknown block index %d", evt.Index)
 			}
 
 			switch delta := evt.Delta.AsAny().(type) {
@@ -423,7 +512,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		case anthropic.ContentBlockStopEvent:
 			blockIndex, ok := blockIndexMap[evt.Index]
 			if !ok {
-				return nil, fmt.Errorf("received stop for unknown block index %d", evt.Index)
+				return finalMessage, nil, fmt.Errorf("received stop for unknown block index %d", evt.Index)
 			}
 
 			ev := Event{
@@ -437,47 +526,14 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, requestAuth.classifyHTTPError(err, err)
+		return finalMessage, nil, err
 	}
 
 	if startedBlocks != stoppedBlocks {
-		return nil, fmt.Errorf("stream truncated: started %d blocks but stopped %d", startedBlocks, stoppedBlocks)
+		return finalMessage, nil, fmt.Errorf("stream truncated: started %d blocks but stopped %d", startedBlocks, stoppedBlocks)
 	}
 
-	output := accumulateAnthropicEventsToMessage(events)
-
-	responseModel := string(finalMessage.Model)
-	if responseModel == "" {
-		responseModel = model
-	}
-
-	// Anthropic returns non-cached tokens as InputTokens; the total prompt
-	// token count is the sum of all three fields.
-	usage := Usage{
-		InputTokens:           int(finalMessage.Usage.InputTokens) + int(finalMessage.Usage.CacheReadInputTokens) + int(finalMessage.Usage.CacheCreationInputTokens),
-		OutputTokens:          int(finalMessage.Usage.OutputTokens),
-		CacheReadInputTokens:  int(finalMessage.Usage.CacheReadInputTokens),
-		CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
-	}
-
-	authType = common.ProviderAuthTypeAPI
-	if useOAuth {
-		authType = common.ProviderAuthTypeSubscription
-	}
-
-	response := &MessageResponse{
-		Id:              finalMessage.ID,
-		Model:           responseModel,
-		Provider:        options.Provider,
-		Output:          output,
-		StopReason:      string(finalMessage.StopReason),
-		StopSequence:    finalMessage.StopSequence,
-		Usage:           usage,
-		AuthType:        authType,
-		ReasoningEffort: resolvedEffort,
-	}
-
-	return response, nil
+	return finalMessage, events, nil
 }
 
 // anthropicSupportsAdaptiveThinking returns true for models where adaptive

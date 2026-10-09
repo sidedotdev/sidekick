@@ -148,6 +148,10 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		Msg("bedrock stream complete")
 
 	output := accumulateBedrockEventsToMessage(collected)
+	stampCoreBlockMetadata(&output, CoreBlockMetadata{
+		Provider:     bedrockProviderName,
+		ProviderType: string(common.BedrockToolChatProviderType),
+	})
 
 	return &MessageResponse{
 		Model:           model,
