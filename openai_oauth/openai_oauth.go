@@ -194,7 +194,7 @@ func ExchangeRefreshToken(ctx context.Context, refreshToken string) (*Credential
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, &common.OAuthRefreshError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var tokenResp struct {
@@ -263,7 +263,11 @@ func GetAndMaybeRefresh(ctx context.Context, secretManager interface{ GetSecret(
 		log.Info().Msg("OpenAI OAuth token expiring soon, refreshing proactively")
 		newCreds, refreshErr := ExchangeRefreshToken(ctx, creds.RefreshToken)
 		if refreshErr != nil {
-			return nil, false, invalidOAuthError(profileId, fmt.Errorf("failed to refresh OpenAI OAuth token: %w", refreshErr))
+			refreshErr = fmt.Errorf("failed to refresh OpenAI OAuth token: %w", refreshErr)
+			if common.IsOAuthCredentialRejection(refreshErr) {
+				return nil, false, invalidOAuthError(profileId, refreshErr)
+			}
+			return nil, false, refreshErr
 		}
 		if storeErr := StoreForProfileFn(secret_manager.ProfileIdOf(secretManager), newCreds); storeErr != nil {
 			return nil, false, fmt.Errorf("failed to store refreshed OpenAI OAuth credentials: %w", storeErr)
