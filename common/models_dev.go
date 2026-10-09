@@ -93,6 +93,30 @@ func (m *ModelInfo) EffortLevels() []string {
 	return nil
 }
 
+// HasModeBodyValue reports whether any models.dev experimental mode of the
+// model sets the given request body field to value.
+func (m *ModelInfo) HasModeBodyValue(field string, value string) bool {
+	if len(m.Experimental) == 0 {
+		return false
+	}
+	var experimental struct {
+		Modes map[string]struct {
+			Provider struct {
+				Body map[string]any `json:"body"`
+			} `json:"provider"`
+		} `json:"modes"`
+	}
+	if err := json.Unmarshal(m.Experimental, &experimental); err != nil {
+		return false
+	}
+	for _, mode := range experimental.Modes {
+		if bodyValue, ok := mode.Provider.Body[field].(string); ok && bodyValue == value {
+			return true
+		}
+	}
+	return false
+}
+
 type ProviderInfo struct {
 	Models map[string]ModelInfo `json:"models"`
 }

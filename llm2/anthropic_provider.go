@@ -39,6 +39,14 @@ const (
 // that enables fast mode. Empty means unset (fast mode off).
 const anthropicSpeedFast = "fast"
 
+// anthropicSupportsFastMode reports whether models.dev lists fast mode for a
+// first-party Anthropic model. Other models either reject the speed parameter
+// or silently ignore it, so it must not be sent for them.
+func anthropicSupportsFastMode(model string) bool {
+	info, ok := common.GetModel("anthropic", model)
+	return ok && info.HasModeBodyValue("speed", anthropicSpeedFast)
+}
+
 type AnthropicProvider struct {
 	BaseURL             string
 	DefaultModel        string
@@ -160,7 +168,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	for k, v := range p.CustomHeaders {
 		clientOptions = append(clientOptions, option.WithHeader(k, v))
 	}
-	fastMode := options.Speed == anthropicSpeedFast
+	fastMode := options.Speed == anthropicSpeedFast && anthropicSupportsFastMode(model)
 
 	if useOAuth {
 		headers := anthropicRequestHeaders(model, true, oauthCreds.AccessToken, options.Tools, assumeAnthropicModelNames, fastMode)
@@ -297,7 +305,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 
 	var streamOpts []option.RequestOption
-	if fastMode && strings.Contains(model, "opus-4-8") {
+	if fastMode {
 		// The non-beta MessageNewParams struct does not yet expose a Speed field
 		// in the SDK; inject it into the request body directly so we stay on
 		// client.Messages.NewStreaming.
@@ -475,6 +483,10 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		Usage:           usage,
 		AuthType:        authType,
 		ReasoningEffort: resolvedEffort,
+		ServiceTier:     options.ServiceTier,
+	}
+	if fastMode {
+		response.Speed = anthropicSpeedFast
 	}
 
 	return response, nil

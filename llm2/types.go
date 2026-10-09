@@ -277,6 +277,11 @@ type MessageResponse struct {
 	// effort requested if the model does not support reasoning or uses a
 	// different effort enum/schema)
 	ReasoningEffort string `json:"reasoningEffort"`
+
+	// the service tier and speed sent to the provider; empty means the
+	// provider's standard tier
+	ServiceTier string `json:"serviceTier,omitempty"`
+	Speed       string `json:"speed,omitempty"`
 }
 
 // GetMessage returns the Output message as a common.Message interface.

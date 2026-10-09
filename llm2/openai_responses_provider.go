@@ -495,6 +495,7 @@ loop:
 		Usage:           usage,
 		AuthType:        credentials.authType,
 		ReasoningEffort: actualReasoningEffort,
+		ServiceTier:     options.ServiceTier,
 	}, nil
 }
 

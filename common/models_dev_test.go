@@ -623,3 +623,35 @@ func TestLoadModelsDev_PreservesExperimentalModes(t *testing.T) {
 		t.Errorf("expected experimental to be omitted for gpt-4, got %+v", withoutModes.Experimental)
 	}
 }
+
+func TestModelInfoHasModeBodyValue(t *testing.T) {
+	t.Parallel()
+	modes := json.RawMessage(`{"modes": {
+		"fast": {"provider": {"body": {"speed": "fast"}}},
+		"ultrafast": {"provider": {"body": {"service_tier": "ultrafast"}}},
+		"pro": {"provider": {"body": {"reasoning": {"mode": "pro"}}}}
+	}}`)
+	tests := []struct {
+		name         string
+		experimental json.RawMessage
+		field        string
+		value        string
+		want         bool
+	}{
+		{name: "matching speed mode", experimental: modes, field: "speed", value: "fast", want: true},
+		{name: "matching service tier mode", experimental: modes, field: "service_tier", value: "ultrafast", want: true},
+		{name: "different value", experimental: modes, field: "service_tier", value: "flex", want: false},
+		{name: "non-string body value", experimental: modes, field: "reasoning", value: "pro", want: false},
+		{name: "no experimental data", field: "speed", value: "fast", want: false},
+		{name: "malformed experimental data", experimental: json.RawMessage(`{"modes": [`), field: "speed", value: "fast", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			info := ModelInfo{Experimental: tt.experimental}
+			if got := info.HasModeBodyValue(tt.field, tt.value); got != tt.want {
+				t.Errorf("HasModeBodyValue(%q, %q) = %v, want %v", tt.field, tt.value, got, tt.want)
+			}
+		})
+	}
+}
