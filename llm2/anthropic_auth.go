@@ -1,11 +1,15 @@
 package llm2
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sidekick/common"
 	"sidekick/llm"
 	"sidekick/secret_manager"
+
+	"go.temporal.io/sdk/temporal"
 )
 
 // anthropicCredentialsForRequest resolves credentials for the configured
@@ -51,8 +55,17 @@ func anthropicCredentialsForRequest(secretManager secret_manager.SecretManager, 
 }
 
 func anthropicOAuthLookupError(err error, provider string, authType common.ProviderAuthType) error {
-	if _, ok := common.AsProviderAuthError(err); ok {
-		return common.ReattributeProviderAuthError(err, provider, authType)
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) && appErr.Type() == common.ProviderAuthErrorType {
+		var netErr net.Error
+		if errors.Is(appErr, context.DeadlineExceeded) || errors.Is(appErr, context.Canceled) ||
+			(errors.As(appErr, &netErr) && netErr.Timeout()) {
+			// The shared credential loader also wraps interrupted refresh requests
+			// as invalid credentials, but these failures do not justify reauthentication.
+			err = appErr.Unwrap()
+		} else {
+			return common.ReattributeProviderAuthError(err, provider, authType)
+		}
 	}
 	return fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
 }
