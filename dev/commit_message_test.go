@@ -222,9 +222,17 @@ func TestCommitModelFallback(t *testing.T) {
 			wantModel: "localization-model",
 		},
 		{
-			name: "falls back to default without commit or code localization",
+			name: "falls back to coding without commit or code localization",
 			useCaseConfigs: map[string][]common.ModelConfig{
-				common.CodingKey: {{Provider: "test", Model: "coding-model"}},
+				common.CodingKey:   {{Provider: "test", Model: "coding-model"}},
+				common.PlanningKey: {{Provider: "test", Model: "planning-model"}},
+			},
+			wantModel: "coding-model",
+		},
+		{
+			name: "falls back to default without commit, code localization or coding",
+			useCaseConfigs: map[string][]common.ModelConfig{
+				common.PlanningKey: {{Provider: "test", Model: "planning-model"}},
 			},
 			wantModel: "default-model",
 		},

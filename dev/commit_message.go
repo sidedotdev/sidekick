@@ -35,10 +35,15 @@ func (a commitMessageArguments) Message() string {
 	return subject + "\n\n" + body
 }
 
-// commitModelConfig resolves the commit model, falling back to the code
-// localization model and then the defaults when commit isn't configured.
+// commitModelConfig resolves the commit model, falling back in order to the
+// code localization, coding and then default models when commit isn't
+// configured.
 func commitModelConfig(dCtx DevContext) common.ModelConfig {
-	return dCtx.GetModelConfig(common.CommitKey, 0, common.CodeLocalizationKey)
+	fallback := common.CodingKey
+	if len(dCtx.GetLLMConfig().GetModels(common.CodeLocalizationKey)) > 0 {
+		fallback = common.CodeLocalizationKey
+	}
+	return dCtx.GetModelConfig(common.CommitKey, 0, fallback)
 }
 
 // generateCommitMessage asks the commit model for a commit message via a
