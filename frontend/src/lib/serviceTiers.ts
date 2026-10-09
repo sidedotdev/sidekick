@@ -94,3 +94,34 @@ export const applyServiceTier = (option: ServiceTierOption): ServiceTierSelectio
   serviceTier: option.field === 'serviceTier' ? option.value : '',
   speed: option.field === 'speed' ? option.value : '',
 })
+
+/**
+ * Keeps the tier only if models.dev lists it for the model, falling back to
+ * standard, so a tier chosen for one model doesn't carry over to another that
+ * doesn't offer it. Without models data nothing can be ruled out.
+ */
+export const keepOfferedTier = (
+  modelsData: ModelsData,
+  provider: string,
+  model: string,
+  tier: ServiceTierSelection,
+): ServiceTierSelection => {
+  if (Object.keys(modelsData).length === 0) return tier
+  const offered = findServiceTierOptions(modelsData, provider, model, {})
+  const selectedId = selectedServiceTierId(offered, tier)
+  return applyServiceTier(offered.find((o) => o.id === selectedId) ?? STANDARD_TIER)
+}
+
+// Tier values that mean the provider's ordinary serving path.
+const STANDARD_TIER_VALUES = new Set(['', 'auto', 'default', 'standard', 'standard_only'])
+
+/** Labels any non-standard tier a request was served with, or '' when standard. */
+export const nonStandardTierLabel = (tier: Partial<ServiceTierSelection>): string =>
+  TIER_FIELDS.map((field) => tier[field] ?? '')
+    .filter((value) => !STANDARD_TIER_VALUES.has(value))
+    .map(capitalize)
+    .join(', ')
+
+/** Anthropic bills fast mode to usage credits rather than subscription limits. */
+export const requiresUsageCredits = (provider: string, tier: ServiceTierSelection): boolean =>
+  provider === 'anthropic' && tier.speed === 'fast'

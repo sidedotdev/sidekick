@@ -9,6 +9,7 @@
           ({{ effectiveReasoningEffort }} reasoning)
         </span>
       </p>
+      <p class="service-tier" v-if="serviceTierLabel">Service tier: {{ serviceTierLabel }}</p>
       <p class="auth-type" v-if="authType">Auth type: {{ authType }}</p>
       <p class="profile" v-if="resolvedProfileName">Profile: {{ resolvedProfileName }}</p>
       <p class="model-usage" v-if="parsedActionResult && !completionParseFailure && flowAction.actionStatus !== 'pending' && flowAction.actionStatus !== 'started' && usage && (usage.inputTokens || usage.outputTokens)">
@@ -197,6 +198,7 @@ import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage, St
 import { isLlm2ChatHistoryWrapper } from '../lib/models';
 import { useProfiles } from '../lib/profiles';
 import { parseLlm2ToolArguments } from '../lib/toolArguments';
+import { nonStandardTierLabel } from '../lib/serviceTiers';
 import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
 import ImagePreview from './ImagePreview.vue'
@@ -331,6 +333,10 @@ const effectiveModel = computed(() => props.flowAction.actionParams.model || par
 const effectiveProvider = computed(() => props.flowAction.actionParams.provider || parsedActionResult.value?.provider || completion.value?.provider || '')
 const effectiveReasoningEffort = computed(() => parsedActionResult.value?.reasoningEffort || props.flowAction.actionParams.reasoningEffort || '')
 const authType = computed(() => parsedActionResult.value?.authType || '')
+const serviceTierLabel = computed(() => nonStandardTierLabel({
+  serviceTier: parsedActionResult.value?.serviceTier,
+  speed: parsedActionResult.value?.speed,
+}))
 
 const { profiles, profileName } = useProfiles()
 // The profile is only worth calling out when more than one is configured.

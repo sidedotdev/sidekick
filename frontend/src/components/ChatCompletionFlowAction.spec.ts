@@ -326,6 +326,46 @@ describe('ChatCompletionFlowAction', () => {
       expect(wrapper.find('.auth-type').text()).toBe('Auth type: api')
     })
 
+    describe('service tier display', () => {
+      const tierActionResult = (tier: { serviceTier?: string; speed?: string }) => JSON.stringify({
+        model: 'gpt-6',
+        provider: 'openai',
+        ...tier,
+        output: {
+          role: 'assistant',
+          content: [{ id: 'b1', type: 'text', text: 'Hello' }]
+        },
+        stopReason: 'stop',
+        usage: { inputTokens: 100, outputTokens: 50 }
+      })
+
+      it.each([
+        [{ serviceTier: 'ultrafast' }, 'Service tier: Ultrafast'],
+        [{ speed: 'fast' }, 'Service tier: Fast'],
+      ])('shows the non-standard tier the response was served with (%j)', async (tier, expected) => {
+        const wrapper = mount(ChatCompletionFlowAction, {
+          props: { flowAction: { ...flowAction, actionResult: tierActionResult(tier) }, expand: true }
+        })
+
+        await wrapper.vm.$nextTick()
+
+        expect(wrapper.find('.service-tier').text()).toBe(expected)
+      })
+
+      it.each([
+        [{}],
+        [{ serviceTier: 'default' }],
+      ])('hides the standard tier (%j)', async (tier) => {
+        const wrapper = mount(ChatCompletionFlowAction, {
+          props: { flowAction: { ...flowAction, actionResult: tierActionResult(tier) }, expand: true }
+        })
+
+        await wrapper.vm.$nextTick()
+
+        expect(wrapper.find('.service-tier').exists()).toBe(false)
+      })
+    })
+
     describe('resolved profile display', () => {
       const cacheProfiles = (profiles: { id: string; name: string }[]) => {
         sessionStorage.setItem('profiles_cache', JSON.stringify({ data: profiles, timestamp: Date.now() }))

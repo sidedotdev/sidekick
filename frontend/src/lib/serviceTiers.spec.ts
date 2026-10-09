@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { applyServiceTier, findServiceTierOptions, selectedServiceTierId } from './serviceTiers'
+import {
+  applyServiceTier,
+  findServiceTierOptions,
+  keepOfferedTier,
+  nonStandardTierLabel,
+  requiresUsageCredits,
+  selectedServiceTierId,
+} from './serviceTiers'
 import type { ModelsData } from './store'
 
 const modelsData: ModelsData = {
@@ -83,5 +90,53 @@ describe('selectedServiceTierId / applyServiceTier', () => {
     const [standard, fast] = findServiceTierOptions(modelsData, 'anthropic', 'claude-opus-5', {})
     expect(applyServiceTier(fast)).toEqual({ serviceTier: '', speed: 'fast' })
     expect(applyServiceTier(standard)).toEqual({ serviceTier: '', speed: '' })
+  })
+})
+
+describe('keepOfferedTier', () => {
+  const ultrafast = { serviceTier: 'ultrafast', speed: '' }
+  const fast = { serviceTier: '', speed: 'fast' }
+  const standard = { serviceTier: '', speed: '' }
+
+  it.each([
+    ['keeps a tier the model offers', 'openai', 'gpt-6', ultrafast, ultrafast],
+    ['keeps anthropic fast mode on a model that offers it', 'anthropic', 'claude-opus-5', fast, fast],
+    ['drops a tier from another provider', 'anthropic', 'claude-opus-5', ultrafast, standard],
+    ['drops a tier the model does not list', 'openai', 'gpt-4', ultrafast, standard],
+    ['drops a tier when the model is unknown', 'openai', 'not-a-model', ultrafast, standard],
+    ['keeps standard', 'openai', 'gpt-6', standard, standard],
+  ])('%s', (_name, provider, model, tier, expected) => {
+    expect(keepOfferedTier(modelsData, provider, model, tier)).toEqual(expected)
+  })
+
+  it('keeps the tier until models data is available', () => {
+    expect(keepOfferedTier({}, 'anthropic', 'claude-opus-5', ultrafast)).toEqual(ultrafast)
+  })
+})
+
+describe('nonStandardTierLabel', () => {
+  it.each([
+    [{}, ''],
+    [{ serviceTier: '', speed: '' }, ''],
+    [{ serviceTier: 'default' }, ''],
+    [{ serviceTier: 'auto' }, ''],
+    [{ serviceTier: 'standard_only' }, ''],
+    [{ serviceTier: 'ultrafast' }, 'Ultrafast'],
+    [{ serviceTier: 'priority' }, 'Priority'],
+    [{ speed: 'fast' }, 'Fast'],
+    [{ serviceTier: 'priority', speed: 'fast' }, 'Priority, Fast'],
+  ])('labels %j as %j', (tier, expected) => {
+    expect(nonStandardTierLabel(tier)).toBe(expected)
+  })
+})
+
+describe('requiresUsageCredits', () => {
+  it.each([
+    ['anthropic', { serviceTier: '', speed: 'fast' }, true],
+    ['anthropic', { serviceTier: '', speed: '' }, false],
+    ['openai', { serviceTier: 'ultrafast', speed: '' }, false],
+    ['openai', { serviceTier: '', speed: 'fast' }, false],
+  ])('%s with %j -> %s', (provider, tier, expected) => {
+    expect(requiresUsageCredits(provider, tier)).toBe(expected)
   })
 })
