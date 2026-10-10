@@ -36,7 +36,7 @@ func TestConvertForeignBuiltinToolBlocks(t *testing.T) {
 	t.Run("native blocks are untouched", func(t *testing.T) {
 		t.Parallel()
 		messages := []Message{{Role: RoleAssistant, Content: anthropicPair}}
-		out := convertForeignBuiltinToolBlocks(messages, isAnthropicNativeBuiltinToolBlock)
+		out := convertForeignBuiltinToolBlocks(messages, hasAnthropicBuiltinToolId)
 		assert.Equal(t, messages, out)
 	})
 
@@ -195,6 +195,86 @@ func TestBuiltinToolClientNameReversibility(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestNativeBuiltinToolBlockPredicateTrustsCoreMetadataOverIds(t *testing.T) {
+	t.Parallel()
+
+	tagged := func(id, provider, providerType string) ContentBlock {
+		return ContentBlock{
+			Type:           ContentBlockTypeBuiltinToolUse,
+			BuiltinToolUse: &BuiltinToolUseBlock{Id: id},
+			Metadata: map[string]any{MetadataNamespaceCore: map[string]any{
+				"provider":     provider,
+				"providerType": providerType,
+			}},
+		}
+	}
+	untagged := func(id string) ContentBlock {
+		return ContentBlock{Type: ContentBlockTypeBuiltinToolUse, BuiltinToolUse: &BuiltinToolUseBlock{Id: id}}
+	}
+
+	isAnthropicNative := nativeBuiltinToolBlockPredicate("anthropic", "anthropic", hasAnthropicBuiltinToolId)
+	isOpenAINative := nativeBuiltinToolBlockPredicate("openai", "openai", hasOpenAIBuiltinToolId)
+
+	tests := []struct {
+		name     string
+		isNative func(ContentBlock) bool
+		block    ContentBlock
+		want     bool
+	}{
+		{"same provider with unrecognized id", isAnthropicNative, tagged("custom_1", "anthropic", "anthropic"), true},
+		{"foreign provider with misleading id", isAnthropicNative, tagged("srvtoolu_1", "openai", "openai"), false},
+		{"same type under another provider name", isAnthropicNative, tagged("srvtoolu_1", "work-anthropic", "anthropic"), false},
+		{"same name with another provider type", isAnthropicNative, tagged("srvtoolu_1", "anthropic", "anthropic_compatible"), false},
+		{"openai same provider with unrecognized id", isOpenAINative, tagged("call_1", "openai", "openai"), true},
+		{"openai foreign provider with misleading id", isOpenAINative, tagged("ws_1", "google", "google"), false},
+		{"untagged falls back to anthropic id", isAnthropicNative, untagged("srvtoolu_1"), true},
+		{"untagged falls back to foreign id", isAnthropicNative, untagged("ws_1"), false},
+		{"untagged falls back to openai id", isOpenAINative, untagged("ws_1"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.isNative(tt.block))
+		})
+	}
+}
+
+func TestConvertForeignBuiltinToolBlocksUsesCoreMetadata(t *testing.T) {
+	t.Parallel()
+
+	nativeBlocks := anthropicWebSearchBlocks("custom_native", "org")
+	foreignBlocks := anthropicWebSearchBlocks("srvtoolu_foreign", "org")
+	for i := range foreignBlocks {
+		foreignBlocks[i].Metadata = map[string]any{MetadataNamespaceCore: map[string]any{
+			"provider":     "openai",
+			"providerType": "openai",
+		}}
+	}
+	messages := []Message{{Role: RoleAssistant, Content: append(nativeBlocks, foreignBlocks...)}}
+
+	out := convertForeignBuiltinToolBlocks(messages, nativeBuiltinToolBlockPredicate("anthropic", "anthropic", hasAnthropicBuiltinToolId))
+
+	typesById := make(map[string][]ContentBlockType)
+	for _, msg := range out {
+		for _, block := range msg.Content {
+			switch {
+			case block.BuiltinToolUse != nil:
+				typesById[block.BuiltinToolUse.Id] = append(typesById[block.BuiltinToolUse.Id], block.Type)
+			case block.BuiltinToolResult != nil:
+				typesById[block.BuiltinToolResult.ToolCallId] = append(typesById[block.BuiltinToolResult.ToolCallId], block.Type)
+			case block.ToolUse != nil:
+				typesById[block.ToolUse.Id] = append(typesById[block.ToolUse.Id], block.Type)
+			case block.ToolResult != nil:
+				typesById[block.ToolResult.ToolCallId] = append(typesById[block.ToolResult.ToolCallId], block.Type)
+			}
+		}
+	}
+	assert.Equal(t, map[string][]ContentBlockType{
+		"custom_native":    {ContentBlockTypeBuiltinToolUse, ContentBlockTypeBuiltinToolResult},
+		"srvtoolu_foreign": {ContentBlockTypeToolUse, ContentBlockTypeToolResult},
+	}, typesById)
+}
+
 func TestIsNativeBuiltinToolBlockPredicates(t *testing.T) {
 	t.Parallel()
 
@@ -215,14 +295,14 @@ func TestIsNativeBuiltinToolBlockPredicates(t *testing.T) {
 		BuiltinToolResult: &BuiltinToolResultBlock{ToolCallId: "srvtoolu_1"},
 	}
 
-	assert.True(t, isAnthropicNativeBuiltinToolBlock(anthropicUse))
-	assert.True(t, isAnthropicNativeBuiltinToolBlock(anthropicResult))
-	assert.False(t, isAnthropicNativeBuiltinToolBlock(openaiUse))
-	assert.False(t, isAnthropicNativeBuiltinToolBlock(googleUse))
+	assert.True(t, hasAnthropicBuiltinToolId(anthropicUse))
+	assert.True(t, hasAnthropicBuiltinToolId(anthropicResult))
+	assert.False(t, hasAnthropicBuiltinToolId(openaiUse))
+	assert.False(t, hasAnthropicBuiltinToolId(googleUse))
 
-	assert.True(t, isOpenAINativeBuiltinToolBlock(openaiUse))
-	assert.False(t, isOpenAINativeBuiltinToolBlock(anthropicUse))
-	assert.False(t, isOpenAINativeBuiltinToolBlock(anthropicResult))
+	assert.True(t, hasOpenAIBuiltinToolId(openaiUse))
+	assert.False(t, hasOpenAIBuiltinToolId(anthropicUse))
+	assert.False(t, hasOpenAIBuiltinToolId(anthropicResult))
 
 	assert.False(t, noNativeBuiltinToolBlocks(anthropicUse))
 	assert.False(t, noNativeBuiltinToolBlocks(openaiUse))

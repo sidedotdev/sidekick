@@ -143,7 +143,10 @@
     </div>
   </form>
   <div v-if="expand && !isPending">
-    <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
+    <div
+      v-if="flowAction.actionParams.requestContent && (flowAction.actionParams.requestKind !== 'provider_auth' || flowAction.actionStatus !== 'complete')"
+      class="markdown-container"
+    >
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
       </button>

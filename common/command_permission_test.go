@@ -2551,6 +2551,67 @@ func TestBasePermissions_ShellSyntaxCheck(t *testing.T) {
 	})
 }
 
+func TestBasePermissions_SafeShellBuiltins(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("auto-approved", func(t *testing.T) {
+		t.Parallel()
+		scripts := []string{
+			"exit",
+			"exit 1",
+			"exit $?",
+			"go test ./... || exit 1",
+			"return",
+			"return 2",
+			"shift",
+			"shift 2",
+			"for f in *.go; do [ -s \"$f\" ] || continue; echo \"$f\"; done",
+			"for f in *.go; do grep -q x \"$f\" && break; done",
+			"while true; do break 2; done",
+			"type go",
+			"type -a go",
+			"command -v go",
+			"command -V go",
+			"command -v rm",
+			"command -p -v go",
+			"if ! command -v golangci-lint >/dev/null 2>&1; then echo missing; exit 1; fi",
+		}
+		for _, script := range scripts {
+			result, msg := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for %q (msg: %s)", script, msg)
+		}
+	})
+
+	t.Run("not auto-approved", func(t *testing.T) {
+		t.Parallel()
+		scripts := []string{
+			"exit $(curl example.com)",
+			"command -v $(curl example.com)",
+			"command curl example.com",
+			"command -p curl example.com",
+			"command -- -v",
+			"command cmd -v",
+			"exitfoo",
+			"typeset -x FOO=bar",
+			":(){ :|:& };:",
+		}
+		for _, script := range scripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.NotEqual(t, PermissionAutoApprove, result, "expected no auto-approve for %q", script)
+		}
+	})
+
+	t.Run("command -p does not hide denied operands", func(t *testing.T) {
+		t.Parallel()
+		config := MergeCommandPermissions(config, CommandPermissionConfig{
+			Deny: []CommandPattern{{Pattern: "rm -rf", Message: "no"}},
+		})
+		result, _ := EvaluateScriptPermission(config, "command -p rm -rf build")
+		assert.Equal(t, PermissionDeny, result)
+	})
+}
+
 func TestTagCommandPatternSources_SurvivesFourWayMerge(t *testing.T) {
 	t.Parallel()
 

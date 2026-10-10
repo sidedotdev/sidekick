@@ -98,6 +98,11 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		params.ParallelToolCalls = param.NewOpt(*options.ParallelToolCalls)
 	}
 
+	// Compatible proxies may reject unknown OpenAI-specific fields.
+	if p.BaseURL == "" && options.PromptCacheKey != "" {
+		params.PromptCacheKey = param.NewOpt(options.PromptCacheKey)
+	}
+
 	actualReasoningEffort := resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 	if actualReasoningEffort != "" {
 		params.ReasoningEffort = shared.ReasoningEffort(actualReasoningEffort)
@@ -271,6 +276,11 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	if stopReason == "stop" || stopReason == "" {
 		stopReason = "stop"
 	}
+
+	stampCoreBlockMetadata(&outputMessage, CoreBlockMetadata{
+		Provider:     options.Provider,
+		ProviderType: string(common.OpenaiCompatibleToolChatProviderType),
+	})
 
 	return &MessageResponse{
 		Model:           responseModel,

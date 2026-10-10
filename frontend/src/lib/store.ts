@@ -14,9 +14,22 @@ export interface ReasoningOption {
   max?: number;
 }
 
+// An alternative way of running a model (e.g. a service tier), selected by
+// merging provider.body into the request.
+export interface ModelMode {
+  provider?: {
+    body?: Record<string, unknown>;
+    headers?: Record<string, string>;
+  };
+}
+
 export interface ModelInfo {
+  release_date?: string;
   reasoning?: boolean;
   reasoning_options?: ReasoningOption[];
+  experimental?: {
+    modes?: Record<string, ModelMode>;
+  };
 }
 
 interface ProviderInfo {

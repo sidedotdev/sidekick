@@ -85,6 +85,8 @@ func (b *fakeCodexBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/responses":
 		b.responseRequests = append(b.responseRequests, body)
+		w.Header().Set("Openai-Organization", "org-test")
+		w.Header().Set("Openai-Project", "project-test")
 		w.Header()["Content-Type"] = nil
 		fmt.Fprint(w, b.responseRounds(len(b.responseRequests)))
 	case "/alpha/search":
@@ -178,7 +180,15 @@ func TestOpenAIResponsesProvider_SubscriptionWebSearchRunsClientSide(t *testing.
 		alphaBody:   alphaSearchSuccessBody,
 	}
 
-	response, err := streamAgainstFakeCodexBackend(t, backend, common.ProviderAuthTypeSubscription, alphaSearchTestSecrets(t))
+	server := httptest.NewServer(backend)
+	t.Cleanup(server.Close)
+	provider := OpenAIResponsesProvider{
+		BaseURL:      server.URL,
+		AuthType:     common.ProviderAuthTypeSubscription,
+		BuiltinTools: []string{webSearchToolName},
+	}
+	request := webSearchTestRequest(alphaSearchTestSecrets(t))
+	response, err := provider.Stream(context.Background(), request, make(chan Event, 1000))
 	require.NoError(t, err)
 
 	require.Len(t, backend.responseRequests, 2)
@@ -204,7 +214,7 @@ func TestOpenAIResponsesProvider_SubscriptionWebSearchRunsClientSide(t *testing.
 	assert.Contains(t, jsonText(t, outputs[0]["output"]), "Go 1.27 was released in August.")
 	assert.Contains(t, jsonText(t, outputs[0]["output"]), "https://go.dev/doc/go1.27")
 
-	assert.Equal(t, []ContentBlock{
+	expectedContent := []ContentBlock{
 		{
 			Id:   "fc_call_search",
 			Type: ContentBlockTypeBuiltinToolUse,
@@ -222,9 +232,39 @@ func TestOpenAIResponsesProvider_SubscriptionWebSearchRunsClientSide(t *testing.
 			},
 		},
 		{Id: "msg_test", Type: ContentBlockTypeText, Text: "Go 1.27 is the latest release."},
-	}, response.Output.Content)
+	}
+	for i := range expectedContent {
+		expectedContent[i].Metadata = map[string]any{MetadataNamespaceCore: &CoreBlockMetadata{
+			Provider:     "openai",
+			ProviderType: string(common.OpenaiResponsesCompatibleChatProvider),
+			Headers:      map[string]string{"Openai-Organization": "org-test", "Openai-Project": "project-test"},
+		}}
+	}
+	assert.Equal(t, expectedContent, response.Output.Content)
 	assert.Equal(t, "stop", response.StopReason)
 	assert.Equal(t, Usage{InputTokens: 20, OutputTokens: 10}, response.Usage)
+
+	rawHistory, err := json.Marshal(response.Output)
+	require.NoError(t, err)
+	var history Message
+	require.NoError(t, json.Unmarshal(rawHistory, &history))
+	request.Messages = append(request.Messages, history, Message{Role: RoleUser, Content: TextContentBlocks("Summarize that.")})
+	_, err = provider.Stream(context.Background(), request, make(chan Event, 1000))
+	require.NoError(t, err)
+	require.Len(t, backend.responseRequests, 3)
+	assert.Len(t, backend.alphaRequests, 1)
+
+	replay := backend.responseRequests[2]
+	assert.Empty(t, requestInputItems(t, replay, "web_search_call"))
+	replayCalls := requestInputItems(t, replay, "function_call")
+	require.Len(t, replayCalls, 1)
+	assert.Equal(t, "call_search", replayCalls[0]["call_id"])
+	assert.Equal(t, clientWebSearchFunctionName, replayCalls[0]["name"])
+	replayOutputs := requestInputItems(t, replay, "function_call_output")
+	require.Len(t, replayOutputs, 1)
+	assert.Equal(t, "call_search", replayOutputs[0]["call_id"])
+	assert.Contains(t, jsonText(t, replayOutputs[0]["output"]), "Go 1.27 was released in August.")
+	assert.Contains(t, jsonText(t, replayOutputs[0]["output"]), "https://go.dev/doc/go1.27")
 }
 
 func TestOpenAIResponsesProvider_SubscriptionWebSearchEdgeCases(t *testing.T) {
@@ -389,7 +429,90 @@ func TestOpenAIResponsesProvider_CompletesFunctionArguments(t *testing.T) {
 			for event := range events {
 				streamed = append(streamed, event)
 			}
-			assert.Equal(t, response.Output, AccumulateEventsToMessage(streamed))
+			expectedOutput := AccumulateEventsToMessage(streamed)
+			require.Len(t, expectedOutput.Content, 1)
+			expectedOutput.Content[0].Metadata = map[string]any{MetadataNamespaceCore: &CoreBlockMetadata{
+				Provider:     "openai",
+				ProviderType: string(common.OpenaiResponsesCompatibleChatProvider),
+				Headers:      map[string]string{"Openai-Organization": "org-test", "Openai-Project": "project-test"},
+			}}
+			assert.Equal(t, expectedOutput, response.Output)
+		})
+	}
+}
+
+func TestOpenAIResponsesProvider_ReplaysBuiltinSearchByOrigin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		metadata   *CoreBlockMetadata
+		wantNative bool
+	}{
+		{name: "untagged hosted search", wantNative: true},
+		{
+			name:       "same provider",
+			metadata:   &CoreBlockMetadata{Provider: "openai", ProviderType: string(common.OpenaiResponsesCompatibleChatProvider)},
+			wantNative: true,
+		},
+		{
+			name:     "different provider name",
+			metadata: &CoreBlockMetadata{Provider: "other-openai", ProviderType: string(common.OpenaiResponsesCompatibleChatProvider)},
+		},
+		{
+			name:     "different provider type",
+			metadata: &CoreBlockMetadata{Provider: "openai", ProviderType: string(common.OpenaiToolChatProviderType)},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			backend := &fakeCodexBackend{
+				t:              t,
+				responseRounds: func(int) string { return sseResponse(t, sseText(t, 0, "answer")) },
+			}
+			server := httptest.NewServer(backend)
+			t.Cleanup(server.Close)
+			provider := OpenAIResponsesProvider{
+				BaseURL:      server.URL,
+				AuthType:     common.ProviderAuthTypeAPI,
+				BuiltinTools: []string{webSearchToolName},
+			}
+			block := ContentBlock{
+				Type: ContentBlockTypeBuiltinToolUse,
+				BuiltinToolUse: &BuiltinToolUseBlock{
+					Id: "ws_history", Name: webSearchToolName, Arguments: `{"type":"search","query":"q"}`, Status: "completed",
+				},
+			}
+			if tc.metadata != nil {
+				block.Metadata = map[string]any{MetadataNamespaceCore: tc.metadata}
+			}
+			request := webSearchTestRequest(&secret_manager.MockSecretManager{})
+			request.Messages = append([]Message{{Role: RoleAssistant, Content: []ContentBlock{block}}}, request.Messages...)
+
+			_, err := provider.Stream(context.Background(), request, make(chan Event, 100))
+			require.NoError(t, err)
+			require.Len(t, backend.responseRequests, 1)
+			body := backend.responseRequests[0]
+			nativeCalls := requestInputItems(t, body, "web_search_call")
+			calls := requestInputItems(t, body, "function_call")
+			outputs := requestInputItems(t, body, "function_call_output")
+			if tc.wantNative {
+				require.Len(t, nativeCalls, 1)
+				assert.Equal(t, "ws_history", nativeCalls[0]["id"])
+				assert.Empty(t, calls)
+				assert.Empty(t, outputs)
+			} else {
+				assert.Empty(t, nativeCalls)
+				require.Len(t, calls, 1)
+				require.Len(t, outputs, 1)
+				assert.Equal(t, clientWebSearchFunctionName, calls[0]["name"])
+				assert.JSONEq(t, block.BuiltinToolUse.Arguments, calls[0]["arguments"].(string))
+				assert.Equal(t, calls[0]["call_id"], outputs[0]["call_id"])
+				assert.Contains(t, jsonText(t, outputs[0]["output"]), "Web search was performed server-side")
+			}
+			assert.Empty(t, backend.alphaRequests)
 		})
 	}
 }

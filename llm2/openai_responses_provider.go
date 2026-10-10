@@ -42,6 +42,13 @@ func (p OpenAIResponsesProvider) webSearchToolEnabled() bool {
 	return p.BaseURL == "" || slices.Contains(p.BuiltinTools, webSearchToolName)
 }
 
+func (p OpenAIResponsesProvider) providerType() string {
+	if p.BaseURL != "" {
+		return string(common.OpenaiResponsesCompatibleChatProvider)
+	}
+	return string(common.OpenaiToolChatProviderType)
+}
+
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options
@@ -96,14 +103,15 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		}
 	}
 
-	isNativeBuiltinTool := isOpenAINativeBuiltinToolBlock
+	isNativeBuiltinTool := nativeBuiltinToolBlockPredicate(options.Provider, p.providerType(), hasOpenAIBuiltinToolId)
 	if credentials.useOAuth {
 		// Subscription requests never declare the hosted web_search tool (see
 		// clientWebSearchFunctionName), so recorded searches replay as
 		// function call pairs.
 		isNativeBuiltinTool = noNativeBuiltinToolBlocks
 	}
-	inputItems, err := messageToResponsesInput(convertForeignBuiltinToolBlocks(messages, isNativeBuiltinTool))
+	messages = convertForeignBuiltinToolBlocks(messages, isNativeBuiltinTool)
+	inputItems, err := messageToResponsesInput(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build input: %w", err)
 	}
@@ -134,6 +142,11 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 
 	if options.ServiceTier != "" {
 		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.ServiceTier)
+	}
+
+	// Compatible proxies may reject unknown OpenAI-specific fields.
+	if p.BaseURL == "" && options.PromptCacheKey != "" {
+		params.PromptCacheKey = param.NewOpt(options.PromptCacheKey)
 	}
 
 	webSearchIncluded := false
@@ -195,6 +208,9 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	for key, value := range options.ExtraBody {
 		extraBodyOptions = append(extraBodyOptions, option.WithJSONSet(key, value))
 	}
+
+	var httpResponse *http.Response
+	extraBodyOptions = append(extraBodyOptions, option.WithResponseInto(&httpResponse))
 
 	var events []Event
 	var stopReason string
@@ -607,6 +623,11 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	}
 
 	outputMessage := AccumulateEventsToMessage(events)
+	stampCoreBlockMetadata(&outputMessage, CoreBlockMetadata{
+		Provider:     options.Provider,
+		ProviderType: p.providerType(),
+		Headers:      provenanceHeaders(httpResponse),
+	})
 
 	return &MessageResponse{
 		Id:              "",
@@ -618,6 +639,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		Usage:           totalUsage,
 		AuthType:        credentials.authType,
 		ReasoningEffort: actualReasoningEffort,
+		ServiceTier:     options.ServiceTier,
 	}, nil
 }
 

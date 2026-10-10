@@ -56,6 +56,10 @@ type ModelInfo struct {
 	// Option types other than effort, budget_tokens and toggle may appear and
 	// are ignored by consumers.
 	ReasoningOptions []ReasoningOption `json:"reasoning_options,omitempty"`
+	// Passed through unparsed so the frontend can read alternative modes (e.g.
+	// service tiers under experimental.modes) without a schema change there
+	// ever breaking decoding of the rest of models.dev.
+	Experimental json.RawMessage `json:"experimental,omitempty"`
 }
 
 const reasoningOptionTypeEffort = "effort"
@@ -87,6 +91,30 @@ func (m *ModelInfo) EffortLevels() []string {
 		return option.Values
 	}
 	return nil
+}
+
+// HasModeBodyValue reports whether any models.dev experimental mode of the
+// model sets the given request body field to value.
+func (m *ModelInfo) HasModeBodyValue(field string, value string) bool {
+	if len(m.Experimental) == 0 {
+		return false
+	}
+	var experimental struct {
+		Modes map[string]struct {
+			Provider struct {
+				Body map[string]any `json:"body"`
+			} `json:"provider"`
+		} `json:"modes"`
+	}
+	if err := json.Unmarshal(m.Experimental, &experimental); err != nil {
+		return false
+	}
+	for _, mode := range experimental.Modes {
+		if bodyValue, ok := mode.Provider.Body[field].(string); ok && bodyValue == value {
+			return true
+		}
+	}
+	return false
 }
 
 type ProviderInfo struct {
