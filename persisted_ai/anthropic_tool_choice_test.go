@@ -3,43 +3,37 @@ package persisted_ai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"sidekick/common"
-	"sidekick/fflag"
+	"sidekick/llm2"
+	"sidekick/secret_manager"
 	"testing"
 	"time"
 
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/require"
-	ffclient "github.com/thomaspoignant/go-feature-flag"
-	"github.com/thomaspoignant/go-feature-flag/retriever/fileretriever"
 )
 
-func TestStreamAnthropicForcedToolChoiceExclusions(t *testing.T) {
+func TestStreamAnthropicToolChoiceCompatibility(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name       string
 		model      string
-		flagValue  string
 		compatible bool
 		wantForced bool
 	}{
-		{name: "default haiku exclusion", model: "claude-haiku-5-5", wantForced: true},
-		{name: "default sonnet downgrade", model: "claude-sonnet-5-5"},
-		{name: "empty exclusions downgrade haiku", model: "claude-haiku-5-5", flagValue: "[]"},
-		{name: "flag excludes sonnet", model: "claude-sonnet-5-5", flagValue: "[sonnet]", wantForced: true},
-		{name: "flag replaces defaults", model: "claude-haiku-5-5", flagValue: "[sonnet]"},
-		{name: "case insensitive exclusion", model: "claude-sonnet-5-5", flagValue: "[SONNET]", wantForced: true},
-		{name: "blank exclusion is ignored", model: "claude-sonnet-5-5", flagValue: `[""]`},
-		{name: "invalid flag falls back", model: "claude-haiku-5-5", flagValue: "[42]", wantForced: true},
-		{name: "old model retains forced choice", model: "claude-opus-4-5", flagValue: "[]", wantForced: true},
-		{name: "compatible ignores exclusions", model: "claude-haiku-5-5", flagValue: "[haiku]", compatible: true},
-		{name: "compatible old model downgrades", model: "claude-opus-4-5", flagValue: "[opus]", compatible: true},
+		{name: "haiku 5.5 uses auto", model: "claude-haiku-5-5"},
+		{name: "sonnet 5.5 uses auto", model: "claude-sonnet-5-5"},
+		{name: "dotted haiku 5.5 uses auto", model: "claude-haiku-5.5"},
+		{name: "haiku 5.1 uses auto", model: "claude-haiku-5-1"},
+		{name: "5.0 retains forced choice", model: "claude-sonnet-5-0", wantForced: true},
+		{name: "old model retains forced choice", model: "claude-opus-4-5", wantForced: true},
+		{name: "compatible haiku uses auto", model: "claude-haiku-5-5", compatible: true},
+		{name: "compatible old model uses auto", model: "claude-opus-4-5", compatible: true},
+		{name: "compatible non claude model uses auto", model: "glm-4.6", compatible: true},
 	}
 
 	for _, tt := range tests {
@@ -48,24 +42,6 @@ func TestStreamAnthropicForcedToolChoiceExclusions(t *testing.T) {
 			for _, choiceType := range []common.ToolChoiceType{common.ToolChoiceTypeTool, common.ToolChoiceTypeRequired} {
 				t.Run(string(choiceType), func(t *testing.T) {
 					t.Parallel()
-
-					var flags *fflag.FFlagActivities
-					if tt.flagValue != "" {
-						path := filepath.Join(t.TempDir(), "flags.yml")
-						data := fmt.Sprintf(`anthropic-forced-tool-choice-exclusions:
-  variations:
-    selected: %s
-  defaultRule:
-    variation: selected
-`, tt.flagValue)
-						require.NoError(t, os.WriteFile(path, []byte(data), 0600))
-						client, err := ffclient.New(ffclient.Config{
-							Retriever: &fileretriever.Retriever{Path: path},
-						})
-						require.NoError(t, err)
-						t.Cleanup(client.Close)
-						flags = &fflag.FFlagActivities{FFlag: fflag.FFlag{Client: client}}
-					}
 
 					requests := make(chan json.RawMessage, 1)
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +63,7 @@ func TestStreamAnthropicForcedToolChoiceExclusions(t *testing.T) {
 					t.Cleanup(server.Close)
 
 					input := newRunawayStreamActivityInput(t)
+					input.InstructToolCall = true
 					input.Options.Provider = "anthropic"
 					input.Options.Model = tt.model
 					input.Options.ReasoningEffort = "high"
@@ -108,7 +85,7 @@ func TestStreamAnthropicForcedToolChoiceExclusions(t *testing.T) {
 						AuthType: common.ProviderAuthTypeAPI,
 					}}
 
-					activities := Llm2Activities{FeatureFlags: flags}
+					activities := Llm2Activities{}
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
 					_, err := activities.Stream(ctx, input)
@@ -126,6 +103,13 @@ func TestStreamAnthropicForcedToolChoiceExclusions(t *testing.T) {
 							Name                   string `json:"name"`
 							DisableParallelToolUse *bool  `json:"disable_parallel_tool_use"`
 						} `json:"tool_choice"`
+						Messages []struct {
+							Role    string `json:"role"`
+							Content []struct {
+								Type string `json:"type"`
+								Text string `json:"text"`
+							} `json:"content"`
+						} `json:"messages"`
 						Thinking *struct {
 							Type string `json:"type"`
 						} `json:"thinking"`
@@ -145,6 +129,18 @@ func TestStreamAnthropicForcedToolChoiceExclusions(t *testing.T) {
 					require.Equal(t, wantType, request.ToolChoice.Type)
 					require.NotNil(t, request.ToolChoice.DisableParallelToolUse)
 					require.False(t, *request.ToolChoice.DisableParallelToolUse)
+					require.NotEmpty(t, request.Messages)
+					lastMessage := request.Messages[len(request.Messages)-1]
+					require.Equal(t, "user", lastMessage.Role)
+					require.NotEmpty(t, lastMessage.Content)
+					instruction := lastMessage.Content[len(lastMessage.Content)-1]
+					require.Equal(t, "text", instruction.Type)
+					require.Contains(t, instruction.Text, "MUST")
+					if choiceType == common.ToolChoiceTypeTool {
+						require.Contains(t, instruction.Text, "record_plan")
+					} else {
+						require.Contains(t, instruction.Text, "one of the provided tools")
+					}
 					if tt.model == "claude-sonnet-5-5" && !tt.wantForced {
 						require.NotNil(t, request.Thinking)
 						require.Equal(t, "adaptive", request.Thinking.Type)
@@ -152,6 +148,87 @@ func TestStreamAnthropicForcedToolChoiceExclusions(t *testing.T) {
 					if tt.wantForced {
 						require.Nil(t, request.Thinking)
 					}
+				})
+			}
+		})
+	}
+}
+
+func TestStreamAnthropicForcedToolChoice55Integration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("Skipping integration test; LLM API keys are unavailable in non-local sidekick environments")
+	}
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+	_, err := secretManager.GetSecret("ANTHROPIC_API_KEY")
+	require.NoError(t, err, "SIDE_INTEGRATION_TEST=true requires ANTHROPIC_API_KEY")
+
+	for _, model := range []string{"claude-haiku-5-5", "claude-sonnet-5-5"} {
+		t.Run(model, func(t *testing.T) {
+			t.Parallel()
+			for _, choiceType := range []common.ToolChoiceType{common.ToolChoiceTypeTool, common.ToolChoiceTypeRequired} {
+				t.Run(string(choiceType), func(t *testing.T) {
+					t.Parallel()
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					defer cancel()
+
+					weatherTool := &common.Tool{
+						Name:        "get_current_weather",
+						Description: "Get the current weather in a given location",
+						Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+							Location string `json:"location"`
+							Unit     string `json:"unit" jsonschema:"enum=celsius,enum=fahrenheit"`
+						}{}),
+					}
+					choice := common.ToolChoice{Type: choiceType}
+					if choiceType == common.ToolChoiceTypeTool {
+						choice.Name = weatherTool.Name
+					}
+					history := NewLlm2ChatHistory("flow-tool-choice", "workspace-tool-choice")
+					history.Append(&llm2.Message{
+						Role:    llm2.RoleUser,
+						Content: llm2.TextContentBlocks("What's the weather like in Paris in celsius?"),
+					})
+					input := StreamInput{
+						Options: llm2.Options{
+							ModelConfig: common.ModelConfig{Provider: "anthropic", Model: model},
+							Tools:       []*common.Tool{weatherTool},
+							ToolChoice:  choice,
+						},
+						Secrets:     secret_manager.SecretManagerContainer{SecretManager: secretManager},
+						ChatHistory: &ChatHistoryContainer{History: history},
+						WorkspaceId: "workspace-tool-choice",
+						FlowId:      "flow-tool-choice",
+						Providers: []common.ModelProviderPublicConfig{{
+							Name:     "anthropic",
+							Type:     "anthropic",
+							AuthType: common.ProviderAuthTypeAPI,
+						}},
+						InstructToolCall: true,
+					}
+
+					activities := Llm2Activities{}
+					response, err := activities.Stream(ctx, input)
+					require.NoError(t, err)
+					require.NotNil(t, response)
+
+					calls := response.Output.GetToolCalls()
+					require.NotEmpty(t, calls, "expected a tool call, got content: %+v", response.Output.Content)
+					require.Equal(t, weatherTool.Name, calls[0].Name)
+					var arguments struct {
+						Location string `json:"location"`
+						Unit     string `json:"unit"`
+					}
+					require.NoError(t, json.Unmarshal([]byte(calls[0].Arguments), &arguments))
+					require.NotEmpty(t, arguments.Location)
+					require.Equal(t, "celsius", arguments.Unit)
 				})
 			}
 		})

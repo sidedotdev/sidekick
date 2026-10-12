@@ -49,11 +49,6 @@ type AnthropicProvider struct {
 	// provider-native tools (e.g. "web_search"). First-party Anthropic ignores
 	// this and always supports its native tools.
 	BuiltinTools []string
-
-	// ForcedToolChoiceExclusions contains case-insensitive model-name substrings.
-	// Nil uses the defaults; an empty slice disables exclusions. Compatible
-	// providers ignore exclusions because their tool-choice support varies.
-	ForcedToolChoiceExclusions []string
 }
 
 // webSearchToolEnabled reports whether the native web search tool may be sent.
@@ -221,14 +216,15 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 	params.Messages = anthropicMessages
 
-	toolChoice := p.effectiveToolChoice(model, options.ToolChoice)
 	if len(options.Tools) > 0 {
 		tools, err := toolsToAnthropicParams(options.Tools, p.webSearchToolEnabled())
 		if err != nil {
 			return nil, err
 		}
 		params.Tools = tools
-		params.ToolChoice = toolChoiceToAnthropicParam(toolChoice, options.ParallelToolCalls != nil && *options.ParallelToolCalls)
+
+		toolChoice := toolChoiceToAnthropicParam(options.ToolChoice, options.ParallelToolCalls != nil && *options.ParallelToolCalls)
+		params.ToolChoice = toolChoice
 	}
 
 	if useOAuth {
@@ -241,10 +237,11 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	resolvedEffort := resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 
 	// Anthropic does not allow thinking when tool_choice forces tool use
-	if isForcedToolChoice(toolChoice) && resolvedEffort != "" {
+	forcesTool := options.ToolChoice.Type == common.ToolChoiceTypeRequired || options.ToolChoice.Type == common.ToolChoiceTypeTool
+	if forcesTool && resolvedEffort != "" {
 		log.Info().
 			Str("model", model).
-			Str("toolChoiceType", string(toolChoice.Type)).
+			Str("toolChoiceType", string(options.ToolChoice.Type)).
 			Msg("disabling thinking because tool_choice forces tool use")
 	} else if anthropicSupportsAdaptiveThinking(model) && resolvedEffort != "" {
 		// Adaptive-capable models: thinking and effort are orthogonal.
@@ -481,44 +478,6 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 
 	return response, nil
-}
-
-func isForcedToolChoice(choice common.ToolChoice) bool {
-	return choice.Type == common.ToolChoiceTypeRequired || choice.Type == common.ToolChoiceTypeTool
-}
-
-// effectiveToolChoice downgrades forced tool choices to auto where they are
-// rejected; callers are expected to instruct the model to call the tool via
-// the prompt instead.
-func (p AnthropicProvider) effectiveToolChoice(model string, choice common.ToolChoice) common.ToolChoice {
-	if isForcedToolChoice(choice) && !p.supportsForcedToolChoice(model) {
-		return common.ToolChoice{Type: common.ToolChoiceTypeAuto}
-	}
-	return choice
-}
-
-// Claude 5.1+ generally rejects forced tool choice; exclusions retain it for
-// model families that still support it.
-func (p AnthropicProvider) supportsForcedToolChoice(model string) bool {
-	if p.AnthropicCompatible {
-		return false
-	}
-	major, minor, ok := parseAnthropicVersion(model)
-	if !ok || major < 5 || (major == 5 && minor < 1) {
-		return true
-	}
-	exclusions := p.ForcedToolChoiceExclusions
-	if exclusions == nil {
-		exclusions = DefaultAnthropicForcedToolChoiceExclusions()
-	}
-	model = strings.ToLower(model)
-	for _, exclusion := range exclusions {
-		exclusion = strings.ToLower(strings.TrimSpace(exclusion))
-		if exclusion != "" && strings.Contains(model, exclusion) {
-			return true
-		}
-	}
-	return false
 }
 
 // anthropicSupportsAdaptiveThinking returns true for models where adaptive
@@ -1072,8 +1031,4 @@ func toolChoiceToAnthropicParam(choice common.ToolChoice, parallelToolCalls bool
 			},
 		}
 	}
-}
-
-func DefaultAnthropicForcedToolChoiceExclusions() []string {
-	return []string{"haiku"}
 }

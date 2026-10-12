@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/fflag"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/secret_manager"
@@ -53,9 +52,8 @@ func (si StreamInput) ActionParams() map[string]any {
 
 // Llm2Activities provides LLM streaming activities using the llm2 package types.
 type Llm2Activities struct {
-	Streamer     srv.Streamer
-	Storage      common.KeyValueStorage
-	FeatureFlags *fflag.FFlagActivities
+	Streamer srv.Streamer
+	Storage  common.KeyValueStorage
 
 	// providerFactory overrides provider resolution; tests use it to drive
 	// Stream with scripted output. Nil means resolve from model config.
@@ -169,17 +167,6 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		log.Error().Err(err).Msg("failed to get llm2 provider")
 		return nil, err
 	}
-	if anthropicProvider, ok := provider.(llm2.AnthropicProvider); ok && !anthropicProvider.AnthropicCompatible {
-		const flagName = "anthropic-forced-tool-choice-exclusions"
-		flags, _ := la.FeatureFlags.EvaluateFlags(ctx, fflag.EvaluateFlagsInput{
-			TargetingKey: input.FlowId,
-			StringArrayFlags: map[string][]string{
-				flagName: llm2.DefaultAnthropicForcedToolChoiceExclusions(),
-			},
-		})
-		anthropicProvider.ForcedToolChoiceExclusions = flags.StringArrayValues[flagName]
-		provider = anthropicProvider
-	}
 
 	llm2History, ok := input.ChatHistory.History.(*Llm2ChatHistory)
 	if !ok {
@@ -196,6 +183,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	if input.InstructToolCall {
 		messages = appendToolCallInstruction(messages, options.ToolChoice)
 	}
+	options.ToolChoice = resolveToolChoice(options, input.Providers)
 
 	secretManager := newOpenAIOAuthSecretWrapper(ctx, input.Secrets.SecretManager)
 

@@ -118,9 +118,8 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		Streamer: service,
 	}
 	llm2Activities := &persisted_ai.Llm2Activities{
-		Streamer:     service,
-		Storage:      service,
-		FeatureFlags: &ffa,
+		Streamer: service,
+		Storage:  service,
 	}
 	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{
 		Storage: service,

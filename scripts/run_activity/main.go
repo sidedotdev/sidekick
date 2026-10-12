@@ -112,9 +112,8 @@ func buildActivityRegistry() map[string]interface{} {
 		Streamer: service,
 	}
 	llm2Activities := &persisted_ai.Llm2Activities{
-		Streamer:     service,
-		Storage:      service,
-		FeatureFlags: &ffa,
+		Streamer: service,
+		Storage:  service,
 	}
 	lspActivities := &lsp.LSPActivities{
 		LSPClientProvider: func(languageName string) lsp.LSPClient {
