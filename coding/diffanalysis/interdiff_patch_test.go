@@ -51,6 +51,24 @@ func TestInterdiffAppliesToReviewedContent(t *testing.T) {
 		{"shared replacement before a differing change without final newline", "s\nA\nx\ny\nB\ne", "s\nA2\nx\ny\nB2\ne", "s\nA2\nx\ny\nB3\nB4\ne"},
 		{"shared replacement then differing final line without newline", "s\nA\nx\nB", "s\nA2\nx\nB2", "s\nA2\nx\nB3"},
 		{"differing change then shared final replacement without newline", "s\nA\nx\nB", "s\nA2\nx\nB2", "s\nA3\nx\nB2"},
+		{
+			"reverted trailing addition after changed earlier hunk",
+			numbered(50, nil, true),
+			numbered(50, map[int]string{10: "line 10\nprior", 40: "line 40\nreverted"}, true),
+			numbered(50, map[int]string{10: "line 10\ncurrent\nextra"}, true),
+		},
+		{
+			"reverted trailing deletion after changed earlier hunk",
+			numbered(50, nil, true),
+			strings.ReplaceAll(numbered(50, map[int]string{10: "line 10\nprior"}, true), "line 40\n", ""),
+			numbered(50, map[int]string{10: "line 10\ncurrent\nextra"}, true),
+		},
+		{
+			"reverted trailing replacement after changed earlier hunk",
+			numbered(50, nil, true),
+			numbered(50, map[int]string{10: "line 10\nprior", 40: "replacement"}, true),
+			numbered(50, map[int]string{10: "line 10\ncurrent\nextra"}, true),
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

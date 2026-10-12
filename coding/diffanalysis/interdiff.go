@@ -689,10 +689,27 @@ func restoreOmittedCommonLines(section string, prior, current FileDiff) string {
 		for end < len(lines) && !hunkHeaderRegex.MatchString(lines[end]) {
 			end++
 		}
+		// Reverted hunks can have unprefixed blank separators, which are not
+		// part of either image (empty context lines still have a space).
+		bodyEnd := end
+		for bodyEnd > i+1 && lines[bodyEnd-1] == "" {
+			bodyEnd--
+		}
 		header := parseHunkHeader(hunkHeaderRegex.FindStringSubmatch(lines[i]))
+		placements := hunkPlacements(header, offset)
+		if header.oldCount != header.newCount {
+			// The library reverses an unmatched prior hunk's body but leaves
+			// its header forward-facing. Both images must verify the reversal.
+			reversed := hunkRange{
+				oldStart: header.newStart, oldCount: header.newCount,
+				newStart: header.oldStart, newCount: header.oldCount,
+				trailer: header.trailer,
+			}
+			placements = append(placements, hunkPlacements(reversed, offset)...)
+		}
 		restored := false
-		for _, hunk := range hunkPlacements(header, offset) {
-			body, ok := restoreHunk(hunk, lines[i+1:end], oldImages, newImages)
+		for _, hunk := range placements {
+			body, ok := restoreHunk(hunk, lines[i+1:bodyEnd], oldImages, newImages)
 			if !ok {
 				continue
 			}

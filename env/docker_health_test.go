@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -61,31 +62,35 @@ func withDockerHealthHooks(t *testing.T, check func(context.Context, time.Durati
 
 func TestWaitForDockerEngine_UsesIndirectedHook(t *testing.T) {
 	t.Run("returns true once the hook reports responsive", func(t *testing.T) {
-		withFastDockerReadyTiming(t)
-		var probes atomic.Int32
-		origCheck := checkDockerEngineResponsive
-		checkDockerEngineResponsive = func(context.Context, time.Duration) bool {
-			// Become responsive only after a few polls to prove we loop on the hook.
-			return probes.Add(1) >= 3
-		}
-		t.Cleanup(func() { checkDockerEngineResponsive = origCheck })
+		synctest.Test(t, func(t *testing.T) {
+			withFastDockerReadyTiming(t)
+			var probes atomic.Int32
+			origCheck := checkDockerEngineResponsive
+			checkDockerEngineResponsive = func(context.Context, time.Duration) bool {
+				// Become responsive only after a few polls to prove we loop on the hook.
+				return probes.Add(1) >= 3
+			}
+			t.Cleanup(func() { checkDockerEngineResponsive = origCheck })
 
-		assert.True(t, waitForDockerEngine(context.Background(), dockerReadyPollTimeout))
-		assert.GreaterOrEqual(t, probes.Load(), int32(3))
+			assert.True(t, waitForDockerEngine(context.Background(), dockerReadyPollTimeout))
+			assert.GreaterOrEqual(t, probes.Load(), int32(3))
+		})
 	})
 
 	t.Run("returns false when the hook never reports responsive", func(t *testing.T) {
-		withFastDockerReadyTiming(t)
-		var probes atomic.Int32
-		origCheck := checkDockerEngineResponsive
-		checkDockerEngineResponsive = func(context.Context, time.Duration) bool {
-			probes.Add(1)
-			return false
-		}
-		t.Cleanup(func() { checkDockerEngineResponsive = origCheck })
+		synctest.Test(t, func(t *testing.T) {
+			withFastDockerReadyTiming(t)
+			var probes atomic.Int32
+			origCheck := checkDockerEngineResponsive
+			checkDockerEngineResponsive = func(context.Context, time.Duration) bool {
+				probes.Add(1)
+				return false
+			}
+			t.Cleanup(func() { checkDockerEngineResponsive = origCheck })
 
-		assert.False(t, waitForDockerEngine(context.Background(), dockerReadyPollTimeout))
-		assert.Positive(t, probes.Load(), "the readiness hook must be polled")
+			assert.False(t, waitForDockerEngine(context.Background(), dockerReadyPollTimeout))
+			assert.Positive(t, probes.Load(), "the readiness hook must be polled")
+		})
 	})
 }
 

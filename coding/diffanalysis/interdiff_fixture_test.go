@@ -236,3 +236,27 @@ func reconstructPreImage(files ...*FileDiff) string {
 	}
 	return out.String()
 }
+
+func TestInterdiffRealReviewPairWithRevertedHunk(t *testing.T) {
+	t.Parallel()
+
+	fixtureDir := filepath.Join("testdata", "interdiff_reverted_hunk")
+	prior, err := os.ReadFile(filepath.Join(fixtureDir, "prior.diff"))
+	require.NoError(t, err)
+	current, err := os.ReadFile(filepath.Join(fixtureDir, "current.diff"))
+	require.NoError(t, err)
+
+	result, err := Interdiff(string(prior), string(current))
+	require.NoError(t, err)
+	files, err := parseForInterdiff(result)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	priorFiles, err := parseForInterdiff(string(prior))
+	require.NoError(t, err)
+	currentFiles, err := parseForInterdiff(string(current))
+	require.NoError(t, err)
+	require.Len(t, priorFiles, 1)
+	require.Len(t, currentFiles, 1)
+	assertInterdiffApplies(t, &priorFiles[0], &currentFiles[0], files[0])
+}

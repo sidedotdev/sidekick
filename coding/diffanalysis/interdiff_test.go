@@ -665,3 +665,41 @@ func TestInterdiffHunklessSections(t *testing.T) {
 		})
 	}
 }
+
+func TestRestoreRevertedHunkRequiresMatchingPostImages(t *testing.T) {
+	t.Parallel()
+
+	const header = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n"
+	const prior = header + "@@ -1,2 +1,3 @@\n a\n+added\n b\n"
+	const current = header + "@@ -1,2 +1,2 @@\n a\n b\n"
+	const section = header + "@@ -1,2 +1,3 @@\n a\n-added\n b\n\n"
+	const repaired = header + "@@ -1,3 +1,2 @@\n a\n-added\n b\n"
+
+	for _, tc := range []struct {
+		name    string
+		prior   string
+		section string
+		want    string
+	}{
+		{"reversed body with forward header", prior, section, repaired},
+		{"incorrect removed content", prior, strings.ReplaceAll(section, "-added", "-wrong"), ""},
+		{"different prior content", strings.ReplaceAll(prior, "+added", "+other"), section, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			priorFiles, err := parseForInterdiff(tc.prior)
+			require.NoError(t, err)
+			currentFiles, err := parseForInterdiff(current)
+			require.NoError(t, err)
+
+			got := restoreOmittedCommonLines(tc.section, priorFiles[0], currentFiles[0])
+			if tc.want == "" {
+				require.Equal(t, tc.section, got)
+				return
+			}
+			require.Equal(t, tc.want, got)
+			_, err = parseForInterdiff(got)
+			require.NoError(t, err)
+		})
+	}
+}
