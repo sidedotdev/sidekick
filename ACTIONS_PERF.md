@@ -74,6 +74,53 @@ histograms for cheaper STAT1 estimates. The running REST service still showed
 some slow responses after the full refresh; this is a verified SQL-plan repair,
 not proof that every endpoint latency spike is resolved.
 
+### Sampling-limit comparison
+
+A consistent, integrity-checked copy of the live database contained **377,697
+actions**. Across two runs, each limit received **18 trials in rotating order**.
+Each trial restored the same full statistics, then used a fresh Go-driver
+connection with the server's 64 MB cache setting. Timing covers only
+`ANALYZE flow_actions`, excluding setup, statistics restoration and verification.
+The OS cache was warmed; the copy had no concurrent application writers.
+
+| Analysis limit | Median elapsed | Min–max elapsed | Median CPU |
+| --- | ---: | ---: | ---: |
+| 100 | 42.9 ms | 36–343 ms | 42.7 ms |
+| **400** | **43.3 ms** | **37–960 ms** | **43.0 ms** |
+| 1,000 | 42.6 ms | 37–212 ms | 42.5 ms |
+| 4,000 | 46.1 ms | 38–287 ms | 45.4 ms |
+| 10,000 | 47.7 ms | 42–231 ms | 47.6 ms |
+| 0: full analysis | 268.7 ms | 255–1,113 ms | 264.6 ms |
+
+**400 is reasonable, not uniquely optimal:** 1,000 costs essentially the same,
+and larger samples did not improve either observed plan. All 108 trials used
+the flow index for both queries; complete row hashes stayed identical
+(452/938 actions). Every positive limit removed STAT4; full analysis produced
+96 samples. These isolated, warmed-cache measurements are not directly
+comparable to the earlier live-database timings or guarantees of tail latency.
+
+SQLite has **no built-in incremental STAT4 refresh**: it requires a full scan
+of each analyzed index with `analysis_limit=0`. An individual index can be
+targeted to spread maintenance across passes, but its histogram is still
+rebuilt, not incrementally updated. Increasing a positive limit never enables
+STAT4.
+
+A later run tested **100k and 1m**, with 18 rotated trials per limit on the same
+snapshot and smaller-limit/full-analysis controls. Selected results:
+
+| Analysis limit | Median elapsed | Min–max elapsed | Median CPU |
+| --- | ---: | ---: | ---: |
+| 400 | 95.9 ms | 43–577 ms | 60.2 ms |
+| 100,000 | 177.7 ms | 91–801 ms | 111.0 ms |
+| 1,000,000 | 275.6 ms | 188–604 ms | 213.3 ms |
+| 0: full analysis | 361.3 ms | 272–1,962 ms | 289.8 ms |
+
+The 400 control was slower than in the earlier window; compare costs within
+this run rather than attributing that difference to the limit. All plans and
+result hashes remained unchanged. At 1m, the limit exceeds the table's row
+count: STAT1 matched full analysis exactly, but STAT4 still had zero samples
+(versus 96 for full analysis). Neither larger limit improved these query plans.
+
 ## Local evidence / reproduction
 
 Under `.side/tmp/`: `actions-tail-active.{profile.pprof,trace,http.json}`,
@@ -82,8 +129,15 @@ Under `.side/tmp/`: `actions-tail-active.{profile.pprof,trace,http.json}`,
 Use `go tool pprof -top -cum` on the CPU profile or `go tool trace` on the trace.
 `probe_actions_query.go` and `check_actions_planner.go` accept `-db`, `-workspace`,
 `-flow`; both open the source database read-only. Initial schema/statistics
-experiments were isolated. The follow-up refreshed live statistics only.
+experiments were isolated. The initial follow-up refreshed live statistics only.
 Evidence: `actions-stats-{refresh,resource,resource-time,bounded,bounded-time}.txt`
 and `actions-stats-*.{jsonl,plan.txt}`. `refresh_actions_stats.go -db PATH -apply
 -analysis-limit 400` repeats bounded refresh; omit `-apply` to inspect only.
 Use `probe_actions_query.go -snapshot` when flows are actively changing.
+
+Limit comparison: `actions-limits-{results,repeat,large}.jsonl` contains individual
+timings, estimates and plans. Reproduce with
+`go run .side/tmp/benchmark_action_stats.go -db COPY_PATH -allow-statistics-writes
+-workspace WORKSPACE -flows FLOW1,FLOW2 -rounds 6`; use a disposable SQLite backup,
+not the live database. Default limits are `100,400,1000,4000,10000,0`.
+The larger-limit run used `-limits 400,1000,10000,100000,1000000,0 -rounds 18`.
