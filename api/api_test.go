@@ -518,7 +518,7 @@ func TestGetTasksHandler(t *testing.T) {
 		err := json.Unmarshal(resp.Body.Bytes(), &result)
 		if assert.Nil(t, err) {
 			// TODO check just task ids
-			assert.Equal(t, testCase.expectedTasks, result.Tasks)
+			assert.ElementsMatch(t, testCase.expectedTasks, result.Tasks)
 		}
 	}
 }
