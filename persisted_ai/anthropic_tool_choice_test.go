@@ -14,9 +14,10 @@ import (
 
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 )
 
-func TestStreamAnthropicToolChoiceCompatibility(t *testing.T) {
+func TestForceToolCallAnthropicCompatibility(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -63,14 +64,14 @@ func TestStreamAnthropicToolChoiceCompatibility(t *testing.T) {
 					t.Cleanup(server.Close)
 
 					input := newRunawayStreamActivityInput(t)
-					input.InstructToolCall = true
 					input.Options.Provider = "anthropic"
 					input.Options.Model = tt.model
 					input.Options.ReasoningEffort = "high"
 					input.Options.Tools = []*common.Tool{{Name: "record_plan", Parameters: &jsonschema.Schema{Type: "object"}}}
-					input.Options.ToolChoice = common.ToolChoice{Type: choiceType}
-					if choiceType == common.ToolChoiceTypeTool {
-						input.Options.ToolChoice.Name = "record_plan"
+					if choiceType == common.ToolChoiceTypeRequired {
+						input.Options.Tools = append(input.Options.Tools, &common.Tool{
+							Name: "cancel_plan", Parameters: &jsonschema.Schema{Type: "object"},
+						})
 					}
 					parallel := true
 					input.Options.ParallelToolCalls = &parallel
@@ -85,10 +86,18 @@ func TestStreamAnthropicToolChoiceCompatibility(t *testing.T) {
 						AuthType: common.ProviderAuthTypeAPI,
 					}}
 
-					activities := Llm2Activities{}
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer cancel()
-					_, err := activities.Stream(ctx, input)
+					_, _, err := runForcedToolCallTest(t, forcedToolCallTestConfig{StreamInput: input},
+						func(ctx context.Context, request StreamInput) (*llm2.MessageResponse, error) {
+							ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+							defer cancel()
+							request.FlowActionId = ""
+							activities := Llm2Activities{}
+							response, err := activities.Stream(ctx, request)
+							if err != nil {
+								return nil, temporal.NewNonRetryableApplicationError(err.Error(), "request-inspection", err)
+							}
+							return response, nil
+						})
 					require.ErrorContains(t, err, "stop after request inspection")
 
 					var body json.RawMessage
@@ -154,7 +163,7 @@ func TestStreamAnthropicToolChoiceCompatibility(t *testing.T) {
 	}
 }
 
-func TestStreamAnthropicForcedToolChoice55Integration(t *testing.T) {
+func TestForceToolCallAnthropic55Integration(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
@@ -187,9 +196,15 @@ func TestStreamAnthropicForcedToolChoice55Integration(t *testing.T) {
 							Unit     string `json:"unit" jsonschema:"enum=celsius,enum=fahrenheit"`
 						}{}),
 					}
-					choice := common.ToolChoice{Type: choiceType}
-					if choiceType == common.ToolChoiceTypeTool {
-						choice.Name = weatherTool.Name
+					tools := []*common.Tool{weatherTool}
+					if choiceType == common.ToolChoiceTypeRequired {
+						tools = append(tools, &common.Tool{
+							Name:        "get_local_time",
+							Description: "Get the current time in a given location",
+							Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+								Location string `json:"location"`
+							}{}),
+						})
 					}
 					history := NewLlm2ChatHistory("flow-tool-choice", "workspace-tool-choice")
 					history.Append(&llm2.Message{
@@ -199,8 +214,7 @@ func TestStreamAnthropicForcedToolChoice55Integration(t *testing.T) {
 					input := StreamInput{
 						Options: llm2.Options{
 							ModelConfig: common.ModelConfig{Provider: "anthropic", Model: model},
-							Tools:       []*common.Tool{weatherTool},
-							ToolChoice:  choice,
+							Tools:       tools,
 						},
 						Secrets:     secret_manager.SecretManagerContainer{SecretManager: secretManager},
 						ChatHistory: &ChatHistoryContainer{History: history},
@@ -211,16 +225,20 @@ func TestStreamAnthropicForcedToolChoice55Integration(t *testing.T) {
 							Type:     "anthropic",
 							AuthType: common.ProviderAuthTypeAPI,
 						}},
-						InstructToolCall: true,
 					}
 
-					activities := Llm2Activities{}
-					response, err := activities.Stream(ctx, input)
-					require.NoError(t, err)
+					response, _, err := runForcedToolCallTest(t, forcedToolCallTestConfig{StreamInput: input},
+						func(_ context.Context, request StreamInput) (*llm2.MessageResponse, error) {
+							request.FlowActionId = ""
+							request.Secrets = input.Secrets
+							activities := Llm2Activities{}
+							return activities.Stream(ctx, request)
+						})
+					requireWorkflowSuccess(t, err)
 					require.NotNil(t, response)
 
-					calls := response.Output.GetToolCalls()
-					require.NotEmpty(t, calls, "expected a tool call, got content: %+v", response.Output.Content)
+					calls := response.GetMessage().GetToolCalls()
+					require.NotEmpty(t, calls, "expected a tool call, got content: %s", response.GetMessage().GetContentString())
 					require.Equal(t, weatherTool.Name, calls[0].Name)
 					var arguments struct {
 						Location string `json:"location"`

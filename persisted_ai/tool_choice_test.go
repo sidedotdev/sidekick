@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStreamActivity_ResolvesToolChoice(t *testing.T) {
+func TestResolveToolChoice(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -62,23 +62,51 @@ func TestStreamActivity_ResolvesToolChoice(t *testing.T) {
 				t.Run(string(choice.Type), func(t *testing.T) {
 					t.Parallel()
 
-					input := newRunawayStreamActivityInput(t)
-					input.Options.Provider = tt.provider
-					input.Options.Model = tt.model
-					input.Options.ToolChoice = choice
-					input.Options.Tools = []*common.Tool{{Name: "record_plan"}}
-					input.Options.ReasoningEffort = "high"
-					parallel := true
-					input.Options.ParallelToolCalls = &parallel
-					forced := choice.Type == common.ToolChoiceTypeTool || choice.Type == common.ToolChoiceTypeRequired
-					input.InstructToolCall = forced
+					options := llm2.Options{
+						ModelConfig: common.ModelConfig{Provider: tt.provider, Model: tt.model},
+						ToolChoice:  choice,
+					}
+					var providers []common.ModelProviderPublicConfig
 					if tt.providerType != "" {
-						input.Providers = []common.ModelProviderPublicConfig{{
+						providers = []common.ModelProviderPublicConfig{{
 							Name:       tt.provider,
 							Type:       tt.providerType,
 							DefaultLLM: tt.defaultModel,
 						}}
 					}
+					want := choice
+					if tt.wantAuto && (choice.Type == common.ToolChoiceTypeTool || choice.Type == common.ToolChoiceTypeRequired) {
+						want = common.ToolChoice{Type: common.ToolChoiceTypeAuto}
+					}
+					require.Equal(t, want, resolveToolChoice(options, providers))
+					require.Equal(t, choice, options.ToolChoice)
+				})
+			}
+		})
+	}
+}
+
+func TestStreamActivityPreservesToolChoice(t *testing.T) {
+	t.Parallel()
+
+	for _, providerType := range []string{"anthropic", "anthropic_compatible", "openai", "google"} {
+		t.Run(providerType, func(t *testing.T) {
+			t.Parallel()
+
+			for _, choice := range []common.ToolChoice{
+				{Type: common.ToolChoiceTypeTool, Name: "record_plan"},
+				{Type: common.ToolChoiceTypeRequired},
+				{Type: common.ToolChoiceTypeAuto},
+				{},
+			} {
+				t.Run(string(choice.Type), func(t *testing.T) {
+					t.Parallel()
+
+					input := newRunawayStreamActivityInput(t)
+					input.Options.ModelConfig = common.ModelConfig{Provider: "test-provider", Model: "claude-haiku-5-5"}
+					input.Options.ToolChoice = choice
+					input.Options.Tools = []*common.Tool{{Name: "record_plan"}}
+					input.Providers = []common.ModelProviderPublicConfig{{Name: "test-provider", Type: providerType}}
 					originalOptions := input.Options
 					history := input.ChatHistory.History.(*Llm2ChatHistory)
 					originalMessages := history.Llm2Messages()
@@ -92,30 +120,10 @@ func TestStreamActivity_ResolvesToolChoice(t *testing.T) {
 					_, err := activities.Stream(context.Background(), input)
 					require.NoError(t, err)
 					require.Len(t, provider.requests, 1)
-
-					request := provider.requests[0]
-					wantOptions := originalOptions
-					if tt.wantAuto && forced {
-						wantOptions.ToolChoice = common.ToolChoice{Type: common.ToolChoiceTypeAuto}
-					}
-					require.Equal(t, wantOptions, request.Options)
+					require.Equal(t, originalOptions, provider.requests[0].Options)
+					require.Equal(t, originalMessages, provider.requests[0].Messages)
 					require.Equal(t, originalOptions, input.Options)
 					require.Equal(t, originalMessages, history.Llm2Messages())
-
-					if forced {
-						require.Len(t, request.Messages, len(originalMessages)+1)
-						instruction := request.Messages[len(originalMessages)]
-						require.Equal(t, llm2.RoleSystem, instruction.Role)
-						require.Len(t, instruction.Content, 1)
-						require.Contains(t, instruction.Content[0].Text, "MUST")
-						if choice.Type == common.ToolChoiceTypeTool {
-							require.Contains(t, instruction.Content[0].Text, "record_plan")
-						} else {
-							require.Contains(t, instruction.Content[0].Text, "one of the provided tools")
-						}
-					} else {
-						require.Equal(t, originalMessages, request.Messages)
-					}
 				})
 			}
 		})

@@ -114,30 +114,76 @@ func forceToolCallWithToolsResolver(
 			ToolChoice:        toolChoice,
 			ParallelToolCalls: parallelToolCalls,
 		},
-		Secrets:          *actionCtx.Secrets,
-		ChatHistory:      chatHistory,
-		WorkspaceId:      actionCtx.WorkspaceId,
-		FlowId:           workflow.GetInfo(actionCtx).WorkflowExecution.ID,
-		Providers:        actionCtx.GetProviders(),
-		InstructToolCall: true,
+		Secrets:     *actionCtx.Secrets,
+		ChatHistory: chatHistory,
+		WorkspaceId: actionCtx.WorkspaceId,
+		FlowId:      workflow.GetInfo(actionCtx).WorkflowExecution.ID,
+		Providers:   actionCtx.GetProviders(),
 	}
 
+	promptVersion := workflow.GetVersion(actionCtx, "force-tool-call-prompt", workflow.DefaultVersion, 1)
 	executeStream := func(ctx flow_action.ActionContext) (common.MessageResponse, error) {
-		if resolveTools == nil {
+		if promptVersion < 1 && resolveTools == nil {
 			return ExecuteChatStreamWithModelConfigResolver(ctx, streamInput, toolNameMapping, disableUserRetry, resolveModelConfig)
 		}
-		return ExecuteChatStreamWithAttemptResolver(ctx, streamInput, toolNameMapping, disableUserRetry, func() (llm2.Options, *ToolNameMappingConfig, error) {
+
+		input := streamInput
+		if promptVersion >= 1 {
+			input.ChatHistory = &ChatHistoryContainer{}
+		}
+		resolveAttempt := func() (llm2.Options, *ToolNameMappingConfig, error) {
 			options := streamInput.Options
 			if resolveModelConfig != nil {
 				options.ModelConfig = resolveModelConfig()
 			}
-			options.Tools = resolveTools(options.ModelConfig)
-			options.ToolChoice = llm.ToolChoice{Type: llm.ToolChoiceTypeRequired}
-			if len(options.Tools) == 1 {
-				options.ToolChoice.Type = llm.ToolChoiceTypeTool
-				options.ToolChoice.Name = options.Tools[0].Name
+			if resolveTools != nil {
+				options.Tools = resolveTools(options.ModelConfig)
+				options.ToolChoice = llm.ToolChoice{Type: llm.ToolChoiceTypeRequired}
+				if len(options.Tools) == 1 {
+					options.ToolChoice.Type = llm.ToolChoiceTypeTool
+					options.ToolChoice.Name = options.Tools[0].Name
+				}
 			}
-			return options, toolNameMapping, nil
+
+			mapping := toolNameMapping
+			if promptVersion >= 1 {
+				attemptInput := input
+				attemptInput.Options = options
+				applyProviderAuthOverrides(ctx.ExecContext, &attemptInput, &mapping, ctx.GetProviders())
+				instructionChoice := mapOptionsToolNames(options, mapping).ToolChoice
+
+				*input.ChatHistory = chatHistory.Clone()
+				err := AppendChatHistory(ctx.ExecContext, input.ChatHistory, common.ChatMessage{
+					Role:    common.ChatMessageRoleSystem,
+					Content: toolCallInstruction(instructionChoice),
+				})
+				if err != nil {
+					return llm2.Options{}, nil, err
+				}
+				options.ToolChoice = resolveToolChoice(options, attemptInput.Providers)
+			}
+			return options, mapping, nil
+		}
+		if promptVersion < 1 {
+			return ExecuteChatStreamWithAttemptResolver(ctx, input, toolNameMapping, disableUserRetry, resolveAttempt)
+		}
+
+		// Older stream histories bypass attempt resolvers.
+		generation := ctx.GlobalState.NamedCancellationGeneration(flow_action.LLMStreamCancellationName)
+		options, mapping, err := resolveAttempt()
+		if err != nil {
+			return nil, err
+		}
+		input.Options = options
+		firstAttempt := true
+		return ExecuteChatStreamWithAttemptResolver(ctx, input, mapping, disableUserRetry, func() (llm2.Options, *ToolNameMappingConfig, error) {
+			if firstAttempt {
+				firstAttempt = false
+				if ctx.GlobalState.NamedCancellationGeneration(flow_action.LLMStreamCancellationName) == generation {
+					return options, mapping, nil
+				}
+			}
+			return resolveAttempt()
 		})
 	}
 
@@ -341,4 +387,11 @@ func ForceParallelToolCallWithToolsResolver(
 	modelConfig := resolveModelConfig()
 	tools := resolveTools(modelConfig)
 	return forceToolCallWithToolsResolver(actionCtx, flow_action.TrackOptions{}, modelConfig, resolveModelConfig, resolveTools, chatHistory, nil, &parallel, false, tools...)
+}
+
+func toolCallInstruction(choice common.ToolChoice) string {
+	if choice.Type == common.ToolChoiceTypeTool && choice.Name != "" {
+		return fmt.Sprintf("You MUST respond by calling the %s tool.", choice.Name)
+	}
+	return "You MUST respond by calling one of the provided tools."
 }
