@@ -65,6 +65,7 @@ describe('KanbanBoard keyboard control', () => {
     tasks: FullTask[] = baseTasks(),
     onScrollIntoView: (el: HTMLElement) => void = () => {},
     scrollHeight = 2000,
+    projectList: Project[] = projects,
   ) => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600)
@@ -73,7 +74,7 @@ describe('KanbanBoard keyboard control', () => {
     HTMLElement.prototype.scrollIntoView = vi.fn(function (this: HTMLElement) {
       onScrollIntoView(this)
     })
-    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ projects }) } as Response)))
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ projects: projectList }) } as Response)))
     scrollParent = document.createElement('div')
     scrollParent.style.overflow = 'auto'
     document.body.appendChild(scrollParent)
@@ -205,6 +206,35 @@ describe('KanbanBoard keyboard control', () => {
     expect(focused()).toBe('a1')
     expect(rootClasses().contains(KEYBOARD_MODALITY_CLASS)).toBe(true)
     expect(rootClasses().contains(KEYBOARD_CONTROL_CLASS)).toBe(true)
+  })
+
+  it.each([
+    { name: 'project card', selector: '.virtual-task-card-container[data-task-id="a1"]', projectId: 'project_1' },
+    { name: 'draft button', selector: `[data-board-nav="${draft('project_2')}"]`, projectId: 'project_2' },
+    { name: 'queue button', selector: `[data-board-nav="${queue('project_1')}"]`, projectId: 'project_1' },
+    { name: 'project header', selector: `[data-board-nav="${BETA_TOGGLE}"]`, projectId: 'project_2' },
+    { name: 'everything else card', selector: '.virtual-task-card-container[data-task-id="e1"]' },
+    { name: 'everything else header', selector: `[data-board-nav="${ELSE_TOGGLE}"]` },
+    { name: 'column heading', selector: `[data-board-nav="${ids.headingAddTask('human')}"]` },
+    { name: 'no focus', selector: null },
+    { name: 'no projects', selector: '.virtual-task-card-container[data-task-id="a1"]', noProjects: true },
+    { name: 'keyboard control disabled', selector: '.virtual-task-card-container[data-task-id="a1"]', disabled: true },
+  ])('opens a task with the appropriate project from $name', async ({ selector, projectId, noProjects, disabled }) => {
+    if (disabled) setKanbanKeyboardControl(false)
+    const w = await mountBoard(baseTasks(), () => {}, 2000, noProjects ? [] : projects)
+
+    for (const key of ['t', 'T']) {
+      if (selector) element(selector).focus()
+      else (document.activeElement as HTMLElement)?.blur()
+
+      const event = await press(key, { shiftKey: key === 'T' })
+      expect(event.defaultPrevented).toBe(true)
+      const modal = w.findComponent(TaskModal)
+      expect(modal.exists()).toBe(true)
+      expect(modal.props('task').projectId).toBe(key === 't' ? projectId : undefined)
+      modal.vm.$emit('close')
+      await frames()
+    }
   })
 
   it('tracks keyboard modality and the setting on the root element', async () => {
