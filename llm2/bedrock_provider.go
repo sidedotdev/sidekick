@@ -108,7 +108,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 	start := time.Now()
 	streamOut, err := client.ConverseStream(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: ConverseStream: %w", err)
+		return nil, classifyBadRequestError(err, fmt.Errorf("bedrock: ConverseStream: %w", err))
 	}
 	stream := streamOut.GetStream()
 	defer stream.Close()

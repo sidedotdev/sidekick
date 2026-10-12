@@ -33,12 +33,12 @@ func newProviderRequestAuth(secretManager secret_manager.SecretManager, provider
 	}
 }
 
-// classifyHTTPError returns reportedErr as a provider auth error when err is a
-// provider authentication rejection, otherwise reportedErr unchanged.
+// classifyHTTPError preserves authentication recovery details before classifying
+// other non-retryable request failures.
 // reportedErr lets callers keep formatting that may drop the SDK error type.
 func (a providerRequestAuth) classifyHTTPError(err, reportedErr error) error {
 	if !isProviderAuthRejection(err) {
-		return reportedErr
+		return classifyBadRequestError(err, reportedErr)
 	}
 	reason := common.ProviderAuthErrorReasonInvalidAPIKey
 	if a.useOAuth {
