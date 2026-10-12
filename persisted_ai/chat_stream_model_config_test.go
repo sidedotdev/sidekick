@@ -23,6 +23,7 @@ import (
 type streamModelConfigTestInput struct {
 	Legacy       bool
 	UpdateModels []string
+	MaxTokens    map[string]int
 	Pause        bool
 }
 
@@ -53,7 +54,7 @@ func streamModelConfigTestWorkflow(ctx workflow.Context, input streamModelConfig
 		Secrets:     &secrets,
 	}
 	eCtx.SetLLMConfig(common.LLMConfig{
-		Defaults: []common.ModelConfig{{Provider: "test", Model: "initial"}},
+		Defaults: []common.ModelConfig{{Provider: "test", Model: "initial", MaxTokens: input.MaxTokens["initial"]}},
 	})
 
 	nonStreamCancellations := 0
@@ -65,7 +66,7 @@ func streamModelConfigTestWorkflow(ctx workflow.Context, input streamModelConfig
 		for _, model := range input.UpdateModels {
 			_ = workflow.Sleep(ctx, 100*time.Millisecond)
 			eCtx.SetLLMConfig(common.LLMConfig{
-				Defaults: []common.ModelConfig{{Provider: "test", Model: model}},
+				Defaults: []common.ModelConfig{{Provider: "test", Model: model, MaxTokens: input.MaxTokens[model]}},
 			})
 			globalState.CancelNamed(flow_action.LLMStreamCancellationName)
 		}
@@ -228,11 +229,12 @@ func TestExecuteChatStreamUsesLatestRepeatedUpdate(t *testing.T) {
 	env.RegisterWorkflow(streamModelConfigTestWorkflow)
 	env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
+	limits := map[string]int{"initial": 123, "second": 456}
 	var activities *Llm2Activities
 	for _, model := range []string{"initial", "second"} {
 		model := model
 		env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input StreamInput) bool {
-			return input.Options.ModelConfig.Model == model
+			return input.Options.ModelConfig.Model == model && input.Options.MaxTokens == limits[model]
 		})).Return(&llm2.MessageResponse{
 			Id: model + "-partial",
 			Output: llm2.Message{
@@ -241,7 +243,7 @@ func TestExecuteChatStreamUsesLatestRepeatedUpdate(t *testing.T) {
 		}, nil).After(time.Second).Once()
 	}
 	env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input StreamInput) bool {
-		return input.Options.ModelConfig.Model == "third"
+		return input.Options.ModelConfig.Model == "third" && input.Options.MaxTokens == 0
 	})).Return(&llm2.MessageResponse{
 		Id: "latest",
 		Output: llm2.Message{
@@ -251,6 +253,7 @@ func TestExecuteChatStreamUsesLatestRepeatedUpdate(t *testing.T) {
 
 	env.ExecuteWorkflow(streamModelConfigTestWorkflow, streamModelConfigTestInput{
 		UpdateModels: []string{"second", "third"},
+		MaxTokens:    limits,
 	})
 
 	require.NoError(t, env.GetWorkflowError())

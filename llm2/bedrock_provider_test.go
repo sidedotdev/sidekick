@@ -296,7 +296,7 @@ func TestBedrockProvider_Integration_ClaudeHaiku(t *testing.T) {
 }
 
 func TestBedrockAnthropicRequestFields(t *testing.T) {
-	t.Parallel()
+	setupModelsDevFixture(t, outputLimitFixture)
 
 	tests := []struct {
 		name          string
@@ -353,7 +353,7 @@ func TestBedrockAnthropicRequestFields(t *testing.T) {
 			wantFields: map[string]any{
 				"thinking": map[string]any{"type": "enabled", "budget_tokens": 10000},
 			},
-			wantMaxTokens: anthropicDefaultMaxTokens,
+			wantMaxTokens: 64000,
 			wantEffort:    "medium",
 		},
 		{
@@ -363,7 +363,7 @@ func TestBedrockAnthropicRequestFields(t *testing.T) {
 			wantFields: map[string]any{
 				"thinking": map[string]any{"type": "enabled", "budget_tokens": 5000},
 			},
-			wantMaxTokens: anthropicDefaultMaxTokens,
+			wantMaxTokens: 64000,
 			wantEffort:    "low",
 		},
 		{

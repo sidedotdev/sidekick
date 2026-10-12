@@ -230,6 +230,7 @@ func executeChatStreamV1(
 	if toolNameMapping != nil {
 		streamInput.ToolNameMapping = toolNameMapping
 	}
+	resolveMaxTokens(&streamInput.Options)
 
 	eCtx := actionCtx.ExecContext
 	var la *Llm2Activities
@@ -258,6 +259,7 @@ func executeChatStreamV1(
 							return nil, err
 						}
 						streamInput.Options = options
+						resolveMaxTokens(&streamInput.Options)
 						toolNameMapping = mapping
 						streamInput.ToolNameMapping = mapping
 					}
@@ -436,4 +438,14 @@ func executeRepairToolCallArguments(eCtx flow_action.ExecContext, args []string)
 		return nil, err
 	}
 	return output.Arguments, nil
+}
+
+func resolveMaxTokens(options *llm2.Options) {
+	if options.MaxTokens > 0 {
+		return
+	}
+	options.MaxTokens = 0
+	if options.ModelConfig.MaxTokens > 0 {
+		options.MaxTokens = options.ModelConfig.MaxTokens
+	}
 }
