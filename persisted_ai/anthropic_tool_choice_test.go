@@ -30,7 +30,7 @@ func TestForceToolCallAnthropicCompatibility(t *testing.T) {
 		{name: "sonnet 5.5 uses auto", model: "claude-sonnet-5-5"},
 		{name: "dotted haiku 5.5 uses auto", model: "claude-haiku-5.5"},
 		{name: "haiku 5.1 uses auto", model: "claude-haiku-5-1"},
-		{name: "5.0 retains forced choice", model: "claude-sonnet-5-0", wantForced: true},
+		{name: "5 retains forced choice", model: "claude-sonnet-5", wantForced: true},
 		{name: "old model retains forced choice", model: "claude-opus-4-5", wantForced: true},
 		{name: "compatible haiku uses auto", model: "claude-haiku-5-5", compatible: true},
 		{name: "compatible old model uses auto", model: "claude-opus-4-5", compatible: true},

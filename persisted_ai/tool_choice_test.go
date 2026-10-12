@@ -26,7 +26,7 @@ func TestResolveToolChoice(t *testing.T) {
 		{name: "5.1 dotted", provider: "anthropic", model: "claude-sonnet-5.1", wantAuto: true},
 		{name: "5.1 hyphenated", provider: "anthropic", model: "claude-5-1-sonnet", wantAuto: true},
 		{name: "future major", provider: "anthropic", model: "claude-opus-6", wantAuto: true},
-		{name: "5.0", provider: "anthropic", model: "claude-sonnet-5-0"},
+		{name: "5", provider: "anthropic", model: "claude-sonnet-5"},
 		{name: "4.5", provider: "anthropic", model: "claude-opus-4-5"},
 		{name: "dated model", provider: "anthropic", model: "claude-sonnet-4-20250514"},
 		{name: "date without version", provider: "anthropic", model: "claude-sonnet-20250514"},
