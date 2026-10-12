@@ -102,13 +102,12 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			Model:    common.OpenaiToolChatProviderType.SmallModel(),
 		},
 		Tools:      []*common.Tool{mockTool},
-		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
+		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeTool, Name: mockTool.Name},
 	}
 
 	eventChan := make(chan Event, 100)
 	var allEvents []Event
 	var sawBlockStartedToolUse bool
-	var sawTextDelta bool
 	eventIdx := 0
 
 	var wg sync.WaitGroup
@@ -121,9 +120,6 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			eventIdx++
 			if event.Type == EventBlockStarted && event.ContentBlock.Type == ContentBlockTypeToolUse {
 				sawBlockStartedToolUse = true
-			}
-			if event.Type == EventTextDelta {
-				sawTextDelta = true
 			}
 		}
 	}()
@@ -149,13 +145,8 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	if len(allEvents) == 0 {
 		t.Error("No events received")
 	}
-
 	if !sawBlockStartedToolUse {
 		t.Error("Expected to see at least one block_started event with tool_use")
-	}
-
-	if !sawTextDelta {
-		t.Error("Expected to see at least one text_delta event")
 	}
 
 	t.Logf("Response output content blocks: %d", len(response.Output.Content))
@@ -163,17 +154,15 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 
 	var foundToolUse bool
 	for _, block := range response.Output.Content {
-		if block.Type == ContentBlockTypeToolUse {
+		if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil && block.ToolUse.Name == mockTool.Name {
 			foundToolUse = true
-			if block.ToolUse.Name == "get_current_weather" {
-				t.Logf("Found tool_use block: %+v", block.ToolUse)
-				break
-			}
+			t.Logf("Found tool_use block: %+v", block.ToolUse)
+			break
 		}
 	}
 
 	if !foundToolUse {
-		t.Error("Expected response.Output.Content to include a tool_use block with Name 'get_current_weather'")
+		t.Fatal("Expected response.Output.Content to include a tool_use block with Name 'get_current_weather'")
 	}
 
 	assert.NotNil(t, response.Usage, "Usage field should not be nil")
@@ -207,6 +196,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 
 		eventChan := make(chan Event, 100)
 		var allEvents []Event
+		var sawTextDelta bool
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -214,12 +204,18 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			defer wg.Done()
 			for event := range eventChan {
 				allEvents = append(allEvents, event)
+				if event.Type == EventTextDelta {
+					sawTextDelta = true
+				}
 			}
 		}()
 
+		followUpOptions := options
+		followUpOptions.Tools = nil
+		followUpOptions.ToolChoice = common.ToolChoice{}
 		request := StreamRequest{
 			Messages:      messages,
-			Options:       options,
+			Options:       followUpOptions,
 			SecretManager: secretManager,
 		}
 		response, err := provider.Stream(ctx, request, eventChan)
@@ -233,9 +229,12 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		if response == nil {
 			t.Fatal("Stream returned a nil response")
 		}
-
 		if len(allEvents) == 0 {
 			t.Error("No events received")
+		}
+
+		if !sawTextDelta {
+			t.Error("Expected to see at least one text_delta event after providing tool results")
 		}
 
 		t.Logf("Response output content blocks (multi-turn): %d", len(response.Output.Content))
