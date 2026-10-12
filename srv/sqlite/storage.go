@@ -113,7 +113,8 @@ func sqliteUri(dbPath string) string {
 	prefs.Add("_pragma", "temp_store(MEMORY)")
 	prefs.Add("_pragma", "synchronous(NORMAL)")
 	prefs.Add("_pragma", fmt.Sprintf("cache_size(-%d)", cacheSizeKB))
-	prefs.Add("_pragma", "optimize(0x10002)")
+	// Include SQLite's temporary analysis limit when checking all tables.
+	prefs.Add("_pragma", "optimize(0x10012)")
 
 	// Construct the final SQLite address string
 	return fmt.Sprintf("file:%s?%s", dbPath, prefs.Encode())

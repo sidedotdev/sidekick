@@ -131,6 +131,10 @@ func (opts ReclaimKVOptions) pauseAfterBatch(batchDuration time.Duration) time.D
 // startMaintenance runs query planner optimization and bounded free page
 // reclamation in the background for the lifetime of the storage instance.
 func (s *Storage) startMaintenance() {
+	// Planner statistics are cached per connection, even after another
+	// connection updates them.
+	s.db.SetConnMaxLifetime(optimizeInterval)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	s.stopMaintenance = cancel
 	s.maintenanceDone = make(chan struct{})
@@ -146,6 +150,8 @@ func (s *Storage) runMaintenance(ctx context.Context) {
 	kvTicker := time.NewTicker(kvMaintenanceInterval)
 	defer kvTicker.Stop()
 
+	s.optimize(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -159,6 +165,18 @@ func (s *Storage) runMaintenance(ctx context.Context) {
 }
 
 func (s *Storage) optimize(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Explicit analysis bypasses optimize's tenfold-growth threshold. Sampling
+	// bounds the work and retires stale STAT4 instead of rebuilding histograms.
+	start := time.Now()
+	if _, err := s.db.ExecContext(ctx, "PRAGMA analysis_limit=400; ANALYZE flow_actions"); err != nil {
+		log.Warn().Err(err).Msg("failed to analyze flow actions")
+	} else {
+		log.Debug().Dur("duration", time.Since(start)).Msg("refreshed flow action statistics")
+	}
+
 	for _, db := range []*trackedDB{s.db, s.kvDb} {
 		if _, err := db.ExecContext(ctx, "PRAGMA optimize"); err != nil {
 			log.Warn().Err(err).Str("db", db.name).Msg("failed to optimize database")
