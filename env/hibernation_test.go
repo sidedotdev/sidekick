@@ -98,6 +98,35 @@ func TestHibernateEnvAndWake_Basic(t *testing.T) {
 	assert.Equal(t, "new content", string(content))
 }
 
+func TestHibernateEnvAndWake_RetainsSideTmp(t *testing.T) {
+	t.Parallel()
+	_, worktreeDir, branchName := setupHibernationTestRepo(t)
+
+	e := &LocalEnv{WorkingDirectory: worktreeDir}
+	require.NoError(t, ensureSideTmp(context.Background(), e))
+	sideTmp := filepath.Join(worktreeDir, ".side", "tmp")
+	require.NoError(t, os.MkdirAll(filepath.Join(sideTmp, "nested"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(sideTmp, "notes.txt"), []byte("scratch notes"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(sideTmp, "nested", "blob.bin"), []byte{0x00, 0x01, 0xff, 0x00}, 0644))
+	require.Empty(t, strings.TrimSpace(runGitIn(t, worktreeDir, "status", "--porcelain")),
+		".side/tmp must be git-ignored for this test to be meaningful")
+
+	_, err := HibernateEnv(context.Background(), e, branchName)
+	require.NoError(t, err)
+	assert.NoDirExists(t, sideTmp)
+
+	_, err = WakeHibernatedEnv(context.Background(), e)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(sideTmp, "notes.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "scratch notes", string(content))
+	content, err = os.ReadFile(filepath.Join(sideTmp, "nested", "blob.bin"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0x00, 0x01, 0xff, 0x00}, content)
+	assert.Empty(t, strings.TrimSpace(runGitIn(t, worktreeDir, "status", "--porcelain")))
+}
+
 // TestHibernateEnvAndWake_LegacyUnlinkedGit covers worktrees hibernated by an
 // older build that removed the .git link and pruned the worktree registration.
 // Wake must recreate the worktree and restore state via the fresh (legacy) path.
