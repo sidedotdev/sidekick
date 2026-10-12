@@ -1,4 +1,4 @@
-# SQLite query-plan regression checks
+# SQLite query-plan checks
 
 Proposed follow-up: validate queries exercised by tests without duplicating SQL
 from storage methods.
@@ -23,5 +23,8 @@ from storage methods.
   bad. Report SQL, scenario, and plan on failure.
 - **Limits:** Capture discovers only exercised paths. Maintain scenarios for
   data-dependent variants, review stale entries, and use the project's SQLite
-  version. Exclude the validator's own SQL from capture. These checks detect
-  access-path regressions, not runtime performance guarantees.
+  version. Exclude the validator's own SQL from capture. These checks enforce
+  selected plan properties for specific fixture data, bindings, and statistics.
+  Failing an assertion does not establish a regression, and passing does not
+  rule one out. Performance claims require measurements under representative
+  workloads.
