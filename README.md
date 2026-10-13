@@ -151,42 +151,6 @@ Note: for built-in provider types (openai, anthropic, google), omit the name to
 use the default built-in llm configs, or set it to match the type. Setting a
 different name will prevent the default llm configs from being used.
 
-#### Reranking
-
-Cohere reranking is optional and separate from chat and embedding models.
-`side auth` can store a Cohere API key for selected profiles; `side init` does
-not offer Cohere as a chat provider. With no reranking configuration, Sidekick
-uses provider `cohere` and model `rerank-v4.0-pro`, skipping reranking when that
-profile has no usable key.
-
-To use a named provider, select it in `reranking`, alongside `llm` and
-`embedding` in the local config:
-
-```yaml
-providers:
-  - name: company-ranking
-    type: cohere
-
-reranking:
-  default:
-    - provider: company-ranking
-      model: rerank-v4.0-pro
-  diff_summarize:
-    - provider: company-ranking
-      model: rerank-v3.5
-```
-
-Credentials are looked up by provider **name**, not type. This example uses
-`COMPANY_RANKING_API_KEY` (or `SIDE_COMPANY_RANKING_API_KEY`) for the default
-profile. Named profiles use the existing profile-specific keyring and
-environment prefixes. A local provider's `key` is available only to its
-associated profiles. Omitting a built-in provider's name defaults it to its
-type; an explicit custom name is not also an alias for that type.
-
-Use `reranking: {default: []}` to disable reranking explicitly. Workspace
-configuration and flow overrides also accept `reranking` with `defaults` and
-`useCaseConfigs`, following the existing configuration precedence.
-
 ### AGENTS.md
 
 Sidekick automatically loads repository-specific instructions from an `AGENTS.md`
