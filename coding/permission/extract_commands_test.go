@@ -95,22 +95,22 @@ func TestExtractCommands(t *testing.T) {
 		{
 			name:     "xargs simple",
 			script:   "find . | xargs rm",
-			expected: []string{"find .", "rm"},
+			expected: []string{"find .", "xargs rm", "rm"},
 		},
 		{
 			name:     "xargs with -I flag",
 			script:   "xargs -I {} cp {} /tmp",
-			expected: []string{"cp {} /tmp"},
+			expected: []string{"xargs -I {} cp {} /tmp", "cp {} /tmp"},
 		},
 		{
 			name:     "xargs with multiple flags",
 			script:   "xargs -n 1 -P 4 echo",
-			expected: []string{"echo"},
+			expected: []string{"xargs -n 1 -P 4 echo", "echo"},
 		},
 		{
 			name:     "xargs with -0 flag",
 			script:   "ls | xargs -0 wc -l",
-			expected: []string{"ls", "wc -l"},
+			expected: []string{"ls", "xargs -0 wc -l", "wc -l"},
 		},
 		{
 			name:     "empty script",
@@ -642,77 +642,77 @@ func TestExtractCommands_Xargs(t *testing.T) {
 		{
 			name:     "attached short option values",
 			script:   "ls | xargs -n1 -P4 wc -l",
-			expected: []string{"ls", "wc -l"},
+			expected: []string{"ls", "xargs -n1 -P4 wc -l", "wc -l"},
 		},
 		{
 			name:     "attached replace string",
 			script:   "ls | xargs -I{} cp -n {} dest",
-			expected: []string{"ls", "cp -n {} dest"},
+			expected: []string{"ls", "xargs -I{} cp -n {} dest", "cp -n {} dest"},
 		},
 		{
 			name:     "clustered flags without values",
 			script:   "ls | xargs -0rt grep foo",
-			expected: []string{"ls", "grep foo"},
+			expected: []string{"ls", "xargs -0rt grep foo", "grep foo"},
 		},
 		{
 			name:     "cluster ending in flag with separate value",
 			script:   "ls | xargs -0n 2 grep foo",
-			expected: []string{"ls", "grep foo"},
+			expected: []string{"ls", "xargs -0n 2 grep foo", "grep foo"},
 		},
 		{
 			name:     "long options with and without values",
 			script:   "ls | xargs --null --no-run-if-empty --max-args=1 --max-procs 4 grep foo",
-			expected: []string{"ls", "grep foo"},
+			expected: []string{"ls", "xargs --null --no-run-if-empty --max-args=1 --max-procs 4 grep foo", "grep foo"},
 		},
 		{
 			name:     "long option with optional value",
 			script:   "ls | xargs --replace cat {}",
-			expected: []string{"ls", "cat {}"},
+			expected: []string{"ls", "xargs --replace cat {}", "cat {}"},
 		},
 		{
 			name:     "deprecated -i with attached replace string",
 			script:   "ls | xargs -i% cat %",
-			expected: []string{"ls", "cat %"},
+			expected: []string{"ls", "xargs -i% cat %", "cat %"},
 		},
 		{
 			name:     "quoted delimiter value",
 			script:   `ls | xargs -d '\n' grep foo`,
-			expected: []string{"ls", "grep foo"},
+			expected: []string{"ls", `xargs -d '\n' grep foo`, "grep foo"},
 		},
 		{
 			name:     "end of options marker",
 			script:   "ls | xargs -0 -- grep foo",
-			expected: []string{"ls", "grep foo"},
+			expected: []string{"ls", "xargs -0 -- grep foo", "grep foo"},
 		},
 		{
 			name:     "no command defaults to echo",
 			script:   "ls | xargs -0",
-			expected: []string{"ls", "echo"},
+			expected: []string{"ls", "xargs -0", "echo"},
 		},
 		{
 			name:     "redirect stays with wrapped command",
 			script:   "xargs grep foo > out.txt",
-			expected: []string{"grep foo > out.txt"},
+			expected: []string{"xargs grep foo > out.txt", "grep foo > out.txt"},
 		},
 		{
 			name:     "nested wrapper is unwrapped",
 			script:   "ls | xargs sudo rm",
-			expected: []string{"ls", "sudo rm", "rm"},
+			expected: []string{"ls", "xargs sudo rm", "sudo rm", "rm"},
 		},
 		{
 			name:     "shell -c is unwrapped",
 			script:   `ls | xargs -I{} sh -c 'curl {}'`,
-			expected: []string{"ls", `sh -c 'curl {}'`, "curl {}"},
+			expected: []string{"ls", `xargs -I{} sh -c 'curl {}'`, `sh -c 'curl {}'`, "curl {}"},
 		},
 		{
 			name:     "nested xargs is unwrapped",
 			script:   "ls | xargs -n1 xargs grep foo",
-			expected: []string{"ls", "grep foo"},
+			expected: []string{"ls", "xargs -n1 xargs grep foo", "xargs grep foo", "grep foo"},
 		},
 		{
 			name:     "xargs behind wrapper is unwrapped",
 			script:   "ls | nice -n 5 xargs grep foo",
-			expected: []string{"ls", "nice -n 5 xargs grep foo", "grep foo"},
+			expected: []string{"ls", "nice -n 5 xargs grep foo", "xargs grep foo", "grep foo"},
 		},
 		{
 			name:     "xargs inside find -exec is not unwrapped",
@@ -722,7 +722,7 @@ func TestExtractCommands_Xargs(t *testing.T) {
 		{
 			name:     "nested recursive wrapper is unwrapped",
 			script:   "ls | xargs nice -n 5 grep foo",
-			expected: []string{"ls", "nice -n 5 grep foo", "grep foo"},
+			expected: []string{"ls", "xargs nice -n 5 grep foo", "nice -n 5 grep foo", "grep foo"},
 		},
 		{
 			name:     "unknown short flag extracts nothing",

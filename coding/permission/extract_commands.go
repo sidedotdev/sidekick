@@ -162,17 +162,8 @@ func appendBackgroundIfPresent(node *sitter.Node, sourceCode []byte, cmdText str
 	return cmdText
 }
 
-// addCommand records cmdText along with the commands it runs. An xargs
-// invocation is replaced by the command it runs, since xargs itself has no
-// permission-relevant effect. When that command can't be determined, the xargs
-// invocation itself is recorded so it can't be auto-approved.
+// addCommand records cmdText along with the commands it runs.
 func addCommand(cmdText string, commands *[]string, opts extractOpts) {
-	if !opts.legacy {
-		if innerCmd, ok := xargsWrappedCommand(parseCommandParts(cmdText)); ok {
-			addCommand(innerCmd, commands, opts)
-			return
-		}
-	}
 	*commands = append(*commands, cmdText)
 	handleSpecialCommands(cmdText, commands, opts)
 }
@@ -195,9 +186,10 @@ func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts)
 	case "exec", "lima":
 		handleExecCommand(parts, commands, opts)
 	case "xargs":
-		// Outside legacy mode, addCommand already unwrapped xargs if it could.
 		if opts.legacy {
 			handleXargsCommandLegacy(parts, commands)
+		} else if innerCmd, ok := xargsWrappedCommand(parts); ok {
+			addCommand(innerCmd, commands, opts)
 		}
 
 	// Privilege/user context wrappers
@@ -223,6 +215,10 @@ func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts)
 		handleWrapperWithPositionalArg(parts, commands, map[string]bool{"-k": true, "--kill-after": true, "-s": true, "--signal": true}, 1, opts)
 	case "stdbuf":
 		handleWrapperWithFlags(parts, commands, map[string]bool{"-i": true, "-o": true, "-e": true, "--input": true, "--output": true, "--error": true}, opts)
+	case "sandbox-exec", "/usr/bin/sandbox-exec":
+		if !opts.legacy {
+			handleWrapperWithFlags(parts, commands, map[string]bool{"-f": true, "-n": true, "-p": true, "-D": true}, opts)
+		}
 
 	// Remote/parallel execution
 	case "ssh":
