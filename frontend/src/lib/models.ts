@@ -43,6 +43,11 @@ export interface EmbeddingConfig {
   useCaseConfigs: { [key: string]: ModelConfig[] }
 }
 
+export interface RerankingConfig {
+  defaults: ModelConfig[] | null
+  useCaseConfigs: { [key: string]: ModelConfig[] } | null
+}
+
 export interface Profile {
   id: string
   name: string
@@ -56,6 +61,7 @@ export interface Workspace {
   profileId?: string
   llmConfig?: LLMConfig | null
   embeddingConfig?: EmbeddingConfig | null
+  rerankingConfig?: RerankingConfig | null
 }
 
 // TODO /gen remove this and the components/views where it is used

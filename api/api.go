@@ -443,7 +443,7 @@ func (ctrl *Controller) resolveProviders(profileId string) ([]string, error) {
 	}
 
 	secretManager := ctrl.profileSecretManager(profileId)
-	for _, builtinProvider := range common.BuiltinProviders {
+	for _, builtinProvider := range common.BuiltinLLMProviders {
 		if seen[builtinProvider] {
 			continue
 		}

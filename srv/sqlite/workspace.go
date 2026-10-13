@@ -156,13 +156,13 @@ func (s *Storage) DeleteWorkspace(ctx context.Context, workspaceId string) error
 
 func (s *Storage) GetWorkspaceConfig(ctx context.Context, workspaceId string) (domain.WorkspaceConfig, error) {
 	query := `
-		SELECT llm_config, embedding_config
+		SELECT llm_config, embedding_config, reranking_config
 		FROM workspace_configs
 		WHERE workspace_id = ?
 	`
 
-	var llmConfigJSON, embeddingConfigJSON string
-	err := s.db.QueryRowContext(ctx, query, workspaceId).Scan(&llmConfigJSON, &embeddingConfigJSON)
+	var llmConfigJSON, embeddingConfigJSON, rerankingConfigJSON string
+	err := s.db.QueryRowContext(ctx, query, workspaceId).Scan(&llmConfigJSON, &embeddingConfigJSON, &rerankingConfigJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return domain.WorkspaceConfig{}, common.ErrNotFound
@@ -182,6 +182,12 @@ func (s *Storage) GetWorkspaceConfig(ctx context.Context, workspaceId string) (d
 	if err != nil {
 		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to unmarshal embedding config")
 		return domain.WorkspaceConfig{}, fmt.Errorf("failed to unmarshal embedding config: %w", err)
+	}
+
+	err = json.Unmarshal([]byte(rerankingConfigJSON), &config.Reranking)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to unmarshal reranking config")
+		return domain.WorkspaceConfig{}, fmt.Errorf("failed to unmarshal reranking config: %w", err)
 	}
 
 	return config, nil
@@ -210,12 +216,18 @@ func (s *Storage) PersistWorkspaceConfig(ctx context.Context, workspaceId string
 		return fmt.Errorf("failed to marshal embedding config: %w", err)
 	}
 
+	rerankingConfigJSON, err := json.Marshal(config.Reranking)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to marshal reranking config")
+		return fmt.Errorf("failed to marshal reranking config: %w", err)
+	}
+
 	query := `
-		INSERT OR REPLACE INTO workspace_configs (workspace_id, llm_config, embedding_config)
-		VALUES (?, ?, ?)
+		INSERT OR REPLACE INTO workspace_configs (workspace_id, llm_config, embedding_config, reranking_config)
+		VALUES (?, ?, ?, ?)
 	`
 
-	_, err = s.db.ExecContext(ctx, query, workspaceId, string(llmConfigJSON), string(embeddingConfigJSON))
+	_, err = s.db.ExecContext(ctx, query, workspaceId, string(llmConfigJSON), string(embeddingConfigJSON), string(rerankingConfigJSON))
 	if err != nil {
 		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to persist workspace config")
 		return fmt.Errorf("failed to persist workspace config: %w", err)

@@ -402,7 +402,7 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 		secret_manager.KeyringSecretManager{},
 		secret_manager.LocalConfigSecretManager{},
 	})}
-	reranker, err := GetReranker(secretsManager)
+	reranker, err := GetReranker(common.DefaultRerankingModelConfig(), nil, secretsManager)
 	require.NoError(t, err)
 	require.Nil(t, reranker, "byte-equality assertions below require reranking to be disabled")
 
