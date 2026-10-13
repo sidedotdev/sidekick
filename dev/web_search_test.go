@@ -14,7 +14,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
+func TestAppendWebSearchTool(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -22,7 +22,10 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 		envContainer *env.EnvContainer
 		providerType string
 		builtinTools []string
-		wantAdded    bool
+		// version overrides the "web-search-tool" workflow version to exercise
+		// replay of workflows started before the latest version.
+		version   *workflow.Version
+		wantAdded bool
 	}{
 		{
 			name:         "responses compatible without opt in",
@@ -78,19 +81,38 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 			providerType: "unknown",
 		},
 		{
-			name:         "local environment remains disabled with opt in",
+			name:         "local environment with opt in enables web search",
 			envContainer: &env.EnvContainer{Env: &env.LocalEnv{}},
 			providerType: "openai_responses_compatible",
 			builtinTools: []string{"web_search"},
+			wantAdded:    true,
 		},
 		{
-			name:         "local env stays disabled",
+			name:         "local environment without opt in stays disabled",
 			envContainer: &env.EnvContainer{Env: &env.LocalEnv{}},
-			wantAdded:    false,
+			providerType: "openai_responses_compatible",
 		},
 		{
-			name:         "local git worktree env stays disabled",
+			name:         "local env enables web search",
+			envContainer: &env.EnvContainer{Env: &env.LocalEnv{}},
+			wantAdded:    true,
+		},
+		{
+			name:         "local git worktree env enables web search",
 			envContainer: &env.EnvContainer{Env: &env.LocalGitWorktreeEnv{}},
+			wantAdded:    true,
+		},
+		{
+			name:         "legacy version without provider check ignores unsupported provider",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			providerType: "unknown",
+			version:      versionPtr(1),
+			wantAdded:    true,
+		},
+		{
+			name:         "pre web search version never adds tool",
+			envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}},
+			version:      versionPtr(workflow.DefaultVersion),
 			wantAdded:    false,
 		},
 		{
@@ -109,14 +131,14 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 			wantAdded:    true,
 		},
 		{
-			name:         "missing env stays disabled",
+			name:         "missing env enables web search",
 			envContainer: &env.EnvContainer{},
-			wantAdded:    false,
+			wantAdded:    true,
 		},
 		{
-			name:         "missing env container stays disabled",
+			name:         "missing env container enables web search",
 			envContainer: nil,
-			wantAdded:    false,
+			wantAdded:    true,
 		},
 	}
 
@@ -126,6 +148,9 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 
 			var ts testsuite.WorkflowTestSuite
 			wfEnv := ts.NewTestWorkflowEnvironment()
+			if tc.version != nil {
+				wfEnv.OnGetVersion("web-search-tool", workflow.DefaultVersion, webSearchToolMaxVersion).Return(*tc.version)
+			}
 
 			existing := &llm.Tool{Name: "some_function_tool"}
 			wf := func(ctx workflow.Context) ([]*llm.Tool, error) {
@@ -144,7 +169,7 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 						}},
 					},
 				}
-				return appendWebSearchToolIfNonLocal(dCtx, []*llm.Tool{existing}, common.ModelConfig{Provider: "selected-provider"}), nil
+				return appendWebSearchTool(dCtx, []*llm.Tool{existing}, common.ModelConfig{Provider: "selected-provider"}), nil
 			}
 			wfEnv.RegisterWorkflow(wf)
 			wfEnv.ExecuteWorkflow(wf)
@@ -165,4 +190,8 @@ func TestAppendWebSearchToolIfNonLocal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func versionPtr(v workflow.Version) *workflow.Version {
+	return &v
 }

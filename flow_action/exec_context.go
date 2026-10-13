@@ -5,6 +5,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/secret_manager"
 	"strings"
 	"time"
@@ -60,6 +61,15 @@ type ActionContext struct {
 	ExecContext
 	ActionType   string
 	ActionParams map[string]interface{}
+}
+
+// FlowCache lets flags be evaluated once per flow. It has a value receiver so
+// contexts embedding ExecContext by value provide it too.
+func (eCtx ExecContext) FlowCache() fflag.FlowCache {
+	if eCtx.GlobalState == nil {
+		return nil
+	}
+	return eCtx.GlobalState
 }
 
 func (eCtx *ExecContext) NewActionContext(actionType string) ActionContext {

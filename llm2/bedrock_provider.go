@@ -108,7 +108,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 	start := time.Now()
 	streamOut, err := client.ConverseStream(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: ConverseStream: %w", err)
+		return nil, classifyBadRequestError(err, fmt.Errorf("bedrock: ConverseStream: %w", err))
 	}
 	stream := streamOut.GetStream()
 	defer stream.Close()
@@ -148,14 +148,10 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		Msg("bedrock stream complete")
 
 	output := accumulateBedrockEventsToMessage(collected)
-
-	// Report the resolved effort. When "lowest" resolved to "" (thinking off),
-	// report "none" so consumers know thinking was intentionally skipped.
-	reportedEffort := resolvedEffort
-	if strings.Contains(strings.ToLower(model), "claude") &&
-		request.Options.ReasoningEffort == "lowest" && resolvedEffort == "" {
-		reportedEffort = "none"
-	}
+	stampCoreBlockMetadata(&output, CoreBlockMetadata{
+		Provider:     bedrockProviderName,
+		ProviderType: string(common.BedrockToolChatProviderType),
+	})
 
 	return &MessageResponse{
 		Model:           model,
@@ -164,7 +160,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		StopReason:      stopReason,
 		Usage:           usage,
 		AuthType:        common.ProviderAuthTypeAPI,
-		ReasoningEffort: reportedEffort,
+		ReasoningEffort: resolvedEffort,
 	}, nil
 }
 
@@ -210,7 +206,7 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 		return nil, maxTokens, ""
 	}
 
-	resolvedEffort = resolveAnthropicReasoningEffort(options.ReasoningEffort, model)
+	resolvedEffort = resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 
 	// Anthropic does not allow thinking when tool_choice forces tool use
 	forcesTool := options.ToolChoice.Type == common.ToolChoiceTypeRequired || options.ToolChoice.Type == common.ToolChoiceTypeTool
@@ -240,7 +236,6 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 		return map[string]any{"thinking": adaptiveThinking}, maxTokens, resolvedEffort
 	}
 	if resolvedEffort == "" {
-		// "lowest" resolved to "": thinking is intentionally skipped.
 		return nil, maxTokens, resolvedEffort
 	}
 

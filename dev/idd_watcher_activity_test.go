@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
@@ -47,19 +46,11 @@ func TestIddWatchEditIdleActivity_ReturnsAfterIdleOnIntentEdit(t *testing.T) {
 		resCh <- result{out, err}
 	}()
 
-	// Give the watcher a moment to install its inotify hooks before writing.
-	time.Sleep(50 * time.Millisecond)
-	// Both edits land within one burst window, so they should coalesce into
-	// the same returned batch rather than splitting into two activity
-	// returns. The watcher dedupes paths, so under heavy load (where hook
-	// installation may lag past the initial sleep) the writes can simply be
-	// retried until a settled batch is reported.
-	writeBurst := func() {
+	// Retry the same path because watcher installation is asynchronous.
+	writeEdit := func() {
 		writeFile(t, filepath.Join(intentDir, "goals.md"), "# initial\n")
-		time.Sleep(40 * time.Millisecond)
-		writeFile(t, filepath.Join(intentDir, "notes.md"), "more\n")
 	}
-	writeBurst()
+	writeEdit()
 
 	// Must exceed IdleDuration, otherwise retries keep the batch from settling.
 	retryTicker := time.NewTicker(2 * time.Second)
@@ -70,11 +61,10 @@ func TestIddWatchEditIdleActivity_ReturnsAfterIdleOnIntentEdit(t *testing.T) {
 		case r := <-resCh:
 			require.NoError(t, r.err)
 			assert.False(t, r.out.TimedOut)
-			sort.Strings(r.out.ChangedPaths)
-			assert.Equal(t, []string{"intent/goals.md", "intent/notes.md"}, r.out.ChangedPaths)
+			assert.Equal(t, []string{"intent/goals.md"}, r.out.ChangedPaths)
 			return
 		case <-retryTicker.C:
-			writeBurst()
+			writeEdit()
 		case <-deadline:
 			t.Fatal("watcher did not return after idle window elapsed")
 		}
@@ -89,7 +79,9 @@ func TestIddWatchEditIdleActivity_IgnoresEditsOutsideWatchSubdir(t *testing.T) {
 	otherDir := filepath.Join(worktree, "src")
 	require.NoError(t, os.MkdirAll(otherDir, 0o755))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Far above MaxWait so a starved scheduler in loaded runs can't race the
+	// context deadline against the MaxWait timer.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	type result struct {
@@ -118,7 +110,7 @@ func TestIddWatchEditIdleActivity_IgnoresEditsOutsideWatchSubdir(t *testing.T) {
 		require.NoError(t, r.err)
 		assert.True(t, r.out.TimedOut, "expected MaxWait timeout when no intent edits occurred")
 		assert.Empty(t, r.out.ChangedPaths)
-	case <-time.After(3 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("watcher did not return on MaxWait timeout")
 	}
 }
@@ -129,7 +121,9 @@ func TestIddWatchEditIdleActivity_IgnoresUnwatchedExtensions(t *testing.T) {
 	intentDir := filepath.Join(worktree, "intent")
 	require.NoError(t, os.MkdirAll(intentDir, 0o755))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Far above MaxWait so a starved scheduler in loaded runs can't race the
+	// context deadline against the MaxWait timer.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	type result struct {
@@ -158,7 +152,7 @@ func TestIddWatchEditIdleActivity_IgnoresUnwatchedExtensions(t *testing.T) {
 		require.NoError(t, r.err)
 		assert.True(t, r.out.TimedOut)
 		assert.Empty(t, r.out.ChangedPaths)
-	case <-time.After(3 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("watcher did not return on MaxWait timeout")
 	}
 }

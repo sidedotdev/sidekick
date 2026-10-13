@@ -209,11 +209,23 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "realpath"},
 			{Pattern: "readlink"},
 			{Pattern: "timeout"},
+			{Pattern: "sandbox-exec"},
+			{Pattern: "/usr/bin/sandbox-exec"},
 			{Pattern: "sleep"},
 			{Pattern: "wait"},
 			{Pattern: "seq"},
 			{Pattern: "printf"},
 			{Pattern: "set"},
+			// Control-flow builtins: their only arguments are numeric counts or
+			// statuses, and any command substitutions are evaluated separately.
+			{Pattern: "exit"},
+			{Pattern: "return"},
+			{Pattern: "break"},
+			{Pattern: "continue"},
+			{Pattern: "shift"},
+			// Command lookup without execution
+			{Pattern: "type"},
+			{Pattern: `command(\s+-[pvV]+)*\s+-[pvV]*[vV][pvV]*(\s|$)`},
 			// low-risk fs write commands (note: paths outside of repo are protected with another mechanism)
 			{Pattern: "touch"},
 			{Pattern: "rmdir"},

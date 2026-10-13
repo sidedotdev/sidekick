@@ -147,7 +147,6 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	// Defaults match flags.yml production defaults.
 	var ffa *fflag.FFlagActivities
 	knownFlags := map[string]bool{
-		fflag.CheckEdits:                        true,
 		fflag.InfoNeeds:                         false,
 		fflag.DisableContextCodeVisibilityCheck: true,
 		fflag.InitialRepoSummary:                true,
@@ -654,7 +653,7 @@ func (s *BuildCodingInputTestSuite) TestResolveCodingOptionsKeepsWebSearchTool()
 	s.Greater(functionToolCount, 0, "function tools should remain available alongside web search")
 }
 
-func (s *BuildCodingInputTestSuite) TestWebSearchToolUsableOnlyInNonLocalEnv() {
+func (s *BuildCodingInputTestSuite) TestWebSearchToolUsableInLocalAndRemoteEnvs() {
 	wrapperWorkflow := func(ctx workflow.Context, useDevPodEnv bool) (llm2.Options, error) {
 		envContainer := &env.EnvContainer{Env: &env.LocalEnv{}}
 		if useDevPodEnv {
@@ -676,39 +675,31 @@ func (s *BuildCodingInputTestSuite) TestWebSearchToolUsableOnlyInNonLocalEnv() {
 	}
 
 	var ffa *fflag.FFlagActivities
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	for _, useDevPodEnv := range []bool{true, false} {
+		s.SetupTest()
+		s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
 
-	s.env.ExecuteWorkflow(wrapperWorkflow, true)
-	s.True(s.env.IsWorkflowCompleted())
-	s.NoError(s.env.GetWorkflowError())
+		s.env.ExecuteWorkflow(wrapperWorkflow, useDevPodEnv)
+		s.True(s.env.IsWorkflowCompleted())
+		s.NoError(s.env.GetWorkflowError())
 
-	var options llm2.Options
-	s.NoError(s.env.GetWorkflowResult(&options))
+		var options llm2.Options
+		s.NoError(s.env.GetWorkflowResult(&options))
 
-	webSearchCount := 0
-	functionToolCount := 0
-	for _, tool := range options.Tools {
-		if tool.Type == common.ToolTypeWebSearch {
-			webSearchCount++
-		} else {
-			functionToolCount++
+		webSearchCount := 0
+		functionToolCount := 0
+		for _, tool := range options.Tools {
+			if tool.Type == common.ToolTypeWebSearch {
+				webSearchCount++
+			} else {
+				functionToolCount++
+			}
 		}
-	}
-	s.Equal(1, webSearchCount, "non-local env should enable the web search tool")
-	s.Greater(functionToolCount, 0, "function tools should remain available alongside web search")
-	// Auto tool choice keeps the web search tool usable: providers only
-	// filter the tool list down when a specific tool is forced.
-	s.Equal(common.ToolChoiceTypeAuto, options.ToolChoice.Type)
-
-	// Local envs must not get web search by default.
-	s.SetupTest()
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
-	s.env.ExecuteWorkflow(wrapperWorkflow, false)
-	s.True(s.env.IsWorkflowCompleted())
-	s.NoError(s.env.GetWorkflowError())
-	s.NoError(s.env.GetWorkflowResult(&options))
-	for _, tool := range options.Tools {
-		s.NotEqual(common.ToolTypeWebSearch, tool.Type)
+		s.Equal(1, webSearchCount, "web search tool should be enabled (devpod env: %v)", useDevPodEnv)
+		s.Greater(functionToolCount, 0, "function tools should remain available alongside web search")
+		// Auto tool choice keeps the web search tool usable: providers only
+		// filter the tool list down when a specific tool is forced.
+		s.Equal(common.ToolChoiceTypeAuto, options.ToolChoice.Type)
 	}
 }
 

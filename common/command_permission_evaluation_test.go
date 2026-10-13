@@ -413,3 +413,35 @@ func TestEvaluateScriptPermissionDetailed(t *testing.T) {
 		assert.Empty(t, msg)
 	})
 }
+
+func TestEvaluateScriptPermission_Xargs(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	tests := []struct {
+		name   string
+		script string
+		opts   EvaluatePermissionOptions
+		want   PermissionResult
+	}{
+		{name: "safe wrapped command still requires wrapper approval", script: "ls | xargs grep foo", want: PermissionRequireApproval},
+		{name: "flags before safe wrapped command", script: "git ls-files -z | xargs -0 -n1 wc -l", want: PermissionRequireApproval},
+		{name: "no wrapped command runs echo", script: "ls | xargs", want: PermissionRequireApproval},
+		{name: "unapproved wrapped command", script: "ls | xargs rm", want: PermissionRequireApproval},
+		{name: "denied wrapped command", script: "ls | xargs sudo rm", want: PermissionDeny},
+		{name: "unparseable xargs options", script: "ls | xargs --frobnicate grep foo", want: PermissionRequireApproval},
+		{name: "network in nested shell", script: `ls | xargs -I{} sh -c 'curl {}'`, want: PermissionRequireApproval},
+		{name: "safe command through nested xargs", script: "ls | xargs -n1 xargs grep foo", want: PermissionRequireApproval},
+		{name: "unsafe command through nested xargs", script: "ls | xargs -n1 xargs rm", want: PermissionRequireApproval},
+		{name: "xargs in find -exec is not unwrapped", script: `find . -exec xargs grep foo \;`, want: PermissionRequireApproval},
+		{name: "legacy extraction never auto-approves xargs", script: "ls | xargs grep foo", opts: EvaluatePermissionOptions{UseLegacyCommandExtraction: true}, want: PermissionRequireApproval},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, _ := EvaluateScriptPermissionWithOptions(config, tt.script, tt.opts)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}

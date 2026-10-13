@@ -359,10 +359,8 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 	}
 	pushArgs = append(pushArgs, dest+":"+containerRepoDir)
 	pushArgs = append(pushArgs, refspecs...)
-	cmd := exec.CommandContext(ctx, "git", pushArgs...)
-	cmd.Env = append(os.Environ(), GitSSHEnv(opts)...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git push to %s: %w: %s", containerRepoDir, GitSSHFailure(err, out), string(out))
+	if out, err := RunGitOverSSH(ctx, opts, pushArgs...); err != nil {
+		return fmt.Errorf("git push to %s: %w: %s", containerRepoDir, err, string(out))
 	}
 	pushDur := time.Since(pushStart)
 
@@ -484,12 +482,11 @@ func fetchRemoteRefToLocal(ctx context.Context, sshArgs []string, workingDirecto
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir,
-		"fetch", "--no-tags", "--no-write-fetch-head", dest+":"+workingDirectory, refspec)
 	// Tag conflict detection relies on Git's diagnostic text.
-	cmd.Env = append(os.Environ(), GitSSHEnv(opts)...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch %s %s: %w: %s", workingDirectory, refspec, GitSSHFailure(err, out), string(out))
+	out, err := RunGitOverSSH(ctx, opts, "-C", localRepoDir,
+		"fetch", "--no-tags", "--no-write-fetch-head", dest+":"+workingDirectory, refspec)
+	if err != nil {
+		return fmt.Errorf("git fetch %s %s: %w: %s", workingDirectory, refspec, err, string(out))
 	}
 	return nil
 }
@@ -546,6 +543,61 @@ func GitSSHFailure(err error, output []byte) error {
 	return err
 }
 
+// gitTransferAttempts bounds how many times a replay-safe git transfer is
+// attempted when its connection drops mid-stream.
+const gitTransferAttempts = 3
+
+// RunGitOverSSH runs git with args using ssh opts as its transport and returns
+// the combined output, with failures classified by GitSSHFailure. A connection
+// dropped mid-transfer is retried a bounded number of times, so callers must
+// only use it for replay-safe transfers: fetches and pushes of explicit
+// refspecs, which converge on the same refs when repeated.
+func RunGitOverSSH(ctx context.Context, opts []string, args ...string) ([]byte, error) {
+	for attempt := 1; ; attempt++ {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Env = append(os.Environ(), GitSSHEnv(opts)...)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return out, nil
+		}
+		err = GitSSHFailure(err, out)
+		if attempt >= gitTransferAttempts || ctx.Err() != nil || !gitTransferDisconnected(err, out) {
+			return out, err
+		}
+		log.Warn().Err(err).Int("attempt", attempt).Str("output", strings.TrimSpace(string(out))).
+			Msg("git transfer connection dropped mid-stream; retrying")
+		select {
+		case <-ctx.Done():
+			return out, err
+		case <-time.After(time.Duration(attempt) * time.Second):
+		}
+	}
+}
+
+// gitTransferDisconnected reports whether a git transfer failed because its
+// connection dropped after the remote git started responding. Failures before
+// that point are left to ssh transport recovery, which can repair causes (a
+// moved endpoint, a rejected key) that a plain retry cannot.
+func gitTransferDisconnected(err error, output []byte) bool {
+	var transportErr *gitSSHTransportError
+	if errors.As(err, &transportErr) {
+		return false
+	}
+	text := strings.ToLower(string(output))
+	for _, fragment := range []string{
+		"unexpected disconnect while reading sideband packet",
+		"the remote end hung up unexpectedly",
+		"early eof",
+		"connection reset by peer",
+		"broken pipe",
+	} {
+		if strings.Contains(text, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
 // syncBranchToRemoteOverSSH force-updates a single branch in a remote
 // environment's clone from the local repository, which is the source of truth
 // for it. When the branch is checked out in a remote worktree, that worktree
@@ -585,10 +637,8 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
 	pushStart := time.Now()
-	cmd := exec.CommandContext(ctx, "git", "-C", localRepoDir, "push", "--quiet", dest+":"+workingDirectory, refspec)
-	cmd.Env = append(os.Environ(), GitSSHEnv(opts)...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git push branch %s to %s: %w: %s", branch, workingDirectory, GitSSHFailure(err, out), string(out))
+	if out, err := RunGitOverSSH(ctx, opts, "-C", localRepoDir, "push", "--quiet", dest+":"+workingDirectory, refspec); err != nil {
+		return fmt.Errorf("git push branch %s to %s: %w: %s", branch, workingDirectory, err, string(out))
 	}
 
 	// The push only moved the ref, so realign any remote worktree that has the

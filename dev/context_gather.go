@@ -219,7 +219,7 @@ func GatherContextForCoding(dCtx DevContext, chatHistory *persisted_ai.ChatHisto
 }
 
 func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, opts ContextGatherOptions) (int, error) {
-	forgettingEnabled := fflag.IsEnabled(dCtx, fflag.ContextGatheringForget)
+	forgettingEnabled := fflag.IsEnabledWithoutVersioning(dCtx, fflag.ContextGatheringForget)
 	tracker := newContextGatherHistory(chatHistory, forgettingEnabled)
 
 	prompt, err := renderContextGatherPrompt(dCtx, promptInfo, forgettingEnabled, opts.EnvironmentContext)

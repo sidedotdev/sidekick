@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import KanbanView from '@/views/KanbanView.vue'
 import BlockedView from '@/views/BlockedView.vue'
 import { isBlockedNow } from '@/lib/offHours'
+import { areLocalSettingsAvailable } from '@/lib/localSettings'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -60,6 +61,12 @@ const router = createRouter({
       name: 'workspace',
       component: () => import('@/views/WorkspaceView.vue'),
       props: true
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/views/LocalSettingsView.vue'),
+      beforeEnter: () => areLocalSettingsAvailable() ? true : { path: '/kanban' },
     },
     {
       path: '/archived-tasks',

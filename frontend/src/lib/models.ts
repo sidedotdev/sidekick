@@ -1,8 +1,12 @@
 export interface ModelConfig {
   provider: string
   model: string
-  reasoningEffort?: '' | 'lowest' | 'minimal' | 'low' | 'medium' | 'high' | 'highest'
-  speed?: '' | 'fast'
+  // Model-specific effort level; 'lowest'/'highest' are legacy aliases for the bottom/top of the model's ladder
+  reasoningEffort?: string
+  // Sent as the provider's service_tier, e.g. OpenAI's 'flex', 'priority' or 'ultrafast'; empty means standard
+  serviceTier?: string
+  // Anthropic fast mode ('fast'); empty means standard
+  speed?: string
 }
 
 export interface LLMConfig {

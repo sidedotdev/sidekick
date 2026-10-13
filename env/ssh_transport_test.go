@@ -274,7 +274,18 @@ func startedForwardHolderArgs(t *testing.T) (argsFile, sshPath string) {
 	t.Helper()
 	argsFile = filepath.Join(t.TempDir(), "args")
 	sshPath = installFakeSSH(t, "printf '%s\\n' \"$*\" >> "+argsFile+"\nexec sleep 30\n")
+	// These holders never exit, so the start grace would only add latency.
+	overrideReverseForwardHolderStartGrace(t, 10*time.Millisecond)
 	return argsFile, sshPath
+}
+
+// overrideReverseForwardHolderStartGrace sets the package-wide holder start
+// grace for the rest of the test. The caller's test must not be parallel.
+func overrideReverseForwardHolderStartGrace(t *testing.T, grace time.Duration) {
+	t.Helper()
+	original := reverseForwardHolderStartGrace
+	reverseForwardHolderStartGrace = grace
+	t.Cleanup(func() { reverseForwardHolderStartGrace = original })
 }
 
 func readHolderInvocations(t *testing.T, argsFile string) []string {
@@ -284,7 +295,12 @@ func readHolderInvocations(t *testing.T, argsFile string) []string {
 		return nil
 	}
 	require.NoError(t, err)
-	return strings.Split(strings.TrimSpace(string(contents)), "\n")
+	// The file can be observed between creation and completion of a record.
+	lastNewline := strings.LastIndexByte(string(contents), '\n')
+	if lastNewline < 0 {
+		return nil
+	}
+	return strings.Split(string(contents[:lastNewline]), "\n")
 }
 
 // waitForHolderInvocations waits until the fake ssh has recorded at least n
@@ -294,11 +310,7 @@ func waitForHolderInvocations(t *testing.T, argsFile string, n int) []string {
 	t.Helper()
 	var invocations []string
 	require.Eventually(t, func() bool {
-		contents, err := os.ReadFile(argsFile)
-		if err != nil {
-			return false
-		}
-		invocations = strings.Split(strings.TrimSpace(string(contents)), "\n")
+		invocations = readHolderInvocations(t, argsFile)
 		return len(invocations) >= n
 	}, 15*time.Second, 10*time.Millisecond, "expected %d fake ssh invocation(s)", n)
 	return invocations
@@ -371,11 +383,9 @@ func TestReverseForwardHolderReusesAndRestarts(t *testing.T) {
 func TestReverseForwardHolderReportsImmediateExit(t *testing.T) {
 	// Deliberately not parallel: overrides PATH and a package timing var.
 	sshPath := installFakeSSH(t, "echo 'bind: Address already in use' >&2\nexit 255\n")
-	originalGrace := reverseForwardHolderStartGrace
 	// Generous grace: ensure returns as soon as the fake exits, so this only
 	// bounds how long a heavily loaded machine may take to run it.
-	reverseForwardHolderStartGrace = 30 * time.Second
-	t.Cleanup(func() { reverseForwardHolderStartGrace = originalGrace })
+	overrideReverseForwardHolderStartGrace(t, 30*time.Second)
 
 	holder := &reverseForwardHolder{key: "test", executable: sshPath}
 	err := holder.ensure(context.Background(), &recordingSSHEnv{&LocalEnv{}}, []common.PortForwardConfig{{HostPort: 8080}})
@@ -400,8 +410,12 @@ func TestReverseForwardHolderPlacesOptionsBeforeDestination(t *testing.T) {
 	args := invocations[0]
 	destination := strings.Index(args, "workspace.devpod")
 	require.GreaterOrEqual(t, destination, 0)
-	assert.Less(t, strings.Index(args, "-N"), destination, "-N must precede the destination")
-	assert.Less(t, strings.Index(args, "-R 127.0.0.1:3000:127.0.0.1:8080"), destination, "-R must precede the destination")
+	noCommand := strings.Index(args, "-N")
+	reverseForward := strings.Index(args, "-R 127.0.0.1:3000:127.0.0.1:8080")
+	require.GreaterOrEqual(t, noCommand, 0, "-N must be present")
+	require.GreaterOrEqual(t, reverseForward, 0, "-R must be present")
+	assert.Less(t, noCommand, destination, "-N must precede the destination")
+	assert.Less(t, reverseForward, destination, "-R must precede the destination")
 }
 
 // holderAlive reports whether the holder registered under key is running.
@@ -616,6 +630,9 @@ func TestLegacyTransportReplaceReverseForwardsKeepsRetainedAndOtherRemotes(t *te
 	}
 
 	require.NoError(t, edited.EnsureReverseForwards(ctx, initial))
+	// Holders record their invocations asynchronously, so let the first one
+	// land before starting the second to keep their order deterministic.
+	waitForHolderInvocations(t, argsFile, 1)
 	require.NoError(t, otherRemote.EnsureReverseForwards(ctx, other))
 	invocations := waitForHolderInvocations(t, argsFile, 2)
 	require.Len(t, invocations, 2)
@@ -661,6 +678,9 @@ func TestLegacyTransportCloseAfterReplacementStopsEffectiveHolder(t *testing.T) 
 	before := &legacySSHTransport{key: key, forwards: previous, sshEnv: &recordingSSHEnv{&LocalEnv{}}}
 	t.Cleanup(before.Close)
 	require.NoError(t, before.EnsureReverseForwards(ctx, previous))
+	// The replacement kills this holder, which must not happen before it has
+	// recorded its invocation.
+	require.Len(t, waitForHolderInvocations(t, argsFile, 1), 1)
 	require.NoError(t, before.ReplaceReverseForwards(ctx, previous, desired))
 	require.Len(t, waitForHolderInvocations(t, argsFile, 2), 2)
 	require.True(t, holderAlive(reverseForwardHolderKey(key, desired)))
@@ -678,7 +698,7 @@ func TestLegacyTransportCloseAfterReplacementStopsEffectiveHolder(t *testing.T) 
 // that exits at once because the remote refused a binding: the failure must be
 // reported, and a retry must start a holder afresh.
 func TestLegacyTransportReplaceReverseForwardsRetriesFailedBind(t *testing.T) {
-	// Deliberately not parallel: overrides PATH.
+	// Deliberately not parallel: overrides PATH and a package timing var.
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	failedOnce := filepath.Join(dir, "failed-once")
@@ -698,10 +718,15 @@ func TestLegacyTransportReplaceReverseForwardsRetriesFailedBind(t *testing.T) {
 	transport := &legacySSHTransport{key: key, forwards: desired, sshEnv: &recordingSSHEnv{&LocalEnv{}}}
 	ctx := context.Background()
 
+	// Generous grace: ensure returns as soon as the failing fake exits, so
+	// this only bounds how long a heavily loaded machine may take to run it.
+	overrideReverseForwardHolderStartGrace(t, 30*time.Second)
 	err := transport.ReplaceReverseForwards(ctx, nil, desired)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Address already in use")
 
+	// The retried holder never exits, so a long grace would only add latency.
+	overrideReverseForwardHolderStartGrace(t, 10*time.Millisecond)
 	require.NoError(t, transport.ReplaceReverseForwards(ctx, nil, desired))
 	invocations := waitForHolderInvocations(t, argsFile, 1)
 	require.Len(t, invocations, 1)
@@ -712,11 +737,17 @@ func TestLegacyTransportReplaceReverseForwardsRetriesFailedBind(t *testing.T) {
 // the dedicated holder binds the reverse forwards, and the command channel
 // (whose lifetime is a command's) must not compete for the same bindings.
 func TestRunRemoteCommandGivesForwardsToTheHolderOnly(t *testing.T) {
-	// Deliberately not parallel: overrides PATH and package timing vars.
-	argsFile, _ := startedForwardHolderArgs(t)
-	originalDialTimeout := agentExecDialTimeout
-	agentExecDialTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { agentExecDialTimeout = originalDialTimeout })
+	// Deliberately not parallel: overrides PATH and a package timing var.
+	argsFile := filepath.Join(t.TempDir(), "args")
+	// Only the holder blocks; the command channel exits at once so the dial
+	// fails fast instead of waiting out ping, cancel and reap timeouts.
+	installFakeSSH(t, strings.Join([]string{
+		"printf '%s\\n' \"$*\" >> " + argsFile,
+		`case " $* " in *" -N "*) exec sleep 30 ;; esac`,
+		"exit 1",
+		"",
+	}, "\n"))
+	overrideReverseForwardHolderStartGrace(t, 10*time.Millisecond)
 
 	key := "test:forwards-owned-by-holder"
 	forwards := []common.PortForwardConfig{{HostPort: 8080, ContainerPort: 3000}}
@@ -731,13 +762,19 @@ func TestRunRemoteCommandGivesForwardsToTheHolderOnly(t *testing.T) {
 	require.Error(t, err, "the fake ssh never speaks the agent protocol, so the command cannot succeed")
 
 	var holderInvocations, channelInvocations []string
-	for _, invocation := range readHolderInvocations(t, argsFile) {
-		if strings.Contains(invocation, "-N") {
-			holderInvocations = append(holderInvocations, invocation)
-			continue
+	// The holder may still be starting under load, while the channel's
+	// invocation is recorded before the command fails.
+	require.Eventually(t, func() bool {
+		holderInvocations, channelInvocations = nil, nil
+		for _, invocation := range readHolderInvocations(t, argsFile) {
+			if strings.Contains(invocation, "-N") {
+				holderInvocations = append(holderInvocations, invocation)
+				continue
+			}
+			channelInvocations = append(channelInvocations, invocation)
 		}
-		channelInvocations = append(channelInvocations, invocation)
-	}
+		return len(holderInvocations) > 0
+	}, 15*time.Second, 10*time.Millisecond, "expected a holder invocation")
 
 	require.Len(t, holderInvocations, 1, "exactly one dedicated forward holder must be started")
 	assert.Contains(t, holderInvocations[0], "-R 127.0.0.1:3000:127.0.0.1:8080")
@@ -775,4 +812,29 @@ func TestReverseForwardHolderNoForwardsIsNoop(t *testing.T) {
 
 	require.NoError(t, holder.ensure(context.Background(), &recordingSSHEnv{&LocalEnv{}}, nil))
 	assert.Empty(t, readHolderInvocations(t, argsFile))
+}
+
+func TestReadHolderInvocations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		contents string
+		want     []string
+	}{
+		{name: "empty file"},
+		{name: "incomplete invocation", contents: "-N -R 127.0.0.1"},
+		{name: "complete invocation", contents: "-N workspace.devpod\n", want: []string{"-N workspace.devpod"}},
+		{name: "incomplete trailing invocation", contents: "-N first\n-N second", want: []string{"-N first"}},
+		{name: "multiple complete invocations", contents: "-N first\n-N second\n", want: []string{"-N first", "-N second"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			argsFile := filepath.Join(t.TempDir(), "args")
+			require.NoError(t, os.WriteFile(argsFile, []byte(tt.contents), 0600))
+			assert.Equal(t, tt.want, readHolderInvocations(t, argsFile))
+		})
+	}
 }

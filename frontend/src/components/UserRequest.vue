@@ -1,12 +1,13 @@
 <template>
   <form ref="formRef" tabindex="-1" v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
-    <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
+    <div v-if="flowAction.actionParams.requestContent && flowAction.actionParams.requestKind !== 'provider_auth'" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
       </button>
       <vue-markdown
         :source="flowAction.actionParams.requestContent"
         :options="{ breaks: true }"
+        :plugins="markdownPlugins"
         class="markdown"
       />
     </div>
@@ -127,6 +128,9 @@
         <span class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
     </div>
+    <div v-else-if="flowAction.actionParams.requestKind === 'provider_auth'">
+      <ProviderAuthRequest :flow-action="flowAction" :submit-choice="submitProviderAuthChoice" />
+    </div>
     <div v-else>
       <AutogrowTextarea ref="textareaRef" v-model="responseContent"/>
       <div v-if="errorMessage" class="error-message">
@@ -138,15 +142,18 @@
       </button>
     </div>
   </form>
-  <!-- TODO move approved/rejected to FlowActionItem summary. Only show content here -->
-  <div v-if="expand && !isPending && (!flowAction.actionParams.command || !parsedActionResult?.Approved)">
-    <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
+  <div v-if="expand && !isPending">
+    <div
+      v-if="flowAction.actionParams.requestContent && (flowAction.actionParams.requestKind !== 'provider_auth' || flowAction.actionStatus !== 'complete')"
+      class="markdown-container"
+    >
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
       </button>
       <vue-markdown
         :source="flowAction.actionParams.requestContent"
         :options="{ breaks: true }"
+        :plugins="markdownPlugins"
         class="markdown"
       />
     </div>
@@ -195,21 +202,28 @@
     <div class="free-form" v-else-if="flowAction.actionParams.requestKind == 'free_form'">
       <p v-if="parsedActionResult?.Content"><b>You: </b>{{ parsedActionResult.Content }}</p>
     </div>
+    <div class="provider-auth-result" v-else-if="flowAction.actionParams.requestKind === 'provider_auth'">
+      <p v-if="providerAuthResultCopy">{{ providerAuthResultCopy }}</p>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, inject } from 'vue';
 import type { FlowAction } from '../lib/models';
+import { USER_REQUEST_SHORTCUT_SUBMITTED_KEY } from '../lib/userRequestShortcut';
 import AutogrowTextarea from './AutogrowTextarea.vue';
 import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
+import { markdownPlugins } from '../lib/markdownTables'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';
 import Select from 'primevue/select';
 import DevRunControls from './DevRunControls.vue';
 import PermissionEvaluationDetails from './PermissionEvaluationDetails.vue';
+import ProviderAuthRequest from './ProviderAuthRequest.vue';
+import { providerAuthMethodLabel, type ProviderAuthMethod } from '../lib/providerAuth';
 import { registerGlobalShortcut, unregisterGlobalShortcut } from '../lib/globalShortcutRegistry';
 
 interface UserResponse {
@@ -350,14 +364,14 @@ onMounted(() => {
   }
 
   if (isPending.value) {
-    registerGlobalShortcut(props.flowAction.id, props.flowAction.created, () => {
+    registerGlobalShortcut(props.flowAction.id, props.flowAction.created, (event) => {
       const requestKind = props.flowAction.actionParams.requestKind
       if (requestKind === 'free_form' && responseContent.value.length > 0) {
-        submitAndRetainFocus(true)
+        submitViaShortcut(true, event)
       } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
-        submitAndRetainFocus(!hasResponseText.value)
+        submitViaShortcut(!hasResponseText.value, event)
       } else if (requestKind === 'continue') {
-        submitAndRetainFocus(true)
+        submitViaShortcut(true, event)
       }
     })
 
@@ -386,6 +400,17 @@ const parsedActionResult = computed<keyable | null>(() => {
 
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
 
+// The workflow records its resolution as the action result, whereas the raw
+// user response (with a capitalized Choice) is what's stored until then.
+const providerAuthResultCopy = computed(() => {
+  const result = parsedActionResult.value
+  if (!result) return ''
+  if (result.resolvedExternally) return 'Resolved externally'
+  const method: string | undefined = result.method || result.Choice
+  if (!method) return ''
+  return `Authenticated with: ${providerAuthMethodLabel(props.flowAction.actionParams.methods, method)}`
+})
+
 const hasDevRunConfig = ref(false)
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
@@ -399,15 +424,15 @@ const handleKeyDown = (event: KeyboardEvent) => {
     if (requestKind === 'free_form' && responseContent.value.length > 0) {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(true)
+      submitViaShortcut(true, event)
     } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(!hasResponseText.value)
+      submitViaShortcut(!hasResponseText.value, event)
     } else if (requestKind === 'continue') {
       event.preventDefault()
       event.stopPropagation()
-      submitAndRetainFocus(true)
+      submitViaShortcut(true, event)
     }
   }
 }
@@ -415,13 +440,27 @@ const handleKeyDown = (event: KeyboardEvent) => {
 // When a keyboard shortcut submits the response, the action collapses and the
 // form unmounts, dropping focus. Move focus to the nearest subflow heading so
 // subsequent keyboard events keep bubbling to the flow view.
-const submitAndRetainFocus = async (approved: boolean) => {
+const submitAndRetainFocus = async (approved: boolean): Promise<boolean> => {
   const heading = formRef.value
     ?.closest('.subflow-container')
     ?.querySelector<HTMLElement>('.subflow-name-container')
   const result = await submitUserResponse(approved)
   if (result !== false) {
     heading?.focus()
+  }
+  return result === true
+}
+
+const onShortcutSubmitted = inject(USER_REQUEST_SHORTCUT_SUBMITTED_KEY, null)
+
+// Holding Shift opts out of any navigation the flow view performs after a
+// shortcut submission.
+const submitViaShortcut = async (approved: boolean, event: KeyboardEvent) => {
+  const allowNavigation = !event.shiftKey
+  const flowAction = props.flowAction
+  const submitted = await submitAndRetainFocus(approved)
+  if (submitted && allowNavigation) {
+    onShortcutSubmitted?.(flowAction)
   }
 }
 
@@ -587,7 +626,14 @@ const copyRequestContent = async () => {
   }
 }
 
-async function submitUserResponse(approved: boolean) {
+async function submitProviderAuthChoice(method: ProviderAuthMethod) {
+  const accepted = await submitUserResponse(true, method);
+  if (accepted === false) {
+    throw new Error(errorMessage.value || 'Failed to complete flow action');
+  }
+}
+
+async function submitUserResponse(approved: boolean, choice?: string) {
   if (props.flowAction.actionStatus !== 'pending') {
     return;
   }
@@ -598,6 +644,10 @@ async function submitUserResponse(approved: boolean) {
   const userResponse: UserResponse = {
     content: responseContent.value,
   };
+
+  if (choice) {
+    userResponse.choice = choice;
+  }
 
   if (props.flowAction.actionParams.requestKind === 'merge_approval') {
     userResponse.params = {

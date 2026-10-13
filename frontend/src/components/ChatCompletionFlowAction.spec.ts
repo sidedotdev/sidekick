@@ -326,6 +326,46 @@ describe('ChatCompletionFlowAction', () => {
       expect(wrapper.find('.auth-type').text()).toBe('Auth type: api')
     })
 
+    describe('service tier display', () => {
+      const tierActionResult = (tier: { serviceTier?: string; speed?: string }) => JSON.stringify({
+        model: 'gpt-6',
+        provider: 'openai',
+        ...tier,
+        output: {
+          role: 'assistant',
+          content: [{ id: 'b1', type: 'text', text: 'Hello' }]
+        },
+        stopReason: 'stop',
+        usage: { inputTokens: 100, outputTokens: 50 }
+      })
+
+      it.each([
+        [{ serviceTier: 'ultrafast' }, 'Service tier: Ultrafast'],
+        [{ speed: 'fast' }, 'Service tier: Fast'],
+      ])('shows the non-standard tier the response was served with (%j)', async (tier, expected) => {
+        const wrapper = mount(ChatCompletionFlowAction, {
+          props: { flowAction: { ...flowAction, actionResult: tierActionResult(tier) }, expand: true }
+        })
+
+        await wrapper.vm.$nextTick()
+
+        expect(wrapper.find('.service-tier').text()).toBe(expected)
+      })
+
+      it.each([
+        [{}],
+        [{ serviceTier: 'default' }],
+      ])('hides the standard tier (%j)', async (tier) => {
+        const wrapper = mount(ChatCompletionFlowAction, {
+          props: { flowAction: { ...flowAction, actionResult: tierActionResult(tier) }, expand: true }
+        })
+
+        await wrapper.vm.$nextTick()
+
+        expect(wrapper.find('.service-tier').exists()).toBe(false)
+      })
+    })
+
     describe('resolved profile display', () => {
       const cacheProfiles = (profiles: { id: string; name: string }[]) => {
         sessionStorage.setItem('profiles_cache', JSON.stringify({ data: profiles, timestamp: Date.now() }))
@@ -532,6 +572,58 @@ describe('ChatCompletionFlowAction', () => {
       expect(blockStructure(wrapper)).toEqual(streamingStructure)
       expect(wrapper.find('.action-result .llm2-tool-use-block').findComponent(JsonTree).props('data')).toEqual({ query: 'test' })
       expect(wrapper.find('.action-result .action-result-stop-reason').text()).toBe('Stop Reason: tool_use')
+    })
+
+    it('renders a pending web search while streaming and the completed search with its results', async () => {
+      const pendingSearch: Llm2ContentBlock = {
+        id: 'ws_1',
+        type: 'builtin_tool_use',
+        builtinToolUse: { id: 'ws_1', name: 'web_search', arguments: '', status: 'in_progress' }
+      }
+      const fa: FlowAction = {
+        ...flowAction,
+        actionStatus: 'started',
+        actionResult: '',
+        streamingData: { content: '', toolCalls: [], blocks: [pendingSearch], toolArguments: {} }
+      }
+      const wrapper = mount(ChatCompletionFlowAction, { props: { flowAction: fa, expand: true } })
+      await flushPromises()
+
+      const pending = wrapper.get('.action-result .web-search-block')
+      expect(pending.text()).toContain('Web search')
+      expect(pending.text()).toContain('in_progress')
+      expect(wrapper.find('.action-result .llm2-unknown-block').exists()).toBe(false)
+
+      const finalBlocks: Llm2ContentBlock[] = [
+        {
+          id: 'ws_1',
+          type: 'builtin_tool_use',
+          builtinToolUse: { id: 'ws_1', name: 'web_search', arguments: '{"type":"search","query":"sidekick"}', status: 'completed' }
+        },
+        {
+          id: '',
+          type: 'builtin_tool_result',
+          builtinToolResult: { toolCallId: 'ws_1', name: 'web_search', searchResults: [{ url: 'https://example.com', title: 'Example' }] }
+        },
+        { type: 'text', text: 'Found it' }
+      ]
+      await wrapper.setProps({
+        flowAction: {
+          ...fa,
+          actionStatus: 'complete',
+          streamingData: undefined,
+          actionResult: JSON.stringify({ output: { role: 'assistant', content: finalBlocks }, stopReason: 'stop' })
+        }
+      })
+      await flushPromises()
+
+      const search = wrapper.get('.action-result .web-search-block:not(.web-search-results)')
+      expect(search.text()).toContain('completed')
+      expect(search.findAll('li').map((el) => el.text())).toEqual(['sidekick'])
+      const results = wrapper.get('.action-result .web-search-results')
+      expect(results.get('a').attributes('href')).toBe('https://example.com')
+      expect(wrapper.find('.action-result .message-content').text()).toBe('Found it')
+      expect(wrapper.find('.action-result .llm2-unknown-block').exists()).toBe(false)
     })
   })
 })

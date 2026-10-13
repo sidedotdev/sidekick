@@ -302,7 +302,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 	if !seededInitialPrompt {
 		// prepend a concise repository summary to the other code context in the initial prompt
 		version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-		if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		if version >= 2 && fflag.IsEnabledWithoutVersioning(dCtx, fflag.InitialRepoSummary) {
 			repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get repo summary: %w", err)
@@ -703,7 +703,7 @@ func devPlanTools(dCtx DevContext, hasExistingPlan bool) []*llm.Tool {
 func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	tools := devPlanTools(dCtx, hasExistingPlan)
-	tools = appendWebSearchToolIfNonLocal(dCtx, tools, modelConfig)
+	tools = appendWebSearchTool(dCtx, tools, modelConfig)
 
 	chatOptions := llm2.Options{
 		Tools: tools,
@@ -736,10 +736,18 @@ func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, p
 }
 
 func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*flow_action.UserResponse, error) {
+	markdown := devPlan.String()
 	req := flow_action.RequestForUser{
-		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
+		Content:       markdown,
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 		RequestKind:   flow_action.RequestKindApproval,
+	}
+	v := workflow.GetVersion(dCtx, "approval-copy-content", workflow.DefaultVersion, 2)
+	if v < 2 {
+		req.Content = "Please approve or reject the development plan:\n\n" + markdown + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed."
+		if v >= 1 {
+			req.RequestParams["copyContent"] = markdown
+		}
 	}
 
 	// IDD sub-task plans are auto-approved: the intent author reviews outcomes

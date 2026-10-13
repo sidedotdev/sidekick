@@ -100,7 +100,7 @@ func ExecuteChatStreamWithAttemptResolver(
 		}
 
 		if v == 1 {
-			return executeChatStreamV1(heartbeatActionCtx, streamInput, toolNameMapping, disableUserRetry, false)
+			return executeChatStreamV1(heartbeatActionCtx, streamInput, toolNameMapping, disableUserRetry, false, nil)
 		}
 
 		legacyOptions := ChatStreamOptions{
@@ -147,7 +147,7 @@ func ExecuteChatStreamWithAttemptResolver(
 		var response common.MessageResponse
 		var err error
 		if v == 1 {
-			response, err = executeChatStreamV1(attemptActionCtx, streamInput, toolNameMapping, disableUserRetry, true)
+			response, err = executeChatStreamV1(attemptActionCtx, streamInput, toolNameMapping, disableUserRetry, true, resolveAttempt)
 		} else {
 			legacyOptions := ChatStreamOptions{
 				ToolChatOptions: llm.ToolChatOptions{
@@ -220,21 +220,57 @@ func executeChatStreamV1(
 	toolNameMapping *ToolNameMappingConfig,
 	disableUserRetry bool,
 	propagateCancellation bool,
+	resolveAttempt StreamAttemptResolver,
 ) (common.MessageResponse, error) {
 	chatHistory := streamInput.ChatHistory
 	if _, ok := chatHistory.History.(*Llm2ChatHistory); !ok {
 		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
+	streamInput.Options = resolveMaxTokens(streamInput.Options)
 
 	if toolNameMapping != nil {
 		streamInput.ToolNameMapping = toolNameMapping
 	}
 
+	eCtx := actionCtx.ExecContext
 	var la *Llm2Activities
 	var response llm2.MessageResponse
 	var err error
+	providerAuthVersion := workflow.GetVersion(eCtx, "provider-auth-user-retry", workflow.DefaultVersion, 1)
+	if providerAuthVersion >= 1 {
+		applyProviderAuthOverrides(eCtx, &streamInput, &toolNameMapping, streamInput.Providers)
+	}
 	if disableUserRetry {
 		err = flow_action.PerformActivity(actionCtx.ExecContext, la.Stream, &response, streamInput)
+	} else if providerAuthVersion >= 1 {
+		initialProviders := streamInput.Providers
+		attempt := 0
+		err = flow_action.PerformWithUserRetryOptions(actionCtx, flow_action.UserRetryOptions{
+			OnFailure:             ProviderAuthFailureHandler{},
+			PropagateCancellation: propagateCancellation,
+			ResolveArgs: func() ([]interface{}, error) {
+				attempt++
+				// The first attempt was resolved by the caller; later attempts
+				// follow a failure handler that may have changed auth or config.
+				if attempt > 1 {
+					if resolveAttempt != nil {
+						options, mapping, err := resolveAttempt()
+						if err != nil {
+							return nil, err
+						}
+						streamInput.Options = resolveMaxTokens(options)
+						toolNameMapping = mapping
+						streamInput.ToolNameMapping = mapping
+					}
+					providers := eCtx.GetProviders()
+					if len(providers) == 0 {
+						providers = initialProviders
+					}
+					applyProviderAuthOverrides(eCtx, &streamInput, &toolNameMapping, providers)
+				}
+				return []interface{}{streamInput}, nil
+			},
+		}, la.Stream, &response)
 	} else if propagateCancellation {
 		err = flow_action.PerformWithUserRetryOrCancel(actionCtx, la.Stream, &response, streamInput)
 	} else {
@@ -250,7 +286,6 @@ func executeChatStreamV1(
 		response.Output.SanitizeToolNames()
 	}
 
-	eCtx := actionCtx.ExecContext
 	if workflow.GetVersion(eCtx, "repair-tool-call-args", workflow.DefaultVersion, 1) == 1 {
 		if err := repairLlm2MessageToolCalls(eCtx, &response.Output); err != nil {
 			return nil, err
@@ -258,6 +293,29 @@ func executeChatStreamV1(
 	}
 
 	return newStreamResponse(response, streamInput), nil
+}
+
+// resolveMaxTokens falls back to the model config's max tokens when the
+// request doesn't set its own. This must happen before the options are
+// serialized as activity input: the embedded ModelConfig.MaxTokens shares the
+// "maxTokens" JSON key with Options.MaxTokens, so encoding/json drops it.
+func resolveMaxTokens(options llm2.Options) llm2.Options {
+	if options.MaxTokens <= 0 && options.ModelConfig.MaxTokens > 0 {
+		options.MaxTokens = options.ModelConfig.MaxTokens
+	}
+	return options
+}
+
+// applyProviderAuthOverrides applies the flow's provider auth type overrides
+// to providers. An API key override also drops the tool name mapping, which
+// only exists for subscription (OAuth) requests.
+func applyProviderAuthOverrides(eCtx flow_action.ExecContext, streamInput *StreamInput, toolNameMapping **ToolNameMappingConfig, providers []common.ModelProviderPublicConfig) {
+	streamInput.Providers = eCtx.ApplyProviderAuthOverrides(providers)
+	authType, ok := eCtx.ProviderAuthTypeOverride(streamInput.Options.ModelConfig.Provider)
+	if ok && common.NormalizeProviderAuthType(string(authType)) == common.ProviderAuthTypeAPI {
+		*toolNameMapping = nil
+		streamInput.ToolNameMapping = nil
+	}
 }
 
 // executeChatStreamLegacy handles the LegacyChatHistory path.

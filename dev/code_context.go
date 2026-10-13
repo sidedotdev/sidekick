@@ -130,7 +130,7 @@ func PrepareRepoSummary(dCtx DevContext, requirements string, weightedRankQuerie
 		return "", "", err
 	}
 
-	if !fflag.IsEnabled(dCtx, fflag.InfoNeeds) {
+	if !fflag.IsEnabledWithoutVersioning(dCtx, fflag.InfoNeeds) {
 		return repoSummary, "", nil
 	}
 	// Call IdentifyInformationNeeds to get additional information needs

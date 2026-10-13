@@ -5,10 +5,9 @@ import (
 	"strings"
 )
 
-// Id prefixes assigned by each provider to server-side web search tool calls,
-// used to detect whether a persisted builtin tool block originated from the
-// provider currently being targeted (native same-provider replay) or from a
-// different provider (cross-provider conversion).
+// Id prefixes assigned by each provider to server-side web search tool calls.
+// They only identify the origin of legacy blocks persisted without core
+// metadata; see nativeBuiltinToolBlockPredicate.
 const (
 	anthropicBuiltinToolIdPrefix = "srvtoolu_"
 	openaiWebSearchCallIdPrefix  = "ws_"
@@ -182,7 +181,22 @@ func BuiltinToolResultText(r *BuiltinToolResultBlock) string {
 	return sb.String()
 }
 
-func isAnthropicNativeBuiltinToolBlock(block ContentBlock) bool {
+// nativeBuiltinToolBlockPredicate reports whether builtin tool blocks can be
+// replayed verbatim to the given provider config. Tagged blocks must come from
+// the same provider name and type: provider-generated payloads (eg encrypted
+// search content) are only valid for the account or vendor that produced them.
+// Untagged legacy blocks fall back to hasLegacyNativeId.
+func nativeBuiltinToolBlockPredicate(provider, providerType string, hasLegacyNativeId func(ContentBlock) bool) func(ContentBlock) bool {
+	return func(block ContentBlock) bool {
+		meta := GetCoreBlockMetadata(block)
+		if meta == nil || meta.ProviderType == "" {
+			return hasLegacyNativeId(block)
+		}
+		return meta.Provider == provider && meta.ProviderType == providerType
+	}
+}
+
+func hasAnthropicBuiltinToolId(block ContentBlock) bool {
 	switch block.Type {
 	case ContentBlockTypeBuiltinToolUse:
 		return block.BuiltinToolUse != nil && strings.HasPrefix(block.BuiltinToolUse.Id, anthropicBuiltinToolIdPrefix)
@@ -192,7 +206,7 @@ func isAnthropicNativeBuiltinToolBlock(block ContentBlock) bool {
 	return false
 }
 
-func isOpenAINativeBuiltinToolBlock(block ContentBlock) bool {
+func hasOpenAIBuiltinToolId(block ContentBlock) bool {
 	// OpenAI never reports builtin tool results, so only use blocks can be native.
 	return block.Type == ContentBlockTypeBuiltinToolUse &&
 		block.BuiltinToolUse != nil &&

@@ -152,6 +152,7 @@ describe('model configuration presets', () => {
 
     const firstEditor = useModelConfigPresets(undefined, { workspaceId: 'workspace-1' })
     firstEditor.handlePresetChange('zebra')
+    expect(firstEditor.saveOrUpdatePreset({ finalSave: true })).toBe(true)
 
     expect(localStorage.getItem('sidekick_last_model_preset_selection')).toBe('zebra')
     expect(localStorage.getItem('sidekick_last_model_preset_selection_workspace-1')).toBe('zebra')
@@ -193,6 +194,54 @@ describe('model configuration presets', () => {
     expect(saved[0]).toMatchObject({
       id: 'preset-1',
       name: 'Updated flow models',
+    })
+  })
+  it.each([
+    {
+      name: 'a custom configuration auto-saved before the task is started',
+      prepare: (editor: ReturnType<typeof useModelConfigPresets>) => {
+        editor.handlePresetChange('add_preset')
+        editor.llmConfig.value = {
+          defaults: [{ provider: 'anthropic', model: 'claude' }],
+          useCaseConfigs: {},
+        }
+        expect(editor.saveOrUpdatePreset()).toBe(true)
+      },
+    },
+    {
+      name: 'an edited existing preset',
+      prepare: (editor: ReturnType<typeof useModelConfigPresets>) => {
+        editor.editPreset('existing')
+        editor.llmConfig.value = {
+          defaults: [{ provider: 'anthropic', model: 'claude' }],
+          useCaseConfigs: {},
+        }
+      },
+    },
+  ])('restores $name in the next editor for the workspace', ({ prepare }) => {
+    vi.stubGlobal('crypto', { randomUUID: () => 'preset-1' })
+    savePresets([
+      {
+        id: 'existing',
+        name: 'Existing models',
+        config: {
+          defaults: [{ provider: 'openai', model: 'gpt' }],
+          useCaseConfigs: {},
+        },
+      },
+    ])
+
+    const editor = useModelConfigPresets(undefined, { workspaceId: 'workspace-1' })
+    prepare(editor)
+    expect(editor.saveOrUpdatePreset({ finalSave: true })).toBe(true)
+
+    invalidatePresetsCache()
+    const nextEditor = useModelConfigPresets(undefined, { workspaceId: 'workspace-1' })
+
+    expect(nextEditor.selectedPresetValue.value).toBe(editor.currentPresetId.value)
+    expect(nextEditor.llmConfig.value.defaults[0]).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude',
     })
   })
 })

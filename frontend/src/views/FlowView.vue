@@ -71,8 +71,10 @@ import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Subflow, Workspac
 import { SubflowStatus } from '../lib/models'
 import { Llm2ActionStream, type Llm2StreamSnapshot } from '../lib/llm2ActionStream'
 import { buildSubflowTrees } from '../lib/subflow'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
+import { isKanbanKeyboardControlEnabled } from '../lib/localSettings'
+import { USER_REQUEST_SHORTCUT_SUBMITTED_KEY, isUserRequestAction } from '../lib/userRequestShortcut'
 import { viewCache } from '../lib/viewCache'
 import { isFlowModelConfigVisible } from '../lib/flowModelConfig'
 import { useIdeOpener, IDE_OPENER_KEY } from '@/composables/useIdeOpener'
@@ -80,6 +82,11 @@ import { useIdeOpener, IDE_OPENER_KEY } from '@/composables/useIdeOpener'
 const props = defineProps<{
   flowId?: string
   embedded?: boolean
+}>()
+
+const emit = defineEmits<{
+  // Embedded only: the last pending user request was submitted via keyboard shortcut
+  (e: 'userRequestsCleared'): void
 }>()
 
 const subflowProcessingDebounceTimers = ref<Record<string, NodeJS.Timeout>>({})
@@ -103,6 +110,24 @@ const modelConfigModalOpen = ref(false)
 const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
+const router = useRouter()
+
+// With keyboard control on, submitting the flow's last pending request moves
+// on to whatever needs attention next instead of idling on this flow.
+const handleUserRequestShortcutSubmitted = (submitted: FlowAction) => {
+  if (!isKanbanKeyboardControlEnabled()) return
+  const otherRequestPending = flowActions.value.some(action =>
+    action.id !== submitted.id && action.actionStatus === 'pending' && isUserRequestAction(action),
+  )
+  if (otherRequestPending) return
+  if (props.embedded) {
+    emit('userRequestsCleared')
+  } else {
+    router.push({ name: 'kanban' })
+  }
+}
+
+provide(USER_REQUEST_SHORTCUT_SUBMITTED_KEY, handleUserRequestShortcutSubmitted)
 
 const effectiveFlowId = computed(() => props.flowId ?? (route.params.id as string | undefined))
 
@@ -667,10 +692,6 @@ onMounted(async () => {
   if (initialFlowId) {
     await setupFlow(initialFlowId);
   }
-  
-  useEventBus('flow-view-collapse').on(() => {
-    shortContent.value = true;
-  });
 });
 
 watch(effectiveFlowId, async (newFlowId, oldFlowId) => {
@@ -699,17 +720,34 @@ const goToNextStep = async () => {
   }
 };
 
-let setShortContent = () => {
-  const innerSet = () => {
-    const contentHeight = scrollContainerRef.value?.scrollHeight || 0
-    const containerHeight = flowActionsContainerRef.value?.clientHeight || 0
-    shortContent.value = contentHeight <= containerHeight
-  }
-  // HACK: set it fast to get immediate feedback, but slower too when rendering takes longer
-  setTimeout(innerSet, 10)
-  setTimeout(innerSet, 50)
-  setTimeout(innerSet, 250)
+const contentFitsContainer = () => {
+  const contentHeight = scrollContainerRef.value?.scrollHeight || 0
+  const containerHeight = flowActionsContainerRef.value?.clientHeight || 0
+  return contentHeight <= containerHeight
 }
+
+// HACK: run fast to get immediate feedback, but slower too when rendering takes longer
+const afterRender = (fn: () => void) => {
+  setTimeout(fn, 10)
+  setTimeout(fn, 50)
+  setTimeout(fn, 250)
+}
+
+let setShortContent = () => {
+  afterRender(() => {
+    shortContent.value = contentFitsContainer()
+  })
+}
+
+// Flipping flex-direction while content overflows resets the scroll position,
+// so a collapse may only switch to the short layout once nothing can scroll.
+useEventBus('flow-view-collapse').on(() => {
+  afterRender(() => {
+    if (contentFitsContainer()) {
+      shortContent.value = true
+    }
+  })
+})
 
 const pauseFlow = async () => {
   if (!flow.value) return

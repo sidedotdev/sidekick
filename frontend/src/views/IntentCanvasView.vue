@@ -254,7 +254,12 @@
       @close="closeSubtask"
       @resize-start="(e) => startDrag('side-panel', e)"
     >
-      <FlowView :key="activeSubtaskFlowId" :flow-id="activeSubtaskFlowId" embedded />
+      <FlowView
+        :key="activeSubtaskFlowId"
+        :flow-id="activeSubtaskFlowId"
+        embedded
+        @user-requests-cleared="openNextSubtaskNeedingAttention"
+      />
     </SubtaskSidePanel>
 
     <div v-if="showFinishDialog" class="finish-panel" role="dialog" aria-label="Finish IDD">
@@ -666,10 +671,22 @@ type CanvasFlow = Omit<Flow, 'created' | 'updated'> & {
   updated?: string
 }
 
-let fetchingCanvasState = false
-const fetchCanvasState = async () => {
-  if (fetchingCanvasState) return
-  fetchingCanvasState = true
+let canvasStateRequest: Promise<void> | null = null
+const fetchCanvasState = (): Promise<void> => {
+  canvasStateRequest ??= loadCanvasState().finally(() => {
+    canvasStateRequest = null
+  })
+  return canvasStateRequest
+}
+
+// An in-flight poll may have started before a recent change, so wait it out
+// and load again.
+const fetchFreshCanvasState = async () => {
+  await canvasStateRequest
+  await fetchCanvasState()
+}
+
+const loadCanvasState = async () => {
   try {
     await fetchFlow()
     if (flow.value?.status === 'completed') {
@@ -723,8 +740,6 @@ const fetchCanvasState = async () => {
     clarifications.value = questions.flat()
   } catch (e) {
     console.error('Failed to fetch intent canvas state:', e)
-  } finally {
-    fetchingCanvasState = false
   }
 }
 
@@ -841,6 +856,22 @@ const openSubtask = (subtaskFlowId: string) => {
 
 const closeSubtask = () => {
   activeSubtaskFlowId.value = null
+}
+
+const openNextSubtaskNeedingAttention = async () => {
+  const submittedFlowId = activeSubtaskFlowId.value
+  closeSubtask()
+  await fetchFreshCanvasState()
+  // The user may have opened another sub-task while state was refreshing
+  if (activeSubtaskFlowId.value) return
+  const flowIdsWithClarifications = new Set(clarifications.value.map(item => item.subtaskFlowId))
+  const next = sortedSubtasks.value.find(task =>
+    task.flowId !== submittedFlowId
+    && (flowIdsWithClarifications.has(task.flowId) || statusClass(task.status) === 'blocked'),
+  )
+  if (next) {
+    openSubtask(next.flowId)
+  }
 }
 
 const showFinishDialog = ref(false)

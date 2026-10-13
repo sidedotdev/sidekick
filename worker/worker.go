@@ -31,6 +31,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/persisted_ai"
 	"sidekick/poll_failures"
+	"sidekick/provider_auth"
 )
 
 // Worker wraps a Temporal worker with telemetry shutdown
@@ -63,7 +64,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		log.Fatal().Err(err).Msg("Failed to initialize telemetry tracer")
 	}
 
-	featureFlag, err := fflag.NewFFlag("flags.yml")
+	featureFlag, err := fflag.NewFFlag("fflag/flags.yml")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create go-feature-flag instance")
 	}
@@ -174,6 +175,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	}
 
 	w := worker.New(temporalClient, taskQueue, worker.Options{
+		BuildID:                  common.GetWorkerBuildID(),
 		DeadlockDetectionTimeout: 5 * time.Second,
 		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor()},
 		OnFatalError: func(err error) {
@@ -196,6 +198,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.SnapshotEnvironmentActivity)
 	w.RegisterActivity(env.CreateRemoteWorktreeActivity)
 	w.RegisterActivity(&srv.Activities{Service: service})
+	w.RegisterActivity(&provider_auth.Activities{})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)
 	w.RegisterActivity(llmActivities)
 	w.RegisterActivity(pollFailuresActivities)

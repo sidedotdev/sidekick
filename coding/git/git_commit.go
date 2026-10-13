@@ -11,8 +11,12 @@ import (
 )
 
 type GitCommitParams struct {
-	CommitMessage  string
-	CommitAll      bool
+	CommitMessage string
+	CommitAll     bool
+	// AuthorName/AuthorEmail override the default Sidekick author, e.g. for
+	// commits whose content was written by the human.
+	AuthorName     string
+	AuthorEmail    string
 	CommitterName  string
 	CommitterEmail string
 	// IgnoreNothingToCommit causes the activity to succeed silently when the
@@ -39,7 +43,7 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 		}
 	}
 
-	envVars := buildGitEnvVars(committerName, committerEmail)
+	envVars := BuildGitEnvVarsWithAuthor(params.AuthorName, params.AuthorEmail, committerName, committerEmail)
 	args := []string{"commit", "-m", params.CommitMessage}
 	if params.CommitAll {
 		args = append(args, "-a")
@@ -92,6 +96,12 @@ func isNothingToCommitOutput(stdout, stderr string) bool {
 }
 
 // GitUserConfig holds the git user configuration
+// Sidekick's own git identity, used wherever Sidekick authors or commits.
+const (
+	SidekickGitName  = "Sidekick"
+	SidekickGitEmail = "sidekick@side.dev"
+)
+
 type GitUserConfig struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
@@ -133,10 +143,24 @@ func getGitUserConfig(ctx context.Context, envContainer env.EnvContainer) (name 
 	return config.Name, config.Email, nil
 }
 
-func buildGitEnvVars(committerName, committerEmail string) []string {
+// BuildGitEnvVars returns the git identity env vars for Sidekick-made commits:
+// Sidekick as author, and the developer as committer when known.
+func BuildGitEnvVars(committerName, committerEmail string) []string {
+	return BuildGitEnvVarsWithAuthor("", "", committerName, committerEmail)
+}
+
+// BuildGitEnvVarsWithAuthor is like BuildGitEnvVars, but uses the given author
+// identity when provided, falling back to Sidekick per empty field.
+func BuildGitEnvVarsWithAuthor(authorName, authorEmail, committerName, committerEmail string) []string {
+	if authorName == "" {
+		authorName = SidekickGitName
+	}
+	if authorEmail == "" {
+		authorEmail = SidekickGitEmail
+	}
 	envVars := []string{
-		"GIT_AUTHOR_NAME=Sidekick",
-		"GIT_AUTHOR_EMAIL=sidekick@side.dev",
+		"GIT_AUTHOR_NAME=" + authorName,
+		"GIT_AUTHOR_EMAIL=" + authorEmail,
 	}
 	if committerName != "" {
 		envVars = append(envVars, "GIT_COMMITTER_NAME="+committerName)

@@ -326,14 +326,14 @@ func TestBedrockAnthropicRequestFields(t *testing.T) {
 			},
 		},
 		{
-			name:   "adaptive model highest effort maps to max",
+			name:   "adaptive model passes xhigh effort through",
 			model:  "global.anthropic.claude-opus-4-8",
-			effort: "highest",
+			effort: "xhigh",
 			wantFields: map[string]any{
 				"thinking":      map[string]any{"type": "adaptive", "display": "summarized"},
-				"output_config": map[string]any{"effort": "max"},
+				"output_config": map[string]any{"effort": "xhigh"},
 			},
-			wantEffort: "max",
+			wantEffort: "xhigh",
 		},
 		{
 			name:      "budget thinking on haiku bumps max tokens above budget",
@@ -367,9 +367,8 @@ func TestBedrockAnthropicRequestFields(t *testing.T) {
 			wantEffort:    "low",
 		},
 		{
-			name:       "lowest effort disables thinking",
-			model:      "global.anthropic.claude-opus-4-6-v1",
-			effort:     "lowest",
+			name:       "non-adaptive model without effort skips thinking",
+			model:      "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 			wantFields: nil,
 		},
 		{

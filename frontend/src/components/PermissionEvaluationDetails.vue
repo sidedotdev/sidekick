@@ -10,9 +10,9 @@
     <div
       class="perm-script"
       @mouseover="onPointerOver"
-      @mouseleave="scheduleHide"
+      @mouseleave="tooltipTrigger.leave"
       @focusin="onFocusIn"
-      @focusout="hideTooltip"
+      @focusout="tooltipTrigger.dismiss"
     >
       <div v-for="(line, li) in lines" :key="li" class="perm-line">
         <span class="perm-gutter">
@@ -89,6 +89,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, type PropType } from 'vue'
 import type { CommandPermissionEvaluation, PermissionResult, ScriptPermissionEvaluation } from '../lib/models'
+import { useTooltipTrigger } from '../composables/useTooltipTrigger'
 import {
   annotatePermissionEvaluation,
   describeAutoApproval,
@@ -193,7 +194,6 @@ const TOOLTIP_MARGIN = 8
 const TOOLTIP_GAP = 8
 const tooltip = ref<TooltipState | null>(null)
 const tooltipRef = ref<HTMLElement | null>(null)
-let hideTimer: ReturnType<typeof setTimeout> | undefined
 
 const tooltipTargets = computed(() => (tooltip.value?.targetIds ?? [])
   .map((id) => targetsById.value.get(id))
@@ -218,23 +218,11 @@ function parseTargetIds(element: HTMLElement): number[] {
   return (element.dataset.targetIds ?? '').split(',').filter(Boolean).map(Number)
 }
 
-function cancelHide() {
-  if (hideTimer !== undefined) {
-    clearTimeout(hideTimer)
-    hideTimer = undefined
-  }
-}
-
-function hideTooltip() {
-  cancelHide()
-  tooltip.value = null
-}
-
-// Delayed so moving between adjacent segments of one target doesn't flicker.
-function scheduleHide() {
-  cancelHide()
-  hideTimer = setTimeout(hideTooltip, 80)
-}
+const tooltipTrigger = useTooltipTrigger<{ element: HTMLElement; point?: { x: number; y: number } }>({
+  show: ({ element, point }) => showTooltip(element, point),
+  hide: () => { tooltip.value = null },
+  leaveDelayMs: 80,
+})
 
 // For a highlight wrapping across lines, anchor to the fragment under the pointer.
 function anchorRect(element: HTMLElement, point?: { x: number; y: number }): DOMRect {
@@ -244,7 +232,6 @@ function anchorRect(element: HTMLElement, point?: { x: number; y: number }): DOM
 }
 
 async function showTooltip(element: HTMLElement, point?: { x: number; y: number }) {
-  cancelHide()
   const targetIds = parseTargetIds(element)
   const key = targetIds.join(',')
   if (tooltip.value?.key === key) return
@@ -272,29 +259,28 @@ async function showTooltip(element: HTMLElement, point?: { x: number; y: number 
 
 function onPointerOver(event: MouseEvent) {
   const element = targetElement(event)
-  if (element) showTooltip(element, { x: event.clientX, y: event.clientY })
-  else scheduleHide()
+  if (element) tooltipTrigger.hover({ element, point: { x: event.clientX, y: event.clientY } })
+  else tooltipTrigger.leave()
 }
 
 function onFocusIn(event: FocusEvent) {
   const element = targetElement(event)
-  if (element) showTooltip(element)
+  if (element) tooltipTrigger.focus({ element })
 }
 
 function onKeyDown(event: KeyboardEvent) {
-  if (event.key === 'Escape') hideTooltip()
+  if (event.key === 'Escape') tooltipTrigger.dismiss()
 }
 
 onMounted(() => {
-  window.addEventListener('scroll', hideTooltip, true)
-  window.addEventListener('resize', hideTooltip)
+  window.addEventListener('scroll', tooltipTrigger.dismiss, true)
+  window.addEventListener('resize', tooltipTrigger.dismiss)
   window.addEventListener('keydown', onKeyDown)
 })
 
 onUnmounted(() => {
-  cancelHide()
-  window.removeEventListener('scroll', hideTooltip, true)
-  window.removeEventListener('resize', hideTooltip)
+  window.removeEventListener('scroll', tooltipTrigger.dismiss, true)
+  window.removeEventListener('resize', tooltipTrigger.dismiss)
   window.removeEventListener('keydown', onKeyDown)
 })
 </script>
@@ -559,7 +545,7 @@ onUnmounted(() => {
 /* Mirrors Tooltip.vue so tooltips look the same across the app. */
 .perm-tooltip {
   position: fixed;
-  z-index: 200;
+  z-index: var(--z-index-tooltip);
   max-width: min(24rem, calc(100vw - 1rem));
   padding: 0.375rem 0.625rem;
   background: var(--color-background-mute);

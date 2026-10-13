@@ -495,11 +495,12 @@ func main() {
 		case enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED:
 			if *verbose && eid >= int64(startEvent) && eid <= int64(endEvent) {
 				attrs := event.GetWorkflowTaskCompletedEventAttributes()
-				fmt.Printf("%s WorkflowTaskCompleted scheduled=%d started=%d identity=%q\n",
+				fmt.Printf("%s WorkflowTaskCompleted scheduled=%d started=%d identity=%q buildId=%q\n",
 					eventPrefix(eid, event.EventTime),
 					attrs.GetScheduledEventId(),
 					attrs.GetStartedEventId(),
-					attrs.GetIdentity())
+					attrs.GetIdentity(),
+					attrs.GetWorkerVersion().GetBuildId())
 			}
 		case enums.EVENT_TYPE_WORKFLOW_TASK_TIMED_OUT:
 			if eid >= int64(startEvent) && eid <= int64(endEvent) {

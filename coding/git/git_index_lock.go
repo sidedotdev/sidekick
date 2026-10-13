@@ -5,9 +5,16 @@ import (
 	"fmt"
 	"sidekick/env"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
+
+// indexLockRetryDelays spaces out retries of a command blocked by an
+// index.lock that is not provably stale. Writers usually hold the lock only
+// briefly, but concurrent git processes in a slow remote sandbox (e.g. an
+// editor's background git status) can hold it for seconds.
+var indexLockRetryDelays = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
 
 // staleIndexLockGraceSeconds is how old a git index.lock must be before it is
 // eligible for automatic removal. A legitimate in-progress index write holds
@@ -69,25 +76,35 @@ func cleanupStaleIndexLock(ctx context.Context, envContainer env.EnvContainer, w
 }
 
 // runGitIndexCommandWithRetry runs an index-mutating git command via the
-// environment. If it fails only because a stale index.lock is present, the
-// confirmed-stale lock is removed and the command is retried once. cleanupDir
-// is the worktree the lock lives in; pass "" to use the environment's working
-// directory (the same directory the command runs in).
+// environment. While it fails only because an index.lock is present, the lock
+// is removed if confirmed stale, otherwise the command waits for the live
+// holder to release it, and is then retried a bounded number of times. Git
+// acquires the index lock before mutating anything, so such a failure leaves
+// nothing behind and the retry is safe. cleanupDir is the worktree the lock
+// lives in; pass "" to use the environment's working directory (the same
+// directory the command runs in).
 func runGitIndexCommandWithRetry(ctx context.Context, input env.EnvRunCommandActivityInput, cleanupDir string) (env.EnvRunCommandActivityOutput, error) {
 	output, err := env.EnvRunCommandActivity(ctx, input)
-	if err != nil || output.ExitStatus == 0 || !isIndexLockContentionError(output) {
-		return output, err
-	}
+	for _, delay := range indexLockRetryDelays {
+		if err != nil || output.ExitStatus == 0 || !isIndexLockContentionError(output) {
+			return output, err
+		}
 
-	removed, cleanupErr := cleanupStaleIndexLock(ctx, input.EnvContainer, cleanupDir, input.EnvVars)
-	if cleanupErr != nil {
-		log.Warn().Err(cleanupErr).Msg("failed to clean up stale git index.lock")
-		return output, err
+		removed, cleanupErr := cleanupStaleIndexLock(ctx, input.EnvContainer, cleanupDir, input.EnvVars)
+		if cleanupErr != nil {
+			log.Warn().Err(cleanupErr).Msg("failed to clean up stale git index.lock")
+			return output, err
+		}
+		if removed {
+			log.Info().Msg("removed stale git index.lock; retrying git command")
+		} else {
+			select {
+			case <-ctx.Done():
+				return output, err
+			case <-time.After(delay):
+			}
+		}
+		output, err = env.EnvRunCommandActivity(ctx, input)
 	}
-	if !removed {
-		return output, err
-	}
-
-	log.Info().Msg("removed stale git index.lock; retrying git command")
-	return env.EnvRunCommandActivity(ctx, input)
+	return output, err
 }

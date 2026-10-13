@@ -4,7 +4,7 @@
     <div v-if="criteriaFulfillment">
       <div v-if="expand" class="analysis">
         <strong>Analysis:</strong>
-        <vue-markdown :source="criteriaFulfillment.analysis"></vue-markdown>
+        <vue-markdown :source="criteriaFulfillment.analysis" :plugins="markdownPlugins" class="markdown"></vue-markdown>
       </div>
       <div v-if="!criteriaFulfillment.isFulfilled && criteriaFulfillment.feedbackMessage" class="feedback">
         <pre><strong>Feedback:</strong> {{ criteriaFulfillment.feedbackMessage }}</pre>
@@ -32,6 +32,7 @@ import { computed } from 'vue';
 import type { FlowAction, CriteriaFulfillment } from '@/lib/models';
 import { parseCriteriaFulfillment, parseCriteriaExpansionCount } from '@/lib/criteriaFulfillment';
 import VueMarkdown from 'vue-markdown-render';
+import { markdownPlugins } from '@/lib/markdownTables';
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue';
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 

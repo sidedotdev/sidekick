@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
@@ -158,6 +159,15 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		relWorkDir = filepath.Clean(params.WorkingDir)
 	}
 
+	// Agent-invoked git operations get the same author/committer identity as
+	// automated Sidekick commits. Missing committer values are omitted so git
+	// falls back to the environment's own config.
+	var committerName, committerEmail string
+	if dCtx.GlobalState != nil {
+		committerName = dCtx.GlobalState.GetStringValue("committerName")
+		committerEmail = dCtx.GlobalState.GetStringValue("committerEmail")
+	}
+
 	// Execute command through sh
 	var output env.EnvRunCommandActivityOutput
 	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
@@ -165,6 +175,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		Command:            "sh",
 		Args:               []string{"-c", params.Command},
 		RelativeWorkingDir: relWorkDir,
+		EnvVars:            git.BuildGitEnvVars(committerName, committerEmail),
 	}).Get(dCtx.Context, &output)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute command: %v", err)

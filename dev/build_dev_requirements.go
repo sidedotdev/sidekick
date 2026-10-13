@@ -279,7 +279,7 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 	if !seededInitialPrompt {
 		// prepend a concise repository summary to the other code context in the initial prompt
 		version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
-		if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		if version >= 2 && fflag.IsEnabledWithoutVersioning(dCtx, fflag.InitialRepoSummary) {
 			repoSummary, err := GetRepoSummaryForPrompt(dCtx, initialInfo.Requirements, 5000)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get repo summary: %w", err)
@@ -497,7 +497,7 @@ func devRequirementsTools(dCtx DevContext, hasExistingRequirements bool) []*llm.
 func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingRequirements bool) (common.MessageResponse, error) {
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	tools := devRequirementsTools(dCtx, hasExistingRequirements)
-	tools = appendWebSearchToolIfNonLocal(dCtx, tools, modelConfig)
+	tools = appendWebSearchTool(dCtx, tools, modelConfig)
 
 	// random order of tools to avoid bias in the LLM's use of the tools
 	// NOTE: disabled shuffling as it can mess with cache hit rate
@@ -635,10 +635,18 @@ func addToolCallResponse(eCtx flow_action.ExecContext, chatHistory *persisted_ai
 }
 
 func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*flow_action.UserResponse, error) {
+	markdown := devReq.String()
 	// Create a RequestForUser struct for approval request
 	req := flow_action.RequestForUser{
-		Content:       "Please approve or reject these requirements:\n\n" + devReq.String() + "\n\nDo you approve these requirements? If not, please provide feedback on what needs to be changed.",
+		Content:       markdown,
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
+	}
+	v := workflow.GetVersion(dCtx, "approval-copy-content", workflow.DefaultVersion, 2)
+	if v < 2 {
+		req.Content = "Please approve or reject these requirements:\n\n" + markdown + "\n\nDo you approve these requirements? If not, please provide feedback on what needs to be changed."
+		if v >= 1 {
+			req.RequestParams["copyContent"] = markdown
+		}
 	}
 	return GetUserApproval(dCtx, "dev_requirements", req.Content, req.RequestParams)
 }

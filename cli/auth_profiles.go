@@ -3,16 +3,11 @@ package main
 import (
 	"fmt"
 	"sidekick/common"
-	"sidekick/secret_manager"
+	"sidekick/provider_auth"
 	"strings"
 
 	"github.com/charmbracelet/huh"
-	"github.com/zalando/go-keyring"
 )
-
-// keyringSet writes secrets to the keyring. Overridable in tests to avoid OS
-// keyring dependency.
-var keyringSet = keyring.Set
 
 // loadDeclaredProfiles resolves the profiles declared in local config, always
 // including the default profile. Overridable in tests.
@@ -110,42 +105,12 @@ func selectCredentialProfiles(credentialName string) ([]string, error) {
 	return promptProfileSelection(credentialName, profiles)
 }
 
-// storeSecretForProfiles saves the same secret value under the derived key of
-// each given profile.
-func storeSecretForProfiles(profileIds []string, secretName, secretValue string) error {
-	for _, profileId := range profileIds {
-		derivedName := secret_manager.ProfileSecretName(profileId, secretName)
-		if err := keyringSet(keyringService, derivedName, secretValue); err != nil {
-			return fmt.Errorf("profile %q: %w", profileId, err)
-		}
-	}
-	return nil
-}
-
-// partitionProfilesBySecret splits profiles into those that already hold a
-// stored secret and those that don't.
-func partitionProfilesBySecret(profileIds []string, secretName string) (withSecret, withoutSecret []string, err error) {
-	for _, profileId := range profileIds {
-		derivedName := secret_manager.ProfileSecretName(profileId, secretName)
-		value, getErr := keyringGet(keyringService, derivedName)
-		if getErr != nil && getErr != keyring.ErrNotFound {
-			return nil, nil, getErr
-		}
-		if value != "" {
-			withSecret = append(withSecret, profileId)
-		} else {
-			withoutSecret = append(withoutSecret, profileId)
-		}
-	}
-	return withSecret, withoutSecret, nil
-}
-
 // resolveTargetProfiles narrows selected profiles to those a new credential
 // should be written to. Profiles without a stored credential are always
 // written, while profiles that already have one are only overwritten on
 // confirmation.
 func resolveTargetProfiles(profileIds []string, secretName, subject string) ([]string, error) {
-	withSecret, withoutSecret, err := partitionProfilesBySecret(profileIds, secretName)
+	withSecret, withoutSecret, err := provider_auth.PartitionProfilesBySecret(profileIds, secretName)
 	if err != nil {
 		return nil, fmt.Errorf("error checking existing %s: %w", subject, err)
 	}
@@ -166,7 +131,7 @@ func resolveTargetProfiles(profileIds []string, secretName, subject string) ([]s
 // existingSecretForProfiles reports whether a secret is already stored under
 // any of the given profiles' derived keys.
 func existingSecretForProfiles(profileIds []string, secretName string) (bool, error) {
-	withSecret, _, err := partitionProfilesBySecret(profileIds, secretName)
+	withSecret, _, err := provider_auth.PartitionProfilesBySecret(profileIds, secretName)
 	if err != nil {
 		return false, err
 	}

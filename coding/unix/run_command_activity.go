@@ -58,6 +58,12 @@ func RunCommandActivity(ctx context.Context, input RunCommandActivityInput) (Run
 	// would otherwise block Wait indefinitely.
 	cmd.WaitDelay = 100 * time.Millisecond
 
+	// A new session has no controlling terminal, so interactive prompts (e.g.
+	// sudo's password prompt) fail fast instead of touching the worker's
+	// terminal. When the worker runs in a background process group, terminal
+	// access sends SIGTTOU/SIGTTIN to the whole group, stopping the worker.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
 	runErr := cmd.Run()
 
 	if runErr != nil && ctx.Err() != nil {

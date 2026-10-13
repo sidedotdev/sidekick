@@ -61,6 +61,27 @@ func (planExec DevPlanExecution) String() string {
 	return writer.String()
 }
 
+// planExecutionSummary lists each plan step with the summary of the work done
+// for it, for contexts that already have the full plan text.
+func planExecutionSummary(planExec DevPlanExecution) string {
+	writer := &strings.Builder{}
+	for _, stepExecution := range planExec.StepExecutions {
+		if writer.Len() > 0 {
+			writer.WriteString("\n")
+		}
+		fmt.Fprintf(writer, "Step %s: %s\n", stepExecution.DevStep.StepNumber, stepExecution.DevStep.Title)
+		summary := strings.TrimSpace(stepExecution.ExecutionSummary)
+		switch {
+		case !stepExecution.Complete:
+			writer.WriteString("Not completed.\n")
+		case summary != "":
+			writer.WriteString(summary)
+			writer.WriteString("\n")
+		}
+	}
+	return writer.String()
+}
+
 func (stepExec DevStepExecution) String() string {
 	writer := &strings.Builder{}
 	if stepExec.Complete {
@@ -311,7 +332,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	}
 
-	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2); v >= 1 && !gatherHandoff && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2); v >= 1 && !gatherHandoff && fflag.IsEnabledWithoutVersioning(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 		if err != nil {
 			return result, fmt.Errorf("failed to retrieve repo summary: %v", err)
@@ -532,23 +553,26 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 	}
 
-	// Step 4: auto-format code and add OR commit all changes to git (depending on flag)
-	// only do this if the type was edit
+	// Step 4: auto-format code and commit all changes to git, only if the type
+	// was edit
 	if step.Type == "edit" {
 		err = AutoFormatCode(dCtx)
 		if err != nil {
 			return result, fmt.Errorf("failed to auto-format code: %w", err)
 		}
 
-		// needed when check edits is enabled to ensure we commit the auto-formatting
-		// needed when check edits is disabled because staging is how we limit future diffs in that case
+		// ensures the auto-formatting is committed too
 		err = git.GitAddAll(dCtx.ExecContext)
 		if err != nil {
 			return result, fmt.Errorf("failed to git add all: %w", err)
 		}
 
-		if fflag.IsEnabled(dCtx, fflag.CheckEdits) {
-			// TODO use an LLM to write a better commit message
+		fflag.EvalRetiredCheckEditsFlag(dCtx)
+		if llmCommitMessagesEnabled(dCtx) {
+			if err := commitPendingWork(dCtx, chatHistory); err != nil {
+				return result, fmt.Errorf("failed to commit step changes: %w", err)
+			}
+		} else {
 			err = git.GitCommit(dCtx.ExecContext, fmt.Sprintf("%s\n\n%s", step.Title, step.Definition))
 			if err != nil {
 				return result, fmt.Errorf("failed to git commit: %w", err)

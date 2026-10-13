@@ -347,3 +347,48 @@ func TestFindHibernationCandidates_SkipsAlreadyHibernated(t *testing.T) {
 	assert.Equal(t, "flow_active", output.Candidates[0].FlowId)
 	assert.Equal(t, activeDir, output.Candidates[0].WorktreePath)
 }
+
+func TestFindHibernationCandidates_SkipsEnvTypesWithoutHibernation(t *testing.T) {
+	t.Parallel()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
+	ctx := context.Background()
+	workspaceId := "ws_hibcandidates_envtype"
+
+	persistTaskFlowWorktree := func(suffix string, envType env.EnvType) {
+		taskId := "task_" + suffix
+		flowId := "flow_" + suffix
+		require.NoError(t, storage.PersistTask(ctx, domain.Task{
+			WorkspaceId: workspaceId,
+			Id:          taskId,
+			Status:      domain.TaskStatusBlocked,
+			FlowOptions: map[string]interface{}{"envType": string(envType)},
+		}))
+		require.NoError(t, storage.PersistFlow(ctx, domain.Flow{
+			WorkspaceId: workspaceId,
+			Id:          flowId,
+			ParentId:    taskId,
+			Status:      "paused",
+		}))
+		// Remote worktree paths live inside the sandbox/container, so they
+		// never exist on the worker's filesystem.
+		require.NoError(t, storage.PersistWorktree(ctx, domain.Worktree{
+			Id:               "wt_" + suffix,
+			FlowId:           flowId,
+			Name:             "side/" + suffix,
+			WorkspaceId:      workspaceId,
+			WorkingDirectory: "/root/remote/worktrees/" + suffix,
+		}))
+	}
+
+	persistTaskFlowWorktree("modal", env.EnvTypeModal)
+	persistTaskFlowWorktree("devpod", env.EnvTypeDevPod)
+
+	output, err := ima.FindHibernationCandidates(ctx, HibernationCandidatesInput{
+		WorkspaceId:       workspaceId,
+		InactivityTimeout: 0,
+	})
+	require.NoError(t, err)
+	require.Len(t, output.Candidates, 1)
+	assert.Equal(t, "flow_devpod", output.Candidates[0].FlowId)
+}

@@ -130,7 +130,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 	var newChatHistory []llm.ChatMessage
 	var activityFuture workflow.Future
 	vLegacy := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
-	if vLegacy == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
+	if vLegacy == 1 && fflag.IsEnabledWithoutVersioning(ctx, fflag.ManageHistoryWithContextMarkers) {
 		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, chatMessages, requestedKeepLength)
 	} else {
 		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatMessages, requestedKeepLength)

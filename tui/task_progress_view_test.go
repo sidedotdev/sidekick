@@ -67,6 +67,31 @@ func (m *mockClientForProgress) QueryFlow(workspaceID, flowID, query string, que
 	return args.Get(0), args.Error(1)
 }
 
+func (m *mockClientForProgress) StartProviderOAuth(req client.StartProviderOAuthRequest) (client.StartProviderOAuthResponse, error) {
+	args := m.Called(req)
+	return args.Get(0).(client.StartProviderOAuthResponse), args.Error(1)
+}
+
+func (m *mockClientForProgress) GetProviderOAuthStatus(sessionID string) (client.ProviderOAuthStatus, error) {
+	args := m.Called(sessionID)
+	return args.Get(0).(client.ProviderOAuthStatus), args.Error(1)
+}
+
+func (m *mockClientForProgress) SubmitProviderOAuthCode(sessionID, input string) error {
+	args := m.Called(sessionID, input)
+	return args.Error(0)
+}
+
+func (m *mockClientForProgress) ProviderAPIKeyExists(provider, profileID string) (bool, error) {
+	args := m.Called(provider, profileID)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *mockClientForProgress) SaveProviderAPIKey(req client.SaveProviderAPIKeyRequest) error {
+	args := m.Called(req)
+	return args.Error(0)
+}
+
 func TestGetActionDisplayName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

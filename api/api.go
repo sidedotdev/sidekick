@@ -109,6 +109,12 @@ type Controller struct {
 	// secretManagerForProfile resolves credentials stored under a specific
 	// profile. When nil, only the default-profile secretManager is available.
 	secretManagerForProfile func(profileId string) secret_manager.SecretManager
+	// providerOAuth tracks in-progress provider OAuth logins; shared across
+	// Controller copies.
+	providerOAuth *providerOAuthSessions
+	// startProviderOAuth begins a provider OAuth login, defaulting to the
+	// shared provider_auth session.
+	startProviderOAuth startProviderOAuthFunc
 	// loadLocalConfig reads the local sidekick config, defaulting to the config
 	// file discovered on disk.
 	loadLocalConfig  func() (common.LocalConfig, error)
@@ -240,15 +246,27 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	}
 
 	r.Use(CORSMiddleware(allowedOrigins))
+	r.Use(CompressionMiddleware())
 
 	// Store allowedOrigins in controller for websocket handlers
 	ctrl.allowedOrigins = allowedOrigins
+	if ctrl.providerOAuth == nil {
+		ctrl.providerOAuth = newProviderOAuthSessions()
+	}
 
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
 	r.GET("/api/v1/profiles", ctrl.GetProfilesHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
 	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)
 	r.POST("/api/v1/open-in-ide", ctrl.OpenInIdeHandler)
+
+	providerAuthRoutes := r.Group("/api/v1/provider_auth")
+	providerAuthRoutes.POST("/oauth/start", ctrl.StartProviderOAuthHandler)
+	providerAuthRoutes.GET("/oauth/:sessionId", ctrl.GetProviderOAuthStatusHandler)
+	providerAuthRoutes.POST("/oauth/:sessionId/code", ctrl.SubmitProviderOAuthCodeHandler)
+	providerAuthRoutes.GET("/api_key", ctrl.ProviderAPIKeyExistsHandler)
+	providerAuthRoutes.POST("/api_key", ctrl.SaveProviderAPIKeyHandler)
+	providerAuthRoutes.POST("/credential_updated", ctrl.CredentialUpdatedHandler)
 
 	remotePairingRoutes := r.Group("/api/v1/remote/pairings")
 	remotePairingRoutes.GET("/", ctrl.ListPairingsHandler)
@@ -362,6 +380,7 @@ func NewController() (Controller, error) {
 		secretManagerForProfile: func(profileId string) secret_manager.SecretManager {
 			return secret_manager.NewProfileSecretManager(profileId)
 		},
+		providerOAuth:    newProviderOAuthSessions(),
 		taskStartTimeout: common.GetTaskStartTimeout(),
 	}, nil
 }
@@ -1900,6 +1919,11 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		case flow_action.RequestKindMultipleChoice:
 			if strings.TrimSpace(body.UserResponse.Choice) == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "User choice cannot be empty"})
+				return
+			}
+		case flow_action.RequestKindProviderAuth:
+			if !providerAuthMethodOffered(flowAction.ActionParams["methods"], body.UserResponse.Choice) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Choice must be one of the offered authentication methods"})
 				return
 			}
 		}

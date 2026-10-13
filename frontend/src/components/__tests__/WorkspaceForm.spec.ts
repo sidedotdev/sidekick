@@ -118,7 +118,7 @@ describe('WorkspaceForm.vue', () => {
         name: 'New Workspace',
         localRepoDir: '/local/repo/dir',
         configMode: 'merge',
-        llmConfig: { defaults: [{ provider: 'openai', model: '', reasoningEffort: '', speed: '' }], useCaseConfigs: {} },
+        llmConfig: { defaults: [{ provider: 'openai', model: '', reasoningEffort: '', serviceTier: '', speed: '' }], useCaseConfigs: {} },
         embeddingConfig: { defaults: [{ provider: 'openai', model: '' }], useCaseConfigs: {} }
       }),
     });
@@ -181,7 +181,7 @@ describe('WorkspaceForm.vue', () => {
         localRepoDir: '/updated/repo/dir',
         configMode: 'merge',
         llmConfig: {
-          defaults: [{ provider: 'openai', model: '', reasoningEffort: '', speed: '' }],
+          defaults: [{ provider: 'openai', model: '', reasoningEffort: '', serviceTier: '', speed: '' }],
           useCaseConfigs: {}
         },
         embeddingConfig: {

@@ -30,6 +30,13 @@ export function parseWebSearchBlock(block: unknown): WebSearchAction | null {
   if (!isRecord(tool) || tool.name !== 'web_search' || typeof tool.arguments !== 'string') return null
   if (tool.status !== undefined && typeof tool.status !== 'string') return null
 
+  // OpenAI reports the search action only once the item is done, and
+  // Anthropic streams it as argument deltas, so a block with no arguments yet
+  // is a search whose action is still unknown rather than malformed input.
+  if (tool.arguments.trim() === '') {
+    return { title: 'Web search', status: tool.status as string | undefined }
+  }
+
   let action: unknown
   try {
     action = JSON.parse(tool.arguments)
