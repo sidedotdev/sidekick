@@ -28,7 +28,7 @@ func verifierTestActivities(t *testing.T, config string) *fflag.FFlagActivities 
 
 func TestVerifierSettingsDefaults(t *testing.T) {
 	t.Parallel()
-	config, err := os.ReadFile("../flags.yml")
+	config, err := os.ReadFile("../fflag/flags.yml")
 	require.NoError(t, err)
 	activities := verifierTestActivities(t, string(config))
 	assignments := map[bool]int{}

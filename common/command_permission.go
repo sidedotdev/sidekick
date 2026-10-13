@@ -209,6 +209,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "realpath"},
 			{Pattern: "readlink"},
 			{Pattern: "timeout"},
+			{Pattern: "sandbox-exec"},
+			{Pattern: "/usr/bin/sandbox-exec"},
 			{Pattern: "sleep"},
 			{Pattern: "wait"},
 			{Pattern: "seq"},

@@ -18,6 +18,7 @@ type LocalConfig struct {
 	Providers          []ModelProviderConfig    `koanf:"providers,omitempty"`
 	LLM                map[string][]ModelConfig `koanf:"llm,omitempty"`
 	Embedding          map[string][]ModelConfig `koanf:"embedding,omitempty"`
+	Reranking          map[string][]ModelConfig `koanf:"reranking,omitempty"`
 	CommandPermissions CommandPermissionConfig  `koanf:"command_permissions,omitempty"`
 	OffHours           OffHoursConfig           `koanf:"off_hours,omitempty"`
 }
@@ -101,6 +102,14 @@ func (c LocalConfig) Validate() error {
 		}
 	}
 
+	for useCase, configs := range c.Reranking {
+		for _, mc := range configs {
+			if err := c.validateRerankingProvider(mc.Provider); err != nil {
+				return fmt.Errorf("invalid provider in reranking config for use case %s: %w", useCase, err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -177,4 +186,23 @@ func GetSidekickConfigPath() string {
 
 	// Default to config.yml when no config exists
 	return filepath.Join(configDir, "config.yml")
+}
+
+func (c LocalConfig) validateRerankingProvider(name string) error {
+	for _, provider := range c.Providers {
+		providerName := provider.Name
+		if providerName == "" {
+			providerName = provider.Type
+		}
+		if providerName == name {
+			if provider.Type != "cohere" {
+				return fmt.Errorf("unsupported reranking provider type: %s", provider.Type)
+			}
+			return nil
+		}
+	}
+	if name == "cohere" {
+		return nil
+	}
+	return fmt.Errorf("invalid provider name: %s", name)
 }

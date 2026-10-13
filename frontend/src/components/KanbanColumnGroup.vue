@@ -7,7 +7,9 @@
     >
       <h2 v-if="showHeadings">
         {{ columnNames[agentType] }}
-        <button v-if="agentType !== 'none'" class="new-task mini-button" @click="emit('addTask', agentType)">+</button>
+        <ShortcutTooltip v-if="agentType !== 'none'" :label="agentType === 'human' ? 'Draft task' : 'Queue task'" shortcut="T" position="bottom">
+          <button class="new-task mini-button" :aria-label="agentType === 'human' ? 'Draft task' : 'Queue task'" @click="emit('addTask', agentType)">+</button>
+        </ShortcutTooltip>
         <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="emit('archiveFinished')">📦</button>
       </h2>
       <VirtualTaskList
@@ -27,6 +29,7 @@
       </button>
       <button class="new-task" v-if="agentType == 'llm'" :data-board-nav="addTaskControlId(agentType)" @click="emit('addTask', agentType)">
         + Queue Task
+        <ShortcutHint v-if="newTaskShortcutLabel" :label="newTaskShortcutLabel" />
       </button>
     </div>
   </div>
@@ -38,6 +41,7 @@ import type { FullTask, AgentType, Task } from '../lib/models'
 import { boardControlIds, groupTasksByAgentType } from '../lib/kanbanNavigation'
 import VirtualTaskList from './VirtualTaskList.vue'
 import ShortcutHint from './ShortcutHint.vue'
+import ShortcutTooltip from './ShortcutTooltip.vue'
 
 const props = withDefaults(defineProps<{
   tasks: FullTask[]

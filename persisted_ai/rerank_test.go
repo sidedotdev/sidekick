@@ -112,7 +112,7 @@ func TestGetReranker(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			reranker, err := GetReranker(tt.manager)
+			reranker, err := GetReranker(common.DefaultRerankingModelConfig(), nil, tt.manager)
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
@@ -305,21 +305,31 @@ func TestCohereRerankMaxQueryTokens(t *testing.T) {
 func TestSplitRerankQueryUsesModelTokenCounts(t *testing.T) {
 	t.Parallel()
 
-	query := strings.Repeat("界", 20000)
-	client := &stubCohereRerankClient{
-		tokenCount: func(text string) int {
-			return len([]rune(text)) * 2
-		},
+	for _, tt := range []struct {
+		model     string
+		maxTokens int
+		chunks    int
+	}{
+		{common.DefaultCohereRerankingModel, cohereRerankV4MaxTokens, 2},
+		{"rerank-v3.5", cohereRerankDefaultMaxTokens, 10},
+	} {
+		t.Run(tt.model, func(t *testing.T) {
+			t.Parallel()
+			query := strings.Repeat("界", 20000)
+			client := &stubCohereRerankClient{
+				tokenCount: func(text string) int {
+					return len([]rune(text)) * 2
+				},
+			}
+			chunks, err := splitRerankQuery(context.Background(), client, query, tt.model)
+			require.NoError(t, err)
+			require.Len(t, chunks, tt.chunks)
+			for _, chunk := range chunks {
+				assert.LessOrEqual(t, client.tokenCount(chunk), tt.maxTokens)
+			}
+			assert.Equal(t, query, strings.Join(chunks, ""))
+		})
 	}
-
-	chunks, err := splitRerankQuery(context.Background(), client, query)
-
-	require.NoError(t, err)
-	require.Len(t, chunks, 2)
-	for _, chunk := range chunks {
-		assert.LessOrEqual(t, client.tokenCount(chunk), cohereRerankV4MaxTokens)
-	}
-	assert.Equal(t, query, strings.Join(chunks, ""))
 }
 func TestCohereRerankerReturnsTokenizeError(t *testing.T) {
 	client := &stubCohereRerankClient{tokenizeErr: errors.New("tokenize failed")}

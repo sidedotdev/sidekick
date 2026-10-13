@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-FLAGS_FILE=flags.yml
+FLAGS_FILE=fflag/flags.yml
 S3_BUCKET=genflow.dev
-OBJECT_PATH=sidekick/$FLAGS_FILE
+OBJECT_PATH=sidekick/flags.yml
 AWS_CLI=$(which aws)
 
 # Check if AWS CLI is installed

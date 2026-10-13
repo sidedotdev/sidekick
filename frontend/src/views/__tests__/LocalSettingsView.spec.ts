@@ -32,16 +32,16 @@ describe('LocalSettingsView', () => {
     const wrapper = mount(LocalSettingsView)
     const upInput = wrapper.get<HTMLInputElement>('.key-input[data-direction="up"]')
 
-    await upInput.setValue('w')
-    expect(getKanbanKeyBindings().up).toBe('w')
+    await upInput.setValue('u')
+    expect(getKanbanKeyBindings().up).toBe('u')
     expect(wrapper.find('.key-error').exists()).toBe(false)
 
     await upInput.setValue('j')
-    expect(getKanbanKeyBindings().up).toBe('w')
+    expect(getKanbanKeyBindings().up).toBe('u')
     expect(wrapper.get('.key-error').text()).toContain('down')
 
     await upInput.trigger('blur')
-    expect(upInput.element.value).toBe('w')
+    expect(upInput.element.value).toBe('u')
     expect(wrapper.find('.key-error').exists()).toBe(false)
   })
 

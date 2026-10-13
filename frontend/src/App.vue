@@ -13,8 +13,10 @@ import PlusIcon from './components/icons/PlusIcon.vue'
 import SmartphoneIcon from './components/icons/SmartphoneIcon.vue'
 import SlidersIcon from './components/icons/SlidersIcon.vue'
 import ShortcutTooltip from './components/ShortcutTooltip.vue'
+import ShortcutHint from './components/ShortcutHint.vue'
 import FuzzySelect from './components/FuzzySelect.vue'
 import { installPageNavigation } from './lib/pageNavigation'
+import { isInteractiveElement } from './lib/dom'
 
 const router = useRouter()
 const route = useRoute()
@@ -62,7 +64,9 @@ const workspaceSelectRef = ref<InstanceType<typeof FuzzySelect> | null>(null)
 
 const handleGlobalKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
-  if (modKey && event.key === 'w') {
+  const hasAnyModifier = event.metaKey || event.ctrlKey || event.altKey
+  const target = event.target instanceof HTMLElement ? event.target : null
+  if (!event.defaultPrevented && !hasAnyModifier && event.key.toLowerCase() === 'w' && !isInteractiveElement(target)) {
     event.preventDefault()
     workspaceSelectRef.value?.show()
   }
@@ -191,6 +195,7 @@ onUnmounted(() => {
             >
               <template #value>
                 <span>{{ workspaces.find(w => w.id === store.workspaceId)?.name || '' }}</span>
+                <ShortcutHint label="w" class="workspace-shortcut" />
               </template>
             </FuzzySelect>
             <RouterLink v-if="mode === 'development'" :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button" data-nav-item><GearIcon /></RouterLink>
@@ -266,6 +271,10 @@ header {
 
 .workspace-selector :deep(.p-select-label) {
   padding: 0.2rem 0.4rem;
+}
+
+.workspace-shortcut {
+  margin-left: 0.5rem;
 }
 
 .edit-workspace-button {

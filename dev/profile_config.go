@@ -28,7 +28,7 @@ func persistUnscopedConfigs(eCtx flow_action.ExecContext, declaredProviders []co
 // from one exec context's global state to another's, e.g. from the temporary
 // setup-time context to the flow's long-lived one.
 func copyUnscopedConfigs(from, to flow_action.ExecContext) {
-	for _, key := range []string{globalStateKeyDeclaredProviders, globalStateKeyUnscopedLLMConfig, globalStateKeyUnscopedEmbeddingConfig} {
+	for _, key := range []string{globalStateKeyDeclaredProviders, globalStateKeyUnscopedLLMConfig, globalStateKeyUnscopedEmbeddingConfig, globalStateKeyUnscopedRerankingConfig} {
 		if value := from.GlobalState.GetValue(key); value != nil {
 			to.GlobalState.SetValue(key, value)
 		}
@@ -78,6 +78,9 @@ func applyProfileChange(dCtx DevContext, profileId string) {
 		dCtx.SetProviders(providers)
 		dCtx.SetEmbeddingConfig(scopedEmbeddingConfig)
 		dCtx.SetLLMConfig(scopedLLMConfig)
+	}
+	if rerankingConfig, ok := dCtx.GlobalState.GetValue(globalStateKeyUnscopedRerankingConfig).(common.RerankingConfig); providersOk && ok {
+		dCtx.SetRerankingConfig(common.RerankingConfigForProfile(rerankingConfig, declaredProviders, profileId))
 	}
 
 	dCtx.GlobalState.SetValue(globalStateKeyModelConfigRevision, ModelConfigRevision(dCtx)+1)
