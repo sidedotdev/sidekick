@@ -64,7 +64,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		log.Fatal().Err(err).Msg("Failed to initialize telemetry tracer")
 	}
 
-	featureFlag, err := fflag.NewFFlag("flags.yml")
+	featureFlag, err := fflag.NewFFlag("fflag/flags.yml")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create go-feature-flag instance")
 	}

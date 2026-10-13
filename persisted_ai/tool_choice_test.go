@@ -120,7 +120,9 @@ func TestStreamActivityPreservesToolChoice(t *testing.T) {
 					_, err := activities.Stream(context.Background(), input)
 					require.NoError(t, err)
 					require.Len(t, provider.requests, 1)
-					require.Equal(t, originalOptions, provider.requests[0].Options)
+					expectedOptions := originalOptions
+					expectedOptions.PromptCacheKey = input.FlowId
+					require.Equal(t, expectedOptions, provider.requests[0].Options)
 					require.Equal(t, originalMessages, provider.requests[0].Messages)
 					require.Equal(t, originalOptions, input.Options)
 					require.Equal(t, originalMessages, history.Llm2Messages())
