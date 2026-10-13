@@ -113,6 +113,9 @@ func TestResolveRouteWith(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			before := oauthCalls
 			got, err := resolveRouteWith(t.Context(), tt.route, tt.secrets, oauth)
+			if used := oauthCalls > before; used != tt.wantOAuthUsed {
+				t.Errorf("oauth used = %v, want %v", used, tt.wantOAuthUsed)
+			}
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
@@ -124,9 +127,6 @@ func TestResolveRouteWith(t *testing.T) {
 			}
 			if got.endpoint != tt.wantEndpoint || got.token != tt.wantToken || got.accountID != tt.wantAccount {
 				t.Errorf("got %+v", got)
-			}
-			if used := oauthCalls > before; used != tt.wantOAuthUsed {
-				t.Errorf("oauth used = %v, want %v", used, tt.wantOAuthUsed)
 			}
 		})
 	}
