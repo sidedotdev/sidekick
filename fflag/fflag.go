@@ -29,12 +29,11 @@ func NewFFlag(flagsFilePath string) (FFlag, error) {
 			Path: flagsFilePath,
 		}
 	} else {
-		// TODO /gen create a custom retriever (implement Retrieve signature)
-		// that falls back to a local file if the HTTP request fails, and uses
-		// that file as a cache of the HTTP response.
-		r = &httpretriever.Retriever{
-			URL:     "https://genflow.dev/sidekick/flags.yml", // TODO /gen switch to side.dev/flags.yml here and in deploy_flags.yml
-			Timeout: 10 * time.Second,
+		r = &CachedRetriever{
+			Retriever: httpretriever.Retriever{
+				URL:     "https://genflow.dev/sidekick/flags.yml", // TODO /gen switch to side.dev/flags.yml here and in deploy_flags.yml
+				Timeout: 10 * time.Second,
+			},
 		}
 	}
 	client, err := ffclient.New(ffclient.Config{
