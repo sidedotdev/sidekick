@@ -997,6 +997,8 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 						EnvContainer:           *dCtx.EnvContainer,
 						ModelConfig:            modelConfig,
 						SecretManagerContainer: *dCtx.Secrets,
+						RerankingConfig:        dCtx.GetRerankingConfig(),
+						Providers:              dCtx.GetProviders(),
 					}).Get(dCtx, &summarizedDiff)
 					if err == nil {
 						diffForRequirements = summarizedDiff

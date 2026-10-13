@@ -233,7 +233,7 @@ func TestInitExcludesCohereFromChatSetup(t *testing.T) {
 						return "Add new provider", nil
 					}
 					return "chat-service", nil
-				case "Select your LLM API provider":
+				case "Select your API provider":
 					authSeen = true
 					assert.Equal(t, []string{"OpenAI", "Google", "Anthropic"}, options)
 					return "", cancelled

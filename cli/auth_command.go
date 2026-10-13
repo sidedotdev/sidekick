@@ -250,7 +250,7 @@ func handleLLMAuthCommand() error {
 }
 
 func handleProviderAuthCommand(providers []string) error {
-	provider, err := selectOption("Select your LLM API provider", providers)
+	provider, err := selectOption("Select your API provider", providers)
 	if err != nil {
 		return fmt.Errorf("provider selection failed: %w", err)
 	}

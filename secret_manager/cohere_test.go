@@ -39,16 +39,24 @@ func TestLocalConfigCohereCredentials(t *testing.T) {
 		notFound   bool
 	}{
 		{
-			name: "type lookup with arbitrary name",
+			name: "explicit name does not alias provider type",
 			providers: `providers:
   - name: ranking-service
     type: cohere
     key: default-key
 `,
+			notFound: true,
+		},
+		{
+			name: "omitted name defaults to builtin type",
+			providers: `providers:
+  - type: cohere
+    key: default-key
+`,
 			wantKey: "default-key",
 		},
 		{
-			name: "type and name match the same provider only once",
+			name: "explicit builtin name",
 			providers: `providers:
   - name: cohere
     type: cohere
@@ -76,17 +84,14 @@ func TestLocalConfigCohereCredentials(t *testing.T) {
 			wantKey:    "named-key",
 		},
 		{
-			name: "type lookup filters other profiles before matching",
+			name: "name lookup filters other profiles before matching",
 			providers: `providers:
-  - name: default-ranking
-    type: cohere
+  - type: cohere
     key: default-key
-  - name: work-ranking
-    type: cohere
+  - type: cohere
     key: work-key
     profiles: [work]
-  - name: personal-ranking
-    type: cohere
+  - type: cohere
     key: personal-key
     profiles: [personal]
 `,
@@ -96,8 +101,7 @@ func TestLocalConfigCohereCredentials(t *testing.T) {
 		{
 			name: "shared credential includes selected profile",
 			providers: `providers:
-  - name: shared-ranking
-    type: cohere
+  - type: cohere
     key: shared-key
     profiles: [default, work]
 `,
@@ -107,8 +111,7 @@ func TestLocalConfigCohereCredentials(t *testing.T) {
 		{
 			name: "named profile cannot use default credentials",
 			providers: `providers:
-  - name: ranking
-    type: cohere
+  - type: cohere
     key: default-key
 `,
 			profileId: "work",
@@ -117,8 +120,7 @@ func TestLocalConfigCohereCredentials(t *testing.T) {
 		{
 			name: "default cannot use named profile credentials",
 			providers: `providers:
-  - name: ranking
-    type: cohere
+  - type: cohere
     key: work-key
     profiles: [work]
 `,
@@ -137,27 +139,24 @@ func TestLocalConfigCohereCredentials(t *testing.T) {
 		{
 			name: "empty membership excludes all profiles",
 			providers: `providers:
-  - name: ranking
-    type: cohere
+  - type: cohere
     key: unused-key
     profiles: []
 `,
 			notFound: true,
 		},
 		{
-			name: "multiple type matches are ambiguous",
+			name: "multiple default names are ambiguous",
 			providers: `providers:
-  - name: first-ranking
-    type: cohere
+  - type: cohere
     key: first-key
-  - name: second-ranking
-    type: cohere
+  - type: cohere
     key: second-key
 `,
 			wantErr: "multiple providers found",
 		},
 		{
-			name: "type and legacy name matches are ambiguous",
+			name: "type alone does not create ambiguity",
 			providers: `providers:
   - name: ranking
     type: cohere
@@ -166,7 +165,7 @@ func TestLocalConfigCohereCredentials(t *testing.T) {
     type: openai_compatible
     key: legacy-key
 `,
-			wantErr: "multiple providers found",
+			wantKey: "legacy-key",
 		},
 		{
 			name: "multiple legacy name matches are ambiguous",
@@ -220,15 +219,12 @@ func TestLocalConfigCohereCredentials(t *testing.T) {
 func TestCohereSecretManagersProfileIsolation(t *testing.T) {
 	keyring.MockInit()
 	writeCohereLocalConfig(t, `providers:
-  - name: default-ranking
-    type: cohere
+  - type: cohere
     key: config-default
-  - name: work-ranking
-    type: cohere
+  - type: cohere
     key: config-work
     profiles: [work]
-  - name: personal-ranking
-    type: cohere
+  - type: cohere
     key: config-personal
     profiles: [personal]
 `)
@@ -346,16 +342,14 @@ func TestCohereCompositeCredentialPrecedence(t *testing.T) {
 			t.Setenv("WORK_COHERE_API_KEY", tt.env)
 			t.Setenv("SIDE_WORK_COHERE_API_KEY", tt.preferred)
 			providers := `providers:
-  - name: default-ranking
-    type: cohere
+  - type: cohere
     key: default-config-key
-  - name: personal-ranking
-    type: cohere
+  - type: cohere
     key: personal-config-key
     profiles: [personal]
 `
 			if tt.config != "" {
-				providers += "  - name: work-ranking\n    type: cohere\n    key: " + tt.config + "\n    profiles: [work]\n"
+				providers += "  - type: cohere\n    key: " + tt.config + "\n    profiles: [work]\n"
 			}
 			writeCohereLocalConfig(t, providers)
 			if tt.keyring != "" {
