@@ -78,12 +78,11 @@ describe('UserRequest', () => {
 
   describe('copy request content', () => {
     it.each([
-      ['pending', '# Requirements\n\n- Preserve `markdown`.\n', '# Requirements\n\n- Preserve `markdown`.\n'],
-      ['complete', '# Plan\n\n1. Implement the feature.\n', '# Plan\n\n1. Implement the feature.\n'],
-      ['pending', undefined, 'Please review this request.'],
-      ['complete', undefined, 'Please review this request.'],
-      ['pending', '', ''],
-    ])('copies the backend payload for %s requests', async (actionStatus, copyContent, expected) => {
+      ['pending', '# Requirements\n\n- Preserve `markdown`.\n', undefined],
+      ['complete', '# Plan\n\n1. Implement the feature.\n', undefined],
+      ['pending', '# Requirements\n\n- Preserve `markdown`.\n', 'Separate copy payload'],
+      ['complete', '# Plan\n\n1. Implement the feature.\n', 'Separate copy payload'],
+    ])('copies requestContent verbatim for %s requests', async (actionStatus, requestContent, copyContent) => {
       const writeText = vi.fn().mockResolvedValue(undefined)
       const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
       Object.defineProperty(navigator, 'clipboard', {
@@ -95,15 +94,15 @@ describe('UserRequest', () => {
           actionStatus,
           actionParams: {
             requestKind: 'approval',
-            requestContent: 'Please review this request.',
+            requestContent,
             copyContent,
           },
         }))
 
-        expect(wrapper.text()).toContain('Please review this request.')
+        expect(wrapper.find('.markdown h1').text()).toBe(actionStatus === 'pending' ? 'Requirements' : 'Plan')
         await wrapper.find('button.copy-button').trigger('click')
 
-        expect(writeText).toHaveBeenCalledExactlyOnceWith(expected)
+        expect(writeText).toHaveBeenCalledExactlyOnceWith(requestContent)
       } finally {
         wrapper.unmount()
         if (originalClipboard) {

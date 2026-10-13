@@ -738,12 +738,16 @@ func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, p
 func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*flow_action.UserResponse, error) {
 	markdown := devPlan.String()
 	req := flow_action.RequestForUser{
-		Content:       "Please approve or reject the development plan:\n\n" + markdown + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
+		Content:       markdown,
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 		RequestKind:   flow_action.RequestKindApproval,
 	}
-	if workflow.GetVersion(dCtx, "approval-copy-content", workflow.DefaultVersion, 1) >= 1 {
-		req.RequestParams["copyContent"] = markdown
+	v := workflow.GetVersion(dCtx, "approval-copy-content", workflow.DefaultVersion, 2)
+	if v < 2 {
+		req.Content = "Please approve or reject the development plan:\n\n" + markdown + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed."
+		if v >= 1 {
+			req.RequestParams["copyContent"] = markdown
+		}
 	}
 
 	// IDD sub-task plans are auto-approved: the intent author reviews outcomes

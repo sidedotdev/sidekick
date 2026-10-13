@@ -85,9 +85,8 @@ func TestApprovalCopyContent(t *testing.T) {
 			require.NoError(t, env.GetWorkflowError())
 			require.NotEmpty(t, actions)
 			action := actions[len(actions)-1]
-			require.Equal(t, tc.content, action.ActionParams["copyContent"])
-			require.Contains(t, action.ActionParams["requestContent"], tc.content)
-			require.NotEqual(t, tc.content, action.ActionParams["requestContent"])
+			require.Equal(t, tc.content, action.ActionParams["requestContent"])
+			require.NotContains(t, action.ActionParams, "copyContent")
 			require.Equal(t, "approve_plan", action.ActionParams["approveTag"])
 			require.Equal(t, "reject_plan", action.ActionParams["rejectTag"])
 		})

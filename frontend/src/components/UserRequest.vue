@@ -620,8 +620,7 @@ function continueCopy(): string {
 
 const copyRequestContent = async () => {
   try {
-    const { copyContent, requestContent } = props.flowAction.actionParams
-    await navigator.clipboard.writeText(copyContent ?? requestContent)
+    await navigator.clipboard.writeText(props.flowAction.actionParams.requestContent)
   } catch (err) {
     console.error('Failed to copy request content:', err)
   }
