@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -859,6 +860,40 @@ func cost(u usage, s priceSchedule, retention string) float64 {
 		write = t.LongTTLCacheWrite
 	}
 	return (float64(u.Read)*t.CacheRead + float64(u.Write)*write + float64(u.Uncached)*t.Input) / 1e6
+}
+
+// missed re-bills u as if the request had not hit its eligible cached prefix:
+// the read tokens move to the write bucket (explicit caches re-write the
+// prefix) or the uncached bucket. Total prompt size, and so tier selection,
+// is unchanged.
+func (u usage) missed(explicitWrites bool) usage {
+	if explicitWrites {
+		return usage{Write: u.Write + u.Read, Uncached: u.Uncached}
+	}
+	return usage{Write: u.Write, Uncached: u.Uncached + u.Read}
+}
+
+// expectedCost blends an ideal hit with a miss at the given conditional hit
+// probability. Short probes measure per-request hit rates well below 1 even
+// when routing is correct, so policy costs are reported across a range of
+// hitProb rather than only the ideal.
+func expectedCost(u usage, s priceSchedule, retention string, hitProb float64, explicitWrites bool) float64 {
+	if hitProb >= 1 {
+		return cost(u, s, retention)
+	}
+	return hitProb*cost(u, s, retention) + (1-hitProb)*cost(u.missed(explicitWrites), s, retention)
+}
+
+func parseHitProbabilities(spec string) ([]float64, error) {
+	var out []float64
+	for _, part := range strings.Split(spec, ",") {
+		p, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err != nil || math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
+			return nil, fmt.Errorf("hit probability %q: want a number in [0,1]", part)
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // openAIContextBoundary is the last prompt size billed as "short context"

@@ -64,9 +64,12 @@ type callResult struct {
 	InputTokens  int     `json:"inputTokens"`
 	CachedTokens int     `json:"cachedTokens"`
 	CachedRatio  float64 `json:"cachedRatio"`
-	TTFTMillis   int64   `json:"ttftMillis"`
-	TotalMillis  int64   `json:"totalMillis"`
-	Error        string  `json:"error,omitempty"`
+	// RawUsage is the provider's usage object verbatim; it is the evidence for
+	// which billing fields (e.g. cache_write_tokens) a route actually returns.
+	RawUsage    json.RawMessage `json:"rawUsage,omitempty"`
+	TTFTMillis  int64           `json:"ttftMillis"`
+	TotalMillis int64           `json:"totalMillis"`
+	Error       string          `json:"error,omitempty"`
 }
 
 // errFatalResponse marks failures that will recur on every call (auth, quota)
@@ -82,6 +85,7 @@ func main() {
 
 type config struct {
 	model, effort    string
+	route            string
 	trials, warm     int
 	appends, words   int
 	gap, callTimeout time.Duration
@@ -95,6 +99,7 @@ func parseFlags() (config, error) {
 	var armsFlag string
 	flag.StringVar(&c.model, "model", "gpt-6-astra", "Model to probe")
 	flag.StringVar(&c.effort, "effort", "low", "Reasoning effort")
+	flag.StringVar(&c.route, "route", "codex", "codex (ChatGPT subscription, OAuth) or api (api.openai.com, OPENAI_API_KEY)")
 	flag.IntVar(&c.trials, "trials", 3, "Trials per arm (each trial uses a fresh key and nonce)")
 	flag.IntVar(&c.warm, "warm", 3, "Exact-repeat calls after the cold call")
 	flag.IntVar(&c.appends, "append", 2, "Append-only calls after the warm calls")
@@ -131,7 +136,7 @@ func run() error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	route, err := resolveRoute(ctx)
+	route, err := resolveRoute(ctx, c.route)
 	if err != nil {
 		return err
 	}
@@ -237,13 +242,40 @@ func parseArms(s string) ([]arm, error) {
 	return arms, nil
 }
 
-func resolveRoute(ctx context.Context) (probeRoute, error) {
+const (
+	codexEndpoint = "https://chatgpt.com/backend-api/codex/responses"
+	apiEndpoint   = "https://api.openai.com/v1/responses"
+)
+
+func resolveRoute(ctx context.Context, name string) (probeRoute, error) {
 	manager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
 		&secret_manager.EnvSecretManager{},
 		&secret_manager.KeyringSecretManager{},
 		&secret_manager.LocalConfigSecretManager{},
 	})
-	credentials, found, err := openai_oauth.GetAndMaybeRefresh(ctx, manager)
+	return resolveRouteWith(ctx, name, manager, openai_oauth.GetAndMaybeRefresh)
+}
+
+type secretGetter = interface{ GetSecret(string) (string, error) }
+
+type oauthLookup func(context.Context, secretGetter) (*openai_oauth.Credentials, bool, error)
+
+// resolveRouteWith picks the endpoint and credential for a named route. The
+// API route needs only OPENAI_API_KEY and must never touch OAuth, so that a
+// metered-API probe cannot silently fall back to the subscription endpoint.
+func resolveRouteWith(ctx context.Context, name string, manager secretGetter, oauth oauthLookup) (probeRoute, error) {
+	switch name {
+	case "api":
+		apiKey, err := manager.GetSecret("OPENAI_API_KEY")
+		if err != nil || apiKey == "" {
+			return probeRoute{}, fmt.Errorf("resolve OPENAI_API_KEY: %v", err)
+		}
+		return probeRoute{endpoint: apiEndpoint, token: apiKey}, nil
+	case "codex":
+	default:
+		return probeRoute{}, fmt.Errorf("unknown -route %q (want codex or api)", name)
+	}
+	credentials, found, err := oauth(ctx, manager)
 	if err != nil {
 		return probeRoute{}, fmt.Errorf("resolve OpenAI OAuth credentials: %w", err)
 	}
@@ -251,7 +283,7 @@ func resolveRoute(ctx context.Context) (probeRoute, error) {
 		return probeRoute{}, fmt.Errorf("no %s credentials configured", openai_oauth.SecretName)
 	}
 	return probeRoute{
-		endpoint:  "https://chatgpt.com/backend-api/codex/responses",
+		endpoint:  codexEndpoint,
 		token:     credentials.AccessToken,
 		accountID: credentials.AccountID,
 	}, nil
@@ -302,6 +334,7 @@ func doCall(ctx context.Context, route probeRoute, a arm, key string, prompt pro
 	outcome, err := parseResponsesStream(resp.Body, start)
 	res.TotalMillis = time.Since(start).Milliseconds()
 	res.Model = outcome.Model
+	res.RawUsage = outcome.RawUsage
 	res.TTFTMillis = outcome.FirstOutputAfter.Milliseconds()
 	if err != nil {
 		res.Error = err.Error()

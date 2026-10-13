@@ -63,16 +63,24 @@ type options struct {
 	minCacheable, granularity          int
 	strictOverlap                      bool
 	policies                           string
-	priceAs, cacheModes                string
+	priceAs, cacheModes, hitProbs      string
 	priceInput, priceRead, priceWrite  float64
 }
 
 // cacheMode is a named cache-billing assumption: the retention bought, how
-// long entries live and how uncached tokens are charged.
+// long entries live, how uncached tokens are charged, and the conditional
+// probability that an eligible prefix actually hits.
 type cacheMode struct {
 	name      string
 	retention string
 	cm        cacheModel
+	hitProb   float64
+}
+
+func (m cacheMode) withHitProbability(p float64) cacheMode {
+	m.hitProb = p
+	m.name = fmt.Sprintf("%s, p(hit)=%.2f", m.name, p)
+	return m
 }
 
 func cacheModeByName(retention string, minCacheable, granularity int) (cacheMode, error) {
@@ -80,21 +88,22 @@ func cacheModeByName(retention string, minCacheable, granularity int) (cacheMode
 	switch retention {
 	case retention5m:
 		base.TTL, base.ExplicitWrites = 5*time.Minute, true
-		return cacheMode{name: "explicit 5m", retention: retention, cm: base}, nil
+		return cacheMode{name: "explicit 5m", retention: retention, cm: base, hitProb: 1}, nil
 	case retention1h:
 		base.TTL, base.ExplicitWrites = time.Hour, true
-		return cacheMode{name: "explicit 1h", retention: retention, cm: base}, nil
+		return cacheMode{name: "explicit 1h", retention: retention, cm: base, hitProb: 1}, nil
 	case retention30m:
 		base.TTL, base.ExplicitWrites = 30*time.Minute, true
-		return cacheMode{name: "explicit 30m", retention: retention, cm: base}, nil
+		return cacheMode{name: "explicit 30m", retention: retention, cm: base, hitProb: 1}, nil
 	case retentionImplicit:
-		// Idealized: every prefix within TTL hits. Observed OpenAI implicit
-		// reuse is far worse, so this is a lower bound on implicit cost.
+		// The 5m TTL is an assumption (OpenAI documents 5–10 min, longer
+		// off-peak); it has not been measured here. Residual misses are
+		// modeled via hitProb rather than by shortening the TTL.
 		base.TTL, base.ExplicitWrites = 5*time.Minute, false
 		if base.Granularity < 128 {
 			base.Granularity = 128
 		}
-		return cacheMode{name: "implicit (idealized, 5m)", retention: retention, cm: base}, nil
+		return cacheMode{name: "implicit (TTL 5m)", retention: retention, cm: base, hitProb: 1}, nil
 	}
 	return cacheMode{}, fmt.Errorf("unknown cache mode %q (want 5m, 1h, 30m or implicit)", retention)
 }
@@ -127,6 +136,7 @@ func run(ctx context.Context, w io.Writer) error {
 	flag.BoolVar(&o.strictOverlap, "strict-overlap", false, "exclude every call whose creation precedes its predecessor's UpdatedAt (sensitivity check)")
 	flag.StringVar(&o.policies, "policies", "", "comma-separated keep:trigger[:minTurns] char policies; default sweeps a grid")
 	flag.StringVar(&o.cacheModes, "cache-modes", "5m,1h", "comma-separated cache billing modes: 5m, 1h, 30m, implicit")
+	flag.StringVar(&o.hitProbs, "hit-prob", "1", "comma-separated conditional hit probabilities for eligible prefixes; each cache mode is reported at each (1 = ideal). Applies to policy reports only, not the validity baseline")
 	flag.StringVar(&o.priceAs, "price-as", "", "comma-separated price schedules to cost the same replay at; built-in names: "+strings.Join(builtinScheduleNames(), ", ")+"; or provider/model from model_prices; default: the replayed model")
 	flag.Float64Var(&o.priceInput, "price-input", 0, "override input $/Mtok (single ad-hoc schedule)")
 	flag.Float64Var(&o.priceRead, "price-cache-read", 0, "override cache read $/Mtok")
@@ -152,13 +162,19 @@ func run(ctx context.Context, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	hitProbs, err := parseHitProbabilities(o.hitProbs)
+	if err != nil {
+		return err
+	}
 	var modes []cacheMode
 	for _, name := range strings.Split(o.cacheModes, ",") {
 		m, err := cacheModeByName(strings.TrimSpace(name), o.minCacheable, o.granularity)
 		if err != nil {
 			return err
 		}
-		modes = append(modes, m)
+		for _, p := range hitProbs {
+			modes = append(modes, m.withHitProbability(p))
+		}
 	}
 
 	kv, err := openKV(o.kvDB)
@@ -523,7 +539,7 @@ type totals struct {
 	promptTokens                   float64
 }
 
-func (t *totals) add(step replayStep, u usage, s priceSchedule, retention string) {
+func (t *totals) add(step replayStep, u usage, s priceSchedule, mode cacheMode) {
 	t.calls++
 	if step.Truncated {
 		t.truncations++
@@ -532,7 +548,7 @@ func (t *totals) add(step replayStep, u usage, s priceSchedule, retention string
 	t.usage.Read += u.Read
 	t.usage.Write += u.Write
 	t.usage.Uncached += u.Uncached
-	t.cost += cost(u, s, retention)
+	t.cost += expectedCost(u, s, mode.retention, mode.hitProb, mode.cm.ExplicitWrites)
 	t.promptTokens += float64(u.total())
 }
 
@@ -542,7 +558,7 @@ func sumSteps(replays []lineageReplay, pick func(lineageReplay) []replayStep, tm
 		steps := pick(r)
 		sim := simulateUsage(steps, r.calls, tm, mode.cm)
 		for i := range steps {
-			t.add(steps[i], sim[i], s, mode.retention)
+			t.add(steps[i], sim[i], s, mode)
 		}
 	}
 	return t
@@ -559,8 +575,8 @@ func reportBaseline(w io.Writer, replays []lineageReplay, tm tokenModel, s price
 		sim := simulateUsage(r.actual, r.calls, tm, mode.cm)
 		for i := range r.actual {
 			rec := recordedUsage(r.calls[i])
-			recorded.add(r.actual[i], rec, s, mode.retention)
-			modeled.add(r.actual[i], sim[i], s, mode.retention)
+			recorded.add(r.actual[i], rec, s, mode)
+			modeled.add(r.actual[i], sim[i], s, mode)
 			if r.calls[i].InputTokens > 0 {
 				readErrs = append(readErrs, float64(sim[i].Read-rec.Read)/float64(r.calls[i].InputTokens))
 			}
@@ -574,7 +590,7 @@ func reportBaseline(w io.Writer, replays []lineageReplay, tm tokenModel, s price
 	fmt.Fprintf(w, "\nmodel cost error %+.1f%%; per-call (modeled − recorded cache read)/input: p10 %+.2f, median %+.2f, p90 %+.2f\n",
 		100*(modeled.cost-recorded.cost)/math.Max(recorded.cost, 1e-9),
 		percentileSorted(readErrs, 0.1), percentileSorted(readErrs, 0.5), percentileSorted(readErrs, 0.9))
-	fmt.Fprintf(w, "Everything below is modeled (idealized cache, replayed prompts); deltas are against the modeled cost of the recorded prompts under the same mode. Output tokens excluded.\n\n")
+	fmt.Fprintf(w, "Everything below is modeled (replayed prompts, cache TTL and hit probability as labeled per column); deltas are against the modeled cost of the recorded prompts under the same mode. Output tokens excluded.\n\n")
 }
 
 // reportSchedule prints, for one price schedule, every policy's cost under

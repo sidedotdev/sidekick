@@ -15,6 +15,9 @@ type streamOutcome struct {
 	Model        string
 	InputTokens  int
 	CachedTokens int
+	// RawUsage is the terminal event's usage object verbatim, before any
+	// decoding, so the exact billing schema the route returns can be inspected.
+	RawUsage json.RawMessage
 	// FirstOutputAfter is the delay until the first output or reasoning delta,
 	// i.e. time-to-first-token rather than time-to-first-SSE-line.
 	FirstOutputAfter time.Duration
@@ -46,13 +49,8 @@ func parseResponsesStream(body io.Reader, start time.Time) (streamOutcome, error
 			Error    *struct{ Message string }
 			Delta    json.RawMessage `json:"delta"`
 			Response struct {
-				Model string `json:"model"`
-				Usage *struct {
-					InputTokens        int `json:"input_tokens"`
-					InputTokensDetails *struct {
-						CachedTokens *int `json:"cached_tokens"`
-					} `json:"input_tokens_details"`
-				} `json:"usage"`
+				Model    string          `json:"model"`
+				RawUsage json.RawMessage `json:"usage"`
 			} `json:"response"`
 		}
 		if err := json.Unmarshal(event, &envelope); err != nil {
@@ -66,7 +64,18 @@ func parseResponsesStream(body io.Reader, start time.Time) (streamOutcome, error
 		case "response.completed":
 			out.Completed = true
 			out.Model = envelope.Response.Model
-			u := envelope.Response.Usage
+			out.RawUsage = envelope.Response.RawUsage
+			var u *struct {
+				InputTokens        int `json:"input_tokens"`
+				InputTokensDetails *struct {
+					CachedTokens *int `json:"cached_tokens"`
+				} `json:"input_tokens_details"`
+			}
+			if len(envelope.Response.RawUsage) > 0 {
+				if err := json.Unmarshal(envelope.Response.RawUsage, &u); err != nil {
+					return fmt.Errorf("bad usage JSON: %w", err)
+				}
+			}
 			if u == nil || u.InputTokens <= 0 || u.InputTokensDetails == nil || u.InputTokensDetails.CachedTokens == nil {
 				return errNoUsage
 			}

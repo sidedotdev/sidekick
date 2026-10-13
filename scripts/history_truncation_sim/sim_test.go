@@ -352,6 +352,45 @@ func TestSimulateUsage_IdealizedCache(t *testing.T) {
 	assert.InDelta(t, (4992*1+2608*10)/1e6, cost(usage{Read: 4992, Uncached: 2608}, astra, retentionImplicit), 1e-12)
 }
 
+func TestExpectedCost_ResidualMissProbability(t *testing.T) {
+	t.Parallel()
+	astra := builtinSchedules["openai/gpt-6-astra"]
+	fable := builtinSchedules["anthropic/claude-fable-5-1"]
+	implicitHit := usage{Read: 9000, Uncached: 1000}
+	explicitHit := usage{Read: 9000, Write: 1000}
+
+	ideal := cost(implicitHit, astra, retentionImplicit)
+	miss := cost(usage{Uncached: 10000}, astra, retentionImplicit)
+	assert.InDelta(t, ideal, expectedCost(implicitHit, astra, retentionImplicit, 1, false), 1e-12)
+	assert.InDelta(t, miss, expectedCost(implicitHit, astra, retentionImplicit, 0, false), 1e-12, "a miss bills the eligible prefix as plain input")
+	assert.InDelta(t, 0.9*ideal+0.1*miss, expectedCost(implicitHit, astra, retentionImplicit, 0.9, false), 1e-12)
+
+	explicitMiss := cost(usage{Write: 10000}, fable, retention5m)
+	assert.InDelta(t, explicitMiss, expectedCost(explicitHit, fable, retention5m, 0, true), 1e-12, "with explicit writes a miss re-writes the prefix")
+
+	// Tier selection depends on the whole prompt, not on which bucket it lands in.
+	haiku := builtinSchedules["anthropic/claude-haiku-5-5"]
+	big := usage{Read: 150000, Write: 1000}
+	assert.InDelta(t, cost(usage{Write: 151000}, haiku, retention5m), expectedCost(big, haiku, retention5m, 0, true), 1e-12)
+
+	assert.True(t, math.IsNaN(expectedCost(implicitHit, fable, retentionImplicit, 1, false)), "unsupported retention stays NaN")
+
+	oneHourMiss := cost(usage{Write: 10000}, fable, retention1h)
+	assert.InDelta(t, 10000*20/1e6, oneHourMiss, 1e-12, "1h misses re-write at the 1h write price")
+	assert.InDelta(t, oneHourMiss, expectedCost(explicitHit, fable, retention1h, 0, true), 1e-12)
+}
+
+func TestParseHitProbabilities(t *testing.T) {
+	t.Parallel()
+	got, err := parseHitProbabilities("1, 0.9,0.8, 0")
+	require.NoError(t, err)
+	assert.Equal(t, []float64{1, 0.9, 0.8, 0}, got)
+	for _, bad := range []string{"", "1,", "1.5", "-0.1", "x", "NaN", "Inf", "-Inf"} {
+		_, err := parseHitProbabilities(bad)
+		assert.Error(t, err, bad)
+	}
+}
+
 func TestSimulateUsage_LongRetentionTurnsRewriteIntoRead(t *testing.T) {
 	t.Parallel()
 	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

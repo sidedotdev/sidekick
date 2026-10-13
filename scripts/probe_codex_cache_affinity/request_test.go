@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"sidekick/openai_oauth"
 )
 
 func TestBuildRequest_ArmHeadersAndBodyKey(t *testing.T) {
@@ -66,6 +71,62 @@ func TestBuildRequest_ArmHeadersAndBodyKey(t *testing.T) {
 			}
 			if gotBody["store"] != false || gotBody["stream"] != true {
 				t.Errorf("expected store=false stream=true, got store=%v stream=%v", gotBody["store"], gotBody["stream"])
+			}
+		})
+	}
+}
+
+type mapSecrets map[string]string
+
+func (m mapSecrets) GetSecret(name string) (string, error) {
+	v, ok := m[name]
+	if !ok {
+		return "", errors.New("not found: " + name)
+	}
+	return v, nil
+}
+
+func TestResolveRouteWith(t *testing.T) {
+	t.Parallel()
+	oauthCalls := 0
+	oauth := func(context.Context, secretGetter) (*openai_oauth.Credentials, bool, error) {
+		oauthCalls++
+		return &openai_oauth.Credentials{AccessToken: "oauth-tok", AccountID: "acct"}, true, nil
+	}
+	tests := []struct {
+		name          string
+		route         string
+		secrets       mapSecrets
+		wantEndpoint  string
+		wantToken     string
+		wantAccount   string
+		wantErr       string
+		wantOAuthUsed bool
+	}{
+		{name: "api uses key and never oauth", route: "api", secrets: mapSecrets{"OPENAI_API_KEY": "sk-1"}, wantEndpoint: apiEndpoint, wantToken: "sk-1"},
+		{name: "api without key fails rather than falling back", route: "api", secrets: mapSecrets{}, wantErr: "OPENAI_API_KEY"},
+		{name: "codex uses oauth", route: "codex", secrets: mapSecrets{}, wantEndpoint: codexEndpoint, wantToken: "oauth-tok", wantAccount: "acct", wantOAuthUsed: true},
+		{name: "unknown route", route: "gateway", secrets: mapSecrets{}, wantErr: "unknown -route"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			before := oauthCalls
+			got, err := resolveRouteWith(t.Context(), tt.route, tt.secrets, oauth)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.endpoint != tt.wantEndpoint || got.token != tt.wantToken || got.accountID != tt.wantAccount {
+				t.Errorf("got %+v", got)
+			}
+			if used := oauthCalls > before; used != tt.wantOAuthUsed {
+				t.Errorf("oauth used = %v, want %v", used, tt.wantOAuthUsed)
 			}
 		})
 	}

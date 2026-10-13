@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +84,57 @@ func (p *poisonAfterReader) Read(b []byte) (int, error) {
 		err = nil
 	}
 	return n, err
+}
+
+// The raw usage object is the evidence for which billing counters a route
+// returns, so it must survive verbatim: unknown fields, absent vs zero vs
+// positive cache_write_tokens all have to be distinguishable afterwards.
+func TestParseResponsesStream_PreservesRawUsage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		usage     string
+		wantWrite string
+	}{
+		{name: "write field absent", usage: `{"input_tokens":5000,"input_tokens_details":{"cached_tokens":4096}}`, wantWrite: "absent"},
+		{name: "write field zero", usage: `{"input_tokens":5000,"input_tokens_details":{"cached_tokens":4096,"cache_write_tokens":0}}`, wantWrite: "0"},
+		{name: "write field positive with unknown siblings", usage: `{"input_tokens":5000,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":4990},"attribution":{"items":{}},"total_tokens":5005}`, wantWrite: "4990"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body := sse(`{"type":"response.completed","response":{"model":"gpt-x","usage":` + tt.usage + `}}`)
+			got, err := parseResponsesStream(strings.NewReader(body), time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var canonWant, canonGot any
+			if err := json.Unmarshal([]byte(tt.usage), &canonWant); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(got.RawUsage, &canonGot); err != nil {
+				t.Fatalf("RawUsage not JSON: %v (%s)", err, got.RawUsage)
+			}
+			if !reflect.DeepEqual(canonWant, canonGot) {
+				t.Errorf("RawUsage = %s, want %s", got.RawUsage, tt.usage)
+			}
+			var details struct {
+				InputTokensDetails map[string]json.RawMessage `json:"input_tokens_details"`
+			}
+			if err := json.Unmarshal(got.RawUsage, &details); err != nil {
+				t.Fatal(err)
+			}
+			write, present := details.InputTokensDetails["cache_write_tokens"]
+			gotWrite := "absent"
+			if present {
+				gotWrite = string(write)
+			}
+			if gotWrite != tt.wantWrite {
+				t.Errorf("cache_write_tokens = %s, want %s", gotWrite, tt.wantWrite)
+			}
+		})
+	}
 }
 
 func TestParseResponsesStream_StopsAtCompleted(t *testing.T) {
