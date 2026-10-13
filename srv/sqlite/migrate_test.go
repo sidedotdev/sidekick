@@ -268,7 +268,7 @@ func TestWorkspaceRerankingMigration(t *testing.T) {
 	`, "ws-reranking", llmJSON, embeddingJSON)
 	require.NoError(t, err)
 
-	require.NoError(t, m.Migrate(18))
+	require.NoError(t, m.Migrate(19))
 	storage := &Storage{db: &trackedDB{DB: db, name: "main", tracker: newBusyTracker()}}
 	config, err := storage.GetWorkspaceConfig(ctx, "ws-reranking")
 	require.NoError(t, err)
