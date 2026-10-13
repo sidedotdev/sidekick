@@ -76,6 +76,45 @@ describe('UserRequest', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
+  describe('copy request content', () => {
+    it.each([
+      ['pending', '# Requirements\n\n- Preserve `markdown`.\n', '# Requirements\n\n- Preserve `markdown`.\n'],
+      ['complete', '# Plan\n\n1. Implement the feature.\n', '# Plan\n\n1. Implement the feature.\n'],
+      ['pending', undefined, 'Please review this request.'],
+      ['complete', undefined, 'Please review this request.'],
+      ['pending', '', ''],
+    ])('copies the backend payload for %s requests', async (actionStatus, copyContent, expected) => {
+      const writeText = vi.fn().mockResolvedValue(undefined)
+      const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText },
+      })
+      try {
+        mountComponent(createMockFlowAction({
+          actionStatus,
+          actionParams: {
+            requestKind: 'approval',
+            requestContent: 'Please review this request.',
+            copyContent,
+          },
+        }))
+
+        expect(wrapper.text()).toContain('Please review this request.')
+        await wrapper.find('button.copy-button').trigger('click')
+
+        expect(writeText).toHaveBeenCalledExactlyOnceWith(expected)
+      } finally {
+        wrapper.unmount()
+        if (originalClipboard) {
+          Object.defineProperty(navigator, 'clipboard', originalClipboard)
+        } else {
+          Reflect.deleteProperty(navigator, 'clipboard')
+        }
+      }
+    })
+  })
+
   it('submits user response successfully and clears error message', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
