@@ -98,6 +98,9 @@ func parseResponsesStream(body io.Reader, start time.Time) (streamOutcome, error
 			if err := flush(); err != nil {
 				return out, err
 			}
+			if out.Completed {
+				return out, nil
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,37 @@ func TestParseResponsesStream(t *testing.T) {
 				t.Errorf("FirstOutputAfter = %v, wantTTFT=%v", got.FirstOutputAfter, tt.wantTTFT)
 			}
 		})
+	}
+}
+
+// poisonAfterReader fails any read past the provided prefix, proving the parser
+// stops consuming once it has the terminal event.
+type poisonAfterReader struct {
+	r    *strings.Reader
+	done bool
+}
+
+func (p *poisonAfterReader) Read(b []byte) (int, error) {
+	if p.done {
+		return 0, errors.New("read past terminal event")
+	}
+	n, err := p.r.Read(b)
+	if err == io.EOF {
+		p.done = true
+		err = nil
+	}
+	return n, err
+}
+
+func TestParseResponsesStream_StopsAtCompleted(t *testing.T) {
+	t.Parallel()
+	body := sse(`{"type":"response.completed","response":{"usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":5}}}}`)
+	got, err := parseResponsesStream(&poisonAfterReader{r: strings.NewReader(body)}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InputTokens != 5 {
+		t.Fatalf("got %+v", got)
 	}
 }
 

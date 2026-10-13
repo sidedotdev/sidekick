@@ -273,16 +273,16 @@ func doCall(ctx context.Context, route probeRoute, a arm, key string, prompt pro
 	res := callResult{Arm: a, Key: key}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	start := time.Now()
 	fail := func(err error) (callResult, error) {
 		res.Error = err.Error()
-		res.TotalMillis = time.Since(time.Now()).Milliseconds()
+		res.TotalMillis = time.Since(start).Milliseconds()
 		return res, err
 	}
 	req, err := buildRequest(ctx, route, a, key, prompt)
 	if err != nil {
 		return fail(err)
 	}
-	start := time.Now()
 	resp, err := noRedirectClient.Do(req)
 	if err != nil {
 		return fail(err)
