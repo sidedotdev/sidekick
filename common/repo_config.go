@@ -116,7 +116,8 @@ type DevPodEnvConfig struct {
 	// WorkspaceId overrides the workspace name DevPod derives from the
 	// repo directory basename. When empty, the repo directory's basename is
 	// used, matching DevPod's default behavior.
-	WorkspaceId string `toml:"workspace_id,omitempty"`
+	WorkspaceId string            `toml:"workspace_id,omitempty"`
+	EnvVars     map[string]string `toml:"env_vars,omitempty" json:"envVars,omitempty"`
 }
 
 // OpenShellEnvConfig holds configuration specific to the OpenShell environment type.

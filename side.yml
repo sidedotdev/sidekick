@@ -78,6 +78,11 @@ command_permissions:
     - pattern: '^(?:\./)?app/android/gradlew -p app/android(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
     - pattern: '^\./gradlew(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
 
+devpod:
+  env_vars:
+    # Concurrent Go linkers exhaust memory on 4 GiB development environments.
+    GOFLAGS: "-p=2"
+
 openshell:
   from: "Dockerfile.openshell"
 
