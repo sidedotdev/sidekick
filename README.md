@@ -204,6 +204,7 @@ You can optionally configure `integration_test_commands` separately from
 frequently than unit tests. Sidekick will run these tests only at the end of a
 task, instead of within each step or iteration.
 
+<-- hide until we make devpod and other envs visible in a release without dev-mode enabled
 Commands run concurrently by default. For resource-constrained environments,
 set `max_parallel_test_commands` in the corresponding environment section:
 
@@ -212,17 +213,10 @@ devpod:
   max_parallel_test_commands: 1
 ```
 
-The setting is available independently under `local`, `local_git_worktree`,
-`devpod`, `openshell`, and `modal`. An omitted value or `0` means unlimited;
-negative values are invalid. It limits commands within each test invocation,
-including retries, for both `test_commands` and `integration_test_commands`.
-As each command finishes, the next queued command can start. It does not limit
-parallelism inside a command or coordinate separate flows sharing an environment.
-Existing workflow histories retain their original scheduling behavior.
-
 Tool-specific resource limits can be configured separately. For example,
 `devpod.env_vars.GOFLAGS: "-p=1"` also limits concurrent Go builds within each
-command.
+command just for the devpod environment.
+-->
 
 #### edit_code
 
