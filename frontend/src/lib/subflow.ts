@@ -1,56 +1,5 @@
-import type { FlowAction, SubflowTree } from "./models";
+import type { FlowAction, Subflow, SubflowTree } from "./models";
 
-/*
-Given a list of flow actions like this:
-
-{subflow: 'a', actionType: 'action1', ...},
-{subflow: 'a:|:x', actionType: 'action2', ...},
-{subflow: 'a:|:y', actionType: 'action3', ...},
-{subflow: 'a:|:x', actionType: 'action2b', ...},
-{subflow: 'b:|:z', actionType: 'action4', ...},
-{subflow: 'b', actionType: 'action5', ...},
-
-Create an array subflow tree like this:
-
-[
-  {
-    name: 'a',
-    children: [
-      { actionType: 'action1', ... },
-      {
-        name: 'x',
-        children: [
-          { actionType: 'action2', ... },
-        ],
-      },
-      {
-        name: 'y',
-        children: [
-          { actionType: 'action3', ... },
-        ],
-      },
-      {
-        name: 'x',
-        children: [
-          { actionType: 'action2b', ... },
-        ],
-      },
-    ],
-  },
-  {
-    name: 'b',
-    children: [
-      {
-        name: 'z',
-        children: [
-          { actionType: 'action4', ... },
-        ],
-      },
-      { actionType: 'action5', ... },
-    ],
-  },
-]
-*/
 const getFlowActionTimestamp = (value: FlowAction['created'] | FlowAction['updated'] | undefined): number | null => {
   if (!value) {
     return null
@@ -60,74 +9,78 @@ const getFlowActionTimestamp = (value: FlowAction['created'] | FlowAction['updat
   return Number.isNaN(timestamp) ? null : timestamp
 }
 
-export const buildSubflowTrees = (flowActions: FlowAction[]): SubflowTree[] => {
-  const subflowTrees: SubflowTree[] = [];
-  let ancestors: SubflowTree[] = [];
-  const subflowDescriptions: { [subflow: string]: string } = {};
-  const subflowIds: { [subflow: string]: string } = {};
-  const orderedFlowActions = flowActions
-    .map((action, index) => ({
-      action,
-      index,
-      createdAt: getFlowActionTimestamp(action.created),
-    }))
-    .sort((left, right) => {
-      if (left.createdAt !== null && right.createdAt !== null && left.createdAt !== right.createdAt) {
-        return left.createdAt - right.createdAt
-      }
+export const buildSubflowTrees = (
+  flowActions: FlowAction[],
+  subflowsById: Record<string, Subflow>,
+): SubflowTree[] => {
+  const roots: SubflowTree[] = []
+  const nodes = new Map<string, SubflowTree>()
+  const parents = new Map<string, string>()
+  const firstActionTime = new Map<SubflowTree | FlowAction, number>()
 
-      return left.index - right.index
-    })
-    .map(({ action }) => action)
-
-  for (const action of orderedFlowActions) {
-    const subflows = action.subflow.split(':|:');
-
-    if (action.subflowDescription && action.subflowDescription.length > 0) {
-      const lastSubflow = subflows[subflows.length - 1]
-      subflowDescriptions[lastSubflow] = action.subflowDescription;
+  const ensureNode = (id: string): SubflowTree => {
+    const existing = nodes.get(id)
+    if (existing) return existing
+    const subflow = subflowsById[id]
+    const node: SubflowTree = {
+      id,
+      name: subflow?.name ?? 'Loading subflow…',
+      description: subflow?.description,
+      children: [],
     }
-
-    if (action.subflowId) {
-      const lastSubflow = subflows[subflows.length - 1]
-      subflowIds[lastSubflow] = action.subflowId;
-    }
-
-    let parent: SubflowTree | undefined;
-    let i = 0;
-
-    // Find the longest common prefix with the ancestors
-    while (i < ancestors.length && i < subflows.length && ancestors[i].name === subflows[i]) {
-      parent = ancestors[i];
-      i++;
-    }
-
-    // Remove the extra ancestors
-    ancestors = ancestors.slice(0, i);
-
-    // Add the new nodes
-    for (; i < subflows.length; i++) {
-      const newSubflowTree: SubflowTree = { name: subflows[i], children: [] };
-      const description = subflowDescriptions[newSubflowTree.name]
-      //console.log({name: newSubflowTree.name, description})
-      if (description && description.length > 0) {
-        newSubflowTree.description = description;
-      }
-      const id = subflowIds[newSubflowTree.name];
-      if (id) {
-        newSubflowTree.id = id;
-      }
-
-      (parent ? parent.children : subflowTrees).push(newSubflowTree);
-      ancestors.push(newSubflowTree);
-      parent = newSubflowTree;
-    }
-
-    // Add the action to the last node
-    parent!.children.push(action);
+    nodes.set(id, node)
+    if (subflow?.parentSubflowId) ensureNode(subflow.parentSubflowId)
+    return node
   }
-  //console.log(subflowDescriptions);
-  //console.log(subflowTrees);
 
-  return subflowTrees;
-};
+  Object.keys(subflowsById).sort().forEach(ensureNode)
+  for (const action of flowActions) {
+    if (action.subflowId) ensureNode(action.subflowId)
+  }
+  for (const [id, node] of nodes) {
+    const parentId = subflowsById[id]?.parentSubflowId
+    let ancestor = parentId
+    const visited = new Set([id])
+    while (ancestor && !visited.has(ancestor)) {
+      visited.add(ancestor)
+      ancestor = parents.get(ancestor)
+    }
+    if (parentId && !ancestor) {
+      parents.set(id, parentId)
+      nodes.get(parentId)!.children.push(node)
+    } else {
+      roots.push(node)
+    }
+  }
+
+  const ungrouped: SubflowTree = { id: 'ungrouped-actions', name: 'Actions', children: [] }
+  for (const action of flowActions) {
+    const parent = action.subflowId ? nodes.get(action.subflowId)! : ungrouped
+    parent.children.push(action)
+    firstActionTime.set(action, getFlowActionTimestamp(action.created) ?? 0)
+  }
+  if (ungrouped.children.length) roots.push(ungrouped)
+
+  const order = (node: SubflowTree): number => {
+    for (const child of node.children) {
+      if (!('actionType' in child)) firstActionTime.set(child, order(child))
+    }
+    node.children.sort((a, b) =>
+      (firstActionTime.get(a)! - firstActionTime.get(b)!) ||
+      (a.id ?? '').localeCompare(b.id ?? ''),
+    )
+    const time = node.children.length ? firstActionTime.get(node.children[0])! : Infinity
+    firstActionTime.set(node, time)
+    return time
+  }
+  roots.forEach(order)
+  roots.sort((a, b) => (firstActionTime.get(a)! - firstActionTime.get(b)!) || a.id!.localeCompare(b.id!))
+  return roots
+}
+
+export function containsFlowAction(tree: SubflowTree, actionId: string | undefined): boolean {
+  if (!actionId) return false
+  return tree.children.some(child => 'actionType' in child
+    ? child.id === actionId
+    : containsFlowAction(child, actionId))
+}

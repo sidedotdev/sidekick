@@ -49,7 +49,18 @@
     <div ref="scrollContainerRef" class="scroll-container">
       <div v-if="isLoadingFlow && !flow" class="loading-indicator">Loading...</div>
       <div v-else-if="flow && isStartingFlow" class="loading-indicator">Starting Task...</div>
-      <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1" :subflowsById="subflowsById"/>
+      <button v-if="hasOlderHistory" :disabled="isLoadingHistory" @click="loadOlderHistory">
+        {{ isLoadingHistory ? 'Loading history…' : 'Load older history' }}
+      </button>
+      <p v-if="historyError" role="alert">{{ historyError }}</p>
+      <SubflowContainer
+        v-for="subflowTree in subflowTrees"
+        :key="subflowTree.id"
+        :subflowTree="subflowTree"
+        :defaultExpanded="containsFlowAction(subflowTree, latestActionId)"
+        :latestActionId="latestActionId"
+        :subflowsById="subflowsById"
+      />
     </div>
   </div>
 
@@ -70,7 +81,8 @@ import FlowModelConfigModal from '@/components/FlowModelConfigModal.vue'
 import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Subflow, Workspace, Llm2StreamEvent } from '../lib/models'
 import { SubflowStatus } from '../lib/models'
 import { Llm2ActionStream, type Llm2StreamSnapshot } from '../lib/llm2ActionStream'
-import { buildSubflowTrees } from '../lib/subflow'
+import { buildSubflowTrees, containsFlowAction } from '../lib/subflow'
+import { createFlowHistoryPager } from '../lib/flowHistoryPager'
 import { useRoute, useRouter } from 'vue-router'
 import { store } from '../lib/store'
 import { isKanbanKeyboardControlEnabled } from '../lib/localSettings'
@@ -161,8 +173,7 @@ const updateSubflowTrees = () => {
   const relevantFlowActions = flowActions.value.filter(
     (action) => action.actionType !== 'user_request.continue' || action.actionStatus === 'pending'
   )
-  const newSubtrees = buildSubflowTrees(relevantFlowActions)
-  subflowTrees.value = newSubtrees
+  subflowTrees.value = buildSubflowTrees(relevantFlowActions, subflowsById.value)
 }
 
 let flow = ref<Flow | null>(null)
@@ -200,7 +211,7 @@ const handleSubflowStatusUpdate = (subflowId: string, status: SubflowStatus, res
       }
       updateActiveDevStep(subflowId, subflowToUpdate.type, status);
     } else {
-      console.warn(`Received status update for subflow ${subflowId} not found in cache.`);
+      getAndSubscribeSubflowWithDebounce(subflowId, 0);
     }
   }, 100);
 };
@@ -256,14 +267,23 @@ const disposeAllLlm2ActionStreams = () => {
 };
 
 const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Promise<Response>) => {
-  eventsSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/events`);
+  const generation = historyGeneration
+  const socket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/events`);
+  eventsSocket = socket
+  const isCurrent = () => generation === historyGeneration && socket === eventsSocket && !eventsSocketClosed
 
-  eventsSocket.onopen = async () => {
+  socket.onopen = async () => {
+    if (!isCurrent()) return
     console.log("Events WebSocket connection opened for flow:", flowId);
     if (initialFlowPromise) {
-      await initialFlowPromise; // Wait for the main flow data to be fetched if provided
+      try {
+        await initialFlowPromise; // Wait for the main flow data to be fetched if provided
+      } catch {
+        // Live events can still be received if the metadata request failed.
+      }
     }
     setTimeout(() => {
+      if (!isCurrent()) return
       // Send message to subscribe to events for the main flow itself
       const message = JSON.stringify({parentId: flowId});
       eventsSocket?.send(message);
@@ -276,7 +296,8 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
     }, 10);
   };
 
-  eventsSocket.onmessage = (event) => {
+  socket.onmessage = (event) => {
+    if (!isCurrent()) return
     try {
       setShortContent()
       const flowEvent = JSON.parse(event.data);
@@ -342,71 +363,64 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
     }
   };
 
-  eventsSocket.onerror = (error) => {
-    console.error("Events WebSocket error observed:", error);
+  socket.onerror = (error) => {
+    if (isCurrent()) console.error("Events WebSocket error observed:", error);
   };
 
-  eventsSocket.onclose = (event) => {
-    if (eventsSocketClosed) return;
+  socket.onclose = (event) => {
+    if (!isCurrent()) return;
     console.log("Events WebSocket is closed. Reconnect will be attempted in 1 second.", event.reason);
     setTimeout(() => {
-      if (!eventsSocketClosed && currentFlowIdForSockets) {
-        connectEventsWebSocketForFlow(currentFlowIdForSockets); // Reconnect, no initialFlowPromise needed
+      if (isCurrent()) {
+        connectEventsWebSocketForFlow(flowId); // Reconnect, no initialFlowPromise needed
       }
     }, 1000);
   };
 };
 
-const getAndSubscribeSubflowWithDebounce = (subflowId: string, delay: number) => {
-  // Clear existing timer for this subflowId, if any
-  if (subflowProcessingDebounceTimers.value[subflowId]) {
-    clearTimeout(subflowProcessingDebounceTimers.value[subflowId]);
-  }
+const getAndSubscribeSubflowWithDebounce = (subflowId: string, delay: number, ancestors = new Set<string>()) => {
+  if (ancestors.has(subflowId)) return
+  const visited = new Set(ancestors).add(subflowId)
+  const generation = historyGeneration
+  clearTimeout(subflowProcessingDebounceTimers.value[subflowId])
 
   subflowProcessingDebounceTimers.value[subflowId] = setTimeout(async () => {
     try {
-      let subflowData = subflowsById.value[subflowId];
-
+      let subflowData = subflowsById.value[subflowId]
       if (!subflowData) {
-        const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/subflows/${subflowId}`);
-        if (response.ok) {
-          subflowData = (await response.json()).subflow as Subflow;
-          subflowsById.value[subflowId] = subflowData;
-        } else {
-          console.error(`Failed to fetch subflow ${subflowId}: ${response.status}`, await response.text());
-          return
-        }
+        const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/subflows/${subflowId}`)
+        if (!response.ok) throw new Error(`Failed to fetch subflow ${subflowId}: ${response.status}`)
+        subflowData = (await response.json()).subflow as Subflow
+        if (generation !== historyGeneration) return
+        subflowsById.value[subflowId] = subflowData
+        updateSubflowTrees()
       }
-
-      // Ensure subflowData is available before proceeding (either from cache or successful fetch)
-      if (!subflowData) {
-          console.error(`Subflow data for ${subflowId} is still not available after cache check and fetch attempt.`);
-          return
-      }
-      
-      // Send subscription message for the current subflowId
-      sendEventSubscription(subflowId);
-
-      // If there's a parent subflow, process it with a 10ms debounce
+      if (generation !== historyGeneration) return
+      updateActiveDevStep(subflowId, subflowData.type, subflowData.status)
+      sendEventSubscription(subflowId)
       if (subflowData.parentSubflowId) {
-        getAndSubscribeSubflowWithDebounce(subflowData.parentSubflowId, 10);
+        getAndSubscribeSubflowWithDebounce(subflowData.parentSubflowId, 10, visited)
       }
     } catch (err) {
-      console.error(`Error processing subflow ${subflowId}:`, err);
+      if (generation === historyGeneration) console.error(`Error processing subflow ${subflowId}:`, err)
     } finally {
-      delete subflowProcessingDebounceTimers.value[subflowId];
+      if (generation === historyGeneration) delete subflowProcessingDebounceTimers.value[subflowId]
     }
-  }, delay);
-};
+  }, delay)
+}
 
 const connectActionChangesWebSocketForFlow = (flowId: string) => {
-  actionChangesSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/action_changes_ws?streamMessageStartId=$`);
+  const generation = historyGeneration
+  const socket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/action_changes_ws?streamMessageStartId=$`);
+  actionChangesSocket = socket
+  const isCurrent = () => generation === historyGeneration && socket === actionChangesSocket && !actionChangesSocketClosed
 
-  actionChangesSocket.onopen = () => {
-    console.log("WebSocket connection opened for flow:", flowId);
+  socket.onopen = () => {
+    if (isCurrent()) console.log("WebSocket connection opened for flow:", flowId);
   };
 
-  actionChangesSocket.onmessage = async (event) => {
+  socket.onmessage = async (event) => {
+    if (!isCurrent()) return
     try {
       const flowAction: FlowAction = JSON.parse(event.data);
 
@@ -414,13 +428,14 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
       if (!hasReceivedFirstAction) {
         hasReceivedFirstAction = true;
         isStartingFlow.value = false;
-        
+
         // Reload flow data if no worktrees exist, as worktrees are created during flow execution
         if (flow.value && (!flow.value.worktrees || flow.value.worktrees.length === 0)) {
           try {
             const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}`);
             if (response.ok) {
               const flowData = await response.json();
+              if (!isCurrent()) return
               flow.value = flowData.flow;
             }
           } catch (err) {
@@ -428,6 +443,7 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
           }
         }
       }
+      if (!isCurrent()) return
 
       // ensure we get subflow
       if (flowAction.subflowId) {
@@ -437,7 +453,8 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
       // Existing logic for flowAction processing
       clearTimeout(subscribeStreamDebounceTimers[flowAction.id]);
       subscribeStreamDebounceTimers[flowAction.id] = setTimeout(() => {
-        let latestFlowAction = flowActions.value.find((action) => action.id === flowAction.id);
+        if (!isCurrent()) return
+        const latestFlowAction = flowActions.value.find((action) => action.id === flowAction.id);
         if (latestFlowAction?.actionStatus === 'started') {
           // Subscribe to events for the flow action itself (e.g., for chat messages)
           sendEventSubscription(flowAction.id);
@@ -448,7 +465,7 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
       const index = flowActions.value.findIndex((action) => action.id === flowAction.id);
       if (index !== -1) {
         const existing = flowActions.value[index];
-        if (flowAction.updated < existing.updated) {
+        if (new Date(flowAction.updated).getTime() < new Date(existing.updated).getTime()) {
           // events may be out of order at this point, even though the backend
           // provides them in order, if we do any awaits in the event handlers
           return;
@@ -465,98 +482,95 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
       if (flowAction.actionStatus !== 'started') {
         disposeLlm2ActionStream(flowAction.id);
       }
-      
+
       clearTimeout(subflowTreeDebounceTimer);
       subflowTreeDebounceTimer = setTimeout(() => {
-        updateSubflowTrees();
+        if (isCurrent()) updateSubflowTrees();
       }, 100);
     } catch (err) {
       console.error("Error parsing WebSocket message for action changes", err);
     }
   };
 
-  actionChangesSocket.onerror = (error) => {
-    console.error("ActionChanges WebSocket error observed:", error);
+  socket.onerror = (error) => {
+    if (isCurrent()) console.error("ActionChanges WebSocket error observed:", error);
   };
 
-  actionChangesSocket.onclose = (event) => {
-    if (actionChangesSocketClosed) return;
+  socket.onclose = (event) => {
+    if (!isCurrent()) return;
     console.log("ActionChanges WebSocket is closed. Reconnect will be attempted in 1 second.", event.reason);
     setTimeout(() => {
-      if (!actionChangesSocketClosed && currentFlowIdForSockets) {
-        connectActionChangesWebSocketForFlow(currentFlowIdForSockets);
-      }
+      if (isCurrent()) connectActionChangesWebSocketForFlow(flowId);
     }, 1000);
   };
 };
 
-const fetchAndMergeFlowActions = async (flowId: string) => {
-  try {
-    const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flowId}/actions`);
-    if (response.ok) {
-      const data = await response.json();
-      const fetchedActions = data.flowActions as FlowAction[];
-      
-      for (const action of fetchedActions) {
-        const index = flowActions.value.findIndex((a) => a.id === action.id);
-        if (index !== -1) {
-          // Only replace if REST action is not older than in-memory action
-          if (action.updated >= flowActions.value[index].updated) {
-            flowActions.value[index] = action;
-          }
-        } else {
-          flowActions.value.push(action);
-        }
-
-        if (action.subflowId) {
-          getAndSubscribeSubflowWithDebounce(action.subflowId, 100);
-        }
-
-        // Subscribe to events for in-progress actions (e.g., for chat message streaming)
-        if (action.actionStatus === 'started') {
-          sendEventSubscription(action.id);
-        }
+const actionHistory = createFlowHistoryPager<FlowAction>('actions', 'flowActions', fetchedActions => {
+  const indices = new Map(flowActions.value.map((action, index) => [action.id, index]))
+  for (const action of fetchedActions) {
+    const index = indices.get(action.id)
+    if (index !== undefined) {
+      const existing = flowActions.value[index]
+      if (new Date(action.updated).getTime() < new Date(existing.updated).getTime()) continue
+      if (action.actionStatus === 'started' && existing.streamingData) {
+        action.streamingData = existing.streamingData
       }
-
-      if (fetchedActions.length > 0 && !hasReceivedFirstAction) {
-        hasReceivedFirstAction = true;
-        isStartingFlow.value = false;
-      }
-
-      updateSubflowTrees();
+      flowActions.value[index] = action
     } else {
-      console.error(`Failed to fetch flow actions for flow ${flowId}:`, await response.text());
+      indices.set(action.id, flowActions.value.length)
+      flowActions.value.push(action)
     }
-  } catch (err) {
-    console.error(`Error fetching flow actions for flow ${flowId}:`, err);
+    if (action.subflowId) getAndSubscribeSubflowWithDebounce(action.subflowId, 100)
+    if (action.actionStatus === 'started') sendEventSubscription(action.id)
+    else disposeLlm2ActionStream(action.id)
   }
-};
+  if (fetchedActions.length > 0 && !hasReceivedFirstAction) {
+    hasReceivedFirstAction = true
+    isStartingFlow.value = false
+  }
+  updateSubflowTrees()
+  setShortContent()
+})
 
-const fetchFlowSubflows = async (flowId: string) => {
-  try {
-    const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flowId}/subflows`);
-    if (response.ok) {
-      const data = await response.json();
-      const subflows = data.subflows as Subflow[];
-      for (const subflow of subflows) {
-        subflowsById.value[subflow.id] = subflow;
-        updateActiveDevStep(subflow.id, subflow.type, subflow.status);
-      }
-    } else {
-      console.error(`Failed to fetch subflows for flow ${flowId}:`, await response.text());
+const subflowHistory = createFlowHistoryPager<Subflow>('subflows', 'subflows', subflows => {
+  for (const subflow of subflows) {
+    const existing = subflowsById.value[subflow.id]
+    if (!existing || new Date(subflow.updated ?? 0).getTime() > new Date(existing.updated ?? 0).getTime()) {
+      subflowsById.value[subflow.id] = subflow
     }
-  } catch (err) {
-    console.error(`Error fetching subflows for flow ${flowId}:`, err);
+    const current = subflowsById.value[subflow.id]
+    updateActiveDevStep(current.id, current.type, current.status)
+    getAndSubscribeSubflowWithDebounce(current.id, 100)
   }
-};
+  updateSubflowTrees()
+  setShortContent()
+})
+
+let historyGeneration = 0
+const hasOlderHistory = computed(() =>
+  !!effectiveFlowId.value && (actionHistory.hasMore.value || subflowHistory.hasMore.value),
+)
+const isLoadingHistory = computed(() => actionHistory.loading.value || subflowHistory.loading.value)
+const historyError = computed(() => actionHistory.error.value || subflowHistory.error.value)
+const latestActionId = computed(() => {
+  const actions = flowActions.value.filter(action =>
+    action.actionType !== 'user_request.continue' || action.actionStatus === 'pending',
+  )
+  return actions.reduce<FlowAction | undefined>((latest, action) => {
+    if (!latest) return action
+    const difference = new Date(action.created).getTime() - new Date(latest.created).getTime()
+    return difference > 0 || (difference === 0 && action.id > latest.id) ? action : latest
+  }, undefined)?.id
+})
+
+const loadOlderHistory = async () => {
+  await Promise.all([actionHistory.load(), subflowHistory.load()])
+}
 
 const saveCurrentFlowToCache = () => {
   if (flow.value && currentFlowIdForSockets) {
     viewCache.setFlowView(currentFlowIdForSockets, {
       flow: flow.value,
-      flowActions: flowActions.value,
-      subflowsById: subflowsById.value,
-      subflowTrees: subflowTrees.value,
       workspace: workspace.value,
     })
   }
@@ -564,6 +578,9 @@ const saveCurrentFlowToCache = () => {
 
 const setupFlow = async (newFlowId: string | undefined) => {
   saveCurrentFlowToCache();
+  const generation = ++historyGeneration
+  actionHistory.reset(store.workspaceId ?? undefined, newFlowId)
+  subflowHistory.reset(store.workspaceId ?? undefined, newFlowId)
 
   // Close existing WebSockets first
   if (actionChangesSocket) {
@@ -618,43 +635,29 @@ const setupFlow = async (newFlowId: string | undefined) => {
   Object.values(subflowProcessingDebounceTimers.value).forEach(timerId => clearTimeout(timerId));
   subflowProcessingDebounceTimers.value = {};
 
-  // Restore from cache or initialize empty state
+  // Reload history from the newest page to avoid gaps after time away from a flow.
   const cached = viewCache.getFlowView(newFlowId);
-  if (cached) {
-    flow.value = cached.flow;
-    flowActions.value = [...cached.flowActions];
-    subflowsById.value = { ...cached.subflowsById };
-    workspace.value = cached.workspace;
-    isLoadingFlow.value = false;
-    activeDevStep.value.clear();
-    for (const [id, subflow] of Object.entries(subflowsById.value)) {
-      updateActiveDevStep(id, subflow.type, subflow.status);
-    }
-    updateSubflowTrees();
-  } else {
-    flow.value = null;
-    flowActions.value = [];
-    activeDevStep.value.clear();
-    subflowsById.value = {};
-    isLoadingFlow.value = true;
-    updateSubflowTrees();
-  }
+  flow.value = cached?.flow ?? null
+  workspace.value = cached?.workspace ?? null
+  flowActions.value = []
+  subflowsById.value = {}
+  activeDevStep.value.clear()
+  isLoadingFlow.value = !cached
+  updateSubflowTrees()
 
   const flowPromise = fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${newFlowId}`);
 
   connectEventsWebSocketForFlow(newFlowId, flowPromise);
   connectActionChangesWebSocketForFlow(newFlowId);
 
-  // Fetch historical flow actions via REST after websocket is established
-  fetchAndMergeFlowActions(newFlowId);
-
-  // Fetch all subflows for this flow to populate subflowsById
-  fetchFlowSubflows(newFlowId);
+  void loadOlderHistory()
 
   try {
     const response = await flowPromise;
+    if (generation !== historyGeneration) return
     if (response.ok) {
       const flowData = await response.json();
+      if (generation !== historyGeneration) return
       flow.value = flowData.flow;
       isLoadingFlow.value = false;
       isStartingFlow.value = !hasReceivedFirstAction;
@@ -665,6 +668,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
           const wsResponse = await fetch(`/api/v1/workspaces/${flow.value.workspaceId}`);
           if (wsResponse.ok) {
             const wsData = await wsResponse.json();
+            if (generation !== historyGeneration) return
             workspace.value = wsData.workspace;
           }
         } catch (wsErr) {
@@ -678,6 +682,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
       isStartingFlow.value = false;
     }
   } catch (err) {
+    if (generation !== historyGeneration) return
     console.error(`Error fetching flow ${newFlowId}:`, err);
     flow.value = null;
     isLoadingFlow.value = false;
@@ -762,6 +767,11 @@ const pauseFlow = async () => {
 
 onUnmounted(() => {
   saveCurrentFlowToCache();
+  historyGeneration++
+  actionHistory.reset()
+  subflowHistory.reset()
+  Object.values(subflowProcessingDebounceTimers.value).forEach(clearTimeout)
+  clearTimeout(subflowTreeDebounceTimer)
   actionChangesSocketClosed = true; // Prevent reconnects
   if (actionChangesSocket) {
     actionChangesSocket.close();
