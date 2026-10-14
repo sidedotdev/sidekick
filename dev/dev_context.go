@@ -332,6 +332,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
 				PortForwards:     portForwards,
+				EnvVars:          tempRepoConfigForDevPod.DevPodConfig.EnvVars,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -361,6 +362,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
 				PortForwards:     portForwards,
+				EnvVars:          tempRepoConfigForDevPod.DevPodConfig.EnvVars,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
@@ -368,6 +370,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				WorkspaceName:    devpodWorkspaceName,
 				LocalRepoDir:     repoDir,
 				PortForwards:     portForwards,
+				EnvVars:          tempRepoConfigForDevPod.DevPodConfig.EnvVars,
 			}}
 		}
 	case string(env.EnvTypeOpenShell):

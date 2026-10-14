@@ -17,14 +17,11 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	"go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/converter"
 	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -257,17 +254,20 @@ func (s *AuthorEditBlocksTestSuite) testModelUpdateRebuildsAuthoringTools(prompt
 		Return(ResolveToolNameMappingResult{UseMapping: true}, nil).
 		Maybe()
 
+	callbacks := &modelConfigUpdateCallbacks{}
 	var activities *persisted_ai.Llm2Activities
 	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
 		return input.Options.ModelConfig.Model == "initial-coding" &&
 			len(input.Options.Tools) > 0 &&
 			!streamInputHasTool(input, readImageTool.Name)
-	})).Return(&llm2.MessageResponse{
-		StopReason: "stop",
-		Output: llm2.Message{
-			Role: llm2.RoleAssistant,
-		},
-	}, nil).After(time.Second).Once()
+	})).Return(func(ctx context.Context, _ persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+		// The update must cancel a running stream, not race its mock invocation.
+		s.env.RegisterDelayedCallback(func() {
+			s.env.UpdateWorkflow(UpdateNameModelConfig, "authoring-model-update", callbacks, updatedConfig)
+		}, 0)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}).Once()
 	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
 		return input.Options.ModelConfig.Model == "updated" &&
 			streamInputHasTool(input, readImageTool.Name) &&
@@ -283,21 +283,6 @@ func (s *AuthorEditBlocksTestSuite) testModelUpdateRebuildsAuthoringTools(prompt
 			}},
 		},
 	}, nil).Once()
-
-	callbacks := &modelConfigUpdateCallbacks{}
-	s.env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, args converter.EncodedValues) {
-		if info.ActivityType.Name != "Stream" {
-			return
-		}
-		var input persisted_ai.StreamInput
-		s.Require().NoError(args.Get(&input))
-		if input.Options.ModelConfig.Model != "initial-coding" {
-			return
-		}
-		s.env.RegisterDelayedCallback(func() {
-			s.env.UpdateWorkflow(UpdateNameModelConfig, "authoring-model-update", callbacks, updatedConfig)
-		}, 0)
-	})
 
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{PromptInfo: promptInfo})
 

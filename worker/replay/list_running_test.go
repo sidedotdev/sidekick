@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"sidekick/temporal"
+	"sidekick/temporal/readonlyproxy"
 
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
@@ -44,7 +44,7 @@ func newReplayVisibilityClient(t *testing.T, list func(context.Context, *workflo
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 
-	proxy, err := temporal.StartReadOnlyProxy("127.0.0.1:0", listener.Addr().String(), nil)
+	proxy, err := readonlyproxy.Start("127.0.0.1:0", listener.Addr().String(), nil)
 	require.NoError(t, err)
 	t.Cleanup(proxy.Stop)
 
