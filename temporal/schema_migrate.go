@@ -500,9 +500,12 @@ func applyVisibilityMigration(db *sql.DB, plan visibilityMigrationPlan) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin visibility migration transaction: %w", err)
 	}
+	defer tx.Rollback()
 	if plan.rebuild {
-		// Visibility objects are a rebuildable index: drop and recreate them
-		// from the target schema. Past runs re-index as workflows progress.
+		if err := queueVisibilityRepair(tx); err != nil {
+			return fmt.Errorf("failed to queue visibility repair: %w", err)
+		}
+		// The repair inventory commits atomically with the rebuilt index.
 		for _, obj := range []string{
 			"executions_visibility_fts_text",
 			"executions_visibility_fts_keyword_list",

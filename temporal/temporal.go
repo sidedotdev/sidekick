@@ -215,6 +215,9 @@ func startServer(cfg *serverConfig) temporal.Server {
 	if err := migrateTemporalSchema(cfg.dbFilePath); err != nil {
 		log.Fatal().Err(err).Msg("Unable to migrate temporal schema")
 	}
+	if err := exportVisibilityRepair(cfg.dbFilePath); err != nil {
+		log.Fatal().Err(err).Msg("Unable to export temporal visibility repair inventory")
+	}
 
 	// Setup namespace
 	namespaceConfig, err := sqliteschema.NewNamespaceConfig(cfg.clusterName, cfg.namespace, false, nil)
@@ -284,6 +287,10 @@ func startServer(cfg *serverConfig) temporal.Server {
 	err = setupSearchAttributes(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Setting up sidekick temporal search attributes failed")
+	}
+
+	if err := repairMigratedVisibility(context.Background(), cfg.dbFilePath, fmt.Sprintf("%s:%d", cfg.ip, cfg.ports.frontend)); err != nil {
+		log.Error().Err(err).Msg("Temporal visibility repair incomplete; pending runs will be retried on next startup")
 	}
 
 	return server

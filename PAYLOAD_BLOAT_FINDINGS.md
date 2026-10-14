@@ -181,3 +181,96 @@ oversized memos). No paths were made worse.
    `replay_codec_probe` in-memory overlay remains useful for before/after
    comparisons.
 3. Scratch files (`.side/tmp/affected.log`) leaking into review/merge diffs.
+
+## Visibility repair and migration verification
+
+### Missing visibility discovered while preparing codec cleanup
+
+The earlier visibility rebuild dropped `executions_visibility` without rebuilding
+all retained executions. The diagnostic found 1,668 executions missing from
+visibility, including 281 Running runs. Listing workflows alone was therefore
+not a safe inventory for codec deletion. A new codec key can belong to an old
+invisible workflow; filtering by key creation time does not solve this.
+
+The approved live repair used Temporal's `RefreshWorkflowTasks` admin API:
+1,642 runs refreshed, 17 already listed, and 9 NotFound during the apply pass.
+The subsequent verification reported 1,615 listed, zero missing, and 53 NotFound.
+Those 53 were old closed executions eligible for retention deletion; refreshing
+tasks also regenerates retention tasks. These are observations from that repair,
+not a guarantee that visibility will always remain complete.
+
+Tools:
+- `scripts/visibility_gap`: compares the extracted execution inventory with
+  visibility and checks missing executions through the API.
+- `scripts/refresh_visibility`: dry-run by default; `-apply` refreshes tasks and
+  verifies visibility. Refreshing tasks can also regenerate pending timers,
+  activity tasks, and retention tasks.
+
+### Automatic repair after future visibility rebuilds
+
+The rebuild transaction now records namespace/workflow/run IDs in
+`sidekick_temporal_visibility_repair` before dropping the old visibility index.
+A failed inventory write aborts the rebuild.
+
+Before starting Temporal, the inventory is copied to
+`<temporal.db path>.visibility-repair.db`. The copy commits before the source
+is cleared; startup stops if export fails. An interrupted export can be repeated
+without losing IDs. Completed repairs are not reintroduced on a later startup.
+
+After the embedded server starts and its API is ready, repair reads only that
+separate checklist and calls the existing admin API. It never opens the live
+Temporal database. An entry is acknowledged only after it is listed or its
+execution is confirmed NotFound. Other errors preserve the entry for the next
+startup. Each run has a 20-second timeout; the startup repair pass has a
+two-minute budget. A large or failing backlog can require further startups.
+This does not retroactively detect a rebuild whose inventory was never recorded.
+
+The separate file is necessary for compatibility with the running embedded
+server: the initial implementation's first schema read failed with SQLITE_BUSY
+despite a five-second busy timeout, and external read-only probes stayed blocked
+throughout a 24-second observation. The precise source of that prolonged lock
+was not established; no Temporal locking settings were changed.
+
+### Real old-checkout test: red and green
+
+`sh scripts/test_temporal_upgrade/visibility.sh` builds an old checkout
+(default `5d986e50`) in a temporary worktree under `.side/tmp`, creates a fresh
+database with two workflows parked on a signal and one completed workflow,
+then upgrades it using the current build. Isolated ports and a separate data
+home keep it away from the user's server.
+
+A critical control: the harness waits for the old server's visibility queue
+to drain naturally before stopping it. Without that wait, outstanding indexing
+tasks can repopulate visibility after restart and falsely make a broken
+migration appear successful. No task rows are manually deleted.
+
+Observed results:
+- Negative control without repair, after natural queue drain: the original
+  parked run is not visible after the rebuild; the test fails.
+- Fixed build, after natural queue drain: all three exact run IDs are visible,
+  their statuses and history lengths are unchanged, and both parked workflows
+  subsequently complete with the expected activity result.
+- Another restart: all three remain visible and no refresh is repeated.
+- File-backed regression tests cover export failure, retry, preserving failed
+  repairs, skipping already-listed runs, and repairing while the main database
+  is locked. Temporarily restoring main-DB access or clearing before copying
+  makes the respective regression tests fail.
+
+Representative logs:
+- `.side/tmp/visibility-red-drained.log`
+- `.side/tmp/visibility-green-sidecar.log`
+- `.side/tmp/visibility-red-live-db-access.log`
+- `.side/tmp/visibility-red-clear-before-copy.log`
+
+### Remaining scope
+
+The codec cleanup workflow has not yet been repaired or restarted. Visibility
+repair is a prerequisite, not permission to delete every unmarked key: reference
+enumeration completeness, retained/reset histories, scan races, bounded deletion,
+and fail-closed behavior still need to be addressed.
+
+The original size findings remain about retained payload data observed in the
+extraction, grouped by available timestamps—not a time series of database file
+sizes. The initial DuckDB artifact is
+`.side/tmp/payload_bloat/payload_bloat.duckdb`; rerunning reports does not by itself
+measure new physical file growth.
