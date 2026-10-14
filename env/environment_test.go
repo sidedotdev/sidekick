@@ -438,13 +438,22 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 			WorkspaceId:  "ws-" + ksuid.New().String(),
 		})
 		require.NoError(t, err)
-		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
-		// Worktrees must live beside the repo (inside the persistent workspace
-		// mount) rather than in a system temp path.
-		assert.Equal(t, filepath.Join(filepath.Dir(repoDir), "sidekick-worktrees"),
+		// Local-folder DevPods mount the repository, not its parent directory.
+		assert.Equal(t, filepath.Join(repoDir, ".side", "worktrees"),
 			filepath.Dir(filepath.Dir(output.WorktreePath)))
 		assert.DirExists(t, output.WorktreePath)
 		assertSideTmpReady(t, output.WorktreePath)
+
+		relativePath, err := filepath.Rel(repoDir, output.WorktreePath)
+		require.NoError(t, err)
+		ignored, err := exec.Command("git", "-C", repoDir, "check-ignore", relativePath).CombinedOutput()
+		require.NoError(t, err, "%s", ignored)
+
+		gitDirOutput, err := exec.Command("git", "-C", output.WorktreePath, "rev-parse", "--absolute-git-dir").Output()
+		require.NoError(t, err)
+		lock, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(gitDirOutput)), "locked"))
+		require.NoError(t, err)
+		assert.Equal(t, WorktreeLockReason, strings.TrimSpace(string(lock)))
 
 		// Verify the branch was created inside the worktree
 		cmd := exec.Command("git", "branch", "--show-current")

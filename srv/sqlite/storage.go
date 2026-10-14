@@ -34,14 +34,22 @@ type Storage struct {
 }
 
 func NewStorage() (*Storage, error) {
-	mainDbPath, err := GetSqliteUri(coreDatabaseFileName)
+	dataDir, err := common.GetSidekickDataHome()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get main database path: %w", err)
+		return nil, fmt.Errorf("failed to get Sidekick data home: %w", err)
 	}
-	kvDbPath, err := GetSqliteUri(KVDatabaseFileName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get key-value database path: %w", err)
+	return NewStorageAtDir(dataDir)
+}
+
+func NewStorageAtDir(dataDir string) (*Storage, error) {
+	if dataDir == "" {
+		return nil, fmt.Errorf("database directory must not be empty")
 	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create database directory: %w", err)
+	}
+	mainDbPath := sqliteUri(filepath.Join(dataDir, coreDatabaseFileName))
+	kvDbPath := sqliteUri(filepath.Join(dataDir, KVDatabaseFileName))
 
 	mainDb, err := sql.Open("sqlite", mainDbPath)
 	if err != nil {
