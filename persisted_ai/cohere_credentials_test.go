@@ -1,13 +1,16 @@
 package persisted_ai
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sidekick/common"
 	"sidekick/secret_manager"
 	"testing"
+	"time"
 
 	"github.com/adrg/xdg"
 	"github.com/stretchr/testify/assert"
@@ -16,6 +19,33 @@ import (
 )
 
 func TestGetRerankerUsesProfileCredentials(t *testing.T) {
+	const childEnv = "SIDE_TEST_RERANKER_CREDENTIALS_CHILD"
+	if os.Getenv(childEnv) != "1" {
+		t.Parallel()
+
+		// MockInit replaces the process-wide keyring, so it must not run
+		// in the process that also runs live credential integration tests.
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGetRerankerUsesProfileCredentials$", "-test.timeout=30s", "-test.v")
+		cmd.Env = append(os.Environ(), childEnv+"=1")
+		for _, providerName := range []string{"cohere", "company-ranking"} {
+			model := common.ModelConfig{Provider: providerName}
+			secretName := model.NormalizedProviderName() + "_API_KEY"
+			for _, profileId := range []string{"default", "work", "personal"} {
+				envName := secret_manager.ProfileEnvSecretName(profileId, secretName)
+				key := ""
+				if profileId != "personal" {
+					key = profileId + "-key"
+				}
+				cmd.Env = append(cmd.Env, envName+"="+key, "SIDE_"+envName+"=")
+			}
+		}
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "isolated credential test failed:\n%s", output)
+		return
+	}
+
 	originalHome, originalDirs := xdg.ConfigHome, xdg.ConfigDirs
 	t.Cleanup(func() {
 		xdg.ConfigHome, xdg.ConfigDirs = originalHome, originalDirs
@@ -46,15 +76,11 @@ providers:
 			require.NoError(t, os.WriteFile(configPath, []byte(config), 0600))
 
 			for _, profileId := range []string{"default", "work", "personal"} {
-				envName := secret_manager.ProfileEnvSecretName(profileId, secretName)
-				t.Setenv(envName, "")
-				t.Setenv("SIDE_"+envName, "")
 				if profileId == "personal" {
 					continue
 				}
 				key := profileId + "-key"
 				require.NoError(t, keyring.Set("sidekick", secret_manager.ProfileSecretName(profileId, secretName), key))
-				t.Setenv(envName, key)
 			}
 
 			reranker, err := GetReranker(model, providers, nil)
