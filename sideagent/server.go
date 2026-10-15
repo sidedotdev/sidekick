@@ -216,6 +216,22 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 	default:
 	}
 
+	// exec reports a failed chdir as "fork/exec <executable>", which hides
+	// a lost worktree behind what looks like a missing system binary.
+	if req.Dir != "" {
+		info, err := os.Stat(req.Dir)
+		if err != nil {
+			resp.ExitStatus = -1
+			resp.Error = fmt.Sprintf("working directory %q is unavailable: %v", req.Dir, err)
+			return resp
+		}
+		if !info.IsDir() {
+			resp.ExitStatus = -1
+			resp.Error = fmt.Sprintf("working directory %q is not a directory", req.Dir)
+			return resp
+		}
+	}
+
 	commandEnv := append(s.baseEnv(req.LoginEnv), req.Env...)
 	commandPath, err := resolveExecutable(req.Argv[0], req.Dir, commandEnv)
 	if err != nil {

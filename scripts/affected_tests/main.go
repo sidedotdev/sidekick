@@ -27,8 +27,8 @@ import (
 	"syscall"
 	"time"
 
-	"sidekick/common"
 	"sidekick/gotestreport"
+	"sidekick/internal/cachehome"
 )
 
 // hashedEnvVars are the environment variables that, when set, affect what
@@ -727,7 +727,7 @@ func (pe packageEntry) hasHash(h string) bool {
 }
 
 func cachePath() (string, error) {
-	home, err := common.GetSidekickCacheHome()
+	home, err := cachehome.Get()
 	if err != nil {
 		return "", err
 	}

@@ -1836,6 +1836,15 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database accessor not initialized"})
 		return
 	}
+	page, paginated, err := historyPageRequest(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if paginated {
+		ctrl.getFlowActionsPage(c, workspaceId, flowId, page)
+		return
+	}
 	ctx := c.Request.Context()
 	flowActions, err := ctrl.service.GetFlowActions(ctx, workspaceId, flowId)
 	if err != nil {

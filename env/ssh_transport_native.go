@@ -1631,9 +1631,21 @@ func nativeHostKeyCallback(config SSHConnConfig) (ssh.HostKeyCallback, error) {
 			}
 			knownHostsFiles = []string{filepath.Join(home, ".ssh", "known_hosts")}
 		}
-		callback, err := knownhosts.New(knownHostsFiles...)
+		existingFiles := make([]string, 0, len(knownHostsFiles))
+		for _, file := range knownHostsFiles {
+			_, err := os.Stat(file)
+			if errors.Is(err, os.ErrNotExist) {
+				// OpenSSH's default list includes optional files such as known_hosts2.
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read known hosts %s: %w", file, err)
+			}
+			existingFiles = append(existingFiles, file)
+		}
+		callback, err := knownhosts.New(existingFiles...)
 		if err != nil {
-			return nil, fmt.Errorf("read known hosts %s: %w", strings.Join(knownHostsFiles, " "), err)
+			return nil, fmt.Errorf("read known hosts %s: %w", strings.Join(existingFiles, " "), err)
 		}
 		return callback, nil
 	default:

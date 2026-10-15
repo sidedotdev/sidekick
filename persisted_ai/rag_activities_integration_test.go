@@ -2,8 +2,10 @@ package persisted_ai
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/secret_manager"
 	"sidekick/srv"
@@ -22,10 +25,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupTestWorkspace initializes the test environment and returns the workspace ID and repo root
-func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
-	storage, err := sqlite.NewStorage()
-	require.NoError(t, err, "Failed to initialize sqlite storage")
+// The separate persistent databases retain embeddings across runs without
+// contending with the application's databases.
+func setupTestWorkspace(t *testing.T, ctx context.Context, dataHome string) (*sqlite.Storage, string, string) {
+	t.Helper()
+	storage, err := sqlite.NewStorageAtDir(filepath.Join(dataHome, "integration-tests", "rag"))
+	require.NoError(t, err, "Failed to initialize integration sqlite storage")
+	t.Cleanup(func() { require.NoError(t, storage.Close()) })
 
 	// Get repository paths in order: current dir, repo root, common dir
 	repoPaths, err := utils.GetRepositoryPaths(ctx, ".")
@@ -36,34 +42,27 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 	require.NoError(t, err, "Failed to get all workspaces")
 
 	// Try each repository path in sequence
-	var workspaceId string
-	var workspaceRepoDir string
 	for _, repoPath := range repoPaths {
 		cleanedRepoPath := filepath.Clean(repoPath)
 		for _, ws := range workspaces {
 			if filepath.Clean(ws.LocalRepoDir) == cleanedRepoPath {
-				workspaceId = ws.Id
-				workspaceRepoDir = cleanedRepoPath
-				break
+				return storage, ws.Id, cleanedRepoPath
 			}
-		}
-		if workspaceId != "" {
-			break
 		}
 	}
 
-	/*
-		There are a reasons we prompt the developer to init instead of just creating a
-		new workspace:
-
-		1. The init process is needed to help them get set up right anyways
-		2. We want the dev to know what workspaces they init: this will end up
-		   being a real workspace they see in their local sidekick UI
-		3. We don't want CI to keep re-initializing and embedding everything,
-		   that could potentially get expensive
-	*/
-	require.NotEmpty(t, workspaceId, "Failed to find an existing workspace.\n\nPlease run `side init` in the sidekick repo root and try again.")
-	return workspaceId, workspaceRepoDir
+	repoRoot := repoPaths[len(repoPaths)-1]
+	now := time.Now()
+	workspace := domain.Workspace{
+		Id:           fmt.Sprintf("ws_rag_%x", sha256.Sum256([]byte(repoRoot))),
+		Name:         filepath.Base(repoRoot),
+		LocalRepoDir: repoRoot,
+		ConfigMode:   "local",
+		Created:      now,
+		Updated:      now,
+	}
+	require.NoError(t, storage.PersistWorkspace(ctx, workspace))
+	return storage, workspace.Id, repoRoot
 }
 
 // noRerankSecretManager hides the reranker credential from a test: a network
@@ -81,10 +80,7 @@ func (m noRerankSecretManager) GetSecret(name string) (string, error) {
 }
 
 // setupRagService creates and configures the RagActivities service with necessary dependencies
-func setupRagService(t *testing.T, ctx context.Context, repoRoot string) *RagActivities {
-	storage, err := sqlite.NewStorage()
-	require.NoError(t, err, "Failed to initialize sqlite storage")
-
+func setupRagService(storage *sqlite.Storage) *RagActivities {
 	service := srv.NewDelegator(storage, nil)
 	return &RagActivities{
 		DatabaseAccessor: service,
@@ -95,12 +91,8 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set to true")
 	}
-	// TODO this could be made to work by initializing a workspace (side init)
-	// inside the container, but that's deferred as too much work for now.
-	// Alternatively, use some TBD mechanism to run this test on the host,
-	// where an initialized workspace and API keys are available.
 	if common.IsActiveEnvNonLocal() {
-		t.Skip("Skipping integration test; no initialized workspace or API keys in non-local sidekick environments")
+		t.Skip("Skipping integration test; API keys are unavailable in non-local sidekick environments")
 	}
 
 	secretsManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
@@ -115,8 +107,10 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 	require.NoError(t, err, "Failed to retrieve OPENAI_API_KEY")
 
 	ctx := context.Background()
-	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
-	ragActivities := setupRagService(t, ctx, repoRoot)
+	dataHome, err := common.GetSidekickDataHome()
+	require.NoError(t, err)
+	storage, workspaceId, repoRoot := setupTestWorkspace(t, ctx, dataHome)
+	ragActivities := setupRagService(storage)
 
 	// Configure test parameters
 	localEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{
@@ -189,8 +183,10 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
-	ragActivities := setupRagService(t, ctx, repoRoot)
+	dataHome, err := common.GetSidekickDataHome()
+	require.NoError(t, err)
+	storage, workspaceId, repoRoot := setupTestWorkspace(t, ctx, dataHome)
+	ragActivities := setupRagService(storage)
 
 	sandboxName := env.OpenShellSandboxName(repoRoot)
 
@@ -255,8 +251,8 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	phaseStart = time.Now()
 	output, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
 	t.Logf("phase: ranked outline took %v", time.Since(phaseStart))
-	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
+	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 
 	expectedPaths := []string{
 		"\ndomain/\n",
@@ -366,8 +362,10 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 	require.NoError(t, err, "Failed to retrieve OPENAI_API_KEY")
 
 	ctx := context.Background()
-	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
-	ragActivities := setupRagService(t, ctx, repoRoot)
+	dataHome, err := common.GetSidekickDataHome()
+	require.NoError(t, err)
+	storage, workspaceId, repoRoot := setupTestWorkspace(t, ctx, dataHome)
+	ragActivities := setupRagService(storage)
 
 	headOutput, err := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "HEAD").CombinedOutput()
 	require.NoError(t, err, "failed to resolve test repository HEAD: %s", headOutput)
