@@ -381,7 +381,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					if approveErr != nil {
 						return llm2.ToolResultBlock{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
-					iteration.AutoIterationCount = 0
+					iteration.resetAfterFeedback()
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &devReq
 						return llm2.ToolResultBlock{Content: llm2.TextContentBlocks("Requirements recorded and approved."), Name: tc.Name, ToolCallId: tc.Id}, nil
@@ -411,7 +411,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					if approveErr != nil {
 						return llm2.ToolResultBlock{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
-					iteration.AutoIterationCount = 0
+					iteration.resetAfterFeedback()
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &updatedReqs
 						return llm2.ToolResultBlock{Content: llm2.TextContentBlocks("Requirements updated and approved."), Name: tc.Name, ToolCallId: tc.Id}, nil
@@ -439,7 +439,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			}
 
 			if res.Name == getHelpOrInputTool.Name {
-				iteration.AutoIterationCount = 0
+				iteration.resetAfterFeedback()
 			}
 		}
 

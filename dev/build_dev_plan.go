@@ -450,7 +450,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 				state.contextSizeExtension += len(response.TextContent()) - 5000
 			}
 			if response.Name == getHelpOrInputTool.Name {
-				iteration.AutoIterationCount = 0
+				iteration.resetAfterFeedback()
 			}
 		}
 
@@ -486,7 +486,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			}
 
 			if workflow.GetVersion(iteration.ExecCtx, "dev-plan", workflow.DefaultVersion, 1) == 1 {
-				iteration.AutoIterationCount = 0
+				iteration.resetAfterFeedback()
 			}
 
 			if userResponse.Approved != nil && *userResponse.Approved {
@@ -582,7 +582,7 @@ func devPlanToolHandlers(
 
 				v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
 				if v == 1 {
-					iteration.AutoIterationCount = 0
+					iteration.resetAfterFeedback()
 				}
 
 				if userResponse.Approved != nil && *userResponse.Approved {
@@ -646,7 +646,7 @@ func devPlanToolHandlers(
 
 				v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
 				if v == 1 {
-					iteration.AutoIterationCount = 0
+					iteration.resetAfterFeedback()
 				}
 
 				if userResponse.Approved != nil && *userResponse.Approved {
@@ -824,11 +824,12 @@ func (state *buildDevPlanState) prepareFinalization(iteration *LlmIteration) (bo
 		return false, nil
 	}
 
+	iterationsSinceFeedback := iteration.Num - iteration.feedbackIteration
 	atLimit := iteration.AutoIterationCount >= iteration.autoIterations ||
-		iteration.Num >= iteration.maxIterations
+		iterationsSinceFeedback >= iteration.maxIterations
 	state.forceRecording = state.forceRecording || atLimit
 	nearLimit := iteration.AutoIterationCount >= max(1, iteration.autoIterations-2) ||
-		iteration.Num >= max(1, iteration.maxIterations-2)
+		iterationsSinceFeedback >= max(1, iteration.maxIterations-2)
 	if nearLimit || state.forceRecording {
 		if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
 			Role:    "system",
@@ -850,4 +851,8 @@ func (state *buildDevPlanState) recordingReminder() string {
 		status = "A plan has been recorded, but its revision or approval is still pending."
 	}
 	return status + " Finish planning now and call " + updateDevPlanTool.Name + " to finalize it, or " + recordDevPlanTool.Name + " to replace it. Set is_planning_complete to true once complete." + helpReminder + "\n\nCurrent plan:\n" + state.devPlan.String()
+}
+
+func (state *buildDevPlanState) resetAfterFeedback() {
+	state.forceRecording = false
 }
