@@ -87,6 +87,17 @@ type indexedCommand struct {
 }
 
 func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRun []common.CommandConfig, resultsCh workflow.Channel) ([]TestResult, error) {
+	maxParallel := len(commandsToRun)
+	if workflow.GetVersion(dCtx, "max-parallel-test-commands", workflow.DefaultVersion, 1) >= 1 {
+		limit, err := testCommandParallelism(dCtx)
+		if err != nil {
+			return nil, err
+		}
+		if limit > 0 {
+			maxParallel = min(maxParallel, limit)
+		}
+	}
+
 	// Build indexed commands for tracking across retries
 	pendingCommands := make([]indexedCommand, len(commandsToRun))
 	for i, cmd := range commandsToRun {
@@ -103,13 +114,17 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 	var activityCauses []error
 
 	for {
-		// execute pending test commands in parallel
-		for _, ic := range pendingCommands {
-			ic := ic
+		nextCommand := 0
+		startNext := func() {
+			ic := pendingCommands[nextCommand]
+			nextCommand++
 			workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 				localActionCtx := actionCtx.WithContext(ctx)
 				runSingleTest(localActionCtx, ic.index, ic.cmd.WorkingDir, ic.cmd.Command, *dCtx.EnvContainer, resultsCh)
 			})
+		}
+		for nextCommand < min(maxParallel, len(pendingCommands)) {
+			startNext()
 		}
 
 		// Wait for all goroutines to finish and collect the results
@@ -138,6 +153,9 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 			} else {
 				allResults[result.commandIndex] = result.result
 				completed[result.commandIndex] = true
+			}
+			if nextCommand < len(pendingCommands) {
+				startNext()
 			}
 		}
 
@@ -271,9 +289,15 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 	activityFuture := workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput)
 	err := activityFuture.Get(actionCtx, &runTestOutput)
 	if err != nil {
+		commandErr := fmt.Errorf("failed to run test command '%s': %v", fullCommand, err)
+		_, dockerFailure := env.AsDockerEngineFailure(err)
+		if workflow.GetVersion(actionCtx, "max-parallel-test-commands", workflow.DefaultVersion, 1) >= 1 || dockerFailure {
+			// Heartbeat retries and Docker recovery need the underlying error type.
+			commandErr = fmt.Errorf("failed to run test command '%s': %w", fullCommand, err)
+		}
 		resultsCh.Send(actionCtx, singleTestResult{
 			commandIndex: commandIndex,
-			err:          fmt.Errorf("failed to run test command '%s': %w", fullCommand, err),
+			err:          commandErr,
 		})
 		return
 	}
@@ -402,4 +426,27 @@ Here is the test result output to summarize:
 	}
 
 	return summarizedOutput, nil
+}
+
+func testCommandParallelism(dCtx DevContext) (int, error) {
+	if err := dCtx.RepoConfig.ValidateTestCommandLimits(); err != nil {
+		return 0, err
+	}
+	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
+		return 0, nil
+	}
+	switch dCtx.EnvContainer.Env.GetType() {
+	case env.EnvTypeLocal:
+		return dCtx.RepoConfig.LocalConfig.MaxParallelTestCommands, nil
+	case env.EnvTypeLocalGitWorktree:
+		return dCtx.RepoConfig.LocalGitWorktreeConfig.MaxParallelTestCommands, nil
+	case env.EnvTypeDevPod:
+		return dCtx.RepoConfig.DevPodConfig.MaxParallelTestCommands, nil
+	case env.EnvTypeOpenShell:
+		return dCtx.RepoConfig.OpenShellConfig.MaxParallelTestCommands, nil
+	case env.EnvTypeModal:
+		return dCtx.RepoConfig.ModalConfig.MaxParallelTestCommands, nil
+	default:
+		return 0, nil
+	}
 }

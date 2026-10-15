@@ -260,6 +260,7 @@ export interface Subflow {
   parentSubflowId?: string; // ID of the parent subflow, if any
   flowId: string; // ID of the flow this subflow belongs to
   result?: string; // Result of the subflow, if any
+  updated?: Date;
 }
 // --- End From Go definition ---
 

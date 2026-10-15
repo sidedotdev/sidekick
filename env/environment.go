@@ -349,6 +349,7 @@ type DevPodEnv struct {
 	// PortForwards are host ports reverse-forwarded into the container over
 	// the SSH connection used to run commands.
 	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
+	EnvVars      map[string]string          `json:"envVars,omitempty"`
 	Hibernated   bool                       `json:"hibernated,omitempty"`
 }
 
@@ -870,7 +871,7 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 }
 
 func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
+	req := e.commandRequest(input)
 	if !input.SkipWaking {
 		req = withRemoteReadLock(req, e.WorkingDirectory)
 	}
