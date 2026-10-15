@@ -69,6 +69,13 @@ func NewStorageAtDir(dataDir string) (*Storage, error) {
 		deletePrefixBatchSize: defaultDeletePrefixBatchSize,
 	}
 
+	for _, db := range []*trackedDB{storage.db, storage.kvDb} {
+		if err := initializeDatabase(context.Background(), db.DB); err != nil {
+			storage.closeDatabases()
+			return nil, fmt.Errorf("failed to initialize %s database: %w", db.name, err)
+		}
+	}
+
 	err = storage.MigrateUp("sidekick")
 	sideAppEnv := os.Getenv("SIDE_APP_ENV")
 	if err != nil {
@@ -103,10 +110,8 @@ func GetSqliteUri(filePath string) (string, error) {
 	return sqliteUri(filepath.Join(dbDir, filePath)), nil
 }
 
-// sqliteUri builds a connection string applying our standard pragmas. The
-// auto_vacuum pragma must come first: it only takes effect while the database
-// is still empty, and pragmas such as journal_mode already write the file
-// header, after which the mode can only be changed by a full VACUUM.
+// Only connection-local settings belong here: database-wide changes can
+// acquire write locks even when a pooled connection is opened for a read.
 func sqliteUri(dbPath string) string {
 	const (
 		busyTimeoutMs = 5000
@@ -115,14 +120,10 @@ func sqliteUri(dbPath string) string {
 
 	// Build our SQLite preferences as a series of URL encoded values
 	prefs := make(url.Values)
-	prefs.Add("_pragma", "auto_vacuum(INCREMENTAL)")
 	prefs.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMs))
-	prefs.Add("_pragma", "journal_mode(WAL)")
 	prefs.Add("_pragma", "temp_store(MEMORY)")
 	prefs.Add("_pragma", "synchronous(NORMAL)")
 	prefs.Add("_pragma", fmt.Sprintf("cache_size(-%d)", cacheSizeKB))
-	// Include SQLite's temporary analysis limit when checking all tables.
-	prefs.Add("_pragma", "optimize(0x10012)")
 
 	// Construct the final SQLite address string
 	return fmt.Sprintf("file:%s?%s", dbPath, prefs.Encode())
@@ -360,4 +361,38 @@ func (s *Storage) GetKeysWithPrefix(ctx context.Context, workspaceId string, pre
 		keys = append(keys, key)
 	}
 	return keys, rows.Err()
+}
+
+func initializeDatabase(ctx context.Context, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("get initialization connection: %w", err)
+	}
+	defer conn.Close()
+
+	var pageCount int
+	if err := conn.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
+		return fmt.Errorf("read page count: %w", err)
+	}
+	// Auto-vacuum must precede WAL's file header creation. Existing databases
+	// require explicit conversion rather than a startup VACUUM.
+	if pageCount == 0 {
+		if _, err := conn.ExecContext(ctx, "PRAGMA auto_vacuum(INCREMENTAL)"); err != nil {
+			return fmt.Errorf("configure auto-vacuum: %w", err)
+		}
+	}
+
+	var journalMode string
+	if err := conn.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		return fmt.Errorf("read journal mode: %w", err)
+	}
+	if journalMode != "wal" {
+		if err := conn.QueryRowContext(ctx, "PRAGMA journal_mode(WAL)").Scan(&journalMode); err != nil {
+			return fmt.Errorf("enable WAL: %w", err)
+		}
+		if journalMode != "wal" {
+			return fmt.Errorf("expected WAL journal mode, got %q", journalMode)
+		}
+	}
+	return nil
 }
