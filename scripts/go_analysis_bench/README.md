@@ -56,6 +56,14 @@ prepare the desired binary and dependency/build caches before measuring.
 Record any GC, telemetry, toolchain, proxy, cgo, or other environment overrides
 along with reports and keep them constant between runs.
 
+Prepare caches **as the account running the benchmark**, including the seed's
+module metadata. A readable cache populated by another user is not necessarily
+complete or writable. Go commands can succeed while reporting failed cache
+writes on stderr, repeatedly downloading metadata on subsequent requests.
+See the cache preparation and offline module-metadata preflight in
+[VALIDATION.md](VALIDATION.md). After correcting a cache setup defect, rerun
+both implementations rather than comparing against an earlier baseline.
+
 Use a dedicated OS user or an otherwise idle account. By default the benchmark
 refuses a run if that account already has an analysis daemon or helper. It never
 terminates an editor's preexisting daemon to obtain a clean baseline.
@@ -216,8 +224,8 @@ These are conservative summed RSS figures, including frontends, a shared server,
 telemetry processes and transient Go/compiler helpers. A transient fork
 snapshot contributed to the peak. This is a smoke observation on a tiny
 fixture, **not a two-hour baseline, a demonstrated leak, or a before/after fix
-result**. The long-running representative-repository procedure above is still
-required for evaluating a fix.
+result**. The subsequent sustained paired evaluation is recorded in
+[VALIDATION.md](VALIDATION.md).
 
 Unit coverage includes proc-stat parsing, detached-daemon/helper accounting,
 metadata-unavailable accounting, PID reuse/history pruning, bounded observer
@@ -304,5 +312,32 @@ therefore trades warm lookup latency for bounded workspace retention.
 
 These are selection smoke results, not a multi-hour plateau claim or attainment
 of a 50 MB target. In particular, zero final-idle RSS describes eviction, not
-active analysis cost. The long-running paired procedure above remains necessary
-for acceptance validation.
+active analysis cost. Sustained paired results, reproduction instructions and
+their limitations are recorded in [VALIDATION.md](VALIDATION.md).
+
+## Sustained validation and regression coverage
+
+See [VALIDATION.md](VALIDATION.md) for the sustained before/after runs, a
+single-workspace age-recycling control, exact reproduction commands, provenance
+checks, latency trade-offs and live call-hierarchy compatibility validation.
+
+For a completed run, summarize the raw memory stream without mixing active
+analysis with final-idle eviction:
+
+```sh
+go run ./scripts/go_analysis_bench/summarize \
+  --input /absolute/path/to/run --window 5m
+```
+
+The summarizer validates chronological samples, process identities, RSS sums,
+report/sample agreement, successful correctness checks and uncontaminated
+startup. Output includes separate phase/time windows, observed non-telemetry
+gopls process lifetimes, and SHA-256 checksums of the report and memory stream.
+Telemetry and other helpers remain included in the memory totals. Sampling can
+miss short-lived processes, so observed server counts are not launch counts.
+
+**Provenance:** the harness reads `sourceRevision` and `sourceDiffSha256` from
+its runtime working directory, not the executable. Run each binary from its
+own build checkout, with absolute seed/output/comparison paths. Preserve binary
+hashes and build revisions alongside results; do not run a baseline executable
+from the candidate checkout and treat its recorded revision as the baseline.

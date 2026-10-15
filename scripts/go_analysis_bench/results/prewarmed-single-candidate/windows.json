@@ -1,0 +1,120 @@
+{
+  "sourceRevision": "367911517dbc0b5a79ae61490a0af5a7682256fa",
+  "reportSha256": "ca8b4b499bccc449820fc55775dd9534ead22ae023144d437373d5ca6dadc4f1",
+  "memorySha256": "8295702219c892cd0e72783ab12dae1dcfc7871bdc52c008a80f04c5d00b562d",
+  "windowSeconds": 300,
+  "samples": 972,
+  "peakRssBytes": 1151242240,
+  "windows": [
+    {
+      "fromSeconds": 0,
+      "phase": "startup",
+      "samples": 1,
+      "medianRssBytes": 0,
+      "peakRssBytes": 0,
+      "medianWithHarnessBytes": 90083328
+    },
+    {
+      "fromSeconds": 0,
+      "phase": "active",
+      "samples": 110,
+      "medianRssBytes": 1116160000,
+      "peakRssBytes": 1151242240,
+      "medianWithHarnessBytes": 1229754368
+    },
+    {
+      "fromSeconds": 0,
+      "phase": "idle",
+      "samples": 177,
+      "medianRssBytes": 1072754688,
+      "peakRssBytes": 1122418688,
+      "medianWithHarnessBytes": 1186504704
+    },
+    {
+      "fromSeconds": 300,
+      "phase": "idle",
+      "samples": 166,
+      "medianRssBytes": 508403712,
+      "peakRssBytes": 1073541120,
+      "medianWithHarnessBytes": 624013312
+    },
+    {
+      "fromSeconds": 300,
+      "phase": "active",
+      "samples": 107,
+      "medianRssBytes": 546009088,
+      "peakRssBytes": 1073541120,
+      "medianWithHarnessBytes": 661618688
+    },
+    {
+      "fromSeconds": 600,
+      "phase": "idle",
+      "samples": 174,
+      "medianRssBytes": 408985600,
+      "peakRssBytes": 510763008,
+      "medianWithHarnessBytes": 524603392
+    },
+    {
+      "fromSeconds": 600,
+      "phase": "active",
+      "samples": 112,
+      "medianRssBytes": 444076032,
+      "peakRssBytes": 472293376,
+      "medianWithHarnessBytes": 559693824
+    },
+    {
+      "fromSeconds": 900,
+      "phase": "idle",
+      "samples": 39,
+      "medianRssBytes": 384786432,
+      "peakRssBytes": 422780928,
+      "medianWithHarnessBytes": 500404224
+    },
+    {
+      "fromSeconds": 900,
+      "phase": "active",
+      "samples": 22,
+      "medianRssBytes": 408915968,
+      "peakRssBytes": 437108736,
+      "medianWithHarnessBytes": 524533760
+    },
+    {
+      "fromSeconds": 900,
+      "phase": "finalIdle",
+      "samples": 64,
+      "medianRssBytes": 389242880,
+      "peakRssBytes": 435990528,
+      "medianWithHarnessBytes": 504860672
+    }
+  ],
+  "servers": [
+    {
+      "pid": 50866,
+      "startTicks": 1742119,
+      "firstSeenSeconds": 1.003934839,
+      "lastSeenSeconds": 301.001893429,
+      "peakRssBytes": 899608576
+    },
+    {
+      "pid": 31011,
+      "startTicks": 1772251,
+      "firstSeenSeconds": 302.00401321,
+      "lastSeenSeconds": 602.001971917,
+      "peakRssBytes": 334663680
+    },
+    {
+      "pid": 8505,
+      "startTicks": 1802333,
+      "firstSeenSeconds": 603.00166806,
+      "lastSeenSeconds": 908.002175872,
+      "peakRssBytes": 347951104
+    },
+    {
+      "pid": 54302,
+      "startTicks": 1833008,
+      "firstSeenSeconds": 909.002477461,
+      "lastSeenSeconds": 1020.002125885,
+      "peakRssBytes": 313810944
+    }
+  ]
+}

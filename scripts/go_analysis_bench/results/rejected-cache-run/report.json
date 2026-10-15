@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "config": {
+    "label": "step3-multi-candidate",
+    "output": "/root/sidekick-worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-analyze-gopls-usage/.side/tmp/bench-home/step3-multi-candidate",
+    "seed": "/root/sidekick-worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-analyze-gopls-usage/.side/tmp/analysis-baseline",
+    "workspaces": 3,
+    "cycles": 0,
+    "durationNanos": 1800000000000,
+    "idleEvery": 20,
+    "idleNanos": 10000000000,
+    "finalIdleNanos": 75000000000,
+    "sampleIntervalNanos": 1000000000,
+    "steadyWindowNanos": 10000000000,
+    "operationLimitNanos": 60000000000,
+    "daemonNames": "gopls",
+    "allowExisting": false
+  },
+  "startedAt": "2026-10-15T09:42:23.214978455Z",
+  "endedAt": "2026-10-15T10:13:08.512796392Z",
+  "goVersion": "go1.26.4",
+  "goEnvironment": {
+    "GOARCH": "amd64",
+    "GOFLAGS": "",
+    "GOMODCACHE": "/go/pkg/mod",
+    "GOOS": "linux",
+    "GOPATH": "/go",
+    "GOROOT": "/usr/local/go",
+    "GOTOOLCHAIN": "local",
+    "GOVERSION": "go1.26.4",
+    "GOWORK": "off"
+  },
+  "goplsVersion": "golang.org/x/tools/gopls v0.21.0",
+  "sourceRevision": "367911517dbc0b5a79ae61490a0af5a7682256fa",
+  "sourceDiffSha256": "5c963db20854fbd16b7cf0202db249f18b75bf330aabcb71a063302f39b86428",
+  "seedRevision": "2144e05a3af74547fa8b186d786586b3aff35293",
+  "fixtureSha256": "7e124d4e00d3c6010670a13b12e58b9311a4d357155e64a8964802ff129d25fd",
+  "workloadFingerprint": "58bfe4691b286a6e6d7555996e32d89bf0ff8585ff007f2599f89f5b8d8c0dfc",
+  "hostname": "modal",
+  "kernel": "Linux 4.19.0-gvisor",
+  "completedCycles": 160,
+  "correctnessFailures": 1,
+  "memory": {
+    "peakRssBytes": 628060160,
+    "peakWithHarnessBytes": 748257280,
+    "steadyRssBytes": 0,
+    "steadyWithHarnessBytes": 0,
+    "steadySamples": 0,
+    "samples": 1753
+  },
+  "latency": {
+    "autofix": {
+      "count": 481,
+      "failures": 1,
+      "p50Millis": 156,
+      "p95Millis": 179,
+      "maxMillis": 60007.803248
+    },
+    "definition.crossFile": {
+      "count": 481,
+      "failures": 0,
+      "p50Millis": 2828,
+      "p95Millis": 3768,
+      "maxMillis": 48729.085688
+    },
+    "definition.dependency": {
+      "count": 481,
+      "failures": 0,
+      "p50Millis": 3,
+      "p95Millis": 7,
+      "maxMillis": 10.12864
+    },
+    "definition.stdlib": {
+      "count": 480,
+      "failures": 0,
+      "p50Millis": 119,
+      "p95Millis": 132,
+      "maxMillis": 192.534888
+    },
+    "edit.sync": {
+      "count": 481,
+      "failures": 0,
+      "p50Millis": 1,
+      "p95Millis": 2,
+      "maxMillis": 34.085594
+    },
+    "freshness.definition": {
+      "count": 481,
+      "failures": 0,
+      "p50Millis": 12,
+      "p95Millis": 15,
+      "maxMillis": 417.083728
+    },
+    "freshness.references": {
+      "count": 481,
+      "failures": 0,
+      "p50Millis": 9,
+      "p95Millis": 10,
+      "maxMillis": 13.657976
+    },
+    "references": {
+      "count": 481,
+      "failures": 0,
+      "p50Millis": 5,
+      "p95Millis": 8,
+      "maxMillis": 16.713493
+    }
+  },
+  "error": "workspace 0 cycle 160 autofix: context deadline exceeded\nno final-idle samples; steady-state measurement is unavailable"
+}

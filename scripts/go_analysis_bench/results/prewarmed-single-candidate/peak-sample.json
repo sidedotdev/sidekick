@@ -1,0 +1,40 @@
+{
+  "analysisRssBytes": 1151242240,
+  "at": "2026-10-15T11:39:17.054572279Z",
+  "harnessRssBytes": 111157248,
+  "phase": "active",
+  "processes": [
+    {
+      "command": "/go/bin/gopls",
+      "executable": "/go/bin/gopls",
+      "pid": 50866,
+      "ppid": 50754,
+      "rssBytes": 896921600,
+      "startTicks": 1742119
+    },
+    {
+      "command": "/go/bin/gopls ** telemetry **",
+      "executable": "/go/bin/gopls",
+      "pid": 50880,
+      "ppid": 50866,
+      "rssBytes": 173916160,
+      "startTicks": 1742123
+    },
+    {
+      "command": "go list -e -json=Name,ImportPath,Error,Dir,GoFiles,IgnoredGoFiles,IgnoredOtherFiles,CFiles,CgoFiles,CXXFiles,MFiles,HFiles,FFiles,SFiles,SwigFiles,SwigCXXFiles,SysoFiles,TestGoFiles,XTestGoFiles,CompiledGoFiles,Export,DepOnly,Imports,ImportMap,TestImports,XTestImports,ForTest,DepsErrors,Module,EmbedFiles -compiled=true -test=true -export=false -deps=true -find=false -pgo=off -- sidekick/analysisbenchfixture",
+      "executable": "/usr/local/go/bin/go",
+      "pid": 56617,
+      "ppid": 50866,
+      "rssBytes": 44343296,
+      "startTicks": 1745608
+    },
+    {
+      "command": "/usr/local/go/pkg/tool/linux_amd64/compile -V=full",
+      "executable": "/usr/local/go/pkg/tool/linux_amd64/compile",
+      "pid": 56639,
+      "ppid": 56617,
+      "rssBytes": 36061184,
+      "startTicks": 1745612
+    }
+  ]
+}

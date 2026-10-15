@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "config": {
+    "label": "step3-cached-multi-candidate",
+    "output": "/root/sidekick-worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-analyze-gopls-usage/.side/tmp/bench-home/step3-cached-multi-candidate",
+    "seed": "/root/sidekick-worktrees/ws_2h7TkUIDypLPvB5QXLIF0cwlqi8/sidekick-analyze-gopls-usage/.side/tmp/analysis-baseline",
+    "workspaces": 3,
+    "cycles": 0,
+    "durationNanos": 1800000000000,
+    "idleEvery": 20,
+    "idleNanos": 10000000000,
+    "finalIdleNanos": 75000000000,
+    "sampleIntervalNanos": 1000000000,
+    "steadyWindowNanos": 10000000000,
+    "operationLimitNanos": 60000000000,
+    "daemonNames": "gopls",
+    "allowExisting": false
+  },
+  "startedAt": "2026-10-15T10:50:02.890870523Z",
+  "endedAt": "2026-10-15T11:21:25.518863072Z",
+  "goVersion": "go1.26.4",
+  "goEnvironment": {
+    "GOARCH": "amd64",
+    "GOFLAGS": "",
+    "GOMODCACHE": "/go/pkg/mod",
+    "GOOS": "linux",
+    "GOPATH": "/go",
+    "GOROOT": "/usr/local/go",
+    "GOTOOLCHAIN": "local",
+    "GOVERSION": "go1.26.4",
+    "GOWORK": "off"
+  },
+  "goplsVersion": "golang.org/x/tools/gopls v0.21.0",
+  "sourceRevision": "367911517dbc0b5a79ae61490a0af5a7682256fa",
+  "sourceDiffSha256": "151435364725f8c8e1bcde07c6887d3bf35b360eb1221c6d45af8c8f808b9380",
+  "seedRevision": "2144e05a3af74547fa8b186d786586b3aff35293",
+  "fixtureSha256": "7e124d4e00d3c6010670a13b12e58b9311a4d357155e64a8964802ff129d25fd",
+  "workloadFingerprint": "58bfe4691b286a6e6d7555996e32d89bf0ff8585ff007f2599f89f5b8d8c0dfc",
+  "hostname": "modal",
+  "kernel": "Linux 4.19.0-gvisor",
+  "completedCycles": 223,
+  "correctnessFailures": 0,
+  "memory": {
+    "peakRssBytes": 992571392,
+    "peakWithHarnessBytes": 1088462848,
+    "steadyRssBytes": 0,
+    "steadyWithHarnessBytes": 116322304,
+    "steadySamples": 10,
+    "samples": 1788
+  },
+  "latency": {
+    "autofix": {
+      "count": 669,
+      "failures": 0,
+      "p50Millis": 181,
+      "p95Millis": 208,
+      "maxMillis": 763.867698
+    },
+    "definition.crossFile": {
+      "count": 669,
+      "failures": 0,
+      "p50Millis": 2078,
+      "p95Millis": 2166,
+      "maxMillis": 15620.560901
+    },
+    "definition.dependency": {
+      "count": 669,
+      "failures": 0,
+      "p50Millis": 3,
+      "p95Millis": 7,
+      "maxMillis": 16.039317
+    },
+    "definition.stdlib": {
+      "count": 669,
+      "failures": 0,
+      "p50Millis": 119,
+      "p95Millis": 131,
+      "maxMillis": 578.913322
+    },
+    "edit.sync": {
+      "count": 669,
+      "failures": 0,
+      "p50Millis": 1,
+      "p95Millis": 2,
+      "maxMillis": 120.672918
+    },
+    "freshness.definition": {
+      "count": 669,
+      "failures": 0,
+      "p50Millis": 12,
+      "p95Millis": 15,
+      "maxMillis": 335.086707
+    },
+    "freshness.references": {
+      "count": 669,
+      "failures": 0,
+      "p50Millis": 9,
+      "p95Millis": 10,
+      "maxMillis": 105.2765
+    },
+    "references": {
+      "count": 669,
+      "failures": 0,
+      "p50Millis": 5,
+      "p95Millis": 9,
+      "maxMillis": 18.891895
+    }
+  }
+}

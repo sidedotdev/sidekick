@@ -1,0 +1,66 @@
+{
+  "baseline": "step3-cached-single-baseline",
+  "candidate": "step3-cached-single-candidate",
+  "peakRssBytes": {
+    "before": 1560662016,
+    "after": 1151242240,
+    "afterBeforeRatio": 0.7376627534965264
+  },
+  "steadyRssBytes": {
+    "before": 1405218816,
+    "after": 0,
+    "afterBeforeRatio": 0
+  },
+  "peakWithHarnessBytes": {
+    "before": 1678524416,
+    "after": 1262399488,
+    "afterBeforeRatio": 0.7520888442054096
+  },
+  "steadyWithHarnessBytes": {
+    "before": 1523113984,
+    "after": 115617792,
+    "afterBeforeRatio": 0.07590882443109392
+  },
+  "p95Millis": {
+    "autofix": {
+      "before": 640,
+      "after": 219,
+      "afterBeforeRatio": 0.3421875
+    },
+    "definition.crossFile": {
+      "before": 5,
+      "after": 4,
+      "afterBeforeRatio": 0.8
+    },
+    "definition.dependency": {
+      "before": 5,
+      "after": 3,
+      "afterBeforeRatio": 0.6
+    },
+    "definition.stdlib": {
+      "before": 195,
+      "after": 133,
+      "afterBeforeRatio": 0.6820512820512821
+    },
+    "edit.sync": {
+      "before": 1,
+      "after": 19,
+      "afterBeforeRatio": 19
+    },
+    "freshness.definition": {
+      "before": 170,
+      "after": 11,
+      "afterBeforeRatio": 0.06470588235294118
+    },
+    "freshness.references": {
+      "before": 589,
+      "after": 10,
+      "afterBeforeRatio": 0.01697792869269949
+    },
+    "references": {
+      "before": 587,
+      "after": 5,
+      "afterBeforeRatio": 0.008517887563884156
+    }
+  }
+}
