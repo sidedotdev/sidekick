@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -94,6 +95,17 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 		t.Skip("Skipping integration test; API keys are unavailable in non-local sidekick environments")
 	}
 
+	secretsManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		secret_manager.EnvSecretManager{},
+		secret_manager.KeyringSecretManager{},
+		secret_manager.LocalConfigSecretManager{},
+	})
+	apiKey, err := secretsManager.GetSecret("OPENAI_API_KEY")
+	if errors.Is(err, secret_manager.ErrSecretNotFound) || (err == nil && apiKey == "") {
+		t.Skip("Skipping integration test; OPENAI_API_KEY is not configured")
+	}
+	require.NoError(t, err, "Failed to retrieve OPENAI_API_KEY")
+
 	ctx := context.Background()
 	dataHome, err := common.GetSidekickDataHome()
 	require.NoError(t, err)
@@ -105,12 +117,6 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 		RepoDir: repoRoot,
 	})
 	require.NoError(t, err, "Failed to create local env")
-
-	secretsManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		secret_manager.EnvSecretManager{},
-		secret_manager.KeyringSecretManager{},
-		secret_manager.LocalConfigSecretManager{},
-	})
 
 	options := RankedDirSignatureOutlineOptions{
 		RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
@@ -344,6 +350,17 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 		t.Skip("skipping Modal ranked context integration test; credentials are unavailable in non-local sidekick environments")
 	}
 
+	secretsManager := noRerankSecretManager{SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		secret_manager.EnvSecretManager{},
+		secret_manager.KeyringSecretManager{},
+		secret_manager.LocalConfigSecretManager{},
+	})}
+	apiKey, err := secretsManager.GetSecret("OPENAI_API_KEY")
+	if errors.Is(err, secret_manager.ErrSecretNotFound) || (err == nil && apiKey == "") {
+		t.Skip("Skipping integration test; OPENAI_API_KEY is not configured")
+	}
+	require.NoError(t, err, "Failed to retrieve OPENAI_API_KEY")
+
 	ctx := context.Background()
 	dataHome, err := common.GetSidekickDataHome()
 	require.NoError(t, err)
@@ -395,11 +412,6 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 	}
 	ec := env.EnvContainer{Env: modalEnv}
 
-	secretsManager := noRerankSecretManager{SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		secret_manager.EnvSecretManager{},
-		secret_manager.KeyringSecretManager{},
-		secret_manager.LocalConfigSecretManager{},
-	})}
 	reranker, err := GetReranker(common.DefaultRerankingModelConfig(), nil, secretsManager)
 	require.NoError(t, err)
 	require.Nil(t, reranker, "byte-equality assertions below require reranking to be disabled")
