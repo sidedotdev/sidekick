@@ -33,6 +33,9 @@ type OpenAIResponsesProvider struct {
 
 	// upstreamActivityInterval overrides defaultUpstreamActivityInterval.
 	upstreamActivityInterval time.Duration
+	// httpTransport lets tests capture requests bound for the real OpenAI or
+	// ChatGPT hosts without rewriting BaseURL, which changes routing behavior.
+	httpTransport http.RoundTripper
 }
 
 // webSearchToolEnabled reports whether the native web search tool may be sent.
@@ -74,7 +77,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	if activityInterval == 0 {
 		activityInterval = defaultUpstreamActivityInterval
 	}
-	httpClient := withResponseDump(&http.Client{Timeout: 45 * time.Minute})
+	httpClient := withResponseDump(&http.Client{Timeout: 45 * time.Minute, Transport: p.httpTransport})
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
@@ -88,6 +91,10 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	}
 	if credentials.useOAuth {
 		clientOptions = append(clientOptions, option.WithHeader("ChatGPT-Account-Id", credentials.accountID))
+		// The Codex backend derives prompt-cache affinity from session-id.
+		if p.BaseURL == "" && options.PromptCacheKey != "" {
+			clientOptions = append(clientOptions, option.WithHeader("session-id", options.PromptCacheKey))
+		}
 	}
 	for k, v := range p.CustomHeaders {
 		clientOptions = append(clientOptions, option.WithHeader(k, v))

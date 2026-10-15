@@ -9,19 +9,18 @@ import (
 	"syscall"
 
 	"github.com/joho/godotenv"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	log.Info().Str("host", common.GetTemporalServerHost()).Int("port", common.GetTemporalServerPort()).Msg("Starting Temporal server")
-
 	if err := godotenv.Load(); err != nil {
 		if !os.IsNotExist(err) {
 			log.Fatal().Err(err).Msg("Error loading .env file")
 		}
 	}
+
+	configureLogging()
+	log.Info().Str("host", common.GetTemporalServerHost()).Int("port", common.GetTemporalServerPort()).Msg("Starting Temporal server")
 
 	common.StartPprofServer()
 

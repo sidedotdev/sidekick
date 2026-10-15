@@ -469,6 +469,12 @@ func restoreFilesFragment() string {
   if [ -s "$rtmp/changed.tgz" ]; then tar xzf "$rtmp/changed.tgz"; fi
   if [ -s "$rtmp/deleted.list" ]; then tr '\000' '\012' < "$rtmp/deleted.list" | while IFS= read -r d; do if [ -n "$d" ]; then rm -f -- "$d"; fi; done; fi
   if [ -s "$rtmp/staged.patch" ]; then git apply --cached --binary --allow-empty --whitespace=nowarn "$rtmp/staged.patch"; fi
+  for name in index ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_AUTOSTASH MERGE_RR AUTO_MERGE; do
+    if [ -f "$rtmp/git-state/$name" ]; then
+      path=$(git rev-parse --git-path "$name")
+      cp "$rtmp/git-state/$name" "$path"
+    fi
+  done
   rm -rf "$rtmp"
 fi`, shellQuote(HibernationPatchFile), shellQuote(HibernationPatchFile))
 }
@@ -586,7 +592,16 @@ else
   : > "$tmpdir/sidetmp.tgz"
 fi
 git diff --cached --binary > "$tmpdir/staged.patch"
-tar czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch sidetmp.tgz
+# Patches cannot encode conflict stages or pending merge parents.
+mkdir "$tmpdir/git-state"
+for name in index ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_AUTOSTASH MERGE_RR AUTO_MERGE; do
+  path=$(git rev-parse --git-path "$name")
+  if [ -f "$path" ]; then cp "$path" "$tmpdir/git-state/$name"; fi
+done
+if [ -f "$tmpdir/git-state/index" ]; then
+  GIT_INDEX_FILE="$tmpdir/git-state/index" git update-index --no-split-index
+fi
+tar czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch sidetmp.tgz git-state
 rm -rf "$tmpdir"
 mv %s %s
 cat > %s <<'SIDEKICK_HIB_EOF'

@@ -180,15 +180,63 @@ func resolveKeepAndTrigger(requestedKeepLength int, modelConfig common.ModelConf
 	return keepLength, keepLength + buffer
 }
 
+// ManagePolicy fully determines when and how far history is cut. Production
+// derives it via resolveKeepAndTrigger; simulations supply it directly.
+type ManagePolicy struct {
+	// KeepLength is the size (chars) truncation tries to drop back to.
+	KeepLength int
+	// TruncationTrigger is the size (chars) at or above which truncation runs.
+	TruncationTrigger int
+	// MinRecentTurns retains the most recent complete turns regardless of
+	// budget. A turn is an assistant message plus the user messages that
+	// follow it up to the next assistant message, so the pending turn's tool
+	// results are part of the last turn.
+	MinRecentTurns int
+}
+
 // ManageLlm2ChatHistory applies retention logic to llm2 messages.
 // This mirrors the logic in manageChatHistoryV2 but operates on llm2.Message types.
 func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, requestedKeepLength int, modelConfig common.ModelConfig) ([]llm2.Message, error) {
+	keepLength, truncationTrigger := resolveKeepAndTrigger(requestedKeepLength, modelConfig)
+	return ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{
+		KeepLength:        keepLength,
+		TruncationTrigger: truncationTrigger,
+	}, modelConfig)
+}
+
+// retainRecentTurns marks the last n complete turns as retained. With fewer
+// than n assistant messages, everything is retained.
+func retainRecentTurns(messages []llm2.Message, isRetained []bool, n int) {
+	if n <= 0 {
+		return
+	}
+	start := 0
+	seen := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != llm2.RoleAssistant {
+			continue
+		}
+		seen++
+		if seen == n {
+			start = i
+			break
+		}
+	}
+	for i := start; i < len(messages); i++ {
+		isRetained[i] = true
+	}
+}
+
+// ManageLlm2ChatHistoryWithPolicy is the policy-explicit core of
+// ManageLlm2ChatHistory. The input slice is not modified.
+func ManageLlm2ChatHistoryWithPolicy(messages []llm2.Message, policy ManagePolicy, modelConfig common.ModelConfig) ([]llm2.Message, error) {
 	provider := modelConfig.Provider
 	if len(messages) == 0 {
 		return []llm2.Message{}, nil
 	}
+	messages = append([]llm2.Message(nil), messages...)
 
-	keepLength, truncationTrigger := resolveKeepAndTrigger(requestedKeepLength, modelConfig)
+	keepLength, truncationTrigger := policy.KeepLength, policy.TruncationTrigger
 
 	// Leave valid history untouched while below the trigger to preserve the
 	// cached prefix; malformed tool-call turns still need repair because
@@ -213,6 +261,7 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 			isRetained[lastIndex-1] = true
 		}
 	}
+	retainRecentTurns(messages, isRetained, policy.MinRecentTurns)
 
 	// Incremental intent updates depend on every preceding update surviving.
 	for i, msg := range messages {

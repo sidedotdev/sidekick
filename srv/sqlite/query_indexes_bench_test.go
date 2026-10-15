@@ -64,6 +64,7 @@ func benchmarkIndexCandidate(b *testing.B, candidate indexCandidate, size string
 	require.NoError(b, err)
 	b.Cleanup(func() { require.NoError(b, db.Close()) })
 	db.SetMaxOpenConns(1)
+	require.NoError(b, initializeDatabase(ctx, db))
 	require.NoError(b, migrateUp(db, "index-benchmark"))
 	s := &Storage{db: &trackedDB{DB: db, name: "main", tracker: newBusyTracker()}}
 

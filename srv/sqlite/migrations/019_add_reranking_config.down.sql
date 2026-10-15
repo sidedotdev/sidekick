@@ -1,0 +1,1 @@
+ALTER TABLE workspace_configs DROP COLUMN reranking_config;

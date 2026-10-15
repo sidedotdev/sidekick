@@ -204,6 +204,20 @@ You can optionally configure `integration_test_commands` separately from
 frequently than unit tests. Sidekick will run these tests only at the end of a
 task, instead of within each step or iteration.
 
+<-- hide until we make devpod and other envs visible in a release without dev-mode enabled
+Commands run concurrently by default. For resource-constrained environments,
+set `max_parallel_test_commands` in the corresponding environment section:
+
+```yaml
+devpod:
+  max_parallel_test_commands: 1
+```
+
+Tool-specific resource limits can be configured separately. For example,
+`devpod.env_vars.GOFLAGS: "-p=1"` also limits concurrent Go builds within each
+command just for the devpod environment.
+-->
+
 #### edit_code
 
 If you do not use a standard `AGENTS.md` file, you can configure Sidekick to load

@@ -124,7 +124,8 @@ const submitWorkspace = async () => {
     configMode: configMode.value,
     profileId: effectiveProfileId.value,
     llmConfig: filterEmptyUseCaseKeys(llmConfig.value),
-    embeddingConfig: filterEmptyUseCaseKeys(embeddingConfig.value)
+    embeddingConfig: filterEmptyUseCaseKeys(embeddingConfig.value),
+    rerankingConfig: props.workspace.rerankingConfig
   };
 
   try {

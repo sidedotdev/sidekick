@@ -11,9 +11,11 @@ import (
 	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
+	"time"
 
 	"github.com/invopop/jsonschema"
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -55,6 +57,16 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 
 	v := workflow.GetVersion(ctx, "bulk-search-single-activity", workflow.DefaultVersion, 1)
 	if v >= 1 {
+		if workflow.GetVersion(ctx, "bulk-search-activity-retry", workflow.DefaultVersion, 1) >= 1 {
+			// Search and its ignore-file setup are idempotent, unlike arbitrary
+			// tool commands that inherit the caller's no-retry policy.
+			options := workflow.GetActivityOptions(ctx)
+			options.RetryPolicy = &temporal.RetryPolicy{
+				InitialInterval: 5 * time.Second,
+				MaximumAttempts: 2,
+			}
+			ctx = workflow.WithActivityOptions(ctx, options)
+		}
 		var output BulkSearchRepositoryActivityOutput
 		err := workflow.ExecuteActivity(ctx, BulkSearchRepositoryActivity, BulkSearchRepositoryActivityInput{
 			EnvContainer: envContainer,

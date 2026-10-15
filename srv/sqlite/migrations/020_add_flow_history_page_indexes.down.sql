@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_flow_actions_workspace_flow_created_id;
+DROP INDEX IF EXISTS idx_subflows_workspace_flow_id;

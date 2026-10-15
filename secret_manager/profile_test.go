@@ -122,15 +122,15 @@ func TestLocalConfigSecretManagerProfileFiltering(t *testing.T) {
 		},
 	}
 
-	defaultKey, err := LocalConfigSecretManager{}.findProviderKey(config, "", "openai")
+	defaultKey, err := LocalConfigSecretManager{}.findProviderKey(config, "OPENAI")
 	require.NoError(t, err)
 	assert.Equal(t, "default-key", defaultKey)
 
-	workKey, err := LocalConfigSecretManager{ProfileId: "work"}.findProviderKey(config, "", "openai")
+	workKey, err := LocalConfigSecretManager{ProfileId: "work"}.findProviderKey(config, "OPENAI_WORK")
 	require.NoError(t, err)
 	assert.Equal(t, "work-key", workKey)
 
-	_, err = LocalConfigSecretManager{ProfileId: "personal"}.findProviderKey(config, "", "openai")
+	_, err = LocalConfigSecretManager{ProfileId: "personal"}.findProviderKey(config, "OPENAI_WORK")
 	assert.ErrorIs(t, err, ErrSecretNotFound)
 }
 
@@ -145,10 +145,10 @@ func TestLocalConfigSecretManagerProfileEdgeCases(t *testing.T) {
 			},
 		}
 
-		_, err := LocalConfigSecretManager{}.findProviderKey(config, "", "openai")
+		_, err := LocalConfigSecretManager{}.findProviderKey(config, "OPENAI")
 		assert.ErrorIs(t, err, ErrSecretNotFound)
 
-		_, err = LocalConfigSecretManager{ProfileId: "work"}.findProviderKey(config, "", "openai")
+		_, err = LocalConfigSecretManager{ProfileId: "work"}.findProviderKey(config, "OPENAI")
 		assert.ErrorIs(t, err, ErrSecretNotFound)
 	})
 
@@ -157,11 +157,11 @@ func TestLocalConfigSecretManagerProfileEdgeCases(t *testing.T) {
 		config := common.LocalConfig{
 			Providers: []common.ModelProviderConfig{
 				{Name: "openai", Type: "openai", Key: "work-key", Profiles: &[]string{"work"}},
-				{Name: "openai_alt", Type: "openai", Key: "other-work-key", Profiles: &[]string{"work"}},
+				{Name: "openai", Type: "openai_compatible", Key: "other-work-key", Profiles: &[]string{"work"}},
 			},
 		}
 
-		_, err := LocalConfigSecretManager{ProfileId: "work"}.findProviderKey(config, "", "openai")
+		_, err := LocalConfigSecretManager{ProfileId: "work"}.findProviderKey(config, "OPENAI")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "multiple providers found")
 	})

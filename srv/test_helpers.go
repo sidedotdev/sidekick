@@ -85,8 +85,19 @@ func (m *MemoryStreamer) AddFlowActionChange(ctx context.Context, flowAction dom
 
 func (m *MemoryStreamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
 	m.mu.Lock()
-	actionCh := make(chan domain.FlowAction, 100)
+	var backlog []domain.FlowAction
+	if streamMessageStartId == "" || streamMessageStartId == "0" {
+		for _, action := range m.flowActions {
+			if action.WorkspaceId == workspaceId && action.FlowId == flowId {
+				backlog = append(backlog, action)
+			}
+		}
+	}
+	actionCh := make(chan domain.FlowAction, len(backlog)+100)
 	errCh := make(chan error, 1)
+	for _, action := range backlog {
+		actionCh <- action
+	}
 	m.flowActionListeners = append(m.flowActionListeners, actionCh)
 	m.mu.Unlock()
 

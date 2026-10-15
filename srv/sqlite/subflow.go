@@ -79,8 +79,11 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 		FROM subflows
 		WHERE workspace_id = ? AND flow_id = ?
 	`
+	return s.querySubflows(ctx, workspaceId, flowId, query, workspaceId, flowId)
+}
 
-	rows, err := s.db.QueryContext(ctx, query, workspaceId, flowId)
+func (s *Storage) querySubflows(ctx context.Context, workspaceId, flowId, query string, args ...interface{}) ([]domain.Subflow, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Error().Err(err).
 			Str("workspaceId", workspaceId).
