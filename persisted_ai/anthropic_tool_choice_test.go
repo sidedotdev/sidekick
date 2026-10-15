@@ -3,6 +3,7 @@ package persisted_ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -176,8 +177,11 @@ func TestForceToolCallAnthropic55Integration(t *testing.T) {
 		&secret_manager.KeyringSecretManager{},
 		&secret_manager.LocalConfigSecretManager{},
 	})
-	_, err := secretManager.GetSecret("ANTHROPIC_API_KEY")
-	require.NoError(t, err, "SIDE_INTEGRATION_TEST=true requires ANTHROPIC_API_KEY")
+	apiKey, err := secretManager.GetSecret("ANTHROPIC_API_KEY")
+	if errors.Is(err, secret_manager.ErrSecretNotFound) || (err == nil && apiKey == "") {
+		t.Skip("Skipping integration test; ANTHROPIC_API_KEY is not configured")
+	}
+	require.NoError(t, err, "Failed to retrieve ANTHROPIC_API_KEY")
 
 	for _, model := range []string{"claude-haiku-5-5", "claude-sonnet-5-5"} {
 		t.Run(model, func(t *testing.T) {

@@ -3,6 +3,7 @@ package persisted_ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,6 +103,17 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 		t.Skip("Skipping integration test; no initialized workspace or API keys in non-local sidekick environments")
 	}
 
+	secretsManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		secret_manager.EnvSecretManager{},
+		secret_manager.KeyringSecretManager{},
+		secret_manager.LocalConfigSecretManager{},
+	})
+	apiKey, err := secretsManager.GetSecret("OPENAI_API_KEY")
+	if errors.Is(err, secret_manager.ErrSecretNotFound) || (err == nil && apiKey == "") {
+		t.Skip("Skipping integration test; OPENAI_API_KEY is not configured")
+	}
+	require.NoError(t, err, "Failed to retrieve OPENAI_API_KEY")
+
 	ctx := context.Background()
 	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
 	ragActivities := setupRagService(t, ctx, repoRoot)
@@ -111,12 +123,6 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 		RepoDir: repoRoot,
 	})
 	require.NoError(t, err, "Failed to create local env")
-
-	secretsManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		secret_manager.EnvSecretManager{},
-		secret_manager.KeyringSecretManager{},
-		secret_manager.LocalConfigSecretManager{},
-	})
 
 	options := RankedDirSignatureOutlineOptions{
 		RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
@@ -348,6 +354,17 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 		t.Skip("skipping Modal ranked context integration test; credentials are unavailable in non-local sidekick environments")
 	}
 
+	secretsManager := noRerankSecretManager{SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		secret_manager.EnvSecretManager{},
+		secret_manager.KeyringSecretManager{},
+		secret_manager.LocalConfigSecretManager{},
+	})}
+	apiKey, err := secretsManager.GetSecret("OPENAI_API_KEY")
+	if errors.Is(err, secret_manager.ErrSecretNotFound) || (err == nil && apiKey == "") {
+		t.Skip("Skipping integration test; OPENAI_API_KEY is not configured")
+	}
+	require.NoError(t, err, "Failed to retrieve OPENAI_API_KEY")
+
 	ctx := context.Background()
 	workspaceId, repoRoot := setupTestWorkspace(t, ctx)
 	ragActivities := setupRagService(t, ctx, repoRoot)
@@ -397,11 +414,6 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 	}
 	ec := env.EnvContainer{Env: modalEnv}
 
-	secretsManager := noRerankSecretManager{SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		secret_manager.EnvSecretManager{},
-		secret_manager.KeyringSecretManager{},
-		secret_manager.LocalConfigSecretManager{},
-	})}
 	reranker, err := GetReranker(common.DefaultRerankingModelConfig(), nil, secretsManager)
 	require.NoError(t, err)
 	require.Nil(t, reranker, "byte-equality assertions below require reranking to be disabled")
@@ -427,8 +439,8 @@ func TestRankedDirSignatureOutline_Modal_Integration(t *testing.T) {
 	phaseStart = time.Now()
 	output, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
 	t.Logf("phase: ranked outline took %s", time.Since(phaseStart))
-	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
+	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 
 	// Second call exercises the per-git-tree outline cache populated by the
 	// first: unchanged files are neither read nor re-parsed, and the result
