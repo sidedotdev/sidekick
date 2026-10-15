@@ -41,10 +41,12 @@ Seed clones are made at committed HEAD; uncommitted source is not copied.
 Only the clones receive the benchmark package and `go.mod` changes. `GOWORK=off`
 prevents an enclosing `go.work` from changing the experiment.
 
-Cycles include periodic idle intervals and a final idle period with clients
-still connected. Initialization is included in the first cross-file operation;
-its latency is visible in the operation stream and maximum. Final shutdown and
-cleanup occur after memory sampling ends.
+Cycles include periodic idle intervals and a final idle period without explicit
+client shutdown. Desktop idle eviction remains enabled, so a sufficiently long
+idle period can have zero analysis RSS. Initialization, including initialization
+after workspace eviction or age recycling, is included in the cross-file
+operation. Its latency is visible in the operation stream and maximum.
+Final owner shutdown and cleanup occur after memory sampling ends.
 
 ## Isolation and prerequisites
 
@@ -221,5 +223,86 @@ Unit coverage includes proc-stat parsing, detached-daemon/helper accounting,
 metadata-unavailable accounting, PID reuse/history pruning, bounded observer
 state, exact reference checks, invalid-run comparison rejection and output
 correctness. Real integration coverage checks repeated edits across working
-directories and canceled-run cleanup. The separate call-hierarchy lint tool is
-not modified; its compatibility must be checked when changing the analyzer.
+directories and canceled-run cleanup. The separate call-hierarchy lint tool
+continues to use its own JSON-RPC client rather than the desktop workspace cache.
+
+## Implementation selection: owned, bounded gopls sessions
+
+The desktop retains gopls's semantic definitions, references and both existing
+code-action requests. It no longer launches an automatic shared daemon, debug
+servers or RPC trace logging. Each activity owner retains at most one workspace
+server, releases it after one minute idle, and replaces it on the next operation
+once it is five minutes old. Age recycling occurs even under continuous use;
+it is a server-lifetime bound, not a hard RSS limit for one large query.
+Worker shutdown also closes the owner. Preexisting shared daemons are not
+killed: their ownership cannot safely be inferred. Account for any old Sidekick
+instance and its daemon when measuring an upgrade.
+
+Operations hold a cancellable lease. The complete edit notification sequence
+holds one lease and carries the original environment, so eviction cannot split
+the sequence or restart an SSH workspace locally. Failed or canceled sync
+discards the client. Transport closure closes both pipes and waits for the
+owned process, with a two-second grace period before killing an unresponsive
+process. SSH launch and Modal login-shell routing remain supported.
+
+### Focused semantic replacement evaluation
+
+The reproducible `go/packages` probe loads syntax/type information and counts
+resolved identifier objects and available source positions:
+
+```sh
+go run ./scripts/go_analysis_bench/semantic_probe \
+  --dir . --pattern ./... --iterations 2
+```
+
+On Sidekick with Go 1.26.4, workspace-wide `LoadSyntax` retained about **405 MB
+Go heap** after GC, taking **3.5–4.4 seconds** per independent load. These are
+in-process heap measurements, not process-tree RSS, and cannot be directly
+compared with benchmark RSS. This prototype is not a complete backend:
+workspace reference indexing, invalidation, test variants and gopls-equivalent
+`source.fixAll` behavior would still need implementation and validation.
+Import organization alone is not established as an equivalent autofix.
+
+Export data often supplies dependency definition positions; targeted source
+parsing can extract their definitions without eagerly checking dependency
+syntax. The optional `--dependency-syntax` probe explores that eager strategy,
+not a prerequisite for semantic lookup. Its roughly 1.78 GB retained heap for
+`--pattern ./coding/lsp` is not evidence that a focused replacement inherently
+needs that memory.
+
+The lifecycle fix was selected because it demonstrates a substantial reduction
+while preserving the existing semantic engine and autofixes, without relying
+on unimplemented replacement semantics.
+
+### Selection smoke measurements
+
+Paired, isolated-account runs used Go 1.26.4, gopls v0.21.0, matching fixtures,
+200 ms RSS sampling and a two-second final-idle median window. Both completed
+all correctness checks, including dependencies, references, autofix and edits.
+Memory includes analysis processes and their helpers, but excludes the harness
+in this table.
+
+| Workload | Shared-daemon baseline peak / final idle | Owned lifecycle peak / final idle |
+| --- | --- | --- |
+| Three fixture workspaces, 15 cycles, 65 s final idle | 1,132.9 / 1,096.8 MiB | 452.8 / 0.0 MiB |
+| Two Sidekick HEAD clones, two cycles, 5 s final idle | 2,347.6 / 2,189.1 MiB | 924.5 / 593.6 MiB |
+
+The first pair used `--workspaces 3 --cycles 15 --idle-every 5 --idle 1s
+--final-idle 65s --steady-window 2s --sample 200ms`. The seeded pair used
+`--seed /path/to/sidekick --workspaces 2 --cycles 2 --idle-every 1 --idle 1s
+--final-idle 5s --steady-window 2s --sample 200ms`. The baseline binary was
+built from commit `2144e05`; both seeded runs cloned that commit. Rebuild both
+binaries from matching fixtures: comparison rejects mismatched checksums.
+
+In the fixture pair, cross-file definition p50/p95 changed from **4/408 ms**
+to **1,279/1,339 ms** because every workspace switch now initializes a server.
+Maximum definition latency was **1.52 s baseline / 17.50 s candidate**; the
+smoke trial does not explain that cold-start outlier. Autofix p95 was
+140/179 ms, references 7/9 ms, dependency definitions 4/4 ms and post-edit
+definition freshness 120/9 ms (baseline/candidate). Alternating workspaces
+therefore trades warm lookup latency for bounded workspace retention.
+
+These are selection smoke results, not a multi-hour plateau claim or attainment
+of a 50 MB target. In particular, zero final-idle RSS describes eviction, not
+active analysis cost. The long-running paired procedure above remains necessary
+for acceptance validation.

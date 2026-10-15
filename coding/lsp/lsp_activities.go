@@ -12,6 +12,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -19,10 +20,17 @@ import (
 // t.TempDir() to create a temporary directory, creating go files and then
 // directly calling the activity methods
 type LSPActivities struct {
-	//StreamAccessor    db.StreamAccessor
-	LSPClientProvider     func(language string) LSPClient
-	InitializedClients    map[string]LSPClient
-	InitializationLockers sync.Map
+	LSPClientProvider  func(language string) LSPClient
+	InitializedClients map[string]LSPClient
+
+	cacheOnce      sync.Once
+	clientGate     chan struct{}
+	idleTimer      *time.Timer
+	idleGeneration uint64
+	clientBorn     time.Time
+	closed         bool
+	idleTimeout    time.Duration
+	maxClientAge   time.Duration
 }
 
 type LSPDefinitionLocationsRequest struct {
@@ -98,10 +106,11 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 
 	langName := utils.InferLanguageNameFromFilePath(request.FilePath)
 	repoDir := request.EnvContainer.Env.GetWorkingDirectory()
-	lspClient, err := la.findOrInitClient(ctx, repoDir, langName, request.EnvContainer)
+	lspClient, release, err := la.findOrInitClient(ctx, repoDir, langName, request.EnvContainer)
 	if err != nil {
 		return []SymbolDefinitionLocation{}, err
 	}
+	defer release()
 	fileURI := convertFilePathToURI(repoDir, request.FilePath)
 
 	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
@@ -341,21 +350,26 @@ func convertFilePathToURI(repoDir, filePath string) string {
 
 // TextDocumentDidOpenActivityInput represents input for the TextDocumentDidOpen notification.
 type TextDocumentDidOpenActivityInput struct {
-	RepoDir    string `json:"repo_dir"`
-	FilePath   string `json:"file_path"`
-	LanguageID string `json:"language_id"`
-	Version    int    `json:"version"`
-	Text       string `json:"text"`
+	RepoDir      string            `json:"repo_dir"`
+	FilePath     string            `json:"file_path"`
+	LanguageID   string            `json:"language_id"`
+	Version      int               `json:"version"`
+	Text         string            `json:"text"`
+	EnvContainer *env.EnvContainer `json:"envContainer,omitempty"`
 }
 
 // TextDocumentDidOpenActivity sends a textDocument/didOpen notification to the LSP server.
 func (lspa *LSPActivities) TextDocumentDidOpenActivity(ctx context.Context, input TextDocumentDidOpenActivityInput) error {
 	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
-	lspClient, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, nil)
+	lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
 	if err != nil {
 		return err
 	}
+	defer release()
+	return didOpen(ctx, lspClient, input)
+}
 
+func didOpen(ctx context.Context, lspClient LSPClient, input TextDocumentDidOpenActivityInput) error {
 	// Check if server supports open/close notifications
 	capabilities := lspClient.GetServerCapabilities()
 	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
@@ -383,18 +397,23 @@ func (lspa *LSPActivities) TextDocumentDidOpenActivity(ctx context.Context, inpu
 
 // TextDocumentDidCloseActivityInput represents input for the TextDocumentDidClose notification.
 type TextDocumentDidCloseActivityInput struct {
-	RepoDir  string `json:"repo_dir"`
-	FilePath string `json:"file_path"`
+	RepoDir      string            `json:"repo_dir"`
+	FilePath     string            `json:"file_path"`
+	EnvContainer *env.EnvContainer `json:"envContainer,omitempty"`
 }
 
 // TextDocumentDidCloseActivity sends a textDocument/didClose notification to the LSP server.
 func (lspa *LSPActivities) TextDocumentDidCloseActivity(ctx context.Context, input TextDocumentDidCloseActivityInput) error {
 	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
-	lspClient, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, nil)
+	lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
 	if err != nil {
 		return err
 	}
+	defer release()
+	return didClose(ctx, lspClient, input)
+}
 
+func didClose(ctx context.Context, lspClient LSPClient, input TextDocumentDidCloseActivityInput) error {
 	// Check if server supports open/close notifications
 	capabilities := lspClient.GetServerCapabilities()
 	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
@@ -423,16 +442,21 @@ type TextDocumentDidChangeActivityInput struct {
 	FilePath       string                           `json:"file_path"`
 	Version        int                              `json:"version"`
 	ContentChanges []TextDocumentContentChangeEvent `json:"content_changes"`
+	EnvContainer   *env.EnvContainer                `json:"envContainer,omitempty"`
 }
 
 // TextDocumentDidChangeActivity sends a textDocument/didChange notification to the LSP server.
 func (lspa *LSPActivities) TextDocumentDidChangeActivity(ctx context.Context, input TextDocumentDidChangeActivityInput) error {
 	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
-	lspClient, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, nil)
+	lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
 	if err != nil {
 		return err
 	}
+	defer release()
+	return didChange(ctx, lspClient, input)
+}
 
+func didChange(ctx context.Context, lspClient LSPClient, input TextDocumentDidChangeActivityInput) error {
 	// Check if server supports change notifications
 	capabilities := lspClient.GetServerCapabilities()
 	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
@@ -461,19 +485,24 @@ func (lspa *LSPActivities) TextDocumentDidChangeActivity(ctx context.Context, in
 
 // TextDocumentDidSaveActivityInput represents input for the TextDocumentDidSave notification.
 type TextDocumentDidSaveActivityInput struct {
-	RepoDir  string  `json:"repo_dir"`
-	FilePath string  `json:"file_path"`
-	Text     *string `json:"text,omitempty"`
+	RepoDir      string            `json:"repo_dir"`
+	FilePath     string            `json:"file_path"`
+	Text         *string           `json:"text,omitempty"`
+	EnvContainer *env.EnvContainer `json:"envContainer,omitempty"`
 }
 
 // TextDocumentDidSaveActivity sends a textDocument/didSave notification to the LSP server.
 func (lspa *LSPActivities) TextDocumentDidSaveActivity(ctx context.Context, input TextDocumentDidSaveActivityInput) error {
 	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
-	lspClient, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, nil)
+	lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
 	if err != nil {
 		return err
 	}
+	defer release()
+	return didSave(ctx, lspClient, input)
+}
 
+func didSave(ctx context.Context, lspClient LSPClient, input TextDocumentDidSaveActivityInput) error {
 	// Check if server supports save notifications
 	capabilities := lspClient.GetServerCapabilities()
 	includeText := true

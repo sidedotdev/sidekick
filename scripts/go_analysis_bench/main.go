@@ -178,7 +178,6 @@ func runBenchmark(ctx context.Context, cfg config) (report benchmarkReport, resu
 	}
 	report.Hostname, _ = os.Hostname()
 	var monitor *memoryMonitor
-	var clients []*lsp.Jsonrpc2LSPClient
 	var files []*os.File
 	var token string
 	latency := newLatencyAccumulator()
@@ -193,10 +192,8 @@ func runBenchmark(ctx context.Context, cfg config) (report benchmarkReport, resu
 		}
 		report.Latency = latency.summary()
 		report.CorrectnessFailures = driver.failures
-		for _, client := range clients {
-			if client.Conn != nil {
-				resultErr = errors.Join(resultErr, client.Conn.Close())
-			}
+		if driver.activities != nil {
+			resultErr = errors.Join(resultErr, driver.activities.Close())
 		}
 		for _, file := range files {
 			resultErr = errors.Join(resultErr, file.Close())
@@ -312,7 +309,6 @@ func runBenchmark(ctx context.Context, cfg config) (report benchmarkReport, resu
 	actions := json.NewEncoder(files[1])
 	driver.activities = lsp.NewLSPActivities(func(language string) lsp.LSPClient {
 		client := &lsp.Jsonrpc2LSPClient{LanguageName: language}
-		clients = append(clients, client)
 		return &actionRecordingClient{LSPClient: client, log: actions}
 	})
 	monitor, err = startMonitor(filepath.Join(output, "memory.jsonl"), cfg.SampleInterval, cfg.SteadyWindow, cfg.DaemonNames, cancel)

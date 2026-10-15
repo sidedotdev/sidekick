@@ -103,25 +103,11 @@ func (b *workload) references(ctx context.Context, w workspace, symbol string) e
 }
 
 func (b *workload) notify(ctx context.Context, w workspace, relativePath string, content string) error {
-	if err := b.activities.TextDocumentDidOpenActivity(ctx, lsp.TextDocumentDidOpenActivityInput{
-		RepoDir: w.root, FilePath: relativePath,
-	}); err != nil {
-		return err
-	}
-	if err := b.activities.TextDocumentDidChangeActivity(ctx, lsp.TextDocumentDidChangeActivityInput{
-		RepoDir: w.root, FilePath: relativePath, Version: 2,
-		ContentChanges: []lsp.TextDocumentContentChangeEvent{{Text: content}},
-	}); err != nil {
-		return err
-	}
-	if err := b.activities.TextDocumentDidSaveActivity(ctx, lsp.TextDocumentDidSaveActivityInput{
-		RepoDir: w.root, FilePath: relativePath,
-	}); err != nil {
-		return err
-	}
-	return b.activities.TextDocumentDidCloseActivity(ctx, lsp.TextDocumentDidCloseActivityInput{
-		RepoDir: w.root, FilePath: relativePath,
+	_, err := b.activities.SyncDocumentActivity(ctx, lsp.SyncDocumentActivityInput{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: w.root}},
+		FilePath:     relativePath, Content: content,
 	})
+	return err
 }
 
 func (b *workload) edit(ctx context.Context, w *workspace, cycle int) error {
@@ -291,4 +277,11 @@ func (c *actionRecordingClient) Initialize(ctx context.Context, params lsp.Initi
 		client.EnvContainer = &env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: root.Path}}
 	}
 	return c.LSPClient.Initialize(ctx, params)
+}
+
+func (c *actionRecordingClient) Close() error {
+	if client, ok := c.LSPClient.(interface{ Close() error }); ok {
+		return client.Close()
+	}
+	return nil
 }
