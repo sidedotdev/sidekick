@@ -595,7 +595,7 @@ func devPlanToolHandlers(
 				}
 			}
 
-			result.Content = llm2.TextContentBlocks("Plan updated successfully. Current plan:\n" + validatedPlan.String())
+			result.Content = llm2.TextContentBlocks("Plan updated successfully. " + partialDevPlanInstructions + "\n\nCurrent plan:\n" + validatedPlan.String())
 			return result, nil
 		},
 		recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
@@ -658,7 +658,7 @@ func devPlanToolHandlers(
 					return result, nil
 				}
 			} else {
-				result.Content = llm2.TextContentBlocks("Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.")
+				result.Content = llm2.TextContentBlocks("Recorded plan progress. " + partialDevPlanInstructions)
 				return result, nil
 			}
 		},
@@ -721,13 +721,14 @@ func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryConta
 // extremely unreliable
 func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, planningPrompt string, reproduceIssue bool) string {
 	data := map[string]interface{}{
-		"codeContext":            codeContext,
-		"requirements":           requirements,
-		"recordPlanFunctionName": recordDevPlanTool.Name,
-		"planningPrompt":         planningPrompt,
-		"reproducePrompt":        reproducePrompt,
-		"reproduceIssue":         reproduceIssue,
-		"editCodeHints":          dCtx.RepoConfig.EditCode.Hints,
+		"codeContext":              codeContext,
+		"requirements":             requirements,
+		"recordPlanFunctionName":   recordDevPlanTool.Name,
+		"planningPrompt":           planningPrompt,
+		"reproducePrompt":          reproducePrompt,
+		"reproduceIssue":           reproduceIssue,
+		"editCodeHints":            dCtx.RepoConfig.EditCode.Hints,
+		"planFeedbackInstructions": planFeedbackInstructions,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -842,17 +843,20 @@ func (state *buildDevPlanState) prepareFinalization(iteration *LlmIteration) (bo
 }
 
 func (state *buildDevPlanState) recordingReminder() string {
-	helpReminder := " If user input is needed to complete the plan, use the " + getHelpOrInputTool.Name + " tool to request it before finalizing the plan."
 	if len(state.devPlan.Steps) == 0 {
-		return "No executable plan has been recorded. Finish planning now and call " + recordDevPlanTool.Name + " with executable steps and is_planning_complete set to true. Writing a plan in prose does not record it." + helpReminder
+		return "No executable plan has been recorded. Use " + recordDevPlanTool.Name + " to record executable steps; prose alone does not record a plan. " + planFeedbackInstructions
 	}
-	status := "Only a partial plan has been recorded."
+	status := "Only a partial plan has been recorded; continue investigating and refining it."
 	if state.devPlan.Complete {
-		status = "A plan has been recorded, but its revision or approval is still pending."
+		status = "A complete plan has been recorded."
 	}
-	return status + " Finish planning now and call " + updateDevPlanTool.Name + " to finalize it, or " + recordDevPlanTool.Name + " to replace it. Set is_planning_complete to true once complete." + helpReminder + "\n\nCurrent plan:\n" + state.devPlan.String()
+	return status + " Use " + updateDevPlanTool.Name + " for substantive revisions or " + recordDevPlanTool.Name + " to replace the plan. " + planFeedbackInstructions + "\n\nCurrent plan:\n" + state.devPlan.String()
 }
 
 func (state *buildDevPlanState) resetAfterFeedback() {
 	state.forceRecording = false
 }
+
+const partialDevPlanInstructions = `The plan is incomplete. This checkpoint preserves learnings in case history is truncated. Continue investigating, retrieve context as needed, and refine the plan until complete. Do not stop because of context pressure or use help requests for progress announcements or permission to continue. Check requirements for ambiguity; do not make unfounded assumptions. Clarify consequential decisions with the user when research cannot resolve them, unless the user has delegated the choice. A decision is consequential if it could substantially change the outcome or high-level implementation approach, including a choice between materially different valid approaches. Ask an actionable question only for a genuine question or blocker requiring user input that research cannot resolve. ` + planFeedbackInstructions
+
+const planFeedbackInstructions = `If feedback requests a plan change, revise the affected plan content. If feedback asks a question, answer directly using an available communication tool, or a normal response if none is available. If a requested tool is unavailable, state that clearly. Do not send metadata-only updates merely to trigger another feedback cycle. Continue any unfinished planning after responding. Mark is_planning_complete true when planning is complete; approval is a separate user decision.`

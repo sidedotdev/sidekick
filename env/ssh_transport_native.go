@@ -905,12 +905,17 @@ func (c *nativeSSHConn) runPooledSFTPOp(ctx context.Context, client *ssh.Client,
 	case result := <-resultCh:
 		if result.err != nil {
 			if sftpFailureWarrantsReconnect(ctx, result.err, op) {
+				log.Ctx(ctx).Warn().Err(result.err).Str("remote", c.remoteKey).
+					Str("operation", op.Name).Str("path", op.Path).Msg("discarding failed shared sftp channel")
 				c.invalidateSFTPClient(sftpClient)
 			}
 			return nil, fmt.Errorf("%s %s: %w", op.Name, op.Path, result.err)
 		}
 		return result.value, nil
 	case <-opCtx.Done():
+		log.Ctx(ctx).Warn().Err(opCtx.Err()).AnErr("callerError", ctx.Err()).
+			Str("remote", c.remoteKey).Str("operation", op.Name).Str("path", op.Path).
+			Msg("discarding interrupted shared sftp channel")
 		c.invalidateSFTPClient(sftpClient)
 		return nil, fmt.Errorf("%s %s: %w", op.Name, op.Path, opCtx.Err())
 	}

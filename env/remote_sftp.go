@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"sidekick/common"
@@ -435,9 +436,15 @@ func boundedSFTPOp[T any](ctx context.Context, conn *sftpConn, client *sftp.Clie
 	case result := <-resultCh:
 		return result.value, result.err
 	case <-ctx.Done():
+		log.Ctx(ctx).Warn().Err(ctx.Err()).AnErr("callerError", ctx.Err()).
+			Str("remote", conn.key).Str("operation", opName).Str("path", path).
+			Msg("discarding interrupted shared sftp connection")
 		conn.invalidate(client)
 		return zero, fmt.Errorf("sftp %s %s: %w", opName, path, ctx.Err())
 	case <-timer.C:
+		log.Ctx(ctx).Warn().Err(context.DeadlineExceeded).AnErr("callerError", ctx.Err()).
+			Str("remote", conn.key).Str("operation", opName).Str("path", path).
+			Msg("discarding interrupted shared sftp connection")
 		conn.invalidate(client)
 		return zero, fmt.Errorf("sftp %s %s timed out after %s", opName, path, sftpOpTimeout)
 	}
@@ -476,10 +483,24 @@ func withSFTPRetry(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, op
 // sftpFailureWarrantsReconnect separates a dead session from an answer about
 // the remote path, which reconnecting cannot change.
 func sftpFailureWarrantsReconnect(ctx context.Context, err error, op SFTPOp) bool {
-	if ctx.Err() != nil || errors.Is(err, os.ErrPermission) {
+	if ctx.Err() != nil || errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.ENOTDIR) {
 		return false
 	}
-	return op.RetryOnNotExist || !errors.Is(err, os.ErrNotExist)
+	if errors.Is(err, os.ErrNotExist) {
+		return op.RetryOnNotExist
+	}
+	var status *sftp.StatusError
+	if errors.As(err, &status) {
+		// Filesystem errors must not tear down a channel shared by other
+		// operations. Only transport/protocol statuses warrant reconnecting.
+		switch status.FxCode() {
+		case sftp.ErrSSHFxNoConnection, sftp.ErrSSHFxConnectionLost, sftp.ErrSSHFxBadMessage:
+			return true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // sftpValue runs a value-producing op and restores its static type.

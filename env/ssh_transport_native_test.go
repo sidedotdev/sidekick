@@ -1367,6 +1367,50 @@ func refusedLocalPort(t *testing.T) int {
 	return port
 }
 
+func TestNativeTransportSFTPPathErrorPreservesInFlightRead(t *testing.T) {
+	for _, operation := range []string{"mkdir under file", "readdir file", "remove nonempty directory"} {
+		t.Run(operation, func(t *testing.T) {
+			server := startSSHTestServer(t, sshTestServerOptions{})
+			transport := nativeTestTransport(t, server, t.Name())
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			dir := t.TempDir()
+			filePath := filepath.Join(dir, "file.txt")
+			content := []byte("an unrelated read must survive a filesystem error")
+			require.NoError(t, os.WriteFile(filePath, content, 0o600))
+
+			value, err := transport.WithSFTP(ctx, SFTPOp{
+				Name: "read",
+				Path: filePath,
+				Run: func(client *sftp.Client) (any, error) {
+					file, err := client.Open(filePath)
+					if err != nil {
+						return nil, err
+					}
+					defer file.Close()
+
+					var pathErr error
+					switch operation {
+					case "mkdir under file":
+						pathErr = sftpMkdirAll(ctx, transport, filepath.Join(filePath, "child"), 0o755)
+					case "readdir file":
+						_, pathErr = sftpReadDir(ctx, transport, filePath)
+					case "remove nonempty directory":
+						pathErr = sftpRemove(ctx, transport, dir)
+					}
+					if pathErr == nil {
+						return nil, fmt.Errorf("%s unexpectedly succeeded", operation)
+					}
+					return io.ReadAll(file)
+				},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, content, value)
+		})
+	}
+}
+
 func TestNativeTransportMissingKnownHostsFiles(t *testing.T) {
 	tests := []struct {
 		name       string
