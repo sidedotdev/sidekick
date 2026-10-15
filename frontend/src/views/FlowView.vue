@@ -45,14 +45,14 @@
       </button>
     </div>
   </div>
-  <div ref="flowActionsContainerRef" class="flow-actions-container" :class="{ 'short-content': shortContent }">
+  <div ref="flowActionsContainerRef" class="flow-actions-container" :class="{ 'short-content': shortContent }" @scroll.passive="scheduleHistoryAutoload">
     <div ref="scrollContainerRef" class="scroll-container">
       <div v-if="isLoadingFlow && !flow" class="loading-indicator">Loading...</div>
       <div v-else-if="flow && isStartingFlow" class="loading-indicator">Starting Task...</div>
-      <button v-if="hasOlderHistory" :disabled="isLoadingHistory" @click="loadOlderHistory">
-        {{ isLoadingHistory ? 'Loading history…' : 'Load older history' }}
-      </button>
-      <p v-if="historyError" role="alert">{{ historyError }}</p>
+      <p v-if="historyError" role="alert">
+        {{ historyError }}
+        <button :disabled="isLoadingHistory" @click="loadOlderHistory">Retry loading history</button>
+      </p>
       <SubflowContainer
         v-for="subflowTree in subflowTrees"
         :key="subflowTree.id"
@@ -73,7 +73,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, onUnmounted, watch, provide } from 'vue'
-import { useEventBus } from '@vueuse/core'
+import { useEventBus, useResizeObserver } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
 import IdeSelectorDialog from '@/components/IdeSelectorDialog.vue'
 import FlowEditorLinks from '@/components/FlowEditorLinks.vue'
@@ -567,6 +567,42 @@ const loadOlderHistory = async () => {
   await Promise.all([actionHistory.load(), subflowHistory.load()])
 }
 
+let historyAutoloadFrame: number | undefined
+
+const cancelHistoryAutoload = () => {
+  if (historyAutoloadFrame !== undefined) cancelAnimationFrame(historyAutoloadFrame)
+  historyAutoloadFrame = undefined
+}
+
+const scheduleHistoryAutoload = () => {
+  cancelHistoryAutoload()
+  const generation = historyGeneration
+  historyAutoloadFrame = requestAnimationFrame(() => {
+    historyAutoloadFrame = undefined
+    if (generation !== historyGeneration || !hasOlderHistory.value || isLoadingHistory.value || historyError.value) return
+    const container = flowActionsContainerRef.value
+    const content = scrollContainerRef.value
+    if (!container || !content || container.clientHeight === 0) return
+
+    const fits = contentFitsContainer()
+    if (shortContent.value !== fits) {
+      shortContent.value = fits
+      return
+    }
+
+    // Bounding rectangles work with both normal and column-reverse scrolling.
+    const distance = container.getBoundingClientRect().top - content.getBoundingClientRect().top
+    if (distance <= container.clientHeight) void loadOlderHistory()
+  })
+}
+
+watch(
+  [hasOlderHistory, isLoadingHistory, historyError, shortContent],
+  scheduleHistoryAutoload,
+  { flush: 'post' },
+)
+useResizeObserver([flowActionsContainerRef, scrollContainerRef], scheduleHistoryAutoload)
+
 const saveCurrentFlowToCache = () => {
   if (flow.value && currentFlowIdForSockets) {
     viewCache.setFlowView(currentFlowIdForSockets, {
@@ -578,6 +614,7 @@ const saveCurrentFlowToCache = () => {
 
 const setupFlow = async (newFlowId: string | undefined) => {
   saveCurrentFlowToCache();
+  cancelHistoryAutoload()
   const generation = ++historyGeneration
   actionHistory.reset(store.workspaceId ?? undefined, newFlowId)
   subflowHistory.reset(store.workspaceId ?? undefined, newFlowId)
@@ -767,6 +804,7 @@ const pauseFlow = async () => {
 
 onUnmounted(() => {
   saveCurrentFlowToCache();
+  cancelHistoryAutoload()
   historyGeneration++
   actionHistory.reset()
   subflowHistory.reset()

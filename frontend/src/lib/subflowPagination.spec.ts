@@ -49,8 +49,8 @@ describe('paginated subflow trees', () => {
     expect(trees[0].children).toEqual([item])
   })
 
-  it('renders subflows without loaded actions and tolerates cycles', () => {
-    const trees = buildSubflowTrees([], {
+  it('retains action ancestry through cycles while hiding empty subflows', () => {
+    const trees = buildSubflowTrees([action('1', 'a')], {
       a: subflow('a', 'b'),
       b: subflow('b', 'a'),
       empty: subflow('empty'),
@@ -61,6 +61,36 @@ describe('paginated subflow trees', () => {
       walk(node.children.filter(child => !('actionType' in child)) as typeof trees)
     })
     walk(trees)
-    expect(ids.sort()).toEqual(['a', 'b', 'empty'])
+    expect(ids.sort()).toEqual(['a', 'b'])
+  })
+})
+
+describe('empty subflows', () => {
+  it.each([undefined, 'prereqs', 'step.dev'])('hides empty roots and descendants of type %s', (type) => {
+    const item = action('1', 'active')
+    const trees = buildSubflowTrees([item], {
+      empty: { ...subflow('empty'), type },
+      active: subflow('active'),
+      nested: { ...subflow('nested', 'active'), type },
+      deep: { ...subflow('deep', 'nested'), type },
+    })
+    expect(trees).toEqual([{
+      id: 'active', name: 'Repeated name', description: 'active', children: [item],
+    }])
+  })
+
+  it('reveals a subflow and its ancestors when an action arrives', () => {
+    const parent = subflow('parent')
+    const child = subflow('child', parent.id)
+    const subflows = { parent, child }
+    expect(buildSubflowTrees([], subflows)).toEqual([])
+
+    const item = action('1', child.id)
+    expect(buildSubflowTrees([item], subflows)).toEqual([{
+      id: parent.id, name: parent.name, description: parent.description,
+      children: [{
+        id: child.id, name: child.name, description: child.description, children: [item],
+      }],
+    }])
   })
 })
