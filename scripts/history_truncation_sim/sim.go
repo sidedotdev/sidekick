@@ -907,9 +907,9 @@ func openAISchedule(name string, short, long [3]float64) priceSchedule {
 	}}
 }
 
-// builtinSchedules are list prices as published on 2026-10-08. Anthropic
-// sells 5m and 1h explicit retention; OpenAI sells a 30m explicit cache plus
-// free implicit caching. Output tokens are not modeled.
+// builtinSchedules are fixed pricing scenarios for reproducible comparisons,
+// not live pricing or verified route-specific billing rules. In particular,
+// the implicit scenario assumes no write premium. Output tokens are excluded.
 var builtinSchedules = map[string]priceSchedule{
 	"anthropic/claude-fable-5-1":  anthropicSchedule("Fable 5.1", 10, 0.25, 12.5, 20),
 	"anthropic/claude-opus-5-5":   anthropicSchedule("Opus 5.5", 4, 0.20, 5, 8),

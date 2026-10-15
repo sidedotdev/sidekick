@@ -96,9 +96,9 @@ func cacheModeByName(retention string, minCacheable, granularity int) (cacheMode
 		base.TTL, base.ExplicitWrites = 30*time.Minute, true
 		return cacheMode{name: "explicit 30m", retention: retention, cm: base, hitProb: 1}, nil
 	case retentionImplicit:
-		// The 5m TTL is an assumption (OpenAI documents 5–10 min, longer
-		// off-peak); it has not been measured here. Residual misses are
-		// modeled via hitProb rather than by shortening the TTL.
+		// This scenario assumes a 5m TTL and no write premium; neither
+		// assumption is established by the recorded cache-read counters.
+		// Residual misses are modeled via hitProb.
 		base.TTL, base.ExplicitWrites = 5*time.Minute, false
 		if base.Granularity < 128 {
 			base.Granularity = 128
@@ -108,8 +108,8 @@ func cacheModeByName(retention string, minCacheable, granularity int) (cacheMode
 	return cacheMode{}, fmt.Errorf("unknown cache mode %q (want 5m, 1h, 30m or implicit)", retention)
 }
 
-// recordedRetention is the cache product the recorded calls were billed
-// under, which the validity check must reproduce.
+// recordedRetention selects the baseline cache assumption. Provider identity
+// alone does not establish the route's billing rules or retention.
 func recordedRetention(provider string) string {
 	if strings.Contains(provider, "openai") {
 		return retentionImplicit
