@@ -595,7 +595,7 @@ func devPlanToolHandlers(
 				}
 			}
 
-			result.Content = llm2.TextContentBlocks("Plan updated successfully. Current plan:\n" + validatedPlan.String())
+			result.Content = llm2.TextContentBlocks("Plan updated successfully. " + partialDevPlanInstructions + "\n\nCurrent plan:\n" + validatedPlan.String())
 			return result, nil
 		},
 		recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
@@ -658,7 +658,7 @@ func devPlanToolHandlers(
 					return result, nil
 				}
 			} else {
-				result.Content = llm2.TextContentBlocks("Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.")
+				result.Content = llm2.TextContentBlocks("Recorded plan progress. " + partialDevPlanInstructions)
 				return result, nil
 			}
 		},
@@ -851,3 +851,5 @@ func (state *buildDevPlanState) recordingReminder() string {
 	}
 	return status + " Finish planning now and call " + updateDevPlanTool.Name + " to finalize it, or " + recordDevPlanTool.Name + " to replace it. Set is_planning_complete to true once complete." + helpReminder + "\n\nCurrent plan:\n" + state.devPlan.String()
 }
+
+const partialDevPlanInstructions = `The plan is still incomplete. This partial plan is only a checkpoint to preserve useful context in case history is truncated later. Continue investigating immediately, retrieve additional code context as needed, and keep refining the plan until it is complete. Record or update the plan with is_planning_complete set to true only when planning is complete. Do not stop or end with a final response summarizing an incomplete plan because of context pressure; checkpoint your learnings and keep working instead. Do not use help requests for progress announcements, to say the plan is not finalized, or to ask permission to continue. Request user input only for a genuine question or blocker that cannot be resolved with the available tools, and ask an actionable question. After receiving the answer, continue planning.`
