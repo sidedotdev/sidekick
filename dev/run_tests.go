@@ -100,6 +100,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 	// Track non-heartbeat failures across iterations
 	var failedCommands []indexedCommand
 	var activityErrors []string
+	var dockerErr error
 
 	for {
 		// execute pending test commands in parallel
@@ -128,6 +129,9 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 					})
 				} else {
 					activityErrors = append(activityErrors, result.err.Error())
+					if _, ok := env.AsDockerEngineFailure(result.err); ok {
+						dockerErr = result.err
+					}
 					failedCommands = append(failedCommands, indexedCommand{
 						index: result.commandIndex,
 						cmd:   commandsToRun[result.commandIndex],
@@ -177,14 +181,20 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		}
 
 		// Prompt user once for all failed commands
-		prompt := fmt.Sprintf("run_tests failed for %d command(s):\n\n```\n%s\n```", len(activityErrors), strings.Join(activityErrors, "\n"))
-		requestParams := map[string]any{
-			"continueTag": "try_again",
-		}
-		userErr := flow_action.GetUserContinue(actionCtx.ExecContext, prompt, requestParams)
+		handled, userErr := flow_action.HandleDockerFailure(actionCtx.ExecContext, "run_tests", dockerErr)
 		if userErr != nil {
 			return nil, userErr
 		}
+		if !handled {
+			prompt := fmt.Sprintf("run_tests failed for %d command(s):\n\n```\n%s\n```", len(activityErrors), strings.Join(activityErrors, "\n"))
+			requestParams := map[string]any{
+				"continueTag": "try_again",
+			}
+			if userErr := flow_action.GetUserContinue(actionCtx.ExecContext, prompt, requestParams); userErr != nil {
+				return nil, userErr
+			}
+		}
+		dockerErr = nil
 
 		switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 		case 2:
@@ -262,7 +272,7 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 	if err != nil {
 		resultsCh.Send(actionCtx, singleTestResult{
 			commandIndex: commandIndex,
-			err:          fmt.Errorf("failed to run test command '%s': %v", fullCommand, err),
+			err:          fmt.Errorf("failed to run test command '%s': %w", fullCommand, err),
 		})
 		return
 	}

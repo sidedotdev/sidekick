@@ -76,6 +76,42 @@ describe('UserRequest', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
+  it.each([
+    ['Restart Docker and retry', true],
+    ['Retry without restarting', false],
+  ])('submits the Docker recovery choice: %s', async (label, approved) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ success: true }),
+    })
+    global.fetch = fetchMock
+    mountComponent(createMockFlowAction({
+      actionType: 'user_request.approve.restart_docker',
+      actionParams: {
+        requestKind: 'approval',
+        requestContent: 'A restart interrupts all workspaces on this engine.',
+        approveTag: 'restart_docker',
+        rejectTag: 'retry_without_restart',
+        rejectReasonRequired: false,
+      },
+    }))
+    try {
+      expect(fetchMock).not.toHaveBeenCalled()
+      const button = wrapper.findAll('button').find(button => button.text().startsWith(label as string))
+      expect(button).toBeDefined()
+      await button!.trigger('click')
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/workspaces/test-workspace-id/flow_actions/test-action-id/complete',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ userResponse: { content: '', approved } }),
+        }),
+      )
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   describe('copy request content', () => {
     it.each([
       ['pending', '# Requirements\n\n- Preserve `markdown`.\n', undefined],

@@ -712,3 +712,63 @@ func (s *RunTestsTestSuite) TestGracefullyHandlePausedTestErrorVersioning() {
 		})
 	}
 }
+
+func (s *RunTestsTestSuite) TestDockerFailurePromptsOnceForParallelCommands() {
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{Command: "first command"},
+			{Command: "second command"},
+		},
+	}
+	s.devContext.ExecContext.DisableHumanInTheLoop = false
+	var mu sync.Mutex
+	calls := map[string]int{}
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			command := input.Args[2]
+			calls[command]++
+			if calls[command] == 1 {
+				return env.EnvRunCommandActivityOutput{}, temporal.NewNonRetryableApplicationError(
+					"Docker unavailable", env.ErrTypeDockerEngineUnavailable, nil,
+					env.DockerEngineFailureDetails{Host: "worker-host"})
+			}
+			return env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil
+		},
+	)
+	var requests []flow_action.RequestForUser
+	parent := func(ctx workflow.Context) (TestResult, error) {
+		signalCh := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			for {
+				var req flow_action.RequestForUser
+				signalCh.Receive(ctx, &req)
+				requests = append(requests, req)
+				approved := false
+				workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "",
+					flow_action.UserResponseSignalName(req.FlowActionId), flow_action.UserResponse{
+						FlowActionId: req.FlowActionId, Approved: &approved,
+					}).Get(ctx, nil)
+			}
+		})
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "child-test-workflow",
+		})
+		var result TestResult
+		err := workflow.ExecuteChildWorkflow(childCtx, s.wrapperWorkflow).Get(ctx, &result)
+		return result, err
+	}
+	s.env.RegisterWorkflow(parent)
+	s.env.ExecuteWorkflow(parent)
+	s.Require().NoError(s.env.GetWorkflowError())
+	var result TestResult
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+	s.True(result.TestsPassed)
+	s.Require().Len(requests, 1)
+	s.Equal(flow_action.RequestKindApproval, requests[0].RequestKind)
+	s.Equal("retry_without_restart", requests[0].RequestParams["rejectTag"])
+	mu.Lock()
+	defer mu.Unlock()
+	s.Equal(map[string]int{"first command": 2, "second command": 2}, calls)
+}

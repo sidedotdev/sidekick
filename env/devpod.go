@@ -29,9 +29,9 @@ func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
 	}
 	// A stopped or wedged docker daemon makes `devpod up` hang forever at
 	// "creating devcontainer". Ensure the daemon is ready before starting, then
-	// guard the run so a hang that begins mid-build is detected and recovered.
+	// guard the run so a hang that begins mid-build is surfaced for recovery.
 	if err := ensureDockerReady(ctx); err != nil {
-		return fmt.Errorf("docker engine not ready for devpod up: %w", err)
+		return wrapDockerOperationError("docker engine not ready for devpod up", err)
 	}
 	var output unix.RunCommandActivityOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
@@ -43,11 +43,15 @@ func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
 		})
 		return runErr
 	})
+	combinedOutput := strings.TrimSpace(output.Stderr + "\n" + output.Stdout)
 	if err != nil {
-		return fmt.Errorf("devpod up failed: %w", err)
+		message := "devpod up failed"
+		if combinedOutput != "" {
+			message += ": " + combinedOutput
+		}
+		return wrapDockerOperationError(message, err)
 	}
 	if output.ExitStatus != 0 {
-		combinedOutput := strings.TrimSpace(output.Stderr + "\n" + output.Stdout)
 		return fmt.Errorf("devpod up exited with status %d: %s", output.ExitStatus, combinedOutput)
 	}
 	return nil
@@ -81,7 +85,7 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 		Args:    []string{"-c", prepareDevPodWorktreeScript, "sidekick-worktrees", input.RepoDir, worktreePath},
 	})
 	if err != nil {
-		return CreateDevPodWorktreeOutput{}, fmt.Errorf("failed to prepare worktree directory in container: %w", err)
+		return CreateDevPodWorktreeOutput{}, wrapDockerOperationError("failed to prepare worktree directory in container", err)
 	}
 	if setupOutput.ExitStatus != 0 {
 		return CreateDevPodWorktreeOutput{}, fmt.Errorf("worktree directory setup failed in container (exit %d): %s", setupOutput.ExitStatus, setupOutput.Stderr)
@@ -96,7 +100,7 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 		Args:    []string{"worktree", "add", "--lock", "--reason", WorktreeLockReason, "-b", input.BranchName, worktreePath, baseRef},
 	})
 	if err != nil {
-		return CreateDevPodWorktreeOutput{}, fmt.Errorf("failed to run git worktree add in container: %w", err)
+		return CreateDevPodWorktreeOutput{}, wrapDockerOperationError("failed to run git worktree add in container", err)
 	}
 	if addOutput.ExitStatus != 0 {
 		err := fmt.Errorf("git worktree add failed in container (exit %d): %s", addOutput.ExitStatus, addOutput.Stderr)
@@ -139,7 +143,7 @@ func devPodDeleteWorkspace(ctx context.Context, workspaceName string) error {
 		return runErr
 	})
 	if err != nil {
-		return fmt.Errorf("devpod delete failed: %w", err)
+		return wrapDockerOperationError("devpod delete failed", err)
 	}
 	if output.ExitStatus != 0 {
 		return fmt.Errorf("devpod delete exited with status %d: %s", output.ExitStatus, output.Stderr)
@@ -161,7 +165,7 @@ func devPodStopWorkspace(ctx context.Context, workspaceName string) error {
 		return runErr
 	})
 	if err != nil {
-		return fmt.Errorf("devpod stop failed: %w", err)
+		return wrapDockerOperationError("devpod stop failed", err)
 	}
 	if output.ExitStatus != 0 {
 		return fmt.Errorf("devpod stop exited with status %d: %s", output.ExitStatus, output.Stderr)

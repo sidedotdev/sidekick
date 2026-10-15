@@ -877,10 +877,10 @@ func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInpu
 
 	// Commands run over SSH into the container ultimately depend on the docker
 	// engine; a hung engine makes them block forever. Guard so such a hang is
-	// detected and the engine restarted instead of stalling the activity.
+	// detected instead of stalling the activity.
 	var output EnvRunCommandOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
-		resp, execErr := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, req)
+		resp, execErr := e.execWithRecovery(ctx, req)
 		if execErr != nil {
 			return execErr
 		}

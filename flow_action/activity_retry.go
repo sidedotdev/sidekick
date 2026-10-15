@@ -46,6 +46,12 @@ func (f ActivityFailureHandlerFunc) HandleActivityFailure(eCtx ExecContext, acti
 type ContinuePromptFailureHandler struct{}
 
 func (ContinuePromptFailureHandler) HandleActivityFailure(eCtx ExecContext, actionName string, activityErr error) (RetryDecision, error) {
+	if handled, err := HandleDockerFailure(eCtx, actionName, activityErr); handled {
+		if err != nil {
+			return RetryDecisionFail, err
+		}
+		return RetryDecisionRetry, nil
+	}
 	prompt := fmt.Sprintf("%s failed:\n\n```\n%s\n```", actionName, activityErr.Error())
 	requestParams := map[string]any{
 		"continueTag": "try_again",
