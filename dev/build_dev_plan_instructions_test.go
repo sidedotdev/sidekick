@@ -20,6 +20,10 @@ func requirePartialPlanInstructions(t *testing.T, text string) {
 	require.Contains(t, text, "Do not stop")
 	require.Contains(t, text, "progress announcements")
 	require.Contains(t, text, "genuine question or blocker")
+	require.Contains(t, text, "Check requirements for ambiguity; do not make unfounded assumptions.")
+	require.Contains(t, text, "Clarify consequential decisions")
+	require.Contains(t, text, "substantially change the outcome or high-level implementation approach")
+	require.Contains(t, text, "unless the user has delegated the choice")
 }
 
 func TestInitialPlanPromptRequiresContinuation(t *testing.T) {
