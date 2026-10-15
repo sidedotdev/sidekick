@@ -76,6 +76,43 @@ describe('UserRequest', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
+  it.each([
+    ['Restart Docker', true],
+    ['Retry Without Restart', false],
+  ])('submits %s without requiring feedback', async (label, approved) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ success: true }),
+    })
+    global.fetch = fetchMock
+    mountComponent(createMockFlowAction({
+      actionParams: {
+        requestKind: 'approval',
+        requestContent: 'Docker is unavailable.',
+        approveTag: 'restart_docker',
+        rejectTag: 'retry_without_restart',
+        rejectReasonRequired: false,
+      },
+    }))
+
+    const button = wrapper.findAll('button').find(button => button.text().startsWith(label as string))
+    expect(button).toBeDefined()
+    expect(button!.attributes('disabled')).toBeUndefined()
+    await button!.trigger('click')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/workspaces/test-workspace-id/flow_actions/test-action-id/complete',
+      expect.objectContaining({
+        body: JSON.stringify({ userResponse: { content: '', approved } }),
+      }),
+    )
+  })
+
+  it('requires rejection feedback by default', () => {
+    mountComponent(createMockFlowAction())
+    expect(wrapper.find('button.secondary').attributes('disabled')).toBeDefined()
+  })
+
   describe('copy request content', () => {
     it.each([
       ['pending', '# Requirements\n\n- Preserve `markdown`.\n', undefined],

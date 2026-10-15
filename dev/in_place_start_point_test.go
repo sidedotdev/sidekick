@@ -52,7 +52,8 @@ type pinnedRound struct {
 func (s *InPlaceStartPointTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.env.SetWorkerOptions(utils.TestWorkerOptions())
-	// Real Git activity execution is subject to host scheduling and I/O latency.
+	// Real Git activity execution can exceed the SDK's default 3s wait due to
+	// host scheduling and I/O latency.
 	s.env.SetTestTimeout(30 * time.Second)
 
 	s.dir = s.T().TempDir()

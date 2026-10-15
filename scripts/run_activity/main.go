@@ -170,6 +170,7 @@ func buildActivityRegistry() map[string]interface{} {
 		env.NewLocalGitWorktreeActivity,
 		env.CreateDevPodWorktreeActivity,
 		env.DevPodUpActivity,
+		env.RestartDockerEngineActivity,
 		env.CreateSandboxActivity,
 		env.CheckSandboxActivity,
 		env.StopSandboxActivity,

@@ -45,7 +45,14 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	if err := os.Setenv("PATH", gitPath); err != nil {
+	sshPath, err := installMergeTestSSH(tempHome, gitPath)
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("PATH", sshPath); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("GIT_SSH_VARIANT", "ssh"); err != nil {
 		panic(err)
 	}
 

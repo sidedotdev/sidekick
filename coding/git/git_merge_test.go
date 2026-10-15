@@ -992,21 +992,44 @@ func (e *hostTargetMergeEnv) SSHConnConfig(context.Context) (env.SSHConnConfig, 
 	return env.SSHConnConfig{}, errors.New("native SSH is not used by this fixture")
 }
 
-// installMergeTestSSH routes ssh to the "merge-test-host" destination through
-// a local shell, so SSH-based merge ref transport works against local repos.
-func installMergeTestSSH(t *testing.T) {
-	t.Helper()
-	sshDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "ssh"), []byte("#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -o|-p|-i) shift 2 ;;\n    merge-test-host) shift; exec sh -c \"$*\" ;;\n    *) exit 2 ;;\n  esac\ndone\nexit 2\n"), 0755))
-	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GIT_SSH_VARIANT", "ssh")
+// installMergeTestSSH routes merge-test-host through a local shell and
+// forwards other SSH invocations unchanged using the original PATH.
+func installMergeTestSSH(dir, path string) (string, error) {
+	sshDir := filepath.Join(dir, "merge-test-ssh")
+	if err := os.MkdirAll(sshDir, 0755); err != nil {
+		return "", err
+	}
+	script := `#!/bin/sh
+run_fixture() {
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			-o|-p|-i)
+				[ "$#" -ge 2 ] || return 1
+				shift 2
+				;;
+			merge-test-host)
+				shift
+				exec sh -c "$*"
+				;;
+			*) return 1 ;;
+		esac
+	done
+	return 1
+}
+run_fixture "$@"
+PATH=` + shellQuote(path) + ` exec ssh "$@"
+`
+	if err := os.WriteFile(filepath.Join(sshDir, "ssh"), []byte(script), 0755); err != nil {
+		return "", err
+	}
+	return sshDir + string(os.PathListSeparator) + path, nil
 }
 
 // A remote env's own copy of the target branch lags the host. After resolving
 // a host conflict recreated remotely, review diffs taken against the target
 // branch name must show only the flow's work, not base changes merged in.
 func TestGitMergeActivityHostConflictReviewDiffExcludesBaseChanges(t *testing.T) {
-	installMergeTestSSH(t)
+	t.Parallel()
 	ctx := context.Background()
 
 	fixture := setupIddChildMergeFixture(t)
@@ -1041,12 +1064,9 @@ func TestGitMergeActivityHostConflictReviewDiffExcludesBaseChanges(t *testing.T)
 }
 
 func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
-	installMergeTestSSH(t)
+	t.Parallel()
 	ctx := context.Background()
 
-	// The parent keeps the environment above in place until every subtest
-	// has finished, and each subtest works in its own repositories, so the
-	// scenarios can run concurrently.
 	for _, strategy := range []MergeStrategy{MergeStrategyMerge, MergeStrategySquash} {
 		for _, scenario := range []string{"clean", "dirty", "stash conflict", "ordinary conflict", "no host worktree", "backup failure"} {
 			t.Run(string(strategy)+"/"+scenario, func(t *testing.T) {
