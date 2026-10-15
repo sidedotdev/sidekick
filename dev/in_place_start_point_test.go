@@ -128,7 +128,7 @@ func (s *InPlaceStartPointTestSuite) runPinnedReview(worktree *domain.Worktree, 
 		}
 
 		var err error
-		outcome.Diffs, err = generateReviewDiffs(dCtx, pinned.StartPoint, pinned.BaseBranch, pinned.LastReviewDiff, true)
+		outcome.Diffs, err = generateReviewDiffs(dCtx, pinned.StartPoint, pinned.BaseBranch, coding.ReviewDiffBaseline{Diff: pinned.LastReviewDiff, Snapshot: pinned.LastReviewSnapshot}, true)
 		return outcome, err
 	}
 
@@ -186,6 +186,10 @@ func (s *InPlaceStartPointTestSuite) TestEveryRoundSharesOnePin() {
 			return git.GitRevParseResult{CommitHash: "in-place-start-sha"}, nil
 		},
 	)
+	var ca *coding.CodingActivities
+	s.env.OnActivity(ca.GenerateReviewDiffsActivity, mock.Anything, mock.MatchedBy(func(params coding.GenerateReviewDiffsParams) bool {
+		return params.StartPoint == "in-place-start-sha" && params.BaseBranch == ""
+	})).Return(coding.GenerateReviewDiffsResult{}, nil).Once()
 
 	testWorkflow := func(ctx workflow.Context) ([]pinnedRound, error) {
 		ctx = utils.NoRetryCtx(ctx)

@@ -566,3 +566,44 @@ func TestGenerateReviewDiffsActivity_PinnedStartPointExcludesNonTextPriorWork(t 
 		})
 	}
 }
+
+func TestGenerateReviewDiffsActivity_ConfiguredCopiesCanBeReverted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
+	runGit(t, repoDir, "config", "diff.renames", "copies")
+	original, err := os.ReadFile(filepath.Join(repoDir, "shared.go"))
+	require.NoError(t, err)
+
+	writeAndStage(t, repoDir, "copy.go", string(original))
+	writeAndStage(t, repoDir, "shared.go", string(original)+"// Changed at the first review.\n")
+	require.Contains(t, runGit(t, repoDir, "diff", "--staged", "main"), "copy from shared.go",
+		"the control must reproduce copy detection using the production command's defaults")
+	priorTree := strings.TrimSpace(runGit(t, repoDir, "write-tree"))
+
+	ca := &CodingActivities{}
+	params := GenerateReviewDiffsParams{
+		EnvContainer: envContainer,
+		StartPoint:   "main",
+	}
+	reviewed, err := ca.GenerateReviewDiffsActivity(ctx, params)
+	require.NoError(t, err)
+	require.NotEmpty(t, reviewed.FullDiff)
+
+	runGit(t, repoDir, "rm", "--force", "copy.go")
+	writeAndStage(t, repoDir, "shared.go", string(original))
+	currentTree := strings.TrimSpace(runGit(t, repoDir, "write-tree"))
+	params.PriorReviewDiff = reviewed.FullDiff
+	result, err := ca.GenerateReviewDiffsActivity(ctx, params)
+	require.NoError(t, err)
+	require.Empty(t, result.SinceDiffError)
+	require.Empty(t, result.FullDiff)
+	require.NotEmpty(t, result.SinceDiff)
+
+	patchPath := filepath.Join(t.TempDir(), "since-review.diff")
+	require.NoError(t, os.WriteFile(patchPath, []byte(result.SinceDiff), 0600))
+	runGit(t, repoDir, "read-tree", priorTree)
+	runGit(t, repoDir, "apply", "--cached", "--unidiff-zero", "--whitespace=nowarn", patchPath)
+	require.Equal(t, currentTree, strings.TrimSpace(runGit(t, repoDir, "write-tree")))
+}

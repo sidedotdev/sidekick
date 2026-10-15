@@ -248,13 +248,13 @@ func TestInterdiffRealReviewPairWithRevertedHunk(t *testing.T) {
 
 	result, err := Interdiff(string(prior), string(current))
 	require.NoError(t, err)
-	files, err := parseForInterdiff(result)
+	files, err := ParseUnifiedDiff(result)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 
-	priorFiles, err := parseForInterdiff(string(prior))
+	priorFiles, err := ParseUnifiedDiff(string(prior))
 	require.NoError(t, err)
-	currentFiles, err := parseForInterdiff(string(current))
+	currentFiles, err := ParseUnifiedDiff(string(current))
 	require.NoError(t, err)
 	require.Len(t, priorFiles, 1)
 	require.Len(t, currentFiles, 1)

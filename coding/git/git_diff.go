@@ -21,6 +21,9 @@ type GitDiffParams struct {
 	IgnoreWhitespace bool
 	Staged           bool
 	ContextLines     *int
+
+	// DisableCopyDetection preserves new-file contents even when Git configuration enables copies.
+	DisableCopyDetection bool
 }
 
 // GitDiff returns the diff of the current, staged changes in the working tree.
@@ -56,6 +59,9 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 
 	var cmdParts []string
 	cmdParts = append(cmdParts, "git", "diff", "--no-ext-diff")
+	if params.DisableCopyDetection {
+		cmdParts = append(cmdParts, "--find-renames")
+	}
 
 	// stagedInMainCmd records whether the primary diff command below already
 	// includes `--staged`. An explicit two-ref range can't take `--staged`, so
@@ -158,6 +164,9 @@ func appendDiffSection(diff, section string) string {
 // callers append unmergedFilesDiff for those.
 func stagedIndexDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	args := []string{"diff", "--no-ext-diff", "--staged"}
+	if params.DisableCopyDetection {
+		args = append(args, "--find-renames")
+	}
 	if params.ContextLines != nil {
 		args = append(args, fmt.Sprintf("-U%d", *params.ContextLines))
 	}
@@ -220,6 +229,9 @@ func unmergedFilesDiff(ctx context.Context, envContainer env.EnvContainer, param
 	}
 
 	diffArgs := []string{"diff", "--no-ext-diff", "HEAD"}
+	if params.DisableCopyDetection {
+		diffArgs = append(diffArgs, "--find-renames")
+	}
 	if params.ContextLines != nil {
 		diffArgs = append(diffArgs, fmt.Sprintf("-U%d", *params.ContextLines))
 	}
@@ -424,6 +436,9 @@ func workingTreeAndUntrackedDiff(ctx context.Context, envContainer env.EnvContai
 
 	// Part 2: Tracked files diff (Modified in Working Tree vs. Index)
 	trackedArgs := []string{"diff", "--no-ext-diff"}
+	if params.DisableCopyDetection {
+		trackedArgs = append(trackedArgs, "--find-renames")
+	}
 	if params.IgnoreWhitespace {
 		trackedArgs = append(trackedArgs, "-w")
 	}

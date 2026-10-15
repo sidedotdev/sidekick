@@ -53,11 +53,12 @@ func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ig
 	var ca *coding.CodingActivities
 	var diffs coding.GenerateReviewDiffsResult
 	err = workflow.ExecuteActivity(dCtx, ca.GenerateReviewDiffsActivity, coding.GenerateReviewDiffsParams{
-		EnvContainer:     *dCtx.EnvContainer,
-		StartPoint:       startPoint,
-		BaseBranch:       promptInfo.BaseBranch,
-		PriorReviewDiff:  promptInfo.LastReviewDiff,
-		IgnoreWhitespace: ignoreWhitespace,
+		EnvContainer:        *dCtx.EnvContainer,
+		StartPoint:          startPoint,
+		BaseBranch:          promptInfo.BaseBranch,
+		PriorReviewDiff:     promptInfo.LastReviewDiff,
+		PriorReviewSnapshot: promptInfo.LastReviewSnapshot,
+		IgnoreWhitespace:    ignoreWhitespace,
 	}).Get(dCtx, &diffs)
 	if err != nil {
 		workflow.GetLogger(dCtx).Warn("Failed to generate review diffs, falling back to base branch diff", "error", err)
@@ -68,7 +69,7 @@ func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ig
 		return fallbackDiff, fallbackDiff, false, nil
 	}
 
-	if promptInfo.LastReviewDiff != "" && diffs.SinceDiffError == "" {
+	if (promptInfo.LastReviewDiff != "" || promptInfo.LastReviewSnapshot != nil) && diffs.SinceDiffError == "" {
 		return diffs.SinceDiff, diffs.FullDiff, true, nil
 	}
 	return diffs.FullDiff, diffs.FullDiff, false, nil

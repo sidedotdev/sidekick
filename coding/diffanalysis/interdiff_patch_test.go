@@ -321,12 +321,12 @@ func TestInterdiffReversesFileCreationAndDeletion(t *testing.T) {
 		{
 			"creation",
 			"diff --git a/f b/f\n--- /dev/null\n+++ b/f\n@@ -0,0 +1,2 @@\n+one\n+two\n",
-			"diff --git a/f b/f\n--- a/f\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two\n",
+			"diff --git a/f b/f\ndeleted file mode 100644\n--- a/f\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two\n",
 		},
 		{
 			"deletion",
 			"diff --git a/f b/f\n--- a/f\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two\n",
-			"diff --git a/f b/f\n--- /dev/null\n+++ b/f\n@@ -0,0 +1,2 @@\n+one\n+two\n",
+			"diff --git a/f b/f\nnew file mode 100644\n--- /dev/null\n+++ b/f\n@@ -0,0 +1,2 @@\n+one\n+two\n",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
