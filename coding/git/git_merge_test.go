@@ -829,23 +829,17 @@ type iddChildMergeFixture struct {
 func setupIddChildMergeFixture(t *testing.T) iddChildMergeFixture {
 	t.Helper()
 
-	hostRepoDir := setupTestGitRepo(t)
-	createCommitWithFile(t, hostRepoDir, "Initial commit", "intent.md", "base intent\n")
+	root := t.TempDir()
+	require.NoError(t, iddRepositoriesFixture.CopyTo(root))
+	hostRepoDir := filepath.Join(root, "host")
+	childRepoDir := filepath.Join(root, "child")
 
 	hostWorktreeDir := filepath.Join(t.TempDir(), "idd-worktree")
-	runGitCommandInTestRepo(t, hostRepoDir, "worktree", "add", "-b", iddBranch, hostWorktreeDir, "main")
-	createCommitWithFile(t, hostWorktreeDir, "Authored intent", "intent.md", "authored intent\n")
-
-	childRepoDir := filepath.Join(t.TempDir(), "child")
-	runGitCommandInTestRepo(t, hostRepoDir, "clone", hostRepoDir, childRepoDir)
-	runGitCommandInTestRepo(t, childRepoDir, "checkout", "-b", iddChildBranch, "origin/"+iddBranch)
-	createCommitWithFile(t, childRepoDir, "Child work", "child.txt", "child work\n")
+	runGitCommandInTestRepo(t, hostRepoDir, "worktree", "add", hostWorktreeDir, iddBranch)
 
 	// The local IDD branch advances after the child branched off, so the child
 	// must merge against the refreshed branch for the host branch to
 	// fast-forward afterwards.
-	createCommitWithFile(t, hostWorktreeDir, "Later intent edit", "intent.md", "updated intent\n")
-
 	return iddChildMergeFixture{
 		hostRepoDir:      hostRepoDir,
 		hostWorktreeDir:  hostWorktreeDir,

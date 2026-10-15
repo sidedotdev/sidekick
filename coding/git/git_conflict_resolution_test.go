@@ -19,14 +19,10 @@ import (
 // conflicts on conflict.txt, and leaves "main" checked out.
 func setupConflictingBranches(t *testing.T, ctx context.Context) (string, env.EnvContainer) {
 	t.Helper()
-	repoDir := setupTestGitRepo(t)
+	repoDir := t.TempDir()
+	require.NoError(t, conflictingBranchesFixture.CopyTo(repoDir))
 	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
 	require.NoError(t, err)
-	createCommitWithFile(t, repoDir, "Initial commit", "conflict.txt", "base content")
-	runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
-	createCommitWithFile(t, repoDir, "Feature change", "conflict.txt", "feature content")
-	runGitCommandInTestRepo(t, repoDir, "checkout", "main")
-	createCommitWithFile(t, repoDir, "Main change", "conflict.txt", "main content")
 	return repoDir, env.EnvContainer{Env: devEnv}
 }
 
@@ -47,15 +43,6 @@ func mergeHeadExists(t *testing.T, repoDir string) bool {
 	return cmd.Run() == nil
 }
 
-// writeAndCommitLines writes a file with the given lines and commits it.
-func writeAndCommitLines(t *testing.T, repoDir, message, filename string, lines []string) {
-	t.Helper()
-	content := strings.Join(lines, "\n") + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, filename), []byte(content), 0644))
-	runGitCommandInTestRepo(t, repoDir, "add", filename)
-	runGitCommandInTestRepo(t, repoDir, "commit", "-m", message)
-}
-
 // numberedLines produces distinct lines so that separate edits land in separate
 // diff hunks.
 func numberedLines(count int) []string {
@@ -70,24 +57,10 @@ func numberedLines(count int) []string {
 // with the merge already attempted and conflict markers in the working tree.
 func setupFarApartConflictRepo(t *testing.T, ctx context.Context) (string, env.EnvContainer) {
 	t.Helper()
-	repoDir := setupTestGitRepo(t)
+	repoDir := t.TempDir()
+	require.NoError(t, farApartConflictFixture.CopyTo(repoDir))
 	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
 	require.NoError(t, err)
-
-	base := numberedLines(20)
-	writeAndCommitLines(t, repoDir, "Initial commit", "conflict.txt", base)
-
-	featureLines := append([]string{}, base...)
-	featureLines[0] = "feature line1"
-	runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
-	writeAndCommitLines(t, repoDir, "Feature change", "conflict.txt", featureLines)
-
-	mainLines := append([]string{}, base...)
-	mainLines[0] = "main line1"
-	runGitCommandInTestRepo(t, repoDir, "checkout", "main")
-	writeAndCommitLines(t, repoDir, "Main change", "conflict.txt", mainLines)
-
-	runConflictingMerge(t, repoDir, "feature")
 	return repoDir, env.EnvContainer{Env: devEnv}
 }
 

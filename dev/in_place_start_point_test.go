@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -51,6 +52,8 @@ type pinnedRound struct {
 func (s *InPlaceStartPointTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.env.SetWorkerOptions(utils.TestWorkerOptions())
+	// Real Git activity execution is subject to host scheduling and I/O latency.
+	s.env.SetTestTimeout(30 * time.Second)
 
 	s.dir = s.T().TempDir()
 	runCmd(s.T(), s.dir, "git", "init", "-b", "main")
