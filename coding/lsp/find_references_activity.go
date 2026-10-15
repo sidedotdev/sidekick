@@ -148,8 +148,12 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 	} else {
 		span.SetAttributes(attribute.Bool("cached", true))
 	}
+	release := lspa.releaseClient
+	if envContainer != nil && envContainer.Env != nil && envContainer.Env.GetType() == env.EnvTypeModal {
+		release = lspa.releaseModalClient
+	}
 	succeeded = true
-	return lspClient, lspa.releaseClient, nil
+	return lspClient, release, nil
 }
 
 // findSymbolPosition finds the position of the last character of the first matching text in the file content

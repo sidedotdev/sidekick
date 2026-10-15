@@ -246,6 +246,23 @@ Worker shutdown also closes the owner. Preexisting shared daemons are not
 killed: their ownership cannot safely be inferred. Account for any old Sidekick
 instance and its daemon when measuring an upgrade.
 
+**Modal exception:** a Modal client is closed synchronously at the end of each
+operation lease instead of being cached. The sandbox watchdog counts a running
+SSH exec session as activity even without traffic; keeping an idle LSP session
+would therefore delay its independent idle shutdown. Compound document sync
+and autofix retain one client through the complete operation, including cleanup
+and edit application. The watchdog still treats in-flight analysis as activity;
+no process exemption is used.
+
+This trades reuse for sandbox idling: every Modal analysis operation pays SSH
+and gopls startup costs, not just the first operation after idle. Local and
+other remote clients retain their normal cache policy. The recorded Linux
+memory/latency comparisons do not measure this Modal-specific policy.
+`TestModalClientReleaseClosesSSHSession` exercises real loopback SSH exec
+sessions and stdin-consuming child processes, checking active-operation
+lifetime, EOF teardown and local SSH process reaping without Modal credentials.
+It is not a live Modal auto-idle timing test.
+
 Operations hold a cancellable lease. The complete edit notification sequence
 holds one lease and carries the original environment, so eviction cannot split
 the sequence or restart an SSH workspace locally. Failed or canceled sync
