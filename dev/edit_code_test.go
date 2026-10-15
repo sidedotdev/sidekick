@@ -1030,3 +1030,64 @@ func (s *AuthorEditBlocksTestSuite) TestPausedConflictInstructionsEditCodeLegacy
 func (s *AuthorEditBlocksTestSuite) TestPausedConflictInstructionsAuthoringLegacy() {
 	s.testPausedConflictInstructions(false, workflow.DefaultVersion)
 }
+
+func TestRenderCodingPromptSandboxPermissions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		envContainer *env.EnvContainer
+		wantSandbox  bool
+	}{
+		{name: "missing environment"},
+		{name: "empty environment", envContainer: &env.EnvContainer{}},
+		{name: "local", envContainer: &env.EnvContainer{Env: &env.LocalEnv{}}},
+		{name: "local worktree", envContainer: &env.EnvContainer{Env: &env.LocalGitWorktreeEnv{}}},
+		{name: "devpod", envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}}, wantSandbox: true},
+		{name: "openshell", envContainer: &env.EnvContainer{Env: &env.OpenShellEnv{}}, wantSandbox: true},
+		{name: "modal", envContainer: &env.EnvContainer{Env: &env.ModalEnv{}}, wantSandbox: true},
+	}
+	renderers := []struct {
+		name   string
+		render func(DevContext) string
+	}{
+		{
+			name: "initial",
+			render: func(dCtx DevContext) string {
+				return renderAuthorEditBlockInitialPrompt(dCtx, "code", "requirements", false, true, "OS: Linux, Arch: x86_64", false)
+			},
+		},
+		{
+			name: "planned step",
+			render: func(dCtx DevContext) string {
+				return renderAuthorEditBlockInitialDevStepPrompt(dCtx, "code", "requirements", "plan", "step", false, true, "OS: Linux, Arch: x86_64", false)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, renderer := range renderers {
+				t.Run(renderer.name, func(t *testing.T) {
+					t.Parallel()
+					dCtx := DevContext{
+						ExecContext: flow_action.ExecContext{EnvContainer: tt.envContainer},
+					}
+					prompt := strings.Join(strings.Fields(renderer.render(dCtx)), " ")
+					const sandboxGuidance = "You are in a disposable, isolated sandbox; commands are auto-approved by default. " +
+						"Install any dependencies or tools and start local services needed to complete the task without asking for permission. " +
+						"Reserve user questions for decisions affecting their requirements or desired outcome, not sandbox setup."
+					const localGuidance = "Any command may be executed, but prefer the ones auto-approved in the repo's"
+					if tt.wantSandbox {
+						assert.Contains(t, prompt, sandboxGuidance)
+						assert.NotContains(t, prompt, localGuidance)
+					} else {
+						assert.NotContains(t, prompt, "disposable, isolated sandbox")
+						assert.Contains(t, prompt, localGuidance)
+					}
+				})
+			}
+		})
+	}
+}
