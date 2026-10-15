@@ -28,8 +28,7 @@ func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
 		args = append(args, "--id", input.WorkspaceId)
 	}
 	// A stopped or wedged docker daemon makes `devpod up` hang forever at
-	// "creating devcontainer". Ensure the daemon is ready before starting, then
-	// guard the run so a hang that begins mid-build is surfaced for recovery.
+	// "creating devcontainer". Probe first, then monitor for hangs mid-build.
 	if err := ensureDockerReady(ctx); err != nil {
 		return wrapDockerOperationError("docker engine not ready for devpod up", err)
 	}
@@ -43,15 +42,15 @@ func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
 		})
 		return runErr
 	})
-	combinedOutput := strings.TrimSpace(output.Stderr + "\n" + output.Stdout)
 	if err != nil {
 		message := "devpod up failed"
-		if combinedOutput != "" {
+		if combinedOutput := strings.TrimSpace(output.Stderr + "\n" + output.Stdout); combinedOutput != "" {
 			message += ": " + combinedOutput
 		}
 		return wrapDockerOperationError(message, err)
 	}
 	if output.ExitStatus != 0 {
+		combinedOutput := strings.TrimSpace(output.Stderr + "\n" + output.Stdout)
 		return fmt.Errorf("devpod up exited with status %d: %s", output.ExitStatus, combinedOutput)
 	}
 	return nil

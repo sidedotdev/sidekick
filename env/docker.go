@@ -49,10 +49,16 @@ var (
 // ensureDockerReady makes a best-effort attempt to ensure the Docker daemon is
 // responsive before an OpenShell/DevPod operation.
 //
-// A stopped daemon may be started automatically. An unresponsive running
-// daemon requires explicit recovery confirmation because restarting it
-// interrupts every workspace on the engine.
+// An unreachable daemon has two very different causes that need different
+// remedies: it was never started (e.g. after a reboot), in which case starting
+// it is enough; or its process is alive but wedged, in which case only a restart
+// (kill + relaunch) recovers it. We tell them apart by checking whether the
+// daemon process is present, so we never waste time "starting" an
+// already-running-but-hung daemon.
 func ensureDockerReady(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if dockerRunning(ctx) {
 		return nil
 	}
@@ -61,9 +67,7 @@ func ensureDockerReady(ctx context.Context) error {
 	}
 
 	var startErr error
-	if dockerProcessRunning(ctx) {
-		log.Warn().Msg("docker daemon process is running but unresponsive")
-	} else if dockerAutoStartEnabled() {
+	if dockerAutoStartEnabled() && !dockerProcessRunning(ctx) {
 		log.Warn().Msg("docker daemon not running; attempting to start it")
 		startErr = startDocker(ctx)
 		if startErr != nil {
@@ -72,6 +76,7 @@ func ensureDockerReady(ctx context.Context) error {
 			return nil
 		}
 	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}

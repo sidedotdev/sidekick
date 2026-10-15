@@ -65,11 +65,12 @@ func dockerEngineResponsive(ctx context.Context, timeout time.Duration) bool {
 	return cmd.Run() == nil
 }
 
-// withDockerEngineWatchdog cancels fn if Docker remains unresponsive, rather
-// than waiting for the activity's StartToClose timeout. It returns a typed
-// DockerEngineUnavailable error so recovery can require user confirmation;
-// monitoring never restarts the engine.
+// withDockerEngineWatchdog cancels operations blocked on an unresponsive engine
+// before their activity timeout. Restarting the engine requires user approval.
 func withDockerEngineWatchdog(ctx context.Context, fn func(ctx context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -89,7 +90,8 @@ func withDockerEngineWatchdog(ctx context.Context, fn func(ctx context.Context) 
 					consecutiveFailures = 0
 					continue
 				}
-				// Cancellation can interrupt a healthy probe.
+				// The probe can also fail simply because fn finished and runCtx
+				// was canceled; don't count that as an engine hang.
 				if runCtx.Err() != nil {
 					return
 				}
@@ -98,7 +100,7 @@ func withDockerEngineWatchdog(ctx context.Context, fn func(ctx context.Context) 
 					continue
 				}
 				log.Warn().Int("consecutiveFailures", consecutiveFailures).
-					Msg("docker engine unresponsive; cancelling operation without restarting Docker")
+					Msg("docker engine unresponsive during operation; canceling operation")
 				engineUnavailable = true
 				cancel()
 				return

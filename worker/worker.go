@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -38,17 +37,13 @@ import (
 // Worker wraps a Temporal worker with telemetry shutdown
 type Worker struct {
 	worker.Worker
-	dockerRestartWorker worker.Worker
-	shutdownTracer      func(context.Context) error
+	shutdownTracer func(context.Context) error
 }
 
 // Stop stops the worker, closes shared remote-env connections and shuts down
 // the tracer
 func (w *Worker) Stop() {
 	w.Worker.Stop()
-	if w.dockerRestartWorker != nil {
-		w.dockerRestartWorker.Stop()
-	}
 	env.CloseAllSharedSFTPConns()
 	env.CloseAllSharedAgentExecConns()
 	env.CloseAllReverseForwardHolders()
@@ -64,10 +59,6 @@ func (w *Worker) Stop() {
 // the Temporal server. It returns an error only when ctx is done before the
 // connection is established.
 func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worker, error) {
-	host, err := os.Hostname()
-	if err != nil {
-		return nil, fmt.Errorf("failed to determine worker hostname: %w", err)
-	}
 	shutdownTracer, err := telemetry.InitTracer("sidekick-worker")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize telemetry tracer")
@@ -292,27 +283,6 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		log.Fatal().Err(err)
 	}
 
-	dockerRestartWorker := worker.New(temporalClient, env.DockerRestartTaskQueue(host), worker.Options{
-		DisableWorkflowWorker:              true,
-		MaxConcurrentActivityExecutionSize: 1,
-		BuildID:                            common.GetWorkerBuildID(),
-		Interceptors:                       []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor()},
-	})
-	dockerRestartWorker.RegisterActivity(env.RestartDockerEngineActivity)
-	if err := dockerRestartWorker.Start(); err != nil {
-		w.Stop()
-		temporalClient.Close()
-		featureFlag.Client.Close()
-		if shutdownTracer != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if shutdownErr := shutdownTracer(cleanupCtx); shutdownErr != nil {
-				log.Error().Err(shutdownErr).Msg("Failed to shutdown telemetry tracer")
-			}
-		}
-		return nil, fmt.Errorf("failed to start Docker restart worker: %w", err)
-	}
-
 	common.StartCodecCleanupWorkflow(context.Background(), temporalClient, taskQueue)
 	dev.StartCleanupWorktreesSchedule(context.Background(), temporalClient, taskQueue)
 
@@ -321,9 +291,8 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	go git.LockExistingSidekickWorktrees(context.Background())
 
 	return &Worker{
-		Worker:              w,
-		dockerRestartWorker: dockerRestartWorker,
-		shutdownTracer:      shutdownTracer,
+		Worker:         w,
+		shutdownTracer: shutdownTracer,
 	}, nil
 }
 

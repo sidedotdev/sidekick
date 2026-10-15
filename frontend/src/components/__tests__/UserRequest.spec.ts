@@ -77,39 +77,40 @@ describe('UserRequest', () => {
   })
 
   it.each([
-    ['Restart Docker and retry', true],
-    ['Retry without restarting', false],
-  ])('submits the Docker recovery choice: %s', async (label, approved) => {
+    ['Restart Docker', true],
+    ['Retry Without Restart', false],
+  ])('submits %s without requiring feedback', async (label, approved) => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ success: true }),
     })
     global.fetch = fetchMock
     mountComponent(createMockFlowAction({
-      actionType: 'user_request.approve.restart_docker',
       actionParams: {
         requestKind: 'approval',
-        requestContent: 'A restart interrupts all workspaces on this engine.',
+        requestContent: 'Docker is unavailable.',
         approveTag: 'restart_docker',
         rejectTag: 'retry_without_restart',
         rejectReasonRequired: false,
       },
     }))
-    try {
-      expect(fetchMock).not.toHaveBeenCalled()
-      const button = wrapper.findAll('button').find(button => button.text().startsWith(label as string))
-      expect(button).toBeDefined()
-      await button!.trigger('click')
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/v1/workspaces/test-workspace-id/flow_actions/test-action-id/complete',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({ userResponse: { content: '', approved } }),
-        }),
-      )
-    } finally {
-      wrapper.unmount()
-    }
+
+    const button = wrapper.findAll('button').find(button => button.text().startsWith(label as string))
+    expect(button).toBeDefined()
+    expect(button!.attributes('disabled')).toBeUndefined()
+    await button!.trigger('click')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/workspaces/test-workspace-id/flow_actions/test-action-id/complete',
+      expect.objectContaining({
+        body: JSON.stringify({ userResponse: { content: '', approved } }),
+      }),
+    )
+  })
+
+  it('requires rejection feedback by default', () => {
+    mountComponent(createMockFlowAction())
+    expect(wrapper.find('button.secondary').attributes('disabled')).toBeDefined()
   })
 
   describe('copy request content', () => {

@@ -1,30 +1,36 @@
-package flow_action
+package dev
 
 import (
 	"fmt"
 	"time"
 
 	"sidekick/env"
+	"sidekick/flow_action"
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
-// HandleDockerFailure reports whether this error belongs to the Docker
-// confirmation flow. A handled error with a nil result permits a retry.
-func HandleDockerFailure(eCtx ExecContext, actionName string, activityErr error) (bool, error) {
+type DockerFailureHandler struct {
+	Fallback flow_action.ActivityFailureHandler
+}
+
+func (h DockerFailureHandler) HandleActivityFailure(eCtx flow_action.ExecContext, actionName string, activityErr error) (flow_action.RetryDecision, error) {
 	details, ok := env.AsDockerEngineFailure(activityErr)
-	if !ok {
-		return false, nil
+	if !ok || workflow.GetVersion(eCtx, "docker-recovery-confirmation", workflow.DefaultVersion, 1) < 1 {
+		if h.Fallback != nil {
+			return h.Fallback.HandleActivityFailure(eCtx, actionName, activityErr)
+		}
+		return flow_action.RetryDecisionFail, nil
 	}
-	if workflow.GetVersion(eCtx, "docker-recovery-confirmation", workflow.DefaultVersion, 1) < 1 {
-		return false, nil
+	if err := eCtx.Err(); err != nil {
+		return flow_action.RetryDecisionFail, err
 	}
-	if eCtx.DisableHumanInTheLoop {
-		return true, activityErr
+	if eCtx.DisableHumanInTheLoop || details.Host == "" {
+		return flow_action.RetryDecisionFail, nil
 	}
 	if eCtx.GlobalState != nil && eCtx.GlobalState.GetPendingUserAction() != nil {
-		return true, PendingActionError
+		return flow_action.RetryDecisionFail, flow_action.PendingActionError
 	}
 
 	prompt := fmt.Sprintf("%s failed because Docker on **%s** is unavailable.\n\n"+
@@ -32,23 +38,24 @@ func HandleDockerFailure(eCtx ExecContext, actionName string, activityErr error)
 		"You can instead check Docker yourself and retry without restarting.\n\n```\n%s\n```",
 		actionName, details.Host, activityErr)
 	for {
-		response, err := GetUserApproval(eCtx, "restart_docker", prompt, map[string]any{
+		response, err := flow_action.GetUserApproval(eCtx, "restart_docker", prompt, map[string]any{
 			"approveTag":           "restart_docker",
 			"rejectTag":            "retry_without_restart",
 			"rejectReasonRequired": false,
 		})
 		if err != nil {
-			return true, err
+			return flow_action.RetryDecisionFail, err
 		}
 		if response == nil || response.Approved == nil {
-			return true, fmt.Errorf("Docker recovery requires a restart or retry selection")
+			return flow_action.RetryDecisionFail, fmt.Errorf("Docker recovery requires a restart or retry selection")
 		}
 		if !*response.Approved {
-			return true, nil
+			return flow_action.RetryDecisionRetry, nil
 		}
 
+		options := workflow.GetActivityOptions(eCtx)
 		restartCtx := workflow.WithActivityOptions(eCtx, workflow.ActivityOptions{
-			TaskQueue:              env.DockerRestartTaskQueue(details.Host),
+			TaskQueue:              options.TaskQueue,
 			StartToCloseTimeout:    5 * time.Minute,
 			ScheduleToStartTimeout: 30 * time.Second,
 			RetryPolicy:            &temporal.RetryPolicy{MaximumAttempts: 1},
@@ -57,30 +64,13 @@ func HandleDockerFailure(eCtx ExecContext, actionName string, activityErr error)
 			Host: details.Host, Confirmed: true,
 		}).Get(restartCtx, nil)
 		if err == nil {
-			return true, nil
+			return flow_action.RetryDecisionRetry, nil
 		}
-		if temporal.IsCanceledError(err) {
-			return true, err
+		if temporal.IsCanceledError(err) || eCtx.Err() != nil {
+			return flow_action.RetryDecisionFail, err
 		}
 		prompt = fmt.Sprintf("Docker restart on **%s** failed:\n\n```\n%s\n```\n\n"+
 			"Retry without restarting, or explicitly confirm another attempt. "+
 			"A restart interrupts **all containers and workspaces on that engine**.", details.Host, err)
-	}
-}
-
-// PerformWithDockerRecovery leaves non-Docker failures to the caller.
-func PerformWithDockerRecovery(eCtx ExecContext, actionName string, activity interface{}, valuePtr interface{}, args ...interface{}) error {
-	for {
-		err := workflow.ExecuteActivity(eCtx, activity, args...).Get(eCtx, valuePtr)
-		if err == nil {
-			return nil
-		}
-		handled, recoveryErr := HandleDockerFailure(eCtx, actionName, err)
-		if !handled {
-			return err
-		}
-		if recoveryErr != nil {
-			return recoveryErr
-		}
 	}
 }

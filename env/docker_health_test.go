@@ -161,10 +161,12 @@ func TestWithDockerEngineWatchdog_UnresponsiveCancelsWithoutRestart(t *testing.T
 	)
 
 	err := withDockerEngineWatchdog(context.Background(), func(ctx context.Context) error {
-		<-ctx.Done()
+		<-ctx.Done() // simulate an operation hung on the engine
 		return ctx.Err()
 	})
 
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 	details, ok := AsDockerEngineFailure(err)
 	require.True(t, ok)
 	assert.NotEmpty(t, details.Host)
@@ -173,25 +175,30 @@ func TestWithDockerEngineWatchdog_UnresponsiveCancelsWithoutRestart(t *testing.T
 
 func TestWithDockerEngineWatchdog_PropagatesCancellation(t *testing.T) {
 	withFastDockerHealthTiming(t)
+	var restarts atomic.Int32
 	withDockerHealthHooks(t,
 		func(context.Context, time.Duration) bool { return false },
-		func(context.Context) error { t.Error("unexpected restart"); return nil },
+		func(context.Context) error { restarts.Add(1); return nil },
 	)
+
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
-		return ctx.Err()
+	err := withDockerEngineWatchdog(ctx, func(operationCtx context.Context) error {
+		cancel()
+		<-operationCtx.Done()
+		return operationCtx.Err()
 	})
+
 	assert.ErrorIs(t, err, context.Canceled)
-	_, ok := AsDockerEngineFailure(err)
-	assert.False(t, ok)
+	_, dockerFailure := AsDockerEngineFailure(err)
+	assert.False(t, dockerFailure)
+	assert.Zero(t, restarts.Load())
 }
 
-func TestWithDockerEngineWatchdog_PreservesCommandError(t *testing.T) {
+func TestWithDockerEngineWatchdog_PreservesImmediateResult(t *testing.T) {
 	withFastDockerHealthTiming(t)
 	var restarts atomic.Int32
 	withDockerHealthHooks(t,
-		func(context.Context, time.Duration) bool { return true },
+		func(context.Context, time.Duration) bool { return false },
 		func(context.Context) error { restarts.Add(1); return nil },
 	)
 

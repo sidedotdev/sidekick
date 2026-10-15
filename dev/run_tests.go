@@ -100,7 +100,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 	// Track non-heartbeat failures across iterations
 	var failedCommands []indexedCommand
 	var activityErrors []string
-	var dockerErr error
+	var activityCauses []error
 
 	for {
 		// execute pending test commands in parallel
@@ -129,9 +129,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 					})
 				} else {
 					activityErrors = append(activityErrors, result.err.Error())
-					if _, ok := env.AsDockerEngineFailure(result.err); ok {
-						dockerErr = result.err
-					}
+					activityCauses = append(activityCauses, result.err)
 					failedCommands = append(failedCommands, indexedCommand{
 						index: result.commandIndex,
 						cmd:   commandsToRun[result.commandIndex],
@@ -181,20 +179,22 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		}
 
 		// Prompt user once for all failed commands
-		handled, userErr := flow_action.HandleDockerFailure(actionCtx.ExecContext, "run_tests", dockerErr)
+		failureHandler := DockerFailureHandler{
+			Fallback: flow_action.ActivityFailureHandlerFunc(func(eCtx flow_action.ExecContext, _ string, _ error) (flow_action.RetryDecision, error) {
+				prompt := fmt.Sprintf("run_tests failed for %d command(s):\n\n```\n%s\n```", len(activityErrors), strings.Join(activityErrors, "\n"))
+				err := flow_action.GetUserContinue(eCtx, prompt, map[string]any{
+					"continueTag": "try_again",
+				})
+				return flow_action.RetryDecisionRetry, err
+			}),
+		}
+		decision, userErr := failureHandler.HandleActivityFailure(actionCtx.ExecContext, "run_tests", errors.Join(activityCauses...))
 		if userErr != nil {
 			return nil, userErr
 		}
-		if !handled {
-			prompt := fmt.Sprintf("run_tests failed for %d command(s):\n\n```\n%s\n```", len(activityErrors), strings.Join(activityErrors, "\n"))
-			requestParams := map[string]any{
-				"continueTag": "try_again",
-			}
-			if userErr := flow_action.GetUserContinue(actionCtx.ExecContext, prompt, requestParams); userErr != nil {
-				return nil, userErr
-			}
+		if decision != flow_action.RetryDecisionRetry {
+			return nil, fmt.Errorf("error running test command(s): %w", errors.Join(activityCauses...))
 		}
-		dockerErr = nil
 
 		switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
 		case 2:
@@ -209,6 +209,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		pendingCommands = failedCommands
 		failedCommands = nil
 		activityErrors = nil
+		activityCauses = nil
 	}
 }
 

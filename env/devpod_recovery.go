@@ -5,123 +5,75 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"sidekick/coding/unix"
-	"sidekick/sideagent"
 
-	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
-var devPodRecoveryLocks = struct {
-	sync.Mutex
-	entries map[string]*devPodRecoveryLock
-}{
-	entries: make(map[string]*devPodRecoveryLock),
+type devPodSSHTransportRecovery struct {
+	env       *DevPodEnv
+	attempted bool
 }
 
-type devPodRecoveryLock struct {
-	token chan struct{}
-	users int
+// Commands sharing a workspace must not race its provisioning.
+var devPodConnectionRecovery singleflight.Group
+
+func (e *DevPodEnv) newSSHTransportRecovery() sshTransportRecovery {
+	return &devPodSSHTransportRecovery{env: e}
 }
 
-func acquireDevPodRecoveryLock(ctx context.Context, name string) (func(), error) {
-	devPodRecoveryLocks.Lock()
-	entry := devPodRecoveryLocks.entries[name]
-	if entry == nil {
-		entry = &devPodRecoveryLock{token: make(chan struct{}, 1)}
-		entry.token <- struct{}{}
-		devPodRecoveryLocks.entries[name] = entry
+func (r *devPodSSHTransportRecovery) recover(ctx context.Context, cause error) (bool, error) {
+	if r.attempted || ctx.Err() != nil || r.env.WorkspaceName == "" {
+		return false, nil
 	}
-	entry.users++
-	devPodRecoveryLocks.Unlock()
-
-	dropUser := func() {
-		devPodRecoveryLocks.Lock()
-		defer devPodRecoveryLocks.Unlock()
-		entry.users--
-		if entry.users == 0 {
-			delete(devPodRecoveryLocks.entries, name)
+	var dialErr *sshDialTransportError
+	if !errors.As(cause, &dialErr) {
+		return false, nil
+	}
+	r.attempted = true
+	workspace := r.env.WorkspaceName
+	resultCh := devPodConnectionRecovery.DoChan(workspace, func() (any, error) {
+		recoveryCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		if err := ensureDockerReady(recoveryCtx); err != nil {
+			return nil, err
 		}
-	}
+		err := withDockerEngineWatchdog(recoveryCtx, func(ctx context.Context) error {
+			probeCtx, cancelProbe := context.WithTimeout(ctx, 10*time.Second)
+			probeErr := runDevPodRecoveryCommand(probeCtx, "ssh", workspace, "--command", "true")
+			cancelProbe()
+			if probeErr == nil {
+				return nil
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return runDevPodRecoveryCommand(ctx, "up", workspace, "--ide", "none")
+		})
+		return nil, err
+	})
 	select {
 	case <-ctx.Done():
-		dropUser()
-		return nil, ctx.Err()
-	case <-entry.token:
+		return false, ctx.Err()
+	case result := <-resultCh:
+		return result.Err == nil, result.Err
 	}
-	release := func() {
-		entry.token <- struct{}{}
-		dropUser()
-	}
-	if err := ctx.Err(); err != nil {
-		release()
-		return nil, err
-	}
-	return release, nil
-}
-
-func (e *DevPodEnv) execWithRecovery(ctx context.Context, req sideagent.ExecRequest) (sideagent.ExecResponse, error) {
-	resp, err := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, req)
-	var dialErr *sshDialTransportError
-	if err == nil || ctx.Err() != nil || !errors.As(err, &dialErr) || e.WorkspaceName == "" {
-		return resp, err
-	}
-
-	// A dial failure proves that the request was never sent. Other transport
-	// failures may follow execution and must not replay an arbitrary command.
-	if recoveryErr := e.recoverConnection(ctx); recoveryErr != nil {
-		return sideagent.ExecResponse{}, errors.Join(err, recoveryErr)
-	}
-	return runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, req)
-}
-
-func (e *DevPodEnv) recoverConnection(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	release, err := acquireDevPodRecoveryLock(ctx, e.WorkspaceName)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	// Another activity may have resumed the shared workspace while we waited.
-	probe := agentExecRequest("/", e.GetType(), e.PortForwards, EnvRunCommandInput{
-		Command: "true", SkipWaking: true,
-	})
-	_, err = runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, probe)
-	if err == nil {
-		return nil
-	}
-	var dialErr *sshDialTransportError
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if !errors.As(err, &dialErr) {
-		return err
-	}
-
-	// A lost registration requires reconciliation with surviving containers.
-	// Creating from LocalRepoDir here could start a duplicate workspace.
-	if err := runDevPodRecoveryCommand(ctx, "status", e.WorkspaceName); err != nil {
-		return fmt.Errorf("cannot recover DevPod workspace %q; check its registration before retrying: %w", e.WorkspaceName, err)
-	}
-	log.Warn().Str("workspace", e.WorkspaceName).Msg("resuming DevPod workspace after SSH dial failure")
-	return runDevPodRecoveryCommand(ctx, "up", e.WorkspaceName, "--ide", "none",
-		"--configure-ssh=true", "--recreate=false", "--reset=false")
 }
 
 func runDevPodRecoveryCommand(ctx context.Context, args ...string) error {
-	out, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
-		WorkingDir: ".", Command: "devpod", Args: args,
+	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+		WorkingDir: ".",
+		Command:    "devpod",
+		Args:       args,
 	})
-	if err != nil {
-		return fmt.Errorf("devpod %s: %w", args[0], err)
+	if err == nil && output.ExitStatus != 0 {
+		err = fmt.Errorf("exit status %d", output.ExitStatus)
 	}
-	if out.ExitStatus != 0 {
-		return fmt.Errorf("devpod %s exited with status %d: %s", args[0], out.ExitStatus,
-			strings.TrimSpace(out.Stderr+"\n"+out.Stdout))
+	if err != nil {
+		return fmt.Errorf("devpod %s failed: %w; %s", strings.Join(args, " "), err,
+			strings.TrimSpace(output.Stderr+"\n"+output.Stdout))
 	}
 	return nil
 }

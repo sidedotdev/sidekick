@@ -171,13 +171,22 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 
 	// Execute command through sh
 	var output env.EnvRunCommandActivityOutput
-	err = flow_action.PerformWithDockerRecovery(dCtx.ExecContext, "run_command", env.EnvRunCommandActivity, &output, env.EnvRunCommandActivityInput{
+	input := env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		Command:            "sh",
 		Args:               []string{"-c", params.Command},
 		RelativeWorkingDir: relWorkDir,
 		EnvVars:            git.BuildGitEnvVars(committerName, committerEmail),
-	})
+	}
+	if workflow.GetVersion(dCtx, "docker-command-recovery", workflow.DefaultVersion, 1) >= 1 {
+		err = flow_action.PerformWithUserRetryOptions(
+			flow_action.ActionContext{ExecContext: dCtx.ExecContext, ActionType: "run_command"},
+			flow_action.UserRetryOptions{OnFailure: DockerFailureHandler{}},
+			env.EnvRunCommandActivity, &output, input,
+		)
+	} else {
+		err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to execute command: %w", err)
 	}

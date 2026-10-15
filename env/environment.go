@@ -178,7 +178,7 @@ func RunWithSSHTransportRecovery(ctx context.Context, e Env, operation func() er
 		}
 		recovered, recoveryErr := recovery.recover(ctx, err)
 		if recoveryErr != nil {
-			return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+			return wrapDockerOperationError("failed to recover SSH transport", fmt.Errorf("%w: %w", err, recoveryErr))
 		}
 		if !recovered {
 			return err
@@ -876,11 +876,11 @@ func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInpu
 	}
 
 	// Commands run over SSH into the container ultimately depend on the docker
-	// engine; a hung engine makes them block forever. Guard so such a hang is
-	// detected instead of stalling the activity.
+	// engine; a hung engine makes them block forever. Surface the failure
+	// rather than stalling the activity.
 	var output EnvRunCommandOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
-		resp, execErr := e.execWithRecovery(ctx, req)
+		resp, execErr := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, req)
 		if execErr != nil {
 			return execErr
 		}

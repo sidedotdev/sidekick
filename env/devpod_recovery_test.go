@@ -3,135 +3,155 @@ package env
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
-
-	"sidekick/common"
-	"sidekick/sideagent"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
+	"golang.org/x/crypto/ssh"
 )
 
-type devPodRecoveryTestTransport struct {
-	stubSSHTransport
-	exec func(context.Context, sideagent.ExecRequest) (sideagent.ExecResponse, error)
+type devPodRecoveryTestEnv struct {
+	*DevPodEnv
+	config   SSHConnConfig
+	portFile string
 }
 
-func (t *devPodRecoveryTestTransport) Exec(ctx context.Context, req sideagent.ExecRequest) (sideagent.ExecResponse, error) {
-	return t.exec(ctx, req)
+func (e *devPodRecoveryTestEnv) SSHConnConfig(context.Context) (SSHConnConfig, error) {
+	data, err := os.ReadFile(e.portFile)
+	if err != nil {
+		return SSHConnConfig{}, err
+	}
+	config := e.config
+	config.Port, err = strconv.Atoi(strings.TrimSpace(string(data)))
+	return config, err
 }
 
-func TestDevPodCommandRecoversBeforeExecution(t *testing.T) {
-	dialErr := fmt.Errorf("connect: %w", &sshDialTransportError{cause: &net.DNSError{
-		Name: "workspace.devpod", Err: "no such host", IsNotFound: true,
-	}})
+func TestDevPodNativeSSHRecovery(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		firstErr   error
-		upFails    bool
-		unlisted   bool
-		stillDown  bool
-		wake       bool
-		wantErr    bool
-		wantUp     bool
-		wantStatus bool
+		name            string
+		dockerAvailable bool
+		restored        bool
+		operationError  bool
 	}{
-		{name: "missing alias", firstErr: dialErr, wantUp: true, wantStatus: true},
-		{name: "wake check", firstErr: dialErr, wake: true, wantUp: true, wantStatus: true},
-		{name: "resume fails", firstErr: dialErr, upFails: true, wantErr: true, wantUp: true, wantStatus: true},
-		{name: "workspace no longer registered", firstErr: dialErr, unlisted: true, wantErr: true, wantStatus: true},
-		{name: "still unreachable", firstErr: dialErr, stillDown: true, wantErr: true, wantUp: true, wantStatus: true},
-		{name: "unknown execution status", firstErr: &agentExecTransportError{cause: errors.New("EOF after send")}, wantErr: true},
-		{name: "host key rejected", firstErr: errors.New("host key mismatch"), wantErr: true},
+		{name: "workspace restored", dockerAvailable: true, restored: true},
+		{name: "workspace still unreachable", dockerAvailable: true},
+		{name: "Docker unavailable"},
+		{name: "operation failure is not replayed", dockerAvailable: true, operationError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			state := filepath.Join(dir, "ready")
-			calls := filepath.Join(dir, "calls")
-			script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RECOVERY_CALLS\"\n" +
-				"case \"$1\" in\nstatus) exit \"$STATUS_EXIT\";;\n" +
-				"up) test \"$UP_EXIT\" = 0 || exit \"$UP_EXIT\"; touch \"$RECOVERY_READY\";;\n" +
-				"*) exit 99;;\nesac\n"
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "devpod"), []byte(script), 0755))
-			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-			t.Setenv("RECOVERY_CALLS", calls)
-			t.Setenv("RECOVERY_READY", state)
-			t.Setenv("STATUS_EXIT", "0")
-			t.Setenv("UP_EXIT", "0")
-			if tc.unlisted {
-				t.Setenv("STATUS_EXIT", "1")
-			}
-			if tc.upFails {
-				t.Setenv("UP_EXIT", "1")
-			}
-			t.Setenv(SSHTransportEnvVar, "native")
-			var sent []sideagent.ExecRequest
-			transport := &devPodRecoveryTestTransport{
-				exec: func(ctx context.Context, req sideagent.ExecRequest) (sideagent.ExecResponse, error) {
-					_, err := os.Stat(state)
-					if err != nil || tc.stillDown {
-						return sideagent.ExecResponse{}, tc.firstErr
-					}
-					if len(req.Argv) > 0 && req.Argv[0] == "test" {
-						return sideagent.ExecResponse{ExitStatus: 1}, nil
-					}
-					if len(req.Argv) > 0 && req.Argv[0] == "echo" {
-						sent = append(sent, req)
-					}
-					return sideagent.ExecResponse{Stdout: []byte("recovered")}, nil
+			withDockerReadyHooks(t,
+				func(context.Context, time.Duration) bool { return tc.dockerAvailable },
+				func(context.Context) bool { return true },
+				func(context.Context) error {
+					t.Fatal("connection recovery must not start a running daemon")
+					return nil
 				},
+				func(context.Context) error {
+					t.Fatal("connection recovery must not restart Docker")
+					return nil
+				},
+			)
+			server := startSSHTestServer(t, sshTestServerOptions{})
+			config := server.connConfig()
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			deadPort := listener.Addr().(*net.TCPAddr).Port
+			require.NoError(t, listener.Close())
+
+			dir := t.TempDir()
+			portFile := filepath.Join(dir, "port")
+			callsFile := filepath.Join(dir, "calls")
+			initialPort, recoveryPort := deadPort, deadPort
+			if tc.restored {
+				recoveryPort = config.Port
 			}
-			original := newNativeSSHTransport
-			newNativeSSHTransport = func(string, []common.PortForwardConfig, SSHCapableEnv) SSHTransport {
-				return transport
+			if tc.operationError {
+				initialPort = config.Port
 			}
-			t.Cleanup(func() { newNativeSSHTransport = original })
-			e := &DevPodEnv{
-				WorkspaceName:    "workspace",
-				WorkingDirectory: "/workspaces/repo",
-				LocalRepoDir:     "/must-not-be-used-to-recreate-a-workspace",
+			require.NoError(t, os.WriteFile(portFile, []byte(strconv.Itoa(initialPort)), 0600))
+			require.NoError(t, os.WriteFile(callsFile, nil, 0600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "devpod"), []byte(`#!/bin/sh
+printf '%s\n' "$*" >> "$TEST_DEVPOD_RECOVERY_CALLS"
+case "$1" in
+  ssh) exit 1 ;;
+  up) printf '%s' "$TEST_DEVPOD_RECOVERY_PORT" > "$TEST_DEVPOD_RECOVERY_PORT_FILE" ;;
+  *) exit 2 ;;
+esac
+`), 0700))
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("TEST_DEVPOD_RECOVERY_CALLS", callsFile)
+			t.Setenv("TEST_DEVPOD_RECOVERY_PORT_FILE", portFile)
+			t.Setenv("TEST_DEVPOD_RECOVERY_PORT", strconv.Itoa(recoveryPort))
+
+			e := &devPodRecoveryTestEnv{
+				DevPodEnv: &DevPodEnv{WorkspaceName: "recovery-test"},
+				config:    config,
+				portFile:  portFile,
 			}
-			out, err := EnvRunCommandActivity(context.Background(), EnvRunCommandActivityInput{
-				EnvContainer: EnvContainer{Env: e},
-				Command:      "echo",
-				Args:         []string{"recovered"},
-				SkipWaking:   !tc.wake,
-			})
-			if tc.wantErr {
-				require.Error(t, err)
-				assert.Empty(t, sent)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, "recovered", out.Stdout)
-				if !tc.wake {
-					require.Len(t, sent, 1)
-					assert.Equal(t, []string{"echo", "recovered"}, sent[0].Argv)
+			transport := &nativeSSHTransport{key: t.Name(), sshEnv: e}
+			t.Cleanup(transport.Close)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			operations := 0
+			operationErr := errors.New("remote operation failed")
+			err = transport.withClient(ctx, func(_ *nativeSSHConn, client *ssh.Client) error {
+				operations++
+				if tc.operationError {
+					return operationErr
 				}
-			}
-			logged, readErr := os.ReadFile(calls)
-			if !tc.wantStatus {
-				assert.True(t, os.IsNotExist(readErr))
-			} else {
-				require.NoError(t, readErr)
-				assert.Equal(t, 1, strings.Count(string(logged), "status workspace"))
-			}
-			if tc.wantUp {
-				assert.Equal(t, 1, strings.Count(string(logged), "up workspace"))
-				assert.Contains(t, string(logged), "--ide none")
-				assert.Contains(t, string(logged), "--configure-ssh")
-			} else {
-				assert.NotContains(t, string(logged), "up ")
-			}
-			assert.NotContains(t, string(logged), e.LocalRepoDir)
-			if tc.wantUp {
-				assert.Contains(t, string(logged), "--recreate=false")
-				assert.Contains(t, string(logged), "--reset=false")
+				_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+				return err
+			})
+
+			calls, readErr := os.ReadFile(callsFile)
+			require.NoError(t, readErr)
+			switch {
+			case tc.operationError:
+				require.ErrorIs(t, err, operationErr)
+				assert.Equal(t, 1, operations)
+				assert.Empty(t, calls)
+			case !tc.dockerAvailable:
+				require.Error(t, err)
+				converter := temporal.GetDefaultFailureConverter()
+				converted := converter.FailureToError(converter.ErrorToFailure(err))
+				var appErr *temporal.ApplicationError
+				require.ErrorAs(t, converted, &appErr)
+				assert.Equal(t, ErrTypeDockerEngineUnavailable, appErr.Type())
+				assert.True(t, appErr.NonRetryable())
+				details, ok := AsDockerEngineFailure(converted)
+				require.True(t, ok)
+				assert.NotEmpty(t, details.Host)
+				assert.Zero(t, operations)
+				assert.Empty(t, calls)
+			default:
+				assert.Equal(t, 1, strings.Count(string(calls), "up recovery-test --ide none"))
+				if tc.restored {
+					require.NoError(t, err)
+					assert.Equal(t, 1, operations)
+				} else {
+					require.Error(t, err)
+					assert.Zero(t, operations)
+				}
 			}
 		})
 	}
+}
+
+func TestDevPodSSHRecoveryDoesNotReplaySentCommand(t *testing.T) {
+	t.Parallel()
+	cause := &agentExecTransportError{cause: errors.New("connection lost after sending")}
+	calls := 0
+	err := RunWithSSHTransportRecovery(context.Background(), &DevPodEnv{WorkspaceName: "unused"}, func() error {
+		calls++
+		return cause
+	})
+	require.ErrorIs(t, err, cause)
+	assert.Equal(t, 1, calls)
 }
