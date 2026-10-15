@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { routeLocationKey } from 'vue-router'
 import FlowView from '../FlowView.vue'
-import type { FlowAction, FlowStatus, SubflowTree } from '../../lib/models'
+import type { FlowAction, FlowStatus, Subflow, SubflowTree } from '../../lib/models'
+import { SubflowStatus } from '../../lib/models'
 import { store } from '../../lib/store'
 
 class MockWebSocket {
@@ -67,12 +68,16 @@ const mountFlow = async ({
   mode = 'development',
   actions = [],
   nextCursor = '',
+  subflows = [],
+  stubSubflows = true,
 }: {
   status: FlowStatus
   embedded?: boolean
   mode?: string
   actions?: FlowAction[]
   nextCursor?: string
+  subflows?: Subflow[]
+  stubSubflows?: boolean
 }) => {
   flowSequence++
   const flowId = `target-flow-${flowSequence}`
@@ -85,7 +90,11 @@ const mountFlow = async ({
       return { ok: true, json: async () => ({ flowActions: actions, nextCursor }) }
     }
     if (url.endsWith(`/flows/${flowId}/subflows?limit=50`)) {
-      return { ok: true, json: async () => ({ subflows: [], nextCursor: '' }) }
+      return { ok: true, json: async () => ({ subflows, nextCursor: '' }) }
+    }
+    const subflow = subflows.find(item => url.endsWith(`/subflows/${item.id}`))
+    if (subflow) {
+      return { ok: true, json: async () => ({ subflow }) }
     }
     if (url.endsWith(`/flows/${flowId}`)) {
       return {
@@ -125,7 +134,7 @@ const mountFlow = async ({
       stubs: {
         FlowEditorLinks: FlowEditorLinksStub,
         FlowModelConfigModal: FlowModelConfigModalStub,
-        SubflowContainer: true,
+        SubflowContainer: stubSubflows,
         IdeSelectorDialog: true,
       },
       provide: {
@@ -385,6 +394,21 @@ describe('FlowView paginated history integration', () => {
       .flatMap(component => (component.props('subflowTree') as SubflowTree).children)
       .filter((child): child is FlowAction => 'actionStatus' in child)
 
+  const setHistoryDistance = (wrapper: VueWrapper, distance: number) => {
+    const container = wrapper.get('.flow-actions-container').element
+    const content = wrapper.get('.scroll-container').element
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 800 })
+    Object.defineProperty(content, 'scrollHeight', { configurable: true, value: 5000 })
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ top: 100, bottom: 900, height: 800 } as DOMRect)
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ top: 100 - distance } as DOMRect)
+  }
+
+  const scrollHistory = async (wrapper: VueWrapper) => {
+    await wrapper.get('.flow-actions-container').trigger('scroll')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await flushPromises()
+  }
+
   it('loads only the newest page initially, then merges older history without overwriting live updates', async () => {
     const latest = action('latest', 3000)
     const { wrapper, flowId } = await mountFlow({
@@ -403,9 +427,8 @@ describe('FlowView paginated history integration', () => {
         ok: true,
         json: async () => ({ flowActions: [latest, action('older', 1000)], nextCursor: '' }),
       } as Response)
-      const button = wrapper.findAll('button').find(button => button.text() === 'Load older history')!
-      await button.trigger('click')
-      await flushPromises()
+      setHistoryDistance(wrapper, 400)
+      await scrollHistory(wrapper)
 
       expect(vi.mocked(fetch).mock.lastCall?.[0]).toBe(
         `/api/v1/workspaces/route-workspace/flows/${flowId}/actions?limit=50&before=older%2Fcursor`,
@@ -418,7 +441,163 @@ describe('FlowView paginated history integration', () => {
     }
   })
 
-  it('fetches subflows outside the loaded pages when live status events arrive', async () => {
+  it('prefetches within one viewport, deduplicates requests, and stops once the buffer is filled', async () => {
+    const { wrapper } = await mountFlow({
+      status: 'in_progress', actions: [action('latest', 3000)], nextCursor: 'older',
+    })
+    try {
+      expect(wrapper.text()).not.toContain('Load older history')
+      const initialCalls = vi.mocked(fetch).mock.calls.length
+      setHistoryDistance(wrapper, 1600)
+      await scrollHistory(wrapper)
+      expect(vi.mocked(fetch).mock.calls.length).toBe(initialCalls)
+
+      let resolve!: (response: Response) => void
+      vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>(r => { resolve = r }))
+      setHistoryDistance(wrapper, 400)
+      await scrollHistory(wrapper)
+      await scrollHistory(wrapper)
+      expect(vi.mocked(fetch).mock.calls.length).toBe(initialCalls + 1)
+
+      setHistoryDistance(wrapper, 2000)
+      resolve(Response.json({ flowActions: [action('older', 1000)], nextCursor: 'more' }))
+      await flushPromises()
+      await scrollHistory(wrapper)
+      expect(vi.mocked(fetch).mock.calls.length).toBe(initialCalls + 1)
+      expect(renderedActions(wrapper).map(item => item.id)).toEqual(['older', 'latest'])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('checks the initial rendered history without requiring a scroll event', async () => {
+    const { wrapper } = await mountFlow({
+      status: 'in_progress', actions: [action('latest', 3000)], nextCursor: 'older',
+    })
+    try {
+      vi.mocked(fetch).mockResolvedValueOnce(Response.json({
+        flowActions: [action('older', 1000)], nextCursor: '',
+      }))
+      setHistoryDistance(wrapper, 400)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await flushPromises()
+      expect(renderedActions(wrapper).map(item => item.id)).toEqual(['older', 'latest'])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it.each(['switch', 'unmount'])('cancels scheduled loading on %s', async (operation) => {
+    const { wrapper } = await mountFlow({
+      status: 'in_progress', actions: [action('latest', 3000)], nextCursor: 'older',
+    })
+    let unmounted = false
+    try {
+      setHistoryDistance(wrapper, 400)
+      const calls = vi.mocked(fetch).mock.calls.length
+      await wrapper.get('.flow-actions-container').trigger('scroll')
+      if (operation === 'switch') {
+        await wrapper.setProps({ flowId: undefined })
+      } else {
+        wrapper.unmount()
+        unmounted = true
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await flushPromises()
+      expect(vi.mocked(fetch).mock.calls.length).toBe(calls)
+    } finally {
+      if (!unmounted) wrapper.unmount()
+    }
+  })
+
+  it('fills a short history buffer without requiring another scroll event', async () => {
+    const { wrapper } = await mountFlow({
+      status: 'in_progress', actions: [action('latest', 3000)], nextCursor: 'older',
+    })
+    try {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(Response.json({ flowActions: [action('middle', 2000)], nextCursor: 'oldest' }))
+        .mockResolvedValueOnce(Response.json({ flowActions: [action('oldest', 1000)], nextCursor: '' }))
+      setHistoryDistance(wrapper, 100)
+      await scrollHistory(wrapper)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await flushPromises()
+      expect(renderedActions(wrapper).map(item => item.id)).toEqual(['oldest', 'middle', 'latest'])
+      const calls = vi.mocked(fetch).mock.calls.length
+      await scrollHistory(wrapper)
+      expect(vi.mocked(fetch).mock.calls.length).toBe(calls)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('does not repeatedly retry failed pages and allows an explicit retry', async () => {
+    const { wrapper } = await mountFlow({
+      status: 'in_progress', actions: [action('latest', 3000)], nextCursor: 'older',
+    })
+    try {
+      vi.mocked(fetch).mockResolvedValueOnce(new Response('', { status: 500 }))
+      setHistoryDistance(wrapper, 400)
+      await scrollHistory(wrapper)
+      expect(wrapper.get('[role="alert"]').text()).toContain('Failed to load actions')
+      const calls = vi.mocked(fetch).mock.calls.length
+      await scrollHistory(wrapper)
+      expect(vi.mocked(fetch).mock.calls.length).toBe(calls)
+
+      vi.mocked(fetch).mockResolvedValueOnce(Response.json({
+        flowActions: [action('older', 1000)], nextCursor: '',
+      }))
+      await wrapper.get('[role="alert"] button').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      expect(renderedActions(wrapper).map(item => item.id)).toEqual(['older', 'latest'])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('preserves action instances and expansion when streamed actions move to a newer subflow', async () => {
+    const subflows: Subflow[] = ['first', 'second'].map(id => ({
+      id, flowId: 'flow', workspaceId: 'route-workspace', name: id,
+      type: 'step.dev', status: SubflowStatus.Started,
+    }))
+    const actions = [1, 2, 3].map(index => ({
+      ...action(`action-${index}`, index * 1000), subflowId: 'first',
+    }))
+    const { wrapper } = await mountFlow({
+      status: 'in_progress', actions, subflows, stubSubflows: false,
+    })
+    try {
+      const findLatest = () => wrapper.findAllComponents({ name: 'FlowActionItem' })
+        .find(component => component.props('flowAction').id === 'action-3')!
+      const latest = findLatest()
+      const instance = latest.vm.$
+      const element = latest.element
+      const renderer = latest.getComponent({ name: 'RunCommandFlowAction' }).vm.$
+      expect(latest.classes()).toContain('expanded-action')
+
+      const socket = MockWebSocket.instances.find(ws => ws.url.includes('action_changes_ws'))!
+      socket.receive({ ...actions[2], actionResult: 'streamed result', updated: new Date(4000) })
+      await new Promise(resolve => setTimeout(resolve, 150))
+      await flushPromises()
+      expect(findLatest().vm.$).toBe(instance)
+      expect(findLatest().element).toBe(element)
+      expect(findLatest().getComponent({ name: 'RunCommandFlowAction' }).vm.$).toBe(renderer)
+
+      socket.receive({ ...action('new-step-action', 5000), subflowId: 'second' })
+      await new Promise(resolve => setTimeout(resolve, 150))
+      await flushPromises()
+      expect(findLatest()).toBeDefined()
+      expect(findLatest().vm.$).toBe(instance)
+      expect(findLatest().element).toBe(element)
+      expect(findLatest().classes()).toContain('expanded-action')
+      expect(findLatest().getComponent({ name: 'RunCommandFlowAction' }).vm.$).toBe(renderer)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('fetches metadata on live status events but hides the subflow until an action arrives', async () => {
     const { wrapper, flowId } = await mountFlow({ status: 'in_progress' })
     try {
       vi.mocked(fetch).mockResolvedValueOnce({
@@ -435,9 +614,17 @@ describe('FlowView paginated history integration', () => {
       await new Promise(resolve => setTimeout(resolve, 150))
       await flushPromises()
       expect(vi.mocked(fetch).mock.lastCall?.[0]).toBe('/api/v1/workspaces/route-workspace/subflows/sf_new')
-      const tree = wrapper.findAllComponents({ name: 'SubflowContainer' })
+      const findTree = () => wrapper.findAllComponents({ name: 'SubflowContainer' })
         .find(component => component.props('subflowTree').id === 'sf_new')
-      expect(tree?.props('subflowTree').name).toBe('New step')
+      expect(findTree()).toBeUndefined()
+
+      const socket = MockWebSocket.instances.find(ws => ws.url.includes('action_changes_ws'))!
+      socket.receive({ ...action('first-step-action', 1000), subflowId: 'sf_new' })
+      await new Promise(resolve => setTimeout(resolve, 150))
+      await flushPromises()
+      expect(findTree()?.props('subflowTree')).toMatchObject({
+        name: 'New step', children: [{ id: 'first-step-action' }],
+      })
     } finally {
       wrapper.unmount()
     }

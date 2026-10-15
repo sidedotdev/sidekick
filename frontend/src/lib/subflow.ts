@@ -65,6 +65,7 @@ export const buildSubflowTrees = (
     for (const child of node.children) {
       if (!('actionType' in child)) firstActionTime.set(child, order(child))
     }
+    node.children = node.children.filter(child => 'actionType' in child || child.children.length > 0)
     node.children.sort((a, b) =>
       (firstActionTime.get(a)! - firstActionTime.get(b)!) ||
       (a.id ?? '').localeCompare(b.id ?? ''),
@@ -75,7 +76,7 @@ export const buildSubflowTrees = (
   }
   roots.forEach(order)
   roots.sort((a, b) => (firstActionTime.get(a)! - firstActionTime.get(b)!) || a.id!.localeCompare(b.id!))
-  return roots
+  return roots.filter(node => node.children.length > 0)
 }
 
 export function containsFlowAction(tree: SubflowTree, actionId: string | undefined): boolean {

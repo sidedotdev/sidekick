@@ -73,8 +73,8 @@ let wasToggled = false;
 const autoExpandThreshold = 2;
 const accordionState = ref({ expanded: props.defaultExpanded || props.subflowTree.children.length <= autoExpandThreshold });
 watch(() => props.defaultExpanded, (newVal: boolean) => {
-  if (!wasToggled) {
-    accordionState.value.expanded = newVal || props.subflowTree.children.length <= autoExpandThreshold
+  if (!wasToggled && newVal) {
+    accordionState.value.expanded = true
   }
 })
 
