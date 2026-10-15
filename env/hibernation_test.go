@@ -18,27 +18,11 @@ import (
 func setupHibernationTestRepo(t *testing.T) (repoDir, worktreeDir, branchName string) {
 	t.Helper()
 	repoDir = t.TempDir()
-
-	runGit := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %v failed: %s", args, out)
-	}
-
-	runGit(repoDir, "init")
-	runGit(repoDir, "config", "user.name", "Test")
-	runGit(repoDir, "config", "user.email", "test@test.com")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Test"), 0644))
-	runGit(repoDir, "add", ".")
-	runGit(repoDir, "commit", "-m", "initial commit")
+	require.NoError(t, hibernationRepoFixture.CopyTo(repoDir))
 
 	branchName = "side/test-branch"
 	worktreeDir = filepath.Join(t.TempDir(), "worktree")
-	runGit(repoDir, "worktree", "add", "-b", branchName, worktreeDir, "HEAD")
+	runGitIn(t, repoDir, "worktree", "add", "-b", branchName, worktreeDir, "HEAD")
 	return repoDir, worktreeDir, branchName
 }
 

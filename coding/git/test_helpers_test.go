@@ -7,25 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"sidekick/internal/testfixture"
+
 	"github.com/stretchr/testify/require"
 )
 
-// setupTestGitRepo initializes a git repository in a temporary directory.
-// It configures a default user and initializes with 'main' as the default branch.
+// setupTestGitRepo supplies an isolated repository with an unborn main branch.
+// The package's TestMain supplies the default Git identity.
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()
 	repoDir := t.TempDir()
-
-	// Check if git is installed
-	_, err := exec.LookPath("git")
-	require.NoError(t, err, "git command not found in PATH")
-
-	// git init with main branch
-	cmdInit := exec.Command("git", "init", "-b", "main")
-	cmdInit.Dir = repoDir
-	outputInit, err := cmdInit.CombinedOutput()
-	require.NoError(t, err, "git init failed: %s", string(outputInit))
-
+	require.NoError(t, emptyRepoFixture.CopyTo(repoDir))
 	return repoDir
 }
 
@@ -86,3 +78,5 @@ func createCommit(t *testing.T, repoDir, message string) string {
 	hash := runGitCommandInTestRepo(t, repoDir, "rev-parse", "HEAD")
 	return hash
 }
+
+var emptyRepoFixture = testfixture.Git("git init -q -b main")

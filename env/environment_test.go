@@ -25,43 +25,11 @@ import (
 // It returns the repo directory path and sets up cleanup via t.Cleanup.
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()
-
-	// Check if git is available
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git command not found in PATH")
 	}
-
 	repoDir := t.TempDir()
-
-	// Initialize git repo
-	cmd := exec.Command("git", "init")
-	cmd.Dir = repoDir
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git init failed: %s", string(output))
-
-	// Create main branch
-	cmd = exec.Command("git", "checkout", "-b", "main")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git checkout -b main failed: %s", string(output))
-
-	// Configure local user for commits (avoid relying on global config)
-	cmd = exec.Command("git", "config", "user.name", "Test User")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git config user.name failed: %s", string(output))
-
-	cmd = exec.Command("git", "config", "user.email", "test@example.com")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git config user.email failed: %s", string(output))
-
-	// Create initial empty commit
-	cmd = exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git commit failed: %s", string(output))
-
+	require.NoError(t, initialRepoFixture.CopyTo(repoDir))
 	return repoDir
 }
 
