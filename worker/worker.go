@@ -64,7 +64,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		log.Fatal().Err(err).Msg("Failed to initialize telemetry tracer")
 	}
 
-	featureFlag, err := fflag.NewFFlag("flags.yml")
+	featureFlag, err := fflag.NewFFlag("fflag/flags.yml")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create go-feature-flag instance")
 	}
@@ -187,6 +187,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.NewLocalGitWorktreeActivity)
 	w.RegisterActivity(env.CreateDevPodWorktreeActivity)
 	w.RegisterActivity(env.DevPodUpActivity)
+	w.RegisterActivity(env.RestartDockerEngineActivity)
 	w.RegisterActivity(env.CreateSandboxActivity)
 	w.RegisterActivity(env.CheckSandboxActivity)
 	w.RegisterActivity(env.StopSandboxActivity)

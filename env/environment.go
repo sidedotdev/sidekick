@@ -178,7 +178,7 @@ func RunWithSSHTransportRecovery(ctx context.Context, e Env, operation func() er
 		}
 		recovered, recoveryErr := recovery.recover(ctx, err)
 		if recoveryErr != nil {
-			return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+			return wrapDockerOperationError("failed to recover SSH transport", fmt.Errorf("%w: %w", err, recoveryErr))
 		}
 		if !recovered {
 			return err
@@ -349,6 +349,7 @@ type DevPodEnv struct {
 	// PortForwards are host ports reverse-forwarded into the container over
 	// the SSH connection used to run commands.
 	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
+	EnvVars      map[string]string          `json:"envVars,omitempty"`
 	Hibernated   bool                       `json:"hibernated,omitempty"`
 }
 
@@ -870,14 +871,14 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 }
 
 func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
+	req := e.commandRequest(input)
 	if !input.SkipWaking {
 		req = withRemoteReadLock(req, e.WorkingDirectory)
 	}
 
 	// Commands run over SSH into the container ultimately depend on the docker
-	// engine; a hung engine makes them block forever. Guard so such a hang is
-	// detected and the engine restarted instead of stalling the activity.
+	// engine; a hung engine makes them block forever. Surface the failure
+	// rather than stalling the activity.
 	var output EnvRunCommandOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
 		resp, execErr := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, req)

@@ -311,6 +311,9 @@ func (m ApprovalInputModel) handleApprovalInput(msg tea.KeyMsg) (ApprovalInputMo
 	case "y", "Y":
 		return m, m.submitApproval(true, "")
 	case "n", "N":
+		if required, ok := m.action.ActionParams["rejectReasonRequired"].(bool); ok && !required {
+			return m, m.submitApproval(false, "")
+		}
 		m.mode = approvalInputModeRejectionFeedback
 		m.textarea.Focus()
 		return m, textarea.Blink
@@ -422,11 +425,13 @@ func (m ApprovalInputModel) submitContinue() tea.Cmd {
 
 // Tag to label mappings for approval buttons
 var approvalApproveTagLabels = map[string]string{
-	"approve_plan": "Approve",
+	"approve_plan":   "Approve",
+	"restart_docker": "Restart Docker",
 }
 
 var approvalRejectTagLabels = map[string]string{
-	"reject_plan": "Revise",
+	"reject_plan":           "Revise",
+	"retry_without_restart": "Retry Without Restart",
 }
 
 var approvalContinueTagLabels = map[string]string{

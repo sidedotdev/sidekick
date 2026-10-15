@@ -381,7 +381,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					if approveErr != nil {
 						return llm2.ToolResultBlock{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
-					iteration.AutoIterationCount = 0
+					iteration.resetAfterFeedback()
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &devReq
 						return llm2.ToolResultBlock{Content: llm2.TextContentBlocks("Requirements recorded and approved."), Name: tc.Name, ToolCallId: tc.Id}, nil
@@ -411,7 +411,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					if approveErr != nil {
 						return llm2.ToolResultBlock{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
-					iteration.AutoIterationCount = 0
+					iteration.resetAfterFeedback()
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &updatedReqs
 						return llm2.ToolResultBlock{Content: llm2.TextContentBlocks("Requirements updated and approved."), Name: tc.Name, ToolCallId: tc.Id}, nil
@@ -439,7 +439,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			}
 
 			if res.Name == getHelpOrInputTool.Name {
-				iteration.AutoIterationCount = 0
+				iteration.resetAfterFeedback()
 			}
 		}
 
@@ -635,10 +635,18 @@ func addToolCallResponse(eCtx flow_action.ExecContext, chatHistory *persisted_ai
 }
 
 func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*flow_action.UserResponse, error) {
+	markdown := devReq.String()
 	// Create a RequestForUser struct for approval request
 	req := flow_action.RequestForUser{
-		Content:       "Please approve or reject these requirements:\n\n" + devReq.String() + "\n\nDo you approve these requirements? If not, please provide feedback on what needs to be changed.",
+		Content:       markdown,
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
+	}
+	v := workflow.GetVersion(dCtx, "approval-copy-content", workflow.DefaultVersion, 2)
+	if v < 2 {
+		req.Content = "Please approve or reject these requirements:\n\n" + markdown + "\n\nDo you approve these requirements? If not, please provide feedback on what needs to be changed."
+		if v >= 1 {
+			req.RequestParams["copyContent"] = markdown
+		}
 	}
 	return GetUserApproval(dCtx, "dev_requirements", req.Content, req.RequestParams)
 }

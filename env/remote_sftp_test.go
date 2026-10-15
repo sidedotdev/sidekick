@@ -372,6 +372,12 @@ func TestSFTPFailureWarrantsReconnect(t *testing.T) {
 		{"permission denied", context.Background(), fmt.Errorf("open: %w", os.ErrPermission), SFTPOp{Name: "read"}, false},
 		{"permission denied while creating", context.Background(), fmt.Errorf("mkdir: %w", os.ErrPermission), SFTPOp{Name: "mkdirall", RetryOnNotExist: true}, false},
 		{"canceled context", canceled, errors.New("connection lost"), SFTPOp{Name: "read"}, false},
+		{"not a directory", context.Background(), &os.PathError{Op: "mkdir", Path: "/file/child", Err: syscall.ENOTDIR}, SFTPOp{Name: "mkdirall", RetryOnNotExist: true}, false},
+		{"server filesystem failure", context.Background(), fmt.Errorf("remove: %w", &sftp.StatusError{Code: uint32(sftp.ErrSSHFxFailure)}), SFTPOp{Name: "remove"}, false},
+		{"unsupported operation", context.Background(), &sftp.StatusError{Code: uint32(sftp.ErrSSHFxOpUnsupported)}, SFTPOp{Name: "read"}, false},
+		{"server connection lost", context.Background(), &sftp.StatusError{Code: uint32(sftp.ErrSSHFxConnectionLost)}, SFTPOp{Name: "read"}, true},
+		{"server no connection", context.Background(), &sftp.StatusError{Code: uint32(sftp.ErrSSHFxNoConnection)}, SFTPOp{Name: "read"}, true},
+		{"unexpected EOF", context.Background(), io.ErrUnexpectedEOF, SFTPOp{Name: "read"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

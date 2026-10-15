@@ -1,6 +1,6 @@
 <template>
   <div class="diff-file" tabindex="-1">
-    <div class="file-header" tabindex="0" @click="toggleExpanded" @keydown.enter.exact="toggleExpanded" @keydown.space.prevent="toggleExpanded">
+    <div class="file-header" :style="{ top: stickyTop }" tabindex="0" @click="toggleExpanded" @keydown.enter.exact="toggleExpanded" @keydown.space.prevent="toggleExpanded">
       <div class="file-header-content">
         <div class="file-path-container">
           <span class="expand-icon" :class="{ expanded: isExpanded }">▶</span>
@@ -218,7 +218,6 @@ const getTheme = () => {
   background: var(--color-background-mute);
   border-bottom: 1px solid var(--color-border);
   position: sticky;
-  top: v-bind(stickyTop);
   z-index: 10;
 }
 

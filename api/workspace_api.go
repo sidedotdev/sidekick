@@ -50,6 +50,7 @@ type WorkspaceRequest struct {
 	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
+	RerankingConfig common.RerankingConfig `json:"rerankingConfig,omitempty"`
 }
 
 type WorkspaceResponse struct {
@@ -62,6 +63,7 @@ type WorkspaceResponse struct {
 	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
+	RerankingConfig common.RerankingConfig `json:"rerankingConfig,omitempty"`
 }
 
 func (w WorkspaceResponse) MarshalJSON() ([]byte, error) {
@@ -289,6 +291,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		Embedding: common.EmbeddingConfig{
 			Defaults: workspaceReq.EmbeddingConfig.Defaults,
 		},
+		Reranking: workspaceReq.RerankingConfig,
 	}
 
 	// TODO /gen call SchedulePollFailuresWorkflow here, after fixing the TODO there
@@ -308,6 +311,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		ProfileId:       workspace.ProfileId,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
+		RerankingConfig: workspaceConfig.Reranking,
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})
@@ -388,6 +392,7 @@ func (ctrl *Controller) GetWorkspaceHandler(c *gin.Context) {
 	} else {
 		response.LLMConfig = config.LLM
 		response.EmbeddingConfig = config.Embedding
+		response.RerankingConfig = config.Reranking
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})
@@ -448,6 +453,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	workspace.ProfileId = workspaceReq.ProfileId
 	workspaceConfig.LLM = workspaceReq.LLMConfig
 	workspaceConfig.Embedding = workspaceReq.EmbeddingConfig
+	workspaceConfig.Reranking = workspaceReq.RerankingConfig
 	workspace.Updated = time.Now().UTC()
 
 	if err := ctrl.service.PersistWorkspace(c, workspace); err != nil {
@@ -474,6 +480,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		ProfileId:       workspace.ProfileId,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
+		RerankingConfig: workspaceConfig.Reranking,
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})

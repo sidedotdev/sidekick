@@ -295,7 +295,12 @@ func readHolderInvocations(t *testing.T, argsFile string) []string {
 		return nil
 	}
 	require.NoError(t, err)
-	return strings.Split(strings.TrimSpace(string(contents)), "\n")
+	// The file can be observed between creation and completion of a record.
+	lastNewline := strings.LastIndexByte(string(contents), '\n')
+	if lastNewline < 0 {
+		return nil
+	}
+	return strings.Split(string(contents[:lastNewline]), "\n")
 }
 
 // waitForHolderInvocations waits until the fake ssh has recorded at least n
@@ -305,11 +310,7 @@ func waitForHolderInvocations(t *testing.T, argsFile string, n int) []string {
 	t.Helper()
 	var invocations []string
 	require.Eventually(t, func() bool {
-		contents, err := os.ReadFile(argsFile)
-		if err != nil {
-			return false
-		}
-		invocations = strings.Split(strings.TrimSpace(string(contents)), "\n")
+		invocations = readHolderInvocations(t, argsFile)
 		return len(invocations) >= n
 	}, 15*time.Second, 10*time.Millisecond, "expected %d fake ssh invocation(s)", n)
 	return invocations
@@ -409,8 +410,12 @@ func TestReverseForwardHolderPlacesOptionsBeforeDestination(t *testing.T) {
 	args := invocations[0]
 	destination := strings.Index(args, "workspace.devpod")
 	require.GreaterOrEqual(t, destination, 0)
-	assert.Less(t, strings.Index(args, "-N"), destination, "-N must precede the destination")
-	assert.Less(t, strings.Index(args, "-R 127.0.0.1:3000:127.0.0.1:8080"), destination, "-R must precede the destination")
+	noCommand := strings.Index(args, "-N")
+	reverseForward := strings.Index(args, "-R 127.0.0.1:3000:127.0.0.1:8080")
+	require.GreaterOrEqual(t, noCommand, 0, "-N must be present")
+	require.GreaterOrEqual(t, reverseForward, 0, "-R must be present")
+	assert.Less(t, noCommand, destination, "-N must precede the destination")
+	assert.Less(t, reverseForward, destination, "-R must precede the destination")
 }
 
 // holderAlive reports whether the holder registered under key is running.
@@ -807,4 +812,29 @@ func TestReverseForwardHolderNoForwardsIsNoop(t *testing.T) {
 
 	require.NoError(t, holder.ensure(context.Background(), &recordingSSHEnv{&LocalEnv{}}, nil))
 	assert.Empty(t, readHolderInvocations(t, argsFile))
+}
+
+func TestReadHolderInvocations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		contents string
+		want     []string
+	}{
+		{name: "empty file"},
+		{name: "incomplete invocation", contents: "-N -R 127.0.0.1"},
+		{name: "complete invocation", contents: "-N workspace.devpod\n", want: []string{"-N workspace.devpod"}},
+		{name: "incomplete trailing invocation", contents: "-N first\n-N second", want: []string{"-N first"}},
+		{name: "multiple complete invocations", contents: "-N first\n-N second\n", want: []string{"-N first", "-N second"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			argsFile := filepath.Join(t.TempDir(), "args")
+			require.NoError(t, os.WriteFile(argsFile, []byte(tt.contents), 0600))
+			assert.Equal(t, tt.want, readHolderInvocations(t, argsFile))
+		})
+	}
 }

@@ -22,6 +22,7 @@ export const DEFAULT_KANBAN_KEY_BINDINGS: Readonly<KanbanKeyBindings> = Object.f
 export const KANBAN_NEW_TASK_SHORTCUT_KEY = 't'
 const RESERVED_KANBAN_KEYS: Readonly<Record<string, string>> = {
   [KANBAN_NEW_TASK_SHORTCUT_KEY]: 'new task',
+  w: 'workspace switcher',
 }
 
 const SINGLE_VISIBLE_CHARACTER = /^\S$/u

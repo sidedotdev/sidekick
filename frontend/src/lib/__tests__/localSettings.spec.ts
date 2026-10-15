@@ -50,14 +50,14 @@ describe('localSettings', () => {
   })
 
   it('persists valid key bindings', () => {
-    expect(setKanbanKeyBinding('up', 'w')).toBeNull()
-    expect(getKanbanKeyBindings().up).toBe('w')
+    expect(setKanbanKeyBinding('up', 'u')).toBeNull()
+    expect(getKanbanKeyBindings().up).toBe('u')
     expect(JSON.parse(localStorage.getItem(KANBAN_KEYBOARD_KEYS_STORAGE_KEY)!)).toEqual({
       ...DEFAULT_KANBAN_KEY_BINDINGS,
-      up: 'w',
+      up: 'u',
     })
     loadLocalSettings()
-    expect(getKanbanKeyBindings().up).toBe('w')
+    expect(getKanbanKeyBindings().up).toBe('u')
   })
 
   it.each([
@@ -68,6 +68,8 @@ describe('localSettings', () => {
     ['a key bound to another direction in another case', 'J'],
     ['the new-task shortcut', 't'],
     ['the new-task shortcut in another case', 'T'],
+    ['the workspace shortcut', 'w'],
+    ['the workspace shortcut in another case', 'W'],
   ])('rejects %s and keeps the last valid binding', (_name, key) => {
     expect(setKanbanKeyBinding('up', key)).not.toBeNull()
     expect(getKanbanKeyBindings().up).toBe('k')
@@ -76,6 +78,7 @@ describe('localSettings', () => {
   it.each([
     ['duplicate keys', { up: 'j', down: 'j', left: 'h', right: 'l' }],
     ['the new-task shortcut', { up: 'T', down: 'j', left: 'h', right: 'l' }],
+    ['the workspace shortcut', { up: 'W', down: 'j', left: 'h', right: 'l' }],
   ])('falls back to defaults when stored bindings contain %s', (_name, stored) => {
     localStorage.setItem(KANBAN_KEYBOARD_KEYS_STORAGE_KEY, JSON.stringify(stored))
     loadLocalSettings()

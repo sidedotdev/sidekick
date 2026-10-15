@@ -1366,3 +1366,123 @@ func refusedLocalPort(t *testing.T) int {
 	require.NoError(t, listener.Close())
 	return port
 }
+
+func TestNativeTransportSFTPPathErrorPreservesInFlightRead(t *testing.T) {
+	for _, operation := range []string{"mkdir under file", "readdir file", "remove nonempty directory"} {
+		t.Run(operation, func(t *testing.T) {
+			server := startSSHTestServer(t, sshTestServerOptions{})
+			transport := nativeTestTransport(t, server, t.Name())
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			dir := t.TempDir()
+			filePath := filepath.Join(dir, "file.txt")
+			content := []byte("an unrelated read must survive a filesystem error")
+			require.NoError(t, os.WriteFile(filePath, content, 0o600))
+
+			value, err := transport.WithSFTP(ctx, SFTPOp{
+				Name: "read",
+				Path: filePath,
+				Run: func(client *sftp.Client) (any, error) {
+					file, err := client.Open(filePath)
+					if err != nil {
+						return nil, err
+					}
+					defer file.Close()
+
+					var pathErr error
+					switch operation {
+					case "mkdir under file":
+						pathErr = sftpMkdirAll(ctx, transport, filepath.Join(filePath, "child"), 0o755)
+					case "readdir file":
+						_, pathErr = sftpReadDir(ctx, transport, filePath)
+					case "remove nonempty directory":
+						pathErr = sftpRemove(ctx, transport, dir)
+					}
+					if pathErr == nil {
+						return nil, fmt.Errorf("%s unexpectedly succeeded", operation)
+					}
+					return io.ReadAll(file)
+				},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, content, value)
+		})
+	}
+}
+
+func TestNativeTransportMissingKnownHostsFiles(t *testing.T) {
+	tests := []struct {
+		name       string
+		files      []string
+		mismatched bool
+		wantError  string
+	}{
+		{
+			name:  "missing later file",
+			files: []string{"trusted", "missing"},
+		},
+		{
+			name:  "missing first file",
+			files: []string{"missing", "trusted"},
+		},
+		{
+			name:      "all files missing rejects unknown key",
+			files:     []string{"missing"},
+			wantError: "host key",
+		},
+		{
+			name:       "missing file does not hide changed key",
+			files:      []string{"trusted", "missing"},
+			mismatched: true,
+			wantError:  "host key",
+		},
+		{
+			name:      "malformed existing file is not ignored",
+			files:     []string{"missing", "malformed"},
+			wantError: "read known hosts",
+		},
+		{
+			name:      "directory is not ignored",
+			files:     []string{"missing", "directory"},
+			wantError: "read known hosts",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startSSHTestServer(t, sshTestServerOptions{})
+			if tt.mismatched {
+				server.writeUntrustedKnownHosts()
+			}
+			dir := t.TempDir()
+			malformed := filepath.Join(dir, "malformed")
+			require.NoError(t, os.WriteFile(malformed, []byte("invalid known hosts entry\n"), 0o600))
+			paths := map[string]string{
+				"trusted":   server.knownHostsPath,
+				"missing":   filepath.Join(dir, "known_hosts2"),
+				"malformed": malformed,
+				"directory": dir,
+			}
+			transport := nativeTestTransport(t, server, t.Name(), func(config *SSHConnConfig) {
+				config.KnownHostsFiles = nil
+				for _, file := range tt.files {
+					config.KnownHostsFiles = append(config.KnownHostsFiles, paths[file])
+				}
+			})
+
+			resp, err := nativeExecEcho(context.Background(), transport, "verified")
+			if tt.wantError == "" {
+				require.NoError(t, err)
+				assert.Contains(t, string(resp.Stdout), "verified")
+			} else {
+				require.ErrorContains(t, err, tt.wantError)
+				assert.Zero(t, server.stats().Sessions)
+				if tt.wantError == "host key" {
+					var dialErr *sshDialTransportError
+					assert.NotErrorAs(t, err, &dialErr)
+				}
+			}
+			assert.NoFileExists(t, paths["missing"])
+		})
+	}
+}

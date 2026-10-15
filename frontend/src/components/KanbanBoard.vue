@@ -33,23 +33,27 @@
     <div class="board-column-headings">
       <h2>
         You
-        <button
-          type="button"
-          class="mini-button"
-          title="Draft task"
-          :data-board-nav="boardControlIds.headingAddTask('human')"
-          @click="addTask('human')"
-        >+</button>
+        <ShortcutTooltip label="Draft task" shortcut="T" position="bottom">
+          <button
+            type="button"
+            class="mini-button"
+            aria-label="Draft task"
+            :data-board-nav="boardControlIds.headingAddTask('human')"
+            @click="addTask('human')"
+          >+</button>
+        </ShortcutTooltip>
       </h2>
       <h2>
         AI Sidekick
-        <button
-          type="button"
-          class="mini-button"
-          title="Queue task"
-          :data-board-nav="boardControlIds.headingAddTask('llm')"
-          @click="addTask('llm')"
-        >+</button>
+        <ShortcutTooltip label="Queue task" shortcut="T" position="bottom">
+          <button
+            type="button"
+            class="mini-button"
+            aria-label="Queue task"
+            :data-board-nav="boardControlIds.headingAddTask('llm')"
+            @click="addTask('llm')"
+          >+</button>
+        </ShortcutTooltip>
       </h2>
       <h2>Finished</h2>
     </div>
@@ -89,6 +93,7 @@
       <KanbanColumnGroup
         v-show="isGroupExpanded(project.id)"
         :tasks="tasksByProjectId[project.id] ?? []"
+        :new-task-shortcut-label="newTaskShortcutLabel"
         :show-headings="false"
         :group-key="project.id"
         @add-task="(agentType: AgentType) => addTask(agentType, project.id)"
@@ -167,6 +172,7 @@ import KanbanColumnGroup from './KanbanColumnGroup.vue'
 import ArchiveIcon from './icons/ArchiveIcon.vue'
 import ProjectsIcon from './icons/ProjectsIcon.vue'
 import TaskModal from './TaskModal.vue'
+import ShortcutTooltip from './ShortcutTooltip.vue'
 import { store } from '../lib/store'
 import { isFocusUnclaimed, isInteractiveElement } from '../lib/dom'
 import { viewCache } from '../lib/viewCache'
@@ -468,7 +474,7 @@ const openCopyModal = (task: Task) => {
 }
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
-const newTaskShortcutLabel = 'T'
+const newTaskShortcutLabel = 't'
 
 const handleKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
@@ -494,7 +500,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
       searchInputRef.value?.focus()
     }, 0)
   } else if (isNewTaskShortcut) {
-    addTask('human')
+    const projectId = keyboardControlEnabled.value
+      && event.key === KANBAN_NEW_TASK_SHORTCUT_KEY
+      && cursorForElement(target)
+      ? target.closest<HTMLElement>('.project-group')?.dataset.groupKey || undefined
+      : undefined
+    addTask('human', projectId)
   }
 }
 

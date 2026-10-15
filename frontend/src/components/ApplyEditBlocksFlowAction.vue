@@ -1,5 +1,5 @@
 <template>
-  <div v-if="expand && actionResult.length > 0" class="apply-edit-blocks-results">
+  <div v-if="expand && actionResult.length > 0" class="apply-edit-blocks-results" :style="{ '--level': level }">
     <div v-for="(result, index) in actionResult" :key="index" class="edit-block-result">
       <h4>
         {{ editBlockLabel(result) }} Result:
@@ -117,7 +117,6 @@ const actionResult = computed(() => {
 
 <style scoped>
 .apply-edit-blocks-results {
-  --level: v-bind(level);
   scroll-margin-top: calc(var(--level) * var(--name-height));
   background-color: inherit;
   padding: 0;

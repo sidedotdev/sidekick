@@ -836,6 +836,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"doneRequired":                    doneRequired,
 		"doneFunctionName":                doneTool.Name,
 		"environmentContext":              environmentContext,
+		"isolatedSandbox":                 isIsolatedSandboxEnvironment(dCtx),
 		"idd":                             idd,
 	}
 	if doneRequired {
@@ -870,6 +871,7 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"doneRequired":                    doneRequired,
 		"hasPlan":                         true,
 		"environmentContext":              environmentContext,
+		"isolatedSandbox":                 isIsolatedSandboxEnvironment(dCtx),
 		"idd":                             idd,
 	}
 	if doneRequired {
@@ -1052,4 +1054,11 @@ func feedbackContextType(feedbackType string, disableHumanInTheLoop bool) string
 		}
 	}
 	return ""
+}
+
+func isIsolatedSandboxEnvironment(dCtx DevContext) bool {
+	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
+		return false
+	}
+	return common.IsolatedSandboxEnvTypes[string(dCtx.EnvContainer.Env.GetType())]
 }

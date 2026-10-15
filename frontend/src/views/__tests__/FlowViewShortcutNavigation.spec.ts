@@ -60,8 +60,8 @@ const mountFlow = async ({ actions, embedded = false }: { actions: FlowAction[],
   capturedHandlers = []
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
     const url = String(input)
-    if (url.endsWith(`/flows/${flowId}/actions`)) return { ok: true, json: async () => ({ flowActions: actions }) }
-    if (url.endsWith(`/flows/${flowId}/subflows`)) return { ok: true, json: async () => ({ subflows: [] }) }
+    if (url.endsWith(`/flows/${flowId}/actions?limit=50`)) return { ok: true, json: async () => ({ flowActions: actions, nextCursor: '' }) }
+    if (url.endsWith(`/flows/${flowId}/subflows?limit=50`)) return { ok: true, json: async () => ({ subflows: [], nextCursor: '' }) }
     if (url.endsWith(`/flows/${flowId}`)) {
       return { ok: true, json: async () => ({ flow: { id: flowId, workspaceId: 'ws-1', type: 'basic_dev', status: 'running', worktrees: [] } }) }
     }

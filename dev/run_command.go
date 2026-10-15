@@ -7,6 +7,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/logger"
 
@@ -170,15 +171,24 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 
 	// Execute command through sh
 	var output env.EnvRunCommandActivityOutput
-	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	input := env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		Command:            "sh",
 		Args:               []string{"-c", params.Command},
 		RelativeWorkingDir: relWorkDir,
 		EnvVars:            git.BuildGitEnvVars(committerName, committerEmail),
-	}).Get(dCtx.Context, &output)
+	}
+	if workflow.GetVersion(dCtx, "docker-command-recovery", workflow.DefaultVersion, 1) >= 1 {
+		err = flow_action.PerformWithUserRetryOptions(
+			flow_action.ActionContext{ExecContext: dCtx.ExecContext, ActionType: "run_command"},
+			flow_action.UserRetryOptions{OnFailure: DockerFailureHandler{}},
+			env.EnvRunCommandActivity, &output, input,
+		)
+	} else {
+		err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
+	}
 	if err != nil {
-		return "", fmt.Errorf("failed to execute command: %v", err)
+		return "", fmt.Errorf("failed to execute command: %w", err)
 	}
 
 	response := fmt.Sprintf("Command executed with exit status %d\n\nStdout:\n%s\n\nStderr:\n%s",

@@ -163,50 +163,33 @@ func (l LocalConfigSecretManager) GetSecret(secretName string) (string, error) {
 		return "", fmt.Errorf("error loading local config: %w", err)
 	}
 
-	// Handle special cases first
-	switch secretName {
-	case "OPENAI_API_KEY":
-		return l.findProviderKey(config, "", "openai")
-	case "ANTHROPIC_API_KEY":
-		return l.findProviderKey(config, "", "anthropic")
-	}
-
-	// For other cases, strip _API_KEY suffix and match against provider names
 	if strings.HasSuffix(secretName, "_API_KEY") {
 		providerName := strings.TrimSuffix(secretName, "_API_KEY")
-		return l.findProviderKey(config, providerName, "")
+		return l.findProviderKey(config, providerName)
 	}
 
 	return "", fmt.Errorf("%w: %s not found in local config", ErrSecretNotFound, secretName)
 }
 
-func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, name, providerType string) (string, error) {
+func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, name string) (string, error) {
 	var matches []common.ModelProviderConfig
 
 	for _, provider := range config.Providers {
 		if !provider.MatchesProfile(l.ProfileId) {
 			continue
 		}
-		if providerType != "" && provider.Type == providerType {
+		providerName := provider.Name
+		if providerName == "" {
+			providerName = provider.Type
+		}
+		if (common.ModelConfig{Provider: providerName}).NormalizedProviderName() == name {
 			matches = append(matches, provider)
-		} else if name != "" {
-			// Convert provider name to match secret name format
-			providerNameNormalized := common.ModelConfig{Provider: provider.Name}.NormalizedProviderName()
-			if providerNameNormalized == name {
-				matches = append(matches, provider)
-			}
 		}
 	}
 	if len(matches) == 0 {
-		if providerType != "" {
-			return "", fmt.Errorf("%w: no provider found with type %s", ErrSecretNotFound, providerType)
-		}
 		return "", fmt.Errorf("%w: no provider found with name %s", ErrSecretNotFound, name)
 	}
 	if len(matches) > 1 {
-		if providerType != "" {
-			return "", fmt.Errorf("multiple providers found with type %s", providerType)
-		}
 		return "", fmt.Errorf("multiple providers found with name %s", name)
 	}
 	return matches[0].Key, nil

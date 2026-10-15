@@ -218,6 +218,8 @@ func checkWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo, reviewedF
 				EnvContainer:           *dCtx.EnvContainer,
 				ModelConfig:            embeddingModelConfig,
 				SecretManagerContainer: *dCtx.Secrets,
+				RerankingConfig:        dCtx.GetRerankingConfig(),
+				Providers:              dCtx.GetProviders(),
 				MaxChars:               maxDiffChars,
 			}).Get(dCtx, &summarizedDiff)
 			if reviewContextVersion >= 2 {
@@ -343,6 +345,8 @@ func prepareUserReviewWork(dCtx DevContext, info CheckWorkInfo, reviewDiff strin
 			EnvContainer:           *dCtx.EnvContainer,
 			ModelConfig:            dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize"),
 			SecretManagerContainer: *dCtx.Secrets,
+			RerankingConfig:        dCtx.GetRerankingConfig(),
+			Providers:              dCtx.GetProviders(),
 			MaxChars:               budget,
 		}).Get(dCtx, &summary)
 		if err == nil && strings.TrimSpace(summary) != "" {
