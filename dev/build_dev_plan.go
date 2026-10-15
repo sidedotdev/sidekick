@@ -721,13 +721,14 @@ func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryConta
 // extremely unreliable
 func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, planningPrompt string, reproduceIssue bool) string {
 	data := map[string]interface{}{
-		"codeContext":            codeContext,
-		"requirements":           requirements,
-		"recordPlanFunctionName": recordDevPlanTool.Name,
-		"planningPrompt":         planningPrompt,
-		"reproducePrompt":        reproducePrompt,
-		"reproduceIssue":         reproduceIssue,
-		"editCodeHints":          dCtx.RepoConfig.EditCode.Hints,
+		"codeContext":              codeContext,
+		"requirements":             requirements,
+		"recordPlanFunctionName":   recordDevPlanTool.Name,
+		"planningPrompt":           planningPrompt,
+		"reproducePrompt":          reproducePrompt,
+		"reproduceIssue":           reproduceIssue,
+		"editCodeHints":            dCtx.RepoConfig.EditCode.Hints,
+		"planFeedbackInstructions": planFeedbackInstructions,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -841,15 +842,16 @@ func (state *buildDevPlanState) prepareFinalization(iteration *LlmIteration) (bo
 }
 
 func (state *buildDevPlanState) recordingReminder() string {
-	helpReminder := " If user input is needed to complete the plan, use the " + getHelpOrInputTool.Name + " tool to request it before finalizing the plan."
 	if len(state.devPlan.Steps) == 0 {
-		return "No executable plan has been recorded. Finish planning now and call " + recordDevPlanTool.Name + " with executable steps and is_planning_complete set to true. Writing a plan in prose does not record it." + helpReminder
+		return "No executable plan has been recorded. Use " + recordDevPlanTool.Name + " to record executable steps; prose alone does not record a plan. " + planFeedbackInstructions
 	}
-	status := "Only a partial plan has been recorded."
+	status := "Only a partial plan has been recorded; continue investigating and refining it."
 	if state.devPlan.Complete {
-		status = "A plan has been recorded, but its revision or approval is still pending."
+		status = "A complete plan has been recorded."
 	}
-	return status + " Finish planning now and call " + updateDevPlanTool.Name + " to finalize it, or " + recordDevPlanTool.Name + " to replace it. Set is_planning_complete to true once complete." + helpReminder + "\n\nCurrent plan:\n" + state.devPlan.String()
+	return status + " Use " + updateDevPlanTool.Name + " for substantive revisions or " + recordDevPlanTool.Name + " to replace the plan. " + planFeedbackInstructions + "\n\nCurrent plan:\n" + state.devPlan.String()
 }
 
-const partialDevPlanInstructions = `The plan is still incomplete. This partial plan is only a checkpoint to preserve useful context in case history is truncated later. Continue investigating immediately, retrieve additional code context as needed, and keep refining the plan until it is complete. Record or update the plan with is_planning_complete set to true only when planning is complete. Do not stop or end with a final response summarizing an incomplete plan because of context pressure; checkpoint your learnings and keep working instead. Do not use help requests for progress announcements, to say the plan is not finalized, or to ask permission to continue. Request user input only for a genuine question or blocker that cannot be resolved with the available tools, and ask an actionable question. After receiving the answer, continue planning.`
+const partialDevPlanInstructions = `The plan is incomplete. This checkpoint preserves learnings in case history is truncated. Continue investigating, retrieve context as needed, and refine the plan until complete. Do not stop because of context pressure or use help requests for progress announcements or permission to continue. Ask an actionable question only for a genuine question or blocker requiring user input that research cannot resolve. ` + planFeedbackInstructions
+
+const planFeedbackInstructions = `If feedback requests a plan change, revise the affected plan content. If feedback asks a question, answer directly using an available communication tool, or a normal response if none is available. If a requested tool is unavailable, state that clearly. Do not send metadata-only updates merely to trigger another feedback cycle. Continue any unfinished planning after responding. Mark is_planning_complete true when planning is complete; approval is a separate user decision.`

@@ -1,124 +1,77 @@
-Here's an example of a plan that you might record via the
-{{{recordPlanFunctionName}}} tool, where the requirements were to make some
-changes to and then test the fooBar function:
+Create a concise implementation plan for human review. Each step should deliver
+one coherent engineering outcome, not a commit-sized task. Usually use 5–9 steps
+for a substantial feature and fewer for small changes; this is guidance, not a
+quota. Cover all acceptance criteria without making one step per criterion,
+dropping scope, or hiding unrelated work in vague steps.
 
-```
-{
-  "learnings": [
-    "The `fooBar` function already does foo currently, but not bar.",
-    "The `Omg` struct holds important info around omega values.",
-    "Other unit tests make use of the XYZ library",
-  ],
-  "analysis": "We first have to build out the bar functionality of `fooBar`. Then, to write tests for the `fooBar` function, we need to write tests that confirm it is performing foo & bar and exercise its edge cases.",
-  "steps": [
-	{
-		"step_number": "1",
-		"definition": "Edit the `fooBar` function such that it actually does bar.",
-		"type": "edit"
-		"completion_analysis": "Step 1 is complete when we have added bar functionality to the `fooBar` function, which view_diff is sufficient to confirm.",
-	},
-	{
-		"step_number": "2",
-		"definition": "Instantiate the XYZ library to create a test suite for fooBar with a new file: `abc/xyz/foo_bar_test.go`",
-		"type": "edit"
-		"completion_analysis": "This step is complete when we have created a test file with the XYZ library set up to enable testing of the fooBar function.",
-	},
-	{
-		"step_number": "3",
-		"definition": "Write a test for the scenario where the input is empty.",
-		"type": "edit"
-		"completion_analysis": "Step 3 is complete when we have written a test for the scenario where the content is empty and the test passes.",
-	},
-	{
-		"step_number": "4",
-		"definition": "Write a test for the scenario where the input is not empty.",
-		"type": "edit"
-		"completion_analysis": "Step 4 is complete when we have written a test for the scenario where the content is not empty and the test passes.",
-	}
-  ],
-  "is_planning_complete": true
-}	
-```
+Group tightly coupled implementation, integration and focused tests together.
+Steps may span multiple files or commits, without line-count or file-count
+limits; leave local task and commit decomposition to execution. Split at
+meaningful architectural boundaries, dependencies or distinct completion
+conditions, not individual functions, files or test cases. Order prerequisites
+before dependents and keep the codebase functional as work progresses.
 
-Step definitions should be very concise, easy to read and understand, and should
-be written using markdown, making use of backticks for code and file path
-references.
+Give each step an action-oriented title, a concrete 1–3 sentence description,
+and an observable completion criterion based on behavior or evidence. Use
+Markdown and backticks for code and file references. Refer to the requirements
+rather than repeating their contracts. Keep detailed findings in learnings;
+both steps and learnings must make sense without the chat history.
 
-All plan steps *must* specify actions that require editing files. Thus, there
-should be NO steps that say anything related to investigating the root cause or
-analyzing the problem etc, as this should be done partially during planning, and
-partially during execution of other plan steps that edit things, where specific
-actions will be done based on that analysis within the step.
+Every step must involve editing files. Include focused tests with implementation;
+reserve a separate integration/recovery step for risks spanning multiple
+components. Do not add standalone investigate, run-tests, review or submit
+steps. Tests and review run automatically after each step.
 
-Similarly, no steps should say anything about running the tests or submitting
-the code etc, as these don't directly involve editing and aren't actions that
-can be taken in this type of plan.
-
-Note that tests are automatically run after each step of the plan is complete,
-and a review is automatically done of the changes made during that step. So
-specifying a separate step to do those things is useless and in fact
-counterproductive. DO NOT SPECIFY ANY SUCH STEPS IN THE PLAN.
-
-The plan should not repeat lengthy details that are included in the requirements
-already, rather just refer to the requirements, which will always be available
-alongside the plan.
-
-Other than the original set of requirements, don't refer to anything from the
-chat history that would not make sense out of context, because these
-requirements will be used directly, without any of the associated chat history
-we had. The final artifact, both the plan steps and the learnings, must make
-sense with only the requirements in context.
-
-Thinking step-by-step as a senior software engineer, analyze the following
-requirements along with the code context provided, and build a plan for meeting
-those requirements.
-
-You should retrieve additional code context, search the repository or read files
-as required to create an accurate plan. Do not specify steps to modify a
-function or add a field etc unless you have retrieved the relevant code first to
-understand what needs to be done. Once you have most of the context you need to
-build a plan, then please record a plan through the {{{recordPlanFunctionName}}}
-tool.
+Inspect relevant code before proposing existing-code changes. Identify important
+integration boundaries and reuse existing infrastructure where appropriate.
+Record findings and uncertainties honestly rather than inventing details.
 
 {{#getHelpOrInputFunctionName}}
-If requirements are unclear or insufficient to understand how they might be
-fulfilled, especially when you discover an edge case that the requirements does
-not cover, DO NOT make any unfounded assumptions but rather ask for help or
-input to clarify requirements. Think through whether there is any ambiguity and
-request clarification if there is any ambiguity.
-
-Use the {{{getHelpOrInputFunctionName}}} function only for a genuine question or
-blocker that requires user input and cannot be resolved with the available tools.
-Ask an actionable question that explains what input you need. After receiving
-the answer, continue planning until the plan is complete.
+Use {{{getHelpOrInputFunctionName}}} only for a genuine question or blocker
+requiring the user's decision that research cannot resolve. Ask an actionable
+question, then continue planning after the answer.
 {{/getHelpOrInputFunctionName}}
 
-If you have a large amount of code context but still need more to complete the
-plan, first record a partial plan through the {{{recordPlanFunctionName}}} tool
-with is_planning_complete set to false. A partial plan is only a checkpoint to
-preserve useful context in case history is truncated later. Record concise
-learnings, including relevant file and function names, findings, unresolved
-questions and next investigative steps, so you can continue without the original
-code context. Preserve still-relevant learnings without duplicating them.
+Record plans through {{{recordPlanFunctionName}}}. Under context pressure,
+record a partial plan with is_planning_complete set to false as a checkpoint
+before history is truncated. Preserve concise, nonduplicated learnings: relevant
+files and symbols, findings, open questions and next investigative steps.
+Continue investigating immediately, retrieving more context as needed.
+Do not stop because of context pressure or use help requests for progress
+announcements, to announce an incomplete plan, or to ask permission to continue.
+Only a genuine question or blocker requiring user input justifies reaching out.
 
-Continue investigating immediately after recording or updating a partial plan.
-Retrieve additional code context as needed and keep refining the plan until it
-is complete, then record or update it with is_planning_complete set to true.
-Do not stop or end with a final response summarizing an incomplete plan because
-of context pressure; checkpoint your learnings and keep working instead.
-Do not use help requests for progress announcements, to say the plan is not
-finalized, or to ask permission to continue. Only a genuine question or blocker
-requiring user input justifies reaching out.
+{{{planFeedbackInstructions}}}
 
-Do not create too many steps that are very limited in scope. Each step should
-correspond roughly to 50-200 lines of code to add/remove, and should not span
-more than 2-5 files at most. Closely related steps should just be merged
-together, eg tests for functionality being added or changes in the same file,
-unless it would make the step too large and require a lot of context to
-complete. Steps should roughly be atomic pieces of work that can stand on their
-own and expect to be committed individually. Try your best to order steps so
-that the codebase remains functional ideally also passes tests at the end of
-each step, when possible.
+Example for a hypothetical report-export feature, after inspecting its existing
+report service and HTTP handlers:
+
+```json
+{
+  "analysis": "Implement reusable CSV generation before exposing it through the existing report API.",
+  "steps": [
+    {
+      "step_number": "1",
+      "title": "Generate report CSV",
+      "definition": "Add CSV generation to the report service using its existing report query. Include focused tests for populated and empty reports and CSV escaping.",
+      "type": "edit",
+      "completion_analysis": "Service tests verify the required columns and correctly escaped output for populated and empty reports."
+    },
+    {
+      "step_number": "2",
+      "title": "Expose authorized report downloads",
+      "definition": "Connect CSV generation to the report download handler using existing authorization and error handling. Add handler tests for successful downloads, denied access and generation failures.",
+      "type": "edit",
+      "completion_analysis": "Handler tests confirm download content and headers, deny unauthorized access and verify error responses."
+    }
+  ],
+  "is_planning_complete": true,
+  "learnings": [
+    "The existing report query enforces tenant filtering; export must reuse it.",
+    "Handler tests already provide authenticated request fixtures."
+  ]
+}
+```
 
 #START CODE CONTEXT
 {{{codeContext}}}
@@ -134,22 +87,11 @@ each step, when possible.
 {{{requirements}}}
 #END REQUIREMENTS
 
-#IMPORTANT INSTRUCTIONS
 {{#planningPrompt}}
+#IMPORTANT INSTRUCTIONS
 {{{planningPrompt}}}
-{{/planningPrompt}}
-{{^planningPrompt}}
-Do not create too many steps that are very limited in scope. Each step should
-correspond roughly to 50-200 lines of code to add/remove, and should not span
-more than 2-5 files at most. Closely related steps should just be merged
-together, eg tests for functionality being added or changes in the same file,
-unless it would make the step too large and require a lot of context to
-complete. Steps should roughly be atomic pieces of work that can stand on their
-own and expect to be committed individually. Try your best to order steps so
-that the codebase remains functional ideally also passes tests at the end of
-each step, when possible.
-{{/planningPrompt}}
 #END IMPORTANT INSTRUCTIONS
+{{/planningPrompt}}
 
 {{#reproduceIssue}}
 #CRITICAL INSTRUCTIONS
