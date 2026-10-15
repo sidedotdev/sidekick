@@ -1,6 +1,6 @@
 <template>
   <form ref="formRef" tabindex="-1" v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
-    <div v-if="flowAction.actionParams.requestContent && flowAction.actionParams.requestKind !== 'provider_auth'" class="markdown-container">
+    <div v-if="flowAction.actionParams.requestContent && flowAction.actionParams.requestKind !== 'provider_auth'" class="markdown-container" :style="{ '--level': level }">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
       </button>
@@ -146,6 +146,7 @@
     <div
       v-if="flowAction.actionParams.requestContent && (flowAction.actionParams.requestKind !== 'provider_auth' || flowAction.actionStatus !== 'complete')"
       class="markdown-container"
+      :style="{ '--level': level }"
     >
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
@@ -826,7 +827,6 @@ label[for="targetBranch"] {
 
 .markdown-container {
   position: relative;
-  --level: v-bind(level);
 }
 
 .copy-button {

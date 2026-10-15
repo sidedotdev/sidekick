@@ -1,5 +1,5 @@
 <template>
-  <div class="flow-action" :class="{ 'expanded-action': expand }" ref="container">
+  <div class="flow-action" :class="{ 'expanded-action': expand }" :style="{ '--level': level }" ref="container">
     <div class="flow-action-header" :class="{ 'expanded-header': expand }">
       <a @click="toggle()" :class="{'disable-toggle': disableToggle}">
         <h3 :title="`Updated: ${formatActionTimestamp(flowAction.updated)}`">
@@ -390,7 +390,6 @@ const summary = computed<Summary | null>(() => {
   --name-height: 2.5rem;
   --expanded-left-margin: 0;
   --pad: 1rem;
-  --level: v-bind(level);
   scroll-margin-top: calc(var(--level) * var(--name-height));
   background-color: inherit;
 }
@@ -399,7 +398,7 @@ const summary = computed<Summary | null>(() => {
   position: sticky;
   z-index: calc(50 - var(--level, 0));
   background-color: inherit;
-  top: calc(v-bind(level) * var(--name-height) - 1px);
+  top: calc(var(--level) * var(--name-height) - 0.0625rem);
   min-height: var(--name-height);
   display: flex;
   flex-direction: column;

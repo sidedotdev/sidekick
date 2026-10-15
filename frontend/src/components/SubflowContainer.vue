@@ -1,5 +1,5 @@
 <template>
-  <div class="subflow-container" :class="{ 'odd': level % 2 === 1, 'container-expanded': accordionState.expanded }" ref="container">
+  <div class="subflow-container" :class="{ 'odd': level % 2 === 1, 'container-expanded': accordionState.expanded }" :style="{ '--subflow-level': level }" ref="container">
     <div class="subflow-name-container" tabindex="-1" @click="toggleAccordion" ref="heading">
       <h2 class="subflow-name" :class="{'name-expanded': accordionState.expanded}">
           <span class="caret" :class="{ 'caret-expanded': accordionState.expanded }"></span>
@@ -111,7 +111,6 @@ function childKey(child: FlowAction | SubflowTree): string {
   background-color: var(--color-background);
   max-width: 100vw;
   border-bottom: 1px solid var(--color-border);
-  --subflow-level: v-bind(level);
   --name-height: 2.5rem;
 }
 
