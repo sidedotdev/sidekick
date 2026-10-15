@@ -209,3 +209,150 @@ func TestGitMergeAbortActivity(t *testing.T) {
 		assert.NoError(t, statErr)
 	})
 }
+
+func TestGitMergeIntoWorktreeActivityPreservesPendingWork(t *testing.T) {
+	t.Parallel()
+
+	for _, staged := range []bool{false, true} {
+		for _, conflicting := range []bool{false, true} {
+			t.Run(fmt.Sprintf("staged=%t/conflicting=%t", staged, conflicting), func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				repoDir := setupTestGitRepo(t)
+				devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+				require.NoError(t, err)
+				container := env.EnvContainer{Env: devEnv}
+
+				write := func(path, content string) {
+					t.Helper()
+					require.NoError(t, os.WriteFile(filepath.Join(repoDir, path), []byte(content), 0644))
+				}
+				gitOutput := func(args ...string) string {
+					t.Helper()
+					cmd := exec.Command("git", args...)
+					cmd.Dir = repoDir
+					out, err := cmd.CombinedOutput()
+					require.NoError(t, err, "%s", out)
+					return strings.TrimSpace(string(out))
+				}
+
+				write("shared.txt", "base\n")
+				write("local.txt", "original\n")
+				runGitCommandInTestRepo(t, repoDir, "add", ".")
+				runGitCommandInTestRepo(t, repoDir, "commit", "-m", "Base")
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+				write("feature.txt", "feature\n")
+				runGitCommandInTestRepo(t, repoDir, "add", ".")
+				runGitCommandInTestRepo(t, repoDir, "commit", "-m", "Feature")
+				featureHead := gitOutput("rev-parse", "HEAD")
+
+				runGitCommandInTestRepo(t, repoDir, "checkout", "main")
+				write("shared.txt", "target\n")
+				runGitCommandInTestRepo(t, repoDir, "add", ".")
+				runGitCommandInTestRepo(t, repoDir, "commit", "-m", "Target")
+				targetHead := gitOutput("rev-parse", "HEAD")
+				runGitCommandInTestRepo(t, repoDir, "checkout", "feature")
+
+				write("local.txt", "pending tracked work\n")
+				write("new.txt", "pending new work\n")
+				if conflicting {
+					write("shared.txt", "pending conflicting work\n")
+				}
+				if staged {
+					runGitCommandInTestRepo(t, repoDir, "add", ".")
+				}
+
+				result, err := GitMergeIntoWorktreeActivity(ctx, container, GitMergeIntoWorktreeParams{
+					WorktreePath:   repoDir,
+					SourceBranch:   "main",
+					CommitterName:  "Test User",
+					CommitterEmail: "test@example.com",
+				})
+				require.NoError(t, err)
+				assert.Equal(t, conflicting, result.HasConflicts)
+				assert.Equal(t, repoDir, result.WorktreePath)
+				assert.Equal(t, featureHead, gitOutput("rev-parse", "HEAD^"))
+				assert.Equal(t, targetHead, gitOutput("rev-parse", "MERGE_HEAD"))
+				assert.Equal(t, "pending tracked work", gitOutput("show", "HEAD:local.txt"))
+				assert.Equal(t, "pending new work", gitOutput("show", "HEAD:new.txt"))
+				assert.Empty(t, gitOutput("stash", "list"))
+
+				if conflicting {
+					assert.Equal(t, "pending conflicting work", gitOutput("show", "HEAD:shared.txt"))
+					content, err := os.ReadFile(filepath.Join(repoDir, "shared.txt"))
+					require.NoError(t, err)
+					assert.Contains(t, string(content), "<<<<<<<")
+					assert.Contains(t, string(content), "pending conflicting work")
+					assert.Contains(t, string(content), "target")
+				} else {
+					content, err := os.ReadFile(filepath.Join(repoDir, "shared.txt"))
+					require.NoError(t, err)
+					assert.Equal(t, "target\n", string(content))
+				}
+
+				checkpoint := gitOutput("rev-parse", "HEAD")
+				status := gitOutput("status", "--porcelain")
+				retryParams := GitMergeIntoWorktreeParams{
+					WorktreePath: repoDir,
+					SourceBranch: "main",
+				}
+				retried, err := GitMergeIntoWorktreeActivity(ctx, container, retryParams)
+				require.NoError(t, err)
+				assert.Equal(t, result, retried)
+				assert.Equal(t, checkpoint, gitOutput("rev-parse", "HEAD"))
+				assert.Equal(t, status, gitOutput("status", "--porcelain"))
+
+				if conflicting {
+					write("shared.txt", "resolved\n")
+					runGitCommandInTestRepo(t, repoDir, "add", "shared.txt")
+					retried, err = GitMergeIntoWorktreeActivity(ctx, container, retryParams)
+					require.NoError(t, err)
+					assert.False(t, retried.HasConflicts)
+					assert.Equal(t, checkpoint, gitOutput("rev-parse", "HEAD"))
+					assert.Equal(t, "resolved", gitOutput("show", ":shared.txt"))
+				}
+				assert.Equal(t, targetHead, gitOutput("rev-parse", "MERGE_HEAD"))
+
+				retryParams.SourceBranch = "feature"
+				_, err = GitMergeIntoWorktreeActivity(ctx, container, retryParams)
+				require.Error(t, err)
+				assert.Equal(t, checkpoint, gitOutput("rev-parse", "HEAD"))
+				assert.Equal(t, targetHead, gitOutput("rev-parse", "MERGE_HEAD"))
+			})
+		}
+	}
+}
+
+func TestGitMergeIntoWorktreeActivityInvalidTargetPreservesWorktree(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+
+	gitOutput := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		return strings.TrimSpace(string(out))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("base\n"), 0644))
+	runGitCommandInTestRepo(t, repoDir, "add", ".")
+	runGitCommandInTestRepo(t, repoDir, "commit", "-m", "Base")
+	head := gitOutput("rev-parse", "HEAD")
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("pending\n"), 0644))
+	status := gitOutput("status", "--porcelain")
+
+	_, err = GitMergeIntoWorktreeActivity(ctx, env.EnvContainer{Env: devEnv}, GitMergeIntoWorktreeParams{
+		WorktreePath: repoDir,
+		SourceBranch: "missing-branch",
+	})
+	require.Error(t, err)
+	assert.Equal(t, head, gitOutput("rev-parse", "HEAD"))
+	assert.Equal(t, status, gitOutput("status", "--porcelain"))
+	content, err := os.ReadFile(filepath.Join(repoDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "pending\n", string(content))
+}
