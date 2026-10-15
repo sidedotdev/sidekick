@@ -79,9 +79,12 @@ command_permissions:
     - pattern: '^\./gradlew(?: +(?:(?::app:)?(?:assembleDebug|assembleDebugAndroidTest|testDebugUnitTest|connectedDebugAndroidTest|lintDebug|check|build|tasks|help)|--(?:no-configuration-cache|configuration-cache|no-daemon|daemon|rerun-tasks|stacktrace|info|quiet|offline|console=plain)|--tests +(?:[A-Za-z0-9_.*]+|"[A-Za-z0-9_.*]+"|''[A-Za-z0-9_.*]+'')))+$'
 
 devpod:
+  max_parallel_test_commands: 1
   env_vars:
     # Concurrent Go linkers exhaust memory on 4 GiB development environments.
-    GOFLAGS: "-p=2"
+    # CLI test linking alone uses about 3 GiB in a 4 GiB DevPod.
+    # Omit DWARF to reduce linking work; override GOFLAGS when using a debugger.
+    GOFLAGS: "-p=1 -ldflags=-w"
 
 openshell:
   from: "Dockerfile.openshell"

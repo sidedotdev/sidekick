@@ -85,9 +85,11 @@ type RepoConfig struct {
 	// container.
 	PortForwards []PortForwardConfig `toml:"port_forwards,omitempty"`
 
-	DevPodConfig    DevPodEnvConfig    `toml:"devpod,omitempty"`
-	OpenShellConfig OpenShellEnvConfig `toml:"openshell,omitempty"`
-	ModalConfig     ModalEnvConfig     `toml:"modal,omitempty"`
+	LocalConfig            LocalEnvConfig     `toml:"local,omitempty" json:"local,omitempty"`
+	LocalGitWorktreeConfig LocalEnvConfig     `toml:"local_git_worktree,omitempty" json:"localGitWorktree,omitempty"`
+	DevPodConfig           DevPodEnvConfig    `toml:"devpod,omitempty"`
+	OpenShellConfig        OpenShellEnvConfig `toml:"openshell,omitempty"`
+	ModalConfig            ModalEnvConfig     `toml:"modal,omitempty"`
 }
 
 // PortForwardConfig declares a single host port to reverse-forward into a
@@ -111,13 +113,19 @@ func (c PortForwardConfig) ContainerPortOrDefault() int {
 	return c.HostPort
 }
 
+// LocalEnvConfig applies independently to local and local_git_worktree.
+type LocalEnvConfig struct {
+	MaxParallelTestCommands int `toml:"max_parallel_test_commands,omitempty" json:"maxParallelTestCommands,omitempty"`
+}
+
 // DevPodEnvConfig holds configuration specific to the DevPod environment type.
 type DevPodEnvConfig struct {
 	// WorkspaceId overrides the workspace name DevPod derives from the
 	// repo directory basename. When empty, the repo directory's basename is
 	// used, matching DevPod's default behavior.
-	WorkspaceId string            `toml:"workspace_id,omitempty"`
-	EnvVars     map[string]string `toml:"env_vars,omitempty" json:"envVars,omitempty"`
+	WorkspaceId             string            `toml:"workspace_id,omitempty"`
+	EnvVars                 map[string]string `toml:"env_vars,omitempty" json:"envVars,omitempty"`
+	MaxParallelTestCommands int               `toml:"max_parallel_test_commands,omitempty" json:"maxParallelTestCommands,omitempty"`
 }
 
 // OpenShellEnvConfig holds configuration specific to the OpenShell environment type.
@@ -125,7 +133,8 @@ type OpenShellEnvConfig struct {
 	// PrebuildCommand is a shell command executed locally before sandbox creation.
 	PrebuildCommand string `toml:"prebuild_command,omitempty"`
 	// From is passed as the --from flag to "openshell sandbox create".
-	From string `toml:"from,omitempty"`
+	From                    string `toml:"from,omitempty"`
+	MaxParallelTestCommands int    `toml:"max_parallel_test_commands,omitempty" json:"maxParallelTestCommands,omitempty"`
 }
 
 // ModalVolumeMount attaches a named Modal Volume at an absolute path inside
@@ -201,7 +210,8 @@ type ModalEnvConfig struct {
 	// the sandbox filesystem, whose snapshots are tied to a single sandbox
 	// lineage, volumes are reachable from any sandbox that mounts them, so
 	// data placed there survives sandbox recreation.
-	Volumes []ModalVolumeMount `toml:"volumes,omitempty" json:"volumes,omitempty"`
+	Volumes                 []ModalVolumeMount `toml:"volumes,omitempty" json:"volumes,omitempty"`
+	MaxParallelTestCommands int                `toml:"max_parallel_test_commands,omitempty" json:"maxParallelTestCommands,omitempty"`
 }
 
 // ModalDefaultCPU and ModalDefaultMemoryMiB are the effective resource
@@ -362,4 +372,23 @@ type EditCodeConfig struct {
 	/** Alternatively, specify a path relative to the repo root to load hints from.
 	 * If Hints is empty and HintsPath is set, the content of the file will be loaded into Hints. */
 	HintsPath string `toml:"hints_path,omitempty"`
+}
+
+// ValidateTestCommandLimits allows zero for unrestricted scheduling.
+func (c RepoConfig) ValidateTestCommandLimits() error {
+	for _, config := range []struct {
+		name  string
+		limit int
+	}{
+		{"local", c.LocalConfig.MaxParallelTestCommands},
+		{"local_git_worktree", c.LocalGitWorktreeConfig.MaxParallelTestCommands},
+		{"devpod", c.DevPodConfig.MaxParallelTestCommands},
+		{"openshell", c.OpenShellConfig.MaxParallelTestCommands},
+		{"modal", c.ModalConfig.MaxParallelTestCommands},
+	} {
+		if config.limit < 0 {
+			return fmt.Errorf("%s.max_parallel_test_commands must be non-negative", config.name)
+		}
+	}
+	return nil
 }

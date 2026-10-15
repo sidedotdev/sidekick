@@ -1,4 +1,4 @@
-package temporal
+package readonlyproxy
 
 import (
 	"context"
@@ -64,7 +64,7 @@ func TestReadOnlyProxy(t *testing.T) {
 	go func() { _ = backend.Serve(backendListener) }()
 	t.Cleanup(backend.Stop)
 
-	proxy, err := StartReadOnlyProxy("127.0.0.1:0", backendListener.Addr().String(), nil)
+	proxy, err := Start("127.0.0.1:0", backendListener.Addr().String(), nil)
 	require.NoError(t, err)
 	t.Cleanup(proxy.Stop)
 
@@ -136,7 +136,7 @@ func TestReadOnlyProxyDecodesOffloadedPayloads(t *testing.T) {
 	go func() { _ = backend.Serve(backendListener) }()
 	t.Cleanup(backend.Stop)
 
-	proxy, err := StartReadOnlyProxy("127.0.0.1:0", backendListener.Addr().String(), storage)
+	proxy, err := Start("127.0.0.1:0", backendListener.Addr().String(), storage)
 	require.NoError(t, err)
 	t.Cleanup(proxy.Stop)
 
