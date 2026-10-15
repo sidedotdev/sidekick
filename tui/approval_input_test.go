@@ -262,3 +262,56 @@ func TestTaskProgress_ProviderAuthOAuthCodeIgnoresDevRunShortcuts(t *testing.T) 
 	m, _ = updateProgress(m, runProviderAuthCmd(t, cmd))
 	assert.Contains(t, m.View(), "Code submitted")
 }
+
+func TestDockerApprovalInput(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		key      string
+		approved bool
+	}{
+		{name: "restart", key: "y", approved: true},
+		{name: "retry without restart", key: "n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			action := &client.FlowAction{
+				Id: "docker-recovery", WorkspaceId: "workspace",
+				ActionParams: map[string]interface{}{
+					"requestKind":          "approval",
+					"approveTag":           "restart_docker",
+					"rejectTag":            "retry_without_restart",
+					"rejectReasonRequired": false,
+				},
+			}
+			mc := &mockClientForProgress{}
+			t.Cleanup(func() { mc.AssertExpectations(t) })
+			mc.On("CompleteFlowAction", action.WorkspaceId, action.Id, client.UserResponse{
+				Approved: &tc.approved,
+			}).Return(nil).Once()
+			model := NewApprovalInputModel()
+			model.SetClient(mc)
+			model.SetAction(action)
+
+			assert.Contains(t, model.View(), "Restart Docker")
+			assert.Contains(t, model.View(), "Retry Without Restart")
+			model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
+			require.Equal(t, approvalInputModeApproval, model.mode)
+			require.NotNil(t, cmd)
+			assert.IsType(t, ApprovalSubmittedMsg{}, cmd())
+		})
+	}
+}
+
+func TestApprovalRejectionRequiresFeedbackByDefault(t *testing.T) {
+	t.Parallel()
+	model := NewApprovalInputModel()
+	model.SetAction(&client.FlowAction{
+		Id: "approval",
+		ActionParams: map[string]interface{}{
+			"requestKind": "approval",
+		},
+	})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	assert.Equal(t, approvalInputModeRejectionFeedback, model.mode)
+}

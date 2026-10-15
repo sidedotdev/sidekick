@@ -1,7 +1,8 @@
 #!/bin/sh
-# Times side.yml's integration_test_commands, all five run concurrently, with
-# the affected-tests wrapper replaced by unfiltered `go test -json -count=1` so
+# Times the Go integration checks with unfiltered `go test -json -count=1` so
 # nothing is skipped by the selection cache or the go test result cache.
+# SIDE_TIMING_SERIAL=1 runs sequentially; the default runs concurrently.
+# SIDE_TIMING_COMMANDS selects a label|command manifest.
 #
 # TODO: commands_spec duplicates side.yml's integration_test_commands; read
 # them from repo config so config changes flow through automatically.
@@ -27,12 +28,16 @@ WHERE=${SIDE_TIMING_WHERE:-local}
 MODE=${SIDE_TIMING_MODE:-both}
 
 commands_spec() {
+  if [ -n "${SIDE_TIMING_COMMANDS:-}" ]; then
+    cat "$SIDE_TIMING_COMMANDS"
+    return
+  fi
   cat <<'COMMANDS'
 integration|SIDE_INTEGRATION_TEST=true go test -json -count=1 -timeout 240s ./...
-lint_chat_history_append|go run ./scripts/lint_chat_history_append/
+e2e|SIDE_E2E_TEST=true go test -json -count=1 -timeout 295s ./...
 lint_track_callback|go run ./scripts/lint_track_callback/ ./...
 lint_workflow_go_context|go run ./scripts/lint_workflow_go_context/ ./...
-e2e|SIDE_E2E_TEST=true go test -json -count=1 -timeout 295s ./...
+lint_chat_history_append|go run ./scripts/lint_chat_history_append/
 COMMANDS
 }
 
@@ -56,7 +61,13 @@ run_batch() {
   fi
   rm -rf "$OUT"
   mkdir -p "$OUT"
-  commands_spec > "$OUT/commands"
+  commands_spec > "$OUT/commands" || return 1
+  if [ ! -s "$OUT/commands" ]; then
+    echo "no timing commands specified" >&2
+    return 1
+  fi
+  printf '%s\n' "${SIDE_TIMING_SERIAL:-0}" > "$OUT/serial"
+  printf '%s\n' "${GOFLAGS:-}" > "$OUT/goflags"
   date +%s > "$OUT/batch_start"
 
   # Heartbeat bounds how long interrupted commands ran when the sandbox dies
@@ -96,7 +107,11 @@ run_batch() {
       printf '%s %s exit=%s wall=%ss\n' "$(date -u '+%H:%M:%S')" "$label" "$st" "$((e - s))" >> "$OUT/timeline"
       sync 2>/dev/null || true
     ) > "$OUT/$i.out" 2> "$OUT/$i.err" &
-    pids="$pids $!"
+    pid=$!
+    pids="$pids $pid"
+    if [ "${SIDE_TIMING_SERIAL:-0}" = "1" ]; then
+      wait "$pid" || true
+    fi
   done < "$OUT/commands"
 
   # Wait for every job regardless of individual failures so one broken command
@@ -141,8 +156,13 @@ report_batch() {
   echo "- host: $(uname -srm)"
   echo "- cpus: $(getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown)"
   echo "- go: $(go version)"
-  echo "- commands: side.yml \`integration_test_commands\`, all $count started concurrently"
-  echo "- deviation from side.yml: \`go run ./scripts/affected_tests/\` replaced by \`go test -json -count=1\` (no package skipping, no cached results); env vars and test timeouts preserved"
+  if [ "$(cat "$OUT/serial" 2>/dev/null)" = "1" ]; then
+    echo "- commands: $count run sequentially"
+  else
+    echo "- commands: all $count started concurrently"
+  fi
+  echo "- GOFLAGS: \`$(cat "$OUT/goflags" 2>/dev/null)\`"
+  echo "- command lines are recorded below; default test commands use \`go test -json -count=1\` (no package skipping or cached results)"
   echo "- batch state: $batch_state"
   echo "- total wall clock for the whole concurrent batch: $(hms $((end - start)))"
   echo "- cgroup memory limit: $(mib "$(mem_read memory.max memory.limit_in_bytes)")"

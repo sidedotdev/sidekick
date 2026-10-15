@@ -512,7 +512,7 @@ func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativ
 			}
 			recovered, recoveryErr := recovery.recover(ctx, err)
 			if recoveryErr != nil {
-				return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+				return wrapDockerOperationError("failed to recover SSH transport", fmt.Errorf("%w: %w", err, recoveryErr))
 			}
 			if !recovered {
 				return err
@@ -523,6 +523,10 @@ func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativ
 		conn.endOp()
 		if opErr == nil {
 			return nil
+		}
+		var execErr *agentExecTransportError
+		if errors.As(opErr, &execErr) {
+			return opErr
 		}
 		opAttempts++
 		if opAttempts > 1 || ctx.Err() != nil || nativeConnectionAlive(client) {
@@ -637,13 +641,13 @@ func (ch *nativeExecChannel) close() {
 	ch.client.Close()
 }
 
-// execFailure enriches a command failure with whatever the remote wrote to the
-// session's stderr, which is where the agent reports pre-protocol problems.
+// execFailure preserves the uncertain command outcome so connection recovery
+// cannot replay a command whose result was lost.
 func (ch *nativeExecChannel) execFailure(execErr error) error {
-	if details := strings.TrimSpace(ch.diagnostics.String()); details != "" {
-		return fmt.Errorf("%w: remote diagnostics: %s", execErr, details)
+	return &agentExecTransportError{
+		cause:       execErr,
+		diagnostics: strings.TrimSpace(ch.diagnostics.String()),
 	}
-	return execErr
 }
 
 // runPooledAgentExec runs req over the connection's pooled exec channel,
@@ -1636,9 +1640,21 @@ func nativeHostKeyCallback(config SSHConnConfig) (ssh.HostKeyCallback, error) {
 			}
 			knownHostsFiles = []string{filepath.Join(home, ".ssh", "known_hosts")}
 		}
-		callback, err := knownhosts.New(knownHostsFiles...)
+		existingFiles := make([]string, 0, len(knownHostsFiles))
+		for _, file := range knownHostsFiles {
+			_, err := os.Stat(file)
+			if errors.Is(err, os.ErrNotExist) {
+				// OpenSSH's default list includes optional files such as known_hosts2.
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read known hosts %s: %w", file, err)
+			}
+			existingFiles = append(existingFiles, file)
+		}
+		callback, err := knownhosts.New(existingFiles...)
 		if err != nil {
-			return nil, fmt.Errorf("read known hosts %s: %w", strings.Join(knownHostsFiles, " "), err)
+			return nil, fmt.Errorf("read known hosts %s: %w", strings.Join(existingFiles, " "), err)
 		}
 		return callback, nil
 	default:

@@ -87,6 +87,17 @@ type indexedCommand struct {
 }
 
 func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRun []common.CommandConfig, resultsCh workflow.Channel) ([]TestResult, error) {
+	maxParallel := len(commandsToRun)
+	if workflow.GetVersion(dCtx, "max-parallel-test-commands", workflow.DefaultVersion, 1) >= 1 {
+		limit, err := testCommandParallelism(dCtx)
+		if err != nil {
+			return nil, err
+		}
+		if limit > 0 {
+			maxParallel = min(maxParallel, limit)
+		}
+	}
+
 	// Build indexed commands for tracking across retries
 	pendingCommands := make([]indexedCommand, len(commandsToRun))
 	for i, cmd := range commandsToRun {
@@ -100,15 +111,20 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 	// Track non-heartbeat failures across iterations
 	var failedCommands []indexedCommand
 	var activityErrors []string
+	var activityCauses []error
 
 	for {
-		// execute pending test commands in parallel
-		for _, ic := range pendingCommands {
-			ic := ic
+		nextCommand := 0
+		startNext := func() {
+			ic := pendingCommands[nextCommand]
+			nextCommand++
 			workflow.Go(dCtx.Context, func(ctx workflow.Context) {
 				localActionCtx := actionCtx.WithContext(ctx)
 				runSingleTest(localActionCtx, ic.index, ic.cmd.WorkingDir, ic.cmd.Command, *dCtx.EnvContainer, resultsCh)
 			})
+		}
+		for nextCommand < min(maxParallel, len(pendingCommands)) {
+			startNext()
 		}
 
 		// Wait for all goroutines to finish and collect the results
@@ -128,6 +144,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 					})
 				} else {
 					activityErrors = append(activityErrors, result.err.Error())
+					activityCauses = append(activityCauses, result.err)
 					failedCommands = append(failedCommands, indexedCommand{
 						index: result.commandIndex,
 						cmd:   commandsToRun[result.commandIndex],
@@ -136,6 +153,9 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 			} else {
 				allResults[result.commandIndex] = result.result
 				completed[result.commandIndex] = true
+			}
+			if nextCommand < len(pendingCommands) {
+				startNext()
 			}
 		}
 
@@ -177,13 +197,21 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		}
 
 		// Prompt user once for all failed commands
-		prompt := fmt.Sprintf("run_tests failed for %d command(s):\n\n```\n%s\n```", len(activityErrors), strings.Join(activityErrors, "\n"))
-		requestParams := map[string]any{
-			"continueTag": "try_again",
+		failureHandler := DockerFailureHandler{
+			Fallback: flow_action.ActivityFailureHandlerFunc(func(eCtx flow_action.ExecContext, _ string, _ error) (flow_action.RetryDecision, error) {
+				prompt := fmt.Sprintf("run_tests failed for %d command(s):\n\n```\n%s\n```", len(activityErrors), strings.Join(activityErrors, "\n"))
+				err := flow_action.GetUserContinue(eCtx, prompt, map[string]any{
+					"continueTag": "try_again",
+				})
+				return flow_action.RetryDecisionRetry, err
+			}),
 		}
-		userErr := flow_action.GetUserContinue(actionCtx.ExecContext, prompt, requestParams)
+		decision, userErr := failureHandler.HandleActivityFailure(actionCtx.ExecContext, "run_tests", errors.Join(activityCauses...))
 		if userErr != nil {
 			return nil, userErr
+		}
+		if decision != flow_action.RetryDecisionRetry {
+			return nil, fmt.Errorf("error running test command(s): %w", errors.Join(activityCauses...))
 		}
 
 		switch workflow.GetVersion(dCtx, "hibernate-worktree", workflow.DefaultVersion, 3) {
@@ -199,6 +227,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		pendingCommands = failedCommands
 		failedCommands = nil
 		activityErrors = nil
+		activityCauses = nil
 	}
 }
 
@@ -260,9 +289,15 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 	activityFuture := workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput)
 	err := activityFuture.Get(actionCtx, &runTestOutput)
 	if err != nil {
+		commandErr := fmt.Errorf("failed to run test command '%s': %v", fullCommand, err)
+		_, dockerFailure := env.AsDockerEngineFailure(err)
+		if workflow.GetVersion(actionCtx, "max-parallel-test-commands", workflow.DefaultVersion, 1) >= 1 || dockerFailure {
+			// Heartbeat retries and Docker recovery need the underlying error type.
+			commandErr = fmt.Errorf("failed to run test command '%s': %w", fullCommand, err)
+		}
 		resultsCh.Send(actionCtx, singleTestResult{
 			commandIndex: commandIndex,
-			err:          fmt.Errorf("failed to run test command '%s': %v", fullCommand, err),
+			err:          commandErr,
 		})
 		return
 	}
@@ -391,4 +426,27 @@ Here is the test result output to summarize:
 	}
 
 	return summarizedOutput, nil
+}
+
+func testCommandParallelism(dCtx DevContext) (int, error) {
+	if err := dCtx.RepoConfig.ValidateTestCommandLimits(); err != nil {
+		return 0, err
+	}
+	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
+		return 0, nil
+	}
+	switch dCtx.EnvContainer.Env.GetType() {
+	case env.EnvTypeLocal:
+		return dCtx.RepoConfig.LocalConfig.MaxParallelTestCommands, nil
+	case env.EnvTypeLocalGitWorktree:
+		return dCtx.RepoConfig.LocalGitWorktreeConfig.MaxParallelTestCommands, nil
+	case env.EnvTypeDevPod:
+		return dCtx.RepoConfig.DevPodConfig.MaxParallelTestCommands, nil
+	case env.EnvTypeOpenShell:
+		return dCtx.RepoConfig.OpenShellConfig.MaxParallelTestCommands, nil
+	case env.EnvTypeModal:
+		return dCtx.RepoConfig.ModalConfig.MaxParallelTestCommands, nil
+	default:
+		return 0, nil
+	}
 }

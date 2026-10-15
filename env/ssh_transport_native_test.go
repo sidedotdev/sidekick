@@ -1410,3 +1410,79 @@ func TestNativeTransportSFTPPathErrorPreservesInFlightRead(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeTransportMissingKnownHostsFiles(t *testing.T) {
+	tests := []struct {
+		name       string
+		files      []string
+		mismatched bool
+		wantError  string
+	}{
+		{
+			name:  "missing later file",
+			files: []string{"trusted", "missing"},
+		},
+		{
+			name:  "missing first file",
+			files: []string{"missing", "trusted"},
+		},
+		{
+			name:      "all files missing rejects unknown key",
+			files:     []string{"missing"},
+			wantError: "host key",
+		},
+		{
+			name:       "missing file does not hide changed key",
+			files:      []string{"trusted", "missing"},
+			mismatched: true,
+			wantError:  "host key",
+		},
+		{
+			name:      "malformed existing file is not ignored",
+			files:     []string{"missing", "malformed"},
+			wantError: "read known hosts",
+		},
+		{
+			name:      "directory is not ignored",
+			files:     []string{"missing", "directory"},
+			wantError: "read known hosts",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startSSHTestServer(t, sshTestServerOptions{})
+			if tt.mismatched {
+				server.writeUntrustedKnownHosts()
+			}
+			dir := t.TempDir()
+			malformed := filepath.Join(dir, "malformed")
+			require.NoError(t, os.WriteFile(malformed, []byte("invalid known hosts entry\n"), 0o600))
+			paths := map[string]string{
+				"trusted":   server.knownHostsPath,
+				"missing":   filepath.Join(dir, "known_hosts2"),
+				"malformed": malformed,
+				"directory": dir,
+			}
+			transport := nativeTestTransport(t, server, t.Name(), func(config *SSHConnConfig) {
+				config.KnownHostsFiles = nil
+				for _, file := range tt.files {
+					config.KnownHostsFiles = append(config.KnownHostsFiles, paths[file])
+				}
+			})
+
+			resp, err := nativeExecEcho(context.Background(), transport, "verified")
+			if tt.wantError == "" {
+				require.NoError(t, err)
+				assert.Contains(t, string(resp.Stdout), "verified")
+			} else {
+				require.ErrorContains(t, err, tt.wantError)
+				assert.Zero(t, server.stats().Sessions)
+				if tt.wantError == "host key" {
+					var dialErr *sshDialTransportError
+					assert.NotErrorAs(t, err, &dialErr)
+				}
+			}
+			assert.NoFileExists(t, paths["missing"])
+		})
+	}
+}

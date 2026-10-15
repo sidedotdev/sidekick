@@ -76,6 +76,81 @@ describe('UserRequest', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
+  it.each([
+    ['Restart Docker', true],
+    ['Retry Without Restart', false],
+  ])('submits %s without requiring feedback', async (label, approved) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ success: true }),
+    })
+    global.fetch = fetchMock
+    mountComponent(createMockFlowAction({
+      actionParams: {
+        requestKind: 'approval',
+        requestContent: 'Docker is unavailable.',
+        approveTag: 'restart_docker',
+        rejectTag: 'retry_without_restart',
+        rejectReasonRequired: false,
+      },
+    }))
+
+    const button = wrapper.findAll('button').find(button => button.text().startsWith(label as string))
+    expect(button).toBeDefined()
+    expect(button!.attributes('disabled')).toBeUndefined()
+    await button!.trigger('click')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/workspaces/test-workspace-id/flow_actions/test-action-id/complete',
+      expect.objectContaining({
+        body: JSON.stringify({ userResponse: { content: '', approved } }),
+      }),
+    )
+  })
+
+  it('requires rejection feedback by default', () => {
+    mountComponent(createMockFlowAction())
+    expect(wrapper.find('button.secondary').attributes('disabled')).toBeDefined()
+  })
+
+  describe('copy request content', () => {
+    it.each([
+      ['pending', '# Requirements\n\n- Preserve `markdown`.\n', undefined],
+      ['complete', '# Plan\n\n1. Implement the feature.\n', undefined],
+      ['pending', '# Requirements\n\n- Preserve `markdown`.\n', 'Separate copy payload'],
+      ['complete', '# Plan\n\n1. Implement the feature.\n', 'Separate copy payload'],
+    ])('copies requestContent verbatim for %s requests', async (actionStatus, requestContent, copyContent) => {
+      const writeText = vi.fn().mockResolvedValue(undefined)
+      const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText },
+      })
+      try {
+        mountComponent(createMockFlowAction({
+          actionStatus,
+          actionParams: {
+            requestKind: 'approval',
+            requestContent,
+            copyContent,
+          },
+        }))
+
+        expect(wrapper.find('.markdown h1').text()).toBe(actionStatus === 'pending' ? 'Requirements' : 'Plan')
+        await wrapper.find('button.copy-button').trigger('click')
+
+        expect(writeText).toHaveBeenCalledExactlyOnceWith(requestContent)
+      } finally {
+        wrapper.unmount()
+        if (originalClipboard) {
+          Object.defineProperty(navigator, 'clipboard', originalClipboard)
+        } else {
+          Reflect.deleteProperty(navigator, 'clipboard')
+        }
+      }
+    })
+  })
+
   it('submits user response successfully and clears error message', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

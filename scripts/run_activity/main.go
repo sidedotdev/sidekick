@@ -84,7 +84,7 @@ func buildActivityRegistry() map[string]interface{} {
 		log.Fatal().Err(err).Msg("Failed to initialize storage for direct execution")
 	}
 
-	featureFlag, err := fflag.NewFFlag("flags.yml")
+	featureFlag, err := fflag.NewFFlag("fflag/flags.yml")
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to create go-feature-flag instance, some activities may not work")
 	}
@@ -170,6 +170,7 @@ func buildActivityRegistry() map[string]interface{} {
 		env.NewLocalGitWorktreeActivity,
 		env.CreateDevPodWorktreeActivity,
 		env.DevPodUpActivity,
+		env.RestartDockerEngineActivity,
 		env.CreateSandboxActivity,
 		env.CheckSandboxActivity,
 		env.StopSandboxActivity,

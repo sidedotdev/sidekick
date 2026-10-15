@@ -69,15 +69,22 @@ type listedWorkflow struct {
 	status enums.WorkflowExecutionStatus
 }
 
-func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int) ([]listedWorkflow, error) {
+func listRecentRunningWorkflows(ctx context.Context, svc workflowservice.WorkflowServiceClient, namespace string, limit int) ([]listedWorkflow, error) {
 	var results []listedWorkflow
 	var nextPageToken []byte
 
-	for {
-		resp, err := c.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
+	for len(results) < limit {
+		// ListWorkflow caps RPCs at ten seconds even with a longer parent
+		// deadline. Reverse-forwarded visibility responses can exceed that.
+		pageCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		resp, err := svc.ListWorkflowExecutions(pageCtx, &workflowservice.ListWorkflowExecutionsRequest{
+			Namespace: namespace,
+			// The server default can transfer hundreds of unneeded entries.
+			PageSize:      int32(min(limit-len(results), 100)),
 			Query:         "ExecutionStatus = 'Running'",
 			NextPageToken: nextPageToken,
 		})
+		cancel()
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +171,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	if fetchLimit < maxWorkflowsToReplay*2 {
 		fetchLimit = maxWorkflowsToReplay * 2
 	}
-	listed, err := listRecentRunningWorkflows(ctx, c, fetchLimit)
+	listed, err := listRecentRunningWorkflows(ctx, c.WorkflowService(), client.DefaultNamespace, fetchLimit)
 	if err != nil {
 		t.Fatalf("Failed to list running workflows: %v", err)
 	}

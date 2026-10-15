@@ -28,10 +28,9 @@ func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
 		args = append(args, "--id", input.WorkspaceId)
 	}
 	// A stopped or wedged docker daemon makes `devpod up` hang forever at
-	// "creating devcontainer". Ensure the daemon is ready before starting, then
-	// guard the run so a hang that begins mid-build is detected and recovered.
+	// "creating devcontainer". Probe first, then monitor for hangs mid-build.
 	if err := ensureDockerReady(ctx); err != nil {
-		return fmt.Errorf("docker engine not ready for devpod up: %w", err)
+		return wrapDockerOperationError("docker engine not ready for devpod up", err)
 	}
 	var output unix.RunCommandActivityOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
@@ -44,7 +43,11 @@ func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
 		return runErr
 	})
 	if err != nil {
-		return fmt.Errorf("devpod up failed: %w", err)
+		message := "devpod up failed"
+		if combinedOutput := strings.TrimSpace(output.Stderr + "\n" + output.Stdout); combinedOutput != "" {
+			message += ": " + combinedOutput
+		}
+		return wrapDockerOperationError(message, err)
 	}
 	if output.ExitStatus != 0 {
 		combinedOutput := strings.TrimSpace(output.Stderr + "\n" + output.Stdout)
@@ -72,20 +75,19 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 	repoName := filepath.Base(input.RepoDir)
 	branchSuffix := strings.TrimPrefix(input.BranchName, "side/")
 	dirName := repoName + "-" + branchSuffix
-	// Worktrees live next to the repo inside the workspace mount (e.g. under
-	// /workspaces, which is backed by the devpod workspace volume) rather than
-	// /tmp, so they survive container restarts and rebuilds.
-	worktreePath := filepath.Join(filepath.Dir(input.RepoDir), "sidekick-worktrees", input.WorkspaceId, dirName)
+	// Local-folder DevPods bind-mount only the repository. Sibling paths are
+	// container-local and disappear on replacement, even when Git survives.
+	worktreePath := filepath.Join(input.RepoDir, ".side", "worktrees", input.WorkspaceId, dirName)
 
-	mkdirOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-		Command: "mkdir",
-		Args:    []string{"-p", worktreePath},
+	setupOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", prepareDevPodWorktreeScript, "sidekick-worktrees", input.RepoDir, worktreePath},
 	})
 	if err != nil {
-		return CreateDevPodWorktreeOutput{}, fmt.Errorf("failed to create worktree directory in container: %w", err)
+		return CreateDevPodWorktreeOutput{}, wrapDockerOperationError("failed to prepare worktree directory in container", err)
 	}
-	if mkdirOutput.ExitStatus != 0 {
-		return CreateDevPodWorktreeOutput{}, fmt.Errorf("mkdir failed in container (exit %d): %s", mkdirOutput.ExitStatus, mkdirOutput.Stderr)
+	if setupOutput.ExitStatus != 0 {
+		return CreateDevPodWorktreeOutput{}, fmt.Errorf("worktree directory setup failed in container (exit %d): %s", setupOutput.ExitStatus, setupOutput.Stderr)
 	}
 
 	baseRef := "HEAD"
@@ -94,10 +96,10 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 	}
 	addOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "git",
-		Args:    []string{"worktree", "add", "-b", input.BranchName, worktreePath, baseRef},
+		Args:    []string{"worktree", "add", "--lock", "--reason", WorktreeLockReason, "-b", input.BranchName, worktreePath, baseRef},
 	})
 	if err != nil {
-		return CreateDevPodWorktreeOutput{}, fmt.Errorf("failed to run git worktree add in container: %w", err)
+		return CreateDevPodWorktreeOutput{}, wrapDockerOperationError("failed to run git worktree add in container", err)
 	}
 	if addOutput.ExitStatus != 0 {
 		err := fmt.Errorf("git worktree add failed in container (exit %d): %s", addOutput.ExitStatus, addOutput.Stderr)
@@ -114,7 +116,7 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 	if err := ensureSideTmp(ctx, EnvWithDir(input.EnvContainer.Env, worktreePath)); err != nil {
 		_, _ = input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 			Command: "git",
-			Args:    []string{"worktree", "remove", "--force", worktreePath},
+			Args:    []string{"worktree", "remove", "--force", "--force", worktreePath},
 		})
 		_, _ = input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 			Command: "git",
@@ -140,7 +142,7 @@ func devPodDeleteWorkspace(ctx context.Context, workspaceName string) error {
 		return runErr
 	})
 	if err != nil {
-		return fmt.Errorf("devpod delete failed: %w", err)
+		return wrapDockerOperationError("devpod delete failed", err)
 	}
 	if output.ExitStatus != 0 {
 		return fmt.Errorf("devpod delete exited with status %d: %s", output.ExitStatus, output.Stderr)
@@ -162,7 +164,7 @@ func devPodStopWorkspace(ctx context.Context, workspaceName string) error {
 		return runErr
 	})
 	if err != nil {
-		return fmt.Errorf("devpod stop failed: %w", err)
+		return wrapDockerOperationError("devpod stop failed", err)
 	}
 	if output.ExitStatus != 0 {
 		return fmt.Errorf("devpod stop exited with status %d: %s", output.ExitStatus, output.Stderr)
@@ -195,3 +197,16 @@ func (devPodSandboxProvider) StopSandbox(ctx context.Context, input StopSandboxI
 func (devPodSandboxProvider) DeleteSandbox(ctx context.Context, input DeleteSandboxInput) error {
 	return devPodDeleteWorkspace(ctx, input.SandboxName)
 }
+
+const prepareDevPodWorktreeScript = `set -eu
+cd "$1"
+exclude_file=$(git rev-parse --git-path info/exclude)
+mkdir -p "$(dirname "$exclude_file")"
+touch "$exclude_file"
+if ! grep -Fqx '/.side/worktrees/' "$exclude_file"; then
+	if [ -s "$exclude_file" ] && ! tail -c 1 "$exclude_file" | grep -q '^$'; then
+		printf '\n' >> "$exclude_file"
+	fi
+	printf '%s\n' '/.side/worktrees/' >> "$exclude_file"
+fi
+mkdir -p "$2"`

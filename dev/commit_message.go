@@ -39,6 +39,10 @@ func (a commitMessageArguments) Message() string {
 // code localization, coding and then default models when commit isn't
 // configured.
 func commitModelConfig(dCtx DevContext) common.ModelConfig {
+	// Changing models can schedule metadata lookups absent from older histories.
+	if workflow.GetVersion(dCtx, "commit-model-fallback", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		return dCtx.GetModelConfig(common.CommitKey, 0, common.CodingKey)
+	}
 	fallback := common.CodingKey
 	if len(dCtx.GetLLMConfig().GetModels(common.CodeLocalizationKey)) > 0 {
 		fallback = common.CodeLocalizationKey
