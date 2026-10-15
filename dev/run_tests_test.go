@@ -712,3 +712,67 @@ func (s *RunTestsTestSuite) TestGracefullyHandlePausedTestErrorVersioning() {
 		})
 	}
 }
+
+func (s *RunTestsTestSuite) TestDockerFailurePromptsOnceForParallelCommands() {
+	s.devContext.RepoConfig.TestCommands = []common.CommandConfig{
+		{Command: "first"},
+		{Command: "second"},
+	}
+	var mu sync.Mutex
+	attempts := map[string]int{}
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			command := input.Args[len(input.Args)-1]
+			mu.Lock()
+			attempts[command]++
+			attempt := attempts[command]
+			mu.Unlock()
+			if attempt == 1 {
+				return env.EnvRunCommandActivityOutput{}, temporal.NewNonRetryableApplicationError(
+					"Docker unavailable", env.ErrTypeDockerEngineUnavailable, nil,
+					env.DockerEngineFailureDetails{Host: "test-host"},
+				)
+			}
+			return env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil
+		},
+	)
+
+	var requests []flow_action.RequestForUser
+	parent := func(ctx workflow.Context) (TestResult, error) {
+		signals := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			for {
+				var req flow_action.RequestForUser
+				signals.Receive(ctx, &req)
+				requests = append(requests, req)
+				approved := false
+				workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "",
+					flow_action.UserResponseSignalName(req.FlowActionId), flow_action.UserResponse{
+						FlowActionId: req.FlowActionId,
+						Approved:     &approved,
+					}).Get(ctx, nil)
+			}
+		})
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "docker-test-retry",
+		})
+		var result TestResult
+		err := workflow.ExecuteChildWorkflow(childCtx, s.wrapperWorkflow).Get(ctx, &result)
+		return result, err
+	}
+	s.env.RegisterWorkflow(parent)
+	s.env.ExecuteWorkflow(parent)
+
+	s.Require().NoError(s.env.GetWorkflowError())
+	var result TestResult
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+	s.True(result.TestsPassed)
+	s.Equal(map[string]int{"first": 2, "second": 2}, attempts)
+	s.Require().Len(requests, 1)
+	s.Equal(flow_action.RequestKindApproval, requests[0].RequestKind)
+	s.Equal("restart_docker", requests[0].RequestParams["approveTag"])
+	s.Equal("retry_without_restart", requests[0].RequestParams["rejectTag"])
+	s.Equal(false, requests[0].RequestParams["rejectReasonRequired"])
+	s.Contains(requests[0].Content, "test-host")
+	s.Contains(requests[0].Content, "all containers")
+}

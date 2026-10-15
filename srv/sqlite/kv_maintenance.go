@@ -178,7 +178,7 @@ func (s *Storage) optimize(ctx context.Context) {
 	}
 
 	for _, db := range []*trackedDB{s.db, s.kvDb} {
-		if _, err := db.ExecContext(ctx, "PRAGMA optimize"); err != nil {
+		if _, err := db.ExecContext(ctx, "PRAGMA optimize(0x10012)"); err != nil {
 			log.Warn().Err(err).Str("db", db.name).Msg("failed to optimize database")
 		}
 	}

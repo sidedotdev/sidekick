@@ -443,7 +443,7 @@ func (ctrl *Controller) resolveProviders(profileId string) ([]string, error) {
 	}
 
 	secretManager := ctrl.profileSecretManager(profileId)
-	for _, builtinProvider := range common.BuiltinProviders {
+	for _, builtinProvider := range common.BuiltinLLMProviders {
 		if seen[builtinProvider] {
 			continue
 		}
@@ -1834,6 +1834,15 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	if ctrl.service == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database accessor not initialized"})
+		return
+	}
+	page, paginated, err := historyPageRequest(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if paginated {
+		ctrl.getFlowActionsPage(c, workspaceId, flowId, page)
 		return
 	}
 	ctx := c.Request.Context()

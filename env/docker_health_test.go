@@ -152,7 +152,7 @@ func TestWithDockerEngineWatchdog_ResponsiveReturnsResult(t *testing.T) {
 	assert.Equal(t, int32(0), restarts.Load(), "engine should not be restarted while responsive")
 }
 
-func TestWithDockerEngineWatchdog_UnresponsiveRestartsAndCancels(t *testing.T) {
+func TestWithDockerEngineWatchdog_UnresponsiveCancelsWithoutRestart(t *testing.T) {
 	withFastDockerHealthTiming(t)
 	var restarts atomic.Int32
 	withDockerHealthHooks(t,
@@ -166,30 +166,36 @@ func TestWithDockerEngineWatchdog_UnresponsiveRestartsAndCancels(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must be retried")
-	assert.Equal(t, int32(1), restarts.Load())
+	assert.ErrorIs(t, err, context.Canceled)
+	details, ok := AsDockerEngineFailure(err)
+	require.True(t, ok)
+	assert.NotEmpty(t, details.Host)
+	assert.Zero(t, restarts.Load())
 }
 
-func TestWithDockerEngineWatchdog_RestartFailureSurfaced(t *testing.T) {
+func TestWithDockerEngineWatchdog_PropagatesCancellation(t *testing.T) {
 	withFastDockerHealthTiming(t)
-	restartErr := errors.New("no restart strategy worked")
+	var restarts atomic.Int32
 	withDockerHealthHooks(t,
 		func(context.Context, time.Duration) bool { return false },
-		func(context.Context) error { return restartErr },
+		func(context.Context) error { restarts.Add(1); return nil },
 	)
 
-	err := withDockerEngineWatchdog(context.Background(), func(ctx context.Context) error {
-		<-ctx.Done()
-		return ctx.Err()
+	ctx, cancel := context.WithCancel(context.Background())
+	err := withDockerEngineWatchdog(ctx, func(operationCtx context.Context) error {
+		cancel()
+		<-operationCtx.Done()
+		return operationCtx.Err()
 	})
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, restartErr)
+	assert.ErrorIs(t, err, context.Canceled)
+	_, dockerFailure := AsDockerEngineFailure(err)
+	assert.False(t, dockerFailure)
+	assert.Zero(t, restarts.Load())
 }
 
-func TestWithDockerEngineWatchdog_DisabledRunsWithoutMonitoring(t *testing.T) {
+func TestWithDockerEngineWatchdog_PreservesImmediateResult(t *testing.T) {
 	withFastDockerHealthTiming(t)
-	t.Setenv(autoRestartDockerEnvVar, "false")
 	var restarts atomic.Int32
 	withDockerHealthHooks(t,
 		func(context.Context, time.Duration) bool { return false },
@@ -202,5 +208,5 @@ func TestWithDockerEngineWatchdog_DisabledRunsWithoutMonitoring(t *testing.T) {
 	})
 
 	assert.ErrorIs(t, err, sentinel)
-	assert.Equal(t, int32(0), restarts.Load(), "watchdog must not restart when auto-restart is disabled")
+	assert.Zero(t, restarts.Load())
 }

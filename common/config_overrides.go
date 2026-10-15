@@ -28,6 +28,7 @@ type ConfigOverrides struct {
 	// LocalConfig overrides
 	LLM       *LLMConfig                   `json:"llm,omitempty"`
 	Embedding *EmbeddingConfig             `json:"embedding,omitempty"`
+	Reranking *RerankingConfig             `json:"reranking,omitempty"`
 	Providers *[]ModelProviderPublicConfig `json:"providers,omitempty"`
 
 	// AdvisorEnabled is a per-run choice (from the task modal) rather than a

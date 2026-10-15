@@ -44,6 +44,15 @@ func (ctrl *Controller) GetFlowSubflowsHandler(c *gin.Context) {
 		return
 	}
 
+	page, paginated, err := historyPageRequest(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if paginated {
+		ctrl.getSubflowsPage(c, workspaceId, flowId, page)
+		return
+	}
 	subflows, err := ctrl.service.GetSubflows(c, workspaceId, flowId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subflows"})

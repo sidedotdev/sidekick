@@ -47,6 +47,8 @@ type RankedViaEmbeddingOptions struct {
 	WeightedRankQueries []WeightedRankQuery
 	Secrets             secret_manager.SecretManagerContainer
 	ModelConfig         common.ModelConfig
+	RerankingConfig     common.RerankingConfig             `json:"rerankingConfig"`
+	Providers           []common.ModelProviderPublicConfig `json:"providers,omitempty"`
 }
 
 func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
@@ -260,7 +262,7 @@ func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkey
 	rankings = append(rankings, ra.bm25WeightedRankings(ctx, options.WorkspaceId, options.ContentType, options.Subkeys, weightedQueries)...)
 	logStep("bm25 rankings")
 
-	reranker, err := GetReranker(options.Secrets.SecretManager)
+	reranker, err := GetReranker(options.RerankingConfig.GetModelConfig("retrieve_code"), options.Providers, options.Secrets.SecretManager)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get reranker: %w", err)
 	}

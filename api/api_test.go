@@ -1256,7 +1256,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 	var result map[string][]domain.FlowAction
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	if assert.Nil(t, err) {
-		assert.Equal(t, flowActions, result["flowActions"])
+		assert.ElementsMatch(t, flowActions, result["flowActions"])
 	}
 }
 

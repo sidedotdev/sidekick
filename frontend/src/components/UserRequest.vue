@@ -33,7 +33,7 @@
     </div>
 
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
-      <AutogrowTextarea ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
+      <AutogrowTextarea v-if="flowAction.actionParams.rejectReasonRequired !== false" ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
@@ -46,7 +46,7 @@
       </button>
 
       <button type="button" class="secondary"
-        :disabled="!hasResponseText"
+        :disabled="flowAction.actionParams.rejectReasonRequired !== false && !hasResponseText"
         @click="submitUserResponse(false)"
       >
         {{ rejectCopy() }}
@@ -601,6 +601,8 @@ const tags: {[key: string]: string} = {
   "reject_plan": "Revise",
   "done": "Done",
   "try_again": "Try Again",
+  "restart_docker": "Restart Docker",
+  "retry_without_restart": "Retry Without Restart",
 }
 
 function rejectCopy(): string {

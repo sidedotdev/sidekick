@@ -1,0 +1,1 @@
+ALTER TABLE workspace_configs ADD COLUMN reranking_config TEXT NOT NULL DEFAULT '{}';
