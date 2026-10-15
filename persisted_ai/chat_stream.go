@@ -226,11 +226,11 @@ func executeChatStreamV1(
 	if _, ok := chatHistory.History.(*Llm2ChatHistory); !ok {
 		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
+	streamInput.Options = resolveMaxTokens(streamInput.Options)
 
 	if toolNameMapping != nil {
 		streamInput.ToolNameMapping = toolNameMapping
 	}
-	resolveMaxTokens(&streamInput.Options)
 
 	eCtx := actionCtx.ExecContext
 	var la *Llm2Activities
@@ -258,8 +258,7 @@ func executeChatStreamV1(
 						if err != nil {
 							return nil, err
 						}
-						streamInput.Options = options
-						resolveMaxTokens(&streamInput.Options)
+						streamInput.Options = resolveMaxTokens(options)
 						toolNameMapping = mapping
 						streamInput.ToolNameMapping = mapping
 					}
@@ -294,6 +293,20 @@ func executeChatStreamV1(
 	}
 
 	return newStreamResponse(response, streamInput), nil
+}
+
+// resolveMaxTokens falls back to the model config's max tokens when the
+// request doesn't set its own. This must happen before the options are
+// serialized as activity input: the embedded ModelConfig.MaxTokens shares the
+// "maxTokens" JSON key with Options.MaxTokens, so encoding/json drops it.
+func resolveMaxTokens(options llm2.Options) llm2.Options {
+	if options.MaxTokens <= 0 {
+		options.MaxTokens = 0
+		if options.ModelConfig.MaxTokens > 0 {
+			options.MaxTokens = options.ModelConfig.MaxTokens
+		}
+	}
+	return options
 }
 
 // applyProviderAuthOverrides applies the flow's provider auth type overrides
@@ -438,14 +451,4 @@ func executeRepairToolCallArguments(eCtx flow_action.ExecContext, args []string)
 		return nil, err
 	}
 	return output.Arguments, nil
-}
-
-func resolveMaxTokens(options *llm2.Options) {
-	if options.MaxTokens > 0 {
-		return
-	}
-	options.MaxTokens = 0
-	if options.ModelConfig.MaxTokens > 0 {
-		options.MaxTokens = options.ModelConfig.MaxTokens
-	}
 }
