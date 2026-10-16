@@ -127,4 +127,3 @@ autofixes, edit freshness, workspace/idle/age recycling, cancellation, SSH
 routing, and managed-background activity/heartbeat/watchdog behavior.
 Loopback SSH and reconnection tests exercise the idle protocol without secrets;
 live Modal idle→wake→semantic-freshness timing remains an end-to-end coverage gap.
-The retained local memory measurements do not validate live Modal timing.
