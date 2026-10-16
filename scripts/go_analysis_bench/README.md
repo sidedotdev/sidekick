@@ -22,45 +22,6 @@ environment. Disconnected clients are replaced before the next query.
 Document-sync sequences hold a single lease, preserving edit freshness across
 recycling. The separate chat-history lint tool keeps its call-hierarchy client.
 
-## Accepted before/after evidence
-
-The retained runs used Go 1.26.4, gopls v0.21.0, prewarmed caches, the same
-committed Sidekick seed and fixture, and Linux 4.19.0-gvisor. The baseline was
-the shared-daemon implementation at `2144e05`; the candidate was the owned
-lifecycle implementation at `3679115`. Reports retain source/diff checksums;
-[the manifest](results/manifest.json) retains binary and artifact hashes.
-These runs precede the later managed-background transport integration.
-
-Each pair used a 10-second idle every 20 cycles, 75-second final idle,
-1-second sampling, and a 10-second final measurement window. All operations
-passed correctness checks.
-
-| Workload | Analysis peak MiB, before → after | Final-idle MiB, before → after | Completed cycles, before → after |
-| --- | ---: | ---: | ---: |
-| Three workspaces, 30 minutes | 3,035.8 → 946.6 | 2,822.4 → 0 | 283 → 223 |
-| One workspace, 16 minutes | 1,488.4 → 1,097.9 | 1,340.1 → 0 | 376 → 1,130 |
-
-Including the harness, peak RSS was **3,143.9 → 1,038.0 MiB** for the multi-
-workspace pair and **1,600.8 → 1,203.9 MiB** for the single-workspace pair.
-Zero final-idle analysis RSS means eviction, not low active-analysis cost.
-The single-workspace candidate had only one sample in its final measurement
-window; its idle statistic should not be treated as a robust plateau estimate.
-These finite runs do not establish a universal memory bound.
-
-Workspace switching has a substantial latency cost: multi-workspace cross-file
-definition p95 changed from **6 ms to 2,166 ms**, and throughput fell. References
-p95 was 8 → 9 ms, autofix 922 → 208 ms, and post-edit definition freshness
-280 → 15 ms. In the single-workspace control, definition p95 was 5 → 4 ms and
-post-edit definition p95 was 170 → 11 ms. Full distributions and maxima remain
-in the reports:
-
-- Multi-workspace: [before](results/prewarmed-multi-baseline/report.json),
-  [after](results/prewarmed-multi-candidate/report.json),
-  [comparison](results/prewarmed-multi-candidate/comparison.json).
-- Single-workspace: [before](results/prewarmed-single-baseline/report.json),
-  [after](results/prewarmed-single-candidate/report.json),
-  [comparison](results/prewarmed-single-candidate/comparison.json).
-
 ## Reproduce
 
 Use a dedicated Linux account with no existing gopls processes. The monitor
@@ -99,10 +60,9 @@ go -C "$ROOT" build -o "$ROOT/.side/tmp/go-analysis-after" ./scripts/go_analysis
   --compare "$ROOT/.side/tmp/go-analysis-before-run/report.json"
 ```
 
-The historical baseline requires its Git history. The current binary exercises
-the current lifecycle implementation, not an exact rebuild of the archived
-candidate. Run each binary from its own source checkout: provenance is read
-from the runtime working directory, not embedded in the executable.
+The historical baseline requires its Git history. Run each binary from its own
+source checkout: provenance is read from the runtime working directory, not
+embedded in the executable.
 
 Use `--workspaces 1 --duration 16m` for the age-recycling control, or increase
 duration for longer trials. For a quick correctness smoke, omit `--seed` and use
@@ -115,9 +75,8 @@ missing final-idle samples, and preexisting analysis processes.
 ## Artifacts and accounting
 
 Runs write `report.json`, `comparison.json` when requested, and streamed
-`memory.jsonl`, `operations.jsonl`, and `actions.jsonl`. Accepted raw streams are
-retained gzip-compressed beside their reports, with a peak-process snapshot.
-The manifest includes hashes of both compressed artifacts and original streams.
+`memory.jsonl`, `operations.jsonl`, and `actions.jsonl` to the selected output
+directory.
 
 Analysis RSS sums daemons and helpers, including detached shared daemons and
 Go/compiler children, but excludes the harness. Combined metrics include the
@@ -139,9 +98,8 @@ go run ./scripts/go_analysis_bench/summarize \
   --input /absolute/path/to/completed-run --window 5m
 ```
 
-For archived evidence, decompress its streams into a `.side/tmp` subdirectory
-and copy `report.json` there first. The summarizer validates identities, RSS
-sums, report/sample agreement, successful checks, and uncontaminated startup.
+The summarizer validates identities, RSS sums, report/sample agreement,
+successful checks, and uncontaminated startup.
 
 Cleanup only signals processes with the run's inherited random environment
 token, rechecking identity and ownership. Accounting is deliberately broader
