@@ -14,12 +14,8 @@ func TestGetOrNewServerConcurrentCallers(t *testing.T) {
 	t.Setenv("SIDE_DATA_HOME", t.TempDir())
 	t.Setenv("SIDE_NATS_SERVER_PORT", "-1")
 	serve = nil
-	serveErr = nil
-	serveOnce = sync.Once{}
 	t.Cleanup(func() {
 		serve = nil
-		serveErr = nil
-		serveOnce = sync.Once{}
 	})
 
 	type result struct {
@@ -53,20 +49,17 @@ func TestGetOrNewServerConcurrentCallers(t *testing.T) {
 	}
 }
 
-func TestGetOrNewServerCachesInitializationError(t *testing.T) {
+func TestGetOrNewServerRetriesAfterInitializationError(t *testing.T) {
 	t.Setenv("SIDE_DATA_HOME", "")
+	t.Setenv("SIDE_NATS_SERVER_PORT", "-1")
 	dataHome := filepath.Join(t.TempDir(), "not-a-directory")
 	require.NoError(t, os.WriteFile(dataHome, nil, 0600))
 	originalDataHome := xdg.DataHome
 	xdg.DataHome = dataHome
 	serve = nil
-	serveErr = nil
-	serveOnce = sync.Once{}
 	t.Cleanup(func() {
 		xdg.DataHome = originalDataHome
 		serve = nil
-		serveErr = nil
-		serveOnce = sync.Once{}
 	})
 
 	server, firstErr := GetOrNewServer()
@@ -93,7 +86,18 @@ func TestGetOrNewServerCachesInitializationError(t *testing.T) {
 
 	for result := range results {
 		require.Nil(t, result.server)
-		require.Error(t, result.err)
-		require.Same(t, firstErr, result.err)
+		require.ErrorContains(t, result.err, "failed to get Sidekick data home")
 	}
+
+	require.NoError(t, os.Remove(dataHome))
+	require.NoError(t, os.Mkdir(dataHome, 0700))
+
+	server, err := GetOrNewServer()
+	require.NoError(t, err)
+	require.NotNil(t, server)
+	defer server.natsServer.Shutdown()
+
+	reusedServer, err := GetOrNewServer()
+	require.NoError(t, err)
+	require.Same(t, server, reusedServer)
 }

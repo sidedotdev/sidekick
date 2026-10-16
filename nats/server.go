@@ -44,15 +44,23 @@ type Server struct {
 }
 
 var serve *Server
-var serveErr error
-var serveOnce sync.Once = sync.Once{}
+var serveMu sync.Mutex
 
 // A singleton instance of the NATS server
 func GetOrNewServer() (*Server, error) {
-	serveOnce.Do(func() {
-		serve, serveErr = newServer()
-	})
-	return serve, serveErr
+	serveMu.Lock()
+	defer serveMu.Unlock()
+
+	if serve != nil {
+		return serve, nil
+	}
+
+	instance, err := newServer()
+	if err != nil {
+		return nil, err
+	}
+	serve = instance
+	return serve, nil
 }
 
 // newServer creates a new NATS server instance configured for Sidekick with default production settings
