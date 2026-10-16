@@ -246,22 +246,31 @@ Worker shutdown also closes the owner. Preexisting shared daemons are not
 killed: their ownership cannot safely be inferred. Account for any old Sidekick
 instance and its daemon when measuring an upgrade.
 
-**Modal exception:** a Modal client is closed synchronously at the end of each
-operation lease instead of being cached. The sandbox watchdog counts a running
-SSH exec session as activity even without traffic; keeping an idle LSP session
-would therefore delay its independent idle shutdown. Compound document sync
-and autofix retain one client through the complete operation, including cleanup
-and edit application. The watchdog still treats in-flight analysis as activity;
-no process exemption is used.
+The cache policy is the same for every environment. Remote analysis streams
+explicitly opt into side-agent managed-background execution, alongside managed
+exec and SFTP channels. Linux session registrations identify the SSH child by
+PID and process starttime in `/tmp/.sidekick-sessions` (overridable with
+`SIDEKICK_SESSION_DIR`). This is a provider-independent signal: idle monitors
+can distinguish managed channels from unregistered SSH work without classifying
+language-server process names.
 
-This trades reuse for sandbox idling: every Modal analysis operation pays SSH
-and gopls startup costs, not just the first operation after idle. Local and
-other remote clients retain their normal cache policy. The recorded Linux
-memory/latency comparisons do not measure this Modal-specific policy.
-`TestModalClientReleaseClosesSSHSession` exercises real loopback SSH exec
-sessions and stdin-consuming child processes, checking active-operation
-lifetime, EOF teardown and local SSH process reaping without Modal credentials.
-It is not a live Modal auto-idle timing test.
+Actual analysis work acquires an admitted side-agent activity lease through the
+environment's normal wake/recovery path. Its heartbeat and shutdown fence remain
+held through cancellation cleanup and workspace-edit application. Releasing the
+lease leaves the cached stream reusable without pinning sandbox idling.
+Unregistered SSH sessions still count as activity. Losing a lease cancels the
+operation and invalidates its client; disconnected cached analysis transports
+are replaced before work, including when disconnection is discovered during
+environment wake.
+
+`TestManagedAnalysisSSHSessionActivity` uses real loopback SSH sessions and
+side-agent activity admission. It checks the shutdown fence during work and
+cancellation cleanup, watchdog idleness after lease release, cached connection
+reuse, EOF teardown and process reaping without Modal credentials.
+`TestClientActivityReconnectsAfterIdleShutdown` covers the first query after
+idle disconnection, both before and during wake. These are not live Modal
+auto-idle timing or remote-host memory measurements; the recorded Linux
+memory/latency comparisons measure local analysis.
 
 Operations hold a cancellable lease. The complete edit notification sequence
 holds one lease and carries the original environment, so eviction cannot split

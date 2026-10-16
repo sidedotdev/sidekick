@@ -146,7 +146,7 @@ func TestGoSemanticsAcrossSessionRecycling(t *testing.T) {
 					_, err := activities.GetSingleFileDefinitions(ctx, definitionRequest(other))
 					require.NoError(t, err)
 				case "idle":
-					_, release, err := activities.findOrInitClient(ctx, dir, "golang", &container)
+					_, _, release, err := activities.findOrInitClient(ctx, dir, "golang", &container)
 					require.NoError(t, err)
 					activities.idleTimeout = 10 * time.Millisecond
 					release()

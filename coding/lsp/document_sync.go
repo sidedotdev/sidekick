@@ -24,7 +24,7 @@ func (la *LSPActivities) SyncDocumentActivity(ctx context.Context, input SyncDoc
 	}
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	lang := utils.InferLanguageNameFromFilePath(input.FilePath)
-	client, release, err := la.findOrInitClient(ctx, baseDir, lang, &input.EnvContainer)
+	ctx, client, release, err := la.findOrInitClient(ctx, baseDir, lang, &input.EnvContainer)
 	if err != nil {
 		return SyncDocumentActivityOutput{}, err
 	}

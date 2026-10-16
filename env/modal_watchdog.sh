@@ -46,18 +46,24 @@ log() {
 is_busy() {
     now=$(date +%s)
     busy_reason=""
-    # a connection is busy only when its sshd forked a session child (shell,
-    # exec'd command, sftp-server). Idle ssh control masters (ControlPersist)
-    # keep a connection sshd alive with no such children, so they don't hold
-    # the sandbox open
-    sshd_pids=$(pgrep -x sshd -d, 2>/dev/null)
+    # Managed channels report admitted work through the activity marker and
+    # shutdown fence. Unregistered SSH sessions remain busy, including shells
+    # started outside Sidekick. A stale PID registration must not hide one.
+    sshd_pids=$(pgrep -x 'sshd|sshd-session' -d, 2>/dev/null)
     if [ -n "$sshd_pids" ]; then
-        children=$(pgrep -P "$sshd_pids" 2>/dev/null | wc -l)
-        sshd_children=$(pgrep -x sshd -P "$sshd_pids" 2>/dev/null | wc -l)
-        if [ "$children" -gt "$sshd_children" ] 2>/dev/null; then
-            busy_reason="ssh-session children=$children control-connections=$sshd_children"
+        sshd_children=$(pgrep -x 'sshd|sshd-session' -P "$sshd_pids" 2>/dev/null | tr '[:space:]' ' ')
+        for child in $(pgrep -P "$sshd_pids" 2>/dev/null); do
+            case " $sshd_children " in
+                *" $child "*) continue ;;
+            esac
+            registered=$(cat "${SIDEKICK_SESSION_DIR:-/tmp/.sidekick-sessions}/$child" 2>/dev/null)
+            start=$(sed 's/^.*) //' "/proc/$child/stat" 2>/dev/null | awk '{print $20}')
+            if [ -n "$registered" ] && [ "$registered" = "$start" ]; then
+                continue
+            fi
+            busy_reason="ssh-session pid=$child"
             return 0
-        fi
+        done
     fi
     # interactive attach (e.g. `modal shell`) allocates a pty without sshd;
     # atime moves on input, mtime on output. Counting a pty only while it saw

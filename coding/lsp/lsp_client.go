@@ -159,6 +159,10 @@ func lspServerCommand(ctx context.Context, languageName string, envContainer *en
 		if envContainer.Env.GetType() == env.EnvTypeModal {
 			remoteCommand = "bash -lc " + lspShellQuote(remoteCommand)
 		}
+		remoteCommand, err = env.ManagedBackgroundCommand(remoteCommand)
+		if err != nil {
+			return nil, fmt.Errorf("prepare managed analysis command: %w", err)
+		}
 		args := append(append([]string{}, sshArgs...), remoteCommand)
 		return exec.Command("ssh", args...), nil
 	}
@@ -282,6 +286,13 @@ func (noopHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc
 
 // TODO make the ReadWriteCloser a parameter, so that multiple different language servers can be supported
 func (l *Jsonrpc2LSPClient) Initialize(ctx context.Context, params InitializeParams) (InitializeResponse, error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	release, err := l.BeginActivity(ctx, cancel)
+	if err != nil {
+		return InitializeResponse{}, err
+	}
+	defer release()
 	rwc, err := lspServerStdioReadWriteCloser(ctx, l.LanguageName, l.EnvContainer)
 	if err != nil {
 		return InitializeResponse{}, fmt.Errorf("gopls failure: %w", err)
@@ -480,4 +491,23 @@ func (l *Jsonrpc2LSPClient) Close() error {
 		result = errors.Join(result, l.transport.Close())
 	}
 	return result
+}
+
+func (l *Jsonrpc2LSPClient) BeginActivity(ctx context.Context, onLost func(error)) (func(), error) {
+	if l.EnvContainer == nil {
+		return func() {}, ctx.Err()
+	}
+	return env.BeginActivity(ctx, l.EnvContainer.Env, onLost)
+}
+
+func (l *Jsonrpc2LSPClient) IsConnected() bool {
+	if l.Conn == nil {
+		return false
+	}
+	select {
+	case <-l.Conn.DisconnectNotify():
+		return false
+	default:
+		return true
+	}
 }

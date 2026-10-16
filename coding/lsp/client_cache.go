@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"sidekick/env"
-
-	"github.com/rs/zerolog/log"
 )
 
 const defaultClientIdleTimeout = time.Minute
@@ -71,15 +69,6 @@ func (la *LSPActivities) releaseClient() {
 		}
 	})
 	la.clientGate <- struct{}{}
-}
-
-// Modal's watchdog counts an open SSH exec session as activity even when
-// the analysis client is idle.
-func (la *LSPActivities) releaseModalClient() {
-	defer func() { la.clientGate <- struct{}{} }()
-	if err := la.closeClients(); err != nil {
-		log.Warn().Err(err).Msg("Failed to close Modal analysis client")
-	}
 }
 
 func (la *LSPActivities) Close() error {

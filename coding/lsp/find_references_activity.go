@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -48,7 +49,7 @@ type FindReferencesActivityInput struct {
 func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input FindReferencesActivityInput) ([]Location, error) {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	lang := utils.InferLanguageNameFromFilePath(input.RelativeFilePath)
-	lspClient, release, err := lspa.findOrInitClient(ctx, baseDir, lang, &input.EnvContainer)
+	ctx, lspClient, release, err := lspa.findOrInitClient(ctx, baseDir, lang, &input.EnvContainer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find or initialize lsp client: %w", err)
 	}
@@ -81,18 +82,18 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 	return references, nil
 }
 
-func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string, lang string, envContainer *env.EnvContainer) (LSPClient, func(), error) {
+func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string, lang string, envContainer *env.EnvContainer) (context.Context, LSPClient, func(), error) {
 	_, span := lspTracer.Start(ctx, "findOrInitClient")
 	defer span.End()
 	span.SetAttributes(attribute.String("language", lang), attribute.String("baseDir", baseDir))
 
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return ctx, nil, nil, err
 	}
 	gate := lspa.gate()
 	select {
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return ctx, nil, nil, ctx.Err()
 	case <-gate:
 	}
 	succeeded := false
@@ -102,14 +103,14 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 		}
 	}()
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return ctx, nil, nil, err
 	}
 	if lspa.closed {
-		return nil, nil, fmt.Errorf("LSP activities are closed")
+		return ctx, nil, nil, fmt.Errorf("LSP activities are closed")
 	}
 	key, err := clientCacheKey(baseDir, lang, envContainer)
 	if err != nil {
-		return nil, nil, err
+		return ctx, nil, nil, err
 	}
 	lspa.idleGeneration++
 	if lspa.idleTimer != nil {
@@ -121,39 +122,51 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 	if lspa.clientBorn.IsZero() {
 		lspa.clientBorn = time.Now()
 	}
-	lspClient, ok := lspa.InitializedClients[key]
-	if !ok || time.Since(lspa.clientBorn) >= lspa.maxClientAge {
-		if err := lspa.closeClients(); err != nil {
-			return nil, nil, fmt.Errorf("close previous analysis client: %w", err)
+	for range 2 {
+		lspClient, ok := lspa.InitializedClients[key]
+		if !ok || time.Since(lspa.clientBorn) >= lspa.maxClientAge || !clientIsConnected(lspClient) {
+			if err := lspa.closeClients(); err != nil {
+				return ctx, nil, nil, fmt.Errorf("close previous analysis client: %w", err)
+			}
+			span.SetAttributes(attribute.Bool("initialized", true))
+			lspClient = lspa.LSPClientProvider(lang)
+			if client, ok := lspClient.(interface{ SetEnvContainer(*env.EnvContainer) }); ok {
+				client.SetEnvContainer(envContainer)
+			}
+			params := InitializeParams{
+				ProcessID:    0,
+				RootURI:      (&url.URL{Scheme: "file", Path: baseDir}).String(),
+				Capabilities: defaultClientCapabilities,
+			}
+			if _, err := lspClient.Initialize(ctx, params); err != nil {
+				err = fmt.Errorf("failed to initialize LSP client: %w", errors.Join(err, closeClient(lspClient)))
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				return ctx, nil, nil, err
+			}
+			lspa.InitializedClients[key] = lspClient
+			lspa.clientBorn = time.Now()
+		} else {
+			span.SetAttributes(attribute.Bool("cached", true))
 		}
-		span.SetAttributes(attribute.Bool("initialized", true))
-		lspClient = lspa.LSPClientProvider(lang)
-		if client, ok := lspClient.(interface{ SetEnvContainer(*env.EnvContainer) }); ok {
-			client.SetEnvContainer(envContainer)
+		operationCtx, finish, err := lspa.beginClientActivity(ctx, lspClient)
+		if err != nil {
+			return operationCtx, nil, nil, errors.Join(err, lspa.closeClients())
 		}
-		params := InitializeParams{
-			ProcessID:    0,
-			RootURI:      (&url.URL{Scheme: "file", Path: baseDir}).String(),
-			Capabilities: defaultClientCapabilities,
+		if !clientIsConnected(lspClient) {
+			finish()
+			if err := lspa.closeClients(); err != nil {
+				return ctx, nil, nil, err
+			}
+			continue
 		}
-		if _, err := lspClient.Initialize(ctx, params); err != nil {
-			_ = closeClient(lspClient)
-			err = fmt.Errorf("failed to initialize LSP client: %w", err)
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return nil, nil, err
-		}
-		lspa.InitializedClients[key] = lspClient
-		lspa.clientBorn = time.Now()
-	} else {
-		span.SetAttributes(attribute.Bool("cached", true))
+		succeeded = true
+		return operationCtx, lspClient, func() {
+			finish()
+			lspa.releaseClient()
+		}, nil
 	}
-	release := lspa.releaseClient
-	if envContainer != nil && envContainer.Env != nil && envContainer.Env.GetType() == env.EnvTypeModal {
-		release = lspa.releaseModalClient
-	}
-	succeeded = true
-	return lspClient, release, nil
+	return ctx, nil, nil, fmt.Errorf("analysis connection disconnected during acquisition")
 }
 
 // findSymbolPosition finds the position of the last character of the first matching text in the file content

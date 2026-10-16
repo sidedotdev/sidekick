@@ -106,7 +106,7 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 
 	langName := utils.InferLanguageNameFromFilePath(request.FilePath)
 	repoDir := request.EnvContainer.Env.GetWorkingDirectory()
-	lspClient, release, err := la.findOrInitClient(ctx, repoDir, langName, request.EnvContainer)
+	ctx, lspClient, release, err := la.findOrInitClient(ctx, repoDir, langName, request.EnvContainer)
 	if err != nil {
 		return []SymbolDefinitionLocation{}, err
 	}
@@ -361,7 +361,7 @@ type TextDocumentDidOpenActivityInput struct {
 // TextDocumentDidOpenActivity sends a textDocument/didOpen notification to the LSP server.
 func (lspa *LSPActivities) TextDocumentDidOpenActivity(ctx context.Context, input TextDocumentDidOpenActivityInput) error {
 	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
-	lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
+	ctx, lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
 	if err != nil {
 		return err
 	}
@@ -405,7 +405,7 @@ type TextDocumentDidCloseActivityInput struct {
 // TextDocumentDidCloseActivity sends a textDocument/didClose notification to the LSP server.
 func (lspa *LSPActivities) TextDocumentDidCloseActivity(ctx context.Context, input TextDocumentDidCloseActivityInput) error {
 	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
-	lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
+	ctx, lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
 	if err != nil {
 		return err
 	}
@@ -448,7 +448,7 @@ type TextDocumentDidChangeActivityInput struct {
 // TextDocumentDidChangeActivity sends a textDocument/didChange notification to the LSP server.
 func (lspa *LSPActivities) TextDocumentDidChangeActivity(ctx context.Context, input TextDocumentDidChangeActivityInput) error {
 	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
-	lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
+	ctx, lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
 	if err != nil {
 		return err
 	}
@@ -494,7 +494,7 @@ type TextDocumentDidSaveActivityInput struct {
 // TextDocumentDidSaveActivity sends a textDocument/didSave notification to the LSP server.
 func (lspa *LSPActivities) TextDocumentDidSaveActivity(ctx context.Context, input TextDocumentDidSaveActivityInput) error {
 	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
-	lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
+	ctx, lspClient, release, err := lspa.findOrInitClient(ctx, input.RepoDir, langName, input.EnvContainer)
 	if err != nil {
 		return err
 	}

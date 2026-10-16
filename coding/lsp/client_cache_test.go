@@ -118,7 +118,7 @@ func TestClientCacheExpiresWhileIdle(t *testing.T) {
 	activities := NewLSPActivities(func(string) LSPClient { return client })
 	activities.idleTimeout = 10 * time.Millisecond
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
-	_, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
+	_, _, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
 	require.NoError(t, err)
 	release()
 	require.Eventually(t, func() bool { return client.closed.Load() == 1 }, 2*time.Second, time.Millisecond)
@@ -135,12 +135,12 @@ func TestClientCacheRecyclesDuringContinuousUse(t *testing.T) {
 	activities.idleTimeout = time.Hour
 	activities.maxClientAge = 30 * time.Millisecond
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
-	_, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
+	_, _, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
 	require.NoError(t, err)
 	release()
 	first := clients[0]
 	require.Eventually(t, func() bool {
-		_, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
+		_, _, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
 		require.NoError(t, err)
 		release()
 		return first.closed.Load() == 1
@@ -160,13 +160,13 @@ func TestClientCacheFailedAcquisitionRetainsIdleCleanup(t *testing.T) {
 	activities := NewLSPActivities(func(string) LSPClient { return client })
 	activities.idleTimeout = 10 * time.Millisecond
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
-	_, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
+	_, _, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
 	require.NoError(t, err)
 	release()
 	container := &env.EnvContainer{Env: &badIdentityEnv{&fakeSSHEnv{
 		fakeEnv: &fakeEnv{envType: env.EnvTypeDevPod},
 	}}}
-	_, _, err = activities.findOrInitClient(context.Background(), "/workspace", "golang", container)
+	_, _, _, err = activities.findOrInitClient(context.Background(), "/workspace", "golang", container)
 	require.ErrorContains(t, err, "identity unavailable")
 	require.Eventually(t, func() bool { return client.closed.Load() == 1 }, 2*time.Second, time.Millisecond)
 }
@@ -301,7 +301,7 @@ func TestClientCacheRechecksCancellationAfterGateAcquisition(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
 	for range 100 {
 		ctx, cancel := context.WithCancel(context.Background())
-		_, release, err := activities.findOrInitClient(cancelOnDoneContext{ctx, cancel}, "/workspace", "golang", nil)
+		_, _, release, err := activities.findOrInitClient(cancelOnDoneContext{ctx, cancel}, "/workspace", "golang", nil)
 		if release != nil {
 			release()
 		}
@@ -356,11 +356,11 @@ func TestNotificationWrappersRetainRemoteRoutingAfterEviction(t *testing.T) {
 			})
 			t.Cleanup(func() { require.NoError(t, activities.Close()) })
 			ctx := context.Background()
-			_, release, err := activities.findOrInitClient(ctx, "/workspace", "golang", remote)
+			_, _, release, err := activities.findOrInitClient(ctx, "/workspace", "golang", remote)
 			require.NoError(t, err)
 			release()
 			local := &env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: "/workspace"}}
-			_, release, err = activities.findOrInitClient(ctx, "/workspace", "golang", local)
+			_, _, release, err = activities.findOrInitClient(ctx, "/workspace", "golang", local)
 			require.NoError(t, err)
 			release()
 			require.EqualValues(t, 1, clients[0].closed.Load())
