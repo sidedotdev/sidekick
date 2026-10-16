@@ -552,6 +552,9 @@ func (s *Supervisor) StartProcess(ctx context.Context, p *Process, outputChan ch
 	p.cancel = cancel
 
 	cmd := exec.CommandContext(procCtx, p.Config.Command, p.Config.Args...)
+	cmd.Cancel = func() error {
+		return signalProcessGroup(cmd.Process, syscall.SIGKILL)
+	}
 	if p.Config.WorkingDir != "" {
 		cmd.Dir = filepath.Join(s.executionRoot, p.Config.WorkingDir)
 	} else {
@@ -580,11 +583,21 @@ func (s *Supervisor) StartProcess(ctx context.Context, p *Process, outputChan ch
 
 	// Stream output, capturing current generation to ignore output from old runs
 	gen := p.getGeneration()
-	go s.streamOutput(p, stdout, outputChan, gen)
-	go s.streamOutput(p, stderr, outputChan, gen)
-
-	// Wait for process to finish
+	var output sync.WaitGroup
+	output.Add(2)
 	go func() {
+		defer output.Done()
+		s.streamOutput(p, stdout, outputChan, gen)
+	}()
+	go func() {
+		defer output.Done()
+		s.streamOutput(p, stderr, outputChan, gen)
+	}()
+
+	// Wait closes the pipes, so readers must consume buffered output first.
+	go func() {
+		defer cancel()
+		output.Wait()
 		err := cmd.Wait()
 		p.setExited(gen)
 		var appended bool
@@ -613,37 +626,38 @@ func (s *Supervisor) streamOutput(p *Process, r io.Reader, outputChan chan<- pro
 	}
 }
 
+// StartProcess uses Setpgid, so the group ID remains the original PID even
+// when the leader exits before its children.
+func signalProcessGroup(process *os.Process, signal syscall.Signal) error {
+	if err := syscall.Kill(-process.Pid, signal); err != nil {
+		return process.Signal(signal)
+	}
+	return nil
+}
+
 func (s *Supervisor) StopProcess(p *Process) {
 	if !p.isRunning() {
 		return
 	}
 	p.setStopping(true)
-	if p.cancel != nil {
-		p.cancel()
-	}
 	cmd := p.Cmd
+	cancel := p.cancel
 	if cmd != nil && cmd.Process != nil {
-		pid := cmd.Process.Pid
 		// Send SIGTERM to the process group
-		pgid, err := syscall.Getpgid(pid)
-		if err == nil {
-			syscall.Kill(-pgid, syscall.SIGTERM)
-		} else {
-			cmd.Process.Signal(syscall.SIGTERM)
-		}
+		signalProcessGroup(cmd.Process, syscall.SIGTERM)
 		// Wait a bit, then force kill if still running
 		go func() {
 			time.Sleep(5 * time.Second)
 			// Check if this specific process is still running by checking its state
 			if cmd.ProcessState == nil {
-				pgid, err := syscall.Getpgid(pid)
-				if err == nil {
-					syscall.Kill(-pgid, syscall.SIGKILL)
-				} else {
-					cmd.Process.Kill()
-				}
+				signalProcessGroup(cmd.Process, syscall.SIGKILL)
+			}
+			if cancel != nil {
+				cancel()
 			}
 		}()
+	} else if cancel != nil {
+		cancel()
 	}
 }
 
@@ -707,13 +721,7 @@ func (s *Supervisor) RestartProcess(ctx context.Context, p *Process, outputChan 
 	// Force kill if still running after 5 seconds
 	if !processHasExited(cmd) {
 		if cmd != nil && cmd.Process != nil {
-			pid := cmd.Process.Pid
-			pgid, err := syscall.Getpgid(pid)
-			if err == nil {
-				syscall.Kill(-pgid, syscall.SIGKILL)
-			} else {
-				cmd.Process.Kill()
-			}
+			signalProcessGroup(cmd.Process, syscall.SIGKILL)
 		}
 		// Wait for it to actually exit after SIGKILL (up to 2 more seconds)
 		for i := 0; i < 20 && !processHasExited(cmd); i++ {

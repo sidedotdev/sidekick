@@ -878,13 +878,15 @@ func TestRestartProcessClearsLogsAndShowsStoppingStatus(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create a script that outputs a unique marker based on an env var.
+	// The child emits readiness so restart cannot signal the process group
+	// before the long-lived worker has been created.
 	// Trap SIGTERM with a brief delay to widen the window in which the
 	// process is in the "stopping" state, mirroring TestRestartProcessSlowStop.
 	scriptPath := filepath.Join(tmpDir, "test.sh")
 	script := `#!/bin/sh
 trap 'sleep 1; exit 0' TERM
-echo "RUN_MARKER=$RUN_MARKER"
-sleep 30
+sh -c 'echo "RUN_MARKER=$RUN_MARKER"; exec sleep 30' &
+wait
 `
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		t.Fatalf("failed to write script: %v", err)
