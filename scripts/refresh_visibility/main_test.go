@@ -32,7 +32,7 @@ func TestRefresh_RunningAndClosedRunStayIntact(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	hostPort := common.GetTemporalServerHostPort()
+	hostPort := common.GetTemporalClientHostPort()
 	c, err := client.Dial(client.Options{HostPort: hostPort})
 	require.NoError(t, err)
 	defer c.Close()
