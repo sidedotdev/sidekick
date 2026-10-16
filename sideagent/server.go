@@ -123,7 +123,6 @@ func (s *server) track(id uint64, p *os.Process) {
 func (s *server) untrack(id uint64) {
 	s.mu.Lock()
 	delete(s.procs, id)
-	delete(s.canceled, id)
 	s.mu.Unlock()
 }
 
@@ -172,8 +171,13 @@ func killProcessGroup(p *os.Process) {
 }
 
 func (s *server) execute(req ExecRequest) ExecResponse {
+	defer func() {
+		s.mu.Lock()
+		delete(s.canceled, req.ID)
+		s.mu.Unlock()
+	}()
 	resp := ExecResponse{ID: req.ID}
-	if len(req.Argv) == 0 {
+	if len(req.Argv) == 0 && req.Workspace == nil {
 		resp.ExitStatus = -1
 		resp.Error = "empty argv"
 		return resp
@@ -232,6 +236,13 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 		}
 	}
 
+	if req.Workspace != nil {
+		return s.executeWorkspace(req)
+	}
+	return s.executeCommand(req)
+}
+func (s *server) executeCommand(req ExecRequest) ExecResponse {
+	resp := ExecResponse{ID: req.ID}
 	commandEnv := append(s.baseEnv(req.LoginEnv), req.Env...)
 	commandPath, err := resolveExecutable(req.Argv[0], req.Dir, commandEnv)
 	if err != nil {

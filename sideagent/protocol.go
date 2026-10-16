@@ -47,6 +47,8 @@ type ExecRequest struct {
 	// (with Hibernated set on the response) if the file exists. The check
 	// happens after ReadLockFile is acquired.
 	HibernationSentinel string `json:"hibernationSentinel,omitempty"`
+	// Workspace runs a repository operation instead of Argv.
+	Workspace *WorkspaceRequest `json:"workspace,omitempty"`
 }
 
 // ExecResponse carries the buffered result of one ExecRequest.

@@ -37,6 +37,7 @@ var agentSourceFiles = []string{
 	"sideagent/protocol.go",
 	"sideagent/server.go",
 	"sideagent/sftp.go",
+	"sideagent/workspace.go",
 }
 
 func findModuleRoot() (string, error) {
