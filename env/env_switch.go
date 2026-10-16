@@ -1,0 +1,343 @@
+package env
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path"
+	"strings"
+
+	"github.com/rs/zerolog/log"
+)
+
+// SwitchBundle carries a flow's working state out of one env so an env of
+// another type can be provisioned from it. Everything it references is on the
+// local host: the branch's commits live in LocalRepoDir and the WIP archive is
+// a local file, so the source env is not needed once export completes.
+type SwitchBundle struct {
+	Branch       string `json:"branch"`
+	HeadCommit   string `json:"headCommit"`
+	LocalRepoDir string `json:"localRepoDir"`
+	// WIPArchivePath is a local archive of uncommitted and untracked text
+	// changes in the hibernation patch layout; empty when the tree was clean.
+	WIPArchivePath string `json:"wipArchivePath,omitempty"`
+}
+
+// SwitchableEnv is implemented by envs whose flow state can be moved to an env
+// of another type.
+type SwitchableEnv interface {
+	Env
+	// ExportForSwitch makes the branch's commits available in the local repo
+	// and captures uncommitted work without committing or otherwise mutating
+	// the env, so it stays usable if the switch fails.
+	ExportForSwitch(ctx context.Context, branch string) (SwitchBundle, error)
+	// RestoreFromSwitch moves the checked-out branch to the bundle's head
+	// commit and overlays the bundle's uncommitted work.
+	RestoreFromSwitch(ctx context.Context, bundle SwitchBundle) error
+}
+
+var (
+	_ SwitchableEnv = (*LocalEnv)(nil)
+	_ SwitchableEnv = (*LocalGitWorktreeEnv)(nil)
+	_ SwitchableEnv = (*DevPodEnv)(nil)
+	_ SwitchableEnv = (*OpenShellEnv)(nil)
+	_ SwitchableEnv = (*ModalEnv)(nil)
+)
+
+func (e *LocalEnv) ExportForSwitch(ctx context.Context, branch string) (SwitchBundle, error) {
+	repoDir, err := localRepoRoot(ctx, e)
+	if err != nil {
+		return SwitchBundle{}, err
+	}
+	return exportForSwitch(ctx, e, branch, repoDir)
+}
+
+func (e *LocalGitWorktreeEnv) ExportForSwitch(ctx context.Context, branch string) (SwitchBundle, error) {
+	repoDir, err := localRepoRoot(ctx, e)
+	if err != nil {
+		return SwitchBundle{}, err
+	}
+	return exportForSwitch(ctx, e, branch, repoDir)
+}
+
+// DevPod workspaces share the host checkout's git directory, so the flow
+// branch's commits already live in LocalRepoDir and need no syncing.
+func (e *DevPodEnv) ExportForSwitch(ctx context.Context, branch string) (SwitchBundle, error) {
+	return exportForSwitch(ctx, e, branch, e.LocalRepoDir)
+}
+
+func (e *OpenShellEnv) ExportForSwitch(ctx context.Context, branch string) (SwitchBundle, error) {
+	return exportForSwitch(ctx, e, branch, e.LocalRepoDir)
+}
+
+func (e *ModalEnv) ExportForSwitch(ctx context.Context, branch string) (SwitchBundle, error) {
+	return exportForSwitch(ctx, e, branch, e.LocalRepoDir)
+}
+
+func (e *LocalEnv) RestoreFromSwitch(ctx context.Context, bundle SwitchBundle) error {
+	return restoreFromSwitch(ctx, e, bundle)
+}
+
+func (e *LocalGitWorktreeEnv) RestoreFromSwitch(ctx context.Context, bundle SwitchBundle) error {
+	return restoreFromSwitch(ctx, e, bundle)
+}
+
+func (e *DevPodEnv) RestoreFromSwitch(ctx context.Context, bundle SwitchBundle) error {
+	return restoreFromSwitch(ctx, e, bundle)
+}
+
+func (e *OpenShellEnv) RestoreFromSwitch(ctx context.Context, bundle SwitchBundle) error {
+	return restoreFromSwitch(ctx, e, bundle)
+}
+
+func (e *ModalEnv) RestoreFromSwitch(ctx context.Context, bundle SwitchBundle) error {
+	return restoreFromSwitch(ctx, e, bundle)
+}
+
+// localRepoRoot resolves the main checkout of the repo that e's working
+// directory belongs to, which differs from it for linked worktrees.
+func localRepoRoot(ctx context.Context, e Env) (string, error) {
+	out, err := e.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", `set -e; common=$(git rev-parse --git-common-dir); cd "$common/.."; pwd -P`},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve local repo dir: %w", err)
+	}
+	if out.ExitStatus != 0 {
+		return "", fmt.Errorf("failed to resolve local repo dir (exit %d): %s", out.ExitStatus, strings.TrimSpace(out.Stderr))
+	}
+	return strings.TrimSpace(out.Stdout), nil
+}
+
+func exportForSwitch(ctx context.Context, e Env, branch, localRepoDir string) (SwitchBundle, error) {
+	if branch == "" {
+		return SwitchBundle{}, fmt.Errorf("branch is required to export for switch")
+	}
+	if localRepoDir == "" {
+		return SwitchBundle{}, fmt.Errorf("cannot export %s env for switch: it has no local repo dir", e.GetType())
+	}
+
+	if snapshotter, ok := e.(SnapshottingEnv); ok {
+		out, err := snapshotter.Snapshot(ctx)
+		if err != nil {
+			return SwitchBundle{}, fmt.Errorf("failed to snapshot env before switch: %w", err)
+		}
+		if out.ExitStatus != 0 {
+			return SwitchBundle{}, fmt.Errorf("failed to snapshot env before switch (exit %d): %s", out.ExitStatus, strings.TrimSpace(out.Stderr))
+		}
+	}
+
+	checkedOut, err := gitOutputForSwitch(ctx, e, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return SwitchBundle{}, err
+	}
+	if checkedOut != branch {
+		return SwitchBundle{}, fmt.Errorf("cannot export for switch: env has %q checked out, expected branch %q", checkedOut, branch)
+	}
+	head, err := gitOutputForSwitch(ctx, e, "rev-parse", "HEAD")
+	if err != nil {
+		return SwitchBundle{}, err
+	}
+
+	if syncer, ok := e.(FlowBranchBackupSyncer); ok {
+		if err := syncer.SyncFlowBranchToLocal(ctx, branch); err != nil {
+			return SwitchBundle{}, fmt.Errorf("failed to sync flow branch %s to local repo: %w", branch, err)
+		}
+	}
+
+	wipArchivePath, err := captureWIPToLocalFile(ctx, e)
+	if err != nil {
+		return SwitchBundle{}, err
+	}
+	return SwitchBundle{
+		Branch:         branch,
+		HeadCommit:     head,
+		LocalRepoDir:   localRepoDir,
+		WIPArchivePath: wipArchivePath,
+	}, nil
+}
+
+const switchWIPArchiveName = "wip.tgz"
+
+// captureWIPToLocalFile archives e's uncommitted work inside e and copies the
+// archive to a local temp file, returning "" when there is nothing to carry.
+// The archive is built outside the worktree so the worktree is only read.
+func captureWIPToLocalFile(ctx context.Context, e Env) (string, error) {
+	script := "set -e\nwipdir=$(mktemp -d)\n" +
+		captureWIPFragment(`"$wipdir/`+switchWIPArchiveName+`"`) +
+		`if [ "$wip_dirty" = 1 ]; then printf '%s\n' "$wipdir/` + switchWIPArchiveName + `"; else rm -rf "$wipdir"; fi` + "\n"
+	out, err := e.RunCommand(ctx, EnvRunCommandInput{Command: "sh", Args: []string{"-c", script}})
+	if err != nil {
+		return "", fmt.Errorf("failed to capture uncommitted changes: %w", err)
+	}
+	if out.ExitStatus != 0 {
+		return "", fmt.Errorf("failed to capture uncommitted changes (exit %d): %s", out.ExitStatus, strings.TrimSpace(out.Stderr))
+	}
+
+	envArchivePath := strings.TrimSpace(out.Stdout)
+	if envArchivePath == "" {
+		return "", nil
+	}
+	if path.Base(envArchivePath) != switchWIPArchiveName {
+		return "", fmt.Errorf("unexpected output while capturing uncommitted changes: %q", envArchivePath)
+	}
+	defer func() {
+		for _, p := range []string{envArchivePath, path.Dir(envArchivePath)} {
+			if err := e.Remove(ctx, p); err != nil {
+				log.Warn().Err(err).Str("path", p).Msg("failed to remove switch WIP archive from env")
+			}
+		}
+	}()
+
+	data, err := e.ReadFile(ctx, envArchivePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read WIP archive from env: %w", err)
+	}
+	f, err := os.CreateTemp("", "sidekick-switch-wip-*.tgz")
+	if err != nil {
+		return "", fmt.Errorf("failed to create local WIP archive: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("failed to write local WIP archive: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("failed to write local WIP archive: %w", err)
+	}
+	return f.Name(), nil
+}
+
+func restoreFromSwitch(ctx context.Context, e Env, bundle SwitchBundle) error {
+	if bundle.HeadCommit == "" {
+		return fmt.Errorf("switch bundle has no head commit")
+	}
+	if _, err := gitOutputForSwitch(ctx, e, "reset", "--hard", bundle.HeadCommit); err != nil {
+		return err
+	}
+	if bundle.WIPArchivePath == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(bundle.WIPArchivePath)
+	if err != nil {
+		return fmt.Errorf("failed to read WIP archive: %w", err)
+	}
+	if err := e.WriteFile(ctx, HibernationPatchFile, data, 0o600); err != nil {
+		return fmt.Errorf("failed to copy WIP archive into env: %w", err)
+	}
+	defer func() {
+		if err := e.Remove(ctx, HibernationPatchFile); err != nil {
+			log.Warn().Err(err).Str("workDir", e.GetWorkingDirectory()).Msg("failed to remove switch WIP archive after restore")
+		}
+	}()
+
+	out, err := e.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", "set -e\n" + restoreFilesFragment()},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to restore uncommitted changes: %w", err)
+	}
+	if out.ExitStatus != 0 {
+		return fmt.Errorf("failed to restore uncommitted changes (exit %d): %s", out.ExitStatus, strings.TrimSpace(out.Stderr))
+	}
+	return nil
+}
+
+func gitOutputForSwitch(ctx context.Context, e Env, args ...string) (string, error) {
+	out, err := e.RunCommand(ctx, EnvRunCommandInput{Command: "git", Args: args})
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
+	}
+	if out.ExitStatus != 0 {
+		return "", fmt.Errorf("git %s failed (exit %d): %s", strings.Join(args, " "), out.ExitStatus, strings.TrimSpace(out.Stderr))
+	}
+	return strings.TrimSpace(out.Stdout), nil
+}
+
+func switchableEnv(c EnvContainer) (SwitchableEnv, error) {
+	switchable, ok := c.Env.(SwitchableEnv)
+	if !ok {
+		return nil, fmt.Errorf("env %T does not support switching", c.Env)
+	}
+	return switchable, nil
+}
+
+type ExportForSwitchInput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+	Branch       string       `json:"branch"`
+}
+
+type ExportForSwitchOutput struct {
+	Bundle SwitchBundle `json:"bundle"`
+}
+
+// ExportForSwitchActivity exports the flow branch and uncommitted work of the
+// env being switched away from.
+func ExportForSwitchActivity(ctx context.Context, input ExportForSwitchInput) (ExportForSwitchOutput, error) {
+	switchable, err := switchableEnv(input.EnvContainer)
+	if err != nil {
+		return ExportForSwitchOutput{}, err
+	}
+	bundle, err := switchable.ExportForSwitch(ctx, input.Branch)
+	if err != nil {
+		return ExportForSwitchOutput{}, err
+	}
+	return ExportForSwitchOutput{Bundle: bundle}, nil
+}
+
+type RestoreFromSwitchInput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+	Bundle       SwitchBundle `json:"bundle"`
+}
+
+type RestoreFromSwitchOutput struct{}
+
+// RestoreFromSwitchActivity applies an exported bundle to the env being
+// switched to, which must already have the bundle's branch checked out.
+func RestoreFromSwitchActivity(ctx context.Context, input RestoreFromSwitchInput) (RestoreFromSwitchOutput, error) {
+	switchable, err := switchableEnv(input.EnvContainer)
+	if err != nil {
+		return RestoreFromSwitchOutput{}, err
+	}
+	if err := switchable.RestoreFromSwitch(ctx, input.Bundle); err != nil {
+		return RestoreFromSwitchOutput{}, err
+	}
+	return RestoreFromSwitchOutput{}, nil
+}
+
+type VerifySwitchInput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+	ExpectedHead string       `json:"expectedHead"`
+}
+
+type VerifySwitchOutput struct {
+	Head string `json:"head"`
+}
+
+// VerifySwitchActivity checks that a newly provisioned env runs commands and
+// has the exported head checked out before it is published to the flow.
+func VerifySwitchActivity(ctx context.Context, input VerifySwitchInput) (VerifySwitchOutput, error) {
+	e := input.EnvContainer.Env
+	if e == nil {
+		return VerifySwitchOutput{}, fmt.Errorf("no env to verify")
+	}
+	out, err := e.RunCommand(ctx, EnvRunCommandInput{Command: "true"})
+	if err != nil {
+		return VerifySwitchOutput{}, fmt.Errorf("switched env failed to run a command: %w", err)
+	}
+	if out.ExitStatus != 0 {
+		return VerifySwitchOutput{}, fmt.Errorf("switched env failed to run a command (exit %d): %s", out.ExitStatus, strings.TrimSpace(out.Stderr))
+	}
+	head, err := gitOutputForSwitch(ctx, e, "rev-parse", "HEAD")
+	if err != nil {
+		return VerifySwitchOutput{}, err
+	}
+	if head != input.ExpectedHead {
+		return VerifySwitchOutput{Head: head}, fmt.Errorf("switched env HEAD is %s, expected %s", head, input.ExpectedHead)
+	}
+	return VerifySwitchOutput{Head: head}, nil
+}

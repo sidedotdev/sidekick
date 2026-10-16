@@ -445,6 +445,39 @@ fi`, shellQuote(repoDir), shellQuote(branch), shellQuote(head), shellQuote(branc
 // normalizes NUL separators so lists written by an earlier build (which used
 // git's -z output) still apply. Paths containing literal newlines are not
 // supported, a documented best-effort caveat.
+// captureWIPFragment returns shell that archives the current directory's
+// uncommitted state relative to HEAD (changed and untracked text files, the
+// deleted paths, and the staged index as a binary patch) in the layout
+// restoreFilesFragment expects. It only reads the worktree. Untracked binary
+// files are treated as regenerable and skipped to keep the archive small;
+// staged binary changes survive via the --binary patch. archiveShellWord is
+// interpolated verbatim so it may reference shell variables; callers quote it.
+// Afterwards $wip_dirty is 1 if anything was captured and 0 otherwise.
+func captureWIPFragment(archiveShellWord string) string {
+	return fmt.Sprintf(`tmpdir=$(mktemp -d)
+# Newline-delimited file lists (busybox tar has no --null); core.quotePath=false
+# keeps unicode paths literal so tar -T can open them.
+git -c core.quotePath=false diff --name-only --diff-filter=D HEAD > "$tmpdir/deleted.list"
+git -c core.quotePath=false diff --name-only --diff-filter=d HEAD > "$tmpdir/changed.list"
+git -c core.quotePath=false ls-files --others --exclude-standard | while IFS= read -r f; do
+  ns=$(git diff --no-index --numstat -- /dev/null "$f" 2>/dev/null | head -n1)
+  case "$ns" in
+    -*) ;;
+    *) printf '%%s\n' "$f" ;;
+  esac
+done >> "$tmpdir/changed.list"
+if [ -s "$tmpdir/changed.list" ]; then
+  tar czf "$tmpdir/changed.tgz" -T "$tmpdir/changed.list"
+else
+  : > "$tmpdir/changed.tgz"
+fi
+git diff --cached --binary > "$tmpdir/staged.patch"
+if [ -s "$tmpdir/deleted.list" ] || [ -s "$tmpdir/changed.list" ] || [ -s "$tmpdir/staged.patch" ]; then wip_dirty=1; else wip_dirty=0; fi
+tar czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch
+rm -rf "$tmpdir"
+`, archiveShellWord)
+}
+
 func restoreFilesFragment() string {
 	return fmt.Sprintf(`if [ -f %s ]; then
   rtmp=$(mktemp -d)
@@ -545,31 +578,8 @@ func HibernateEnv(ctx context.Context, e Env, branchName string) (HibernationMet
 	// commit point), and delete every working file except the retained .git link
 	// that keeps the worktree registered. Running it as one script keeps hibernation atomic against
 	// concurrent wake/read commands even on remote envs, where a lock fd cannot
-	// be held across separate SSH round-trips. Untracked binary files are
-	// treated as regenerable and skipped to keep the archive small; the staged
-	// index (including staged binary changes) is preserved via a --binary patch.
-	hibernateScript := fmt.Sprintf(`set -e
-tmpdir=$(mktemp -d)
-# Newline-delimited file lists (busybox tar has no --null); core.quotePath=false
-# keeps unicode paths literal so tar -T can open them.
-git -c core.quotePath=false diff --name-only --diff-filter=D HEAD > "$tmpdir/deleted.list"
-git -c core.quotePath=false diff --name-only --diff-filter=d HEAD > "$tmpdir/changed.list"
-git -c core.quotePath=false ls-files --others --exclude-standard | while IFS= read -r f; do
-  ns=$(git diff --no-index --numstat -- /dev/null "$f" 2>/dev/null | head -n1)
-  case "$ns" in
-    -*) ;;
-    *) printf '%%s\n' "$f" ;;
-  esac
-done >> "$tmpdir/changed.list"
-if [ -s "$tmpdir/changed.list" ]; then
-  tar czf "$tmpdir/changed.tgz" -T "$tmpdir/changed.list"
-else
-  : > "$tmpdir/changed.tgz"
-fi
-git diff --cached --binary > "$tmpdir/staged.patch"
-tar czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch
-rm -rf "$tmpdir"
-mv %s %s
+	// be held across separate SSH round-trips.
+	hibernateScript := "set -e\n" + captureWIPFragment(shellQuote(tmpPatch)) + fmt.Sprintf(`mv %s %s
 cat > %s <<'SIDEKICK_HIB_EOF'
 %s
 SIDEKICK_HIB_EOF
@@ -577,7 +587,6 @@ find . -mindepth 1 ! -name .git ! -name %s ! -name %s -depth -exec rm -rf {} + 2
 remaining=$(find . -mindepth 1 ! -name .git ! -name %s ! -name %s | head -1)
 if [ -n "$remaining" ]; then echo "LEFTOVER"; else echo "CLEAN"; fi
 `,
-		shellQuote(tmpPatch),
 		shellQuote(tmpPatch), shellQuote(HibernationPatchFile),
 		shellQuote(HibernationMetadataFile),
 		string(metadataBytes),
