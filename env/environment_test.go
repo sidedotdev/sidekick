@@ -1465,6 +1465,84 @@ func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 	}
 }
 
+// TestModalRunCommandRecoversWhenContainerIsGone covers a sandbox that still
+// polls as running after its container is gone: the runtime refuses the API
+// fallback before anything starts, so recovery must restore the sandbox from
+// its snapshot and rerun the command instead of reporting the refusal as the
+// command's result. Not parallel: it swaps the package-level refresh seam.
+func TestModalRunCommandRecoversWhenContainerIsGone(t *testing.T) {
+	const transportFailure = "ssh transport failure before agent channel established: ssh handshake with old.host:1 timed out after 10s"
+	refusal := EnvRunCommandOutput{ExitStatus: modalContainerGoneExitCode, Stderr: modalContainerGoneMessage + "\n"}
+	cases := []struct {
+		name            string
+		sandboxExecutes bool
+		wantExit        int
+		wantStdout      string
+		wantRefreshes   int
+		wantRestored    bool
+	}{
+		{
+			name:          "container gone restores and reruns the command",
+			wantExit:      0,
+			wantStdout:    "ok\n",
+			wantRefreshes: 2,
+			wantRestored:  true,
+		},
+		{
+			name:            "command that printed the refusal itself keeps its result",
+			sandboxExecutes: true,
+			wantExit:        modalContainerGoneExitCode,
+			wantRefreshes:   1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			refreshes := 0
+			prev := refreshModalEndpointDetailed
+			t.Cleanup(func() { refreshModalEndpointDetailed = prev })
+			refreshModalEndpointDetailed = func(context.Context, string) (modalEndpointRefresh, error) {
+				refreshes++
+				if refreshes == 1 {
+					return modalEndpointRefresh{SSHHost: "stale.host", SSHPort: 2}, nil
+				}
+				return modalEndpointRefresh{SSHHost: "restored.host", SSHPort: 3, Restored: true, SnapshotImageId: "im-restored"}, nil
+			}
+
+			apiAttempts := 0
+			e := &ModalEnv{SandboxName: "side--test", SSHHost: "old.host", SSHPort: 1}
+			e.runModalCommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+				if e.SSHHost == "restored.host" {
+					return EnvRunCommandOutput{Stdout: "ok\n"}, "", nil
+				}
+				return EnvRunCommandOutput{ExitStatus: 255}, transportFailure, nil
+			}
+			e.runModalAPICommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+				apiAttempts++
+				sandboxExecutes := func() bool { return tc.sandboxExecutes }
+				if err := modalContainerGoneError(e.SandboxName, refusal.ExitStatus, refusal.Stdout, refusal.Stderr, sandboxExecutes); err != nil {
+					return EnvRunCommandOutput{}, err
+				}
+				return refusal, nil
+			}
+
+			output, err := e.RunCommand(context.Background(), EnvRunCommandInput{Command: "go test ./..."})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantExit, output.ExitStatus)
+			assert.Equal(t, tc.wantStdout, output.Stdout)
+			assert.Equal(t, tc.wantRefreshes, refreshes)
+			assert.Equal(t, 1, apiAttempts)
+			if tc.wantRestored {
+				assert.Contains(t, output.Stderr, "im-restored")
+				assert.Contains(t, output.Stderr, "lost")
+				assert.NotContains(t, output.Stderr, modalContainerGoneMessage)
+			} else {
+				assert.Equal(t, refusal.Stderr, output.Stderr)
+			}
+		})
+	}
+}
+
 // TestAgentExecOutput_SealedIsNeverSuccess: a sealed sandbox runs nothing, so
 // reporting success would let a caller build on state about to be discarded.
 func TestAgentExecOutput_SealedIsNeverSuccess(t *testing.T) {
