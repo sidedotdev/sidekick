@@ -1,1 +1,0 @@
-go: golang.org/x/sync@v0.10.0: module lookup disabled by GOPROXY=off
