@@ -1123,23 +1123,11 @@ func TrackHuman[T any](devActionCtx DevActionContext, f func(trackedCtx DevActio
 }
 
 func RunSubflow[T any](dCtx DevContext, subflowType, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
-	return flow_action.TrackSubflow(dCtx.ExecContext, subflowType, subflowName, func(subflow domain.Subflow) (T, error) {
-		result, err := f(subflow)
-		if checkpointErr := checkpointSubflowGit(dCtx, subflowType); checkpointErr != nil {
-			return result, errors.Join(err, checkpointErr)
-		}
-		return result, err
-	})
+	return flow_action.TrackSubflow(dCtx.ExecContext, subflowType, subflowName, f)
 }
 
 func RunSubflowWithoutResult(dCtx DevContext, subflowType, subflowName string, f func(subflow domain.Subflow) error) (err error) {
-	return flow_action.TrackSubflowWithoutResult(dCtx.ExecContext, subflowType, subflowName, func(subflow domain.Subflow) error {
-		err := f(subflow)
-		if checkpointErr := checkpointSubflowGit(dCtx, subflowType); checkpointErr != nil {
-			return errors.Join(err, checkpointErr)
-		}
-		return err
-	})
+	return flow_action.TrackSubflowWithoutResult(dCtx.ExecContext, subflowType, subflowName, f)
 }
 
 // WithChildSubflow has been removed. Use RunSubflow or RunSubflowWithoutResult instead.

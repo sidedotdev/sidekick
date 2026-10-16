@@ -1,4 +1,4 @@
-package env
+package git
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"sidekick/env"
 	"sidekick/sideagent"
 
 	"github.com/rs/zerolog/log"
@@ -129,16 +130,28 @@ func (c *gitSyncCoordinator) checkpoint(ctx context.Context, key, worktree strin
 
 var repositoryGitSync gitSyncCoordinator
 
-func gitSyncOperation(e Env) (string, func(context.Context, bool) error) {
-	var remote SSHCapableEnv
+// remoteSyncEnv is a sandbox environment whose repository is an independent
+// clone of a worker-side repository, reachable over SSH.
+type remoteSyncEnv interface {
+	env.SSHCapableEnv
+	// WorkerRepository returns the worker-side repository directory the
+	// sandbox clone was seeded from and the sandbox's stable identity.
+	WorkerRepository() (localRepoDir, sandboxName string)
+}
+
+func gitSyncOperation(e env.Env) (string, func(context.Context, bool) error) {
+	var remote env.SSHCapableEnv
 	var local, sandbox string
 	switch e := e.(type) {
-	case *ModalEnv:
+	case *env.ModalEnv:
 		copy := *e
 		remote, local, sandbox = &copy, e.LocalRepoDir, e.SandboxName
-	case *OpenShellEnv:
+	case *env.OpenShellEnv:
 		copy := *e
 		remote, local, sandbox = &copy, e.LocalRepoDir, e.SandboxName
+	case remoteSyncEnv:
+		remote = e
+		local, sandbox = e.WorkerRepository()
 	default:
 		return "", nil
 	}
@@ -159,26 +172,34 @@ func gitSyncOperation(e Env) (string, func(context.Context, bool) error) {
 			return syncGitRepositoriesWithLock(ctx, args, local, remote.GetWorkingDirectory(), lock)
 		}
 		if checkpoint {
-			return RunWithSSHTransportRecovery(ctx, remote, operation)
+			return env.RunWithSSHTransportRecovery(ctx, remote, operation)
 		}
 		return operation()
 	}
 }
 
-func SupportsGitSync(e Env) bool {
+func SupportsGitSync(e env.Env) bool {
 	key, _ := gitSyncOperation(e)
 	return key != ""
 }
 
-func scheduleGitSync(ctx context.Context, e Env) {
-	key, run := gitSyncOperation(e)
+// RemoteSyncObserver backs up sandbox commits to the worker repository shortly
+// after each command, so that work survives a lost sandbox. Observed
+// environments never get woken or recovered for this: a sandbox that is gone
+// has nothing new to back up.
+type RemoteSyncObserver struct{}
+
+var _ env.CommandObserver = RemoteSyncObserver{}
+
+func (RemoteSyncObserver) CommandFinished(ctx context.Context, envContainer env.EnvContainer) {
+	key, run := gitSyncOperation(envContainer.Env)
 	if run != nil {
-		repositoryGitSync.background(ctx, key, e.GetWorkingDirectory(), run)
+		repositoryGitSync.background(ctx, key, envContainer.Env.GetWorkingDirectory(), run)
 	}
 }
 
 type SyncGitInput struct {
-	EnvContainer EnvContainer `json:"envContainer"`
+	EnvContainer env.EnvContainer `json:"envContainer"`
 }
 
 type SyncGitOutput struct{}

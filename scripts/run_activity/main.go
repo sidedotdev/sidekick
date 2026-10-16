@@ -162,6 +162,7 @@ func buildActivityRegistry() map[string]interface{} {
 	devRunActivities := &dev.DevRunActivities{
 		Streamer: service,
 	}
+	envActivities := &env.Activities{CommandObserver: git.RemoteSyncObserver{}}
 	srvActivities := &srv.Activities{Service: service}
 	workspaceActivities := &workspace.Activities{Storage: service}
 
@@ -180,8 +181,8 @@ func buildActivityRegistry() map[string]interface{} {
 		env.SnapshotEnvironmentActivity,
 		env.CreateRemoteWorktreeActivity,
 		sidekick.GithubCloneRepoActivity,
-		env.EnvRunCommandActivity,
 		env.GetEnvironmentInfoActivity,
+		git.SyncGitActivity,
 		git.GitDiffActivity,
 		git.DiffUntrackedFilesActivity,
 		git.GitAddActivity,
@@ -227,6 +228,7 @@ func buildActivityRegistry() map[string]interface{} {
 	}
 
 	// Register struct methods
+	registerStructMethods(registry, envActivities)
 	registerStructMethods(registry, srvActivities)
 	registerStructMethods(registry, llmActivities)
 	registerStructMethods(registry, llm2Activities)

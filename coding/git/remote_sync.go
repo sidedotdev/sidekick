@@ -1,4 +1,4 @@
-package env
+package git
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+
+	"sidekick/env"
 
 	"github.com/rs/zerolog/log"
 )
@@ -25,7 +27,7 @@ func syncGitCommand(ctx context.Context, dir string, args ...string) (string, er
 }
 
 func syncGitScript(ctx context.Context, sshArgs []string, script string) (string, error) {
-	out, err := runSSHScript(ctx, sshArgs, script)
+	out, err := env.RunSSHScript(ctx, sshArgs, script)
 	if err != nil {
 		return "", err
 	}
@@ -98,7 +100,7 @@ func syncGitRepositoriesWithLock(ctx context.Context, sshArgs []string, localRep
 			if _, err := syncGitCommand(ctx, localRepoDir, "update-ref", backupRef, tip, ""); err != nil {
 				return err
 			}
-		} else if err := fetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, tip+":"+backupRef); err != nil {
+		} else if err := env.FetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, tip+":"+backupRef); err != nil {
 			return err
 		}
 	}
@@ -141,14 +143,14 @@ func syncGitRepositoriesWithLock(ctx context.Context, sshArgs []string, localRep
 				return err
 			}
 		}
-		dest, opts := splitSSHDestination(sshArgs)
+		dest, opts := env.SplitSSHDestination(sshArgs)
 		if dest == "" {
 			return fmt.Errorf("missing git sync SSH destination")
 		}
 		args := append([]string{"-C", localRepoDir, "push", "--quiet"}, leases...)
 		args = append(args, dest+":"+workingDirectory)
 		args = append(args, refspecs...)
-		if out, err := RunGitOverSSH(ctx, opts, args...); err != nil {
+		if out, err := env.RunGitOverSSH(ctx, opts, args...); err != nil {
 			return fmt.Errorf("refresh side-worker refs: %w: %s", err, out)
 		}
 	}

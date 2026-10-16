@@ -1,7 +1,8 @@
-package env
+package git
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,10 +10,22 @@ import (
 	"testing"
 	"time"
 
+	"sidekick/env"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
+
+// installFakeSSH puts an ssh stand-in on PATH whose behavior is given by
+// script (a /bin/sh body receiving ssh's arguments), so the "remote"
+// repository is just another local directory. Callers must not be parallel.
+func installFakeSSH(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\n"+script), 0700))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 func syncTestGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -35,6 +48,7 @@ func setupGitSyncRepos(t *testing.T) (local, remote, worktree string) {
 exec sh -c "$cmd"
 `)
 	local = setupTestGitRepo(t)
+	syncTestGit(t, local, "commit", "--allow-empty", "-m", "Initial commit")
 	remote = filepath.Join(t.TempDir(), "remote repo")
 	syncTestGit(t, local, "clone", "--no-local", local, remote)
 	syncTestGit(t, remote, "config", "user.name", "Test")
@@ -198,20 +212,37 @@ func TestGitSyncBackgroundDoesNotMutateCheckedOutBranches(t *testing.T) {
 	assert.Equal(t, tip, syncTestGit(t, other, "rev-parse", workerRefPrefix+"other"))
 }
 
-func TestModalCommandActivitySchedulesGitBackup(t *testing.T) {
-	local, _, worktree := setupGitSyncRepos(t)
-	setupTestDataHome(t)
-	e := &ModalEnv{
-		WorkingDirectory: worktree,
-		LocalRepoDir:     local,
-		SandboxName:      t.Name(),
-		SSHHost:          "fake-host",
-		SSHPort:          22,
-		runModalCommand: func(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
-			out, err := exec.CommandContext(ctx, "git", "-C", worktree, "commit", "--allow-empty", "-m", "agent commit").CombinedOutput()
-			return EnvRunCommandOutput{Stdout: string(out)}, "", err
-		},
+// remoteSyncTestEnv stands in for a sandbox whose commands and sync transport
+// both run locally through the fake ssh.
+type remoteSyncTestEnv struct {
+	env.Env
+	worktree     string
+	localRepoDir string
+}
+
+func (e *remoteSyncTestEnv) GetType() env.EnvType               { return env.EnvTypeModal }
+func (e *remoteSyncTestEnv) GetWorkingDirectory() string        { return e.worktree }
+func (e *remoteSyncTestEnv) WorkerRepository() (string, string) { return e.localRepoDir, "sandbox" }
+func (e *remoteSyncTestEnv) SSHArgs(context.Context) ([]string, error) {
+	return []string{"fake-host"}, nil
+}
+func (e *remoteSyncTestEnv) SSHConnConfig(context.Context) (env.SSHConnConfig, error) {
+	return env.SSHConnConfig{}, nil
+}
+func (e *remoteSyncTestEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
+	cmd := exec.CommandContext(ctx, input.Command, input.Args...)
+	cmd.Dir = e.worktree
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return env.EnvRunCommandOutput{Stderr: string(out), ExitStatus: exitErr.ExitCode()}, nil
 	}
+	return env.EnvRunCommandOutput{Stdout: string(out)}, err
+}
+
+func TestRemoteSyncObserverBacksUpCommandCommits(t *testing.T) {
+	local, _, worktree := setupGitSyncRepos(t)
+	e := &remoteSyncTestEnv{worktree: worktree, localRepoDir: local}
 	key, _ := gitSyncOperation(e)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -219,14 +250,14 @@ func TestModalCommandActivitySchedulesGitBackup(t *testing.T) {
 		require.NoError(t, repositoryGitSync.checkpoint(ctx, key, worktree, func(context.Context, bool) error { return nil }))
 	})
 
-	output, err := EnvRunCommandActivity(context.Background(), EnvRunCommandActivityInput{
-		EnvContainer: EnvContainer{Env: e},
+	activities := &env.Activities{CommandObserver: RemoteSyncObserver{}}
+	output, err := activities.RunCommand(context.Background(), env.EnvRunCommandActivityInput{
+		EnvContainer: env.EnvContainer{Env: e},
 		Command:      "git",
 		Args:         []string{"commit", "--allow-empty", "-m", "agent commit"},
-		SkipWaking:   true,
 	})
 	require.NoError(t, err)
-	require.Zero(t, output.ExitStatus)
+	require.Zero(t, output.ExitStatus, output.Stderr)
 	tip := syncTestGit(t, worktree, "rev-parse", "HEAD")
 	require.Eventually(t, func() bool {
 		return syncTestGit(t, local, "rev-parse", "side/flow") == tip

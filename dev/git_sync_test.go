@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"sidekick/coding/git"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/utils"
@@ -19,22 +20,20 @@ import (
 func TestSubflowGitCheckpoint(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name     string
-		kind     string
-		version  workflow.Version
-		local    bool
-		fail     bool
-		wantSync bool
+		name        string
+		version     workflow.Version
+		local       bool
+		noContainer bool
+		canceled    bool
+		fail        bool
+		wantSync    bool
 	}{
-		{name: "author code", kind: "edit_code", version: 1, wantSync: true},
-		{name: "commit agent", kind: "commit", version: 1, wantSync: true},
-		{name: "parent may have deleted its worktree", kind: "coding", version: 1},
-		{name: "development step", kind: "step.dev", version: 1, wantSync: true},
-		{name: "conflict resolution", kind: "resolve_merge_conflicts", version: 1, wantSync: true},
-		{name: "legacy replay", kind: "edit_code", version: workflow.DefaultVersion},
-		{name: "read only", kind: "gather_context", version: 1},
-		{name: "local environment", kind: "edit_code", version: 1, local: true},
-		{name: "backup failure", kind: "edit_code", version: 1, fail: true, wantSync: true},
+		{name: "explicit checkpoint", version: 1, wantSync: true},
+		{name: "legacy replay", version: workflow.DefaultVersion},
+		{name: "local environment", version: 1, local: true},
+		{name: "no environment", version: 1, noContainer: true},
+		{name: "canceled subflow", version: 1, canceled: true, wantSync: true},
+		{name: "backup failure", version: 1, fail: true, wantSync: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -45,15 +44,20 @@ func TestSubflowGitCheckpoint(t *testing.T) {
 			tenv.OnGetVersion("subflow-git-checkpoint", workflow.DefaultVersion, 1).
 				Return(tt.version).Maybe()
 			var calls atomic.Int32
-			tenv.OnActivity(env.SyncGitActivity, mock.Anything, mock.Anything).
-				Return(func(context.Context, env.SyncGitInput) (env.SyncGitOutput, error) {
+			tenv.OnActivity(git.SyncGitActivity, mock.Anything, mock.Anything).
+				Return(func(context.Context, git.SyncGitInput) (git.SyncGitOutput, error) {
 					calls.Add(1)
 					if tt.fail {
-						return env.SyncGitOutput{}, errors.New("backup unavailable")
+						return git.SyncGitOutput{}, errors.New("backup unavailable")
 					}
-					return env.SyncGitOutput{}, nil
+					return git.SyncGitOutput{}, nil
 				}).Maybe()
 			tenv.ExecuteWorkflow(func(ctx workflow.Context) error {
+				if tt.canceled {
+					var cancel workflow.CancelFunc
+					ctx, cancel = workflow.WithCancel(ctx)
+					cancel()
+				}
 				var e env.Env = &env.ModalEnv{
 					WorkingDirectory: "/repo/worktree",
 					LocalRepoDir:     "/worker/repo",
@@ -66,7 +70,10 @@ func TestSubflowGitCheckpoint(t *testing.T) {
 					Context:      utils.NoRetryCtx(ctx),
 					EnvContainer: &env.EnvContainer{Env: e},
 				}}
-				return checkpointSubflowGit(dCtx, tt.kind)
+				if tt.noContainer {
+					dCtx.EnvContainer = nil
+				}
+				return checkpointSubflowGit(dCtx)
 			})
 			if tt.fail {
 				require.ErrorContains(t, tenv.GetWorkflowError(), "backup unavailable")

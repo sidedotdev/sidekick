@@ -4,19 +4,13 @@ import (
 	"fmt"
 	"time"
 
-	"sidekick/env"
+	"sidekick/coding/git"
 
 	"go.temporal.io/sdk/workflow"
 )
 
-func checkpointSubflowGit(dCtx DevContext, subflowType string) error {
-	switch subflowType {
-	case "edit_code", "commit", "step.dev", "perform_step",
-		"resolve_merge_conflicts", "review_and_resolve", "pass_tests":
-	default:
-		return nil
-	}
-	if dCtx.EnvContainer == nil || !env.SupportsGitSync(dCtx.EnvContainer.Env) {
+func checkpointSubflowGit(dCtx DevContext) error {
+	if dCtx.EnvContainer == nil || !git.SupportsGitSync(dCtx.EnvContainer.Env) {
 		return nil
 	}
 	if workflow.GetVersion(dCtx, "subflow-git-checkpoint", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
@@ -30,11 +24,11 @@ func checkpointSubflowGit(dCtx DevContext, subflowType string) error {
 	options.StartToCloseTimeout = 3 * time.Minute
 	options.HeartbeatTimeout = 0
 	ctx = workflow.WithActivityOptions(ctx, options)
-	err := workflow.ExecuteActivity(ctx, env.SyncGitActivity, env.SyncGitInput{
+	err := workflow.ExecuteActivity(ctx, git.SyncGitActivity, git.SyncGitInput{
 		EnvContainer: *dCtx.EnvContainer,
 	}).Get(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("checkpoint git after %s: %w", subflowType, err)
+		return fmt.Errorf("checkpoint git: %w", err)
 	}
 	return nil
 }

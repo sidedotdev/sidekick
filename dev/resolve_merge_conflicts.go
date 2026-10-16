@@ -68,7 +68,11 @@ const maxConflictResolutionAttempts = 8
 // with feedback feeding back into authoring on failure.
 func resolveMergeConflictsSubflow(dCtx DevContext, params ResolveMergeConflictsParams) error {
 	return RunSubflowWithoutResult(dCtx, "resolve_merge_conflicts", "Resolve Merge Conflicts", func(_ domain.Subflow) error {
-		return resolveMergeConflictsLoop(dCtx, params)
+		err := resolveMergeConflictsLoop(dCtx, params)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 
