@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -14,47 +15,60 @@ import (
 
 func TestActivityLeaseHeartbeatAndDrain(t *testing.T) {
 	t.Parallel()
-	seal := testSeal(t)
-	client := startTestChannelWithSeal(t, seal)
-	marker := filepath.Join(t.TempDir(), "activity")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ready := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		_, err := client.Exec(ctx, ExecRequest{
-			ActivityLease: true,
-			TouchPath:     marker,
-			OnReady:       func() { close(ready) },
-		})
-		done <- err
-	}()
-	select {
-	case <-ready:
-	case err := <-done:
-		t.Fatalf("lease ended before admission: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("lease was not admitted")
-	}
-	mustNotSeal(t, seal, "an admitted background request is active")
-	old := time.Unix(100, 0)
-	require.NoError(t, os.Chtimes(marker, old, old))
-	require.Eventually(t, func() bool {
-		info, err := os.Stat(marker)
-		return err == nil && info.ModTime().After(old)
-	}, 15*time.Second, 20*time.Millisecond)
-	cancel()
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(5 * time.Second):
-		t.Fatal("lease did not release on cancellation")
-	}
-	mustSeal(t, seal, "the background session has no active request")
+	synctest.Test(t, func(t *testing.T) {
+		seal := testSeal(t)
+		client := startTestChannelWithSeal(t, seal)
+		marker := filepath.Join(t.TempDir(), "activity")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ready := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			_, err := client.Exec(ctx, ExecRequest{
+				ActivityLease: true,
+				TouchPath:     marker,
+				OnReady:       func() { close(ready) },
+			})
+			done <- err
+		}()
+		select {
+		case <-ready:
+		case err := <-done:
+			t.Fatalf("lease ended before admission: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("lease was not admitted")
+		}
+		mustNotSeal(t, seal, "an admitted background request is active")
+		synctest.Wait()
+		previous := time.Unix(100, 0)
+		require.NoError(t, os.Chtimes(marker, previous, previous))
+		for range 2 {
+			time.Sleep(activityHeartbeatInterval)
+			synctest.Wait()
+			info, err := os.Stat(marker)
+			require.NoError(t, err)
+			require.True(t, info.ModTime().After(previous), "active lease must refresh its heartbeat")
+			previous = info.ModTime()
+		}
+		cancel()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(5 * time.Second):
+			t.Fatal("lease did not release on cancellation")
+		}
+		mustSeal(t, seal, "the background session has no active request")
 
-	resp, err := client.Exec(context.Background(), ExecRequest{ActivityLease: true})
-	require.NoError(t, err)
-	require.True(t, resp.Sealed)
+		time.Sleep(2 * activityHeartbeatInterval)
+		synctest.Wait()
+		info, err := os.Stat(marker)
+		require.NoError(t, err)
+		require.Equal(t, previous, info.ModTime(), "released lease must stop its heartbeat")
+
+		resp, err := client.Exec(context.Background(), ExecRequest{ActivityLease: true})
+		require.NoError(t, err)
+		require.True(t, resp.Sealed)
+	})
 }
 
 func TestActivityLeaseDisconnectReleasesDrain(t *testing.T) {

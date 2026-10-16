@@ -201,10 +201,16 @@ func TestManagedAnalysisSSHSessionActivity(t *testing.T) {
 	build := exec.Command("go", "build", "-o", agent, "../../cmd/side-agent")
 	output, err := build.CombinedOutput()
 	require.NoError(t, err, "%s", output)
-	for _, operation := range []string{"definition", "references", "failed references", "sync", "autofix", "canceled sync"} {
+	for _, operation := range []string{"definition", "slow SSH startup", "references", "failed references", "sync", "autofix", "canceled sync"} {
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
-			server := startAnalysisSSHServer(t, agent)
+			serverAgent := agent
+			if operation == "slow SSH startup" {
+				serverAgent = filepath.Join(t.TempDir(), "slow-start-agent")
+				script := "#!/bin/sh\nif [ \"$1\" = background ]; then sleep 2; fi\nexec " + lspShellQuote(agent) + " \"$@\"\n"
+				require.NoError(t, os.WriteFile(serverAgent, []byte(script), 0o700))
+			}
+			server := startAnalysisSSHServer(t, serverAgent)
 			dir := t.TempDir()
 			marker := filepath.Join(dir, "activity")
 			lock := filepath.Join(dir, "worktree.lock")
@@ -269,14 +275,25 @@ func TestManagedAnalysisSSHSessionActivity(t *testing.T) {
 					client.transport = transport
 					select {
 					case child := <-server.started:
-						require.Eventually(t, func() bool {
-							for _, pid := range sessionChildren(t, child.Process.Pid) {
-								if _, err := os.Stat(filepath.Join(server.sessions, pid)); err == nil {
-									return true
-								}
+						stop := context.AfterFunc(ctx, func() { _ = transport.Close() })
+						defer stop()
+						probe := []byte("analysis-ready\n")
+						if _, err := transport.Write(probe); err != nil {
+							return InitializeResponse{}, err
+						}
+						response := make([]byte, len(probe))
+						if _, err := io.ReadFull(transport, response); err != nil {
+							return InitializeResponse{}, err
+						}
+						require.Equal(t, probe, response)
+						registered := false
+						for _, pid := range sessionChildren(t, child.Process.Pid) {
+							if _, err := os.Stat(filepath.Join(server.sessions, pid)); err == nil {
+								registered = true
+								break
 							}
-							return false
-						}, time.Second, time.Millisecond, "SSH wrapper must register before serving")
+						}
+						require.True(t, registered, "SSH wrapper must register before serving")
 						return InitializeResponse{}, nil
 					case <-ctx.Done():
 						return InitializeResponse{}, ctx.Err()
@@ -340,7 +357,7 @@ func TestManagedAnalysisSSHSessionActivity(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, activities.Close()) })
 
 			switch operation {
-			case "definition":
+			case "definition", "slow SSH startup":
 				request := definitionRequest("/workspace")
 				request.EnvContainer = container
 				_, err = activities.GetSingleFileDefinitions(ctx, request)
@@ -379,6 +396,7 @@ func TestManagedAnalysisSSHSessionActivity(t *testing.T) {
 				require.Equal(t, "package fixture\nfunc Fixed() {}\n", string(content))
 				require.Equal(t, []string{"read", "autofix", "read", "write"}, events)
 			}
+			cancel()
 			require.Len(t, clients, 1)
 			sealed, err := seal.TrySeal(0)
 			require.NoError(t, err)
@@ -399,7 +417,9 @@ func TestManagedAnalysisSSHSessionActivity(t *testing.T) {
 				}
 				request := definitionRequest("/workspace")
 				request.EnvContainer = container
-				_, err := activities.GetSingleFileDefinitions(ctx, request)
+				reuseCtx, cancelReuse := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancelReuse()
+				_, err := activities.GetSingleFileDefinitions(reuseCtx, request)
 				require.NoError(t, err)
 				require.Len(t, clients, 1, "later work must reuse the same connection")
 				require.NoError(t, os.Chtimes(marker, old, old))
