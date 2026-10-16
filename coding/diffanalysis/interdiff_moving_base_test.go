@@ -13,6 +13,7 @@ func FuzzInterdiffMovingBases(f *testing.F) {
 	f.Add("old\n", "", "base\n", "", "current\n", uint8(5))
 	f.Add("same\nsame\nblock\n", "same\nblock\n", "same\nsame\n", "same\nchanged\n", "changed\nsame\n", uint8(2))
 	f.Fuzz(func(t *testing.T, oldPrefix, newPrefix, base, prior, current string, options uint8) {
+		parallelInterdiffFuzz(t)
 		block := func(s string) string {
 			return strings.TrimSuffix(interdiffFuzzText(s), "\n") + "\n"
 		}

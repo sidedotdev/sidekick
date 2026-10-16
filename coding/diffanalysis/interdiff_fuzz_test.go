@@ -18,6 +18,9 @@ type interdiffFuzzFile struct {
 
 type interdiffFuzzTree map[string]interdiffFuzzFile
 
+// Git-backed seed cases compete with subprocess-heavy tests in other packages.
+var interdiffFuzzSlots = make(chan struct{}, 2)
+
 // Git supplies both the input diffs and the application oracle. Comparing tree
 // IDs checks bytes, paths, existence and modes without sharing Interdiff's parser.
 func FuzzInterdiffTrees(f *testing.F) {
@@ -90,6 +93,7 @@ func FuzzInterdiffTrees(f *testing.F) {
 	add("", long, strings.ReplaceAll(long, "line 25\n", "changed\n"), []byte{0, 6, 0, 0, 0}, 18)
 
 	f.Fuzz(func(t *testing.T, base, prior, current string, program []byte, options uint8) {
+		parallelInterdiffFuzz(t)
 		trees := [3]interdiffFuzzTree{}
 		for i, content := range []string{base, prior, current} {
 			trees[i] = interdiffFuzzTree{
@@ -271,10 +275,9 @@ func interdiffFuzzProgram(trees [3]interdiffFuzzTree, program []byte) {
 }
 
 type interdiffFuzzRepo struct {
-	t     testing.TB
-	dir   string
-	env   []string
-	blobs map[string]string
+	t   testing.TB
+	dir string
+	env []string
 }
 
 func newInterdiffFuzzRepo(t testing.TB) *interdiffFuzzRepo {
@@ -291,7 +294,7 @@ func newInterdiffFuzzRepo(t testing.TB) *interdiffFuzzRepo {
 	env = append(env, "HOME="+dir, "XDG_CONFIG_HOME="+dir, "LC_ALL=C",
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_INDEX_FILE="+filepath.Join(dir, "oracle.index"))
-	repo := &interdiffFuzzRepo{t: t, dir: dir, env: env, blobs: map[string]string{}}
+	repo := &interdiffFuzzRepo{t: t, dir: dir, env: env}
 	repo.git("", "init", "--bare", "--quiet")
 	return repo
 }
@@ -311,33 +314,67 @@ func (r *interdiffFuzzRepo) git(stdin string, args ...string) string {
 
 func (r *interdiffFuzzRepo) tree(tree interdiffFuzzTree) string {
 	r.t.Helper()
-	r.git("", "read-tree", "--empty")
-	var index strings.Builder
-	for path, file := range tree {
-		kind, content := "blob", file.content
-		if file.mode == "160000" {
-			kind = "commit"
-			emptyTree := strings.TrimSpace(r.git("", "hash-object", "-t", "tree", "-w", "--stdin"))
-			content = "tree " + emptyTree + "\nauthor Fuzz <fuzz@example.invalid> 0 +0000\ncommitter Fuzz <fuzz@example.invalid> 0 +0000\n\n" + content
-		}
-		key := kind + ":" + content
-		hash, ok := r.blobs[key]
-		if !ok {
-			hash = strings.TrimSpace(r.git(content, "hash-object", "-t", kind, "-w", "--stdin"))
-			r.blobs[key] = hash
-		}
-		fmt.Fprintf(&index, "%s %s\t%s\x00", file.mode, hash, path)
+	var input strings.Builder
+	writeCommit := func(ref string, mark int, message string) {
+		fmt.Fprintf(&input, "reset %s\n\ncommit %s\nmark :%d\ncommitter Fuzz <fuzz@example.invalid> 0 +0000\ndata %d\n%s\ndeleteall\n",
+			ref, ref, mark, len(message), message)
 	}
-	r.git(index.String(), "update-index", "-z", "--index-info")
-	return strings.TrimSpace(r.git("", "write-tree"))
+	gitlinks := make(map[string]int)
+	for path, file := range tree {
+		if file.mode == "160000" {
+			mark := len(gitlinks) + 1
+			writeCommit("refs/heads/fixture-gitlink", mark, file.content)
+			input.WriteByte('\n')
+			gitlinks[path] = mark
+		}
+	}
+
+	mark := len(gitlinks) + 1
+	writeCommit("refs/heads/fixture-tree", mark, "")
+	for path, file := range tree {
+		dataref := "inline"
+		if gitlink, ok := gitlinks[path]; ok {
+			dataref = fmt.Sprintf(":%d", gitlink)
+		}
+		fmt.Fprintf(&input, "M %s %s \"", file.mode, dataref)
+		for i := 0; i < len(path); i++ {
+			b := path[i]
+			switch {
+			case b == '\\' || b == '"':
+				input.WriteByte('\\')
+				input.WriteByte(b)
+			case b < 0x20 || b >= 0x7f:
+				fmt.Fprintf(&input, "\\%03o", b)
+			default:
+				input.WriteByte(b)
+			}
+		}
+		input.WriteString("\"\n")
+		if dataref == "inline" {
+			fmt.Fprintf(&input, "data %d\n%s\n", len(file.content), file.content)
+		}
+	}
+	fmt.Fprintf(&input, "\nls :%d \"\"\ndone\n", mark)
+
+	output := r.git(input.String(), "fast-import", "--quiet", "--force", "--done")
+	header, _, ok := strings.Cut(strings.TrimSuffix(output, "\n"), "\t")
+	fields := strings.Fields(header)
+	if !ok || len(fields) != 3 || fields[0] != "040000" || fields[1] != "tree" {
+		r.t.Fatalf("unexpected fast-import tree response: %q", output)
+	}
+	return fields[2]
 }
 
 func (r *interdiffFuzzRepo) assertApplies(from, to, patch string) {
 	r.t.Helper()
-	r.git("", "read-tree", from)
-	if patch != "" {
-		r.git(patch, "apply", "--cached", "--unidiff-zero", "--whitespace=nowarn", "-")
+	if patch == "" {
+		if from != to {
+			r.t.Fatalf("empty patch cannot change tree %s into %s", from, to)
+		}
+		return
 	}
+	r.git("", "read-tree", from)
+	r.git(patch, "apply", "--cached", "--unidiff-zero", "--whitespace=nowarn", "-")
 	got := strings.TrimSpace(r.git("", "write-tree"))
 	if got != to {
 		delta := r.git("", "diff-tree", "-r", "-p", to, got)
@@ -447,4 +484,11 @@ func assertEquivalentReviewPatch(t *testing.T, want, got string) {
 	if canonical(want) != canonical(got) {
 		t.Fatalf("different patch semantics\nWANT:\n%s\nGOT:\n%s", want, got)
 	}
+}
+
+func parallelInterdiffFuzz(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	interdiffFuzzSlots <- struct{}{}
+	t.Cleanup(func() { <-interdiffFuzzSlots })
 }
