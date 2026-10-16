@@ -72,7 +72,7 @@ func syncGitRemotesOverSSH(ctx context.Context, sshArgs []string, localRepoDir, 
 			quotedRepo, quotedName, quotedURL, quotedRepo, quotedName, quotedURL))
 	}
 
-	output, err := runSSHScript(ctx, sshArgs, strings.Join(commands, " && "))
+	output, err := RunSSHScript(ctx, sshArgs, strings.Join(commands, " && "))
 	if err != nil {
 		return fmt.Errorf("failed to configure remote git remotes: %w", err)
 	}

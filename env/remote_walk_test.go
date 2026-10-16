@@ -340,7 +340,7 @@ func TestSplitSSHDestination(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dest, opts := splitSSHDestination(tc.args)
+			dest, opts := SplitSSHDestination(tc.args)
 			require.Equal(t, tc.wantDest, dest)
 			if tc.wantOpts == nil {
 				require.Empty(t, opts)

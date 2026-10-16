@@ -889,7 +889,7 @@ func TestRunSSHScriptClassifiesSilentTransportFailure(t *testing.T) {
 		"-p", strconv.Itoa(port),
 		"nobody@127.0.0.1",
 	}
-	output, err := runSSHScript(context.Background(), sshArgs, "echo EXISTS")
+	output, err := RunSSHScript(context.Background(), sshArgs, "echo EXISTS")
 
 	require.Error(t, err)
 	assert.Equal(t, 255, output.ExitStatus)

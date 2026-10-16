@@ -175,7 +175,11 @@ Here is the plan for meeting the requirements, along with updates per step:
 
 func EnsureTestsPassAfterDevPlanExecuted(dCtx DevContext, input PlannedDevInput, planExec DevPlanExecution) error {
 	return RunSubflowWithoutResult(dCtx, "pass_tests", "Finalize", func(_ domain.Subflow) error {
-		return ensureTestsPassAfterDevPlanExecutedSubflow(dCtx, input, planExec)
+		err := ensureTestsPassAfterDevPlanExecutedSubflow(dCtx, input, planExec)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 

@@ -143,6 +143,8 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		},
 		InitializedClients: map[string]lsp.LSPClient{},
 	}
+	envActivities := &env.Activities{CommandObserver: git.RemoteSyncObserver{}}
+
 	treeSitterActivities := &tree_sitter.TreeSitterActivities{
 		DatabaseAccessor: service,
 	}
@@ -195,6 +197,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.ModalRecreateSandboxActivity)
 	w.RegisterActivity(env.UpdateEnvConfigActivity)
 	w.RegisterActivity(env.SyncRepoToRemoteActivity)
+	w.RegisterActivity(git.SyncGitActivity)
 	w.RegisterActivity(env.DeepenRepoActivity)
 	w.RegisterActivity(env.SnapshotEnvironmentActivity)
 	w.RegisterActivity(env.CreateRemoteWorktreeActivity)
@@ -207,7 +210,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(treeSitterActivities)
 	w.RegisterActivity(codingActivities)
 	w.RegisterActivity(ragActivities)
-	w.RegisterActivity(env.EnvRunCommandActivity)
+	w.RegisterActivity(envActivities)
 	w.RegisterActivity(env.GetEnvironmentInfoActivity)
 	w.RegisterActivity(git.GitDiffActivity)
 	w.RegisterActivity(git.DiffUntrackedFilesActivity)

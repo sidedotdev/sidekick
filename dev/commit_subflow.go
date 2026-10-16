@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"errors"
 	"fmt"
 	"sidekick/coding/git"
 	"sidekick/common"
@@ -199,7 +200,11 @@ func commitPendingWork(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryCon
 	}
 
 	return RunSubflowWithoutResult(dCtx, "commit", "Commit Changes", func(_ domain.Subflow) error {
-		return commitPendingWorkSubflow(dCtx, chatHistory, state)
+		err := commitPendingWorkSubflow(dCtx, chatHistory, state)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 

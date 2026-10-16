@@ -1858,6 +1858,19 @@ type EnvRunCommandActivityInput struct {
 	SkipWaking         bool     `json:"skipWaking,omitempty"`
 }
 
+// CommandObserver is told about every command run through Activities once the
+// command itself has finished, whatever its outcome. A command abandoned by a
+// canceled activity is reported when it eventually finishes, so ctx may
+// already be canceled. Implementations must return promptly.
+type CommandObserver interface {
+	CommandFinished(ctx context.Context, envContainer EnvContainer)
+}
+
+type Activities struct {
+	// CommandObserver may be nil, leaving commands unobserved.
+	CommandObserver CommandObserver
+}
+
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
 
 // maxActivityOutputBytes caps individual stdout/stderr fields to stay within
@@ -1897,8 +1910,16 @@ func GetEnvironmentInfoActivity(ctx context.Context, input GetEnvironmentInfoInp
 	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
 }
 
-// EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
-func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+// EnvRunCommandActivity is the registered Temporal activity for RunCommand.
+// Its name is the historical activity type name that workflows schedule and
+// existing histories record; Temporal's WorkflowReplayer cannot apply
+// registration aliases, so the scheduled method name must match it.
+func (a *Activities) EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+	return a.RunCommand(ctx, input)
+}
+
+// RunCommand runs a command in the environment contained in the provided EnvContainer.
+func (a *Activities) RunCommand(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
 	type result struct {
 		output EnvRunCommandActivityOutput
 		err    error
@@ -1913,6 +1934,9 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 			EnvVars:            input.EnvVars,
 			SkipWaking:         input.SkipWaking,
 		})
+		if a.CommandObserver != nil {
+			a.CommandObserver.CommandFinished(ctx, input.EnvContainer)
+		}
 		resultCh <- result{output: out, err: err}
 	}()
 

@@ -957,7 +957,12 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 // try to review and merge if approved. if not approved, iterate by coding some
 // more based on review feedback, then review again
 func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
-	return RunSubflowWithoutResult(dCtx, "review_and_resolve", "Review and resolve", func(subflow domain.Subflow) error {
+	return RunSubflowWithoutResult(dCtx, "review_and_resolve", "Review and resolve", func(subflow domain.Subflow) (err error) {
+		defer func() {
+			if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+				err = errors.Join(err, checkpointErr)
+			}
+		}()
 		reviewMessages := []string{}
 		originalRequirements := params.Requirements
 		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
