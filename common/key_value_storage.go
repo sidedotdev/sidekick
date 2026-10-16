@@ -18,3 +18,21 @@ type KeyValueStorage interface {
 	DeletePrefix(ctx context.Context, workspaceId string, prefix string) error
 	GetKeysWithPrefix(ctx context.Context, workspaceId string, prefix string) ([]string, error)
 }
+
+// SizedKeyScanner scans without loading values. Cursors are backend-specific;
+// an empty cursor starts a scan. Redis may return duplicates and treats limit
+// as a work hint rather than a strict result bound.
+type SizedKeyScanner interface {
+	ScanKeys(ctx context.Context, workspaceID, prefix, cursor string, limit int) (KeyScanPage, error)
+}
+
+type KeySize struct {
+	Key   string `json:"key"`
+	Bytes int64  `json:"bytes"`
+}
+
+type KeyScanPage struct {
+	Keys       []KeySize `json:"keys"`
+	NextCursor string    `json:"nextCursor"`
+	Done       bool      `json:"done"`
+}
