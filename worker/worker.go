@@ -175,7 +175,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 
 	w := worker.New(temporalClient, taskQueue, worker.Options{
 		DeadlockDetectionTimeout: 5 * time.Second,
-		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor()},
+		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor(), env.NewEnvSwitchGateInterceptor()},
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
 		},

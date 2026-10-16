@@ -86,6 +86,7 @@ func SetupModalConfigHandlers(dCtx DevContext) error {
 			return env.EnvConfig{}, err
 		}
 		*dCtx.EnvContainer = output.EnvContainer
+		newFlowEnvState(dCtx.GlobalState).publish(dCtx.EnvContainer)
 		dCtx.RepoConfig.ModalConfig = output.Config.Modal
 		dCtx.RepoConfig.PortForwards = output.Config.PortForwards
 		dCtx.GlobalState.SetValue(globalStateKeyModalConfig, output.Config.Modal)
@@ -174,6 +175,7 @@ func recreateModalSandbox(ctx workflow.Context, dCtx DevContext, config common.M
 		return common.ModalEnvConfig{}, err
 	}
 	*dCtx.EnvContainer = output.EnvContainer
+	newFlowEnvState(dCtx.GlobalState).publish(dCtx.EnvContainer)
 	dCtx.RepoConfig.ModalConfig = config
 	dCtx.GlobalState.SetValue(globalStateKeyModalConfig, config)
 	return config, nil

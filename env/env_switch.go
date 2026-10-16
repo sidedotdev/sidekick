@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/workflow"
 )
 
 // SwitchBundle carries a flow's working state out of one env so an env of
@@ -43,6 +44,70 @@ var (
 	_ SwitchableEnv = (*OpenShellEnv)(nil)
 	_ SwitchableEnv = (*ModalEnv)(nil)
 )
+
+// EnvIdentity recognizes an env across value copies and config-only changes,
+// e.g. a container captured before a sandbox was recreated or switched away.
+type EnvIdentity struct {
+	EnvType          EnvType `json:"envType"`
+	WorkingDirectory string  `json:"workingDirectory"`
+}
+
+func IdentityOf(c EnvContainer) EnvIdentity {
+	if c.Env == nil {
+		return EnvIdentity{}
+	}
+	return EnvIdentity{EnvType: c.Env.GetType(), WorkingDirectory: c.Env.GetWorkingDirectory()}
+}
+
+// EnvTracker exposes a flow's env switching state to the activity gate
+// installed by NewEnvSwitchGateInterceptor.
+type EnvTracker interface {
+	// SwitchInProgress reports whether env-carrying activities must wait.
+	SwitchInProgress() bool
+	// Resolve returns the env an activity scheduled with c must run on.
+	Resolve(c EnvContainer) EnvContainer
+}
+
+type envTrackerKey struct{}
+type pinnedEnvKey struct{}
+type switchBypassKey struct{}
+
+// WithEnvTracker subjects env-carrying activities scheduled from ctx to the
+// tracker's switch gate.
+func WithEnvTracker(ctx workflow.Context, tracker EnvTracker) workflow.Context {
+	return workflow.WithValue(ctx, envTrackerKey{}, tracker)
+}
+
+func EnvTrackerFromContext(ctx workflow.Context) EnvTracker {
+	tracker, _ := ctx.Value(envTrackerKey{}).(EnvTracker)
+	return tracker
+}
+
+// WithPinnedEnv marks activities scheduled from ctx as intentionally targeting
+// the env they are given, typically the developer's local repo rather than the
+// flow env, so they are neither held during a switch nor rewritten after one.
+// This matters even when the values match: an in-place local flow env is
+// indistinguishable from the local repo env until the flow switches away.
+func WithPinnedEnv(ctx workflow.Context) workflow.Context {
+	return workflow.WithValue(ctx, pinnedEnvKey{}, true)
+}
+
+func IsPinnedEnv(ctx workflow.Context) bool {
+	pinned, _ := ctx.Value(pinnedEnvKey{}).(bool)
+	return pinned
+}
+
+// WithSwitchBypass marks activities scheduled from ctx as part of performing a
+// switch, which must reach the source and target envs while the gate is
+// holding everything else.
+func WithSwitchBypass(ctx workflow.Context) workflow.Context {
+	return workflow.WithValue(ctx, switchBypassKey{}, true)
+}
+
+func IsSwitchBypass(ctx workflow.Context) bool {
+	bypass, _ := ctx.Value(switchBypassKey{}).(bool)
+	return bypass
+}
 
 func (e *LocalEnv) ExportForSwitch(ctx context.Context, branch string) (SwitchBundle, error) {
 	repoDir, err := localRepoRoot(ctx, e)

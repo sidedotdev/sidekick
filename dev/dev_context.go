@@ -312,6 +312,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		EmbeddingConfig: embeddingConfig,
 		GlobalState:     &flow_action.GlobalState{},
 	}
+	envState := newFlowEnvState(eCtx.GlobalState)
+	envState.publish(eCtx.EnvContainer)
+	eCtx.Context = env.WithEnvTracker(ctx, envState)
 	eCtx.SetProfileId(profileId)
 	eCtx.SetLLMConfig(llmConfig)
 	eCtx.SetProviders(finalProviders)
@@ -393,7 +396,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// the developer's git identity and we want commits attributed to them.
 	if v := workflow.GetVersion(ctx, "git-user-config-in-global-state", workflow.DefaultVersion, 1); v >= 1 {
 		var gitUserConfig git.GitUserConfig
-		err = workflow.ExecuteActivity(ctx, git.GetGitUserConfigActivity, *tempLocalExecContext.EnvContainer).Get(ctx, &gitUserConfig)
+		err = workflow.ExecuteActivity(env.WithPinnedEnv(ctx), git.GetGitUserConfigActivity, *tempLocalExecContext.EnvContainer).Get(ctx, &gitUserConfig)
 		if err != nil {
 			// Log but don't fail - commit authorship falls back to git config lookup
 			log.Warn().Err(err).Msg("Failed to get git user config, will fall back to git config lookup")
