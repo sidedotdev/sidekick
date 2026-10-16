@@ -588,11 +588,11 @@ func reserveLocalBranch(ctx context.Context, localRepoDir, branchName, startBran
 	return reserveErr
 }
 
-// remoteWorktreeMatches reports whether worktreePath already holds a git
-// worktree checked out on branchName, meaning provisioning is re-running for
-// an existing flow (activity retry, sandbox restore, repeated env setup) and
-// must reuse the worktree rather than recreate it.
-func remoteWorktreeMatches(ctx context.Context, envContainer EnvContainer, branchName, worktreePath string) (bool, error) {
+// worktreeOnBranch reports whether worktreePath already holds a git worktree
+// checked out on branchName, meaning provisioning is re-running for an
+// existing flow (activity retry, sandbox restore, repeated env setup, env
+// switch back) and must reuse the worktree rather than recreate it.
+func worktreeOnBranch(ctx context.Context, envContainer EnvContainer, branchName, worktreePath string) (bool, error) {
 	quotedPath := shellQuote(worktreePath)
 	script := fmt.Sprintf(
 		`[ -e %s/.git ] || exit 1; `+
@@ -604,7 +604,7 @@ func remoteWorktreeMatches(ctx context.Context, envContainer EnvContainer, branc
 		Args:    []string{"-c", script},
 	})
 	if err != nil {
-		return false, fmt.Errorf("failed to check for existing worktree in sandbox: %w", err)
+		return false, fmt.Errorf("failed to check for existing worktree: %w", err)
 	}
 	return output.ExitStatus == 0 && strings.Contains(output.Stdout, "MATCH"), nil
 }
@@ -623,7 +623,7 @@ func isBranchAlreadyExists(err error) bool {
 // Conflicting sandbox state is left intact. Provisioning is idempotent: an
 // existing worktree already on the flow branch at the expected path is reused
 // as-is, so re-runs never destroy in-progress work.
-func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, startBranch, workspaceId, localRepoDir string) (string, error) {
+func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, startBranch, workspaceId, localRepoDir string, allowReuse bool) (string, error) {
 	repoName := filepath.Base(repoDir)
 	branchSuffix := strings.TrimPrefix(branchName, "side/")
 	dirName := repoName + "-" + branchSuffix
@@ -641,7 +641,7 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 	}
 	worktreePath := filepath.Join(baseDir, "sidekick-worktrees", workspaceId, dirName)
 
-	matches, err := remoteWorktreeMatches(ctx, envContainer, branchName, worktreePath)
+	matches, err := worktreeOnBranch(ctx, envContainer, branchName, worktreePath)
 	if err != nil {
 		return "", err
 	}
@@ -656,7 +656,15 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 		return worktreePath, nil
 	}
 	if localRepoDir != "" {
-		if err := reserveLocalBranch(ctx, localRepoDir, branchName, startBranch); err != nil {
+		if err := reserveLocalBranch(ctx, localRepoDir, branchName, startBranch); err != nil && !(allowReuse && isBranchAlreadyExists(err)) {
+			return "", err
+		}
+	}
+
+	attach := false
+	if allowReuse {
+		attach, err = gitBranchExists(ctx, envContainer.Env, branchName)
+		if err != nil {
 			return "", err
 		}
 	}
@@ -667,14 +675,14 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 	}
 	addOutput, err := envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "git",
-		Args:    []string{"worktree", "add", "-b", branchName, worktreePath, baseRef},
+		Args:    worktreeAddArgs(nil, branchName, worktreePath, baseRef, attach),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to run git worktree add in sandbox: %w", err)
 	}
 	if addOutput.ExitStatus != 0 {
 		err := fmt.Errorf("git worktree add failed in sandbox (exit %d): %s", addOutput.ExitStatus, addOutput.Stderr)
-		if localRepoDir == "" && strings.Contains(addOutput.Stderr, "already exists") {
+		if !attach && localRepoDir == "" && strings.Contains(addOutput.Stderr, "already exists") {
 			return "", temporal.NewNonRetryableApplicationError(
 				err.Error(),
 				ErrTypeBranchAlreadyExists,
@@ -689,10 +697,13 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 			Command: "git",
 			Args:    []string{"worktree", "remove", "--force", worktreePath},
 		})
-		_, _ = envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-			Command: "git",
-			Args:    []string{"branch", "-D", branchName},
-		})
+		// An attached branch predates this call and carries flow commits.
+		if !attach {
+			_, _ = envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+				Command: "git",
+				Args:    []string{"branch", "-D", branchName},
+			})
+		}
 		return "", err
 	}
 
@@ -752,6 +763,9 @@ type CreateRemoteWorktreeInput struct {
 	// LocalRepoDir is the worker-local repository in which the flow branch is
 	// reserved. When set, it is the sole authority on branch name availability.
 	LocalRepoDir string `json:"localRepoDir,omitempty"`
+	// AllowReuse attaches an already existing flow branch (in both the local
+	// and remote repos) instead of failing.
+	AllowReuse bool `json:"allowReuse,omitempty"`
 }
 
 type CreateRemoteWorktreeOutput struct {
@@ -762,7 +776,7 @@ type CreateRemoteWorktreeOutput struct {
 // environment via its RunCommand, so that the worktree's .git references
 // resolve within the remote filesystem.
 func CreateRemoteWorktreeActivity(ctx context.Context, input CreateRemoteWorktreeInput) (CreateRemoteWorktreeOutput, error) {
-	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId, input.LocalRepoDir)
+	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId, input.LocalRepoDir, input.AllowReuse)
 	if err != nil {
 		return CreateRemoteWorktreeOutput{}, err
 	}

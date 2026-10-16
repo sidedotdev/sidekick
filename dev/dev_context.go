@@ -2,12 +2,9 @@ package dev
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sidekick/coding/git"
-	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -135,7 +132,6 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, repoMode string, startBranch *string, requirements string, configOverrides common.ConfigOverrides) (DevContext, error) {
 	ctx = utils.NoRetryCtx(ctx)
 
-	var devEnv env.Env
 	var err error
 	var envContainer env.EnvContainer
 	var worktree *domain.Worktree
@@ -246,11 +242,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		return wt, nil
 	}
 
-	// Resolve legacy local_git_worktree into local + worktree
-	if envType == string(env.EnvTypeLocalGitWorktree) {
-		envType = string(env.EnvTypeLocal)
-		repoMode = string(env.RepoModeWorktree)
-	}
+	envType, repoMode = normalizeLegacyEnvType(envType, repoMode)
 
 	// Fall back to repo config defaults when envType is not specified.
 	// Gated behind a version check to avoid introducing new activity calls
@@ -269,307 +261,29 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		}
 	}
 
-	switch envType {
-	case string(env.EnvTypeLocal), "":
-		if repoMode == string(env.RepoModeWorktree) {
-			var localEnvContainer env.EnvContainer
-			worktree, err = createWorktree(func(wt domain.Worktree) (string, error) {
-				err := workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
-					RepoDir:     repoDir,
-					StartBranch: startBranch,
-				}, wt).Get(ctx, &localEnvContainer)
-				if err != nil {
-					return "", err
-				}
-				return localEnvContainer.Env.GetWorkingDirectory(), nil
-			})
+	// Providers load the repo config lazily at their original points in the
+	// recorded activity sequence; in-place local envs never load it.
+	ensured, err := ensureEnv(ctx, ensureEnvParams{
+		WorkspaceId: workspaceId,
+		RepoDir:     repoDir,
+		EnvType:     envType,
+		RepoMode:    repoMode,
+		StartBranch: startBranch,
+		LoadRepoConfig: func() (common.RepoConfig, error) {
+			repoConfig, err := GetRepoConfig(tempLocalExecContext)
 			if err != nil {
-				return DevContext{}, err
+				return common.RepoConfig{}, err
 			}
-			envContainer = localEnvContainer
-		} else {
-			devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
-				RepoDir: repoDir,
-			})
-			if err != nil {
-				return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
-			}
-			envContainer = env.EnvContainer{Env: devEnv}
-		}
-	case string(env.EnvTypeDevPod):
-		devpodWorkspaceName := env.DevPodWorkspaceName(repoDir)
-
-		devPodUpInput := env.DevPodUpInput{WorkspacePath: repoDir}
-		// Check for a custom workspace ID from repo config
-		var portForwards []common.PortForwardConfig
-		tempRepoConfigForDevPod, configErr := GetRepoConfig(tempLocalExecContext)
-		if configErr == nil {
-			configOverrides.ApplyToRepoConfig(&tempRepoConfigForDevPod)
-			portForwards = tempRepoConfigForDevPod.PortForwards
-			if tempRepoConfigForDevPod.DevPodConfig.WorkspaceId != "" {
-				devpodWorkspaceName = tempRepoConfigForDevPod.DevPodConfig.WorkspaceId
-				devPodUpInput.WorkspaceId = devpodWorkspaceName
-			}
-		}
-
-		// Provisioning can hit transient docker/network failures, and devpod up
-		// can legitimately take many minutes (image builds). ProvisioningRetryCtx
-		// gives it a generous timeout and a small bounded number of automatic
-		// retries before surfacing the failure for user-initiated retry rather
-		// than retrying indefinitely.
-		provisionCtx := utils.ProvisioningRetryCtx(ctx)
-		err = workflow.ExecuteActivity(provisionCtx, env.DevPodUpActivity, devPodUpInput).Get(provisionCtx, nil)
-		if err != nil {
-			return DevContext{}, fmt.Errorf("failed to start DevPod workspace: %v", err)
-		}
-
-		// Inside the container the workspace is mounted at /workspaces/<basename>
-		containerWorkDir := "/workspaces/" + filepath.Base(repoDir)
-
-		if repoMode == string(env.RepoModeWorktree) {
-			repoDevPodEnvContainer := env.EnvContainer{Env: &env.DevPodEnv{
-				WorkingDirectory: containerWorkDir,
-				WorkspaceName:    devpodWorkspaceName,
-				LocalRepoDir:     repoDir,
-				PortForwards:     portForwards,
-			}}
-			startBranchStr := ""
-			if startBranch != nil {
-				startBranchStr = *startBranch
-			}
-
-			worktree, err = createWorktree(func(wt domain.Worktree) (string, error) {
-				var wtOutput env.CreateDevPodWorktreeOutput
-				err := workflow.ExecuteActivity(ctx, env.CreateDevPodWorktreeActivity, env.CreateDevPodWorktreeInput{
-					EnvContainer: repoDevPodEnvContainer,
-					RepoDir:      containerWorkDir,
-					BranchName:   wt.Name,
-					StartBranch:  startBranchStr,
-					WorkspaceId:  workspaceId,
-				}).Get(ctx, &wtOutput)
-				if err != nil {
-					return "", err
-				}
-				return wtOutput.WorktreePath, nil
-			})
-			if err != nil {
-				return DevContext{}, err
-			}
-
-			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
-				WorkingDirectory: worktree.WorkingDirectory,
-				WorkspaceName:    devpodWorkspaceName,
-				LocalRepoDir:     repoDir,
-				PortForwards:     portForwards,
-			}}
-		} else {
-			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
-				WorkingDirectory: containerWorkDir,
-				WorkspaceName:    devpodWorkspaceName,
-				LocalRepoDir:     repoDir,
-				PortForwards:     portForwards,
-			}}
-		}
-	case string(env.EnvTypeOpenShell):
-		tempRepoConfigForOpenShell, configErr := GetRepoConfig(tempLocalExecContext)
-		if configErr == nil {
-			configOverrides.ApplyToRepoConfig(&tempRepoConfigForOpenShell)
-		}
-		osConfig := tempRepoConfigForOpenShell.OpenShellConfig
-		portForwards := tempRepoConfigForOpenShell.PortForwards
-
-		sandboxName := env.OpenShellSandboxName(repoDir)
-		// Reuse an existing sandbox for this workspace if it is still alive.
-		var checkOutput env.CheckSandboxOutput
-		_ = workflow.ExecuteActivity(ctx, env.CheckSandboxActivity, env.CheckSandboxInput{
-			EnvType:     env.EnvTypeOpenShell,
-			SandboxName: sandboxName,
-		}).Get(ctx, &checkOutput)
-
-		if !checkOutput.Alive {
-			if osConfig.PrebuildCommand != "" {
-				var prebuildOutput unix.RunCommandActivityOutput
-				err = workflow.ExecuteActivity(ctx, unix.RunCommandActivity, unix.RunCommandActivityInput{
-					WorkingDir: repoDir,
-					Command:    "/usr/bin/env",
-					Args:       []string{"sh", "-c", osConfig.PrebuildCommand},
-				}).Get(ctx, &prebuildOutput)
-				if err != nil {
-					return DevContext{}, fmt.Errorf("openshell prebuild command failed: %v", err)
-				}
-				if prebuildOutput.ExitStatus != 0 {
-					return DevContext{}, fmt.Errorf("openshell prebuild command exited with status %d: %s", prebuildOutput.ExitStatus, prebuildOutput.Stderr)
-				}
-			}
-
-			osConfigJson, jsonErr := json.Marshal(osConfig)
-			if jsonErr != nil {
-				return DevContext{}, fmt.Errorf("failed to marshal openshell config: %v", jsonErr)
-			}
-			var createOutput env.CreateSandboxOutput
-			// Provisioning can hit transient docker/network failures, so retry a
-			// small bounded number of times before surfacing the failure for
-			// user-initiated retry.
-			provisionCtx := utils.ProvisioningRetryCtx(ctx)
-			err = workflow.ExecuteActivity(provisionCtx, env.CreateSandboxActivity, env.CreateSandboxInput{
-				EnvType: env.EnvTypeOpenShell,
-				Name:    sandboxName,
-				RepoDir: repoDir,
-				Config:  osConfigJson,
-			}).Get(provisionCtx, &createOutput)
-			if err != nil {
-				return DevContext{}, fmt.Errorf("failed to create OpenShell sandbox: %v", err)
-			}
-			sandboxName = createOutput.SandboxName
-		}
-
-		newOpenShellEnv := func(workingDir string) *env.OpenShellEnv {
-			return &env.OpenShellEnv{
-				WorkingDirectory: workingDir,
-				SandboxName:      sandboxName,
-				LocalRepoDir:     repoDir,
-				PortForwards:     portForwards,
-			}
-		}
-
-		var syncBranches []string
-		if startBranch != nil && *startBranch != "" {
-			syncBranches = append(syncBranches, *startBranch)
-		}
-		var syncOutput env.SyncRepoToRemoteOutput
-		err = workflow.ExecuteActivity(ctx, env.SyncRepoToRemoteActivity, env.SyncRepoToRemoteInput{
-			EnvContainer: env.EnvContainer{Env: newOpenShellEnv("")},
-			LocalRepoDir: repoDir,
-			Branches:     syncBranches,
-		}).Get(ctx, &syncOutput)
-		if err != nil {
-			return DevContext{}, fmt.Errorf("failed to sync repo to OpenShell sandbox: %v", err)
-		}
-		containerWorkDir := syncOutput.RemoteRepoDir
-		scheduleRepoDeepening(ctx, env.EnvContainer{Env: newOpenShellEnv(containerWorkDir)}, repoDir, containerWorkDir, syncBranches)
-
-		if repoMode == string(env.RepoModeWorktree) {
-			startBranchStr := ""
-			if startBranch != nil {
-				startBranchStr = *startBranch
-			}
-
-			worktree, err = createWorktree(func(wt domain.Worktree) (string, error) {
-				var wtOutput env.CreateRemoteWorktreeOutput
-				err := workflow.ExecuteActivity(ctx, env.CreateRemoteWorktreeActivity, env.CreateRemoteWorktreeInput{
-					EnvContainer: env.EnvContainer{Env: newOpenShellEnv(containerWorkDir)},
-					RepoDir:      containerWorkDir,
-					BranchName:   wt.Name,
-					StartBranch:  startBranchStr,
-					WorkspaceId:  workspaceId,
-					LocalRepoDir: repoDir,
-				}).Get(ctx, &wtOutput)
-				if err != nil {
-					return "", err
-				}
-				return wtOutput.WorktreePath, nil
-			})
-			if err != nil {
-				return DevContext{}, err
-			}
-
-			envContainer = env.EnvContainer{Env: newOpenShellEnv(worktree.WorkingDirectory)}
-		} else {
-			envContainer = env.EnvContainer{Env: newOpenShellEnv(containerWorkDir)}
-		}
-	case string(env.EnvTypeModal):
-		tempRepoConfigForModal, configErr := GetRepoConfig(tempLocalExecContext)
-		if configErr == nil {
-			configOverrides.ApplyToRepoConfig(&tempRepoConfigForModal)
-		}
-		modalConfig := tempRepoConfigForModal.ModalConfig
-		portForwards := tempRepoConfigForModal.PortForwards
-
-		// The sandbox name is scoped to this flow so concurrent tasks never
-		// share (or terminate) each other's sandbox; sandbox creation is
-		// reuse-aware, so retries of this flow re-attach to its live sandbox
-		// instead of creating a new one. Provisioning can hit transient
-		// network failures and includes image builds, so ProvisioningRetryCtx
-		// gives it a generous timeout and a small bounded number of automatic
-		// retries before surfacing the failure for user-initiated retry.
-		sandboxName := env.ModalSandboxName(workspaceId, repoDir, workflow.GetInfo(ctx).WorkflowExecution.ID)
-		modalConfigJson, jsonErr := json.Marshal(modalConfig)
-		if jsonErr != nil {
-			return DevContext{}, fmt.Errorf("failed to marshal modal config: %v", jsonErr)
-		}
-		var createOutput env.CreateSandboxOutput
-		provisionCtx := utils.ProvisioningRetryCtx(ctx)
-		err = workflow.ExecuteActivity(provisionCtx, env.CreateSandboxActivity, env.CreateSandboxInput{
-			EnvType: env.EnvTypeModal,
-			Name:    sandboxName,
-			RepoDir: repoDir,
-			Config:  modalConfigJson,
-		}).Get(provisionCtx, &createOutput)
-		if err != nil {
-			return DevContext{}, fmt.Errorf("failed to create Modal sandbox: %v", err)
-		}
-
-		newModalEnv := func(workingDir string) *env.ModalEnv {
-			return &env.ModalEnv{
-				WorkingDirectory: workingDir,
-				SandboxName:      createOutput.SandboxName,
-				SSHHost:          createOutput.SSHHost,
-				SSHPort:          createOutput.SSHPort,
-				LocalRepoDir:     repoDir,
-				PortForwards:     portForwards,
-			}
-		}
-
-		var syncBranches []string
-		if startBranch != nil && *startBranch != "" {
-			syncBranches = append(syncBranches, *startBranch)
-		}
-		// The repo lands under the remote $HOME, so the env's working
-		// directory is only known after the sync completes.
-		var syncOutput env.SyncRepoToRemoteOutput
-		err = workflow.ExecuteActivity(ctx, env.SyncRepoToRemoteActivity, env.SyncRepoToRemoteInput{
-			EnvContainer: env.EnvContainer{Env: newModalEnv("")},
-			LocalRepoDir: repoDir,
-			Branches:     syncBranches,
-		}).Get(ctx, &syncOutput)
-		if err != nil {
-			return DevContext{}, fmt.Errorf("failed to sync repo to Modal sandbox: %v", err)
-		}
-		containerWorkDir := syncOutput.RemoteRepoDir
-		scheduleRepoDeepening(ctx, env.EnvContainer{Env: newModalEnv(containerWorkDir)}, repoDir, containerWorkDir, syncBranches)
-
-		if repoMode == string(env.RepoModeWorktree) {
-			startBranchStr := ""
-			if startBranch != nil {
-				startBranchStr = *startBranch
-			}
-
-			worktree, err = createWorktree(func(wt domain.Worktree) (string, error) {
-				var wtOutput env.CreateRemoteWorktreeOutput
-				err := workflow.ExecuteActivity(ctx, env.CreateRemoteWorktreeActivity, env.CreateRemoteWorktreeInput{
-					EnvContainer: env.EnvContainer{Env: newModalEnv(containerWorkDir)},
-					RepoDir:      containerWorkDir,
-					BranchName:   wt.Name,
-					StartBranch:  startBranchStr,
-					WorkspaceId:  workspaceId,
-					LocalRepoDir: repoDir,
-				}).Get(ctx, &wtOutput)
-				if err != nil {
-					return "", err
-				}
-				return wtOutput.WorktreePath, nil
-			})
-			if err != nil {
-				return DevContext{}, err
-			}
-
-			envContainer = env.EnvContainer{Env: newModalEnv(worktree.WorkingDirectory)}
-		} else {
-			envContainer = env.EnvContainer{Env: newModalEnv(containerWorkDir)}
-		}
-	default:
-		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
+			configOverrides.ApplyToRepoConfig(&repoConfig)
+			return repoConfig, nil
+		},
+		CreateWorktree: createWorktree,
+	})
+	if err != nil {
+		return DevContext{}, err
 	}
+	envContainer = ensured.EnvContainer
+	worktree = ensured.Worktree
 
 	// for workflow backcompat/replay, we have to do this later
 	profileId := tempLocalExecContext.GetProfileId()
@@ -625,30 +339,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	configOverrides.ApplyToRepoConfig(&repoConfig)
 	eCtx.DisableHumanInTheLoop = repoConfig.DisableHumanInTheLoop
 
-	// Merge command permissions from all config sources: base → local → repo → workspace
-	var baseCommandPermissions common.CommandPermissionConfig
-	baseSource := common.CommandPatternSourceBase
-	if v := workflow.GetVersion(ctx, "base-command-permissions-activity", workflow.DefaultVersion, 1); v >= 1 {
-		var input common.BaseCommandPermissionsInput
-		if sv := workflow.GetVersion(ctx, "sandbox-command-permissions", workflow.DefaultVersion, 1); sv >= 1 {
-			input.EnvType = envType
-		}
-		if common.IsolatedSandboxEnvTypes[input.EnvType] {
-			baseSource = common.CommandPatternSourceBaseIsolatedSandbox
-		}
-		err = workflow.ExecuteActivity(ctx, common.BaseCommandPermissionsActivity, input).Get(ctx, &baseCommandPermissions)
-		if err != nil {
-			return DevContext{}, fmt.Errorf("failed to get base command permissions: %v", err)
-		}
-	} else {
-		baseCommandPermissions = common.BaseCommandPermissions()
+	repoConfig.CommandPermissions, err = envDerivedCommandPermissions(ctx, envType, repoConfig, localConfig, workspaceConfig)
+	if err != nil {
+		return DevContext{}, err
 	}
-	repoConfig.CommandPermissions = common.MergeCommandPermissions(
-		common.TagCommandPatternSources(baseCommandPermissions, baseSource),
-		common.TagCommandPatternSources(localConfig.CommandPermissions, common.CommandPatternSourceLocalConfig),
-		common.TagCommandPatternSources(repoConfig.CommandPermissions, common.CommandPatternSourceRepoConfig),
-		common.TagCommandPatternSources(workspaceConfig.CommandPermissions, common.CommandPatternSourceWorkspaceConfig),
-	)
 
 	// Execute worktree setup script if configured and using worktree mode
 	if worktree != nil && repoConfig.WorktreeSetup != "" {

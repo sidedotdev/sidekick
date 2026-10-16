@@ -386,6 +386,9 @@ type LocalEnvParams struct {
 	// WorktreeBaseDir overrides GetSidekickDataHome() for worktree placement.
 	// Used in tests to avoid setting SIDE_DATA_HOME globally.
 	WorktreeBaseDir string
+	// AllowReuse reuses an existing worktree of the flow branch at the
+	// target path, or attaches the existing branch, instead of failing.
+	AllowReuse bool `json:"allowReuse,omitempty"`
 }
 
 func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
@@ -439,13 +442,31 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 	if params.StartBranch != nil && *params.StartBranch != "" {
 		worktreeBaseRef = *params.StartBranch
 	}
-	// Add the worktree, creating a new branch based on the target branch. The
-	// worktree is created locked so that "git worktree prune" won't remove it
-	// from an environment that can't see its working tree.
+
+	worktreeEnv := &LocalGitWorktreeEnv{WorkingDirectory: workingDir}
+	attach := false
+	if params.AllowReuse {
+		reuse, branchExists, err := inspectReusableWorktree(ctx, &LocalEnv{WorkingDirectory: params.RepoDir}, newBranchName, workingDir)
+		if err != nil {
+			return nil, err
+		}
+		if reuse {
+			if err := ensureSideTmp(ctx, worktreeEnv); err != nil {
+				return nil, err
+			}
+			return worktreeEnv, nil
+		}
+		attach = branchExists
+	}
+
+	// Add the worktree, creating a new branch based on the target branch
+	// unless attaching an existing one. The worktree is created locked so that
+	// "git worktree prune" won't remove it from an environment that can't see
+	// its working tree.
 	addWorktreeInput := unix.RunCommandActivityInput{
 		WorkingDir: params.RepoDir,
 		Command:    "git",
-		Args:       []string{"worktree", "add", "--lock", "--reason", WorktreeLockReason, "-b", newBranchName, workingDir, worktreeBaseRef},
+		Args:       worktreeAddArgs([]string{"--lock", "--reason", WorktreeLockReason}, newBranchName, workingDir, worktreeBaseRef, attach),
 	}
 	addWorktreeOutput, err := unix.RunCommandActivity(ctx, addWorktreeInput)
 	if err != nil {
@@ -454,13 +475,12 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 
 	if addWorktreeOutput.ExitStatus != 0 {
 		err := fmt.Errorf("git worktree add command failed with exit status %d: %s", addWorktreeOutput.ExitStatus, addWorktreeOutput.Stderr)
-		if strings.Contains(addWorktreeOutput.Stderr, "already exists") {
+		if !attach && strings.Contains(addWorktreeOutput.Stderr, "already exists") {
 			return nil, fmt.Errorf("%w: %v", ErrBranchAlreadyExists, err)
 		}
 		return nil, err
 	}
 
-	worktreeEnv := &LocalGitWorktreeEnv{WorkingDirectory: workingDir}
 	if err := ensureSideTmp(ctx, worktreeEnv); err != nil {
 		removeInput := unix.RunCommandActivityInput{
 			WorkingDir: params.RepoDir,
@@ -468,12 +488,15 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 			Args:       []string{"worktree", "remove", "--force", "--force", workingDir},
 		}
 		_, _ = unix.RunCommandActivity(ctx, removeInput)
-		deleteBranchInput := unix.RunCommandActivityInput{
-			WorkingDir: params.RepoDir,
-			Command:    "git",
-			Args:       []string{"branch", "-D", newBranchName},
+		// An attached branch predates this call and carries flow commits.
+		if !attach {
+			deleteBranchInput := unix.RunCommandActivityInput{
+				WorkingDir: params.RepoDir,
+				Command:    "git",
+				Args:       []string{"branch", "-D", newBranchName},
+			}
+			_, _ = unix.RunCommandActivity(ctx, deleteBranchInput)
 		}
-		_, _ = unix.RunCommandActivity(ctx, deleteBranchInput)
 		return nil, err
 	}
 
