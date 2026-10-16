@@ -384,7 +384,7 @@ func budgetExpired(callerCtx context.Context, err error) bool {
 // ConvertKVAutoVacuum switches the key-value database to incremental
 // auto-vacuum mode. The mode lives in the file header and can only be changed
 // by rewriting the whole database with VACUUM, which needs an exclusive lock
-// and as much free disk space as the database itself, so this is never done
+// and up to twice the database's size in free disk space. This is never done
 // automatically: it is meant to be invoked deliberately while Sidekick is
 // stopped.
 func (s *Storage) ConvertKVAutoVacuum(ctx context.Context) error {

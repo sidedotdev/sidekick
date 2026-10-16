@@ -16,9 +16,9 @@ import (
 var ErrCodecPayloadMissing = errors.New("referenced payload not found in KV store")
 
 const (
-	codecWorkspaceID      = "__temporal_codec"
-	codecKeyPrefix        = "codec/"
-	codecMetadataKey      = "sidekick-payload-codec-key"
+	CodecWorkspaceID      = "__temporal_codec"
+	CodecKeyPrefix        = "codec/"
+	CodecMetadataKey      = "sidekick-payload-codec-key"
 	DefaultCodecThreshold = 1024 * 1024 // 1MB
 )
 
@@ -60,15 +60,15 @@ func (c *PayloadCodec) Encode(payloads []*commonpb.Payload) ([]*commonpb.Payload
 			continue
 		}
 
-		key := codecKeyPrefix + ksuid.New().String()
-		err = c.storage.MSetRaw(ctx, codecWorkspaceID, map[string][]byte{key: raw})
+		key := CodecKeyPrefix + ksuid.New().String()
+		err = c.storage.MSetRaw(ctx, CodecWorkspaceID, map[string][]byte{key: raw})
 		if err != nil {
 			return nil, fmt.Errorf("payload codec: failed to store payload %d: %w", i, err)
 		}
 
 		result[i] = &commonpb.Payload{
 			Metadata: map[string][]byte{
-				codecMetadataKey: []byte(key),
+				CodecMetadataKey: []byte(key),
 			},
 		}
 	}
@@ -85,14 +85,14 @@ func (c *PayloadCodec) Decode(payloads []*commonpb.Payload) ([]*commonpb.Payload
 			continue
 		}
 
-		keyBytes, ok := p.Metadata[codecMetadataKey]
+		keyBytes, ok := p.Metadata[CodecMetadataKey]
 		if !ok {
 			result[i] = p
 			continue
 		}
 
 		key := string(keyBytes)
-		values, err := c.storage.MGet(ctx, codecWorkspaceID, []string{key})
+		values, err := c.storage.MGet(ctx, CodecWorkspaceID, []string{key})
 		if err != nil {
 			return nil, fmt.Errorf("payload codec: failed to read key %q: %w", key, err)
 		}
