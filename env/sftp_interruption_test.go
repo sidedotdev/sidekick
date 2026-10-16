@@ -56,10 +56,10 @@ func TestSFTPInterruptionLogging(t *testing.T) {
 					}
 				}
 
+				// The caller deadline also covers SSH channel setup under load.
 				budget := 5 * time.Second
 				wantCause := context.Canceled
 				if cause == "caller deadline" {
-					budget = 100 * time.Millisecond
 					wantCause = context.DeadlineExceeded
 				} else if cause == "operation timeout" {
 					sftpOpTimeout = 50 * time.Millisecond
@@ -80,6 +80,8 @@ func TestSFTPInterruptionLogging(t *testing.T) {
 				}
 				if cause == "cancellation" {
 					cancel()
+				} else if cause == "caller deadline" {
+					<-ctx.Done()
 				}
 				select {
 				case err := <-result:

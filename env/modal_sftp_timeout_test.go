@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestModalSFTPMkdirRecoversAfterConcurrentTimeout(t *testing.T) {
+func TestModalSFTPMkdirRecoversAfterConcurrentCancellation(t *testing.T) {
 	t.Setenv(SSHTransportEnvVar, "native")
 	server := startSSHTestServer(t, sshTestServerOptions{})
 	var probes atomic.Int32
@@ -36,7 +36,7 @@ func TestModalSFTPMkdirRecoversAfterConcurrentTimeout(t *testing.T) {
 	_, err := sftpStat(ctx, transport, dir)
 	require.NoError(t, err)
 
-	slowCtx, cancelSlow := context.WithTimeout(ctx, time.Second)
+	slowCtx, cancelSlow := context.WithCancel(ctx)
 	defer cancelSlow()
 	started := make(chan *sftp.Client, 1)
 	slowResult := make(chan error, 1)
@@ -73,8 +73,9 @@ func TestModalSFTPMkdirRecoversAfterConcurrentTimeout(t *testing.T) {
 					firstResult <- err
 					return nil, err
 				}
-				// Hold the directory operation across the other request's
-				// deadline so it observes that request's channel teardown.
+				// Both operations must hold the shared channel before it is
+				// invalidated, independently of SSH setup latency.
+				cancelSlow()
 				_ = client.Wait()
 				err := doSFTPMkdirAll(client, ignoreDir, 0o755)
 				firstResult <- err
@@ -92,7 +93,7 @@ func TestModalSFTPMkdirRecoversAfterConcurrentTimeout(t *testing.T) {
 	}
 	select {
 	case err := <-slowResult:
-		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, context.Canceled)
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
