@@ -18,6 +18,7 @@ import (
 	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -547,6 +548,35 @@ func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 	}
 }
 
+// flowActionSubscriptionSignal reports when the websocket handler has
+// subscribed to flow action changes. Upgrade completes the client's Dial
+// before the handler subscribes, so tests publishing live events must wait for
+// this rather than for Dial.
+type flowActionSubscriptionSignal struct {
+	srv.Service
+	subscribed chan struct{}
+	once       *sync.Once
+}
+
+func signalFlowActionSubscription(service srv.Service) flowActionSubscriptionSignal {
+	return flowActionSubscriptionSignal{Service: service, subscribed: make(chan struct{}), once: &sync.Once{}}
+}
+
+func (s flowActionSubscriptionSignal) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
+	actionCh, errCh := s.Service.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
+	s.once.Do(func() { close(s.subscribed) })
+	return actionCh, errCh
+}
+
+func (s flowActionSubscriptionSignal) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.subscribed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for the websocket handler to subscribe to flow action changes")
+	}
+}
+
 func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
@@ -564,6 +594,8 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
+	subscription := signalFlowActionSubscription(ctrl.service)
+	ctrl.service = subscription
 	router := DefineRoutes(ctrl, TestAllowedOrigins())
 	s := httptest.NewServer(router)
 	defer s.Close()
@@ -577,9 +609,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 		t.Fatalf("Failed to connect to WebSocket: %v", err)
 	}
 	defer ws.Close()
-
-	// Create a channel to signal when all expected actions have been received
-	done := make(chan bool)
+	subscription.wait(t)
 
 	// Create multiple flow actions
 	expectedActions := []domain.FlowAction{
@@ -597,43 +627,19 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 		},
 	}
 
-	// Goroutine to read messages from WebSocket
-	go func() {
-		receivedCount := 0
-		for {
-			var receivedAction domain.FlowAction
-			err := ws.ReadJSON(&receivedAction)
-			if err != nil {
-				t.Errorf("Failed to read flow action: %v", err)
-				return
-			}
-
-			// Assert if the flow action matches the expected structure/content
-			assert.Equal(t, expectedActions[receivedCount].ActionType, receivedAction.ActionType)
-			assert.Equal(t, expectedActions[receivedCount].Id, receivedAction.Id)
-			assert.Equal(t, expectedActions[receivedCount].FlowId, receivedAction.FlowId)
-			assert.Equal(t, expectedActions[receivedCount].WorkspaceId, receivedAction.WorkspaceId)
-
-			receivedCount++
-			if receivedCount == len(expectedActions) {
-				done <- true
-				return
-			}
-		}
-	}()
-
-	// Simulate persisting flow actions
 	for _, flowAction := range expectedActions {
 		err = db.PersistFlowAction(context.Background(), flowAction)
-		assert.NoError(t, err, "Persisting flow action failed")
+		require.NoError(t, err, "Persisting flow action failed")
 	}
 
-	// Wait for all actions to be received or timeout
-	select {
-	case <-done:
-		// All expected actions were received
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for flow actions")
+	require.NoError(t, ws.SetReadDeadline(time.Now().Add(5*time.Second)))
+	for _, expected := range expectedActions {
+		var receivedAction domain.FlowAction
+		require.NoError(t, ws.ReadJSON(&receivedAction), "Failed to read flow action")
+		assert.Equal(t, expected.ActionType, receivedAction.ActionType)
+		assert.Equal(t, expected.Id, receivedAction.Id)
+		assert.Equal(t, expected.FlowId, receivedAction.FlowId)
+		assert.Equal(t, expected.WorkspaceId, receivedAction.WorkspaceId)
 	}
 
 	// Test error handling
@@ -646,6 +652,40 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	_, resp, err = websocket.DefaultDialer.Dial(invalidFlowURL, nil)
 	assert.Error(t, err, "Expected error for invalid flow")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "Expected 404 status code for invalid flow")
+}
+
+func TestFlowActionChangesWebsocketHandler_ReplaysExistingActionsByDefault(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+	db := ctrl.service
+	ctx := context.Background()
+
+	workspaceId := "test-workspace-id-" + uuid.New().String()
+	flowId := "test-flow-id-" + uuid.New().String()
+	require.NoError(t, db.PersistWorkspace(ctx, domain.Workspace{Id: workspaceId}))
+	require.NoError(t, db.PersistFlow(ctx, domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+
+	existingAction := domain.FlowAction{
+		Id:          "existing-action",
+		ActionType:  "existing-type",
+		FlowId:      flowId,
+		WorkspaceId: workspaceId,
+	}
+	require.NoError(t, db.PersistFlowAction(ctx, existingAction))
+
+	s := httptest.NewServer(DefineRoutes(ctrl, TestAllowedOrigins()))
+	defer s.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/" + workspaceId + "/flows/" + flowId + "/action_changes_ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "Failed to connect to WebSocket")
+	defer ws.Close()
+
+	require.NoError(t, ws.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var received domain.FlowAction
+	require.NoError(t, ws.ReadJSON(&received))
+	assert.Equal(t, existingAction.Id, received.Id)
+	assert.Equal(t, existingAction.ActionType, received.ActionType)
 }
 
 func TestFlowActionChangesWebsocketHandler_NewOnly(t *testing.T) {
@@ -674,6 +714,8 @@ func TestFlowActionChangesWebsocketHandler_NewOnly(t *testing.T) {
 	err = db.PersistFlowAction(ctx, preExistingAction)
 	require.NoError(t, err, "Persisting pre-existing flow action failed")
 
+	subscription := signalFlowActionSubscription(ctrl.service)
+	ctrl.service = subscription
 	router := DefineRoutes(ctrl, TestAllowedOrigins())
 	s := httptest.NewServer(router)
 	defer s.Close()
@@ -683,11 +725,9 @@ func TestFlowActionChangesWebsocketHandler_NewOnly(t *testing.T) {
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err, "Failed to connect to WebSocket")
 	defer ws.Close()
+	subscription.wait(t)
 
-	// Give the websocket connection time to establish
-	time.Sleep(50 * time.Millisecond)
-
-	// Persist an action AFTER connecting
+	// Persist an action AFTER subscribing
 	postConnectAction := domain.FlowAction{
 		Id:          "post-connect-action",
 		ActionType:  "post-connect-type",
