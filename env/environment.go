@@ -1037,6 +1037,7 @@ func (e *OpenShellEnv) GetWorkingDirectory() string {
 }
 
 func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	defer scheduleGitSync(ctx, e)
 	if !input.SkipWaking {
 		if err := wakeIfHibernatedRemote(ctx, e); err != nil {
 			return EnvRunCommandOutput{}, err
@@ -1195,6 +1196,7 @@ func (e *ModalEnv) GetWorkingDirectory() string {
 // idle instead), so commands run without hibernation preflights or read-lock
 // wrapping.
 func (e *ModalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	defer scheduleGitSync(ctx, e)
 	output, _, err := e.runCommandWithRestoreNotice(ctx, input)
 	return output, err
 }
