@@ -91,7 +91,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return DevPlanExecution{}, err
 	}
-	if err = SetupModalConfigHandlers(dCtx); err != nil {
+	if err = SetupEnvSettingsHandlers(dCtx); err != nil {
 		return DevPlanExecution{}, err
 	}
 	SetupProfileChangeHandler(dCtx)

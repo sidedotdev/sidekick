@@ -124,3 +124,29 @@ func (s flowEnvState) takeRetiredOfType(envType env.EnvType) *retiredEnv {
 	}
 	return nil
 }
+
+// unretire drops the retired entry of an env the flow runs on again, since
+// it is now cleaned up as the active env.
+func (s flowEnvState) unretire(identity env.EnvIdentity) {
+	retired := s.retiredEnvs()
+	isIdentity := func(r retiredEnv) bool { return env.IdentityOf(r.EnvContainer) == identity }
+	if !slices.ContainsFunc(retired, isIdentity) {
+		return
+	}
+	s.gs.SetValue(globalStateKeyRetiredEnvs, slices.DeleteFunc(slices.Clone(retired), isIdentity))
+}
+
+// recordSwitchTarget keeps the most complete known state of the env being
+// switched to, so whatever was provisioned can be retired if the switch
+// does not complete.
+func (s flowEnvState) recordSwitchTarget(target ensuredEnv) {
+	current := s.envSwitch()
+	if current == nil {
+		return
+	}
+	updated := *current
+	container := target.EnvContainer
+	updated.Target = &container
+	updated.TargetWorktree = target.Worktree
+	s.setEnvSwitch(updated)
+}

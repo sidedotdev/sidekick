@@ -81,7 +81,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		if usePermissionActivity {
 			var output CheckCommandPermissionOutput
 			err := workflow.ExecuteActivity(dCtx.Context, CheckCommandPermissionActivity, CheckCommandPermissionInput{
-				CommandPermissions:                dCtx.RepoConfig.CommandPermissions,
+				CommandPermissions:                effectiveCommandPermissions(dCtx),
 				Command:                           command,
 				StripEnvVarPrefix:                 stripEnvVarPrefix,
 				DefaultAutoApprove:                sandboxMode,
@@ -102,7 +102,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 				SkipAbsolutePathEscalation:        sandboxMode,
 				HeredocFileWriteWarnInsteadOfDeny: sandboxMode,
 			}
-			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(dCtx.RepoConfig.CommandPermissions, command, opts)
+			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(effectiveCommandPermissions(dCtx), command, opts)
 		}
 
 		workflow.GetLogger(dCtx).Debug("Command permission evaluation result", "command", command, "result", permResult, "message", permMessage)

@@ -41,6 +41,10 @@ type ensureEnvParams struct {
 	AllowReuse bool
 	// CreateWorktree is required in worktree repo mode.
 	CreateWorktree worktreeStrategy
+	// OnProgress, when set, receives the env as soon as each resource that
+	// would need cleaning up exists, so a caller can reclaim a partially
+	// provisioned env when a later step fails.
+	OnProgress func(partial ensuredEnv)
 }
 
 type ensuredEnv struct {
@@ -71,6 +75,17 @@ func (p ensureEnvParams) repoConfig() common.RepoConfig {
 
 func (p ensureEnvParams) worktreeMode() bool {
 	return p.RepoMode == string(env.RepoModeWorktree)
+}
+
+func (p ensureEnvParams) reportProgress(partial ensuredEnv) {
+	if p.OnProgress != nil {
+		p.OnProgress(partial)
+	}
+}
+
+func worktreeAt(wt domain.Worktree, workingDir string) *domain.Worktree {
+	wt.WorkingDirectory = workingDir
+	return &wt
 }
 
 func (p ensureEnvParams) startBranchName() string {
@@ -126,7 +141,9 @@ func ensureLocalEnv(ctx workflow.Context, p ensureEnvParams) (ensuredEnv, error)
 		if err != nil {
 			return "", err
 		}
-		return localEnvContainer.Env.GetWorkingDirectory(), nil
+		workingDir := localEnvContainer.Env.GetWorkingDirectory()
+		p.reportProgress(ensuredEnv{EnvContainer: localEnvContainer, Worktree: worktreeAt(wt, workingDir)})
+		return workingDir, nil
 	})
 	if err != nil {
 		return ensuredEnv{}, err
@@ -164,6 +181,7 @@ func ensureDevPodEnv(ctx workflow.Context, p ensureEnvParams) (ensuredEnv, error
 
 	// Inside the container the workspace is mounted at /workspaces/<basename>
 	containerWorkDir := "/workspaces/" + filepath.Base(p.RepoDir)
+	p.reportProgress(ensuredEnv{EnvContainer: env.EnvContainer{Env: newDevPodEnv(containerWorkDir)}})
 	if !p.worktreeMode() {
 		return ensuredEnv{EnvContainer: env.EnvContainer{Env: newDevPodEnv(containerWorkDir)}}, nil
 	}
@@ -181,6 +199,10 @@ func ensureDevPodEnv(ctx workflow.Context, p ensureEnvParams) (ensuredEnv, error
 		if err != nil {
 			return "", err
 		}
+		p.reportProgress(ensuredEnv{
+			EnvContainer: env.EnvContainer{Env: newDevPodEnv(wtOutput.WorktreePath)},
+			Worktree:     worktreeAt(wt, wtOutput.WorktreePath),
+		})
 		return wtOutput.WorktreePath, nil
 	})
 	if err != nil {
@@ -290,6 +312,8 @@ func ensureModalEnv(ctx workflow.Context, p ensureEnvParams) (ensuredEnv, error)
 // ensureSandboxRepo syncs the local repo into a running sandbox, then attaches
 // the flow worktree there in worktree repo mode.
 func ensureSandboxRepo(ctx workflow.Context, p ensureEnvParams, sandboxLabel string, newEnv func(workingDir string) env.Env) (ensuredEnv, error) {
+	p.reportProgress(ensuredEnv{EnvContainer: env.EnvContainer{Env: newEnv("")}})
+
 	var syncBranches []string
 	if p.StartBranch != nil && *p.StartBranch != "" {
 		syncBranches = append(syncBranches, *p.StartBranch)
@@ -306,6 +330,7 @@ func ensureSandboxRepo(ctx workflow.Context, p ensureEnvParams, sandboxLabel str
 		return ensuredEnv{}, fmt.Errorf("failed to sync repo to %s sandbox: %v", sandboxLabel, err)
 	}
 	remoteRepoDir := syncOutput.RemoteRepoDir
+	p.reportProgress(ensuredEnv{EnvContainer: env.EnvContainer{Env: newEnv(remoteRepoDir)}})
 	scheduleRepoDeepening(ctx, env.EnvContainer{Env: newEnv(remoteRepoDir)}, p.RepoDir, remoteRepoDir, syncBranches)
 
 	if !p.worktreeMode() {
@@ -326,6 +351,10 @@ func ensureSandboxRepo(ctx workflow.Context, p ensureEnvParams, sandboxLabel str
 		if err != nil {
 			return "", err
 		}
+		p.reportProgress(ensuredEnv{
+			EnvContainer: env.EnvContainer{Env: newEnv(wtOutput.WorktreePath)},
+			Worktree:     worktreeAt(wt, wtOutput.WorktreePath),
+		})
 		return wtOutput.WorktreePath, nil
 	})
 	if err != nil {

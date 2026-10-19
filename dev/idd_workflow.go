@@ -240,7 +240,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return err
 	}
-	if err = SetupModalConfigHandlers(dCtx); err != nil {
+	if err = SetupEnvSettingsHandlers(dCtx); err != nil {
 		return err
 	}
 	SetupProfileChangeHandler(dCtx)

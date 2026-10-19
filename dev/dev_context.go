@@ -342,6 +342,11 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	configOverrides.ApplyToRepoConfig(&repoConfig)
 	eCtx.DisableHumanInTheLoop = repoConfig.DisableHumanInTheLoop
 
+	recordCommandPermissionSources(eCtx.GlobalState, commandPermissionSources{
+		Local:     localConfig.CommandPermissions,
+		Repo:      repoConfig.CommandPermissions,
+		Workspace: workspaceConfig.CommandPermissions,
+	})
 	repoConfig.CommandPermissions, err = envDerivedCommandPermissions(ctx, envType, repoConfig, localConfig, workspaceConfig)
 	if err != nil {
 		return DevContext{}, err

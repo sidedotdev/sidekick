@@ -315,7 +315,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return "", err
 	}
-	if err = SetupModalConfigHandlers(dCtx); err != nil {
+	if err = SetupEnvSettingsHandlers(dCtx); err != nil {
 		return "", err
 	}
 	SetupProfileChangeHandler(dCtx)
