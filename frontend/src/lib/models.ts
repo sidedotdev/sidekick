@@ -439,3 +439,9 @@ export type Llm2BuiltinToolUseBlock = Llm2ContentBlockBase & {
     status?: string
   }
 }
+
+export interface EnvSettings {
+  envType: string
+  portForwards: PortForwardConfig[]
+  modal: ModalEnvConfig
+}
