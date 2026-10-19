@@ -688,3 +688,49 @@ func TestCleanupWorktreeArchiveSyncConflicts(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanupWorktreesSharingBranch(t *testing.T) {
+	t.Parallel()
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reverse=%t", reverse), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			root := t.TempDir()
+			repoDir := filepath.Join(root, "repo")
+			require.NoError(t, os.Mkdir(repoDir, 0755))
+			repo := &env.LocalEnv{WorkingDirectory: repoDir}
+			gitCommand := func(args ...string) string {
+				t.Helper()
+				output, err := repo.RunCommand(ctx, env.EnvRunCommandInput{Command: "git", Args: args})
+				require.NoError(t, err)
+				require.Zero(t, output.ExitStatus, "%s", output.Stderr)
+				return strings.TrimSpace(output.Stdout)
+			}
+			gitCommand("init", "-b", "main")
+			gitCommand("config", "user.name", "Test")
+			gitCommand("config", "user.email", "test@example.com")
+			gitCommand("commit", "--allow-empty", "-m", "initial")
+			head := gitCommand("rev-parse", "HEAD")
+			branch := "side/shared-branch"
+			dirs := []string{filepath.Join(root, "active"), filepath.Join(root, "retired worktree")}
+			gitCommand("worktree", "add", "--lock", "-b", branch, dirs[0])
+			gitCommand("worktree", "add", "--lock", "--force", dirs[1], branch)
+			if reverse {
+				dirs[0], dirs[1] = dirs[1], dirs[0]
+			}
+
+			first := env.EnvContainer{Env: &env.LocalGitWorktreeEnv{WorkingDirectory: dirs[0]}}
+			require.NoError(t, CleanupWorktreeActivity(ctx, first, dirs[0], branch, "retired"))
+			require.NoDirExists(t, dirs[0])
+			require.DirExists(t, dirs[1])
+			require.Equal(t, head, gitCommand("rev-parse", "refs/heads/"+branch))
+			require.Equal(t, head, gitCommand("rev-parse", "refs/tags/archive/"+branch+"^{}"))
+
+			last := env.EnvContainer{Env: &env.LocalGitWorktreeEnv{WorkingDirectory: dirs[1]}}
+			require.NoError(t, CleanupWorktreeActivity(ctx, last, dirs[1], branch, "cancelled"))
+			require.NoDirExists(t, dirs[1])
+			require.Empty(t, gitCommand("branch", "--list", branch))
+			require.Equal(t, head, gitCommand("rev-parse", "refs/tags/archive/"+branch+"^{}"))
+		})
+	}
+}

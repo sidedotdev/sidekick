@@ -1366,3 +1366,45 @@ func refusedLocalPort(t *testing.T) int {
 	require.NoError(t, listener.Close())
 	return port
 }
+
+func TestNativeTransportWithoutIdentities(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		noClientAuth bool
+		malformedKey bool
+		wantError    bool
+	}{
+		{name: "none authentication", noClientAuth: true},
+		{name: "public key required", wantError: true},
+		{name: "malformed configured key", noClientAuth: true, malformedKey: true, wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SSH_AUTH_SOCK", "")
+			server := startSSHTestServer(t, sshTestServerOptions{NoClientAuth: tt.noClientAuth})
+			transport := nativeTestTransport(t, server, t.Name(), func(config *SSHConnConfig) {
+				config.IdentityFiles = nil
+				if tt.malformedKey {
+					keyPath := filepath.Join(t.TempDir(), "invalid-key")
+					require.NoError(t, os.WriteFile(keyPath, []byte("not a private key"), 0600))
+					config.IdentityFiles = []string{keyPath}
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			response, err := nativeExecEcho(ctx, transport, "authenticated")
+			if tt.wantError {
+				require.Error(t, err)
+				require.Empty(t, server.stats().ExecCommands)
+				if tt.malformedKey {
+					require.ErrorContains(t, err, "parse ssh identity")
+				} else {
+					require.ErrorContains(t, err, "unable to authenticate")
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.Zero(t, response.ExitStatus)
+			require.Contains(t, string(response.Stdout), "authenticated")
+		})
+	}
+}

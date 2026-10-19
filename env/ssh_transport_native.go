@@ -1587,9 +1587,8 @@ func nativeAuthMethods(config SSHConnConfig, agentConns *agentConnSet) ([]ssh.Au
 	if agentMethod := nativeAgentAuthMethod(agentConns); agentMethod != nil {
 		methods = append(methods, agentMethod)
 	}
-	if len(methods) == 0 {
-		return nil, fmt.Errorf("no usable ssh identity for %s", config.Addr())
-	}
+	// SSH tries "none" first; authenticated proxies such as DevPod may accept
+	// it without a client key. Other servers reject it during negotiation.
 	return methods, nil
 }
 

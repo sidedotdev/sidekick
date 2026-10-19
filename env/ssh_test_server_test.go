@@ -87,6 +87,7 @@ type sshTestServerOptions struct {
 	// connection stays open, but nothing that waits for a reply ever returns.
 	StallGlobalRequests bool
 	SFTPHandler         func(ssh.Channel)
+	NoClientAuth        bool
 }
 
 // harnessWaitTimeout bounds every harness wait, so a protocol mistake fails
@@ -128,6 +129,7 @@ func startSSHTestServer(t *testing.T, opts sshTestServerOptions) *sshTestServer 
 
 	authorized := clientSigner.PublicKey().Marshal()
 	serverConfig := &ssh.ServerConfig{
+		NoClientAuth: opts.NoClientAuth,
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if string(key.Marshal()) != string(authorized) {
 				return nil, fmt.Errorf("unauthorized key")
