@@ -18,6 +18,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/srv"
 	"sidekick/temporalmeta"
+	"sidekick/utils"
 )
 
 const (
@@ -42,6 +43,7 @@ type envSwitchWorkflowResult struct {
 	SwitchInProgress   bool
 	CommandPermissions common.CommandPermissionConfig
 	PortForwards       []common.PortForwardConfig
+	Probes             []envSwitchProbeResult
 }
 
 func switchTestSourceEnv() env.EnvContainer {
@@ -57,16 +59,22 @@ type envSwitchTestInput struct {
 	// worktree, as setup does in in-place repo mode.
 	InPlace bool
 	Retired []retiredEnv
+	Source  *env.EnvContainer
+	Probes  int
 }
 
 var worktreeFlow = envSwitchTestInput{}
 
-// envSwitchTestWorkflow runs a devpod flow whose env can be switched via
-// update_env, reporting what the flow body observes once switching ends.
+// envSwitchTestWorkflow reports what the flow body observes while its
+// environment is changed by update_env.
 func envSwitchTestWorkflow(ctx workflow.Context, input envSwitchTestInput) (envSwitchWorkflowResult, error) {
 	globalState := &flow_action.GlobalState{}
 	globalState.InitValues()
 	container := switchTestSourceEnv()
+	if input.Source != nil {
+		container = *input.Source
+	}
+	original := container
 	state := newFlowEnvState(globalState)
 	state.publish(&container)
 	for _, retired := range input.Retired {
@@ -83,7 +91,7 @@ func envSwitchTestWorkflow(ctx workflow.Context, input envSwitchTestInput) (envS
 			FlowId:           "flow_switch",
 			Name:             switchTestBranch,
 			WorkspaceId:      "ws_switch",
-			WorkingDirectory: switchTestSourceDir,
+			WorkingDirectory: container.Env.GetWorkingDirectory(),
 		}
 	}
 	dCtx := DevContext{
@@ -105,6 +113,27 @@ func envSwitchTestWorkflow(ctx workflow.Context, input envSwitchTestInput) (envS
 		return envSwitchWorkflowResult{}, err
 	}
 
+	var probes []envSwitchProbeResult
+	if err := workflow.SetQueryHandler(ctx, "switchProbeCount", func() (int, error) {
+		return len(probes), nil
+	}); err != nil {
+		return envSwitchWorkflowResult{}, err
+	}
+	for range input.Probes {
+		var duringSwitch bool
+		workflow.GetSignalChannel(ctx, "probe").Receive(ctx, &duringSwitch)
+		if duringSwitch {
+			if err := workflow.Await(ctx, state.SwitchInProgress); err != nil {
+				return envSwitchWorkflowResult{}, err
+			}
+		}
+		probe, err := probeSwitchEnv(flowCtx, original)
+		if err != nil {
+			return envSwitchWorkflowResult{}, err
+		}
+		probes = append(probes, probe)
+	}
+
 	_ = workflow.Sleep(ctx, 100*time.Millisecond)
 	_ = workflow.Await(ctx, func() bool {
 		return workflow.AllHandlersFinished(ctx) && !state.SwitchInProgress()
@@ -123,6 +152,7 @@ func envSwitchTestWorkflow(ctx workflow.Context, input envSwitchTestInput) (envS
 		SwitchInProgress:   state.SwitchInProgress(),
 		CommandPermissions: effectiveCommandPermissions(flowCtx),
 		PortForwards:       portForwards,
+		Probes:             probes,
 	}, nil
 }
 
@@ -235,7 +265,7 @@ func mockSwitchToModal(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSw
 
 func newEnvSwitchTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
-	return newEnvSettingsTestEnv(t)
+	return newEnvGateTestEnv(t)
 }
 
 func commandPatterns(config common.CommandPermissionConfig) []string {
@@ -566,4 +596,550 @@ func TestConcurrentEnvSwitchIsRejected(t *testing.T) {
 	require.NoError(t, wfEnv.GetWorkflowResult(&result))
 	_, isModal := result.EnvContainer.Env.(*env.ModalEnv)
 	require.True(t, isModal)
+}
+
+type envSwitchProbeResult struct {
+	StartedWhileSwitching bool
+	PinnedWhileSwitching  bool
+	Resolved              string
+	Pinned                string
+	After                 string
+	Current               env.EnvContainer
+	Retired               []retiredEnv
+	Lineage               []env.EnvIdentity
+	SwitchInProgress      bool
+}
+
+func probeSwitchEnv(dCtx DevContext, original env.EnvContainer) (envSwitchProbeResult, error) {
+	ctx := utils.NoRetryCtx(dCtx.Context)
+	state := newFlowEnvState(dCtx.GlobalState)
+	result := envSwitchProbeResult{StartedWhileSwitching: state.SwitchInProgress()}
+	started, finished := false, false
+	var regularOutput env.EnvRunCommandActivityOutput
+	var regularErr error
+	workflow.Go(ctx, func(gCtx workflow.Context) {
+		started = true
+		regularErr = workflow.ExecuteActivity(gCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer: original,
+			Command:      "probe",
+		}).Get(gCtx, &regularOutput)
+		finished = true
+	})
+	if err := workflow.Await(ctx, func() bool { return started }); err != nil {
+		return result, err
+	}
+
+	result.PinnedWhileSwitching = state.SwitchInProgress()
+	var pinnedOutput env.EnvRunCommandActivityOutput
+	if err := workflow.ExecuteActivity(env.WithPinnedEnv(ctx), env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		EnvContainer: original,
+		Command:      "pinned",
+	}).Get(ctx, &pinnedOutput); err != nil {
+		return result, err
+	}
+	if err := workflow.Await(ctx, func() bool {
+		return finished && !state.SwitchInProgress() && workflow.AllHandlersFinished(ctx)
+	}); err != nil {
+		return result, err
+	}
+	if regularErr != nil {
+		return result, regularErr
+	}
+
+	var afterOutput env.EnvRunCommandActivityOutput
+	if err := workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		EnvContainer: *dCtx.EnvContainer,
+		Command:      "after",
+	}).Get(ctx, &afterOutput); err != nil {
+		return result, err
+	}
+	result.Resolved = regularOutput.Stdout
+	result.Pinned = pinnedOutput.Stdout
+	result.After = afterOutput.Stdout
+	result.Current = *dCtx.EnvContainer
+	result.Retired = append([]retiredEnv(nil), state.retiredEnvs()...)
+	result.Lineage = append([]env.EnvIdentity(nil), state.lineage()...)
+	result.SwitchInProgress = state.SwitchInProgress()
+	return result, nil
+}
+
+type envSwitchProbeCallbacks struct {
+	envUpdateCallbacks
+	onComplete func()
+}
+
+func (c *envSwitchProbeCallbacks) Complete(result interface{}, err error) {
+	c.envUpdateCallbacks.Complete(result, err)
+	if err == nil && c.onComplete != nil {
+		c.onComplete()
+	}
+}
+
+func switchTestLocalEnv() env.EnvContainer {
+	return env.EnvContainer{Env: &env.LocalGitWorktreeEnv{
+		WorkingDirectory: "/host/repo-worktrees/side-switch-test",
+	}}
+}
+
+func switchTestEnvDescription(container env.EnvContainer) string {
+	return string(container.Env.GetType()) + "@" + container.Env.GetWorkingDirectory()
+}
+
+func mockSwitchBookkeeping(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSwitchRecorder) {
+	var fa *flow_action.FlowActivities
+	wfEnv.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, action domain.FlowAction) error {
+			recorder.mu.Lock()
+			defer recorder.mu.Unlock()
+			recorder.actions = append(recorder.actions, action)
+			if action.ActionType == ActionTypeEnvSwitch {
+				recorder.events = append(recorder.events, string(action.ActionStatus))
+			}
+			return nil
+		})
+	var meta *temporalmeta.TemporalMetaActivities
+	wfEnv.OnActivity(meta.FetchFlowActionActivities, mock.Anything, mock.Anything).
+		Return([]domain.TemporalActivityRef(nil), nil).Maybe()
+	var srvActivities srv.Activities
+	wfEnv.OnActivity(srvActivities.PersistWorktree, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, worktree domain.Worktree) error {
+			recorder.mu.Lock()
+			defer recorder.mu.Unlock()
+			recorder.persistedWorktrees = append(recorder.persistedWorktrees, worktree)
+			return nil
+		}).Maybe()
+	wfEnv.OnActivity(common.BaseCommandPermissionsActivity, mock.Anything, mock.Anything).
+		Return(common.CommandPermissionConfig{}, nil).Maybe()
+}
+
+func mockSwitchTransfer(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSwitchRecorder, source, target env.EnvContainer, gate <-chan struct{}, verifyErr error) {
+	wfEnv.OnActivity(env.ExportForSwitchActivity, mock.Anything, env.ExportForSwitchInput{
+		EnvContainer: source,
+		Branch:       switchTestBranch,
+	}).Return(func(ctx context.Context, input env.ExportForSwitchInput) (env.ExportForSwitchOutput, error) {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return env.ExportForSwitchOutput{}, ctx.Err()
+		case <-time.After(3 * time.Second):
+			return env.ExportForSwitchOutput{}, temporal.NewNonRetryableApplicationError("pinned probe did not release export", "test-timeout", nil)
+		}
+		recorder.record("exported")
+		return env.ExportForSwitchOutput{Bundle: switchTestBundle}, nil
+	}).Once()
+	wfEnv.OnActivity(env.RestoreFromSwitchActivity, mock.Anything, env.RestoreFromSwitchInput{
+		EnvContainer: target,
+		Bundle:       switchTestBundle,
+	}).Return(func(context.Context, env.RestoreFromSwitchInput) (env.RestoreFromSwitchOutput, error) {
+		recorder.record("restored")
+		return env.RestoreFromSwitchOutput{}, nil
+	}).Once()
+	wfEnv.OnActivity(env.VerifySwitchActivity, mock.Anything, env.VerifySwitchInput{
+		EnvContainer: target,
+		ExpectedHead: switchTestHead,
+	}).Return(func(context.Context, env.VerifySwitchInput) (env.VerifySwitchOutput, error) {
+		recorder.record("verified")
+		return env.VerifySwitchOutput{Head: switchTestHead}, verifyErr
+	}).Once()
+}
+
+func mockSwitchDevPodProvisioning(wfEnv *testsuite.TestWorkflowEnvironment) env.EnvContainer {
+	target := env.EnvContainer{Env: &env.DevPodEnv{
+		WorkingDirectory: switchTestSourceDir,
+		WorkspaceName:    env.DevPodWorkspaceName(switchTestBundle.LocalRepoDir),
+		LocalRepoDir:     switchTestBundle.LocalRepoDir,
+	}}
+	wfEnv.OnActivity(env.DevPodUpActivity, mock.Anything, env.DevPodUpInput{
+		WorkspacePath: switchTestBundle.LocalRepoDir,
+	}).Return(nil).Once()
+	base := env.EnvContainer{Env: &env.DevPodEnv{
+		WorkingDirectory: "/workspaces/repo",
+		WorkspaceName:    env.DevPodWorkspaceName(switchTestBundle.LocalRepoDir),
+		LocalRepoDir:     switchTestBundle.LocalRepoDir,
+	}}
+	wfEnv.OnActivity(env.CreateDevPodWorktreeActivity, mock.Anything, env.CreateDevPodWorktreeInput{
+		EnvContainer: base,
+		RepoDir:      "/workspaces/repo",
+		BranchName:   switchTestBranch,
+		StartBranch:  switchTestBranch,
+		WorkspaceId:  "ws_switch",
+		AllowReuse:   true,
+	}).Return(env.CreateDevPodWorktreeOutput{WorktreePath: switchTestSourceDir}, nil).Once()
+	return target
+}
+
+func mockSwitchProbes(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSwitchRecorder, original, resolved env.EnvContainer, gate chan struct{}) {
+	for _, command := range []string{"pinned", "probe", "after"} {
+		expected := resolved
+		if command == "pinned" {
+			expected = original
+		}
+		wfEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, env.EnvRunCommandActivityInput{
+			EnvContainer: expected,
+			Command:      command,
+		}).Return(func(_ context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			recorder.record(input.Command)
+			if input.Command == "pinned" && gate != nil {
+				close(gate)
+			}
+			return env.EnvRunCommandActivityOutput{Stdout: switchTestEnvDescription(input.EnvContainer)}, nil
+		}).Once()
+	}
+}
+
+func TestEnvSwitchLocalWorktreeActivityGate(t *testing.T) {
+	t.Parallel()
+	for _, failVerification := range []bool{false, true} {
+		name := "publishes verified devpod"
+		if failVerification {
+			name = "reverts after failed verification"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			wfEnv := newEnvSwitchTestEnv(t)
+			recorder := &envSwitchRecorder{}
+			mockSwitchBookkeeping(wfEnv, recorder)
+			source := switchTestLocalEnv()
+			target := mockSwitchDevPodProvisioning(wfEnv)
+			expected, retired := target, source
+			status := domain.ActionStatusComplete
+			var verifyErr error
+			if failVerification {
+				expected, retired = source, target
+				status = domain.ActionStatusFailed
+				verifyErr = temporal.NewNonRetryableApplicationError("switched env HEAD is deadbeef", "verify", nil)
+			}
+			gate := make(chan struct{})
+			mockSwitchTransfer(wfEnv, recorder, source, target, gate, verifyErr)
+			mockSwitchProbes(wfEnv, recorder, source, expected, gate)
+
+			callbacks := &envSwitchProbeCallbacks{onComplete: func() {
+				recorder.record("update returned")
+				wfEnv.SignalWorkflow("probe", true)
+			}}
+			wfEnv.RegisterDelayedCallback(func() {
+				wfEnv.UpdateWorkflow(UpdateNameEnv, "switch-to-devpod", callbacks, EnvSettings{EnvType: string(env.EnvTypeDevPod)})
+			}, 5*time.Millisecond)
+			wfEnv.ExecuteWorkflow(envSwitchTestWorkflow, envSwitchTestInput{Source: &source, Probes: 1})
+
+			require.NoError(t, wfEnv.GetWorkflowError())
+			callbacks.requireApplied(t)
+			require.NotEmpty(t, callbacks.result.FlowActionId)
+			require.Equal(t, string(env.EnvTypeLocal), callbacks.result.Settings.EnvType)
+			var result envSwitchWorkflowResult
+			require.NoError(t, wfEnv.GetWorkflowResult(&result))
+			require.Equal(t, expected, result.EnvContainer)
+			require.Equal(t, expected.Env.GetWorkingDirectory(), result.WorktreeDir)
+			require.False(t, result.SwitchInProgress)
+			require.Len(t, result.Retired, 1)
+			require.Equal(t, retired, result.Retired[0].EnvContainer)
+			require.NotNil(t, result.Retired[0].Worktree)
+			require.Equal(t, retired.Env.GetWorkingDirectory(), result.Retired[0].Worktree.WorkingDirectory)
+			require.Equal(t, switchTestBranch, result.Retired[0].Worktree.Name)
+			expectedLineage := []env.EnvIdentity{env.IdentityOf(source)}
+			if !failVerification {
+				expectedLineage = append(expectedLineage, env.IdentityOf(target))
+			}
+			require.Equal(t, expectedLineage, result.Lineage)
+			require.Len(t, result.Probes, 1)
+			probe := result.Probes[0]
+			require.True(t, probe.StartedWhileSwitching)
+			require.True(t, probe.PinnedWhileSwitching)
+			require.Equal(t, switchTestEnvDescription(source), probe.Pinned)
+			require.Equal(t, switchTestEnvDescription(expected), probe.Resolved)
+			require.Equal(t, switchTestEnvDescription(expected), probe.After)
+			require.False(t, probe.SwitchInProgress)
+
+			action := recorder.lastSwitchAction(t)
+			require.Equal(t, callbacks.result.FlowActionId, action.Id)
+			require.Equal(t, status, action.ActionStatus)
+			require.Equal(t, "local", action.ActionParams["from"])
+			require.Equal(t, "devpod", action.ActionParams["to"])
+			if failVerification {
+				require.Contains(t, action.ActionResult, "switched env HEAD is deadbeef")
+			} else {
+				require.Contains(t, action.ActionResult, switchTestHead)
+			}
+			require.Equal(t, []string{
+				string(domain.ActionStatusStarted), "update returned", "pinned", "exported",
+				"restored", "verified", string(status), "probe", "after",
+			}, recorder.events)
+			require.NotEmpty(t, recorder.persistedWorktrees)
+			for _, worktree := range recorder.persistedWorktrees {
+				require.Equal(t, "wt_switch", worktree.Id)
+				require.Equal(t, "flow_switch", worktree.FlowId)
+				require.Equal(t, "ws_switch", worktree.WorkspaceId)
+				require.Equal(t, switchTestBranch, worktree.Name)
+			}
+			require.Equal(t, result.WorktreeDir, recorder.persistedWorktrees[len(recorder.persistedWorktrees)-1].WorkingDirectory)
+		})
+	}
+}
+
+func mockSwitchOpenShellProvisioning(wfEnv *testsuite.TestWorkflowEnvironment) env.EnvContainer {
+	const sandboxName = "side--openshell-switch"
+	newContainer := func(dir string) env.EnvContainer {
+		return env.EnvContainer{Env: &env.OpenShellEnv{
+			WorkingDirectory: dir,
+			SandboxName:      sandboxName,
+			LocalRepoDir:     switchTestBundle.LocalRepoDir,
+		}}
+	}
+	wfEnv.OnActivity(env.CheckSandboxActivity, mock.Anything, env.CheckSandboxInput{
+		EnvType:     env.EnvTypeOpenShell,
+		SandboxName: env.OpenShellSandboxName(switchTestBundle.LocalRepoDir),
+	}).Return(env.CheckSandboxOutput{}, nil).Once()
+	wfEnv.OnActivity(env.CreateSandboxActivity, mock.Anything, mock.MatchedBy(func(input env.CreateSandboxInput) bool {
+		return input.EnvType == env.EnvTypeOpenShell &&
+			input.Name == env.OpenShellSandboxName(switchTestBundle.LocalRepoDir) &&
+			input.RepoDir == switchTestBundle.LocalRepoDir
+	})).Return(env.CreateSandboxOutput{SandboxName: sandboxName}, nil).Once()
+	wfEnv.OnActivity(env.SyncRepoToRemoteActivity, mock.Anything, env.SyncRepoToRemoteInput{
+		EnvContainer: newContainer(""),
+		LocalRepoDir: switchTestBundle.LocalRepoDir,
+		Branches:     []string{switchTestBranch},
+	}).Return(env.SyncRepoToRemoteOutput{RemoteRepoDir: "/root/repo"}, nil).Once()
+	wfEnv.OnActivity(env.DeepenRepoActivity, mock.Anything, mock.Anything).
+		Return(env.DeepenRepoOutput{}, nil).Maybe()
+	wfEnv.OnActivity(env.CreateRemoteWorktreeActivity, mock.Anything, env.CreateRemoteWorktreeInput{
+		EnvContainer: newContainer("/root/repo"),
+		RepoDir:      "/root/repo",
+		BranchName:   switchTestBranch,
+		StartBranch:  switchTestBranch,
+		WorkspaceId:  "ws_switch",
+		LocalRepoDir: switchTestBundle.LocalRepoDir,
+		AllowReuse:   true,
+	}).Return(env.CreateRemoteWorktreeOutput{WorktreePath: switchTestTargetDir}, nil).Once()
+	return newContainer(switchTestTargetDir)
+}
+
+func registerSwitchProbeUpdates(t *testing.T, wfEnv *testsuite.TestWorkflowEnvironment, desired []EnvSettings) []*envSwitchProbeCallbacks {
+	t.Helper()
+	callbacks := make([]*envSwitchProbeCallbacks, len(desired))
+	for i := range callbacks {
+		callbacks[i] = &envSwitchProbeCallbacks{onComplete: func() {
+			wfEnv.SignalWorkflow("probe", true)
+		}}
+	}
+
+	index, polls := 0, 0
+	var next func()
+	next = func() {
+		encoded, err := wfEnv.QueryWorkflow("switchProbeCount")
+		require.NoError(t, err)
+		var count int
+		require.NoError(t, encoded.Get(&count))
+		if count != index {
+			polls++
+			require.Less(t, polls, 1000, "previous switch probe did not finish")
+			wfEnv.RegisterDelayedCallback(next, 10*time.Millisecond)
+			return
+		}
+		polls = 0
+		wfEnv.UpdateWorkflow(UpdateNameEnv, "", callbacks[index], desired[index])
+		index++
+		if index < len(desired) {
+			wfEnv.RegisterDelayedCallback(next, 10*time.Millisecond)
+		}
+	}
+	wfEnv.RegisterDelayedCallback(next, 5*time.Millisecond)
+	return callbacks
+}
+
+func TestEnvSwitchChainedLineageAndRetiredReuse(t *testing.T) {
+	t.Parallel()
+	wfEnv := newEnvSwitchTestEnv(t)
+	recorder := &envSwitchRecorder{}
+	mockSwitchBookkeeping(wfEnv, recorder)
+	local := switchTestLocalEnv()
+	devpod := mockSwitchDevPodProvisioning(wfEnv)
+	openshell := mockSwitchOpenShellProvisioning(wfEnv)
+	require.Equal(t, devpod, mockSwitchDevPodProvisioning(wfEnv))
+
+	sources := []env.EnvContainer{local, devpod, openshell}
+	targets := []env.EnvContainer{devpod, openshell, devpod}
+	desired := make([]EnvSettings, len(targets))
+	for i, target := range targets {
+		gate := make(chan struct{})
+		mockSwitchTransfer(wfEnv, recorder, sources[i], target, gate, nil)
+		mockSwitchProbes(wfEnv, recorder, local, target, gate)
+		desired[i] = EnvSettings{EnvType: string(target.Env.GetType())}
+	}
+	callbacks := registerSwitchProbeUpdates(t, wfEnv, desired)
+	wfEnv.ExecuteWorkflow(envSwitchTestWorkflow, envSwitchTestInput{Source: &local, Probes: len(targets)})
+
+	require.NoError(t, wfEnv.GetWorkflowError())
+	var result envSwitchWorkflowResult
+	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+	require.Len(t, result.Probes, 3)
+	expectedRetired := [][]env.EnvContainer{
+		{local},
+		{local, devpod},
+		{local, openshell},
+	}
+	expectedLineage := []env.EnvIdentity{env.IdentityOf(local), env.IdentityOf(devpod), env.IdentityOf(openshell)}
+	actionIDs := make(map[string]bool)
+	for i, probe := range result.Probes {
+		callbacks[i].requireApplied(t)
+		id := callbacks[i].result.FlowActionId
+		require.NotEmpty(t, id)
+		require.False(t, actionIDs[id], "each switch needs its own flow action")
+		actionIDs[id] = true
+		from := string(sources[i].Env.GetType())
+		if i == 0 {
+			from = string(env.EnvTypeLocal)
+		}
+		require.Equal(t, from, callbacks[i].result.Settings.EnvType)
+		require.True(t, probe.StartedWhileSwitching)
+		require.True(t, probe.PinnedWhileSwitching)
+		require.Equal(t, switchTestEnvDescription(local), probe.Pinned)
+		require.Equal(t, switchTestEnvDescription(targets[i]), probe.Resolved)
+		require.Equal(t, probe.Resolved, probe.After)
+		require.Equal(t, targets[i], probe.Current)
+		require.False(t, probe.SwitchInProgress)
+		lineage := expectedLineage
+		if i == 0 {
+			lineage = lineage[:2]
+		}
+		require.Equal(t, lineage, probe.Lineage)
+		require.Len(t, probe.Retired, len(expectedRetired[i]))
+		for j, retired := range probe.Retired {
+			require.Equal(t, expectedRetired[i][j], retired.EnvContainer)
+			require.NotNil(t, retired.Worktree)
+			require.Equal(t, retired.EnvContainer.Env.GetWorkingDirectory(), retired.Worktree.WorkingDirectory)
+			require.Equal(t, "wt_switch", retired.Worktree.Id)
+			require.Equal(t, switchTestBranch, retired.Worktree.Name)
+		}
+	}
+
+	require.Equal(t, devpod, result.EnvContainer)
+	require.Equal(t, switchTestSourceDir, result.WorktreeDir)
+	require.Equal(t, result.Probes[2].Retired, result.Retired)
+	require.Equal(t, expectedLineage, result.Lineage)
+	require.Len(t, recorder.persistedWorktrees, 3)
+	require.Equal(t, recorder.persistedWorktrees[0], recorder.persistedWorktrees[2],
+		"returning to DevPod must reattach the original worktree")
+	require.Len(t, recorder.actions, 6)
+	for i, callbacks := range callbacks {
+		started, completed := recorder.actions[2*i], recorder.actions[2*i+1]
+		require.Equal(t, callbacks.result.FlowActionId, started.Id)
+		require.Equal(t, started.Id, completed.Id)
+		require.Equal(t, ActionTypeEnvSwitch, completed.ActionType)
+		require.Equal(t, domain.ActionStatusStarted, started.ActionStatus)
+		require.Equal(t, domain.ActionStatusComplete, completed.ActionStatus)
+		require.Equal(t, callbacks.result.Settings.EnvType, completed.ActionParams["from"])
+		require.Equal(t, desired[i].EnvType, completed.ActionParams["to"])
+		require.Contains(t, completed.ActionResult, switchTestHead)
+	}
+}
+
+func TestEnvSwitchSettingsValidatorFromLocalWorktree(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		desired EnvSettings
+		message string
+	}{
+		{
+			name:    "invalid environment type",
+			desired: EnvSettings{EnvType: "mainframe"},
+			message: `invalid environment type "mainframe"`,
+		},
+		{
+			name: "invalid modal config",
+			desired: EnvSettings{
+				EnvType: "modal",
+				Modal: common.ModalEnvConfig{Volumes: []common.ModalVolumeMount{
+					{Name: "a", MountPath: "/cache"},
+					{Name: "b", MountPath: "/cache/"},
+				}},
+			},
+			message: "configured more than once",
+		},
+		{
+			name: "invalid port forwards",
+			desired: EnvSettings{
+				EnvType: "devpod",
+				PortForwards: []common.PortForwardConfig{
+					{HostPort: 3000, ContainerPort: 4000},
+					{HostPort: 4000},
+				},
+			},
+			message: "container_port 4000 is used by both",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			wfEnv := newEnvSwitchTestEnv(t)
+			source := switchTestLocalEnv()
+			callbacks := &envUpdateCallbacks{}
+			wfEnv.RegisterDelayedCallback(func() {
+				wfEnv.UpdateWorkflow(UpdateNameEnv, "", callbacks, test.desired)
+			}, 5*time.Millisecond)
+			wfEnv.ExecuteWorkflow(envSwitchTestWorkflow, envSwitchTestInput{Source: &source})
+
+			require.NoError(t, wfEnv.GetWorkflowError())
+			require.False(t, callbacks.accepted)
+			require.False(t, callbacks.completed)
+			require.ErrorContains(t, callbacks.rejection, test.message)
+			var result envSwitchWorkflowResult
+			require.NoError(t, wfEnv.GetWorkflowResult(&result))
+			require.Equal(t, source, result.EnvContainer)
+			require.Empty(t, result.Retired)
+			require.False(t, result.SwitchInProgress)
+			require.Equal(t, []env.EnvIdentity{env.IdentityOf(source)}, result.Lineage)
+		})
+	}
+}
+
+func TestEnvSwitchSameTypeReconcilesSynchronously(t *testing.T) {
+	t.Parallel()
+	wfEnv := newEnvSwitchTestEnv(t)
+	source := switchTestSourceEnv()
+	desired := EnvSettings{
+		EnvType:      "devpod",
+		PortForwards: []common.PortForwardConfig{{HostPort: 3000, ContainerPort: 3001}},
+	}
+	updated := *source.Env.(*env.DevPodEnv)
+	updated.PortForwards = desired.PortForwards
+	target := env.EnvContainer{Env: &updated}
+	recorder := &envSwitchRecorder{}
+	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, env.UpdateEnvConfigInput{
+		EnvContainer: source,
+		Current:      env.EnvConfig{},
+		Desired:      env.EnvConfig{PortForwards: desired.PortForwards},
+	}).Return(func(context.Context, env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
+		recorder.record("reconciled")
+		return env.UpdateEnvConfigOutput{
+			EnvContainer: target,
+			Config:       env.EnvConfig{PortForwards: desired.PortForwards},
+		}, nil
+	}).Once()
+	mockSwitchProbes(wfEnv, recorder, source, target, nil)
+	callbacks := &envSwitchProbeCallbacks{onComplete: func() {
+		recorder.record("update returned")
+		wfEnv.SignalWorkflow("probe", false)
+	}}
+	wfEnv.RegisterDelayedCallback(func() {
+		wfEnv.UpdateWorkflow(UpdateNameEnv, "", callbacks, desired)
+	}, 5*time.Millisecond)
+	wfEnv.ExecuteWorkflow(envSwitchTestWorkflow, envSwitchTestInput{Probes: 1})
+
+	require.NoError(t, wfEnv.GetWorkflowError())
+	callbacks.requireApplied(t)
+	require.Empty(t, callbacks.result.FlowActionId)
+	require.Equal(t, desired, callbacks.result.Settings)
+	require.GreaterOrEqual(t, len(recorder.events), 2)
+	require.Equal(t, []string{"reconciled", "update returned"}, recorder.events[:2])
+	var result envSwitchWorkflowResult
+	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+	require.Equal(t, target, result.EnvContainer)
+	require.Equal(t, desired.PortForwards, result.PortForwards)
+	require.Empty(t, result.Retired)
+	require.False(t, result.SwitchInProgress)
+	require.Equal(t, []env.EnvIdentity{env.IdentityOf(source)}, result.Lineage)
+	require.Len(t, result.Probes, 1)
+	require.False(t, result.Probes[0].StartedWhileSwitching)
+	require.False(t, result.Probes[0].PinnedWhileSwitching)
 }
