@@ -285,6 +285,7 @@ func (ma *iddMergeApproval) finish(dCtx DevContext) (err error) {
 	if err := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, *dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "IDD flow finished").Get(dCtx, nil); err != nil {
 		return fmt.Errorf("failed to cleanup the idd worktree after merging into %s: %w", target, err)
 	}
+	cleanupRetiredEnvs(dCtx, dCtx, "IDD flow finished")
 
 	return nil
 }

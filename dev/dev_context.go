@@ -13,6 +13,7 @@ import (
 	"sidekick/srv"
 	"sidekick/utils"
 	"sidekick/workspace"
+	"slices"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -476,8 +477,11 @@ func handleFlowCancel(dCtx DevContext) {
 	if !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
 		return
 	}
-	// Use disconnected context to ensure cleanup can complete during cancellation
+	// Use disconnected context to ensure cleanup can complete during
+	// cancellation. It is pinned since a switch cancelled mid-flight would
+	// otherwise hold back cleanup of the very envs it was working with.
 	disconnectedCtx, _ := workflow.NewDisconnectedContext(dCtx)
+	disconnectedCtx = env.WithPinnedEnv(disconnectedCtx)
 
 	_ = signalWorkflowClosure(disconnectedCtx, "canceled")
 
@@ -563,6 +567,95 @@ func handleFlowCancel(dCtx DevContext) {
 				}
 			}
 		}
+	}
+
+	cleanupRetiredEnvs(disconnectedCtx, dCtx, "Sidekick task cancelled")
+}
+
+// cleanupRetiredEnvs cleans up the envs the flow switched away from, plus the
+// target of a switch still in progress, by the same rules as the active env.
+// Failures are logged rather than returned so they never block the flow from
+// ending.
+func cleanupRetiredEnvs(ctx workflow.Context, dCtx DevContext, reason string) {
+	entries := retiredEnvsToCleanUp(dCtx)
+	if len(entries) == 0 {
+		return
+	}
+	if workflow.GetVersion(ctx, "retired-env-cleanup", workflow.DefaultVersion, 1) < 1 {
+		return
+	}
+	// Retired envs are cleaned up as recorded, never redirected to the flow
+	// env, and with bounded retries since they may already be gone.
+	ctx = utils.DefaultRetryCtx(env.WithPinnedEnv(ctx))
+	for _, entry := range entries {
+		cleanupRetiredEnv(ctx, entry, reason)
+	}
+}
+
+// retiredEnvsToCleanUp excludes the active env, which is cleaned up
+// separately, and lists each env once even if it was both retired and the
+// target of the in-progress switch.
+func retiredEnvsToCleanUp(dCtx DevContext) []retiredEnv {
+	if dCtx.GlobalState == nil {
+		return nil
+	}
+	state := newFlowEnvState(dCtx.GlobalState)
+	candidates := slices.Clone(state.retiredEnvs())
+	if inProgress := state.envSwitch(); inProgress != nil && inProgress.Target != nil {
+		candidates = append(candidates, retiredEnv{EnvContainer: *inProgress.Target, Worktree: inProgress.TargetWorktree})
+	}
+
+	seen := map[env.EnvIdentity]bool{}
+	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env != nil {
+		seen[env.IdentityOf(*dCtx.EnvContainer)] = true
+	}
+	var entries []retiredEnv
+	for _, candidate := range candidates {
+		if candidate.EnvContainer.Env == nil {
+			continue
+		}
+		identity := env.IdentityOf(candidate.EnvContainer)
+		if seen[identity] {
+			continue
+		}
+		seen[identity] = true
+		entries = append(entries, candidate)
+	}
+	return entries
+}
+
+func cleanupRetiredEnv(ctx workflow.Context, entry retiredEnv, reason string) {
+	logger := workflow.GetLogger(ctx)
+	container := entry.EnvContainer
+	envType := container.Env.GetType()
+	workingDir := container.Env.GetWorkingDirectory()
+
+	if entry.Worktree != nil {
+		err := workflow.ExecuteActivity(ctx, git.CleanupWorktreeActivity, container, workingDir, entry.Worktree.Name, reason).Get(ctx, nil)
+		if err != nil {
+			logger.Warn("Failed to cleanup retired env worktree", "envType", envType, "workingDir", workingDir, "error", err)
+		}
+	}
+
+	sandboxEnv, ok := container.Env.(env.SandboxEnv)
+	if !ok {
+		return
+	}
+	sandboxName := sandboxEnv.GetSandboxName()
+	var err error
+	if entry.Worktree != nil {
+		err = workflow.ExecuteActivity(ctx, env.DeleteSandboxActivity, env.DeleteSandboxInput{
+			EnvType:     envType,
+			SandboxName: sandboxName,
+		}).Get(ctx, nil)
+	} else {
+		err = workflow.ExecuteActivity(ctx, env.StopSandboxActivity, env.StopSandboxInput{
+			EnvType:     envType,
+			SandboxName: sandboxName,
+		}).Get(ctx, nil)
+	}
+	if err != nil {
+		logger.Warn("Failed to cleanup retired env sandbox", "envType", envType, "sandboxName", sandboxName, "error", err)
 	}
 }
 
@@ -832,7 +925,9 @@ func (devActionCtx *DevActionContext) FlowActionContext() flow_action.ActionCont
 // LLM operations invoked directly from a workflow (e.g. generating branch names
 // or task titles), before the full per-worktree dev context is available. It
 // creates a local env rooted at repoDir and wires in the default secret manager
-// chain. This context should not be used for long-lived operations.
+// chain. This context should not be used for long-lived operations. Its
+// activities are pinned to the local repo env, which may share its identity
+// with the flow env (in-place local mode) but must never follow env switches.
 func newTempLocalExecContext(
 	ctx workflow.Context,
 	workspaceId string,
@@ -848,7 +943,7 @@ func newTempLocalExecContext(
 	}
 	eCtx := flow_action.ExecContext{
 		FlowScope:    &flow_action.FlowScope{},
-		Context:      ctx,
+		Context:      env.WithPinnedEnv(ctx),
 		WorkspaceId:  workspaceId,
 		EnvContainer: &env.EnvContainer{Env: tempLocalEnv},
 		Secrets: &secret_manager.SecretManagerContainer{

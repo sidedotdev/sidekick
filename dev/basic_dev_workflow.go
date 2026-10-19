@@ -1508,6 +1508,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				}
 			}
 		}
+		cleanupRetiredEnvs(dCtx, dCtx, "Sidekick task completed and merged")
 	}
 
 	return gitDiff, mergeInfo, currentTreeHash, err
