@@ -75,6 +75,11 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		}
 	}
 
+	// Preserve recorded permission activities and approvals when replaying older workflows.
+	if sandboxMode && workflow.GetVersion(dCtx, "sandbox-command-permissions-bypass", workflow.DefaultVersion, 1) >= 1 {
+		return true, "", "", nil
+	}
+
 	var permEvaluation *common.ScriptPermissionEvaluation
 	if enableCommandPermissions {
 		var permResult common.PermissionResult
