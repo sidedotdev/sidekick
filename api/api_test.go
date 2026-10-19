@@ -3815,111 +3815,124 @@ func TestUpdateTaskHandler_ProjectIdPresenceSemantics(t *testing.T) {
 	assert.Equal(t, "", updated.ProjectId)
 }
 
-func TestUpdateFlowModalConfigHandler_AcceptsValidConfig(t *testing.T) {
+func TestUpdateFlowEnvHandler_AcceptsValidSettings(t *testing.T) {
 	t.Parallel()
 
-	ctrl := NewMockController(t)
-	mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
-	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Unset()
+	for _, test := range []struct {
+		name         string
+		flowActionId string
+		status       int
+	}{
+		{name: "configuration applied", status: http.StatusOK},
+		{name: "switch started", flowActionId: "action-env-switch", status: http.StatusAccepted},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 
-	workspaceId := "ws-modal-config-" + ksuid.New().String()
-	flowId := "flow-modal-config-" + ksuid.New().String()
-	require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
-	require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
+			ctrl, mockTemporalClient, workspaceId, flowId := newEnvSettingsTestController(t)
+			settings := dev.EnvSettings{
+				EnvType:      "modal",
+				PortForwards: []common.PortForwardConfig{{HostPort: 3000}},
+				Modal: common.ModalEnvConfig{
+					Memory:      2048,
+					MemoryLimit: 8192,
+					Volumes: []common.ModalVolumeMount{
+						{Name: "test-cache", MountPath: "/cache"},
+					},
+				},
+			}
+			result := dev.EnvUpdateResult{Settings: settings, FlowActionId: test.flowActionId}
+			if test.flowActionId != "" {
+				result.Settings = dev.EnvSettings{EnvType: "local"}
+			}
+			mockTemporalClient.On(
+				"UpdateWorkflow",
+				mock.Anything,
+				mock.MatchedBy(func(options client.UpdateWorkflowOptions) bool {
+					return options.WorkflowID == flowId &&
+						options.RunID == "" &&
+						options.UpdateName == dev.UpdateNameEnv &&
+						options.WaitForStage == client.WorkflowUpdateStageCompleted &&
+						len(options.Args) == 1 &&
+						assert.ObjectsAreEqual(settings, options.Args[0])
+				}),
+			).Return(updateOutcomeHandle{result: result}, nil).Once()
 
-	modalConfig := common.ModalEnvConfig{
-		Memory:      2048,
-		MemoryLimit: 8192,
-		Volumes: []common.ModalVolumeMount{
-			{Name: "test-cache", MountPath: "/cache"},
-		},
+			payload, err := json.Marshal(settings)
+			require.NoError(t, err)
+			req := httptest.NewRequest(
+				http.MethodPut,
+				fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/env", workspaceId, flowId),
+				bytes.NewReader(payload),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
+
+			require.Equal(t, test.status, rr.Code, rr.Body.String())
+			var response dev.EnvUpdateResult
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+			assert.Equal(t, result, response)
+			mockTemporalClient.AssertExpectations(t)
+		})
 	}
-	mockTemporalClient.On(
-		"UpdateWorkflow",
-		mock.Anything,
-		mock.MatchedBy(func(options client.UpdateWorkflowOptions) bool {
-			return options.WorkflowID == flowId &&
-				options.RunID == "" &&
-				options.UpdateName == dev.UpdateNameModalConfig &&
-				options.WaitForStage == client.WorkflowUpdateStageCompleted &&
-				len(options.Args) == 1 &&
-				assert.ObjectsAreEqual(modalConfig, options.Args[0])
-		}),
-	).Return(MockWorkflowUpdateHandle{}, nil).Once()
-
-	payload, err := json.Marshal(ModalConfigUpdateRequest{Config: modalConfig})
-	require.NoError(t, err)
-	req := httptest.NewRequest(
-		http.MethodPut,
-		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/modal_config", workspaceId, flowId),
-		bytes.NewReader(payload),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
-
-	require.Equal(t, http.StatusOK, rr.Code)
-	assert.JSONEq(t, `{"message":"Modal environment recreated"}`, rr.Body.String())
-	mockTemporalClient.AssertExpectations(t)
 }
 
-func TestUpdateFlowModalConfigHandler_RejectsInvalidConfigBeforeUpdatingWorkflow(t *testing.T) {
+func TestUpdateFlowEnvHandler_RejectsInvalidSettingsBeforeUpdatingWorkflow(t *testing.T) {
 	t.Parallel()
 
-	ctrl := NewMockController(t)
-	mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
-	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Unset()
-
-	workspaceId := "ws-modal-config-" + ksuid.New().String()
-	flowId := "flow-modal-config-" + ksuid.New().String()
-	require.NoError(t, ctrl.service.PersistWorkspace(context.Background(), domain.Workspace{Id: workspaceId}))
-	require.NoError(t, ctrl.service.PersistFlow(context.Background(), domain.Flow{Id: flowId, WorkspaceId: workspaceId}))
-
-	router := DefineRoutes(ctrl, TestAllowedOrigins())
 	tests := []struct {
 		name    string
 		payload string
 		error   string
 	}{
 		{
+			name:    "invalid environment type",
+			payload: `{"envType":"unknown"}`,
+			error:   "invalid environment type",
+		},
+		{
+			name:    "missing environment type",
+			payload: `{"modal":{}}`,
+			error:   "invalid environment type",
+		},
+		{
 			name:    "duplicate normalized mount paths",
-			payload: `{"config":{"volumes":[{"name":"a","mountPath":"/cache"},{"name":"b","mountPath":"/cache/"}]}}`,
+			payload: `{"envType":"modal","modal":{"volumes":[{"name":"a","mountPath":"/cache"},{"name":"b","mountPath":"/cache/"}]}}`,
 			error:   "configured more than once",
 		},
 		{
 			name:    "image and dockerfile conflict",
-			payload: `{"config":{"image":"ubuntu:24.04","dockerfilePath":"Dockerfile.modal"}}`,
+			payload: `{"envType":"modal","modal":{"image":"ubuntu:24.04","dockerfilePath":"Dockerfile.modal"}}`,
 			error:   "cannot both be set",
 		},
 		{
 			name:    "memory limit below request",
-			payload: `{"config":{"memory":4096,"memoryLimit":2048}}`,
+			payload: `{"envType":"modal","modal":{"memory":4096,"memoryLimit":2048}}`,
 			error:   "memory_limit",
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl, mockTemporalClient, workspaceId, flowId := newEnvSettingsTestController(t)
 			req := httptest.NewRequest(
 				http.MethodPut,
-				fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/modal_config", workspaceId, flowId),
+				fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/env", workspaceId, flowId),
 				strings.NewReader(test.payload),
 			)
 			req.Header.Set("Content-Type", "application/json")
 			rr := httptest.NewRecorder()
-
-			router.ServeHTTP(rr, req)
+			DefineRoutes(ctrl, TestAllowedOrigins()).ServeHTTP(rr, req)
 
 			require.Equal(t, http.StatusBadRequest, rr.Code)
 			var response map[string]string
 			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
-			assert.Contains(t, response["error"], "Invalid Modal configuration")
 			assert.Contains(t, response["error"], test.error)
+			mockTemporalClient.AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
 		})
 	}
-	// No workflow update may be attempted for any rejected config.
-	mockTemporalClient.AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
 }
 
 func TestUpdateTaskHandler_DraftStartAssignment(t *testing.T) {
