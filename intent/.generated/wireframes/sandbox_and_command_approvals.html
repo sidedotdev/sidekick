@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sidekick · Sandbox approval prompt</title>
+  <style>
+/* non-color variables */
+:root {
+  --kanban-gap: 0.5rem;
+  /* shared rounding for kanban surfaces: columns, group headers, task cards */
+  --kanban-radius: 0.375rem;
+  --task-pad: 1.2rem;
+  --section-gap: 160px;
+  --font-size: 15px;
+}
+
+/* color palette from <https://github.com/vuejs/theme> */
+/* TODO remove unused variables, and rename used ones */
+:root {
+  --vt-c-white: #fdfdfd;
+  --vt-c-white-soft: #f8f8f8;
+  --vt-c-white-mute: #f0f0f0;
+
+  --vt-c-black: #181818;
+  --vt-c-black-soft: #1f1f1f;
+  --vt-c-black-mute: #242424;
+
+  --vt-c-indigo: #2c3e50;
+
+  --vt-c-divider-light-1: rgba(60, 60, 60, 0.29);
+  --vt-c-divider-light-2: rgba(60, 60, 60, 0.12);
+  --vt-c-divider-dark-1: rgba(84, 84, 84, 0.65);
+  --vt-c-divider-dark-2: rgba(84, 84, 84, 0.48);
+
+  --vt-c-text-light-1: var(--vt-c-indigo);
+  --vt-c-text-light-2: rgba(60, 60, 60, 1.0);
+  --vt-c-text-dark-1: var(--vt-c-white);
+  --vt-c-text-dark-2: rgba(150, 150, 150, 1.0);
+}
+
+/* specific color variables for light and dark modes only go here */
+:root {
+  --color-background-light: var(--vt-c-white-soft);
+  --color-text-light: var(--vt-c-text-light-1);
+  --color-text-light-2: var(--vt-c-text-light-2);
+
+  --color-background-dark: var(--vt-c-black);
+
+  --color-text-dark: var(--vt-c-text-dark-1);
+  --color-text-dark-2: var(--vt-c-text-dark-2);
+
+  --color-link-dark: rgb(85, 159, 255);
+  --color-link-light: rgb(0, 102, 204);
+
+  /* FIXME do we need both dark and light? */
+  --color-primary: rgba(131,58,180);
+  --color-primary-hover: rgb(142, 82, 185);
+  --color-cta-button-bg-dark: rgba(131,58,180, 0.8);
+  --color-cta-button-bg-light: rgba(131,58,180, 0.8);
+  --color-cta-button-text-light: var(--color-text-dark);
+  --color-cta-button-text-dark: var(--color-text-dark);
+
+  /* FIXME do we need both dark and light? And where do we use these even? */
+  --color-green-light: hsla(160, 100%, 37%, 1);
+  --color-green-dark: hsla(160, 100%, 37%, 1);
+
+  /* FIXME do we need both dark and light? */
+  --color-select-border-light: #888;
+  --color-select-border-dark: #888;
+
+  --color-modal-background-light: var(--vt-c-white);
+  --color-modal-background-dark: var(--vt-c-black-soft);
+  --color-modal-text-light: var(--vt-c-text-light-1);
+  --color-modal-text-dark: var(--color-text-dark);
+
+  --color-error-background-light: rgba(220, 38, 38, 0.1);
+  --color-error-background-dark: rgba(220, 38, 38, 0.15);
+  --color-error-border-light: #dc2626;
+  --color-error-border-dark: #ef4444;
+  --color-error-text-light: #b91c1c;
+  --color-error-text-dark: #f87171;
+}
+
+/* semantic color variables for this project. these all default to dark mode.
+ * generally only these variableshould be used downstream, not the
+ * light/dark-specific variables. */
+:root {
+  --color-text: var(--color-text-dark);
+  --color-text-2: var(--color-text-dark-2);
+  --color-heading: var(--vt-c-text-dark-1);
+  --color-background: var(--color-background-dark); /* --color-background: var(--vt-c-black); */
+  --color-background-soft: var(--vt-c-black-soft);
+  --color-background-mute: var(--vt-c-black-mute);
+  --color-background-hover: #3f3f3f;
+  --color-border: #2b2b2b;
+  --color-border-contrast: #383838;
+  --color-border-hover: var(--vt-c-divider-dark-1); /* why */
+  --color-link: var(--color-link-dark);
+  --color-cta-button-bg: var(--color-cta-button-bg-dark);
+  --color-cta-button-text: var(--color-cta-button-text-dark);
+  --color-green: var(--color-green-dark);
+  --color-select-border: var(--color-select-border-dark);
+  --color-modal-background: var(--color-modal-background-dark);
+  --color-modal-text: var(--color-modal-text-dark);
+  --color-error-background: var(--color-error-background-dark);
+  --color-error-border: var(--color-error-border-dark);
+  --color-error-text: var(--color-error-text-dark);
+}
+
+/* override the color variables for light mode. generally only these variables
+ * without a "-light" or "-dark" suffix should be used downstream. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-heading: var(--vt-c-text-light-1);
+    --color-text: var(--color-text-light);
+    --color-text-2: var(--color-text-light-2);
+    --color-background: var(--color-background-light);
+    --color-background-soft: var(--vt-c-white);
+    --color-background-mute: var(--vt-c-white-mute);
+    --color-background-hover: #ddd;
+    --color-border: var(--vt-c-divider-light-2);
+    --color-border-contrast: var(--vt-c-divider-light-1);
+    --color-border-hover: var(--vt-c-divider-light-1);
+    --color-link: var(--color-link-light);
+    --color-cta-button-bg: var(--color-cta-button-bg-light);
+    --color-cta-button-text: var(--color-cta-button-text-light);
+    --color-green: var(--color-green-light);
+    --color-select-border: rgba(0, 0, 0, 0.5);
+    --color-modal-background: var(--color-modal-background-light);
+    --color-modal-text: var(--color-modal-text-light);
+    --color-error-background: var(--color-error-background-light);
+    --color-error-border: var(--color-error-border-light);
+    --color-error-text: var(--color-error-text-light);
+  }
+}
+
+/* override the color variables based on the user's preference. generally only
+ * these variables without a "-light" or "-dark" suffix should be used
+ * downstream. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: var(--color-text-dark);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--color-text);
+  background: var(--color-background);
+  transition:
+    color 0.5s,
+    background-color 0.5s;
+  line-height: 1.6;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    'Fira Sans',
+    'Droid Sans',
+    'Helvetica Neue',
+    sans-serif;
+  font-size: var(--font-size);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+</style>
+  <style>
+    body { padding: 1.5rem 1rem; }
+    main { max-width: 60rem; margin: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+    body[data-view="mobile"] main { max-width: 80rem; }
+    h1 { font-size: 1.05rem; font-weight: 600; margin: 0; }
+    h2 { font-size: .95rem; font-weight: 600; margin: 0; }
+    .comparison, .variant { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 1rem; }
+    .comparison { gap: 1.75rem; }
+    body[data-view="mobile"] .comparison { grid-template-columns: repeat(auto-fit, minmax(min(100%, 23rem), 1fr)); align-items: start; }
+    button, select, textarea { font: inherit; padding: .45rem .8rem; border: .0625rem solid var(--color-border-contrast); border-radius: .4rem; color: var(--color-text); background: var(--color-background-soft); }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--color-link); }
+    button.primary { background: var(--color-cta-button-bg); color: var(--color-cta-button-text); border-color: transparent; }
+    button.link { padding: 0; border: 0; background: none; color: var(--color-link); }
+    .bar, .buttons { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+    .bar select { min-width: 0; max-width: 100%; }
+    .seg { display: inline-flex; border: .0625rem solid var(--color-border-contrast); border-radius: .4rem; overflow: hidden; }
+    .seg button { border: 0; border-radius: 0; background: none; }
+    .seg button[aria-pressed="true"] { background: var(--color-background-mute); font-weight: 600; }
+    .fine, .caption, summary { color: var(--color-text-2); font-size: .85rem; }
+    code { overflow-wrap: anywhere; padding: .1rem .35rem; border-radius: .25rem; background: var(--color-background-mute); }
+    .card { border: .0625rem solid var(--color-border-contrast); border-radius: .75rem; background: var(--color-background-soft); overflow: hidden; }
+    .task { padding: .75rem 1.25rem; border-bottom: .0625rem solid var(--color-border); display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .edge { padding: 1rem 1.25rem; background: var(--color-background); display: grid; gap: .7rem; }
+    .q { font-weight: 500; }
+    textarea { width: 100%; min-height: 2.6rem; resize: vertical; }
+    pre { margin: 0; font-size: .85rem; color: var(--color-text-2); white-space: pre-wrap; }
+    .access { display: grid; gap: .4rem; }
+    .paths { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .scope-row { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .75rem; align-items: baseline; }
+    .scope-row .paths { display: grid; justify-items: start; min-width: 0; }
+    .sheet .scope-row { grid-template-columns: minmax(0, 1fr); gap: .4rem; }
+    .scope-label { font-weight: 600; }
+    summary { cursor: pointer; }
+    .explanation { display: grid; gap: .5rem; }
+    .narrative { --disclosure-bg: var(--color-background); display: flow-root; position: relative; max-width: 40rem; min-width: 0; }
+    .narrative[role="button"] { cursor: pointer; }
+    .narrative[role="button"]:focus-visible { outline: .125rem solid var(--color-link); outline-offset: .2rem; border-radius: .25rem; }
+    .sheet .narrative { --disclosure-bg: var(--color-background-soft); }
+    .narrative.command-block { --disclosure-bg: var(--color-background-mute); }
+    .request-text { display: block; margin: 0; width: 100%; min-width: 0; line-height: 1.5; }
+    .command { white-space: pre-wrap; font-size: .85rem; }
+    .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+    .chevron { color: var(--color-text); line-height: 0; }
+    .narrative[aria-expanded="false"] .chevron { position: absolute; right: 0; bottom: 0; width: 3.25rem; height: 1.5rem; padding: .25rem .25rem .25rem 2rem; background: linear-gradient(to right, transparent, var(--disclosure-bg) .75rem); }
+    .narrative[aria-expanded="false"] .chevron::before { content: '…'; position: absolute; left: 1rem; bottom: .3rem; line-height: 1; }
+    .narrative[aria-expanded="true"] .chevron { float: right; padding: .2rem; margin-inline-start: .5rem; }
+    .narrative[aria-expanded="true"] .chevron svg { transform: rotate(180deg); }
+    .phone { width: 22.5rem; max-width: 100%; height: 40rem; margin: 0 auto; border: .375rem solid var(--color-border-contrast); border-radius: 2.25rem; background: var(--color-background); display: flex; flex-direction: column; overflow-y: auto; }
+    .statusbar { display: flex; justify-content: space-between; padding: .5rem 1.25rem .25rem; font-size: .75rem; color: var(--color-text-2); }
+    .appbar { padding: .75rem 1rem; border-bottom: .0625rem solid var(--color-border); display: grid; gap: .1rem; }
+    .pane { padding: 1rem; display: grid; gap: .6rem; }
+    .sheet { margin-top: auto; padding: .75rem 1rem 1.25rem; border-top: .0625rem solid var(--color-border-contrast); border-radius: 1.25rem 1.25rem 0 0; background: var(--color-background-soft); display: grid; gap: .6rem; }
+    .handle { width: 2.5rem; height: .25rem; border-radius: .125rem; background: var(--color-border-contrast); margin: 0 auto .25rem; }
+    .sheet .buttons { display: grid; gap: .5rem; }
+    .sheet .buttons button { width: 100%; padding: .7rem; }
+    .pair { display: inline-flex; align-items: center; gap: .6rem; }
+    .sheet .pair { display: grid; gap: .5rem; }
+  </style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Sidekick · permission requests</h1>
+    <span class="caption">One request at a time. Desktop and mobile. Interactive and simulated.</span>
+  </div>
+  <div class="bar">
+    <span class="seg" role="group" aria-label="view"><button id="desktop" aria-pressed="true">Desktop</button><button id="mobile" aria-pressed="false">Mobile</button></span>
+    <select id="mode" aria-label="scenario"></select>
+    <button id="restart">Restart</button>
+  </div>
+  <div id="card" class="comparison"></div>
+</main>
+<script>
+  const MODES = {
+    read: {
+      label: 'Sandbox · simple access request', sandbox: true,
+      queue: [{
+        description: 'Running Go tests requires access to the installed toolchain and downloaded modules.',
+        command: 'go test ./...',
+        requests: [{ access: 'Read only', paths: ['/usr/local/go', '~/go/pkg/mod'] }]
+      }]
+    },
+    queue: {
+      label: 'Sandbox · three separate requests', sandbox: true,
+      queue: [
+        {
+          description: 'Running Go tests requires access to the installed toolchain and downloaded modules.',
+          command: 'go test ./...',
+          requests: [{ access: 'Read only', paths: ['/usr/local/go', '~/go/pkg/mod'] }]
+        },
+        {
+          description: 'Reusing compiled Go packages between test runs requires read and write access to the build cache.',
+          command: 'go test ./...',
+          requests: [{ access: 'Read & write', paths: ['~/.cache/go-build'] }]
+        },
+        {
+          description: 'Checking API compatibility requires reading the shared schemas in the sibling repository.',
+          command: 'go test ./internal/compat -args -schema ../api-contracts/openapi/sidekick.yaml',
+          requests: [{ access: 'Read only', paths: ['../api-contracts/openapi'] }]
+        }
+      ]
+    },
+    grouped: {
+      label: 'Sandbox · one larger, related request', sandbox: true,
+      queue: [{
+        description: 'Updating the shared Go SDK requires reading the API schemas and custom generator templates, then writing the client and documentation in the sibling SDK repository. Both outputs need to match the same schema version.',
+        command: [
+          'java -jar ~/.local/share/openapi-generator/openapi-generator-cli.jar generate \\\\',
+          '  --input-spec ../api-contracts/openapi/sidekick.yaml \\\\',
+          '  --generator-name go --template-dir ../client-codegen/templates/go \\\\',
+          '  --output ../sidekick-go/client \\\\',
+          '  --additional-properties=packageName=client,isGoSubmodule=true &&',
+          'java -jar ~/.local/share/openapi-generator/openapi-generator-cli.jar generate \\\\',
+          '  --input-spec ../api-contracts/openapi/sidekick.yaml \\\\',
+          '  --generator-name markdown --output ../sidekick-go/docs/api'
+        ].join('\n').replaceAll('\\\\', '\\'),
+        requests: [
+          { access: 'Read only', paths: ['../api-contracts/openapi', '../client-codegen/templates/go', '~/.local/share/openapi-generator'] },
+          { access: 'Read & write', paths: ['../sidekick-go/client', '../sidekick-go/docs/api'] }
+        ]
+      }]
+    },
+    exception: {
+      label: 'Sandbox exception · tests', sandbox: true, exception: true,
+      description: 'Run tests.',
+      command: 'go test ./...',
+      commandPatterns: ['go test'],
+      patternDescription: 'Run Go tests as the code changes, without Sandbox.'
+    },
+    unusual: {
+      label: 'Sandbox exception · unusual command', sandbox: true, exception: true,
+      description: 'Verify the downloaded release archives against the published checksums before packaging the update. Report missing or modified files for both Linux and macOS builds.',
+      observed: ['~/Downloads/sidekick-release · read-only', '../release-manifests/SHA256SUMS · read-only', '.side/release-verification.json · write'],
+      command: [
+        'python3 scripts/verify_release.py \\\\',
+        '  --archives ~/Downloads/sidekick-release \\\\',
+        '  --checksums ../release-manifests/SHA256SUMS \\\\',
+        '  --platform linux-amd64 --platform darwin-arm64 \\\\',
+        '  --report .side/release-verification.json'
+      ].join('\n').replaceAll('\\\\', '\\'),
+      commandPatterns: ['python3 scripts/verify_release.py'],
+      patternDescription: 'Verify additional release archives without Sandbox.'
+    },
+    plain: {
+      label: 'No sandbox · command approval', sandbox: false,
+      description: 'Run tests.', command: 'go test ./...',
+      commandPatterns: ['go test']
+    },
+    compound: {
+      label: 'No sandbox · long compound command', sandbox: false,
+      description: 'Check the release with unit tests, race detection, integration tests and static analysis.',
+      command: [
+        'go test -count=1 -timeout=120s ./... &&',
+        'go test -race -count=1 -timeout=300s ./client/... ./api/... &&',
+        'go test -tags=integration -count=1 -timeout=600s ./integration/... &&',
+        'go vet ./...'
+      ].join('\n'),
+      commandPatterns: ['go test', 'go vet']
+    },
+    rejectFirst: {
+      label: 'No sandbox · reject-first experiment', sandbox: false, rejectFirst: true,
+      description: 'Run tests and static analysis.',
+      command: 'go test ./... && go vet ./...',
+      commandPatterns: ['go test', 'go vet'],
+      patternDescription: 'Run tests and static analysis as the code changes.'
+    },
+    fileOperation: {
+      label: 'Sandbox · agent file operation', sandbox: true,
+      queue: [{
+        description: 'Check the authentication requirements in the API notes.',
+        operation: 'Read ~/Documents/api-notes.md',
+        requests: [
+          { access: 'Read only', paths: ['~/Documents/api-notes.md'] }
+        ]
+      }]
+    },
+    linux: {
+      label: 'Sandbox unavailable · Linux', sandbox: true,
+      prerequisite: 'bubblewrap was not found on PATH.',
+      remediation: 'Install your Linux distribution’s bubblewrap package and ensure bwrap is on the Sidekick host’s PATH. Then retry.'
+    },
+    macos: {
+      label: 'Sandbox unavailable · macOS', sandbox: true,
+      prerequisite: 'sandbox-exec is unavailable.',
+      remediation: 'Check that /usr/bin/sandbox-exec exists and is executable on the Sidekick host. If it is missing, repair the macOS installation. Then retry.'
+    }
+  };
+  const WHY_STYLES = [
+    { id: 'rows', title: 'Access request', tradeoff: 'Aligned on desktop; stacked on mobile.' }
+  ];
+  const LIFETIME_STYLES = [
+    { id: 'all', title: 'All choices visible', tradeoff: 'Every choice takes one click.' }
+  ];
+  const OBSERVED_ACCESS = ['/usr/local/go · read-only', '~/go/pkg/mod · read-only', '~/.cache/go-build · read & write'];
+  const SAVED_TO = '.side/sandbox.yml and ~/.config/sidekick/sandbox.yml';
+  const esc = (t) => t.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  let mode = MODES.read, mobile = false, states = [];
+
+
+  const paths = (request) => `<span class="paths">${request.paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>`;
+  const currentRequest = (s) => mode.queue ? mode.queue[s.index] : mode;
+  function collapsedText(s, kind, text) {
+    const tag = kind === 'command' ? 'code' : 'p';
+    const id = `${s.id}-${kind}`;
+    return `<div class="narrative ${kind}-block" data-kind="${kind}">${toggle()}<${tag} id="${id}" class="request-text ${kind} ${s.expanded[kind] ? '' : 'clamp'}">${esc(text)}</${tag}></div>`;
+  }
+  // Hidden until layout shows the clamped text actually overflows.
+  const toggle = () => '<span class="chevron" hidden aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>';
+
+  function request(s) {
+    const item = currentRequest(s);
+    const patterns = (item.commandPatterns || []).map((pattern) => `<code>${esc(pattern)}</code>`).join('');
+    const patternRow = `<div class="access scope-row"><span class="scope-label">Command Pattern</span><span class="paths">${patterns}</span></div>`;
+    if (s.stage === 'pattern') return `${collapsedText(s, 'description', item.patternDescription)}${patternRow}`;
+    const scope = (item.requests || []).map((r) => `<div class="access scope-row"><span class="scope-label">${esc(r.access)}</span>${paths(r)}</div>`).join('');
+    const example = `${mode.queue ? '<span class="fine">Example</span>' : ''}${collapsedText(s, 'command', item.operation || item.command)}`;
+    const commandPattern = mode.sandbox || mode.rejectFirst ? '' : patternRow;
+    return `${collapsedText(s, 'description', item.description)}${scope}${example}${commandPattern}`;
+  }
+
+  function choices(s) {
+    const deny = '<button data-act="no">Deny</button>';
+    if (s.stage === 'ask' && (mode.exception || mode.rejectFirst)) {
+      return `<button class="primary" data-act="execute">${mode.exception ? 'Run once without Sandbox' : 'Allow'}</button>${deny}`;
+    }
+    const always = '<button class="primary" data-act="always">Always allow</button>';
+    const task = '<button data-act="task">Allow for this task</button>';
+    const once = mode.sandbox || s.stage === 'pattern' ? '' : '<button data-act="allow-once">Allow once</button>';
+    return `${always}${task}${once}${deny}`;
+  }
+
+  function executionStatus(s) {
+    if (s.execution === 'idle') return '';
+    const text = s.execution === 'running'
+      ? `${mode.exception ? 'Running without Sandbox' : 'Command running'}…`
+      : s.execution === 'stopped'
+        ? 'Command stopped.'
+        : mode.exception ? 'Ran without Sandbox.' : 'Command finished.';
+    const stop = s.execution === 'running' ? ' <button class="link" data-act="stop">Stop</button>' : '';
+    const findings = mode.exception && s.execution === 'done'
+      ? `<details><summary>Observed access</summary><span class="caption">Findings sent to Sidekick. Filesystem policy unchanged.</span><pre>${esc(s.findings.join('\n'))}</pre></details>`
+      : '';
+    return `<div class="access" data-execution aria-live="polite"><span class="caption">${text}${stop}</span>${findings}</div>`;
+  }
+
+  function body(s) {
+    const activity = executionStatus(s);
+    if (s.stage === 'ask' || s.stage === 'pattern') {
+      const prompt = `${request(s)}<div class="buttons">${choices(s)}</div>`;
+      return activity + (mobile ? `<div class="sheet"><div class="handle"></div>${prompt}</div>` : prompt);
+    }
+    const out = {
+      decided: '<strong>Requests handled</strong>',
+      ran: `<strong>Command finished</strong><span class="caption">${{ always: 'Command pattern allowed for future tasks', task: 'Command pattern allowed for this task', once: 'Allowed once' }[s.lifetime]}</span>`,
+      patternAllowed: `<strong>${mode.exception ? 'Sandbox exception' : 'Command pattern'} allowed ${s.lifetime === 'always' ? 'for future tasks' : 'for this task'}</strong>`,
+      patternDenied: `<strong>No rule added</strong>${s.note ? `<span class="caption">You: ${esc(s.note)}</span>` : ''}`,
+      no: `<label for="${s.id}-reason">${s.returnStage === 'pattern' ? 'Why not allow this pattern?' : 'Why shouldn’t Sidekick proceed?'}</label><textarea id="${s.id}-reason" placeholder="Tell Sidekick what to do differently (optional).">${esc(s.note)}</textarea><div class="buttons"><button class="primary" data-act="send">Submit</button><button data-act="cancel">Cancel</button></div>`,
+      noted: `<strong>Not allowed</strong>${s.note ? `<span class="caption">You: ${esc(s.note)}</span>` : ''}`,
+      unavailable: `<strong>Sandbox unavailable</strong><span class="caption">${mode.prerequisite || ''}</span><span class="caption">${mode.remediation || ''}</span><div class="buttons"><button class="primary" data-act="retry">Retry</button></div>`,
+      checking: '<strong>Checking Sandbox…</strong>'
+    }[s.stage];
+    if (mobile && s.stage === 'no') return `${activity}<div class="sheet"><div class="handle"></div>${out}</div>`;
+    return activity + (mobile ? `<div class="pane">${out}</div>` : out);
+  }
+
+  function render(target) {
+    const html = (target ? [target] : states).map((s) => {
+      const status = { ask: 'permission request', pattern: 'rule request', patternAllowed: 'allowed', patternDenied: 'no rule added', decided: 'decided', ran: 'done', no: 'permission request', noted: 'not allowed', unavailable: 'unavailable', checking: 'checking' }[s.stage];
+      const progress = mode.queue && ['ask', 'no'].includes(s.stage) && mode.queue.length > 1 ? `Request ${s.index + 1} of ${mode.queue.length}` : status;
+      const patternFlow = (mode.exception || mode.rejectFirst) && s.execution !== 'idle';
+      const head = mode.queue || patternFlow
+        ? `<strong>${mode.queue ? 'Sandbox policy' : mode.exception ? 'Sandbox exception' : 'Command permissions'}</strong><span class="caption">${progress}</span>`
+        : mode.prerequisite
+          ? `<strong>Sandbox</strong><span class="caption">${status}</span>`
+          : `<strong>Update release tooling</strong><span class="caption">${status}</span>`;
+      const card = mobile
+        ? `<div class="phone"><div class="statusbar"><span>9:41</span><span>Sidekick</span></div><div class="appbar">${head}</div>${body(s)}</div>`
+        : `<div class="card"><div class="task">${head}</div><div class="edge">${body(s)}</div></div>`;
+      const treatment = [...WHY_STYLES, ...LIFETIME_STYLES].find((style) => style.id === s.id);
+      const label = states.length > 1 ? `<div><h2>${treatment.title}</h2><span class="caption">${treatment.tradeoff}</span></div>` : '';
+      return `<section class="variant" data-treatment="${s.id}">${label}${card}</section>`;
+    }).join('');
+    if (target) document.querySelector(`[data-treatment="${target.id}"]`).outerHTML = html;
+    else document.getElementById('card').innerHTML = html;
+    updateClamps();
+  }
+
+  function updateClamps() {
+    document.querySelectorAll('.narrative').forEach((el) => {
+      const text = el.querySelector('.request-text');
+      const icon = el.querySelector('.chevron');
+      const s = states.find((state) => state.id === el.closest('[data-treatment]').dataset.treatment);
+      const expanded = !!s.expanded[el.dataset.kind];
+      icon.hidden = true;
+      text.classList.add('clamp');
+      const overflows = text.scrollHeight > text.clientHeight + 1;
+      text.classList.toggle('clamp', !expanded);
+      if (overflows) {
+        el.dataset.act = 'expand';
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('aria-expanded', String(expanded));
+        el.setAttribute('aria-controls', text.id);
+      } else {
+        delete el.dataset.act;
+        for (const attribute of ['role', 'tabindex', 'aria-expanded', 'aria-controls']) el.removeAttribute(attribute);
+      }
+      icon.hidden = !overflows;
+    });
+  }
+  window.addEventListener('resize', updateClamps);
+
+  function runApprovedCommand(s) {
+    s.execution = 'running';
+    s.stage = 'pattern';
+    s.expanded = {};
+    s.timer = setTimeout(() => {
+      s.execution = 'done';
+      if (mode.exception) s.findings = [...(mode.observed || OBSERVED_ACCESS)];
+      const activity = document.querySelector(`[data-treatment="${s.id}"] [data-execution]`);
+      if (activity) activity.outerHTML = executionStatus(s);
+    }, 3000);
+  }
+
+  function reset() {
+    states.forEach((s) => clearTimeout(s.timer));
+    const styles = mode.queue || !mode.sandbox ? LIFETIME_STYLES : WHY_STYLES;
+    states = styles.map(({ id }) => ({ id, stage: mode.prerequisite ? 'unavailable' : 'ask', returnStage: 'ask', execution: 'idle', index: 0, decisions: [], grants: [], findings: [], lifetime: null, expanded: {}, note: '', timer: null }));
+    render();
+  }
+
+  document.getElementById('card').onclick = (e) => {
+    const button = e.target.closest('[data-act]');
+    if (!button) return;
+    const act = button.dataset.act;
+    const section = e.target.closest('[data-treatment]');
+    const s = states.find((state) => state.id === section.dataset.treatment);
+    const draft = section.querySelector('textarea');
+    if (draft) s.note = draft.value;
+    if (mode.queue && ['always', 'task'].includes(act)) {
+      const item = currentRequest(s);
+      s.decisions.push({ request: item, action: act, note: '' });
+      s.grants.push(...item.requests.flatMap((r) => r.paths.map((path) => ({
+        path, access: r.access, lifetime: act, destinations: act === 'always' ? SAVED_TO : null
+      }))));
+      s.index++;
+      s.expanded = {};
+      if (s.index === mode.queue.length) s.stage = 'decided';
+    } else if (act === 'always' || act === 'task' || act === 'allow-once') {
+      s.lifetime = act === 'allow-once' ? 'once' : act;
+      s.stage = s.stage === 'pattern' ? 'patternAllowed' : 'ran';
+    } else if (act === 'expand') {
+      const selection = window.getSelection();
+      if (e.detail > 0 && selection && !selection.isCollapsed &&
+          (button.contains(selection.anchorNode) || button.contains(selection.focusNode))) return;
+      const kind = button.dataset.kind;
+      s.expanded[kind] = !s.expanded[kind];
+      render(s);
+      document.querySelector(`[data-treatment="${s.id}"] [data-kind="${kind}"]`).focus();
+      return;
+    } else if (act === 'execute') {
+      runApprovedCommand(s);
+    } else if (act === 'retry') {
+      s.stage = 'checking';
+      s.timer = setTimeout(() => { s.stage = 'unavailable'; render(s); }, 900);
+    } else if (act === 'no') {
+      s.returnStage = s.stage;
+      s.stage = 'no';
+    } else if (act === 'cancel') {
+      s.stage = s.returnStage;
+      s.note = '';
+    } else if (act === 'stop') {
+      clearTimeout(s.timer);
+      s.execution = 'stopped';
+      section.querySelector('[data-execution]').outerHTML = executionStatus(s);
+      return;
+    } else if (act === 'send') {
+      s.note = s.note.trim();
+      if (mode.queue) {
+        s.decisions.push({ request: currentRequest(s), action: 'no', note: s.note });
+        s.index++;
+        s.expanded = {};
+        s.note = '';
+        s.stage = s.index === mode.queue.length ? 'decided' : 'ask';
+      } else {
+        s.stage = s.returnStage === 'pattern' ? 'patternDenied' : 'noted';
+      }
+    }
+    render(s);
+    const updated = document.querySelector(`[data-treatment="${s.id}"]`);
+    const focusTarget = { no: 'textarea', cancel: '[data-act="no"]', send: s.stage === 'ask' && '.buttons button', execute: '.buttons button' }[act];
+    if (focusTarget) updated.querySelector(focusTarget).focus();
+  };
+
+  document.getElementById('card').onkeydown = (e) => {
+    if (!e.target.matches('.narrative[role="button"]') || !['Enter', ' '].includes(e.key)) return;
+    e.preventDefault();
+    if (!e.repeat) e.target.click();
+  };
+
+  const select = document.getElementById('mode');
+  select.innerHTML = Object.entries(MODES).map(([k, m]) => `<option value="${k}">${m.label}</option>`).join('');
+  select.onchange = () => { mode = MODES[select.value]; reset(); };
+  document.getElementById('restart').onclick = reset;
+  const setView = (isMobile) => {
+    mobile = isMobile;
+    document.body.dataset.view = isMobile ? 'mobile' : 'desktop';
+    document.getElementById('desktop').setAttribute('aria-pressed', String(!isMobile));
+    document.getElementById('mobile').setAttribute('aria-pressed', String(isMobile));
+    render();
+  };
+  document.getElementById('desktop').onclick = () => setView(false);
+  document.getElementById('mobile').onclick = () => setView(true);
+  reset();
+</script>
+</body>
+</html>
