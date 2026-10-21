@@ -548,6 +548,21 @@ func truncateToolResultMiddle(block *llm2.ContentBlock, oldText string, maxChars
 // cleanLlm2ToolCallsAndResponses removes orphaned tool calls and tool results.
 func cleanLlm2ToolCallsAndResponses(messages *[]llm2.Message) {
 	validCalls := make(map[string]bool)
+	protected := protectedHistoryBlocks(*messages)
+	protectedCalls := make(map[string]bool)
+	for i, msg := range *messages {
+		for j, block := range msg.Content {
+			if !protected[i][j] {
+				continue
+			}
+			if block.ToolUse != nil {
+				protectedCalls[block.ToolUse.Id] = true
+			}
+			if block.ToolResult != nil && protectedCalls[block.ToolResult.ToolCallId] {
+				validCalls[block.ToolResult.ToolCallId] = true
+			}
+		}
+	}
 	for i, msg := range *messages {
 		calls := getToolUseBlocks(msg)
 		if len(calls) == 0 {
@@ -621,29 +636,28 @@ func hasHumanContext(block llm2.ContentBlock) bool {
 }
 
 func protectedHistoryBlocks(messages []llm2.Message) [][]bool {
+	protected := protectedDeliverableBlocks(messages)
 	pairs := make(map[string]bool)
-	for _, msg := range messages {
+	for i, msg := range messages {
 		intentStart := false
-		for _, block := range msg.Content {
+		for j, block := range msg.Content {
 			if GetContextType(block) == "IntentTaskStart" {
 				intentStart = true
 			}
-			if block.ToolResult != nil && hasHumanContext(block) {
+			protected[i][j] = protected[i][j] || hasHumanContext(block)
+			if block.ToolResult != nil && protected[i][j] {
 				pairs[block.ToolResult.ToolCallId] = true
 			}
 		}
-		for _, block := range msg.Content {
-			if block.ToolUse != nil && (hasHumanContext(block) ||
+		for j, block := range msg.Content {
+			if block.ToolUse != nil && (protected[i][j] ||
 				(intentStart && block.ToolUse.Name == "start_intent_subtask")) {
 				pairs[block.ToolUse.Id] = true
 			}
 		}
 	}
-	protected := make([][]bool, len(messages))
 	for i, msg := range messages {
-		protected[i] = make([]bool, len(msg.Content))
 		for j, block := range msg.Content {
-			protected[i][j] = hasHumanContext(block)
 			if block.ToolUse != nil && pairs[block.ToolUse.Id] {
 				protected[i][j] = true
 			}

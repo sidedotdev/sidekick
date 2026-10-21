@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -24,6 +25,8 @@ const maxRetrieveCodeContextLength = 15000
 
 type toolCallOptions struct {
 	ForwardedAssistantResponse bool
+	AssistantMessage           common.Message
+	requestsAppended           bool
 }
 
 func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *persisted_ai.ChatHistoryContainer, customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error)) ([]llm2.ToolResultBlock, error) {
@@ -31,6 +34,9 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 }
 
 func handleToolCallsWithOptions(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *persisted_ai.ChatHistoryContainer, customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error), options toolCallOptions) ([]llm2.ToolResultBlock, error) {
+	if options.AssistantMessage != nil && !options.requestsAppended && serializeDeliverableCalls(dCtx.ExecContext, toolCalls) {
+		return handleDeliverableToolCalls(dCtx, toolCalls, chatHistory, customHandlers, options)
+	}
 	// backward compatibility: handle-parallel-tool-calls
 	// if old version, only process the first tool call
 	version := workflow.GetVersion(dCtx, "handle-parallel-tool-calls", workflow.DefaultVersion, 1)
