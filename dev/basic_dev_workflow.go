@@ -959,6 +959,9 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 	return RunSubflowWithoutResult(dCtx, "review_and_resolve", "Review and resolve", func(subflow domain.Subflow) (err error) {
 		defer func() {
+			if err == nil && workflow.GetVersion(dCtx, "skip-successful-review-git-checkpoint", workflow.DefaultVersion, 1) >= 1 {
+				return
+			}
 			if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
 				err = errors.Join(err, checkpointErr)
 			}
