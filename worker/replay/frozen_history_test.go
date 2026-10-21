@@ -23,8 +23,27 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// Frozen histories avoid comparing different inputs while diagnosing a running
-// workflow. Capture is explicit because decoded histories can contain secrets.
+// TestFrozenWorkflowHistory replays a captured history so the same input can
+// be replayed across revisions while the live workflow keeps advancing.
+// It omits ancestry filtering because histories from other builds can still
+// exercise compatible code and be useful diagnostic inputs; failures may
+// instead reflect build differences.
+//
+// Capture (set SIDE_REPLAY_CAPTURE_WORKFLOW, optionally SIDE_REPLAY_CAPTURE_RUN):
+//
+//	SIDE_REPLAY_HISTORY_FILE="$PWD/.side/tmp/replay-history.json" \
+//	SIDE_REPLAY_CAPTURE_WORKFLOW=<workflow-id> \
+//	go test -count=1 -run '^TestFrozenWorkflowHistory$' ./worker/replay
+//
+// Offline replay: same command with SIDE_REPLAY_CAPTURE_WORKFLOW unset.
+//
+// The path must be absolute because tests run from the package directory. An
+// existing file is never overwritten. Captured histories have offloaded
+// payloads resolved, so they can contain secrets: keep them in .side/tmp.
+//
+// SIDE_REPLAY_PRINT_FROM/SIDE_REPLAY_PRINT_THROUGH log an event-ID range,
+// SIDE_REPLAY_THROUGH_EVENT replays only through that event, and
+// SIDE_REPLAY_TRIM_IN_FLIGHT=true drops an in-flight workflow-task tail.
 func TestFrozenWorkflowHistory(t *testing.T) {
 	path := os.Getenv("SIDE_REPLAY_HISTORY_FILE")
 	if path == "" {
