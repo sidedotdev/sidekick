@@ -152,3 +152,184 @@ func TestDeliverableHistoryCleanupAcrossInterveningMessages(t *testing.T) {
 		})
 	}
 }
+
+func TestDeliverableHistorySnapshotRetention(t *testing.T) {
+	t.Parallel()
+	type attempt struct {
+		id              string
+		outcome         string
+		requestSnapshot bool
+		reportSnapshot  bool
+	}
+	for _, tc := range []struct {
+		name     string
+		attempts []attempt
+		keep     []int
+	}{
+		{
+			name: "request snapshot survives later successes without snapshots",
+			attempts: []attempt{
+				{outcome: "success", requestSnapshot: true},
+				{outcome: "success"},
+				{outcome: "success"},
+			},
+			keep: []int{0, 2},
+		},
+		{
+			name: "report snapshot survives later successes without snapshots",
+			attempts: []attempt{
+				{outcome: "success", reportSnapshot: true},
+				{outcome: "success"},
+				{outcome: "success"},
+			},
+			keep: []int{0, 2},
+		},
+		{
+			name: "new snapshot supersedes old snapshot independently of latest success",
+			attempts: []attempt{
+				{outcome: "success", requestSnapshot: true},
+				{outcome: "success", reportSnapshot: true},
+				{outcome: "success"},
+			},
+			keep: []int{1, 2},
+		},
+		{
+			name: "latest success and snapshot share one pair",
+			attempts: []attempt{
+				{outcome: "success", requestSnapshot: true},
+				{outcome: "success"},
+				{outcome: "success", reportSnapshot: true},
+			},
+			keep: []int{2},
+		},
+		{
+			name: "snapshot success and newer failure are independently retained",
+			attempts: []attempt{
+				{outcome: "success", reportSnapshot: true},
+				{outcome: "success"},
+				{outcome: "failure"},
+				{outcome: "failure"},
+			},
+			keep: []int{0, 1, 3},
+		},
+		{
+			name: "later success clears failures without discarding snapshot",
+			attempts: []attempt{
+				{outcome: "success", requestSnapshot: true},
+				{outcome: "failure"},
+				{outcome: "failure"},
+				{outcome: "success"},
+			},
+			keep: []int{0, 3},
+		},
+		{
+			name: "failed request snapshot does not supersede validated snapshot",
+			attempts: []attempt{
+				{outcome: "success", reportSnapshot: true},
+				{outcome: "success"},
+				{outcome: "failure", requestSnapshot: true},
+			},
+			keep: []int{0, 1, 2},
+		},
+		{
+			name: "failed report snapshot does not supersede validated snapshot",
+			attempts: []attempt{
+				{outcome: "success", requestSnapshot: true},
+				{outcome: "success"},
+				{outcome: "failure", reportSnapshot: true},
+			},
+			keep: []int{0, 1, 2},
+		},
+		{
+			name: "snapshot without explicit outcome does not supersede validated snapshot",
+			attempts: []attempt{
+				{outcome: "success", requestSnapshot: true},
+				{outcome: "success"},
+				{requestSnapshot: true},
+			},
+			keep: []int{0, 1},
+		},
+		{
+			name: "failed snapshot receives no independent protection",
+			attempts: []attempt{
+				{outcome: "failure", requestSnapshot: true},
+				{outcome: "failure"},
+			},
+			keep: []int{1},
+		},
+		{
+			name: "snapshots and successes are selected per deliverable",
+			attempts: []attempt{
+				{id: "a", outcome: "success", requestSnapshot: true},
+				{id: "b", outcome: "success", reportSnapshot: true},
+				{id: "a", outcome: "success"},
+				{id: "b", outcome: "success"},
+				{id: "a", outcome: "success", reportSnapshot: true},
+			},
+			keep: []int{1, 3, 4},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var messages, expected []llm2.Message
+			for i, a := range tc.attempts {
+				id := a.id
+				if id == "" {
+					id = "a"
+				}
+				pair := []llm2.Message{
+					markTestDeliverable(textMsg(llm2.RoleAssistant, strings.Repeat("operation", i+1)), id, "revise", "", a.requestSnapshot),
+					markTestDeliverable(textMsg(llm2.RoleUser, strings.Repeat("report", i+1)), id, "", a.outcome, a.reportSnapshot),
+				}
+				messages = append(messages, pair...)
+				for _, keep := range tc.keep {
+					if i == keep {
+						expected = append(expected, pair...)
+					}
+				}
+			}
+			tail := textMsg(llm2.RoleUser, "continue")
+			messages = append(messages, tail)
+			expected = append(expected, tail)
+
+			got, err := ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{KeepLength: 1, TruncationTrigger: 1}, common.ModelConfig{})
+			require.NoError(t, err)
+			assert.Equal(t, expected, got)
+		})
+	}
+}
+
+func TestDeliverableHistorySnapshotToolIntegrity(t *testing.T) {
+	t.Parallel()
+	for _, requestSnapshot := range []bool{true, false} {
+		name := "report snapshot"
+		if requestSnapshot {
+			name = "request snapshot"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			model := common.ModelConfig{Provider: "anthropic", Model: "claude-opus-5-5"}
+			large := strings.Repeat("x", common.MaxCharsForModel(model.Provider, model.Model)/4+1)
+			messages := []llm2.Message{
+				markTestDeliverable(toolUseMsg("operation", "produce", large), "a", "revise", "", requestSnapshot),
+				toolResultMsg("operation", "produce", large),
+				toolUseMsg("report", "report", large),
+				markTestDeliverable(toolResultMsg("report", "report", large), "a", "", "success", !requestSnapshot),
+				markTestDeliverable(textMsg(llm2.RoleAssistant, "later operation"), "a", "revise", "", false),
+				markTestDeliverable(textMsg(llm2.RoleUser, "later success without snapshot"), "a", "", "success", false),
+				textMsg(llm2.RoleUser, "continue"),
+			}
+			before, err := json.Marshal(messages)
+			require.NoError(t, err)
+
+			got, err := ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{KeepLength: 1, TruncationTrigger: 1}, model)
+			require.NoError(t, err)
+			require.Len(t, got, len(messages))
+			assert.Equal(t, messages, got)
+
+			after, err := json.Marshal(messages)
+			require.NoError(t, err)
+			assert.JSONEq(t, string(before), string(after))
+		})
+	}
+}

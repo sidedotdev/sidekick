@@ -79,10 +79,17 @@ func protectedDeliverableBlocks(messages []llm2.Message) [][]bool {
 	}
 	successes := make(map[string]deliverableAttempt)
 	failures := make(map[string]deliverableAttempt)
+	snapshots := make(map[string]deliverableAttempt)
 	for _, attempt := range deliverableAttempts(messages) {
 		if attempt.outcome == "success" {
 			successes[attempt.id] = attempt
 			delete(failures, attempt.id)
+			operation := GetDeliverable(messages[attempt.operation.message].Content[attempt.operation.block])
+			report := GetDeliverable(messages[attempt.report.message].Content[attempt.report.block])
+			// A later success need not contain a replacement snapshot.
+			if operation.Snapshot || report.Snapshot {
+				snapshots[attempt.id] = attempt
+			}
 		} else {
 			failures[attempt.id] = attempt
 		}
@@ -95,6 +102,9 @@ func protectedDeliverableBlocks(messages []llm2.Message) [][]bool {
 		protect(attempt)
 	}
 	for _, attempt := range failures {
+		protect(attempt)
+	}
+	for _, attempt := range snapshots {
 		protect(attempt)
 	}
 	return protected
