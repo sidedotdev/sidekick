@@ -22,8 +22,15 @@ import (
 // repository is just another local directory. Callers must not be parallel.
 func installFakeSSH(t *testing.T, script string) {
 	t.Helper()
+	installFakeTool(t, "ssh", script)
+}
+
+// installFakeTool prepends a shim to PATH for a tool the Linux sandbox has
+// but the developer machine may not.
+func installFakeTool(t *testing.T, name, script string) {
+	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\n"+script), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+script), 0700))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
@@ -47,6 +54,14 @@ func setupGitSyncRepos(t *testing.T) (local, remote, worktree string) {
 	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
 exec sh -c "$cmd"
 `)
+	if _, err := exec.LookPath("flock"); err != nil {
+		// util-linux flock gates advancing the main checkout in place; the
+		// sandbox has it but macOS does not. Like util-linux, the shim locks
+		// the inherited descriptor so the lock outlives the shim process.
+		installFakeTool(t, "flock", `for a in "$@"; do fd="$a"; done
+exec perl -e 'use Fcntl qw(:flock); open(my $fh, ">&=", $ARGV[0]) or exit 1; exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1)' "$fd"
+`)
+	}
 	local = setupTestGitRepo(t)
 	syncTestGit(t, local, "commit", "--allow-empty", "-m", "Initial commit")
 	remote = filepath.Join(t.TempDir(), "remote repo")

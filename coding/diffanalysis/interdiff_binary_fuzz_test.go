@@ -17,7 +17,7 @@ func FuzzInterdiffBinarySummaries(f *testing.F) {
 	f.Add("same", "same", "same", uint8(63))
 	f.Add("base", "same", "same", uint8(7))
 	f.Fuzz(func(t *testing.T, base, prior, current string, flags uint8) {
-		parallelInterdiffFuzz(t)
+		t.Parallel()
 		repo := newInterdiffFuzzRepo(t)
 		var ids [3]string
 		for i, text := range []string{base, prior, current} {

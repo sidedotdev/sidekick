@@ -18,9 +18,6 @@ type interdiffFuzzFile struct {
 
 type interdiffFuzzTree map[string]interdiffFuzzFile
 
-// Git-backed seed cases compete with subprocess-heavy tests in other packages.
-var interdiffFuzzSlots = make(chan struct{}, 2)
-
 // Git supplies both the input diffs and the application oracle. Comparing tree
 // IDs checks bytes, paths, existence and modes without sharing Interdiff's parser.
 func FuzzInterdiffTrees(f *testing.F) {
@@ -93,7 +90,7 @@ func FuzzInterdiffTrees(f *testing.F) {
 	add("", long, strings.ReplaceAll(long, "line 25\n", "changed\n"), []byte{0, 6, 0, 0, 0}, 18)
 
 	f.Fuzz(func(t *testing.T, base, prior, current string, program []byte, options uint8) {
-		parallelInterdiffFuzz(t)
+		t.Parallel()
 		trees := [3]interdiffFuzzTree{}
 		for i, content := range []string{base, prior, current} {
 			trees[i] = interdiffFuzzTree{
@@ -484,11 +481,4 @@ func assertEquivalentReviewPatch(t *testing.T, want, got string) {
 	if canonical(want) != canonical(got) {
 		t.Fatalf("different patch semantics\nWANT:\n%s\nGOT:\n%s", want, got)
 	}
-}
-
-func parallelInterdiffFuzz(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	interdiffFuzzSlots <- struct{}{}
-	t.Cleanup(func() { <-interdiffFuzzSlots })
 }
