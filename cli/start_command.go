@@ -157,9 +157,6 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if temporal && !migrationWaiter.wait(ctx) {
-				return
-			}
 			log.Info().Msg("Starting server...")
 			srv := startServer()
 

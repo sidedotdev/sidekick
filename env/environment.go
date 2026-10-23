@@ -59,6 +59,10 @@ const WorktreeLockReason = "Sidekick-managed worktree; locked to prevent git wor
 // ErrTypeBranchAlreadyExists is the application error type for branch already exists errors
 const ErrTypeBranchAlreadyExists = "BranchAlreadyExists"
 
+// ErrTypeMissingWorkingDir is the application error type for commands whose
+// relative working directory does not exist
+const ErrTypeMissingWorkingDir = "MissingWorkingDir"
+
 type EnvType string
 
 const (
@@ -325,6 +329,7 @@ type EnvRunCommandInput struct {
 	// Must be set to true by the wake/hibernate implementations themselves to
 	// avoid infinite recursion.
 	SkipWaking bool `json:"skipWaking,omitempty"`
+	activity   *activityRequest
 }
 
 type EnvRunCommandOutput = unix.RunCommandActivityOutput
@@ -704,11 +709,18 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 // exec request: argv, cwd and env cross the channel verbatim, so no shell
 // command line is ever assembled from user-controlled input.
 func agentExecRequest(workingDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) sideagent.ExecRequest {
-	return sideagent.ExecRequest{
-		Dir:  filepath.Join(workingDir, input.RelativeWorkingDir),
-		Argv: append([]string{input.Command}, input.Args...),
-		Env:  append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards)...),
+	req := sideagent.ExecRequest{
+		Dir:       filepath.Join(workingDir, input.RelativeWorkingDir),
+		Argv:      append([]string{input.Command}, input.Args...),
+		Env:       append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards)...),
+		TouchPath: remoteActivityMarker,
 	}
+	if input.activity != nil {
+		req.Argv = nil
+		req.ActivityLease = true
+		req.OnReady = input.activity.admit
+	}
+	return req
 }
 
 // withRemoteReadLock makes req run under the per-worktree shared hibernation
@@ -1176,7 +1188,8 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 	// Only SSH client diagnostics kept separate from remote output can prove
 	// the command never started, which is what makes re-running it safe.
 	transportFailed := func() bool {
-		return err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
+		return (input.activity == nil || !input.activity.admitted.Load()) &&
+			err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
 	}
 	if !transportFailed() {
 		return output, "", err
@@ -1218,6 +1231,11 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 			if round < maxModalRecoveryRounds && !recovery.repaired && isModalSSHAuthFailure(diagnostics) {
 				continue
 			}
+		}
+
+		if input.activity != nil {
+			apiErr = fmt.Errorf("activity leases require an SSH agent channel: %s", diagnostics)
+			continue
 		}
 
 		// SSH is preferred for its multiplexed connection, but the tunnel
@@ -1801,6 +1819,19 @@ type EnvRunCommandActivityInput struct {
 	SkipWaking         bool     `json:"skipWaking,omitempty"`
 }
 
+// CommandObserver is told about every command run through Activities once the
+// command itself has finished, whatever its outcome. A command abandoned by a
+// canceled activity is reported when it eventually finishes, so ctx may
+// already be canceled. Implementations must return promptly.
+type CommandObserver interface {
+	CommandFinished(ctx context.Context, envContainer EnvContainer)
+}
+
+type Activities struct {
+	// CommandObserver may be nil, leaving commands unobserved.
+	CommandObserver CommandObserver
+}
+
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
 
 // maxActivityOutputBytes caps individual stdout/stderr fields to stay within
@@ -1840,8 +1871,16 @@ func GetEnvironmentInfoActivity(ctx context.Context, input GetEnvironmentInfoInp
 	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
 }
 
-// EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
-func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+// EnvRunCommandActivity is the registered Temporal activity for RunCommand.
+// Its name is the historical activity type name that workflows schedule and
+// existing histories record; Temporal's WorkflowReplayer cannot apply
+// registration aliases, so the scheduled method name must match it.
+func (a *Activities) EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+	return a.RunCommand(ctx, input)
+}
+
+// RunCommand runs a command in the environment contained in the provided EnvContainer.
+func (a *Activities) RunCommand(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
 	type result struct {
 		output EnvRunCommandActivityOutput
 		err    error
@@ -1856,6 +1895,9 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 			EnvVars:            input.EnvVars,
 			SkipWaking:         input.SkipWaking,
 		})
+		if a.CommandObserver != nil {
+			a.CommandObserver.CommandFinished(ctx, input.EnvContainer)
+		}
 		resultCh <- result{output: out, err: err}
 	}()
 
@@ -1869,6 +1911,9 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 				res.output.Stdout = truncateMiddle(res.output.Stdout, maxActivityOutputBytes)
 				res.output.Stderr = truncateMiddle(res.output.Stderr, maxActivityOutputBytes)
 			}
+			if res.err != nil {
+				res.err = explainMissingWorkingDir(ctx, input, res.err)
+			}
 			return res.output, res.err
 		case <-ticker.C:
 			if activity.IsActivity(ctx) {
@@ -1878,6 +1923,25 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 			return EnvRunCommandActivityOutput{}, ctx.Err()
 		}
 	}
+}
+
+// explainMissingWorkingDir names the missing relative working directory when
+// that is why the command failed, since exec otherwise reports it as an
+// opaque "fork/exec <shell>: no such file or directory". The directory won't
+// appear on its own, so retrying is pointless.
+func explainMissingWorkingDir(ctx context.Context, input EnvRunCommandActivityInput, runErr error) error {
+	relDir := input.RelativeWorkingDir
+	if relDir == "" || relDir == "." {
+		return runErr
+	}
+	if _, statErr := input.EnvContainer.Env.Stat(ctx, relDir); errors.Is(statErr, fs.ErrNotExist) {
+		return temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("working directory %q does not exist relative to the repository root (check the workingDir argument): %v", relDir, runErr),
+			ErrTypeMissingWorkingDir,
+			runErr,
+		)
+	}
+	return runErr
 }
 
 func truncateMiddle(s string, maxBytes int) string {

@@ -39,7 +39,7 @@ func (lspa *LSPActivities) AutofixActivity(ctx context.Context, input AutofixAct
 
 	// step 1: initialize
 	langName := utils.InferLanguageNameFromFilePath(input.DocumentURI)
-	lspClient, err := lspa.findOrInitClient(ctx, input.EnvContainer.Env.GetWorkingDirectory(), langName, &input.EnvContainer)
+	ctx, lspClient, release, err := lspa.findOrInitClient(ctx, input.EnvContainer.Env.GetWorkingDirectory(), langName, &input.EnvContainer)
 	if err != nil {
 		if errors.Is(err, ErrUnsupportedLanguage) {
 			span.SetAttributes(attribute.Bool("skipped", true), attribute.String("reason", "unsupported language"))
@@ -47,6 +47,7 @@ func (lspa *LSPActivities) AutofixActivity(ctx context.Context, input AutofixAct
 		}
 		return AutofixActivityOutput{}, err
 	}
+	defer release()
 
 	// step 2: get code actions
 	codeActions, err := getAutofixCodeActions(ctx, lspClient, input.EnvContainer, input.DocumentURI)

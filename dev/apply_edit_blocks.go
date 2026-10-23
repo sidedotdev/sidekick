@@ -128,6 +128,7 @@ func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityIn
 			InitializedClients: map[string]lsp.LSPClient{},
 		},
 	}
+	defer da.LSPActivities.Close()
 	return da.ApplyEditBlocks(ctx, input)
 }
 
@@ -634,71 +635,19 @@ func (da *DevActivities) notifyDidOpenChangeSaveAndClose(ctx context.Context, en
 	defer span.End()
 	span.SetAttributes(attribute.String("filePath", filePath))
 
-	baseDir := envContainer.Env.GetWorkingDirectory()
 	language := utils.InferLanguageNameFromFilePath(filePath)
-	if language == "" {
-		span.SetAttributes(attribute.Bool("skipped", true), attribute.String("reason", "unrecognized language"))
-		return nil // Skip LSP notifications for files without recognized language
+	if !lsp.IsSupportedLanguage(language) {
+		span.SetAttributes(attribute.Bool("skipped", true), attribute.String("reason", "unsupported language"))
+		return nil
 	}
-	span.SetAttributes(attribute.String("language", language))
-
-	var didOpenCalled bool
-
-	// Step 1: didOpen (if openClose supported)
-	_, didOpenSpan := applyEditBlocksTracer.Start(ctx, "LSP.didOpen")
-	didOpenInput := lsp.TextDocumentDidOpenActivityInput{
-		RepoDir:  baseDir,
-		FilePath: filePath,
+	content, err := envContainer.Env.ReadFile(ctx, filePath)
+	if err != nil {
+		return err
 	}
-	err := da.LSPActivities.TextDocumentDidOpenActivity(ctx, didOpenInput)
-	if err == nil {
-		didOpenCalled = true
-	}
-	didOpenSpan.SetAttributes(attribute.Bool("success", err == nil))
-	didOpenSpan.End()
-
-	// Step 2: didChange (if didOpen was called and change is supported)
-	if didOpenCalled {
-		_, didChangeSpan := applyEditBlocksTracer.Start(ctx, "LSP.didChange")
-		// Read current file content for change notification
-		content, err := envContainer.Env.ReadFile(ctx, filePath)
-		if err == nil {
-			didChangeInput := lsp.TextDocumentDidChangeActivityInput{
-				RepoDir:  baseDir,
-				FilePath: filePath,
-				Version:  2, // Version after the edit
-				ContentChanges: []lsp.TextDocumentContentChangeEvent{
-					{
-						Text: string(content), // Full document sync
-					},
-				},
-			}
-			_ = da.LSPActivities.TextDocumentDidChangeActivity(ctx, didChangeInput) // Ignore errors
-		}
-		didChangeSpan.End()
-	}
-
-	// Step 3: didSave (if supported)
-	_, didSaveSpan := applyEditBlocksTracer.Start(ctx, "LSP.didSave")
-	didSaveInput := lsp.TextDocumentDidSaveActivityInput{
-		RepoDir:  baseDir,
-		FilePath: filePath,
-	}
-	_ = da.LSPActivities.TextDocumentDidSaveActivity(ctx, didSaveInput) // Ignore errors
-	didSaveSpan.End()
-
-	// Step 4: didClose (if didOpen was called)
-	if didOpenCalled {
-		_, didCloseSpan := applyEditBlocksTracer.Start(ctx, "LSP.didClose")
-		didCloseInput := lsp.TextDocumentDidCloseActivityInput{
-			RepoDir:  baseDir,
-			FilePath: filePath,
-		}
-		_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
-		didCloseSpan.End()
-	}
-
-	return nil
+	_, err = da.LSPActivities.SyncDocumentActivity(ctx, lsp.SyncDocumentActivityInput{
+		EnvContainer: envContainer, FilePath: filePath, Content: string(content),
+	})
+	return err
 }
 
 type lineEdit struct {

@@ -59,7 +59,9 @@ func (c *Client) readLoop(br *bufio.Reader) {
 		}
 		c.mu.Lock()
 		ch := c.pending[resp.ID]
-		delete(c.pending, resp.ID)
+		if !resp.Ready {
+			delete(c.pending, resp.ID)
+		}
 		c.mu.Unlock()
 		if ch != nil {
 			ch <- resp
@@ -124,22 +126,38 @@ func (c *Client) Exec(ctx context.Context, req ExecRequest) (ExecResponse, error
 		return ExecResponse{}, fmt.Errorf("send exec request: %w", c.brokenErr())
 	}
 
-	select {
-	case resp := <-ch:
-		return resp, nil
-	case <-c.closed:
-		return ExecResponse{}, c.brokenErr()
-	case <-ctx.Done():
-		_ = c.send(clientMessage{CancelID: req.ID})
+	for {
 		select {
-		case <-ch:
+		case resp := <-ch:
+			if resp.Ready {
+				if req.OnReady != nil {
+					req.OnReady()
+				}
+				continue
+			}
+			return resp, nil
 		case <-c.closed:
-		case <-time.After(cancelResponseGrace):
+			return ExecResponse{}, c.brokenErr()
+		case <-ctx.Done():
+			cancelErr := c.send(clientMessage{CancelID: req.ID})
+			timer := time.NewTimer(cancelResponseGrace)
+			waiting := true
+			for waiting {
+				select {
+				case resp := <-ch:
+					waiting = resp.Ready
+				case <-c.closed:
+					waiting = false
+				case <-timer.C:
+					waiting = false
+				}
+			}
+			timer.Stop()
+			c.mu.Lock()
+			delete(c.pending, req.ID)
+			c.mu.Unlock()
+			return ExecResponse{}, errors.Join(ctx.Err(), cancelErr)
 		}
-		c.mu.Lock()
-		delete(c.pending, req.ID)
-		c.mu.Unlock()
-		return ExecResponse{}, ctx.Err()
 	}
 }
 

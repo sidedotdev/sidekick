@@ -45,7 +45,11 @@ func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSize
 
 func EditCodeWithModelConfigResolver(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
-		return editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		err := editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 

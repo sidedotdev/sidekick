@@ -196,28 +196,53 @@ func TestExec_FiltersSideEnvVars(t *testing.T) {
 // the same channel.
 func TestExec_Multiplexing(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	client := startTestChannel(t)
 
-	slowDone := make(chan struct{})
-	go func() {
-		defer close(slowDone)
-		resp, err := client.Exec(ctx, ExecRequest{Argv: []string{"sleep", "1"}})
-		assert.NoError(t, err)
-		assert.Equal(t, 0, resp.ExitStatus)
-	}()
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	fifo := filepath.Join(dir, "release")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+	release, err := os.OpenFile(fifo, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	require.NoError(t, err)
+	defer release.Close()
 
-	start := time.Now()
-	resp, err := client.Exec(ctx, ExecRequest{Argv: []string{"true"}})
+	type result struct {
+		response ExecResponse
+		err      error
+	}
+	blockedDone := make(chan result, 1)
+	go func() {
+		resp, err := client.Exec(ctx, ExecRequest{Argv: []string{
+			"sh", "-c", `printf ready > "$1"; read -r signal < "$2"`, "sh", started, fifo,
+		}})
+		blockedDone <- result{response: resp, err: err}
+	}()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(started)
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond, "blocked command must start")
+
+	requestCtx, cancelRequest := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelRequest()
+	resp, err := client.Exec(requestCtx, ExecRequest{Argv: []string{"true"}})
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.ExitStatus)
-	assert.Less(t, time.Since(start), 900*time.Millisecond,
-		"fast command must not wait behind the slow one")
-
 	select {
-	case <-slowDone:
+	case result := <-blockedDone:
+		t.Fatalf("blocked command completed before release: %+v", result)
+	default:
+	}
+
+	_, err = release.WriteString("release\n")
+	require.NoError(t, err)
+	select {
+	case result := <-blockedDone:
+		require.NoError(t, result.err)
+		require.Equal(t, 0, result.response.ExitStatus)
 	case <-time.After(10 * time.Second):
-		t.Fatal("slow command never completed")
+		t.Fatal("blocked command did not complete after release")
 	}
 }
 

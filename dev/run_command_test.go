@@ -3,12 +3,14 @@ package dev
 import (
 	"context"
 	"testing"
+	"time"
 
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/utils"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/testsuite"
@@ -112,6 +114,83 @@ func TestRunCommandPassesGitIdentityEnvVars(t *testing.T) {
 			require.Equal(t, []string{"-c", "git commit -m test"}, captured.Args)
 			require.Equal(t, "sub", captured.RelativeWorkingDir)
 			require.Equal(t, tt.expectedEnvVars, captured.EnvVars)
+		})
+	}
+}
+
+func TestCheckCommandPermissionSandboxBypass(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name        string
+		environment env.Env
+		legacy      bool
+		bypass      bool
+	}{
+		{name: "modal", environment: &env.ModalEnv{}, bypass: true},
+		{name: "openshell", environment: &env.OpenShellEnv{}, bypass: true},
+		{name: "devpod", environment: &env.DevPodEnv{}, bypass: true},
+		{name: "local", environment: &env.LocalEnv{}},
+		{name: "local worktree", environment: &env.LocalGitWorktreeEnv{}},
+		{name: "legacy modal", environment: &env.ModalEnv{}, legacy: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var suite testsuite.WorkflowTestSuite
+			testEnv := suite.NewTestWorkflowEnvironment()
+			testEnv.RegisterActivity(CheckCommandPermissionActivity)
+			if tt.legacy {
+				testEnv.OnGetVersion("sandbox-command-permissions-bypass", workflow.DefaultVersion, 1).
+					Return(workflow.DefaultVersion).Maybe()
+			}
+			permissionCall := testEnv.OnActivity(CheckCommandPermissionActivity, mock.Anything, mock.Anything).
+				Return(CheckCommandPermissionOutput{
+					Result:  common.PermissionDeny,
+					Message: "Configured denial",
+				}, nil)
+			if tt.bypass {
+				permissionCall.Maybe()
+			} else {
+				permissionCall.Once()
+			}
+
+			testWorkflow := func(ctx workflow.Context) ([]string, error) {
+				ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+					StartToCloseTimeout: time.Minute,
+				})
+				dCtx := DevContext{
+					ExecContext: flow_action.ExecContext{
+						Context:      ctx,
+						EnvContainer: &env.EnvContainer{Env: tt.environment},
+					},
+					RepoConfig: common.RepoConfig{
+						CommandPermissions: common.CommandPermissionConfig{
+							Deny: []common.CommandPattern{{Pattern: "dd if=", Message: "Configured denial"}},
+						},
+					},
+				}
+				proceed, denial, advisory, err := checkCommandPermission(dCtx,
+					"dd if=/dev/zero of=/swapfile bs=1M count=4096", ".")
+				if err != nil {
+					return nil, err
+				}
+				outcome := "blocked"
+				if proceed {
+					outcome = "proceed"
+				}
+				return []string{outcome, denial, advisory}, nil
+			}
+			testEnv.ExecuteWorkflow(testWorkflow)
+			require.True(t, testEnv.IsWorkflowCompleted())
+			require.NoError(t, testEnv.GetWorkflowError())
+			var result []string
+			require.NoError(t, testEnv.GetWorkflowResult(&result))
+			if tt.bypass {
+				assert.Equal(t, []string{"proceed", "", ""}, result)
+				testEnv.AssertNotCalled(t, "CheckCommandPermissionActivity", mock.Anything, mock.Anything)
+			} else {
+				assert.Equal(t, []string{"blocked", "Command denied: Configured denial", ""}, result)
+			}
+			testEnv.AssertExpectations(t)
 		})
 	}
 }

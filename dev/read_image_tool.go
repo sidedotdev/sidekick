@@ -126,6 +126,7 @@ func (a *ReadImageActivities) ReadImageActivity(ctx context.Context, input ReadI
 		}
 		toolResultBlock.ToolCallId = input.ToolCall.Id
 		toolResultBlock.Name = input.ToolCall.Name
+		toolResultBlock = appendNullStringArgsNote(*input.ToolCall, toolResultBlock)
 		finalBlock = llm2.ContentBlock{
 			Type:       llm2.ContentBlockTypeToolResult,
 			ToolResult: &toolResultBlock,

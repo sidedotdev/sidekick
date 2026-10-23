@@ -432,13 +432,14 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			return nil, err
 		}
 	}
-	if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, message); err != nil {
+	if err := appendGenerationMessage(iteration.ExecCtx.ExecContext, iteration.ChatHistory, message); err != nil {
 		return nil, err
 	}
 
 	if len(message.GetToolCalls()) > 0 {
 		options := toolCallOptions{
 			ForwardedAssistantResponse: len(chatResponse.GetMessage().GetToolCalls()) == 0,
+			AssistantMessage:           message,
 		}
 		toolCallResponses, err := handleToolCallsWithOptions(iteration.ExecCtx, message.GetToolCalls(), iteration.ChatHistory, customHandlers, options)
 		if err != nil {
@@ -524,7 +525,7 @@ func devPlanToolHandlers(
 	state *buildDevPlanState,
 	recordedPlan **DevPlan,
 ) map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error) {
-	return map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
+	return deliverableToolHandlers(map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
 		updateDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
 			result := llm2.ToolResultBlock{
 				Name:       toolCall.Name,
@@ -591,11 +592,15 @@ func devPlanToolHandlers(
 					return result, nil
 				} else {
 					result.Content = llm2.TextContentBlocks(fmt.Sprintf("Plan updated but not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedPlan.String(), userResponse.Content))
-					return result, nil
+					return deliverableApprovalFeedback(dCtx, result, "Plan updated but not approved. The user has feedback below.", userResponse.Content), nil
 				}
 			}
 
-			result.Content = llm2.TextContentBlocks("Plan updated successfully. " + partialDevPlanInstructions + "\n\nCurrent plan:\n" + validatedPlan.String())
+			text := "Plan updated successfully. " + partialDevPlanInstructions
+			if !deliverableHistoryEnabled(dCtx.ExecContext) {
+				text += "\n\nCurrent plan:\n" + validatedPlan.String()
+			}
+			result.Content = llm2.TextContentBlocks(text)
 			return result, nil
 		},
 		recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
@@ -655,14 +660,14 @@ func devPlanToolHandlers(
 					return result, nil
 				} else {
 					result.Content = llm2.TextContentBlocks(fmt.Sprintf("Plan was not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedDevPlan.String(), userResponse.Content))
-					return result, nil
+					return deliverableApprovalFeedback(dCtx, result, "Plan recorded but not approved. The user has feedback below.", userResponse.Content), nil
 				}
 			} else {
 				result.Content = llm2.TextContentBlocks("Recorded plan progress. " + partialDevPlanInstructions)
 				return result, nil
 			}
 		},
-	}
+	}, "dev_plan", func() any { return state.devPlan })
 }
 
 func unmarshalPlan(jsonStr string) (DevPlan, error) {
