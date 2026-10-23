@@ -60,6 +60,8 @@ func handleToolCallsWithOptions(dCtx DevContext, toolCalls []llm.ToolCall, chatH
 			output.Ref = nil
 		}
 
+		// With a ref, the tool result block is just a placeholder: the real
+		// content was already persisted by the activity.
 		if output.Ref == nil {
 			output.ToolResultBlock = appendNullStringArgsNote(tc, output.ToolResultBlock)
 		}
@@ -120,6 +122,8 @@ func handleToolCallsWithOptions(dCtx DevContext, toolCalls []llm.ToolCall, chatH
 	results := make([]llm2.ToolResultBlock, len(outputs))
 	for i, o := range outputs {
 		results[i] = o.ToolResultBlock
+		// With a ref, the tool result block is just a placeholder: the real
+		// content was already persisted by the activity.
 		if o.Ref == nil {
 			results[i] = appendNullStringArgsNote(toolCalls[i], o.ToolResultBlock)
 		}
@@ -324,12 +328,6 @@ func handleErrToolCallUnmarshal(toolCallResult llm2.ToolResultBlock, err error) 
 	return toolCallResult, err
 }
 
-const unparseableNullStringArgPath = "(unknown: arguments are not valid json)"
-
-// nullStringValueRe matches a JSON string value "null" in positions where a
-// value is expected, used only when the arguments can't be parsed.
-var nullStringValueRe = regexp.MustCompile(`[:\[,]\s*"null"`)
-
 // appendNullStringArgsNote appends a hint to the tool result (whether it
 // succeeded or failed) when any argument is the literal string "null", since
 // that almost always means the model intended an absent value. Ref-backed
@@ -360,9 +358,6 @@ func appendNullStringArgsNote(toolCall llm.ToolCall, result llm2.ToolResultBlock
 func nullStringArgPaths(arguments string) []string {
 	var data interface{}
 	if err := json.Unmarshal([]byte(llm.RepairJson(arguments)), &data); err != nil {
-		if nullStringValueRe.MatchString(arguments) {
-			return []string{unparseableNullStringArgPath}
-		}
 		return nil
 	}
 	return collectNullStringPaths(data, "")

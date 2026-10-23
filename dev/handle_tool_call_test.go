@@ -181,16 +181,6 @@ func TestNullStringArgPaths(t *testing.T) {
 			arguments: `{"requests": [{"file_path": "a.go", "symbols": [{"name": "Foo"}, {"name": "null"}]}, {"file_path": "null", "symbols": []}], "analysis": "null"}`,
 			expected:  []string{"analysis", "requests[0].symbols[1].name", "requests[1].file_path"},
 		},
-		{
-			name:      "unparseable arguments with null string",
-			arguments: `{"file_path": "null", "window_size": `,
-			expected:  []string{unparseableNullStringArgPath},
-		},
-		{
-			name:      "unparseable arguments without null string",
-			arguments: `{"file_path": "main.go", "window_size": `,
-			expected:  nil,
-		},
 	}
 
 	for _, tt := range tests {
