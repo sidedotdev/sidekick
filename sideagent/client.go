@@ -142,3 +142,8 @@ func (c *Client) Exec(ctx context.Context, req ExecRequest) (ExecResponse, error
 		return ExecResponse{}, ctx.Err()
 	}
 }
+
+// Err reports a terminal channel failure, not an individual RPC error.
+func (c *Client) Err() error {
+	return c.brokenErr()
+}

@@ -241,3 +241,24 @@ func (h *reverseForwardHolder) close() {
 	_ = cmd.Process.Kill()
 	<-exited
 }
+
+func (t *legacySSHTransport) WithAgent(ctx context.Context, op func(*sideagent.Client) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	conn := getPooledAgentExecConn(t.execKey())
+	conn, client, err := conn.beginOp(ctx, t.sshEnv)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		conn.endOp()
+		if client.Err() != nil {
+			conn.invalidate(client)
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return op(client)
+}

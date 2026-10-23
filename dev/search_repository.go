@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sidekick/common"
 	"sidekick/env"
+	"sidekick/repotools"
 	"sidekick/sideagent"
 	"sidekick/utils"
 	"strings"
@@ -57,13 +58,10 @@ func hasLiteralPathSegment(pattern string) bool {
 // filterFilesByGlob filters a list of files using the given glob pattern.
 // It tries matching against both the full path and the basename.
 func filterFilesByGlob(files []string, globPattern string) ([]string, error) {
-	return sideagent.FilterFilesByGlob(files, globPattern)
+	return repotools.FilterFilesByGlob(files, globPattern)
 }
 
-type SingleSearchParams struct {
-	PathGlob   string `json:"path_glob" jsonschema:"description=The file glob path to search within."`
-	SearchTerm string `json:"search_term" jsonschema:"description=The search term to look for within the files."`
-}
+type SingleSearchParams = repotools.SingleSearchParams
 
 const refuseAtSearchOutputLength = 20000
 const maxSearchOutputLength = 10000

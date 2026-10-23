@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
+	"sidekick/repotools"
 )
 
 // WorkspaceRequest keeps dependent repository operations on the same side of
@@ -148,7 +148,7 @@ func (s *server) searchWorkspace(req ExecRequest) (*WorkspaceSearchResult, error
 		result.AllFiles = strings.Split(listing, "\n")
 	}
 	var err error
-	result.MatchedFiles, err = FilterFilesByGlob(result.AllFiles, search.PathGlob)
+	result.MatchedFiles, err = repotools.FilterFilesByGlob(result.AllFiles, search.PathGlob)
 	if err != nil {
 		return nil, err
 	}
@@ -168,31 +168,6 @@ func (s *server) searchWorkspace(req ExecRequest) (*WorkspaceSearchResult, error
 		return nil, fmt.Errorf("search filtered files: %s", result.Output.Error)
 	}
 	return result, nil
-}
-
-// FilterFilesByGlob matches both repository-relative paths and basenames.
-func FilterFilesByGlob(files []string, globPattern string) ([]string, error) {
-	var filteredFiles []string
-	for _, file := range files {
-		if file == "" {
-			continue
-		}
-		matched, err := doublestar.PathMatch(globPattern, file)
-		if err != nil {
-			return nil, fmt.Errorf("invalid glob pattern %s: %v", globPattern, err)
-		}
-		if !matched {
-			base := filepath.Base(file)
-			matched, err = doublestar.PathMatch(globPattern, base)
-			if err != nil {
-				return nil, fmt.Errorf("invalid glob pattern %s (when matching basename %s): %v", globPattern, base, err)
-			}
-		}
-		if matched {
-			filteredFiles = append(filteredFiles, file)
-		}
-	}
-	return filteredFiles, nil
 }
 
 type WorkspaceSearchSetup struct {

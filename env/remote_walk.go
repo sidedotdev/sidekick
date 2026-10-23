@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"sidekick/common"
+	"sidekick/env/localio"
 	"sidekick/gitwalk"
 )
 
@@ -29,11 +30,7 @@ type WalkEntry struct {
 // by the walker. The reader is only guaranteed to be valid until the
 // next entry callback returns; callers wanting to defer the read should
 // copy the bytes inline.
-type WalkEntryWithContent struct {
-	Path  string
-	IsDir bool
-	Open  func(ctx context.Context) (io.ReadCloser, error)
-}
+type WalkEntryWithContent = localio.WalkEntryWithContent
 
 // RemoteWalkContentMode selects how WalkCodeDirectoryEntriesViaEnv reads
 // content for entries on an SSH-backed env. See the package-level

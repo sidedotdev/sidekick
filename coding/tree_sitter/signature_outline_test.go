@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sidekick/coding/tree_sitter/parser"
 	"sidekick/env"
 	"strings"
 	"testing"
@@ -409,7 +410,7 @@ func TestOutlineSnapshotVersion(t *testing.T) {
 	require.NotEmpty(t, OutlineSnapshotVersion)
 	assert.Equal(t, OutlineSnapshotVersion, computeOutlineSnapshotVersion(), "fingerprint must be deterministic")
 
-	entries, err := signatureQueriesFS.ReadDir("signature_queries")
+	entries, err := fs.ReadDir(parser.SignatureQueries(), "signature_queries")
 	require.NoError(t, err)
 	require.NotEmpty(t, entries, "fingerprint must cover the embedded signature queries")
 }

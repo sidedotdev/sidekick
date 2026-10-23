@@ -9,6 +9,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
+	"sidekick/repotools"
 	"sidekick/utils"
 	"strings"
 	"time"
@@ -25,10 +26,7 @@ var bulkSearchRepositoryTool = llm.Tool{
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&BulkSearchRepositoryParams{}),
 }
 
-type BulkSearchRepositoryParams struct {
-	ContextLines int                  `json:"context_lines" jsonschema:"description=The number of lines of context to include around the search term."`
-	Searches     []SingleSearchParams `json:"searches" jsonschema:"description=The list of searches to perform."`
-}
+type BulkSearchRepositoryParams = repotools.BulkSearchRepositoryParams
 
 type BulkSearchRepositoryActivityInput struct {
 	EnvContainer env.EnvContainer           `json:"envContainer"`

@@ -18,6 +18,7 @@ import (
 	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env/localio"
 	"sidekick/sideagent"
 	"sidekick/utils"
 
@@ -533,10 +534,7 @@ func (e *LocalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
 		return nil, lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.ReadFile(p)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).ReadFile(ctx, p)
 }
 
 func (e *LocalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -545,10 +543,7 @@ func (e *LocalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error)
 		return nil, lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.ReadDir(p)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).ReadDir(ctx, p)
 }
 
 func (e *LocalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -557,10 +552,7 @@ func (e *LocalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs
 		return lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.WriteFile(p, data, perm)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).WriteFile(ctx, p, data, perm)
 }
 
 func (e *LocalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -569,10 +561,7 @@ func (e *LocalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) err
 		return lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.MkdirAll(p, perm)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).MkdirAll(ctx, p, perm)
 }
 
 func (e *LocalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -581,10 +570,7 @@ func (e *LocalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
 		return nil, lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.Stat(p)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).Stat(ctx, p)
 }
 
 func (e *LocalEnv) Remove(ctx context.Context, p string) error {
@@ -593,10 +579,7 @@ func (e *LocalEnv) Remove(ctx context.Context, p string) error {
 		return lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.Remove(p)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).Remove(ctx, p)
 }
 
 func (e *LocalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -605,18 +588,7 @@ func (e *LocalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string,
 		return "", lockErr
 	}
 	defer release()
-	if dir != "" && !filepath.IsAbs(dir) {
-		dir = filepath.Join(e.WorkingDirectory, dir)
-	}
-	f, err := os.CreateTemp(dir, pattern)
-	if err != nil {
-		return "", err
-	}
-	name := f.Name()
-	if cerr := f.Close(); cerr != nil {
-		return name, cerr
-	}
-	return name, nil
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).CreateTemp(ctx, dir, pattern)
 }
 
 func (e *LocalGitWorktreeEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
@@ -659,10 +631,7 @@ func (e *LocalGitWorktreeEnv) ReadFile(ctx context.Context, p string) ([]byte, e
 		return nil, lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.ReadFile(p)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).ReadFile(ctx, p)
 }
 
 func (e *LocalGitWorktreeEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
@@ -671,10 +640,7 @@ func (e *LocalGitWorktreeEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEn
 		return nil, lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.ReadDir(p)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).ReadDir(ctx, p)
 }
 
 func (e *LocalGitWorktreeEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
@@ -683,10 +649,7 @@ func (e *LocalGitWorktreeEnv) WriteFile(ctx context.Context, p string, data []by
 		return lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.WriteFile(p, data, perm)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).WriteFile(ctx, p, data, perm)
 }
 
 func (e *LocalGitWorktreeEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
@@ -695,10 +658,7 @@ func (e *LocalGitWorktreeEnv) MkdirAll(ctx context.Context, p string, perm fs.Fi
 		return lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.MkdirAll(p, perm)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).MkdirAll(ctx, p, perm)
 }
 
 func (e *LocalGitWorktreeEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
@@ -707,10 +667,7 @@ func (e *LocalGitWorktreeEnv) Stat(ctx context.Context, p string) (fs.FileInfo, 
 		return nil, lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.Stat(p)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).Stat(ctx, p)
 }
 
 func (e *LocalGitWorktreeEnv) Remove(ctx context.Context, p string) error {
@@ -719,10 +676,7 @@ func (e *LocalGitWorktreeEnv) Remove(ctx context.Context, p string) error {
 		return lockErr
 	}
 	defer release()
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(e.WorkingDirectory, p)
-	}
-	return os.Remove(p)
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).Remove(ctx, p)
 }
 
 func (e *LocalGitWorktreeEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
@@ -731,18 +685,7 @@ func (e *LocalGitWorktreeEnv) CreateTemp(ctx context.Context, dir, pattern strin
 		return "", lockErr
 	}
 	defer release()
-	if dir != "" && !filepath.IsAbs(dir) {
-		dir = filepath.Join(e.WorkingDirectory, dir)
-	}
-	f, err := os.CreateTemp(dir, pattern)
-	if err != nil {
-		return "", err
-	}
-	name := f.Name()
-	if cerr := f.Close(); cerr != nil {
-		return name, cerr
-	}
-	return name, nil
+	return (localio.FileSystem{WorkingDirectory: e.WorkingDirectory}).CreateTemp(ctx, dir, pattern)
 }
 
 func (e *DevPodEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {

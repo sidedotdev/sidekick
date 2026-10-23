@@ -519,8 +519,10 @@ func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativ
 			}
 			continue
 		}
-		opErr := op(conn, client)
-		conn.endOp()
+		opErr := func() error {
+			defer conn.endOp()
+			return op(conn, client)
+		}()
 		if opErr == nil {
 			return nil
 		}
@@ -1662,4 +1664,49 @@ func nativeHostKeyCallback(config SSHConnConfig) (ssh.HostKeyCallback, error) {
 		// here would mean host key policy was decided in two places.
 		return nil, fmt.Errorf("unsupported host key policy %q", config.HostKeyPolicy)
 	}
+}
+
+func (t *nativeSSHTransport) WithAgent(ctx context.Context, op func(*sideagent.Client) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	remotePath, err := agentRemotePath()
+	if err != nil {
+		return err
+	}
+
+	var operationErr error
+	err = t.withClient(ctx, func(conn *nativeSSHConn, client *ssh.Client) error {
+		var channel *nativeExecChannel
+		err := withAgentBootstrap(ctx, client, remotePath, func() error {
+			var err error
+			channel, err = conn.execChannelFor(ctx, client, remotePath)
+			if err != nil {
+				return err
+			}
+			if channel.client.Err() != nil {
+				conn.invalidateExecChannel(channel)
+				channel, err = conn.execChannelFor(ctx, client, remotePath)
+			}
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if channel.client.Err() != nil {
+				conn.invalidateExecChannel(channel)
+			}
+		}()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Callback errors must not enter the connection retry loop.
+		operationErr = op(channel.client)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return operationErr
 }
