@@ -33,9 +33,10 @@ func newProviderRequestAuth(secretManager secret_manager.SecretManager, provider
 	}
 }
 
-// classifyHTTPError returns reportedErr as a provider auth error when err is a
-// provider authentication rejection, as a provider rate limit error when err
-// is a rate limit rejection, and otherwise reportedErr unchanged.
+// classifyHTTPError returns reportedErr as a provider rate limit error when
+// err is a rate limit rejection, as a provider auth error when err is a
+// provider authentication rejection, as a non-retryable provider client error
+// for any other 4xx rejection except 408, and otherwise reportedErr unchanged.
 // reportedErr lets callers keep formatting that may drop the SDK error type.
 func (a providerRequestAuth) classifyHTTPError(err, reportedErr error) error {
 	if retryAfter, ok := providerRateLimitRetryAfter(err); ok {
@@ -44,19 +45,22 @@ func (a providerRequestAuth) classifyHTTPError(err, reportedErr error) error {
 			RetryAfter: retryAfter,
 		}, reportedErr)
 	}
-	if !isProviderAuthRejection(err) {
-		return reportedErr
+	if isProviderAuthRejection(err) {
+		reason := common.ProviderAuthErrorReasonInvalidAPIKey
+		if a.useOAuth {
+			reason = common.ProviderAuthErrorReasonInvalidOAuth
+		}
+		return common.NewProviderAuthError(common.ProviderAuthErrorDetails{
+			Provider:  a.provider,
+			ProfileId: a.profileId,
+			AuthType:  a.authType,
+			Reason:    reason,
+		}, reportedErr)
 	}
-	reason := common.ProviderAuthErrorReasonInvalidAPIKey
-	if a.useOAuth {
-		reason = common.ProviderAuthErrorReasonInvalidOAuth
+	if status, ok := providerClientErrorStatus(err); ok {
+		return common.NewProviderClientError(a.provider, status, reportedErr)
 	}
-	return common.NewProviderAuthError(common.ProviderAuthErrorDetails{
-		Provider:  a.provider,
-		ProfileId: a.profileId,
-		AuthType:  a.authType,
-		Reason:    reason,
-	}, reportedErr)
+	return reportedErr
 }
 
 func isProviderAuthRejection(err error) bool {

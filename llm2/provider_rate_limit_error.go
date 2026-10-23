@@ -75,12 +75,16 @@ func isBedrockRateLimitRejection(err error) bool {
 }
 
 // classifyBedrockError returns err as a provider rate limit error when it is a
-// Bedrock rate limit rejection, otherwise err unchanged.
+// Bedrock rate limit rejection, as a non-retryable provider client error for
+// any other 4xx rejection except 408, and otherwise err unchanged.
 func classifyBedrockError(err error) error {
-	if !isBedrockRateLimitRejection(err) {
-		return err
+	if isBedrockRateLimitRejection(err) {
+		return common.NewProviderRateLimitError(common.ProviderRateLimitErrorDetails{Provider: bedrockProviderName}, err)
 	}
-	return common.NewProviderRateLimitError(common.ProviderRateLimitErrorDetails{Provider: bedrockProviderName}, err)
+	if status, ok := bedrockClientErrorStatus(err); ok {
+		return common.NewProviderClientError(bedrockProviderName, status, err)
+	}
+	return err
 }
 
 func responseHeader(resp *http.Response) http.Header {
