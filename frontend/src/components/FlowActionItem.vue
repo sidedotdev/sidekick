@@ -9,9 +9,13 @@
           <span v-else-if="summary != null" class="action-summary">
             {{ summary.emoji }} {{ summary.text }}
           </span>
+          <span v-if="failedAttempts" class="action-attempts" @click.stop="showAttempts">{{ failedAttempts }}</span>
         </h3>
       </a>
       <hr>
+    </div>
+    <div v-if="expand && flowAction.attempts?.length" :class="{ 'expanded': expand, 'odd': level % 2 === 1 }">
+      <FlowActionAttempts :attempts="flowAction.attempts" v-model:open="attemptsOpen" />
     </div>
     <div v-if="actionSpecificComponent" :class="{ 'expanded': expand, 'odd': level % 2 === 1 }">
       <component ref="actionComponentRef" :is="actionSpecificComponent" :flowAction="flowAction" :expand="expand" :level="level + 1"/>
@@ -43,6 +47,8 @@ import RetrieveCodeContextFlowAction from './RetrieveCodeContextFlowAction.vue';
 import BulkSearchRepositoryFlowAction from './BulkSearchRepositoryFlowAction.vue';
 import ReadFileLinesFlowAction from './ReadFileLinesFlowAction.vue';
 import RunCommandFlowAction from './RunCommandFlowAction.vue';
+import FlowActionAttempts from './FlowActionAttempts.vue';
+import { failedAttemptsSummary } from '@/lib/retryAttempts';
 import { useEventBus } from '@vueuse/core';
 
 const props = defineProps({
@@ -113,6 +119,14 @@ const humanizeText = (text: string): string => {
 const formatActionTimestamp = (timestamp: Date): string => {
   return new Date(timestamp).toLocaleString();
 };
+
+const failedAttempts = computed(() => failedAttemptsSummary(props.flowAction));
+const attemptsOpen = ref(false);
+
+function showAttempts() {
+  expand.value = true;
+  attemptsOpen.value = true;
+}
 
 const actionHeading = computed(() => {
   const actionType = props.flowAction.actionType;
@@ -370,6 +384,15 @@ const summary = computed<Summary | null>(() => {
 </script>
 
 <style scoped>
+.action-attempts {
+  margin-left: 0.5em;
+  font-size: 0.8em;
+  font-weight: normal;
+  color: var(--color-text-2);
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
 .action-summary {
   display: -webkit-box;
   -webkit-box-orient: vertical;

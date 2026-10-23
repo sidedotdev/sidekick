@@ -52,9 +52,11 @@ func TestStreamActivity_BadRequestRetryPolicy(t *testing.T) {
 			require.True(t, env.IsWorkflowCompleted())
 			require.Error(t, env.GetWorkflowError())
 			assert.Contains(t, env.GetWorkflowError().Error(), "provider diagnostic")
-			wantRequests := int32(utils.LlmNumRetries)
-			if status == http.StatusBadRequest {
-				wantRequests = 1
+			// Only server errors are worth activity-level retries; 4xx
+			// rejections are left to the workflow's user/backoff retry loop.
+			wantRequests := int32(1)
+			if status == http.StatusInternalServerError {
+				wantRequests = int32(utils.LlmNumRetries)
 			}
 			assert.Equal(t, wantRequests, requests.Load())
 		})

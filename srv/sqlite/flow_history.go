@@ -13,12 +13,7 @@ func (s *Storage) GetFlowActionsPage(ctx context.Context, workspaceID, flowID st
 	if err != nil {
 		return domain.FlowActionsPage{}, err
 	}
-	query := `
-		SELECT id, subflow_name, subflow_description, subflow_id, flow_id, workspace_id,
-		       created, updated, action_type, action_params, action_status, action_result,
-		       is_human_action, is_callback_action, temporal_activities
-		FROM flow_actions
-		WHERE workspace_id = ? AND flow_id = ?`
+	query := `SELECT ` + flowActionColumns + ` FROM flow_actions WHERE workspace_id = ? AND flow_id = ?`
 	args := []interface{}{workspaceID, flowID}
 	if page.Before != "" {
 		query += ` AND (created, id) < (?, ?)`

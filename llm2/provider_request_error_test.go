@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sidekick/common"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -70,11 +71,19 @@ func TestProviderStream_BadRequestIsNonRetryable(t *testing.T) {
 				assert.Contains(t, err.Error(), "provider diagnostic")
 
 				var appErr *temporal.ApplicationError
-				if status == http.StatusBadRequest {
+				switch status {
+				case http.StatusBadRequest:
 					require.ErrorAs(t, err, &appErr)
 					assert.True(t, appErr.NonRetryable())
-				} else if errors.As(err, &appErr) {
-					assert.False(t, appErr.NonRetryable())
+					assert.Equal(t, common.ProviderClientErrorType, appErr.Type())
+				case http.StatusTooManyRequests:
+					require.ErrorAs(t, err, &appErr)
+					assert.True(t, appErr.NonRetryable())
+					assert.Equal(t, common.ProviderRateLimitErrorType, appErr.Type())
+				default:
+					if errors.As(err, &appErr) {
+						assert.False(t, appErr.NonRetryable())
+					}
 				}
 			})
 		}

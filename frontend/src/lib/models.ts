@@ -139,6 +139,12 @@ export interface Worktree {
   workspaceId: string
 }
 
+/** One failed attempt of an action that is being retried. */
+export interface FlowActionAttempt {
+  at: string
+  error: string
+}
+
 export interface FlowAction {
   id: string
   flowId: string
@@ -155,6 +161,10 @@ export interface FlowAction {
   isHumanAction: boolean
   isCallbackAction?: boolean
   streamingData?: StreamingData
+  /** Failed attempts so far of an action being retried, in chronological order. */
+  attempts?: FlowActionAttempt[]
+  /** When the action will automatically be retried; absent means retrying is up to the user. */
+  nextRetryAt?: string
 }
 
 export interface SubflowTree {

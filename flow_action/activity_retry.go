@@ -107,6 +107,8 @@ func performWithUserRetry(eCtx ExecContext, actionName string, opts UserRetryOpt
 	if onFailure == nil {
 		onFailure = ContinuePromptFailureHandler{}
 	}
+	// However the loop exits, no automatic retry is pending anymore.
+	defer clearScheduledRetry(eCtx)
 
 	for {
 		attemptArgs := args
@@ -146,6 +148,12 @@ func performWithUserRetry(eCtx ExecContext, actionName string, opts UserRetryOpt
 			action := eCtx.GlobalState.GetPendingUserAction()
 			if action != nil {
 				return PendingActionError
+			}
+		}
+
+		if v := workflow.GetVersion(eCtx, retryAttemptsChangeId, workflow.DefaultVersion, 1); v == 1 {
+			if recordErr := recordRetryAttempt(eCtx, err); recordErr != nil {
+				return recordErr
 			}
 		}
 

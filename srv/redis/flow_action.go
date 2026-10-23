@@ -167,6 +167,14 @@ func (s Streamer) AddFlowActionChange(ctx context.Context, flowAction domain.Flo
 		}
 		flowActionMap["temporalActivities"] = string(taJSON)
 	}
+	if len(flowAction.Attempts) > 0 {
+		attemptsJSON, err := json.Marshal(flowAction.Attempts)
+		if err != nil {
+			log.Println("Failed to marshal attempts: ", err)
+			return err
+		}
+		flowActionMap["attempts"] = string(attemptsJSON)
+	}
 	err = s.Client.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		Values: flowActionMap,
@@ -257,6 +265,20 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 					return nil, "", fmt.Errorf("failed to unmarshal temporal activities in message %d: %v", i, err)
 				}
 			}
+			var attempts []domain.FlowActionAttempt
+			if attemptsStr, ok := message.Values["attempts"].(string); ok && attemptsStr != "" {
+				if err := json.Unmarshal([]byte(attemptsStr), &attempts); err != nil {
+					return nil, "", fmt.Errorf("failed to unmarshal attempts in message %d: %v", i, err)
+				}
+			}
+			var nextRetryAt *time.Time
+			if nextRetryAtStr, ok := message.Values["nextRetryAt"].(string); ok && nextRetryAtStr != "" {
+				t, err := time.Parse(time.RFC3339Nano, nextRetryAtStr)
+				if err != nil {
+					return nil, "", fmt.Errorf("failed to parse 'nextRetryAt' timestamp in message %d: %v", i, err)
+				}
+				nextRetryAt = &t
+			}
 			flowActions = append(flowActions, domain.FlowAction{
 				WorkspaceId:        workspaceId,
 				FlowId:             flowId,
@@ -273,6 +295,8 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 				Created:            created,
 				Updated:            updated,
 				TemporalActivities: temporalActivities,
+				Attempts:           attempts,
+				NextRetryAt:        nextRetryAt,
 			})
 		} else {
 			return flowActions, "end", nil
