@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -197,6 +198,14 @@ func startAnalysisSSHServer(t *testing.T, agent string) *analysisSSHServer {
 
 func TestManagedAnalysisSSHSessionActivity(t *testing.T) {
 	t.Parallel()
+	// Modal sandboxes are Linux. The agent only registers managed sessions
+	// from /proc there, and the watchdog reads /proc too, so the registration
+	// assertions below are meaningless elsewhere. On macOS the test could not
+	// even start: copying /bin/sh to the sshd shim breaks its code signature
+	// and the kernel kills it.
+	if runtime.GOOS != "linux" {
+		t.Skip("managed SSH session registration is Linux-only")
+	}
 	agent := filepath.Join(t.TempDir(), "side-agent")
 	build := exec.Command("go", "build", "-o", agent, "../../cmd/side-agent")
 	output, err := build.CombinedOutput()
