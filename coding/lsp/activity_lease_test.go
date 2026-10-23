@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"sidekick/coding/lsp/core"
 	"sidekick/env"
 
 	"github.com/sourcegraph/jsonrpc2"
@@ -128,8 +129,8 @@ func TestClientCacheReplacesDisconnectedJSONRPCConnection(t *testing.T) {
 	t.Parallel()
 	stream, peer := net.Pipe()
 	conn := jsonrpc2.NewConn(context.Background(),
-		jsonrpc2.NewBufferedStream(stream, jsonrpc2.VSCodeObjectCodec{}), noopHandler{})
-	stale := &Jsonrpc2LSPClient{Conn: conn}
+		jsonrpc2.NewBufferedStream(stream, jsonrpc2.VSCodeObjectCodec{}), jsonrpc2.HandlerWithError(func(context.Context, *jsonrpc2.Conn, *jsonrpc2.Request) (any, error) { return nil, nil }))
+	stale := &Jsonrpc2LSPClient{JSONRPCClient: core.JSONRPCClient{Conn: conn}}
 	t.Cleanup(func() { require.NoError(t, stale.Close()) })
 	require.True(t, stale.IsConnected())
 	require.NoError(t, peer.Close())

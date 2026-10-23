@@ -442,8 +442,8 @@ func TestManagedAnalysisSSHSessionActivity(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("closing the cache retained its SSH session")
 			}
-			require.NotNil(t, clients[0].transport.command.ProcessState, "local SSH process must be reaped")
-			require.True(t, clients[0].transport.command.ProcessState.Success())
+			require.NotNil(t, clients[0].transport.Command().ProcessState, "local SSH process must be reaped")
+			require.True(t, clients[0].transport.Command().ProcessState.Success())
 			require.Empty(t, activities.InitializedClients)
 		})
 	}
