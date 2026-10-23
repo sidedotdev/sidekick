@@ -800,6 +800,48 @@ func TestBulkReadFileActivityV2_OutOfRangeIncludesValidRange(t *testing.T) {
 	}
 }
 
+func TestBulkReadFileActivityV2_NullStringArgsNotePersisted(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "small.go"), []byte("line1\nline2\nline3"), 0644))
+
+	storage := sqlite.NewTestSqliteStorage(t, "bulk_read_v2_null_note_test")
+	activities := &BulkReadFileActivities{Storage: storage}
+
+	input := BulkReadFileActivityV2Input{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tempDir}},
+		Params: BulkReadFileParams{
+			FileLines:  []FileLine{{FilePath: "small.go", LineNumber: 1}},
+			WindowSize: 1,
+		},
+		FlowId:      "test-flow",
+		WorkspaceId: "test-workspace",
+		ToolCall: llm.ToolCall{
+			Id:        "call_1",
+			Name:      "read_file",
+			Arguments: `{"file_lines":[{"file_path":"small.go","line_number":1}],"window_size":"null"}`,
+		},
+	}
+
+	out, err := activities.BulkReadFileActivityV2(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, out.Ref.BlockKeys, 1)
+
+	values, err := storage.MGet(context.Background(), input.WorkspaceId, []string{persisted_ai.StorageKey(input.FlowId, out.Ref.BlockKeys[0])})
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+
+	var block llm2.ContentBlock
+	require.NoError(t, json.Unmarshal(values[0], &block))
+	require.NotNil(t, block.ToolResult)
+	require.Len(t, block.ToolResult.Content, 1)
+	text := block.ToolResult.Content[0].Text
+	require.Contains(t, text, "line1")
+	require.Contains(t, text, `"null"`)
+	require.Contains(t, text, "window_size")
+	require.True(t, strings.Index(text, "line1") < strings.Index(text, "window_size"), "note should follow the original content")
+}
+
 func TestParseBulkReadFileParamsLenient(t *testing.T) {
 	t.Parallel()
 

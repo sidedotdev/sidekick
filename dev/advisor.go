@@ -270,7 +270,14 @@ func (a *Advisor) MaybeAdvise(
 	// tool_use blocks. They must be resolved with matching tool results before
 	// the executor's LLM runs again, otherwise the provider rejects the request.
 	if len(injectedToolCalls) > 0 {
-		if _, err := handleToolCalls(dCtx, injectedToolCalls, executorHistory, customHandlers); err != nil {
+		options := toolCallOptions{
+			AssistantMessage: llm.ChatMessage{
+				Role:      llm.ChatMessageRoleAssistant,
+				Content:   executorPuppetContent(respMsg.GetContentString()),
+				ToolCalls: injectedToolCalls,
+			},
+		}
+		if _, err := handleToolCallsWithOptions(dCtx, injectedToolCalls, executorHistory, customHandlers, options); err != nil {
 			return fmt.Errorf("advisor: failed to handle injected executor tool calls: %w", err)
 		}
 	}
@@ -393,7 +400,7 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 	}
 
 	if len(executorToolCalls) > 0 {
-		if err := AppendChatHistory(eCtx, executorHistory, llm.ChatMessage{
+		if err := appendGenerationMessage(eCtx, executorHistory, llm.ChatMessage{
 			Role:      llm.ChatMessageRoleAssistant,
 			Content:   executorPuppetContent(advisorContent),
 			ToolCalls: executorToolCalls,

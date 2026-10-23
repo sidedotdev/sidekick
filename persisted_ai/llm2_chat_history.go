@@ -55,7 +55,8 @@ func (m *BasicBlockMetadata) SetBlockKey(key string) { m.BlockKey = key }
 
 // SidekickBlockMetadata holds sidekick-specific metadata for a content block.
 type SidekickBlockMetadata struct {
-	ContextType string `json:"contextType,omitempty"`
+	ContextType string               `json:"contextType,omitempty"`
+	Deliverable *DeliverableMetadata `json:"deliverable,omitempty"`
 }
 
 // getSidekickBlockMetadata resolves the sidekick metadata from a content block,
@@ -76,8 +77,15 @@ func getSidekickBlockMetadata(block llm2.ContentBlock) *SidekickBlockMetadata {
 		return &meta
 	}
 	if m, ok := raw.(map[string]interface{}); ok {
-		ct, _ := m["contextType"].(string)
-		return &SidekickBlockMetadata{ContextType: ct}
+		data, err := json.Marshal(m)
+		if err != nil {
+			return nil
+		}
+		var meta SidekickBlockMetadata
+		if err := json.Unmarshal(data, &meta); err != nil {
+			return nil
+		}
+		return &meta
 	}
 	return nil
 }

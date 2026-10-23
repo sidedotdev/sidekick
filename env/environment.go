@@ -95,6 +95,10 @@ const WorktreeLockReason = "Sidekick-managed worktree; locked to prevent git wor
 // ErrTypeBranchAlreadyExists is the application error type for branch already exists errors
 const ErrTypeBranchAlreadyExists = "BranchAlreadyExists"
 
+// ErrTypeMissingWorkingDir is the application error type for commands whose
+// relative working directory does not exist
+const ErrTypeMissingWorkingDir = "MissingWorkingDir"
+
 type EnvType string
 
 const (
@@ -2001,6 +2005,9 @@ func (a *Activities) RunCommand(ctx context.Context, input EnvRunCommandActivity
 				res.output.Stdout = truncateMiddle(res.output.Stdout, maxActivityOutputBytes)
 				res.output.Stderr = truncateMiddle(res.output.Stderr, maxActivityOutputBytes)
 			}
+			if res.err != nil {
+				res.err = explainMissingWorkingDir(ctx, input, res.err)
+			}
 			return res.output, res.err
 		case <-ticker.C:
 			if activity.IsActivity(ctx) {
@@ -2010,6 +2017,25 @@ func (a *Activities) RunCommand(ctx context.Context, input EnvRunCommandActivity
 			return EnvRunCommandActivityOutput{}, ctx.Err()
 		}
 	}
+}
+
+// explainMissingWorkingDir names the missing relative working directory when
+// that is why the command failed, since exec otherwise reports it as an
+// opaque "fork/exec <shell>: no such file or directory". The directory won't
+// appear on its own, so retrying is pointless.
+func explainMissingWorkingDir(ctx context.Context, input EnvRunCommandActivityInput, runErr error) error {
+	relDir := input.RelativeWorkingDir
+	if relDir == "" || relDir == "." {
+		return runErr
+	}
+	if _, statErr := input.EnvContainer.Env.Stat(ctx, relDir); errors.Is(statErr, fs.ErrNotExist) {
+		return temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("working directory %q does not exist relative to the repository root (check the workingDir argument): %v", relDir, runErr),
+			ErrTypeMissingWorkingDir,
+			runErr,
+		)
+	}
+	return runErr
 }
 
 func truncateMiddle(s string, maxBytes int) string {
