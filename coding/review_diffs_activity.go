@@ -75,15 +75,12 @@ func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, par
 
 	prior, current := params.PriorReviewDiff, result.FullDiff
 	if params.PriorReviewSnapshot != nil {
-		prior, err = diffanalysis.RebaseReviewDiff(params.PriorReviewSnapshot.TotalDiff, baseChange)
-		current = result.ReviewSnapshot.TotalDiff
-	}
-	if err == nil {
-		if strings.TrimSpace(prior) == "" {
-			result.SinceDiff = current
-		} else {
-			result.SinceDiff, err = diffanalysis.Interdiff(prior, current)
-		}
+		result.SinceDiff, err = diffanalysis.InterdiffWithBaseChange(
+			params.PriorReviewSnapshot.TotalDiff, result.ReviewSnapshot.TotalDiff, baseChange)
+	} else if strings.TrimSpace(prior) == "" {
+		result.SinceDiff = current
+	} else {
+		result.SinceDiff, err = diffanalysis.Interdiff(prior, current)
 	}
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to compute diff since last review, falling back to the full diff")

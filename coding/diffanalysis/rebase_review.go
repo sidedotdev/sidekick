@@ -12,18 +12,7 @@ import (
 // relative to the original base; the result is relative to the new base.
 // Unknown content retains its original identity throughout the three-way merge.
 func RebaseReviewDiff(review, baseChange string) (string, error) {
-	if strings.TrimSpace(baseChange) == "" {
-		return review, nil
-	}
-	trees, err := readReviewTrees(review, baseChange)
-	if err != nil {
-		return "", err
-	}
-	merged, err := mergeReviewTrees(trees)
-	if err != nil {
-		return "", err
-	}
-	return compareReviewTrees(trees.current, merged)
+	return rebaseReviewDiff(review, baseChange, false)
 }
 
 func sameReviewContent(a, b reviewFile) bool {
@@ -34,7 +23,7 @@ func sameReviewFile(a, b reviewFile) bool {
 	return a.mode == b.mode && sameReviewContent(a, b)
 }
 
-func mergeReviewTrees(trees reviewTreeSet) (map[string]reviewFile, error) {
+func mergeReviewTrees(trees reviewTreeSet, preserveConflicts bool) (map[string]reviewFile, error) {
 	base, prior, upstream := trees.base, trees.prior, trees.current
 	fragments := [2]map[string][]*gitdiff.TextFragment{}
 	for side, patch := range trees.patches {
@@ -91,7 +80,7 @@ func mergeReviewTrees(trees reviewTreeSet) (map[string]reviewFile, error) {
 		} else if rightPath != path && leftPath != rightPath {
 			return nil, fmt.Errorf("%s: conflicting renames", path)
 		}
-		file, err := mergeReviewFile(original, left, right, fragments[0][path], fragments[1][path])
+		file, err := mergeReviewFile(original, left, right, fragments[0][path], fragments[1][path], preserveConflicts)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
@@ -118,7 +107,7 @@ func mergeReviewTrees(trees reviewTreeSet) (map[string]reviewFile, error) {
 	return merged, nil
 }
 
-func mergeReviewFile(base, prior, upstream reviewFile, priorEdits, upstreamEdits []*gitdiff.TextFragment) (reviewFile, error) {
+func mergeReviewFile(base, prior, upstream reviewFile, priorEdits, upstreamEdits []*gitdiff.TextFragment, preserveConflicts bool) (reviewFile, error) {
 	result := prior
 	if prior.mode == base.mode {
 		result.mode = upstream.mode
@@ -134,7 +123,7 @@ func mergeReviewFile(base, prior, upstream reviewFile, priorEdits, upstreamEdits
 		if base.binaryID != "" || prior.binaryID != "" || upstream.binaryID != "" {
 			return reviewFile{}, fmt.Errorf("conflicting binary changes")
 		}
-		spans, err := mergeReviewSpans(base.spans, priorEdits, upstreamEdits)
+		spans, err := mergeReviewSpans(base.spans, priorEdits, upstreamEdits, preserveConflicts)
 		if err != nil {
 			return reviewFile{}, err
 		}
@@ -143,12 +132,13 @@ func mergeReviewFile(base, prior, upstream reviewFile, priorEdits, upstreamEdits
 	return result, nil
 }
 
-type reviewSpanEdit struct {
+type reviewEdit[T comparable] struct {
 	start, end  int
-	replacement []reviewSpan
+	side        int
+	replacement []T
 }
 
-func mergeReviewSpans(base []reviewSpan, prior, upstream []*gitdiff.TextFragment) ([]reviewSpan, error) {
+func mergeReviewSpans(base []reviewSpan, prior, upstream []*gitdiff.TextFragment, preserveConflicts bool) ([]reviewSpan, error) {
 	boundaries := map[int64]int{}
 	position := int64(0)
 	for i, span := range base {
@@ -164,11 +154,11 @@ func mergeReviewSpans(base []reviewSpan, prior, upstream []*gitdiff.TextFragment
 	if len(base) == 0 {
 		boundaries[0] = 0
 	}
-	var edits []reviewSpanEdit
-	for _, side := range [][]*gitdiff.TextFragment{prior, upstream} {
-		for _, fragment := range side {
+	var edits []reviewEdit[reviewSpan]
+	for side, fragments := range [][]*gitdiff.TextFragment{prior, upstream} {
+		for _, fragment := range fragments {
 			position := reviewOffset(fragment.OldPosition, fragment.OldLines)
-			var edit *reviewSpanEdit
+			var edit *reviewEdit[reviewSpan]
 			for _, line := range fragment.Lines {
 				if line.Old() && line.New() {
 					edit = nil
@@ -180,7 +170,7 @@ func mergeReviewSpans(base []reviewSpan, prior, upstream []*gitdiff.TextFragment
 					if !ok {
 						return nil, fmt.Errorf("edit does not start on a base boundary")
 					}
-					edits = append(edits, reviewSpanEdit{start: index, end: index})
+					edits = append(edits, reviewEdit[reviewSpan]{start: index, end: index, side: side})
 					edit = &edits[len(edits)-1]
 				}
 				if line.Old() {
@@ -197,28 +187,22 @@ func mergeReviewSpans(base []reviewSpan, prior, upstream []*gitdiff.TextFragment
 			}
 		}
 	}
-	slices.SortFunc(edits, func(a, b reviewSpanEdit) int {
-		if a.start != b.start {
-			return a.start - b.start
-		}
-		return a.end - b.end
+	return mergeReviewEdits(base, edits, func(base, prior, upstream []reviewSpan) ([]reviewSpan, error) {
+		return mergeReviewText(base, prior, upstream, preserveConflicts)
 	})
-	var result []reviewSpan
-	index := 0
-	var previous *reviewSpanEdit
-	for i := range edits {
-		edit := &edits[i]
-		if previous != nil && previous.start == edit.start && previous.end == edit.end &&
-			slices.Equal(previous.replacement, edit.replacement) {
-			continue
-		}
-		if edit.start < index ||
-			previous != nil && previous.start == previous.end && edit.start == edit.end && previous.start == edit.start {
-			return nil, fmt.Errorf("overlapping feature and base edits")
-		}
-		result = append(result, base[index:edit.start]...)
-		result = append(result, edit.replacement...)
-		index, previous = edit.end, edit
+}
+
+func rebaseReviewDiff(review, baseChange string, preserveConflicts bool) (string, error) {
+	if strings.TrimSpace(baseChange) == "" {
+		return review, nil
 	}
-	return append(result, base[index:]...), nil
+	trees, err := readReviewTrees(review, baseChange)
+	if err != nil {
+		return "", err
+	}
+	merged, err := mergeReviewTrees(trees, preserveConflicts)
+	if err != nil {
+		return "", err
+	}
+	return compareReviewTrees(trees.current, merged)
 }

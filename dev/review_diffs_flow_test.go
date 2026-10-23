@@ -596,8 +596,10 @@ func TestReviewRoundDiffsRealFlow(t *testing.T) {
 				assert.Contains(t, fullDiffs[0], "OUR_CHANGE")
 				assert.Contains(t, fullDiffs[1], "RESOLVED_CHANGE")
 				assert.NotContains(t, fullDiffs[1], "UNRELATED_BASE_CHANGE")
-				assert.Contains(t, sinceDiff, "Failed to generate diff since last review:",
-					"incompatible bases must not produce a successful approximate comparison")
+				assert.Contains(t, sinceDiff, "\n-OUR_CHANGE\n")
+				assert.Contains(t, sinceDiff, "\n+RESOLVED_CHANGE\n")
+				assert.NotContains(t, sinceDiff, "THEIR_CHANGE")
+				assert.NotContains(t, sinceDiff, "Failed to generate diff since last review:")
 				assert.NotContains(t, sinceDiff, "UNRELATED_BASE_CHANGE",
 					"non-conflicting base changes are not ours")
 			},
