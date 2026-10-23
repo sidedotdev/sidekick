@@ -53,8 +53,11 @@ type ExecRequest struct {
 	// without spawning a command. It protects work on a separate channel.
 	ActivityLease bool `json:"activityLease,omitempty"`
 	// OnReady runs locally once the remote has admitted the activity lease.
-	OnReady func()                                `json:"-"`
-	Search  *repotools.BulkSearchRepositoryParams `json:"search,omitempty"`
+	OnReady func() `json:"-"`
+	// Search and SymbolDefinitions run a repository tool inside the sandbox
+	// instead of Argv, keeping file reads and language-server traffic local.
+	Search            *repotools.BulkSearchRepositoryParams `json:"search,omitempty"`
+	SymbolDefinitions *repotools.DirectorySymDefRequest     `json:"symbolDefinitions,omitempty"`
 }
 
 // ExecResponse carries the buffered result of one ExecRequest.

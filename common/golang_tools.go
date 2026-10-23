@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/coding/lsp/core"
 	"time"
 
 	"github.com/adrg/xdg"
@@ -21,7 +22,7 @@ var ErrGoplsInstallFailed = errors.New("failed to install gopls after multiple a
 //   - Dockerfile.openshell
 //   - docker/Dockerfile.tests
 //   - env/testdata/Dockerfile.golang
-const GoplsVersion = "v0.21.0"
+const GoplsVersion = core.GoplsVersion
 
 // FindOrInstallGopls attempts to find gopls in PATH or XDG bin directory,
 // installing it if necessary. Returns a command that can be used to execute

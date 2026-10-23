@@ -10,6 +10,12 @@ import (
 	"sidekick/env"
 )
 
+// ClientScope identifies the language-server sessions for the environment's
+// working directory.
+func (lspa *LSPActivities) ClientScope(container env.EnvContainer) (core.ClientScope, error) {
+	return clientScope(container.Env.GetWorkingDirectory(), &container)
+}
+
 // clientScope keeps remote environments sharing a directory path from
 // sharing a language server.
 func clientScope(baseDir string, container *env.EnvContainer) (core.ClientScope, error) {

@@ -41,6 +41,8 @@ type server struct {
 	loginEnvOnce sync.Once
 	loginEnv     []string
 
+	languageServers languageServers
+
 	// seal gates admission; nil means the sandbox default.
 	seal *Seal
 }
@@ -155,6 +157,7 @@ func (s *server) shutdown() {
 		procs = append(procs, p)
 	}
 	s.mu.Unlock()
+	s.languageServers.close()
 	for _, p := range procs {
 		killProcessGroup(p)
 	}
@@ -177,7 +180,7 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 		s.mu.Unlock()
 	}()
 	resp := ExecResponse{ID: req.ID}
-	if len(req.Argv) == 0 && !req.ActivityLease && req.Search == nil {
+	if len(req.Argv) == 0 && !req.ActivityLease && req.Search == nil && req.SymbolDefinitions == nil {
 		resp.ExitStatus = -1
 		resp.Error = "empty argv"
 		return resp
@@ -253,6 +256,9 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 
 	if req.Search != nil {
 		return s.executeSearch(req)
+	}
+	if req.SymbolDefinitions != nil {
+		return s.executeSymbolDefinitions(req)
 	}
 	return s.executeCommand(req)
 }

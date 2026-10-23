@@ -38,7 +38,9 @@ var agentSourceFiles = []string{
 	"repotools",
 	"sideagent",
 	"env/localio",
+	"gitwalk",
 	"utils",
+	"coding/lsp/core",
 	"coding/tree_sitter/parser",
 	"coding/tree_sitter/language_bindings",
 }

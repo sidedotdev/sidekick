@@ -1,12 +1,13 @@
-package coding
+package repotools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
-	"sidekick/coding/lsp"
-	"sidekick/coding/tree_sitter"
-	"sidekick/env"
+	"path/filepath"
+	"sidekick/coding/lsp/core"
+	"sidekick/coding/tree_sitter/parser"
 	"sidekick/utils"
 	"slices"
 	"sync"
@@ -15,55 +16,41 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type RelatedSymbolsActivityInput struct {
+type RelatedSymbolsRequest struct {
 	SymbolText       string
-	EnvContainer     env.EnvContainer
 	RelativeFilePath string
-	SymbolRange      *lsp.Range
+	SymbolRange      *core.Range
 
 	// PreloadedFileContent, when non-nil, is used as RelativeFilePath's
-	// content instead of reading it from the environment. It is intentionally
-	// not serialized: activity invocations always read from the env.
+	// content instead of reading it from the repository.
 	PreloadedFileContent []byte `json:"-"`
-
-	// ReadFile, when non-nil, replaces EnvContainer.Env.ReadFile for loading
-	// files that reference the symbol, so callers can coalesce duplicate reads
-	// across lookups. It is intentionally not serialized: activity invocations
-	// always read from the env.
-	ReadFile func(ctx context.Context, path string) ([]byte, error) `json:"-"`
 }
 
 type RelatedSymbol struct {
-	Symbol           tree_sitter.Symbol
-	Locations        []lsp.Location
+	Symbol           parser.Symbol
+	Locations        []core.Location
 	RelativeFilePath string
 	InSignature      bool
-	Signature        tree_sitter.Signature
+	Signature        parser.Signature
 }
 
-// Could be called EnrichedReferencesActivity or something similar too
-func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input RelatedSymbolsActivityInput) ([]RelatedSymbol, error) {
+// RelatedSymbols finds the symbols whose definitions reference the requested
+// symbol, with the signature each reference appears in.
+func (d *SymbolDefinitions) RelatedSymbols(ctx context.Context, repo Repository, input RelatedSymbolsRequest) ([]RelatedSymbol, error) {
 	lang := utils.InferLanguageNameFromFilePath(input.RelativeFilePath)
-	if !lsp.IsSupportedLanguage(lang) {
+	if !core.IsSupportedLanguage(lang) {
 		return nil, nil
 	}
+	rootUri := repo.GetWorkingDirectory()
 
-	lspInput := lsp.FindReferencesActivityInput{
-		EnvContainer:         input.EnvContainer,
-		RelativeFilePath:     input.RelativeFilePath,
-		SymbolText:           input.SymbolText,
-		Range:                input.SymbolRange,
-		PreloadedFileContent: input.PreloadedFileContent,
-	}
-	references, err := ca.LSPActivities.FindReferencesActivity(ctx, lspInput)
+	references, err := d.findReferences(ctx, repo, rootUri, lang, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find references: %w", err)
 	}
 
 	var relatedSymbols []RelatedSymbol
-	rootUri := input.EnvContainer.Env.GetWorkingDirectory()
 
-	parsedFiles, err := loadReferencingFiles(ctx, input, references)
+	parsedFiles, err := loadReferencingFiles(ctx, repo, input, references)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +80,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 			}
 
 			if RangesOverlap(symbolRange, referenceRange) {
-				var signature tree_sitter.Signature
+				var signature parser.Signature
 				var signatureRange tree_sitter_lib.Range
 				for _, sig := range parsedFiles[filePath].signatures {
 					sigRange := tree_sitter_lib.Range{
@@ -108,7 +95,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 				}
 
 				inSignature := RangesOverlap(signatureRange, referenceRange)
-				relFilePath, err := env.EnvRel(input.EnvContainer.Env, rootUri, filePath)
+				relFilePath, err := filepath.Rel(rootUri, filePath)
 				if err != nil {
 					relFilePath = "" // File is outside working directory
 				}
@@ -122,7 +109,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 				}
 				relatedSymbols = append(relatedSymbols, RelatedSymbol{
 					Symbol:           symbol,
-					Locations:        []lsp.Location{reference},
+					Locations:        []core.Location{reference},
 					RelativeFilePath: relFilePath,
 					InSignature:      inSignature,
 					Signature:        signature,
@@ -134,11 +121,38 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 	return relatedSymbols, nil
 }
 
+func (d *SymbolDefinitions) findReferences(ctx context.Context, repo Repository, rootUri, lang string, input RelatedSymbolsRequest) ([]core.Location, error) {
+	ctx, client, release, err := d.acquireLanguageServer(ctx, lang)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	fileBytes := input.PreloadedFileContent
+	if fileBytes == nil {
+		fileBytes, err = repo.ReadFile(ctx, input.RelativeFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file: %w", err)
+		}
+	}
+	return core.References(ctx, client, rootUri, input.RelativeFilePath, fileBytes, input.SymbolText, input.SymbolRange)
+}
+
+// acquireLanguageServer returns ErrNoLanguageServer when LSP resolution is
+// disabled.
+func (d *SymbolDefinitions) acquireLanguageServer(ctx context.Context, lang string) (context.Context, core.LSPClient, func(), error) {
+	if d.Sessions == nil || d.Sessions.LSPClientProvider == nil {
+		return ctx, nil, nil, ErrNoLanguageServer
+	}
+	return d.Sessions.Acquire(ctx, d.Scope, lang)
+}
+
+var ErrNoLanguageServer = errors.New("no language server available")
+
 // parsedReferenceFile holds the tree-sitter view of one file that references
 // the subject symbol.
 type parsedReferenceFile struct {
-	symbols    []tree_sitter.Symbol
-	signatures []tree_sitter.Signature
+	symbols    []parser.Symbol
+	signatures []parser.Signature
 }
 
 // maxConcurrentReferenceFileLoads bounds parallel reads of files referencing a
@@ -150,13 +164,8 @@ const maxConcurrentReferenceFileLoads = 15
 // loadReferencingFiles reads and parses each distinct file the references
 // point into, concurrently up to maxConcurrentReferenceFileLoads, keyed by
 // absolute file path. The first failure cancels the remaining loads.
-func loadReferencingFiles(ctx context.Context, input RelatedSymbolsActivityInput, references []lsp.Location) (map[string]parsedReferenceFile, error) {
-	readFile := input.ReadFile
-	if readFile == nil {
-		readFile = input.EnvContainer.Env.ReadFile
-	}
-	rootUri := input.EnvContainer.Env.GetWorkingDirectory()
-	subjectAbsPath := env.EnvClean(input.EnvContainer.Env, rootUri+env.EnvSeparator(input.EnvContainer.Env)+input.RelativeFilePath)
+func loadReferencingFiles(ctx context.Context, repo Repository, input RelatedSymbolsRequest, references []core.Location) (map[string]parsedReferenceFile, error) {
+	subjectAbsPath := filepath.Join(repo.GetWorkingDirectory(), input.RelativeFilePath)
 
 	seen := make(map[string]bool, len(references))
 	var uniquePaths []string
@@ -183,19 +192,19 @@ func loadReferencingFiles(ctx context.Context, input RelatedSymbolsActivityInput
 			fileBytes := input.PreloadedFileContent
 			if fileBytes == nil || filePath != subjectAbsPath {
 				var readErr error
-				fileBytes, readErr = readFile(groupCtx, filePath)
+				fileBytes, readErr = repo.ReadFile(groupCtx, filePath)
 				if readErr != nil {
 					return fmt.Errorf("failed to read file %s: %w", filePath, readErr)
 				}
 			}
 			langName := utils.InferLanguageNameFromFilePath(filePath)
 
-			symbols, err := tree_sitter.GetFileSymbolsFromBytes(filePath, langName, fileBytes)
+			symbols, err := parser.GetFileSymbolsFromBytes(filePath, langName, fileBytes)
 			if err != nil {
 				return fmt.Errorf("failed to get file symbols for %s: %w", filePath, err)
 			}
 
-			signatures, err := tree_sitter.GetFileSignaturesFromBytes(langName, fileBytes)
+			signatures, err := parser.GetFileSignaturesFromBytes(langName, fileBytes)
 			if err != nil {
 				return fmt.Errorf("failed to get file signatures for %s: %w", filePath, err)
 			}

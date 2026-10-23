@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -199,6 +200,41 @@ func TestGetAgentBinaryPathNoSourceNoVersion(t *testing.T) {
 	_, err := GetAgentBinaryPath("linux", "amd64")
 	if err == nil {
 		t.Fatal("expected an error when source and release version are unavailable")
+	}
+}
+
+// Every in-module package the agent links must be hashed, or edits to it
+// would ship a stale agent whose protocol or behavior no longer matches.
+func TestAgentSourceFilesCoverAgentDependencies(t *testing.T) {
+	root, err := findModuleRoot()
+	if err != nil {
+		t.Fatalf("find module root: %v", err)
+	}
+	list := exec.Command("go", "list", "-deps", "./cmd/side-agent")
+	list.Dir = root
+	out, err := list.Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	const module = "sidekick/"
+	for _, pkg := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(pkg, module) {
+			continue
+		}
+		dir := strings.TrimPrefix(pkg, module)
+		covered := false
+		for _, hashed := range agentSourceFiles {
+			if dir == hashed || strings.HasPrefix(dir, hashed+"/") {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("agent dependency %s is not covered by agentSourceFiles", dir)
+		}
+		if _, err := os.Stat(filepath.Join(root, dir)); err != nil {
+			t.Errorf("agent dependency dir %s: %v", dir, err)
+		}
 	}
 }
 

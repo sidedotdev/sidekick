@@ -1,17 +1,11 @@
 package lsp
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"net/url"
-	"path/filepath"
 	"sidekick/coding/lsp/core"
 	"sidekick/env"
 	"sidekick/utils"
-	"strings"
 
 	"go.opentelemetry.io/otel"
 )
@@ -59,44 +53,5 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 			return nil, fmt.Errorf("failed to read file: %w", err)
 		}
 	}
-	reader := bufio.NewReader(bytes.NewReader(fileBytes))
-
-	position, err := findSymbolPosition(reader, input.Range, input.SymbolText)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find symbol position: %w", err)
-	}
-
-	absoluteFilepath := filepath.Join(baseDir, input.RelativeFilePath)
-	uri, err := url.Parse("file://" + absoluteFilepath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse uri file://%s: %w", absoluteFilepath, err)
-	}
-	references, err := lspClient.TextDocumentReferences(ctx, uri.String(), position.Line, position.Character)
-	if err != nil {
-		return nil, fmt.Errorf("failed to invoke lsp text document references: %w", err)
-	}
-
-	return references, nil
-}
-
-// findSymbolPosition finds the position of the last character of the first matching text in the file content
-func findSymbolPosition(reader io.Reader, fileRange *Range, symbolText string) (Position, error) {
-	scanner := bufio.NewScanner(reader)
-	lineNum := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		if fileRange != nil && (lineNum < fileRange.Start.Line || lineNum > fileRange.End.Line) {
-			lineNum++
-			continue
-		}
-		index := strings.Index(line, symbolText)
-		if index != -1 {
-			return Position{
-				Line:      lineNum,
-				Character: index + len(symbolText) - 1,
-			}, nil
-		}
-		lineNum++
-	}
-	return Position{}, fmt.Errorf("symbol not found in file content")
+	return core.References(ctx, lspClient, baseDir, input.RelativeFilePath, fileBytes, input.SymbolText, input.Range)
 }

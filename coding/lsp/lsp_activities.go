@@ -1,18 +1,11 @@
 package lsp
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"path"
 	"sidekick/coding/lsp/core"
-	"sidekick/coding/tree_sitter"
 	"sidekick/env"
 	"sidekick/utils"
-	"strings"
-	"unicode/utf8"
 )
 
 // TODO /gen create an integration test for all methods of LSPActivities, using
@@ -45,11 +38,7 @@ type LSPDefinitionLocationsRequest struct {
 	PreloadedFileContent []byte `json:"-"`
 }
 
-type SymbolDefinitionLocation struct {
-	Symbol   string   `json:"symbol"`
-	Location Location `json:"location"`
-	Error    string   `json:"error"`
-}
+type SymbolDefinitionLocation = core.SymbolDefinitionLocation
 
 // TODO /gen use this function as a fallback when getting symbol definitions
 // that are not found via tree-sitter in extractCodeContext
@@ -77,22 +66,6 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 			return []SymbolDefinitionLocation{}, readErr
 		}
 	}
-
-	var lineRange *Range
-	if request.ReferenceLine != "" {
-		lineRange = findReferenceLineRange(fileBytes, request.ReferenceLine)
-		if lineRange == nil {
-			symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
-			for _, symbol := range request.Symbols {
-				symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-					Symbol: symbol,
-					Error:  buildReferenceLineMismatchError(fileBytes, request.FilePath, request.ReferenceLine, symbol),
-				})
-			}
-			return symbolDefinitions, nil
-		}
-	}
-
 	langName := utils.InferLanguageNameFromFilePath(request.FilePath)
 	repoDir := request.EnvContainer.Env.GetWorkingDirectory()
 	ctx, lspClient, release, err := la.findOrInitClient(ctx, repoDir, langName, request.EnvContainer)
@@ -100,242 +73,10 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 		return []SymbolDefinitionLocation{}, err
 	}
 	defer release()
-	fileURI := convertFilePathToURI(repoDir, request.FilePath)
-
-	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
-	for _, symbol := range request.Symbols {
-		positions := findSymbolOccurrencePositions(fileBytes, lineRange, symbol, langName)
-		if len(positions) == 0 {
-			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-				Symbol: symbol,
-				Error:  "symbol not found in file content",
-			})
-			continue
-		}
-
-		seen := make(map[Location]struct{})
-		var lastErr error
-		foundAny := false
-		for _, pos := range positions {
-			locations, defErr := lspClient.TextDocumentDefinition(ctx, fileURI, pos.Line, pos.Character)
-			if defErr != nil {
-				lastErr = defErr
-				continue
-			}
-			for _, location := range locations {
-				if _, ok := seen[location]; ok {
-					continue
-				}
-				seen[location] = struct{}{}
-				symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-					Symbol:   symbol,
-					Location: location,
-				})
-				foundAny = true
-			}
-		}
-		if !foundAny && lastErr != nil {
-			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-				Symbol: symbol,
-				Error:  lastErr.Error(),
-			})
-		}
-	}
-
-	return symbolDefinitions, nil
+	return core.DefinitionLocations(ctx, lspClient, repoDir, request.FilePath, fileBytes, request.Symbols, request.ReferenceLine), nil
 }
 
-// findSymbolOccurrencePositions returns the positions to use for
-// go-to-definition requests for symbolText within data. Where the language has
-// a grammar, only whole syntax tokens naming the symbol are returned: a
-// language server resolves the entire token enclosing the requested position,
-// so a substring match (eg "run" inside "runtime", or inside a comment or
-// string literal) would otherwise yield definitions of an unrelated symbol.
-// Languages without a grammar fall back to a plain text scan.
-func findSymbolOccurrencePositions(data []byte, fileRange *Range, symbolText, langName string) []Position {
-	occurrences, err := tree_sitter.FindSymbolOccurrences(langName, data, symbolText)
-	if err != nil {
-		return findAllSymbolPositions(data, fileRange, symbolText)
-	}
-
-	var positions []Position
-	for _, occurrence := range occurrences {
-		line := int(occurrence.EndPoint.Row)
-		if fileRange != nil && (line < fileRange.Start.Line || line > fileRange.End.Line) {
-			continue
-		}
-		positions = append(positions, Position{
-			Line:      line,
-			Character: lastCharacterOffset(data, occurrence),
-		})
-	}
-	return positions
-}
-
-// lastCharacterOffset returns the LSP character offset of the final character
-// of an occurrence, ie its offset in UTF-16 code units from the line start.
-func lastCharacterOffset(data []byte, occurrence tree_sitter.SymbolOccurrence) int {
-	lineStartByte := occurrence.EndByte - uint(occurrence.EndPoint.Column)
-	_, lastRuneSize := utf8.DecodeLastRune(data[occurrence.StartByte:occurrence.EndByte])
-	lastCharByte := occurrence.EndByte - uint(lastRuneSize)
-	if lastCharByte < lineStartByte {
-		lastCharByte = lineStartByte
-	}
-	return utf16Len(data[lineStartByte:lastCharByte])
-}
-
-// utf16Len returns the number of UTF-16 code units encoding data, which is the
-// character offset unit used by LSP positions.
-func utf16Len(data []byte) int {
-	count := 0
-	for _, r := range string(data) {
-		count++
-		if r > 0xFFFF {
-			count++
-		}
-	}
-	return count
-}
-
-// findAllSymbolPositions returns the position of every occurrence of
-// symbolText within data, pointing at the last character of each match (matching
-// findSymbolPosition's convention). When fileRange is non-nil, only matches on
-// lines within that range are returned. Multiple matches on the same line are
-// each reported.
-func findAllSymbolPositions(data []byte, fileRange *Range, symbolText string) []Position {
-	if symbolText == "" {
-		return nil
-	}
-	var positions []Position
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for i := 0; scanner.Scan(); i++ {
-		if fileRange != nil && (i < fileRange.Start.Line || i > fileRange.End.Line) {
-			continue
-		}
-		line := scanner.Text()
-		searchFrom := 0
-		for searchFrom <= len(line) {
-			idx := strings.Index(line[searchFrom:], symbolText)
-			if idx < 0 {
-				break
-			}
-			absoluteIdx := searchFrom + idx
-			positions = append(positions, Position{
-				Line:      i,
-				Character: absoluteIdx + len(symbolText) - 1,
-			})
-			searchFrom = absoluteIdx + len(symbolText)
-		}
-	}
-	return positions
-}
-
-// buildReferenceLineMismatchError formats an error message explaining that
-// the caller-provided reference_line could not be located in the file, and
-// lists the actual lines (1-based numbers + literal content) where the symbol
-// appears so the caller can retry with a correct reference line.
-func buildReferenceLineMismatchError(data []byte, filePath, referenceLine, symbol string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "reference_line %q did not match any line in %s", referenceLine, filePath)
-	occurrences := findSymbolOccurrenceLines(data, symbol)
-	if len(occurrences) == 0 {
-		fmt.Fprintf(&b, "; symbol %q does not appear in the file", symbol)
-		return b.String()
-	}
-	fmt.Fprintf(&b, "; symbol %q occurs on the following lines:", symbol)
-	for _, occ := range occurrences {
-		fmt.Fprintf(&b, "\n  - line %d: %s", occ.lineNumber, occ.content)
-	}
-	return b.String()
-}
-
-type symbolOccurrenceLine struct {
-	lineNumber int
-	content    string
-}
-
-// findSymbolOccurrenceLines returns each line in data that contains symbolText,
-// reported as a 1-based line number and the literal line content. A line that
-// contains multiple occurrences is reported once.
-func findSymbolOccurrenceLines(data []byte, symbolText string) []symbolOccurrenceLine {
-	if symbolText == "" {
-		return nil
-	}
-	var occurrences []symbolOccurrenceLine
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for i := 0; scanner.Scan(); i++ {
-		line := scanner.Text()
-		if strings.Contains(line, symbolText) {
-			occurrences = append(occurrences, symbolOccurrenceLine{
-				lineNumber: i + 1,
-				content:    line,
-			})
-		}
-	}
-	return occurrences
-}
-
-// findReferenceLineRange returns a single-line Range covering the first line in
-// data that contains the given snippet (after trimming surrounding whitespace),
-// or nil if no such line is found. Callers use a nil return to signal that the
-// caller-provided reference_line could not be located.
-func findReferenceLineRange(data []byte, snippet string) *Range {
-	trimmed := strings.TrimSpace(snippet)
-	if trimmed == "" {
-		return nil
-	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for i := 0; scanner.Scan(); i++ {
-		line := scanner.Text()
-		if strings.Contains(line, trimmed) {
-			return &Range{
-				Start: Position{Line: i, Character: 0},
-				End:   Position{Line: i, Character: len(line)},
-			}
-		}
-	}
-	return nil
-}
-
-// TODO return this instead of Position in findSymbolPositions
-type symbolPosition struct {
-	symbol   string
-	position Position
-}
-
-// findSymbolPositionsFromBytes finds symbol positions in pre-read file content.
-func findSymbolPositionsFromBytes(data []byte, symbols []string) ([]Position, error) {
-	return findSymbolPositionsFromReader(bytes.NewReader(data), symbols)
-}
-
-func findSymbolPositionsFromReader(r io.Reader, symbols []string) ([]Position, error) {
-	// FIXME this might find multiple positions for the same symbol, we should
-	// limit it the first one. less naively, we should use the positions for
-	// each unique type of symbol match, but the easiest way to do this might
-	// just be to get all the defintions and then remove dups, but this could
-	// also be extremely slow with a symbol used many times.
-	var positions []Position
-	scanner := bufio.NewScanner(r)
-	for i := 0; scanner.Scan(); i++ {
-		line := scanner.Text()
-		for _, symbol := range symbols {
-			if strings.Contains(line, symbol) {
-				positions = append(positions, Position{Line: i, Character: strings.Index(line, symbol)})
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return positions, nil
-}
-
-// convertFilePathToURI converts a file path to a URI.
-func convertFilePathToURI(repoDir, filePath string) string {
-	return "file://" + path.Join(repoDir, filePath)
-}
+var findSymbolOccurrencePositions = core.FindSymbolOccurrencePositions
 
 // TextDocumentDidOpenActivityInput represents input for the TextDocumentDidOpen notification.
 type TextDocumentDidOpenActivityInput struct {
@@ -371,7 +112,7 @@ func didOpen(ctx context.Context, lspClient LSPClient, input TextDocumentDidOpen
 		}
 	}
 
-	fileURI := convertFilePathToURI(input.RepoDir, input.FilePath)
+	fileURI := core.ConvertFilePathToURI(input.RepoDir, input.FilePath)
 	params := DidOpenTextDocumentParams{
 		TextDocument: TextDocumentItem{
 			URI:        fileURI,
@@ -415,7 +156,7 @@ func didClose(ctx context.Context, lspClient LSPClient, input TextDocumentDidClo
 		}
 	}
 
-	fileURI := convertFilePathToURI(input.RepoDir, input.FilePath)
+	fileURI := core.ConvertFilePathToURI(input.RepoDir, input.FilePath)
 	params := DidCloseTextDocumentParams{
 		TextDocument: TextDocumentIdentifier{
 			URI: fileURI,
@@ -458,7 +199,7 @@ func didChange(ctx context.Context, lspClient LSPClient, input TextDocumentDidCh
 		}
 	}
 
-	fileURI := convertFilePathToURI(input.RepoDir, input.FilePath)
+	fileURI := core.ConvertFilePathToURI(input.RepoDir, input.FilePath)
 	params := DidChangeTextDocumentParams{
 		TextDocument: VersionedTextDocumentIdentifier{
 			TextDocumentIdentifier: TextDocumentIdentifier{
@@ -511,7 +252,7 @@ func didSave(ctx context.Context, lspClient LSPClient, input TextDocumentDidSave
 		}
 	}
 
-	fileURI := convertFilePathToURI(input.RepoDir, input.FilePath)
+	fileURI := core.ConvertFilePathToURI(input.RepoDir, input.FilePath)
 	params := DidSaveTextDocumentParams{
 		TextDocument: TextDocumentIdentifier{
 			URI: fileURI,
