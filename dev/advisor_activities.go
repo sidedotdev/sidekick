@@ -18,8 +18,7 @@ type AdvisorActivities struct {
 // SummarizeExecutorHistoryInput is the activity input for rendering the advisor
 // turn prompt from the executor's chat history and persisting it to KV.
 type SummarizeExecutorHistoryInput struct {
-	ExecutorHistory   *persisted_ai.ChatHistoryContainer `json:"executorHistory"`
-	MaxRecentMessages int                                `json:"maxRecentMessages"`
+	ExecutorHistory *persisted_ai.ChatHistoryContainer `json:"executorHistory"`
 	// FirstUnreviewedMessage is the index of the first executor message not
 	// covered by an earlier advisor turn prompt.
 	FirstUnreviewedMessage int    `json:"firstUnreviewedMessage"`
@@ -56,7 +55,6 @@ func (a *AdvisorActivities) summarizeExecutorHistory(
 
 	blocks := renderAdvisorTurn(msgs, executorTranscriptWindow{
 		firstUnreviewed:            input.FirstUnreviewedMessage,
-		maxRecent:                  input.MaxRecentMessages,
 		includeInitialInstructions: includeInitialInstructions,
 	})
 	cha := &persisted_ai.ChatHistoryActivities{Storage: a.Storage}
@@ -73,38 +71,28 @@ func (a *AdvisorActivities) summarizeExecutorHistory(
 
 type executorTranscriptWindow struct {
 	firstUnreviewed            int
-	maxRecent                  int
 	includeInitialInstructions bool
 }
 
-// renderAdvisorTurn renders the advisor turn prompt from the executor messages
-// no earlier turn prompt covered. Unreviewed messages older than the recent
-// window are abridged to the blocks the executor's history management always
-// retains, since the executor keeps acting on those. Each always-retained
-// block is rendered as its own block carrying metadata that makes the
-// advisor's history management retain it just as the executor's does.
+// renderAdvisorTurn renders executor messages no earlier turn prompt covered.
+// Always-retained blocks carry metadata so the advisor's history management
+// preserves them just as the executor's does.
 func renderAdvisorTurn(msgs []common.Message, w executorTranscriptWindow) []llm2.ContentBlock {
 	executorMsgs := make([]llm2.Message, len(msgs))
 	for i, m := range msgs {
 		executorMsgs[i] = toLlm2Message(m)
 	}
 	start := min(max(w.firstUnreviewed, 0), len(executorMsgs))
-	recentStart := start
-	if w.maxRecent > 0 {
-		recentStart = max(start, len(executorMsgs)-w.maxRecent)
-	}
 
 	turn := newAdvisorTurnBuilder(executorMsgs)
-	turn.text.WriteString(strings.TrimSpace(RenderPrompt(AdvisorTurnHistoryHeader, map[string]any{
-		"abridged": recentStart > start,
-	})))
+	turn.text.WriteString(strings.TrimSpace(RenderPrompt(AdvisorTurnHistoryHeader, nil)))
 	turn.text.WriteString("\n\n")
 	wrote := false
 	for i := start; i < len(executorMsgs); i++ {
 		if !w.includeInitialInstructions && llm2MessageContextType(executorMsgs[i]) == persisted_ai.ContextTypeInitialInstructions {
 			continue
 		}
-		if turn.writeMessage(i, i < recentStart) {
+		if turn.writeMessage(i) {
 			wrote = true
 		}
 	}
@@ -174,9 +162,7 @@ func (b *advisorTurnBuilder) flush() {
 	b.text.Reset()
 }
 
-// writeMessage renders an executor message, or only its always-retained blocks
-// when abridged, and reports whether anything was rendered.
-func (b *advisorTurnBuilder) writeMessage(index int, abridged bool) bool {
+func (b *advisorTurnBuilder) writeMessage(index int) bool {
 	msg := b.executorMsgs[index]
 	wrote := false
 	var ordinary []llm2.ContentBlock
@@ -188,9 +174,7 @@ func (b *advisorTurnBuilder) writeMessage(index int, abridged bool) bool {
 	}
 	for j, block := range msg.Content {
 		if !b.retained[index][j] {
-			if !abridged {
-				ordinary = append(ordinary, block)
-			}
+			ordinary = append(ordinary, block)
 			continue
 		}
 		writeOrdinary()

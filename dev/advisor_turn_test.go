@@ -112,7 +112,7 @@ func deliverableExchange(id, operation string) []common.Message {
 	}
 }
 
-func TestRenderAdvisorTurnRetainsHumanContextOutsideRecentWindow(t *testing.T) {
+func TestRenderAdvisorTurnIncludesAllNewHistory(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -141,14 +141,14 @@ func TestRenderAdvisorTurnRetainsHumanContextOutsideRecentWindow(t *testing.T) {
 			msgs = append(msgs, tt.feedback...)
 			msgs = append(msgs, fillerMessages("filler step", 30)...)
 
-			blocks := renderAdvisorTurn(msgs, executorTranscriptWindow{maxRecent: 20})
+			blocks := renderAdvisorTurn(msgs, executorTranscriptWindow{})
 			transcript := advisorTurnText(blocks)
 			for _, want := range tt.want {
 				assert.Contains(t, transcript, want)
 			}
 			assert.Contains(t, transcript, "filler step 29")
-			assert.NotContains(t, transcript, "filler step 0\n")
-			assert.NotContains(t, transcript, "here is how verify works")
+			assert.Contains(t, transcript, "filler step 0\n")
+			assert.Contains(t, transcript, "here is how verify works")
 			assert.NotContains(t, transcript, "explain the verify step")
 
 			retained := strings.Join(retainedBlockTexts(blocks), "")
@@ -170,14 +170,14 @@ func TestRenderAdvisorTurnSkipsPreviouslyReviewedMessages(t *testing.T) {
 	}
 	msgs = append(msgs, fillerMessages("new step", 25)...)
 
-	blocks := renderAdvisorTurn(msgs, executorTranscriptWindow{firstUnreviewed: 2, maxRecent: 20})
+	blocks := renderAdvisorTurn(msgs, executorTranscriptWindow{firstUnreviewed: 2})
 	transcript := advisorTurnText(blocks)
 	assert.NotContains(t, transcript, "already reviewed")
 	assert.Contains(t, transcript, "new feedback")
 	assert.Contains(t, transcript, "new step 24")
-	assert.NotContains(t, transcript, "new step 0\n")
+	assert.Contains(t, transcript, "new step 0\n")
 
-	nothingNew := advisorTurnText(renderAdvisorTurn(msgs, executorTranscriptWindow{firstUnreviewed: len(msgs), maxRecent: 20}))
+	nothingNew := advisorTurnText(renderAdvisorTurn(msgs, executorTranscriptWindow{firstUnreviewed: len(msgs)}))
 	assert.Contains(t, nothingNew, "(no new executor messages)")
 	assert.NotContains(t, nothingNew, "new step")
 }
@@ -190,7 +190,7 @@ func TestRenderAdvisorTurnDoesNotDuplicateRecentHumanContext(t *testing.T) {
 		advisorTestMessage(llm2.RoleUser, "go ahead and implement.", persisted_ai.ContextTypeUserFeedback),
 		advisorTestMessage(llm2.RoleAssistant, "implementing", ""),
 	}
-	blocks := renderAdvisorTurn(msgs, executorTranscriptWindow{maxRecent: 20})
+	blocks := renderAdvisorTurn(msgs, executorTranscriptWindow{})
 	transcript := advisorTurnText(blocks)
 	assert.Equal(t, 1, strings.Count(transcript, "go ahead and implement."))
 	assert.Less(t, strings.Index(transcript, "[assistant] working"), strings.Index(transcript, "[user] go ahead and implement."))
@@ -217,7 +217,7 @@ func TestAdvisorHistoryManagementRetainsWhatExecutorRetains(t *testing.T) {
 			name: "standalone feedback",
 			turns: func() [][]llm2.ContentBlock {
 				msgs := append([]common.Message{feedback}, fillerMessages("filler step", 5)...)
-				return [][]llm2.ContentBlock{renderAdvisorTurn(msgs, executorTranscriptWindow{maxRecent: 20})}
+				return [][]llm2.ContentBlock{renderAdvisorTurn(msgs, executorTranscriptWindow{})}
 			},
 			want: []string{"go ahead and implement."},
 		},
@@ -225,7 +225,7 @@ func TestAdvisorHistoryManagementRetainsWhatExecutorRetains(t *testing.T) {
 			name: "question and short answer in one turn",
 			turns: func() [][]llm2.ContentBlock {
 				msgs := append(append([]common.Message{}, exchange...), fillerMessages("filler step", 5)...)
-				return [][]llm2.ContentBlock{renderAdvisorTurn(msgs, executorTranscriptWindow{maxRecent: 20})}
+				return [][]llm2.ContentBlock{renderAdvisorTurn(msgs, executorTranscriptWindow{})}
 			},
 			want: []string{question, "[user] yes"},
 		},
@@ -236,8 +236,8 @@ func TestAdvisorHistoryManagementRetainsWhatExecutorRetains(t *testing.T) {
 				answered := append(append([]common.Message{}, asked...), exchange[1])
 				answered = append(answered, fillerMessages("later step", 3)...)
 				return [][]llm2.ContentBlock{
-					renderAdvisorTurn(asked, executorTranscriptWindow{maxRecent: 20}),
-					renderAdvisorTurn(answered, executorTranscriptWindow{firstUnreviewed: len(asked), maxRecent: 20}),
+					renderAdvisorTurn(asked, executorTranscriptWindow{}),
+					renderAdvisorTurn(answered, executorTranscriptWindow{firstUnreviewed: len(asked)}),
 				}
 			},
 			want: []string{question, "[user] yes"},
@@ -246,7 +246,7 @@ func TestAdvisorHistoryManagementRetainsWhatExecutorRetains(t *testing.T) {
 			name: "deliverable operation and report",
 			turns: func() [][]llm2.ContentBlock {
 				msgs := append(append([]common.Message{}, deliverable...), fillerMessages("filler step", 5)...)
-				return [][]llm2.ContentBlock{renderAdvisorTurn(msgs, executorTranscriptWindow{maxRecent: 20})}
+				return [][]llm2.ContentBlock{renderAdvisorTurn(msgs, executorTranscriptWindow{})}
 			},
 			want: []string{`tool_call record_plan({"plan":"step one"})`, "[user] Recorded."},
 		},
@@ -268,7 +268,7 @@ func TestRenderAdvisorTurnRendersPairedQuestionOnce(t *testing.T) {
 	t.Parallel()
 
 	msgs := helpExchange("help1", `{"question":"implement it?"}`, "yes")
-	transcript := advisorTurnText(renderAdvisorTurn(msgs, executorTranscriptWindow{maxRecent: 20}))
+	transcript := advisorTurnText(renderAdvisorTurn(msgs, executorTranscriptWindow{}))
 	assert.Equal(t, 1, strings.Count(transcript, "tool_call get_help_or_input"))
 	assert.Less(t, strings.Index(transcript, "tool_call get_help_or_input"), strings.Index(transcript, "[user] yes"))
 }

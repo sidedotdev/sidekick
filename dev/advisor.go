@@ -30,10 +30,6 @@ const defaultAdvisorEveryNTurns = 7
 // "advising" use case is not explicitly configured.
 const advisorDefaultModel = "claude-opus-4-8"
 
-// advisorMaxRecentMessages caps how many trailing executor messages are
-// summarized into the advisor prompt each turn.
-const advisorMaxRecentMessages = 20
-
 type AdvisorProceedToolArgs struct{}
 
 type AdvisorGuideToolArgs struct {
@@ -456,7 +452,6 @@ func summarizeExecutorHistory(dCtx DevContext, executorHistory *persisted_ai.Cha
 	var ref *persisted_ai.MessageRef
 	err := workflow.ExecuteActivity(dCtx, aa.SummarizeExecutorRecentHistoryActivity, SummarizeExecutorHistoryInput{
 		ExecutorHistory:        executorHistory,
-		MaxRecentMessages:      advisorMaxRecentMessages,
 		FirstUnreviewedMessage: firstUnreviewed,
 		FlowId:                 flowId,
 		WorkspaceId:            workspaceId,
@@ -472,7 +467,6 @@ func summarizeExecutorHistoryIncludingInitialInstructions(dCtx DevContext, execu
 	var ref *persisted_ai.MessageRef
 	err := workflow.ExecuteActivity(dCtx, aa.SummarizeExecutorHistoryActivity, SummarizeExecutorHistoryInput{
 		ExecutorHistory:        executorHistory,
-		MaxRecentMessages:      advisorMaxRecentMessages,
 		FirstUnreviewedMessage: firstUnreviewed,
 		FlowId:                 flowId,
 		WorkspaceId:            workspaceId,
@@ -494,7 +488,6 @@ func legacyExecutorTurnPrompt(history *persisted_ai.ChatHistoryContainer, includ
 	}
 	var b strings.Builder
 	for _, block := range renderAdvisorTurn(msgs, executorTranscriptWindow{
-		maxRecent:                  advisorMaxRecentMessages,
 		includeInitialInstructions: includeInitialInstructions,
 	}) {
 		b.WriteString(block.Text)
