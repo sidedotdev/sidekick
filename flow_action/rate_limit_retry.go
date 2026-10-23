@@ -24,6 +24,11 @@ const (
 	// rateLimitRetryScheduleChangeId gates the jittered, exhaustible schedule.
 	// Earlier histories keep the legacy hourly-capped schedule.
 	rateLimitRetryScheduleChangeId = "rate-limit-retry-schedule"
+
+	// rateLimitExhaustedFailChangeId gates failing the action once automatic
+	// retries are exhausted and no human can authorize more. Earlier
+	// histories recorded an immediate retry there.
+	rateLimitExhaustedFailChangeId = "rate-limit-exhausted-fail"
 )
 
 // rateLimitBackoffPlateaus lists the ceilings the doubling backoff pauses at
@@ -91,6 +96,9 @@ func (h *RateLimitFailureHandler) HandleActivityFailure(eCtx ExecContext, action
 		"rateLimited": true,
 	}
 	if h.exhausted {
+		if eCtx.DisableHumanInTheLoop && workflow.GetVersion(eCtx, rateLimitExhaustedFailChangeId, workflow.DefaultVersion, 1) == 1 {
+			return RetryDecisionFail, nil
+		}
 		prompt := fmt.Sprintf(
 			"You've reached a usage limit and it hasn't reset after retrying automatically for over a week. Try again once it resets.\n\n```\n%s\n```",
 			activityErr.Error(),

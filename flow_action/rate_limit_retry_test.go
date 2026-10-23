@@ -184,7 +184,24 @@ type rateLimitRetryParams struct {
 	UserRespond       bool
 	// LegacySchedule replays the handler at the workflow version before the
 	// jittered, exhaustible schedule.
-	LegacySchedule bool
+	LegacySchedule        bool
+	DisableHumanInTheLoop bool
+}
+
+// rateLimitFullSchedule is every automatic wait before exhaustion: doubling to
+// an hour, two days hourly, doubling to a day, then a week daily.
+func rateLimitFullSchedule() []rateLimitWait {
+	var waits []rateLimitWait
+	add := func(ds ...time.Duration) {
+		for _, d := range ds {
+			waits = append(waits, rateLimitWait{backoff: d})
+		}
+	}
+	add(time.Minute, 2*time.Minute, 4*time.Minute, 8*time.Minute, 16*time.Minute, 32*time.Minute)
+	add(slices.Repeat([]time.Duration{time.Hour}, 48)...)
+	add(2*time.Hour, 4*time.Hour, 8*time.Hour, 16*time.Hour)
+	add(slices.Repeat([]time.Duration{24 * time.Hour}, 7)...)
+	return waits
 }
 
 type rateLimitRetryResult struct {
@@ -194,7 +211,7 @@ type rateLimitRetryResult struct {
 }
 
 func rateLimitRetryChildWorkflow(ctx workflow.Context, params rateLimitRetryParams) (rateLimitRetryResult, error) {
-	eCtx := newActivityRetryTestExecContext(ctx, false)
+	eCtx := newActivityRetryTestExecContext(ctx, params.DisableHumanInTheLoop)
 	actionCtx := eCtx.NewActionContext(activityRetryTestActionName)
 	start := workflow.Now(ctx)
 	var value string
@@ -252,12 +269,7 @@ func TestRateLimitFailureHandler(t *testing.T) {
 		}
 		return hinted
 	}
-	// The full schedule: doubling to an hour, two days hourly, doubling to a
-	// day, then a week daily.
-	fullSchedule := backoffs(append(minutes(1, 2, 4, 8, 16, 32), append(
-		slices.Repeat([]time.Duration{time.Hour}, 48),
-		append(minutes(2*60, 4*60, 8*60, 16*60), slices.Repeat([]time.Duration{24 * time.Hour}, 7)...)...,
-	)...)...)
+	fullSchedule := rateLimitFullSchedule()
 
 	tests := []struct {
 		name         string
@@ -476,5 +488,135 @@ func TestRateLimitFailureHandler(t *testing.T) {
 				assert.Equal(t, "in_progress", flow.Status, "timer-resolved requests must resume the flow")
 			}
 		})
+	}
+}
+
+type rateLimitExhaustionResult struct {
+	Retries   int
+	Decision  RetryDecision
+	ElapsedMs int64
+}
+
+// rateLimitExhaustionWorkflow feeds the handler the same rate limit error
+// until it stops asking for a retry, standing in for a retry loop that keeps
+// going without a human.
+func rateLimitExhaustionWorkflow(ctx workflow.Context, disableHumanInTheLoop bool) (rateLimitExhaustionResult, error) {
+	eCtx := newActivityRetryTestExecContext(ctx, disableHumanInTheLoop)
+	handler := &RateLimitFailureHandler{}
+	activityErr := common.NewProviderRateLimitError(common.ProviderRateLimitErrorDetails{Provider: "anthropic"}, errors.New("429 Too Many Requests"))
+	maxRetries := 2 * len(rateLimitFullSchedule())
+
+	start := workflow.Now(ctx)
+	var result rateLimitExhaustionResult
+	for {
+		decision, err := handler.HandleActivityFailure(eCtx, activityRetryTestActionName, activityErr)
+		if err != nil {
+			return result, err
+		}
+		result.Decision = decision
+		result.ElapsedMs = workflow.Now(ctx).Sub(start).Milliseconds()
+		if decision != RetryDecisionRetry {
+			return result, nil
+		}
+		result.Retries++
+		if result.Retries > maxRetries {
+			return result, errors.New("handler never stopped retrying")
+		}
+	}
+}
+
+// Without a human to authorize further attempts, a limit that never resets
+// must end the action with its rate limit error once the automatic schedule
+// is spent, rather than hammering the provider.
+func TestRateLimitFailureHandler_NoHumanInTheLoopFailsWhenExhausted(t *testing.T) {
+	t.Parallel()
+
+	fullSchedule := rateLimitFullSchedule()
+	tests := []struct {
+		name          string
+		legacyExhaust bool
+		wantDecision  RetryDecision
+		wantRetries   int
+	}{
+		{name: "fails once the schedule is exhausted", wantDecision: RetryDecisionFail, wantRetries: len(fullSchedule)},
+		// Replaying histories recorded before the terminal guard must keep
+		// their immediate retries; the workflow stops them here.
+		{name: "legacy histories keep retrying", legacyExhaust: true, wantDecision: RetryDecisionRetry, wantRetries: 2*len(fullSchedule) + 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			suite := &testsuite.WorkflowTestSuite{}
+			env := suite.NewTestWorkflowEnvironment()
+			env.SetWorkerOptions(utils.TestWorkerOptions())
+			env.SetTestTimeout(10 * time.Second)
+			env.RegisterWorkflow(rateLimitExhaustionWorkflow)
+			if tt.legacyExhaust {
+				env.OnGetVersion(rateLimitExhaustedFailChangeId, workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+			}
+
+			env.ExecuteWorkflow(rateLimitExhaustionWorkflow, true)
+			require.True(t, env.IsWorkflowCompleted())
+
+			var result rateLimitExhaustionResult
+			if tt.legacyExhaust {
+				require.ErrorContains(t, env.GetWorkflowError(), "handler never stopped retrying")
+				return
+			}
+			require.NoError(t, env.GetWorkflowError())
+			require.NoError(t, env.GetWorkflowResult(&result))
+			assert.Equal(t, tt.wantDecision, result.Decision)
+			assert.Equal(t, tt.wantRetries, result.Retries, "one automatic retry per scheduled wait")
+			minElapsedMs, maxElapsedMs := rateLimitRetryElapsedBounds(fullSchedule, false)
+			assert.GreaterOrEqual(t, result.ElapsedMs, minElapsedMs)
+			assert.LessOrEqual(t, result.ElapsedMs, maxElapsedMs)
+		})
+	}
+}
+
+// The retry loop itself never consults the handler without a human in the
+// loop: a rate limited activity fails on its first attempt.
+func TestRateLimitFailureHandler_NoHumanInTheLoopLoopStopsAfterFirstAttempt(t *testing.T) {
+	t.Parallel()
+
+	storage := sqlite.NewTestSqliteStorage(t, "rate-limit-retry-no-human")
+	service := srv.NewDelegator(storage, srv.NewMemoryStreamer())
+	require.NoError(t, storage.PersistFlow(context.Background(), domain.Flow{
+		WorkspaceId: "ws_test",
+		Id:          rateLimitRetryChildWorkflowId,
+		Status:      "in_progress",
+	}))
+
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(utils.TestWorkerOptions())
+	env.SetTestTimeout(10 * time.Second)
+	env.RegisterWorkflow(rateLimitRetryChildWorkflow)
+	env.RegisterWorkflow(rateLimitRetryParentWorkflow)
+	env.RegisterActivity(&FlowActivities{Service: service})
+	env.RegisterActivity(&srv.Activities{Service: service})
+
+	var calls int32
+	env.OnActivity(activityRetryTestActivity, mock.Anything).Return(func(ctx context.Context) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		return "", common.NewProviderRateLimitError(common.ProviderRateLimitErrorDetails{Provider: "anthropic"}, errors.New("429 Too Many Requests"))
+	})
+
+	env.ExecuteWorkflow(rateLimitRetryParentWorkflow, rateLimitRetryParams{DisableHumanInTheLoop: true})
+	require.True(t, env.IsWorkflowCompleted())
+
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	details, ok := common.AsProviderRateLimitError(err)
+	require.True(t, ok, "action must end with the provider rate limit error, got: %v", err)
+	assert.Equal(t, "anthropic", details.Provider)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+
+	flowActions, err := storage.GetFlowActions(context.Background(), "ws_test", rateLimitRetryChildWorkflowId)
+	require.NoError(t, err)
+	for _, fa := range flowActions {
+		assert.False(t, fa.IsHumanAction, "no user request may be raised without a human in the loop: %s", fa.ActionType)
 	}
 }
