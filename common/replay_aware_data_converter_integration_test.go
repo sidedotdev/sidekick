@@ -127,7 +127,7 @@ func runReplayLiveWorkflow(t *testing.T, dc converter.DataConverter, storage *sq
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
-	c, err := client.Dial(client.Options{HostPort: common.GetTemporalServerHostPort(), DataConverter: dc})
+	c, err := client.Dial(client.Options{HostPort: common.GetTemporalClientHostPort(), DataConverter: dc})
 	require.NoError(t, err)
 	t.Cleanup(c.Close)
 

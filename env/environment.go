@@ -361,6 +361,7 @@ type EnvRunCommandInput struct {
 	// Must be set to true by the wake/hibernate implementations themselves to
 	// avoid infinite recursion.
 	SkipWaking bool `json:"skipWaking,omitempty"`
+	activity   *activityRequest
 }
 
 type EnvRunCommandOutput = unix.RunCommandActivityOutput
@@ -798,11 +799,18 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 // exec request: argv, cwd and env cross the channel verbatim, so no shell
 // command line is ever assembled from user-controlled input.
 func agentExecRequest(workingDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) sideagent.ExecRequest {
-	return sideagent.ExecRequest{
-		Dir:  filepath.Join(workingDir, input.RelativeWorkingDir),
-		Argv: append([]string{input.Command}, input.Args...),
-		Env:  append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards, input.EnvVars)...),
+	req := sideagent.ExecRequest{
+		Dir:       filepath.Join(workingDir, input.RelativeWorkingDir),
+		Argv:      append([]string{input.Command}, input.Args...),
+		Env:       append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards, input.EnvVars)...),
+		TouchPath: remoteActivityMarker,
 	}
+	if input.activity != nil {
+		req.Argv = nil
+		req.ActivityLease = true
+		req.OnReady = input.activity.admit
+	}
+	return req
 }
 
 // withRemoteReadLock makes req run under the per-worktree shared hibernation
@@ -1270,7 +1278,8 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 	// Only SSH client diagnostics kept separate from remote output can prove
 	// the command never started, which is what makes re-running it safe.
 	transportFailed := func() bool {
-		return err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
+		return (input.activity == nil || !input.activity.admitted.Load()) &&
+			err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
 	}
 	if !transportFailed() {
 		return output, "", err
@@ -1312,6 +1321,11 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 			if round < maxModalRecoveryRounds && !recovery.repaired && isModalSSHAuthFailure(diagnostics) {
 				continue
 			}
+		}
+
+		if input.activity != nil {
+			apiErr = fmt.Errorf("activity leases require an SSH agent channel: %s", diagnostics)
+			continue
 		}
 
 		// SSH is preferred for its multiplexed connection, but the tunnel
