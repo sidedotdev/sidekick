@@ -214,7 +214,6 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 	// envs. Subsystems that type-assert on the concrete env type (entry
 	// walks, LSP clients) still receive the original container.
 	readCache := newEnvReadCache(dirSymDefRequest.EnvContainer.Env)
-	readCache.prefetch(ctx, dirSymDefRequest.Requests)
 	cachedEnvContainer := env.EnvContainer{Env: readCache}
 
 	var wg sync.WaitGroup
@@ -1416,40 +1415,5 @@ func sitterToLspRange(r tree_sitter_lib.Range) lsp.Range {
 			Line:      int(r.EndPoint.Row),
 			Character: int(r.EndPoint.Column),
 		},
-	}
-}
-
-// prefetch is opportunistic: a failed batch must not poison individual reads,
-// and oversized or missing files still use the normal reader.
-func (c *envReadCache) prefetch(ctx context.Context, requests []FileSymDefRequest) {
-	reader, ok := c.Env.(interface {
-		ReadFiles(context.Context, []string) (map[string][]byte, error)
-	})
-	if !ok {
-		return
-	}
-	paths := make([]string, 0, len(requests))
-	seen := make(map[string]bool)
-	for _, request := range requests {
-		key := c.cacheKey(request.FilePath)
-		if !seen[key] {
-			paths = append(paths, request.FilePath)
-			seen[key] = true
-		}
-	}
-	files, err := reader.ReadFiles(ctx, paths)
-	if err != nil || ctx.Err() != nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for path, data := range files {
-		key := c.cacheKey(path)
-		if _, exists := c.entries[key]; exists {
-			continue
-		}
-		entry := &envReadCacheEntry{done: make(chan struct{}), fileBytes: data}
-		close(entry.done)
-		c.entries[key] = entry
 	}
 }

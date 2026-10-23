@@ -9,7 +9,6 @@ import (
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/repotools"
-	"sidekick/sideagent"
 	"sidekick/utils"
 	"strings"
 
@@ -574,33 +573,6 @@ func (sCtx *searchContext) executeMainSearch() (string, string, []string, []stri
 		reportHiddenIgnoredDirs := sCtx.includeIgnoredTargets && startsWithWildcardDir(sCtx.input.PathGlob)
 		if sCtx.includeIgnoredTargets {
 			listFilesCmd = sCtx.explicitTargetRgCmd(reportHiddenIgnoredDirs, sCtx.rgArgs, "--", sCtx.escapedSearchTerm)
-		}
-
-		if runner, ok := sCtx.runner.(interface {
-			searchWorkspace(sideagent.WorkspaceSearch) (*sideagent.WorkspaceSearchResult, bool, error)
-		}); ok {
-			plan := sideagent.WorkspaceSearch{
-				ListCommand:   listFilesCmd,
-				SearchCommand: fmt.Sprintf("%s -- %s", sCtx.gitGrepArgs, sCtx.escapedSearchTerm),
-				PathGlob:      sCtx.input.PathGlob,
-			}
-			if reportHiddenIgnoredDirs {
-				plan.ListSeparator = ignoredEntriesSeparator
-			}
-			result, used, err := runner.searchWorkspace(plan)
-			if err != nil {
-				return "", "", nil, nil, err
-			}
-			if used {
-				if reportHiddenIgnoredDirs {
-					entries, _ := splitIgnoredEntriesListing(string(result.Listing.Stdout))
-					sCtx.hiddenIgnoredDirs = hiddenIgnoredDirs(entries, sCtx.input.PathGlob)
-				}
-				if len(result.MatchedFiles) == 0 {
-					return "", string(result.Listing.Stderr), result.AllFiles, result.MatchedFiles, nil
-				}
-				return string(result.Output.Stdout), string(result.Output.Stderr), result.AllFiles, result.MatchedFiles, nil
-			}
 		}
 
 		listFilesOutput, err = sCtx.runner.runCommand(env.EnvRunCommandActivityInput{

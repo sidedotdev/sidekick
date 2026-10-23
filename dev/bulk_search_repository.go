@@ -41,7 +41,7 @@ type BulkSearchRepositoryActivityOutput struct {
 // activity, so that the many intermediate command inputs and outputs never
 // cross the activity boundary.
 func BulkSearchRepositoryActivity(ctx context.Context, input BulkSearchRepositoryActivityInput) (BulkSearchRepositoryActivityOutput, error) {
-	result, err := bulkSearchRepositoryInActivity(ctx, input.EnvContainer, input.Params)
+	result, err := bulkSearchRepository(activitySearchRunner{ctx: ctx}, input.EnvContainer, input.Params)
 	if err != nil {
 		return BulkSearchRepositoryActivityOutput{}, err
 	}

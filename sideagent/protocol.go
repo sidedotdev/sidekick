@@ -52,8 +52,6 @@ type ExecRequest struct {
 	ActivityLease bool `json:"activityLease,omitempty"`
 	// OnReady runs locally once the remote has admitted the activity lease.
 	OnReady func() `json:"-"`
-	// Workspace runs a repository operation instead of Argv.
-	Workspace *WorkspaceRequest `json:"workspace,omitempty"`
 }
 
 // ExecResponse carries the buffered result of one ExecRequest.
