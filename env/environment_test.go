@@ -19,6 +19,7 @@ import (
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 )
 
 // setupTestGitRepo creates a temporary Git repository with a main branch and initial commit.
@@ -417,6 +418,49 @@ func TestGetEnvironmentInfoActivity(t *testing.T) {
 	formatted := output.FormatEnvironmentContext()
 	assert.Contains(t, formatted, "OS:")
 	assert.Contains(t, formatted, "Arch:")
+}
+
+func TestEnvRunCommandActivity_MissingWorkingDir(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, "exists"), 0o755))
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: tempDir})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		relDir  string
+		wantErr string
+	}{
+		{name: "repo root", relDir: "."},
+		{name: "existing dir", relDir: "exists"},
+		{name: "missing dir", relDir: "null", wantErr: `working directory "null" does not exist`},
+		{name: "missing nested dir", relDir: "exists/missing", wantErr: `working directory "exists/missing" does not exist`},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := EnvRunCommandActivity(ctx, EnvRunCommandActivityInput{
+				EnvContainer:       EnvContainer{Env: localEnv},
+				Command:            "sh",
+				Args:               []string{"-c", "echo ok"},
+				RelativeWorkingDir: tt.relDir,
+			})
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, "ok\n", output.Stdout)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			var appErr *temporal.ApplicationError
+			require.ErrorAs(t, err, &appErr)
+			assert.True(t, appErr.NonRetryable())
+			assert.Equal(t, ErrTypeMissingWorkingDir, appErr.Type())
+		})
+	}
 }
 
 func TestCreateDevPodWorktreeActivity(t *testing.T) {
