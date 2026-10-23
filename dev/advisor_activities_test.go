@@ -83,7 +83,7 @@ func TestSummarizeExecutorHistoryActivity_NilHistory(t *testing.T) {
 func TestRenderExecutorTranscript_IncludesThinkingSummaries(t *testing.T) {
 	t.Parallel()
 
-	transcript := renderExecutorTranscript([]common.Message{
+	transcript := advisorTurnText(renderAdvisorTurn([]common.Message{
 		llm2.Message{
 			Role: llm2.RoleAssistant,
 			Content: []llm2.ContentBlock{
@@ -103,7 +103,7 @@ func TestRenderExecutorTranscript_IncludesThinkingSummaries(t *testing.T) {
 				{Type: llm2.ContentBlockTypeText, Text: "I will make the changes."},
 			},
 		},
-	}, advisorMaxRecentMessages)
+	}, executorTranscriptWindow{maxRecent: advisorMaxRecentMessages}))
 
 	assert.Contains(t, transcript, "[assistant] thinking_summary Reviewed the implementation plan.")
 	assert.Contains(t, transcript, "[assistant] thinking_summary Identified the affected files.")

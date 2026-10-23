@@ -68,6 +68,46 @@ type Advisor struct {
 	// initial-instructions message seeded into the advisor history. It sizes
 	// the trimming keep window and is cached after the one-time seeding.
 	requirementsLength int
+
+	// reviewedExecutorBlocks holds the block keys of every executor message
+	// present when an earlier turn prompt was rendered. Block keys rather than
+	// indices identify them because executor history management drops and
+	// rewrites messages between advisor turns.
+	reviewedExecutorBlocks map[string]bool
+}
+
+// firstUnreviewedExecutorMessage returns the index just past the latest
+// executor message an earlier turn prompt covered, or 0 if none survive.
+func (a *Advisor) firstUnreviewedExecutorMessage(executorRefs []persisted_ai.MessageRef) int {
+	for i := len(executorRefs) - 1; i >= 0; i-- {
+		for _, key := range executorRefs[i].BlockKeys {
+			if a.reviewedExecutorBlocks[key] {
+				return i + 1
+			}
+		}
+	}
+	return 0
+}
+
+func (a *Advisor) markExecutorMessagesReviewed(executorRefs []persisted_ai.MessageRef) {
+	if a.reviewedExecutorBlocks == nil {
+		a.reviewedExecutorBlocks = make(map[string]bool)
+	}
+	for _, ref := range executorRefs {
+		for _, key := range ref.BlockKeys {
+			a.reviewedExecutorBlocks[key] = true
+		}
+	}
+}
+
+func executorMessageRefs(history *persisted_ai.ChatHistoryContainer) []persisted_ai.MessageRef {
+	if history == nil {
+		return nil
+	}
+	if llm2History, ok := history.History.(*persisted_ai.Llm2ChatHistory); ok {
+		return llm2History.Refs()
+	}
+	return nil
 }
 
 // newAdvisor constructs an Advisor, resolving the advising model (falling back
@@ -190,28 +230,24 @@ func (a *Advisor) MaybeAdvise(
 	deduplicateInitialInstructions := workflow.GetVersion(dCtx, "advisor-deduplicate-initial-instructions", workflow.DefaultVersion, 1) == 1
 	requirementsSeeded := manageAdvisorHistory && deduplicateInitialInstructions && a.requirementsLength > 0
 	if llm2Hist, ok := a.ChatHistory.History.(*persisted_ai.Llm2ChatHistory); ok {
+		executorRefs := executorMessageRefs(executorHistory)
+		firstUnreviewed := a.firstUnreviewedExecutorMessage(executorRefs)
 		var ref *persisted_ai.MessageRef
 		var err error
 		if requirementsSeeded {
-			ref, err = summarizeExecutorHistory(dCtx, executorHistory, llm2Hist.FlowId(), llm2Hist.WorkspaceId())
+			ref, err = summarizeExecutorHistory(dCtx, executorHistory, firstUnreviewed, llm2Hist.FlowId(), llm2Hist.WorkspaceId())
 		} else {
-			ref, err = summarizeExecutorHistoryIncludingInitialInstructions(dCtx, executorHistory, llm2Hist.FlowId(), llm2Hist.WorkspaceId())
+			ref, err = summarizeExecutorHistoryIncludingInitialInstructions(dCtx, executorHistory, firstUnreviewed, llm2Hist.FlowId(), llm2Hist.WorkspaceId())
 		}
 		if err != nil {
 			return fmt.Errorf("advisor: failed to summarize executor history: %w", err)
 		}
 		llm2Hist.AppendRef(*ref)
+		a.markExecutorMessagesReviewed(executorRefs)
 	} else {
-		recentHistory := legacyExecutorTranscriptIncludingInitialInstructions(executorHistory)
-		if requirementsSeeded {
-			recentHistory = legacyExecutorTranscript(executorHistory)
-		}
-		turnPrompt := RenderPrompt(AdvisorTurn, map[string]string{
-			"recentHistory": recentHistory,
-		})
 		if err := AppendChatHistory(dCtx.ExecContext, a.ChatHistory, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleUser,
-			Content: turnPrompt,
+			Content: legacyExecutorTurnPrompt(executorHistory, !requirementsSeeded),
 		}); err != nil {
 			return fmt.Errorf("advisor: failed to append turn prompt: %w", err)
 		}
@@ -415,14 +451,15 @@ func applyAdvisorToolCalls(eCtx flow_action.ExecContext, executorHistory, adviso
 // advisor turn prompt, persists it, and returns a ref to the persisted content.
 // The in-workflow chat history is refs-only (not hydrated), so rendering and
 // persistence happen inside an activity that hydrates from storage.
-func summarizeExecutorHistory(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, flowId, workspaceId string) (*persisted_ai.MessageRef, error) {
+func summarizeExecutorHistory(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, firstUnreviewed int, flowId, workspaceId string) (*persisted_ai.MessageRef, error) {
 	var aa *AdvisorActivities
 	var ref *persisted_ai.MessageRef
 	err := workflow.ExecuteActivity(dCtx, aa.SummarizeExecutorRecentHistoryActivity, SummarizeExecutorHistoryInput{
-		ExecutorHistory:   executorHistory,
-		MaxRecentMessages: advisorMaxRecentMessages,
-		FlowId:            flowId,
-		WorkspaceId:       workspaceId,
+		ExecutorHistory:        executorHistory,
+		MaxRecentMessages:      advisorMaxRecentMessages,
+		FirstUnreviewedMessage: firstUnreviewed,
+		FlowId:                 flowId,
+		WorkspaceId:            workspaceId,
 	}).Get(dCtx, &ref)
 	if err != nil {
 		return nil, fmt.Errorf("failed to summarize executor history: %w", err)
@@ -430,14 +467,15 @@ func summarizeExecutorHistory(dCtx DevContext, executorHistory *persisted_ai.Cha
 	return ref, nil
 }
 
-func summarizeExecutorHistoryIncludingInitialInstructions(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, flowId, workspaceId string) (*persisted_ai.MessageRef, error) {
+func summarizeExecutorHistoryIncludingInitialInstructions(dCtx DevContext, executorHistory *persisted_ai.ChatHistoryContainer, firstUnreviewed int, flowId, workspaceId string) (*persisted_ai.MessageRef, error) {
 	var aa *AdvisorActivities
 	var ref *persisted_ai.MessageRef
 	err := workflow.ExecuteActivity(dCtx, aa.SummarizeExecutorHistoryActivity, SummarizeExecutorHistoryInput{
-		ExecutorHistory:   executorHistory,
-		MaxRecentMessages: advisorMaxRecentMessages,
-		FlowId:            flowId,
-		WorkspaceId:       workspaceId,
+		ExecutorHistory:        executorHistory,
+		MaxRecentMessages:      advisorMaxRecentMessages,
+		FirstUnreviewedMessage: firstUnreviewed,
+		FlowId:                 flowId,
+		WorkspaceId:            workspaceId,
 	}).Get(dCtx, &ref)
 	if err != nil {
 		return nil, fmt.Errorf("failed to summarize executor history: %w", err)
@@ -445,25 +483,21 @@ func summarizeExecutorHistoryIncludingInitialInstructions(dCtx DevContext, execu
 	return ref, nil
 }
 
-// legacyExecutorTranscript renders the trailing messages of a legacy history
-// directly, since legacy content lives in-memory in the workflow and does not
-// require hydration.
-func legacyExecutorTranscript(history *persisted_ai.ChatHistoryContainer) string {
-	if history == nil {
-		return "(no executor history yet)"
+// legacyExecutorTurnPrompt renders the turn prompt directly, since legacy
+// content lives in-memory in the workflow and does not require hydration.
+// Legacy histories have no block keys to track review progress by, so every
+// turn treats the whole executor history as unreviewed.
+func legacyExecutorTurnPrompt(history *persisted_ai.ChatHistoryContainer, includeInitialInstructions bool) string {
+	var msgs []common.Message
+	if history != nil {
+		msgs = history.Messages()
 	}
-	if rendered := renderExecutorRecentTranscript(history.Messages(), advisorMaxRecentMessages); rendered != "" {
-		return rendered
+	var b strings.Builder
+	for _, block := range renderAdvisorTurn(msgs, executorTranscriptWindow{
+		maxRecent:                  advisorMaxRecentMessages,
+		includeInitialInstructions: includeInitialInstructions,
+	}) {
+		b.WriteString(block.Text)
 	}
-	return "(no executor history yet)"
-}
-
-func legacyExecutorTranscriptIncludingInitialInstructions(history *persisted_ai.ChatHistoryContainer) string {
-	if history == nil {
-		return "(no executor history yet)"
-	}
-	if rendered := renderExecutorTranscript(history.Messages(), advisorMaxRecentMessages); rendered != "" {
-		return rendered
-	}
-	return "(no executor history yet)"
+	return b.String()
 }

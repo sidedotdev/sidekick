@@ -20,81 +20,240 @@ type AdvisorActivities struct {
 type SummarizeExecutorHistoryInput struct {
 	ExecutorHistory   *persisted_ai.ChatHistoryContainer `json:"executorHistory"`
 	MaxRecentMessages int                                `json:"maxRecentMessages"`
-	FlowId            string                             `json:"flowId"`
-	WorkspaceId       string                             `json:"workspaceId"`
+	// FirstUnreviewedMessage is the index of the first executor message not
+	// covered by an earlier advisor turn prompt.
+	FirstUnreviewedMessage int    `json:"firstUnreviewedMessage"`
+	FlowId                 string `json:"flowId"`
+	WorkspaceId            string `json:"workspaceId"`
 }
 
 // SummarizeExecutorHistoryActivity hydrates the executor chat history, renders
-// the advisor turn prompt from its trailing messages, persists it as a content
-// block, and returns a ref to that block. Hydration happens inside the activity
+// the advisor turn prompt from its unreviewed messages, persists it as a
+// message, and returns a ref to it. Hydration happens inside the activity
 // because the in-workflow chat history is refs-only (not hydrated).
 func (a *AdvisorActivities) SummarizeExecutorHistoryActivity(ctx context.Context, input SummarizeExecutorHistoryInput) (*persisted_ai.MessageRef, error) {
-	return a.summarizeExecutorHistory(ctx, input, renderExecutorTranscript)
+	return a.summarizeExecutorHistory(ctx, input, true)
 }
 
 // SummarizeExecutorRecentHistoryActivity omits initial instructions because
 // they are persisted separately in the advisor history.
 func (a *AdvisorActivities) SummarizeExecutorRecentHistoryActivity(ctx context.Context, input SummarizeExecutorHistoryInput) (*persisted_ai.MessageRef, error) {
-	return a.summarizeExecutorHistory(ctx, input, renderExecutorRecentTranscript)
+	return a.summarizeExecutorHistory(ctx, input, false)
 }
 
 func (a *AdvisorActivities) summarizeExecutorHistory(
 	ctx context.Context,
 	input SummarizeExecutorHistoryInput,
-	renderTranscript func([]common.Message, int) string,
+	includeInitialInstructions bool,
 ) (*persisted_ai.MessageRef, error) {
-	transcript := "(no executor history yet)"
+	var msgs []common.Message
 	if input.ExecutorHistory != nil {
 		if err := input.ExecutorHistory.Hydrate(ctx, a.Storage); err != nil {
 			return nil, fmt.Errorf("failed to hydrate executor history: %w", err)
 		}
-		if rendered := renderTranscript(input.ExecutorHistory.Messages(), input.MaxRecentMessages); rendered != "" {
-			transcript = rendered
-		}
+		msgs = input.ExecutorHistory.Messages()
 	}
 
-	turnPrompt := RenderPrompt(AdvisorTurn, map[string]string{
-		"recentHistory": transcript,
+	blocks := renderAdvisorTurn(msgs, executorTranscriptWindow{
+		firstUnreviewed:            input.FirstUnreviewedMessage,
+		maxRecent:                  input.MaxRecentMessages,
+		includeInitialInstructions: includeInitialInstructions,
 	})
-	block := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: turnPrompt}
-	ref, err := persisted_ai.PersistContentBlock(ctx, a.Storage, input.FlowId, input.WorkspaceId, string(llm2.RoleUser), block)
+	cha := &persisted_ai.ChatHistoryActivities{Storage: a.Storage}
+	ref, err := cha.AppendMessage(ctx, persisted_ai.AppendMessageInput{
+		FlowId:      input.FlowId,
+		WorkspaceId: input.WorkspaceId,
+		Message:     llm2.Message{Role: llm2.RoleUser, Content: blocks},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to persist advisor turn prompt: %w", err)
 	}
 	return ref, nil
 }
 
-// renderExecutorTranscript renders the trailing executor messages into a plain
-// text transcript for the advisor prompt, capped at maxRecent when positive.
-//
-// User feedback older than the window is still listed up front: the executor's
-// history management retains it indefinitely, whereas the advisor only sees
-// this tail and its own history is trimmed down to the latest turn prompts, so
-// without it the advisor loses track of user decisions and contradicts them.
-func renderExecutorTranscript(msgs []common.Message, maxRecent int) string {
-	start := 0
-	if maxRecent > 0 && len(msgs) > maxRecent {
-		start = len(msgs) - maxRecent
+type executorTranscriptWindow struct {
+	firstUnreviewed            int
+	maxRecent                  int
+	includeInitialInstructions bool
+}
+
+// renderAdvisorTurn renders the advisor turn prompt from the executor messages
+// no earlier turn prompt covered. Unreviewed messages older than the recent
+// window are abridged to the blocks the executor's history management always
+// retains, since the executor keeps acting on those. Each always-retained
+// block is rendered as its own block carrying metadata that makes the
+// advisor's history management retain it just as the executor's does.
+func renderAdvisorTurn(msgs []common.Message, w executorTranscriptWindow) []llm2.ContentBlock {
+	executorMsgs := make([]llm2.Message, len(msgs))
+	for i, m := range msgs {
+		executorMsgs[i] = toLlm2Message(m)
 	}
-	var earlierFeedback []common.Message
-	for _, m := range msgs[:start] {
-		if executorMessageContextType(m) == persisted_ai.ContextTypeUserFeedback {
-			earlierFeedback = append(earlierFeedback, m)
-		}
+	start := min(max(w.firstUnreviewed, 0), len(executorMsgs))
+	recentStart := start
+	if w.maxRecent > 0 {
+		recentStart = max(start, len(executorMsgs)-w.maxRecent)
 	}
 
-	var b strings.Builder
-	if len(earlierFeedback) > 0 {
-		b.WriteString("Earlier user feedback (before the recent messages below, oldest first):\n")
-		for _, m := range earlierFeedback {
-			writeExecutorMessage(&b, m)
+	turn := newAdvisorTurnBuilder(executorMsgs)
+	turn.text.WriteString(strings.TrimSpace(RenderPrompt(AdvisorTurnHistoryHeader, map[string]any{
+		"abridged": recentStart > start,
+	})))
+	turn.text.WriteString("\n\n")
+	wrote := false
+	for i := start; i < len(executorMsgs); i++ {
+		if !w.includeInitialInstructions && llm2MessageContextType(executorMsgs[i]) == persisted_ai.ContextTypeInitialInstructions {
+			continue
 		}
-		b.WriteString("\nRecent executor messages:\n")
+		if turn.writeMessage(i, i < recentStart) {
+			wrote = true
+		}
 	}
-	for _, m := range msgs[start:] {
-		writeExecutorMessage(&b, m)
+	if !wrote {
+		turn.text.WriteString("(no new executor messages)\n")
 	}
-	return b.String()
+	turn.text.WriteString("\n")
+	turn.text.WriteString(strings.TrimSpace(RenderPrompt(AdvisorTurn, nil)))
+	turn.flush()
+	return turn.blocks
+}
+
+func toLlm2Message(msg common.Message) llm2.Message {
+	switch m := msg.(type) {
+	case llm2.Message:
+		return m
+	case *llm2.Message:
+		if m == nil {
+			return llm2.Message{}
+		}
+	}
+	return persisted_ai.MessageFromCommon(msg)
+}
+
+type executorBlockPosition struct {
+	message int
+	block   int
+}
+
+type advisorTurnBuilder struct {
+	executorMsgs    []llm2.Message
+	retained        [][]bool
+	toolUses        map[string]executorBlockPosition
+	toolResults     map[string]executorBlockPosition
+	renderedCallIds map[string]bool
+
+	blocks []llm2.ContentBlock
+	text   strings.Builder
+}
+
+func newAdvisorTurnBuilder(executorMsgs []llm2.Message) *advisorTurnBuilder {
+	b := &advisorTurnBuilder{
+		executorMsgs:    executorMsgs,
+		retained:        persisted_ai.AlwaysRetainedBlocks(executorMsgs),
+		toolUses:        make(map[string]executorBlockPosition),
+		toolResults:     make(map[string]executorBlockPosition),
+		renderedCallIds: make(map[string]bool),
+	}
+	for i, msg := range executorMsgs {
+		for j, block := range msg.Content {
+			if block.ToolUse != nil {
+				b.toolUses[block.ToolUse.Id] = executorBlockPosition{message: i, block: j}
+			}
+			if block.ToolResult != nil {
+				b.toolResults[block.ToolResult.ToolCallId] = executorBlockPosition{message: i, block: j}
+			}
+		}
+	}
+	return b
+}
+
+func (b *advisorTurnBuilder) flush() {
+	if b.text.Len() == 0 {
+		return
+	}
+	b.blocks = append(b.blocks, llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: b.text.String()})
+	b.text.Reset()
+}
+
+// writeMessage renders an executor message, or only its always-retained blocks
+// when abridged, and reports whether anything was rendered.
+func (b *advisorTurnBuilder) writeMessage(index int, abridged bool) bool {
+	msg := b.executorMsgs[index]
+	wrote := false
+	var ordinary []llm2.ContentBlock
+	writeOrdinary := func() {
+		before := b.text.Len()
+		writeExecutorMessage(&b.text, llm2.Message{Role: msg.Role, Content: ordinary})
+		wrote = wrote || b.text.Len() > before
+		ordinary = nil
+	}
+	for j, block := range msg.Content {
+		if !b.retained[index][j] {
+			if !abridged {
+				ordinary = append(ordinary, block)
+			}
+			continue
+		}
+		writeOrdinary()
+		if b.writeRetained(executorBlockPosition{message: index, block: j}) {
+			wrote = true
+		}
+	}
+	writeOrdinary()
+	return wrote
+}
+
+// writeRetained renders an always-retained executor block as its own advisor
+// block. Tool-call pairing does not survive rendering to text, so a retained
+// result is preceded by its call whenever an earlier turn rendered that call
+// before it was retained, keeping e.g. a question together with its answer.
+func (b *advisorTurnBuilder) writeRetained(pos executorBlockPosition) bool {
+	msg := b.executorMsgs[pos.message]
+	block := msg.Content[pos.block]
+	if block.ToolResult != nil && !b.renderedCallIds[block.ToolResult.ToolCallId] {
+		if callPos, ok := b.toolUses[block.ToolResult.ToolCallId]; ok && b.retained[callPos.message][callPos.block] {
+			b.writeRetained(callPos)
+		}
+	}
+	if block.ToolUse != nil {
+		if b.renderedCallIds[block.ToolUse.Id] {
+			return false
+		}
+		b.renderedCallIds[block.ToolUse.Id] = true
+	}
+
+	var text strings.Builder
+	writeExecutorMessage(&text, llm2.Message{Role: msg.Role, Content: []llm2.ContentBlock{block}})
+	if text.Len() == 0 {
+		return false
+	}
+	b.flush()
+	rendered := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: text.String()}
+	b.markRetained(&rendered, block)
+	b.blocks = append(b.blocks, rendered)
+	return true
+}
+
+// markRetained carries over the metadata the executor's history management
+// retains the source block by. A tool call retained only through its paired
+// result borrows that result's human context type instead.
+func (b *advisorTurnBuilder) markRetained(rendered *llm2.ContentBlock, source llm2.ContentBlock) {
+	if contextType := persisted_ai.HumanContextType(source); contextType != "" {
+		persisted_ai.SetContextType(rendered, contextType)
+		return
+	}
+	if deliverable := persisted_ai.GetDeliverable(source); deliverable != nil {
+		persisted_ai.SetDeliverable(rendered, *deliverable)
+		return
+	}
+	if source.ToolUse == nil {
+		return
+	}
+	if resultPos, ok := b.toolResults[source.ToolUse.Id]; ok {
+		result := b.executorMsgs[resultPos.message].Content[resultPos.block]
+		if contextType := persisted_ai.HumanContextType(result); contextType != "" {
+			persisted_ai.SetContextType(rendered, contextType)
+		}
+	}
 }
 
 func writeExecutorMessage(b *strings.Builder, m common.Message) {
@@ -123,22 +282,6 @@ func writeExecutorMessage(b *strings.Builder, m common.Message) {
 	for _, tc := range m.GetToolCalls() {
 		b.WriteString(fmt.Sprintf("[%s] tool_call %s(%s)\n", m.GetRole(), tc.Name, tc.Arguments))
 	}
-}
-
-// executorMessageContextType returns the retention context type of an executor
-// message across the llm2 and legacy message representations.
-func executorMessageContextType(msg common.Message) string {
-	switch m := msg.(type) {
-	case llm2.Message:
-		return llm2MessageContextType(m)
-	case *llm2.Message:
-		if m != nil {
-			return llm2MessageContextType(*m)
-		}
-	case common.ChatMessage:
-		return m.ContextType
-	}
-	return ""
 }
 
 // SeedAdvisorRequirementsInput is the activity input for extracting the
@@ -202,14 +345,4 @@ func llm2MessageContextType(msg llm2.Message) string {
 		}
 	}
 	return ""
-}
-
-func renderExecutorRecentTranscript(msgs []common.Message, maxRecent int) string {
-	filtered := make([]common.Message, 0, len(msgs))
-	for _, msg := range msgs {
-		if executorMessageContextType(msg) != persisted_ai.ContextTypeInitialInstructions {
-			filtered = append(filtered, msg)
-		}
-	}
-	return renderExecutorTranscript(filtered, maxRecent)
 }
