@@ -75,7 +75,7 @@ func TestModalConcurrentRecoveryReusesReplacement(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.Background()
 		input := ModalCreateSandboxInput{Name: t.Name()}
-		replacement := modalReplacementSandboxName(input.Name)
+		replacement := ModalReplacementSandboxName(input.Name)
 		recycleStarted := make(chan struct{})
 		allowRecycle := make(chan struct{})
 		type result struct {

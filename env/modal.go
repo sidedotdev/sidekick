@@ -758,68 +758,31 @@ func ModalRecreateSandboxActivity(ctx context.Context, input ModalRecreateSandbo
 	}
 	name := modalEnv.SandboxName
 	createInput := ModalCreateSandboxInput{
-		Name:              modalReplacementSandboxName(name),
+		Name:              ModalReplacementSandboxName(name),
 		RepoDir:           modalEnv.LocalRepoDir,
 		Config:            input.Config,
 		SkipSeedSnapshots: true,
 	}
 
-	check, err := modalRecreateCheckSandbox(ctx, name)
+	source, err := modalReplacementSource(ctx, modalEnv, createInput.Name, input.Config)
 	if err != nil {
 		return ModalRecreateSandboxOutput{}, err
 	}
-	if check.Alive {
-		record, err := modalRecreateSnapshot(ctx, modalEnv)
-		if err != nil {
-			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to snapshot Modal sandbox %s: %w", name, err)
-		}
-		if !modalSnapshotCompatible(record, input.Config) {
-			return ModalRecreateSandboxOutput{}, temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("the new Modal configuration cannot restore sandbox %s from its snapshot; the sandbox was left running", name),
-				ErrTypeModalSnapshotIncompatible, nil)
-		}
-		createInput.SnapshotImageId = record.ImageId
+	createInput.SnapshotImageId = source.imageId
+	if source.alive {
 		if err := modalRecreateTerminateSandbox(ctx, name); err != nil {
 			return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to terminate Modal sandbox %s: %w", name, err)
 		}
-	} else {
-		snapshotName := createInput.Name
-		record, err := modalRecreateLatestSnapshot(ctx, snapshotName)
-		if err != nil {
-			return ModalRecreateSandboxOutput{}, err
-		}
-		if record == nil {
-			snapshotName = name
-			record, err = modalRecreateLatestSnapshot(ctx, snapshotName)
-			if err != nil {
-				return ModalRecreateSandboxOutput{}, err
-			}
-		}
-		if record != nil {
-			if !modalSnapshotCompatible(record, input.Config) {
-				return ModalRecreateSandboxOutput{}, temporal.NewNonRetryableApplicationError(
-					fmt.Sprintf("the new Modal configuration cannot restore sandbox %s from its snapshot", snapshotName),
-					ErrTypeModalSnapshotIncompatible, nil)
-			}
-			createInput.SnapshotImageId = record.ImageId
-		} else {
-			log.Warn().Str("sandbox", name).
-				Msg("no snapshot recorded for modal sandbox; its successor restores from its own snapshot if one exists, else starts clean")
-		}
+	} else if source.imageId == "" {
+		log.Warn().Str("sandbox", name).
+			Msg("no snapshot recorded for modal sandbox; its successor restores from its own snapshot if one exists, else starts clean")
 	}
 
 	createOutput, err := modalRecreateCreateSandbox(ctx, createInput)
 	if err != nil {
 		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to recreate Modal sandbox %s: %w", name, err)
 	}
-	successor := &ModalEnv{
-		WorkingDirectory: modalEnv.WorkingDirectory,
-		SandboxName:      createOutput.SandboxName,
-		SSHHost:          createOutput.SSHHost,
-		SSHPort:          createOutput.SSHPort,
-		LocalRepoDir:     modalEnv.LocalRepoDir,
-		PortForwards:     modalEnv.PortForwards,
-	}
+	successor := modalEnv.successor(createOutput)
 	if _, err := modalRecreateSnapshot(ctx, successor); err != nil {
 		return ModalRecreateSandboxOutput{}, fmt.Errorf("failed to snapshot successor Modal sandbox %s: %w", successor.SandboxName, err)
 	}
@@ -828,6 +791,162 @@ func ModalRecreateSandboxActivity(ctx context.Context, input ModalRecreateSandbo
 			successor.SandboxName, name, err)
 	}
 	return ModalRecreateSandboxOutput{EnvContainer: EnvContainer{Env: successor}}, nil
+}
+
+// modalSnapshotSource is the snapshot a replacement sandbox restores from.
+type modalSnapshotSource struct {
+	// imageId is empty when no snapshot exists at all.
+	imageId string
+	// alive reports whether the predecessor was running, in which case it was
+	// checkpointed first so the successor carries its latest state.
+	alive bool
+}
+
+// modalReplacementSource picks the snapshot image for successorName to
+// restore from under config. A live predecessor is snapshotted first. An
+// absent one falls back to the successor's own record (how a retry resumes
+// after the successor was created but the activity did not complete), then
+// to the predecessor's. A snapshot the new config cannot boot is rejected
+// without touching anything.
+func modalReplacementSource(ctx context.Context, modalEnv *ModalEnv, successorName string, config common.ModalEnvConfig) (modalSnapshotSource, error) {
+	name := modalEnv.SandboxName
+	check, err := modalRecreateCheckSandbox(ctx, name)
+	if err != nil {
+		return modalSnapshotSource{}, err
+	}
+	if check.Alive {
+		record, err := modalRecreateSnapshot(ctx, modalEnv)
+		if err != nil {
+			return modalSnapshotSource{}, fmt.Errorf("failed to snapshot Modal sandbox %s: %w", name, err)
+		}
+		if !modalSnapshotCompatible(record, config) {
+			return modalSnapshotSource{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("the new Modal configuration cannot restore sandbox %s from its snapshot; the sandbox was left running", name),
+				ErrTypeModalSnapshotIncompatible, nil)
+		}
+		return modalSnapshotSource{imageId: record.ImageId, alive: true}, nil
+	}
+
+	snapshotName := successorName
+	record, err := modalRecreateLatestSnapshot(ctx, snapshotName)
+	if err != nil {
+		return modalSnapshotSource{}, err
+	}
+	if record == nil {
+		snapshotName = name
+		record, err = modalRecreateLatestSnapshot(ctx, snapshotName)
+		if err != nil {
+			return modalSnapshotSource{}, err
+		}
+	}
+	if record == nil {
+		return modalSnapshotSource{}, nil
+	}
+	if !modalSnapshotCompatible(record, config) {
+		return modalSnapshotSource{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("the new Modal configuration cannot restore sandbox %s from its snapshot", snapshotName),
+			ErrTypeModalSnapshotIncompatible, nil)
+	}
+	return modalSnapshotSource{imageId: record.ImageId}, nil
+}
+
+// successor describes the sandbox that replaced e: same working directory and
+// repo, so it keeps e's EnvIdentity, and e's port mappings, which the
+// snapshot's sshd was configured for.
+func (e *ModalEnv) successor(created ModalCreateSandboxOutput) *ModalEnv {
+	return &ModalEnv{
+		WorkingDirectory: e.WorkingDirectory,
+		SandboxName:      created.SandboxName,
+		SSHHost:          created.SSHHost,
+		SSHPort:          created.SSHPort,
+		LocalRepoDir:     e.LocalRepoDir,
+		PortForwards:     e.PortForwards,
+	}
+}
+
+type ModalReplaceSandboxInput struct {
+	EnvContainer EnvContainer               `json:"envContainer"`
+	Config       common.ModalEnvConfig      `json:"config"`
+	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
+}
+
+type ModalReplaceSandboxOutput struct {
+	EnvContainer EnvContainer `json:"envContainer"`
+}
+
+// ErrTypeModalSnapshotUnavailable is the application error type returned
+// when a sandbox has no snapshot a successor could restore from.
+const ErrTypeModalSnapshotUnavailable = "ModalSnapshotUnavailable"
+
+// CannotReplaceFromSnapshot reports whether err means no sandbox restored
+// from the current one's snapshot can carry the desired settings, so the
+// flow's work has to be transferred into a freshly provisioned sandbox
+// instead.
+func CannotReplaceFromSnapshot(err error) bool {
+	var appErr *temporal.ApplicationError
+	if !errors.As(err, &appErr) {
+		return false
+	}
+	return appErr.Type() == ErrTypeModalSnapshotIncompatible || appErr.Type() == ErrTypeModalSnapshotUnavailable
+}
+
+// ModalReplaceSandboxActivity creates the successor of a flow's Modal sandbox
+// under new settings while leaving the predecessor running, so the flow keeps
+// a working env if this fails and only moves once the successor is ready.
+// The successor restores from the predecessor's fresh checkpoint under the
+// deterministic replacement name (see ModalRecreateSandboxActivity for why),
+// and is snapshotted under its own name before this returns, so the caller
+// may discard the predecessor and its snapshots afterwards without leaving
+// the flow uncheckpointed. The predecessor's port mappings are inherited by
+// the snapshot and swapped for the desired ones once the successor is up.
+//
+// Without a usable snapshot there is nothing to restore from, and the
+// caller is expected to transfer the flow's work into a fresh sandbox
+// instead (see CannotReplaceFromSnapshot).
+func ModalReplaceSandboxActivity(ctx context.Context, input ModalReplaceSandboxInput) (ModalReplaceSandboxOutput, error) {
+	modalEnv, ok := input.EnvContainer.Env.(*ModalEnv)
+	if !ok {
+		return ModalReplaceSandboxOutput{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("environment is not Modal but %s", input.EnvContainer.Env.GetType()), "InvalidEnvType", nil)
+	}
+	if err := errors.Join(input.Config.Validate(), common.ValidatePortForwards(input.PortForwards)); err != nil {
+		return ModalReplaceSandboxOutput{}, temporal.NewNonRetryableApplicationError(
+			"invalid Modal configuration", "InvalidModalEnvConfig", err)
+	}
+	name := modalEnv.SandboxName
+	createInput := ModalCreateSandboxInput{
+		Name:              ModalReplacementSandboxName(name),
+		RepoDir:           modalEnv.LocalRepoDir,
+		Config:            input.Config,
+		SkipSeedSnapshots: true,
+	}
+
+	source, err := modalReplacementSource(ctx, modalEnv, createInput.Name, input.Config)
+	if err != nil {
+		return ModalReplaceSandboxOutput{}, err
+	}
+	if source.imageId == "" {
+		return ModalReplaceSandboxOutput{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("Modal sandbox %s has no snapshot to restore a replacement from", name),
+			ErrTypeModalSnapshotUnavailable, nil)
+	}
+	createInput.SnapshotImageId = source.imageId
+
+	createOutput, err := modalRecreateCreateSandbox(ctx, createInput)
+	if err != nil {
+		return ModalReplaceSandboxOutput{}, fmt.Errorf("failed to create replacement for Modal sandbox %s: %w", name, err)
+	}
+	successor := modalEnv.successor(createOutput)
+	if _, err := modalRecreateSnapshot(ctx, successor); err != nil {
+		return ModalReplaceSandboxOutput{}, fmt.Errorf("failed to snapshot replacement Modal sandbox %s: %w", successor.SandboxName, err)
+	}
+	if !samePortForwards(successor.PortForwards, input.PortForwards) {
+		if err := modalReplaceReverseForwards(ctx, successor, successor.PortForwards, input.PortForwards); err != nil {
+			return ModalReplaceSandboxOutput{}, fmt.Errorf("failed to replace port forwards of replacement Modal sandbox %s: %w", successor.SandboxName, err)
+		}
+		successor.PortForwards = input.PortForwards
+	}
+	return ModalReplaceSandboxOutput{EnvContainer: EnvContainer{Env: successor}}, nil
 }
 
 // modalReplaceReverseForwards is a seam for tests: swapping listeners needs a
@@ -1188,7 +1307,7 @@ func modalCreateSandboxWithRecovery(
 	case err == nil:
 		return output, nil
 	case errors.As(err, &unhealthy):
-		replacement := modalReplacementSandboxName(unhealthy.sandboxName)
+		replacement := ModalReplacementSandboxName(unhealthy.sandboxName)
 		log.Warn().Str("sandbox", unhealthy.sandboxName).Str("replacement", replacement).Err(unhealthy.cause).
 			Msg("reused modal sandbox polls as running but is unusable; replacing it under a fresh name")
 		if recycleErr := recycleUnhealthy(ctx, unhealthy.sandboxName); recycleErr != nil {
@@ -1206,13 +1325,13 @@ func modalCreateSandboxWithRecovery(
 	return createOnce(ctx, input)
 }
 
-// modalReplacementSandboxName derives the successor name for a sandbox that
+// ModalReplacementSandboxName derives the successor name for a sandbox that
 // must be replaced. It is a pure function of the name it replaces, so a
 // retried create whose earlier attempt already terminated the old sandbox and
 // created its successor (but whose result was lost) rediscovers the successor
 // by name instead of orphaning it (see resolveModalSandboxWith). The base is
 // truncated so chained replacements stay within name length limits.
-func modalReplacementSandboxName(name string) string {
+func ModalReplacementSandboxName(name string) string {
 	base := name
 	if len(base) > 55 {
 		base = strings.TrimRight(base[:55], "-")
@@ -1235,7 +1354,7 @@ func resolveModalSandboxWith(lookup func(string) (*modal.Sandbox, error), reques
 		return nil, "", err
 	}
 	for i := 0; sb == nil && i < 3; i++ {
-		name = modalReplacementSandboxName(name)
+		name = ModalReplacementSandboxName(name)
 		sb, err = lookup(name)
 		if err != nil {
 			return nil, "", err

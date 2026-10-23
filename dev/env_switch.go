@@ -10,7 +10,9 @@ import (
 	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
+	"time"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -19,6 +21,8 @@ const (
 
 	globalStateKeyCommandPermissions       = "commandPermissions"
 	globalStateKeyCommandPermissionSources = "commandPermissionSources"
+
+	maxSupersededSandboxStopAttempts = 30
 )
 
 // commandPermissionSources are the unmerged command permission layers a flow
@@ -47,13 +51,17 @@ func effectiveCommandPermissions(dCtx DevContext) common.CommandPermissionConfig
 }
 
 type envSwitchResult struct {
-	EnvType    string `json:"envType"`
-	HeadCommit string `json:"headCommit"`
+	EnvType string `json:"envType"`
+	// HeadCommit is set when the flow's work was transferred to a new env.
+	HeadCommit string `json:"headCommit,omitempty"`
+	// SandboxName is set when the env was replaced by a successor sandbox.
+	SandboxName string `json:"sandboxName,omitempty"`
 }
 
-// startEnvSwitch begins switching the flow to desired.EnvType in its own
-// coroutine, returning once the tracking env_switch flow action exists. The
-// caller must hold lock; the coroutine releases it once the switch ends.
+// startEnvSwitch begins moving the flow onto desired — another env type, or
+// the current type with different settings — in its own coroutine, returning
+// once the tracking env_switch flow action exists. The caller must hold lock;
+// the coroutine releases it once the switch ends.
 func startEnvSwitch(ctx workflow.Context, dCtx *DevContext, lock workflow.Mutex, desired EnvSettings) (EnvUpdateResult, error) {
 	state := newFlowEnvState(dCtx.GlobalState)
 	from := currentEnvType(*dCtx)
@@ -86,7 +94,7 @@ func startEnvSwitch(ctx workflow.Context, dCtx *DevContext, lock workflow.Mutex,
 				updated.FlowActionId = flowAction.Id
 				state.setEnvSwitch(updated)
 			}
-			return switchEnv(actionCtx.Context, dCtx, desired)
+			return switchEnv(actionCtx.Context, dCtx, lock, desired)
 		})
 		if !started {
 			startErr = err
@@ -103,13 +111,14 @@ func startEnvSwitch(ctx workflow.Context, dCtx *DevContext, lock workflow.Mutex,
 	return EnvUpdateResult{FlowActionId: flowActionId, Settings: currentEnvSettings(*dCtx)}, nil
 }
 
-// switchEnv moves the flow's branch and uncommitted work to a newly
-// provisioned env of desired.EnvType and publishes it. On failure the
-// previous env stays active and whatever was provisioned is retired; no env
-// is deleted either way.
-func switchEnv(ctx workflow.Context, dCtx *DevContext, desired EnvSettings) (envSwitchResult, error) {
+// switchEnv prepares an env matching desired, publishes it, and only then
+// lets go of the previous env. On failure the previous env stays active and
+// whatever was provisioned is retired for flow-end cleanup. lock is the
+// settings lock the caller holds for the duration of the switch.
+func switchEnv(ctx workflow.Context, dCtx *DevContext, lock workflow.Mutex, desired EnvSettings) (envSwitchResult, error) {
 	state := newFlowEnvState(dCtx.GlobalState)
 	ctx = utils.ProvisioningRetryCtx(env.WithSwitchBypass(ctx))
+	source := *dCtx.EnvContainer
 
 	result, err := performEnvSwitch(ctx, dCtx, state, desired)
 	if err != nil {
@@ -121,15 +130,113 @@ func switchEnv(ctx workflow.Context, dCtx *DevContext, desired EnvSettings) (env
 		}
 		return envSwitchResult{}, err
 	}
+	stopSupersededSandbox(ctx, state, lock, source, *dCtx.EnvContainer)
 	return result, nil
 }
 
 func performEnvSwitch(ctx workflow.Context, dCtx *DevContext, state flowEnvState, desired EnvSettings) (envSwitchResult, error) {
+	if desired.EnvType == currentEnvType(*dCtx) {
+		return reconfigureEnv(ctx, dCtx, state, desired)
+	}
 	sources, ok := dCtx.GlobalState.GetValue(globalStateKeyCommandPermissionSources).(commandPermissionSources)
 	if !ok {
 		return envSwitchResult{}, errors.New("cannot switch environments: the flow's command permission sources are unknown")
 	}
+	permissions, err := envDerivedCommandPermissions(ctx, desired.EnvType,
+		common.RepoConfig{CommandPermissions: sources.Repo},
+		common.LocalPublicConfig{CommandPermissions: sources.Local},
+		domain.WorkspaceConfig{CommandPermissions: sources.Workspace},
+	)
+	if err != nil {
+		return envSwitchResult{}, err
+	}
+	sandboxName := ""
+	if retired := state.retiredOfType(env.EnvType(desired.EnvType)); retired != nil {
+		sandboxName = reattachSandboxName(*retired)
+	}
+	return transferEnv(ctx, dCtx, state, desired, permissions, sandboxName)
+}
 
+// reattachSandboxName names the Modal sandbox a switch back to a retired env
+// should use: the retired sandbox itself while it is still running, otherwise
+// a successor, since stopping a Modal sandbox is terminal and Modal keeps the
+// name reserved for a while afterwards. Other sandbox types derive their names
+// from the repo, so the empty name leaves provisioning to its default.
+func reattachSandboxName(retired retiredEnv) string {
+	modalEnv, ok := retired.EnvContainer.Env.(*env.ModalEnv)
+	if !ok {
+		return ""
+	}
+	if retired.StopRequested || retired.Stopped {
+		return env.ModalReplacementSandboxName(modalEnv.SandboxName)
+	}
+	return modalEnv.SandboxName
+}
+
+// reconfigureEnv applies desired's settings to an env of the type the flow
+// already runs on. Port forwards are adjusted on the live env; changed
+// sandbox settings replace the sandbox with a successor restored from its
+// snapshot, or, when no usable snapshot exists, with a fresh sandbox the
+// flow's work is transferred to.
+func reconfigureEnv(ctx workflow.Context, dCtx *DevContext, state flowEnvState, desired EnvSettings) (envSwitchResult, error) {
+	current := currentEnvConfig(*dCtx)
+	desiredConfig := env.EnvConfig{PortForwards: desired.PortForwards, Modal: desired.Modal}
+	modalEnv, isModal := dCtx.EnvContainer.Env.(*env.ModalEnv)
+	if !isModal || !current.SandboxSettingsChanged(desiredConfig) {
+		return adjustEnvConfig(ctx, dCtx, state, current, desiredConfig)
+	}
+
+	source := *dCtx.EnvContainer
+	// Creation may succeed even when the activity fails or is cancelled before
+	// returning its endpoint. Cleanup can address that sandbox by name alone.
+	state.recordSwitchTarget(ensuredEnv{EnvContainer: env.EnvContainer{Env: &env.ModalEnv{
+		SandboxName:      env.ModalReplacementSandboxName(modalEnv.SandboxName),
+		WorkingDirectory: modalEnv.WorkingDirectory,
+		LocalRepoDir:     modalEnv.LocalRepoDir,
+	}}})
+	var replaced env.ModalReplaceSandboxOutput
+	err := workflow.ExecuteActivity(ctx, env.ModalReplaceSandboxActivity, env.ModalReplaceSandboxInput{
+		EnvContainer: source,
+		Config:       desired.Modal,
+		PortForwards: desired.PortForwards,
+	}).Get(ctx, &replaced)
+	if err != nil {
+		if !env.CannotReplaceFromSnapshot(err) {
+			return envSwitchResult{}, fmt.Errorf("failed to replace Modal sandbox: %w", err)
+		}
+		workflow.GetLogger(ctx).Info("Modal sandbox cannot be replaced from its snapshot; transferring the flow's work to a fresh sandbox", "error", err)
+		return transferEnv(ctx, dCtx, state, desired, effectiveCommandPermissions(*dCtx), env.ModalReplacementSandboxName(modalEnv.SandboxName))
+	}
+
+	target := ensuredEnv{EnvContainer: replaced.EnvContainer}
+	if dCtx.Worktree != nil {
+		target.Worktree = worktreeAt(*dCtx.Worktree, replaced.EnvContainer.Env.GetWorkingDirectory())
+	}
+	state.recordSwitchTarget(target)
+	publishSwitchedEnv(dCtx, state, source, target, desired, effectiveCommandPermissions(*dCtx))
+	return envSwitchResult{EnvType: desired.EnvType, SandboxName: replaced.EnvContainer.Env.(*env.ModalEnv).SandboxName}, nil
+}
+
+// adjustEnvConfig changes the live env's configuration in place, so nothing
+// is retired.
+func adjustEnvConfig(ctx workflow.Context, dCtx *DevContext, state flowEnvState, current, desired env.EnvConfig) (envSwitchResult, error) {
+	var output env.UpdateEnvConfigOutput
+	err := workflow.ExecuteActivity(ctx, env.UpdateEnvConfigActivity, env.UpdateEnvConfigInput{
+		EnvContainer: *dCtx.EnvContainer,
+		Current:      current,
+		Desired:      desired,
+	}).Get(ctx, &output)
+	if err != nil {
+		return envSwitchResult{}, err
+	}
+	publishEnvConfig(dCtx, state, output.EnvContainer, output.Config)
+	return envSwitchResult{EnvType: currentEnvType(*dCtx)}, nil
+}
+
+// transferEnv moves the flow's branch and uncommitted work to a newly
+// provisioned env and publishes it. sandboxName, when set, names the sandbox
+// to provision instead of the flow's default one.
+func transferEnv(ctx workflow.Context, dCtx *DevContext, state flowEnvState, desired EnvSettings, permissions common.CommandPermissionConfig, sandboxName string) (envSwitchResult, error) {
 	source := *dCtx.EnvContainer
 	branch, err := flowBranch(ctx, *dCtx)
 	if err != nil {
@@ -158,6 +265,7 @@ func performEnvSwitch(ctx workflow.Context, dCtx *DevContext, state flowEnvState
 		StartBranch: &branch,
 		RepoConfig:  targetRepoConfig,
 		AllowReuse:  true,
+		SandboxName: sandboxName,
 		OnProgress:  state.recordSwitchTarget,
 	}
 	if dCtx.Worktree != nil {
@@ -178,27 +286,12 @@ func performEnvSwitch(ctx workflow.Context, dCtx *DevContext, state flowEnvState
 		return envSwitchResult{}, fmt.Errorf("failed to restore flow state into %s env: %w", desired.EnvType, err)
 	}
 
-	err = workflow.ExecuteActivity(ctx, env.VerifySwitchActivity, env.VerifySwitchInput{
-		EnvContainer: target.EnvContainer,
-		ExpectedHead: bundle.HeadCommit,
-	}).Get(ctx, nil)
-	if err != nil {
-		return envSwitchResult{}, fmt.Errorf("failed to verify %s env: %w", desired.EnvType, err)
-	}
-
-	permissions, err := envDerivedCommandPermissions(ctx, desired.EnvType,
-		common.RepoConfig{CommandPermissions: sources.Repo},
-		common.LocalPublicConfig{CommandPermissions: sources.Local},
-		domain.WorkspaceConfig{CommandPermissions: sources.Workspace},
-	)
-	if err != nil {
-		return envSwitchResult{}, err
-	}
-
 	publishSwitchedEnv(dCtx, state, source, target, desired, permissions)
 	return envSwitchResult{EnvType: desired.EnvType, HeadCommit: bundle.HeadCommit}, nil
 }
 
+// publishSwitchedEnv makes target the flow's env and retires the env it
+// replaces.
 func publishSwitchedEnv(dCtx *DevContext, state flowEnvState, source env.EnvContainer, target ensuredEnv, desired EnvSettings, permissions common.CommandPermissionConfig) {
 	var sourceWorktree *domain.Worktree
 	if dCtx.Worktree != nil {
@@ -206,21 +299,91 @@ func publishSwitchedEnv(dCtx *DevContext, state flowEnvState, source env.EnvCont
 		sourceWorktree = &worktree
 	}
 	state.retire(retiredEnv{EnvContainer: source, Worktree: sourceWorktree})
-	state.unretire(env.IdentityOf(target.EnvContainer))
+	state.unretire(target.EnvContainer)
 
-	*dCtx.EnvContainer = target.EnvContainer
 	if dCtx.Worktree != nil && target.Worktree != nil {
 		dCtx.Worktree.WorkingDirectory = target.Worktree.WorkingDirectory
 	}
-
 	dCtx.RepoConfig.EnvType = desired.EnvType
-	dCtx.RepoConfig.ModalConfig = desired.Modal
-	dCtx.RepoConfig.PortForwards = desired.PortForwards
 	dCtx.RepoConfig.CommandPermissions = permissions
-	dCtx.GlobalState.SetValue(globalStateKeyModalConfig, desired.Modal)
-	dCtx.GlobalState.SetValue(globalStateKeyPortForwards, desired.PortForwards)
 	dCtx.GlobalState.SetValue(globalStateKeyCommandPermissions, permissions)
+	publishEnvConfig(dCtx, state, target.EnvContainer, env.EnvConfig{PortForwards: desired.PortForwards, Modal: desired.Modal})
+}
+
+// publishEnvConfig makes container the flow's env, with config as the
+// configuration it reflects.
+func publishEnvConfig(dCtx *DevContext, state flowEnvState, container env.EnvContainer, config env.EnvConfig) {
+	*dCtx.EnvContainer = container
+	dCtx.RepoConfig.ModalConfig = config.Modal
+	dCtx.RepoConfig.PortForwards = config.PortForwards
+	dCtx.GlobalState.SetValue(globalStateKeyModalConfig, config.Modal)
+	dCtx.GlobalState.SetValue(globalStateKeyPortForwards, config.PortForwards)
 	state.publish(dCtx.EnvContainer)
+}
+
+// stopSupersededSandbox stops the sandbox the flow just left, so a
+// long-running command cannot keep it alive past its idle timeout. The
+// flow's work already lives on the published env (a replaced sandbox was
+// snapshotted first), so this runs in the background and keeps retrying
+// rather than holding up the switch; whatever still fails is handled by
+// flow-end cleanup.
+//
+// Each attempt holds the settings lock, so a switch back to this sandbox
+// cannot start while an attempt is in flight (an attempt that times out may
+// still be stopping the sandbox remotely, which the lock cannot cover). A
+// switch back that lands between attempts unretires the sandbox, which ends
+// the retries.
+func stopSupersededSandbox(ctx workflow.Context, state flowEnvState, lock workflow.Mutex, previous, current env.EnvContainer) {
+	sandbox, ok := previous.Env.(env.SandboxEnv)
+	if !ok || sandbox.SandboxSharedAcrossFlows() || sameEnvInstance(previous, current) {
+		return
+	}
+	state.markStopRequested(previous)
+	input := env.StopSandboxInput{EnvType: previous.Env.GetType(), SandboxName: sandbox.GetSandboxName()}
+	workflow.Go(ctx, func(ctx workflow.Context) {
+		ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 5 * time.Minute,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+		})
+		backoff := 10 * time.Second
+		for attempt := 1; ; attempt++ {
+			if err := lock.Lock(ctx); err != nil {
+				return
+			}
+			done, err := stopRetiredSandbox(ctx, state, previous, input)
+			lock.Unlock()
+			if done {
+				return
+			}
+			if attempt >= maxSupersededSandboxStopAttempts {
+				workflow.GetLogger(ctx).Warn("Giving up stopping superseded sandbox; it will be cleaned up at flow end",
+					"envType", input.EnvType, "sandboxName", input.SandboxName, "attempts", attempt, "error", err)
+				return
+			}
+			workflow.GetLogger(ctx).Warn("Failed to stop superseded sandbox; retrying",
+				"envType", input.EnvType, "sandboxName", input.SandboxName, "attempt", attempt, "error", err)
+			if err := workflow.Sleep(ctx, backoff); err != nil {
+				return
+			}
+			backoff = min(backoff*2, 10*time.Minute)
+		}
+	})
+}
+
+// stopRetiredSandbox stops sandbox unless the flow has meanwhile returned to
+// it or it was already stopped. done reports whether nothing is left to do.
+func stopRetiredSandbox(ctx workflow.Context, state flowEnvState, sandbox env.EnvContainer, input env.StopSandboxInput) (done bool, err error) {
+	if current := state.current(); current != nil && current.Env != nil && sameEnvInstance(*current, sandbox) {
+		return true, nil
+	}
+	if entry := state.retiredEntry(sandbox); entry == nil || entry.Stopped {
+		return true, nil
+	}
+	if err := workflow.ExecuteActivity(ctx, env.StopSandboxActivity, input).Get(ctx, nil); err != nil {
+		return false, err
+	}
+	state.markStopped(sandbox)
+	return true, nil
 }
 
 // flowBranch returns the branch holding the flow's work: the flow worktree's

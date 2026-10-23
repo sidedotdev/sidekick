@@ -31,6 +31,13 @@ type envSwitchState struct {
 type retiredEnv struct {
 	EnvContainer env.EnvContainer
 	Worktree     *domain.Worktree
+	// StopRequested marks a sandbox the flow is stopping in the background
+	// after superseding it. A switch back must not reattach to such a
+	// sandbox: for Modal the stop is terminal.
+	StopRequested bool
+	// Stopped marks a sandbox already stopped when it was superseded, so
+	// flow-end cleanup skips the steps that would need it running.
+	Stopped bool
 }
 
 // flowEnvState tracks the env a flow currently runs on, every env it has run
@@ -103,37 +110,96 @@ func (s flowEnvState) retiredEnvs() []retiredEnv {
 // retire records an env for cleanup at flow end. Retiring an env again
 // replaces its earlier entry, since switching back to an env reuses it.
 func (s flowEnvState) retire(entry retiredEnv) {
-	identity := env.IdentityOf(entry.EnvContainer)
-	retired := slices.DeleteFunc(slices.Clone(s.retiredEnvs()), func(r retiredEnv) bool {
-		return env.IdentityOf(r.EnvContainer) == identity
-	})
+	retired := slices.Clone(s.retiredEnvs())
+	for i := range retired {
+		if !sameEnvInstance(retired[i].EnvContainer, entry.EnvContainer) {
+			continue
+		}
+		previous := retired[i]
+		// A sandbox retired mid-provisioning has no worktree yet; it must
+		// not displace the record that knows which worktree to clean up.
+		if entry.Worktree == nil && previous.Worktree != nil {
+			entry.EnvContainer = previous.EnvContainer
+			entry.Worktree = previous.Worktree
+		}
+		// Stop state describes the physical sandbox, so it survives the
+		// record being replaced; only running on the env again (unretire)
+		// resets it.
+		entry.StopRequested = entry.StopRequested || previous.StopRequested
+		entry.Stopped = entry.Stopped || previous.Stopped
+		retired = slices.Delete(retired, i, i+1)
+		break
+	}
 	s.gs.SetValue(globalStateKeyRetiredEnvs, append(retired, entry))
 }
 
-// takeRetiredOfType removes and returns the most recently retired env of the
-// given type, so a switch back to that type can reuse it.
-func (s flowEnvState) takeRetiredOfType(envType env.EnvType) *retiredEnv {
+// retiredOfType returns the most recently retired env of the given type, so a
+// switch back to that type can reattach to it. The entry stays retired until
+// the switch publishes the env.
+func (s flowEnvState) retiredOfType(envType env.EnvType) *retiredEnv {
 	retired := s.retiredEnvs()
 	for i := len(retired) - 1; i >= 0; i-- {
-		if env.IdentityOf(retired[i].EnvContainer).EnvType != envType {
-			continue
+		if retired[i].EnvContainer.Env.GetType() == envType {
+			entry := retired[i]
+			return &entry
 		}
-		entry := retired[i]
-		s.gs.SetValue(globalStateKeyRetiredEnvs, slices.Delete(slices.Clone(retired), i, i+1))
-		return &entry
 	}
 	return nil
 }
 
+// retiredEntry returns the retired record of container's env, if any.
+func (s flowEnvState) retiredEntry(container env.EnvContainer) *retiredEnv {
+	for _, r := range s.retiredEnvs() {
+		if sameEnvInstance(r.EnvContainer, container) {
+			entry := r
+			return &entry
+		}
+	}
+	return nil
+}
+
+func (s flowEnvState) markStopRequested(container env.EnvContainer) {
+	s.updateRetired(container, func(r *retiredEnv) { r.StopRequested = true })
+}
+
+func (s flowEnvState) markStopped(container env.EnvContainer) {
+	s.updateRetired(container, func(r *retiredEnv) { r.Stopped = true })
+}
+
+func (s flowEnvState) updateRetired(container env.EnvContainer, update func(*retiredEnv)) {
+	retired := slices.Clone(s.retiredEnvs())
+	for i := range retired {
+		if sameEnvInstance(retired[i].EnvContainer, container) {
+			update(&retired[i])
+		}
+	}
+	s.gs.SetValue(globalStateKeyRetiredEnvs, retired)
+}
+
 // unretire drops the retired entry of an env the flow runs on again, since
 // it is now cleaned up as the active env.
-func (s flowEnvState) unretire(identity env.EnvIdentity) {
+func (s flowEnvState) unretire(container env.EnvContainer) {
 	retired := s.retiredEnvs()
-	isIdentity := func(r retiredEnv) bool { return env.IdentityOf(r.EnvContainer) == identity }
-	if !slices.ContainsFunc(retired, isIdentity) {
+	isInstance := func(r retiredEnv) bool { return sameEnvInstance(r.EnvContainer, container) }
+	if !slices.ContainsFunc(retired, isInstance) {
 		return
 	}
-	s.gs.SetValue(globalStateKeyRetiredEnvs, slices.DeleteFunc(slices.Clone(retired), isIdentity))
+	s.gs.SetValue(globalStateKeyRetiredEnvs, slices.DeleteFunc(slices.Clone(retired), isInstance))
+}
+
+// sameEnvInstance reports whether two containers refer to the same physical
+// env. Sandboxes are matched by name alone, since a sandbox is also recorded
+// at its base repo directory while its worktree is being provisioned.
+func sameEnvInstance(a, b env.EnvContainer) bool {
+	if a.Env.GetType() != b.Env.GetType() {
+		return false
+	}
+	sandboxA, okA := a.Env.(env.SandboxEnv)
+	sandboxB, okB := b.Env.(env.SandboxEnv)
+	if okA && okB {
+		return sandboxA.GetSandboxName() == sandboxB.GetSandboxName()
+	}
+	return env.InstanceOf(a) == env.InstanceOf(b)
 }
 
 // recordSwitchTarget keeps the most complete known state of the env being

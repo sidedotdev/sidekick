@@ -56,7 +56,7 @@ func TestFlowEnvStateRetiredEnvs(t *testing.T) {
 	t.Parallel()
 	state := newFlowEnvState(&flow_action.GlobalState{})
 	require.Empty(t, state.retiredEnvs())
-	require.Nil(t, state.takeRetiredOfType(env.EnvTypeDevPod))
+	require.Nil(t, state.retiredOfType(env.EnvTypeDevPod))
 
 	localWorktree := &domain.Worktree{Id: "wt_1", Name: "side/flow", WorkingDirectory: "/repo-worktrees/flow"}
 	state.retire(retiredEnv{EnvContainer: envStateLocal, Worktree: localWorktree})
@@ -67,9 +67,73 @@ func TestFlowEnvStateRetiredEnvs(t *testing.T) {
 		{EnvContainer: envStateLocal, Worktree: localWorktree},
 	}, state.retiredEnvs(), "retiring an env again replaces its earlier entry")
 
-	taken := state.takeRetiredOfType(env.EnvTypeDevPod)
-	require.NotNil(t, taken)
-	require.Equal(t, retiredEnv{EnvContainer: envStateDevPod}, *taken)
+	found := state.retiredOfType(env.EnvTypeDevPod)
+	require.NotNil(t, found)
+	require.Equal(t, retiredEnv{EnvContainer: envStateDevPod}, *found)
+	require.Len(t, state.retiredEnvs(), 2, "looking a retired env up must not drop it")
+	require.Nil(t, state.retiredOfType(env.EnvTypeModal))
+
+	state.markStopRequested(envStateDevPod)
+	require.Equal(t, retiredEnv{EnvContainer: envStateDevPod, StopRequested: true}, *state.retiredEntry(envStateDevPod))
+	state.markStopped(envStateDevPod)
+	require.Equal(t, retiredEnv{EnvContainer: envStateDevPod, StopRequested: true, Stopped: true}, *state.retiredEntry(envStateDevPod))
+	require.Nil(t, state.retiredEntry(envStateForeign))
+
+	state.unretire(envStateDevPod)
 	require.Equal(t, []retiredEnv{{EnvContainer: envStateLocal, Worktree: localWorktree}}, state.retiredEnvs())
-	require.Nil(t, state.takeRetiredOfType(env.EnvTypeModal))
+}
+
+// A sandbox is one physical env regardless of the directory it is recorded
+// at, and a record made mid-provisioning (no worktree yet) must not replace
+// the record that knows which worktree to clean up.
+func TestFlowEnvStateMatchesSandboxesByName(t *testing.T) {
+	t.Parallel()
+	worktree := &domain.Worktree{Id: "wt_1", Name: "side/flow", WorkingDirectory: "/root/worktrees/flow"}
+	atWorktree := env.EnvContainer{Env: &env.ModalEnv{WorkingDirectory: "/root/worktrees/flow", SandboxName: "side--repo-abc"}}
+	atRepo := env.EnvContainer{Env: &env.ModalEnv{WorkingDirectory: "/root/repo", SandboxName: "side--repo-abc"}}
+	other := env.EnvContainer{Env: &env.ModalEnv{WorkingDirectory: "/root/worktrees/flow", SandboxName: "side--repo-abc-r1"}}
+
+	state := newFlowEnvState(&flow_action.GlobalState{})
+	state.retire(retiredEnv{EnvContainer: atWorktree, Worktree: worktree})
+	state.retire(retiredEnv{EnvContainer: atRepo})
+	require.Equal(t, []retiredEnv{{EnvContainer: atWorktree, Worktree: worktree}}, state.retiredEnvs())
+
+	state.markStopRequested(atRepo)
+	require.True(t, state.retiredEntry(atWorktree).StopRequested)
+	require.Nil(t, state.retiredEntry(other))
+
+	state.retire(retiredEnv{EnvContainer: atRepo, Worktree: worktree})
+	require.Equal(t, []retiredEnv{{EnvContainer: atRepo, Worktree: worktree, StopRequested: true}}, state.retiredEnvs(),
+		"a record with a worktree replaces the earlier one but keeps the sandbox's lifecycle flags")
+
+	state.unretire(atWorktree)
+	require.Empty(t, state.retiredEnvs())
+}
+
+// TestFlowEnvStateRetiresSandboxReplacementsSeparately covers a same-type
+// sandbox replacement: predecessor and successor share the working directory
+// (one logical identity, so stale references resolve to the successor) but are
+// different sandboxes, each of which must be cleaned up.
+func TestFlowEnvStateRetiresSandboxReplacementsSeparately(t *testing.T) {
+	t.Parallel()
+	predecessor := env.EnvContainer{Env: &env.ModalEnv{WorkingDirectory: "/root/repo", SandboxName: "side--repo-abc"}}
+	successor := env.EnvContainer{Env: &env.ModalEnv{WorkingDirectory: "/root/repo", SandboxName: "side--repo-abc-r1"}}
+	require.Equal(t, env.IdentityOf(predecessor), env.IdentityOf(successor))
+	require.NotEqual(t, env.InstanceOf(predecessor), env.InstanceOf(successor))
+
+	state := newFlowEnvState(&flow_action.GlobalState{})
+	state.retire(retiredEnv{EnvContainer: predecessor})
+	state.unretire(successor)
+	require.Equal(t, []retiredEnv{{EnvContainer: predecessor}}, state.retiredEnvs(),
+		"publishing the successor must not drop the predecessor's retired entry")
+
+	state.retire(retiredEnv{EnvContainer: successor})
+	require.Equal(t, []retiredEnv{{EnvContainer: predecessor}, {EnvContainer: successor}}, state.retiredEnvs())
+
+	state.unretire(predecessor)
+	require.Equal(t, []retiredEnv{{EnvContainer: successor}}, state.retiredEnvs())
+
+	current := successor
+	state.publish(&current)
+	require.Equal(t, successor, state.Resolve(predecessor), "lineage still resolves by logical identity")
 }

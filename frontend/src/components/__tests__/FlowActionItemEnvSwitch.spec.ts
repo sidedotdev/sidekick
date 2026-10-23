@@ -31,6 +31,14 @@ describe('environment switch flow action', () => {
     wrapper.unmount()
   })
 
+  it('describes a same-type change as a reconfiguration', () => {
+    const reconfigure = { ...action('started'), actionParams: { from: 'modal', to: 'modal' } }
+    const wrapper = mount(FlowActionItem, { props: { flowAction: reconfigure } })
+
+    expect(wrapper.get('h3').text()).toContain('Reconfigure environment: modal')
+    wrapper.unmount()
+  })
+
   it('updates an in-progress action when the outcome arrives', async () => {
     const wrapper = mount(FlowActionItem, { props: { flowAction: action('started') } })
     await wrapper.setProps({ flowAction: action('failed') })

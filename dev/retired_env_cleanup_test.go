@@ -45,6 +45,7 @@ type retiredEnvCleanupTestInput struct {
 	Retired      []retiredEnv
 	SwitchTarget *retiredEnv
 	Cancel       bool
+	InPlace      bool
 }
 
 // retiredEnvCleanupTestWorkflow runs a devpod worktree flow that previously
@@ -91,6 +92,9 @@ func retiredEnvCleanupTestWorkflow(ctx workflow.Context, input retiredEnvCleanup
 			WorkspaceId:      "ws_switch",
 			WorkingDirectory: switchTestSourceDir,
 		},
+	}
+	if input.InPlace {
+		dCtx.Worktree = nil
 	}
 	if !input.Cancel {
 		cleanupRetiredEnvs(dCtx, dCtx, flowEndCleanupReason)
@@ -252,9 +256,11 @@ func TestRetiredEnvCleanupAtFlowEnd(t *testing.T) {
 	retiredWorktree := retiredModalEnv(retiredWorktreeDir, "side--modal-retired", true)
 	otherWorktree := retiredModalEnv(switchTestTargetDir, "side--modal-other", true)
 	retiredInPlace := retiredModalEnv("/root/repo", "side--modal-in-place", false)
+	partialTarget := retiredModalEnv("/root/repo", "side--modal-partial", false)
 
 	tests := []struct {
 		name          string
+		inPlace       bool
 		retired       []retiredEnv
 		failing       []string
 		wantWorktrees []retiredEnv
@@ -272,16 +278,16 @@ func TestRetiredEnvCleanupAtFlowEnd(t *testing.T) {
 		},
 		{
 			name:        "a retired in-place env has its sandbox stopped",
+			inPlace:     true,
 			retired:     []retiredEnv{retiredInPlace},
 			wantStopped: []env.StopSandboxInput{{EnvType: env.EnvTypeModal, SandboxName: "side--modal-in-place"}},
 		},
 		{
 			name:          "cleanup failures do not stop later cleanup",
-			retired:       []retiredEnv{retiredWorktree, retiredInPlace, otherWorktree},
-			failing:       []string{retiredWorktreeDir, "side--modal-in-place"},
+			retired:       []retiredEnv{retiredWorktree, partialTarget, otherWorktree},
+			failing:       []string{retiredWorktreeDir, "side--modal-partial"},
 			wantWorktrees: []retiredEnv{retiredWorktree, otherWorktree},
-			wantDeleted:   []retiredEnv{retiredWorktree, otherWorktree},
-			wantStopped:   []env.StopSandboxInput{{EnvType: env.EnvTypeModal, SandboxName: "side--modal-in-place"}},
+			wantDeleted:   []retiredEnv{retiredWorktree, partialTarget, otherWorktree},
 		},
 	}
 	for _, tc := range tests {
@@ -291,7 +297,10 @@ func TestRetiredEnvCleanupAtFlowEnd(t *testing.T) {
 			recorder := &envCleanupRecorder{}
 			mockEnvCleanup(wfEnv, recorder, tc.failing...)
 
-			wfEnv.ExecuteWorkflow(retiredEnvCleanupTestWorkflow, retiredEnvCleanupTestInput{Retired: tc.retired})
+			wfEnv.ExecuteWorkflow(retiredEnvCleanupTestWorkflow, retiredEnvCleanupTestInput{
+				Retired: tc.retired,
+				InPlace: tc.inPlace,
+			})
 
 			require.True(t, wfEnv.IsWorkflowCompleted())
 			require.NoError(t, wfEnv.GetWorkflowError())

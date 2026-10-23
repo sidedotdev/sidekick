@@ -588,7 +588,8 @@ func cleanupRetiredEnvs(ctx workflow.Context, dCtx DevContext, reason string) {
 	// env, and with bounded retries since they may already be gone.
 	ctx = utils.DefaultRetryCtx(env.WithPinnedEnv(ctx))
 	for _, entry := range entries {
-		cleanupRetiredEnv(ctx, entry, reason)
+		deleteSandbox := entry.Worktree != nil || dCtx.Worktree != nil
+		cleanupRetiredEnv(ctx, entry, reason, deleteSandbox)
 	}
 }
 
@@ -605,32 +606,32 @@ func retiredEnvsToCleanUp(dCtx DevContext) []retiredEnv {
 		candidates = append(candidates, retiredEnv{EnvContainer: *inProgress.Target, Worktree: inProgress.TargetWorktree})
 	}
 
-	seen := map[env.EnvIdentity]bool{}
+	seen := map[env.EnvInstance]bool{}
 	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env != nil {
-		seen[env.IdentityOf(*dCtx.EnvContainer)] = true
+		seen[env.InstanceOf(*dCtx.EnvContainer)] = true
 	}
 	var entries []retiredEnv
 	for _, candidate := range candidates {
 		if candidate.EnvContainer.Env == nil {
 			continue
 		}
-		identity := env.IdentityOf(candidate.EnvContainer)
-		if seen[identity] {
+		instance := env.InstanceOf(candidate.EnvContainer)
+		if seen[instance] {
 			continue
 		}
-		seen[identity] = true
+		seen[instance] = true
 		entries = append(entries, candidate)
 	}
 	return entries
 }
 
-func cleanupRetiredEnv(ctx workflow.Context, entry retiredEnv, reason string) {
+func cleanupRetiredEnv(ctx workflow.Context, entry retiredEnv, reason string, deleteSandbox bool) {
 	logger := workflow.GetLogger(ctx)
 	container := entry.EnvContainer
 	envType := container.Env.GetType()
 	workingDir := container.Env.GetWorkingDirectory()
 
-	if entry.Worktree != nil {
+	if entry.Worktree != nil && !entry.Stopped {
 		err := workflow.ExecuteActivity(ctx, git.CleanupWorktreeActivity, container, workingDir, entry.Worktree.Name, reason).Get(ctx, nil)
 		if err != nil {
 			logger.Warn("Failed to cleanup retired env worktree", "envType", envType, "workingDir", workingDir, "error", err)
@@ -643,7 +644,7 @@ func cleanupRetiredEnv(ctx workflow.Context, entry retiredEnv, reason string) {
 	}
 	sandboxName := sandboxEnv.GetSandboxName()
 	var err error
-	if entry.Worktree != nil {
+	if deleteSandbox {
 		err = workflow.ExecuteActivity(ctx, env.DeleteSandboxActivity, env.DeleteSandboxInput{
 			EnvType:     envType,
 			SandboxName: sandboxName,

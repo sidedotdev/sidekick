@@ -148,10 +148,6 @@ func TestSwitchRoundTripBetweenWorktrees(t *testing.T) {
 
 			assert.Equal(t, before, captureWorktreeState(t, targetDir, files))
 			assert.NoFileExists(t, filepath.Join(targetDir, HibernationPatchFile))
-
-			verified, err := VerifySwitchActivity(ctx, VerifySwitchInput{EnvContainer: targetContainer, ExpectedHead: bundle.HeadCommit})
-			require.NoError(t, err)
-			assert.Equal(t, bundle.HeadCommit, verified.Head)
 		})
 	}
 }
@@ -188,18 +184,4 @@ func TestExportForSwitchRequiresLocalRepoDirForRemoteEnvs(t *testing.T) {
 	_, err := (&DevPodEnv{WorkingDirectory: "/workspaces/repo", WorkspaceName: "ws"}).ExportForSwitch(context.Background(), "side/branch")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "local repo dir")
-}
-
-func TestVerifySwitchActivityRejectsUnexpectedHead(t *testing.T) {
-	t.Parallel()
-	_, worktreeDir, _ := setupHibernationTestRepo(t)
-	head := strings.TrimSpace(runGitIn(t, worktreeDir, "rev-parse", "HEAD"))
-
-	output, err := VerifySwitchActivity(context.Background(), VerifySwitchInput{
-		EnvContainer: EnvContainer{Env: &LocalGitWorktreeEnv{WorkingDirectory: worktreeDir}},
-		ExpectedHead: strings.Repeat("0", len(head)),
-	})
-	require.Error(t, err)
-	assert.Equal(t, head, output.Head)
-	assert.Contains(t, err.Error(), head)
 }

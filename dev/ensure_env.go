@@ -39,6 +39,10 @@ type ensureEnvParams struct {
 	// AllowReuse attaches an existing flow branch or worktree instead of
 	// failing, as when a flow returns to a previously used env.
 	AllowReuse bool
+	// SandboxName overrides the flow's default Modal sandbox name, so a
+	// same-type replacement provisions a fresh sandbox beside the current one
+	// rather than re-attaching to it.
+	SandboxName string
 	// CreateWorktree is required in worktree repo mode.
 	CreateWorktree worktreeStrategy
 	// OnProgress, when set, receives the env as soon as each resource that
@@ -280,7 +284,10 @@ func ensureModalEnv(ctx workflow.Context, p ensureEnvParams) (ensuredEnv, error)
 	// network failures and includes image builds, so ProvisioningRetryCtx
 	// gives it a generous timeout and a small bounded number of automatic
 	// retries before surfacing the failure for user-initiated retry.
-	sandboxName := env.ModalSandboxName(p.WorkspaceId, p.RepoDir, workflow.GetInfo(ctx).WorkflowExecution.ID)
+	sandboxName := p.SandboxName
+	if sandboxName == "" {
+		sandboxName = env.ModalSandboxName(p.WorkspaceId, p.RepoDir, workflow.GetInfo(ctx).WorkflowExecution.ID)
+	}
 	modalConfigJson, err := json.Marshal(repoConfig.ModalConfig)
 	if err != nil {
 		return ensuredEnv{}, fmt.Errorf("failed to marshal modal config: %v", err)

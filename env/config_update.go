@@ -42,6 +42,18 @@ type EnvConfig struct {
 	Modal        common.ModalEnvConfig      `json:"modal,omitempty"`
 }
 
+// Equivalent reports whether two configs describe the same live env, ignoring
+// the cosmetic differences reconciliation treats as no-ops.
+func (c EnvConfig) Equivalent(other EnvConfig) bool {
+	return samePortForwards(c.PortForwards, other.PortForwards) && modalEnvConfigsEqual(c.Modal, other.Modal)
+}
+
+// SandboxSettingsChanged reports whether moving from c to desired needs a
+// replacement sandbox rather than an adjustment of the live one.
+func (c EnvConfig) SandboxSettingsChanged(desired EnvConfig) bool {
+	return !modalEnvConfigsEqual(c.Modal, desired.Modal)
+}
+
 // ConfigReconcilingEnv is implemented by environments that can move from one
 // live configuration to another. Implementations decide how disruptive the
 // transition needs to be (no-op, in-place adjustment or full recreation) and

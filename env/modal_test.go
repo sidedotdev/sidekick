@@ -533,7 +533,7 @@ func TestModalRecreateSandboxActivity(t *testing.T) {
 		modalRecreateCreateSandbox = origCreate
 		modalRecreateDeleteSnapshots = origDeleteSnapshots
 	})
-	successorName := modalReplacementSandboxName("side--repo-abc")
+	successorName := ModalReplacementSandboxName("side--repo-abc")
 	successorSteps := []string{"snapshot-successor:" + successorName, "delete-snapshots:side--repo-abc"}
 
 	newInput := func(config common.ModalEnvConfig) ModalRecreateSandboxInput {
@@ -748,7 +748,7 @@ func TestModalCreateSandboxWithRecovery(t *testing.T) {
 	input := ModalCreateSandboxInput{Name: "side-test-recovery"}
 	// The dead sandbox is an adopted successor of the requested name, so the
 	// recovery path must terminate and chain from it, not the requested name.
-	deadName := modalReplacementSandboxName(input.Name)
+	deadName := ModalReplacementSandboxName(input.Name)
 	unhealthyErr := &modalSandboxUnhealthyError{
 		sandboxName: deadName,
 		cause:       errors.New("sshd did not come up in modal sandbox (exit 137)"),
@@ -843,7 +843,7 @@ func TestModalCreateSandboxWithRecovery(t *testing.T) {
 					// termination, so the replacement must use a fresh name
 					// (derived from the dead sandbox's name so activity
 					// retries converge on it) and report it to the caller.
-					wantReplacement := modalReplacementSandboxName(deadName)
+					wantReplacement := ModalReplacementSandboxName(deadName)
 					assert.NotEqual(t, deadName, output.SandboxName)
 					assert.Equal(t, wantReplacement, output.SandboxName)
 					assert.Equal(t, wantReplacement, createNames[1])
@@ -862,22 +862,22 @@ func TestModalCreateSandboxWithRecovery(t *testing.T) {
 func TestModalReplacementSandboxName(t *testing.T) {
 	t.Parallel()
 
-	name := modalReplacementSandboxName("side--myrepo-abc123")
+	name := ModalReplacementSandboxName("side--myrepo-abc123")
 	assert.Regexp(t, `^side--myrepo-abc123-r[0-9a-f]{6}$`, name)
 
 	// The successor is a pure function of the replaced name, so a retried
 	// create can rediscover a successor created by an earlier lost attempt.
-	assert.Equal(t, name, modalReplacementSandboxName("side--myrepo-abc123"))
+	assert.Equal(t, name, ModalReplacementSandboxName("side--myrepo-abc123"))
 
 	// Chained replacements stay distinct across generations.
-	second := modalReplacementSandboxName(name)
+	second := ModalReplacementSandboxName(name)
 	assert.NotEqual(t, name, second)
 	assert.Regexp(t, `-r[0-9a-f]{6}$`, second)
 
 	// Long names are truncated so chains never exceed name length limits.
-	long := modalReplacementSandboxName(strings.Repeat("a", 80))
+	long := ModalReplacementSandboxName(strings.Repeat("a", 80))
 	assert.LessOrEqual(t, len(long), 63)
-	chained := modalReplacementSandboxName(modalReplacementSandboxName(long))
+	chained := ModalReplacementSandboxName(ModalReplacementSandboxName(long))
 	assert.LessOrEqual(t, len(chained), 63)
 }
 
@@ -889,8 +889,8 @@ func TestResolveModalSandboxWith(t *testing.T) {
 	t.Parallel()
 
 	const requested = "side--myrepo-abc123"
-	succ1 := modalReplacementSandboxName(requested)
-	succ2 := modalReplacementSandboxName(succ1)
+	succ1 := ModalReplacementSandboxName(requested)
+	succ2 := ModalReplacementSandboxName(succ1)
 	live := &modal.Sandbox{}
 
 	cases := []struct {
@@ -1030,7 +1030,7 @@ func TestModalEnvReconcileConfig(t *testing.T) {
 			PortForwards:     initialForwards,
 		}
 	}
-	successorName := modalReplacementSandboxName("side--repo-abc")
+	successorName := ModalReplacementSandboxName("side--repo-abc")
 
 	t.Run("ValidateConfig rejects sandbox settings the sandbox cannot apply", func(t *testing.T) {
 		err := newEnv().ValidateConfig(EnvConfig{Modal: common.ModalEnvConfig{

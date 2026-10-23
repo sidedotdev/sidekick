@@ -114,6 +114,9 @@ const actionHeading = computed(() => {
   
   switch (actionType) {
     case 'env_switch':
+      if (props.flowAction.actionParams.from === props.flowAction.actionParams.to) {
+        return `Reconfigure environment: ${props.flowAction.actionParams.to}`;
+      }
       return `Switch environment: ${props.flowAction.actionParams.from} → ${props.flowAction.actionParams.to}`;
     case 'user_request':
       if (props.flowAction.actionStatus === 'complete') {

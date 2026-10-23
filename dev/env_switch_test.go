@@ -165,9 +165,39 @@ type envSwitchRecorder struct {
 	events             []string
 	actions            []domain.FlowAction
 	exportInputs       []env.ExportForSwitchInput
+	createInputs       []env.CreateSandboxInput
 	worktreeInputs     []env.CreateRemoteWorktreeInput
 	persistedWorktrees []domain.Worktree
 	restoreInputs      []env.RestoreFromSwitchInput
+}
+
+// requireEventOrder asserts that each named event was recorded, in the given
+// relative order; other events may be interleaved.
+func requireEventOrder(t *testing.T, r *envSwitchRecorder, events ...string) {
+	t.Helper()
+	last := -1
+	for _, event := range events {
+		index := r.indexOf(event, 1)
+		require.GreaterOrEqual(t, index, 0, "event %q not recorded; events: %v", event, r.events)
+		require.Greater(t, index, last, "event %q out of order; events: %v", event, r.events)
+		last = index
+	}
+}
+
+// indexOf returns the position of the nth occurrence of event, or -1.
+func (r *envSwitchRecorder) indexOf(event string, occurrence int) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	seen := 0
+	for i, e := range r.events {
+		if e == event {
+			seen++
+			if seen == occurrence {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func (r *envSwitchRecorder) record(event string) {
@@ -183,6 +213,17 @@ func (r *envSwitchRecorder) recordSwitchStarted() {
 	}
 }
 
+func (r *envSwitchRecorder) switchActionReached(status domain.ActionStatus) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, action := range r.actions {
+		if action.ActionType == ActionTypeEnvSwitch && action.ActionStatus == status {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *envSwitchRecorder) lastSwitchAction(t *testing.T) domain.FlowAction {
 	t.Helper()
 	r.mu.Lock()
@@ -196,9 +237,8 @@ func (r *envSwitchRecorder) lastSwitchAction(t *testing.T) domain.FlowAction {
 	return domain.FlowAction{}
 }
 
-// mockSwitchToModal mocks everything a devpod → modal switch runs except
-// VerifySwitchActivity. exportGate, when set, holds the export until closed.
-func mockSwitchToModal(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSwitchRecorder, exportGate <-chan struct{}) {
+// exportGate, when set, holds the export until closed.
+func mockSwitchToModal(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSwitchRecorder, exportGate <-chan struct{}) *testsuite.MockCallWrapper {
 	var fa *flow_action.FlowActivities
 	wfEnv.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, action domain.FlowAction) error {
@@ -230,7 +270,12 @@ func mockSwitchToModal(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSw
 			return env.ExportForSwitchOutput{Bundle: bundle}, nil
 		}).Once()
 	wfEnv.OnActivity(env.CreateSandboxActivity, mock.Anything, mock.Anything).
-		Return(env.CreateSandboxOutput{SandboxName: "side--modal-switch", SSHHost: "modal.host", SSHPort: 2222}, nil).Once()
+		Return(func(_ context.Context, input env.CreateSandboxInput) (env.CreateSandboxOutput, error) {
+			recorder.mu.Lock()
+			defer recorder.mu.Unlock()
+			recorder.createInputs = append(recorder.createInputs, input)
+			return env.CreateSandboxOutput{SandboxName: input.Name, SSHHost: "modal.host", SSHPort: 2222}, nil
+		}).Once()
 	wfEnv.OnActivity(env.SyncRepoToRemoteActivity, mock.Anything, mock.Anything).
 		Return(env.SyncRepoToRemoteOutput{RemoteRepoDir: "/root/repo"}, nil).Once()
 	wfEnv.OnActivity(env.DeepenRepoActivity, mock.Anything, mock.Anything).
@@ -250,17 +295,17 @@ func mockSwitchToModal(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSw
 			recorder.persistedWorktrees = append(recorder.persistedWorktrees, worktree)
 			return nil
 		}).Maybe()
-	wfEnv.OnActivity(env.RestoreFromSwitchActivity, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, input env.RestoreFromSwitchInput) (env.RestoreFromSwitchOutput, error) {
+	restore := wfEnv.OnActivity(env.RestoreFromSwitchActivity, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
 			recorder.mu.Lock()
 			defer recorder.mu.Unlock()
-			recorder.restoreInputs = append(recorder.restoreInputs, input)
-			return env.RestoreFromSwitchOutput{}, nil
-		}).Once()
+			recorder.restoreInputs = append(recorder.restoreInputs, args.Get(1).(env.RestoreFromSwitchInput))
+		}).Return(env.RestoreFromSwitchOutput{}, nil).Once()
 	wfEnv.OnActivity(common.BaseCommandPermissionsActivity, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, input common.BaseCommandPermissionsInput) (common.CommandPermissionConfig, error) {
 			return common.CommandPermissionConfig{AutoApprove: []common.CommandPattern{{Pattern: "base-" + input.EnvType}}}, nil
 		}).Maybe()
+	return restore
 }
 
 func newEnvSwitchTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
@@ -280,15 +325,14 @@ func TestEnvSwitchPublishesProvisionedEnvToTheFlow(t *testing.T) {
 	t.Parallel()
 	wfEnv := newEnvSwitchTestEnv(t)
 	recorder := &envSwitchRecorder{}
-	mockSwitchToModal(wfEnv, recorder, nil)
 
 	callbacks := &envUpdateCallbacks{}
-	updateCompletedBeforeVerify := false
-	wfEnv.OnActivity(env.VerifySwitchActivity, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, input env.VerifySwitchInput) (env.VerifySwitchOutput, error) {
-			updateCompletedBeforeVerify = callbacks.completed
-			return env.VerifySwitchOutput{Head: input.ExpectedHead}, nil
-		}).Once()
+	updateCompletedBeforeRestore := false
+	mockSwitchToModal(wfEnv, recorder, nil).
+		Return(func(_ context.Context, _ env.RestoreFromSwitchInput) (env.RestoreFromSwitchOutput, error) {
+			updateCompletedBeforeRestore = callbacks.completed
+			return env.RestoreFromSwitchOutput{}, nil
+		})
 
 	desired := EnvSettings{
 		EnvType:      string(env.EnvTypeModal),
@@ -305,7 +349,7 @@ func TestEnvSwitchPublishesProvisionedEnvToTheFlow(t *testing.T) {
 	require.NoError(t, wfEnv.GetWorkflowError())
 	callbacks.requireApplied(t)
 	require.NotEmpty(t, callbacks.result.FlowActionId)
-	require.True(t, updateCompletedBeforeVerify, "the update must return without waiting for the switch")
+	require.True(t, updateCompletedBeforeRestore, "the update must return without waiting for the switch")
 	require.Equal(t, string(env.EnvTypeDevPod), callbacks.result.Settings.EnvType)
 
 	var result envSwitchWorkflowResult
@@ -315,7 +359,8 @@ func TestEnvSwitchPublishesProvisionedEnvToTheFlow(t *testing.T) {
 	modalEnv, ok := result.EnvContainer.Env.(*env.ModalEnv)
 	require.True(t, ok, "flow env should be the Modal env, got %T", result.EnvContainer.Env)
 	require.Equal(t, switchTestTargetDir, modalEnv.WorkingDirectory)
-	require.Equal(t, "side--modal-switch", modalEnv.SandboxName)
+	require.Len(t, recorder.createInputs, 1)
+	require.Equal(t, recorder.createInputs[0].Name, modalEnv.SandboxName)
 	require.Equal(t, "/host/repo", modalEnv.LocalRepoDir)
 	require.Equal(t, desired.PortForwards, modalEnv.PortForwards)
 	require.Equal(t, switchTestTargetDir, result.WorktreeDir)
@@ -359,9 +404,8 @@ func TestFailedEnvSwitchKeepsPreviousEnvAndRetiresPartialTarget(t *testing.T) {
 	t.Parallel()
 	wfEnv := newEnvSwitchTestEnv(t)
 	recorder := &envSwitchRecorder{}
-	mockSwitchToModal(wfEnv, recorder, nil)
-	wfEnv.OnActivity(env.VerifySwitchActivity, mock.Anything, mock.Anything).
-		Return(env.VerifySwitchOutput{}, temporal.NewNonRetryableApplicationError("switched env HEAD is deadbeef", "VerifyFailed", nil)).Once()
+	mockSwitchToModal(wfEnv, recorder, nil).
+		Return(env.RestoreFromSwitchOutput{}, temporal.NewNonRetryableApplicationError("switched env HEAD is deadbeef", "VerifyFailed", nil))
 
 	callbacks := &envUpdateCallbacks{}
 	wfEnv.RegisterDelayedCallback(func() {
@@ -385,7 +429,8 @@ func TestFailedEnvSwitchKeepsPreviousEnvAndRetiresPartialTarget(t *testing.T) {
 	partial, ok := result.Retired[0].EnvContainer.Env.(*env.ModalEnv)
 	require.True(t, ok, "partial target should be retired, got %T", result.Retired[0].EnvContainer.Env)
 	require.Equal(t, switchTestTargetDir, partial.WorkingDirectory)
-	require.Equal(t, "side--modal-switch", partial.SandboxName)
+	require.Len(t, recorder.createInputs, 1)
+	require.Equal(t, recorder.createInputs[0].Name, partial.SandboxName)
 	require.NotNil(t, result.Retired[0].Worktree)
 	require.Equal(t, switchTestTargetDir, result.Retired[0].Worktree.WorkingDirectory)
 
@@ -403,8 +448,6 @@ func TestInPlaceEnvSwitchMovesTheCheckedOutBranch(t *testing.T) {
 	wfEnv := newEnvSwitchTestEnv(t)
 	recorder := &envSwitchRecorder{}
 	mockSwitchToModal(wfEnv, recorder, nil)
-	wfEnv.OnActivity(env.VerifySwitchActivity, mock.Anything, mock.Anything).
-		Return(env.VerifySwitchOutput{Head: switchTestHead}, nil).Once()
 
 	const checkedOut = "feature/checked-out"
 	var branchQueries []env.EnvRunCommandActivityInput
@@ -453,7 +496,7 @@ func TestEnvSwitchToRetiredEnvKeepsOneRetiredEntryPerEnv(t *testing.T) {
 	previousTarget := retiredEnv{
 		EnvContainer: env.EnvContainer{Env: &env.ModalEnv{
 			WorkingDirectory: switchTestTargetDir,
-			SandboxName:      "side--modal-previous",
+			SandboxName:      "side--modal-switch",
 			LocalRepoDir:     "/host/repo",
 		}},
 		Worktree: &domain.Worktree{Id: "wt_switch", Name: switchTestBranch, WorkingDirectory: switchTestTargetDir},
@@ -461,6 +504,7 @@ func TestEnvSwitchToRetiredEnvKeepsOneRetiredEntryPerEnv(t *testing.T) {
 
 	tests := []struct {
 		name          string
+		exportErr     error
 		verifyErr     error
 		wantRetiredIs env.EnvContainer
 		wantSandbox   string
@@ -475,15 +519,30 @@ func TestEnvSwitchToRetiredEnvKeepsOneRetiredEntryPerEnv(t *testing.T) {
 			wantRetiredIs: previousTarget.EnvContainer,
 			wantSandbox:   "side--modal-switch",
 		},
+		{
+			name:          "failure before any target exists keeps the earlier entry",
+			exportErr:     temporal.NewNonRetryableApplicationError("export failed", "ExportFailed", nil),
+			wantRetiredIs: previousTarget.EnvContainer,
+			wantSandbox:   "side--modal-switch",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			wfEnv := newEnvSwitchTestEnv(t)
 			recorder := &envSwitchRecorder{}
-			mockSwitchToModal(wfEnv, recorder, nil)
-			wfEnv.OnActivity(env.VerifySwitchActivity, mock.Anything, mock.Anything).
-				Return(env.VerifySwitchOutput{Head: switchTestHead}, tc.verifyErr).Once()
+			if tc.exportErr != nil {
+				// Nothing past the export may run, so the full Modal
+				// provisioning mocks (which insist on being called) don't apply.
+				mockSwitchBookkeeping(wfEnv, recorder)
+				wfEnv.OnActivity(common.BaseCommandPermissionsActivity, mock.Anything, mock.Anything).
+					Return(common.CommandPermissionConfig{}, nil).Maybe()
+				wfEnv.OnActivity(env.ExportForSwitchActivity, mock.Anything, mock.Anything).
+					Return(env.ExportForSwitchOutput{}, tc.exportErr).Once()
+			} else {
+				mockSwitchToModal(wfEnv, recorder, nil).
+					Return(env.RestoreFromSwitchOutput{}, tc.verifyErr)
+			}
 
 			callbacks := &envUpdateCallbacks{}
 			wfEnv.RegisterDelayedCallback(func() {
@@ -507,23 +566,136 @@ func TestEnvSwitchToRetiredEnvKeepsOneRetiredEntryPerEnv(t *testing.T) {
 	}
 }
 
-func TestEnvSwitchWaitsForInFlightConfigUpdate(t *testing.T) {
+// A switch back to Modal reattaches the sandbox the flow left behind, unless
+// that sandbox is being stopped: stopping a Modal sandbox is terminal and its
+// name stays reserved for a while, so a successor is provisioned instead.
+func TestEnvSwitchBackToModalReattachesOrReplacesRetiredSandbox(t *testing.T) {
+	t.Parallel()
+	const retiredName = "side--modal-switch"
+	tests := []struct {
+		name          string
+		stopRequested bool
+		stopped       bool
+		wantName      string
+		wantRetired   bool
+	}{
+		{name: "running sandbox is reattached", wantName: retiredName},
+		{name: "sandbox being stopped is replaced", stopRequested: true, wantName: env.ModalReplacementSandboxName(retiredName), wantRetired: true},
+		{name: "stopped sandbox is replaced", stopRequested: true, stopped: true, wantName: env.ModalReplacementSandboxName(retiredName), wantRetired: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wfEnv := newEnvSwitchTestEnv(t)
+			recorder := &envSwitchRecorder{}
+			mockSwitchToModal(wfEnv, recorder, nil)
+			retired := retiredEnv{
+				EnvContainer: env.EnvContainer{Env: &env.ModalEnv{
+					WorkingDirectory: switchTestTargetDir,
+					SandboxName:      retiredName,
+					LocalRepoDir:     "/host/repo",
+				}},
+				Worktree:      &domain.Worktree{Id: "wt_switch", Name: switchTestBranch, WorkingDirectory: switchTestTargetDir},
+				StopRequested: tc.stopRequested,
+				Stopped:       tc.stopped,
+			}
+
+			callbacks := &envUpdateCallbacks{}
+			wfEnv.RegisterDelayedCallback(func() {
+				wfEnv.UpdateWorkflow(UpdateNameEnv, "switch-back", callbacks, EnvSettings{EnvType: string(env.EnvTypeModal)})
+			}, 5*time.Millisecond)
+			wfEnv.ExecuteWorkflow(envSwitchTestWorkflow, envSwitchTestInput{Retired: []retiredEnv{retired}})
+
+			require.NoError(t, wfEnv.GetWorkflowError())
+			callbacks.requireApplied(t)
+			require.Equal(t, domain.ActionStatusComplete, recorder.lastSwitchAction(t).ActionStatus)
+			require.Len(t, recorder.createInputs, 1)
+			require.Equal(t, tc.wantName, recorder.createInputs[0].Name)
+
+			var result envSwitchWorkflowResult
+			require.NoError(t, wfEnv.GetWorkflowResult(&result))
+			require.Equal(t, tc.wantName, result.EnvContainer.Env.(*env.ModalEnv).SandboxName)
+			var retiredNames []string
+			for _, r := range result.Retired {
+				if modalEnv, ok := r.EnvContainer.Env.(*env.ModalEnv); ok {
+					retiredNames = append(retiredNames, modalEnv.SandboxName)
+				}
+			}
+			if tc.wantRetired {
+				require.Equal(t, []string{retiredName}, retiredNames, "the replaced sandbox stays retired for flow-end cleanup")
+			} else {
+				require.Empty(t, retiredNames, "the reattached sandbox is the active env again")
+			}
+		})
+	}
+}
+
+// Repository-scoped sandboxes may still be serving other flows after this
+// flow switches away, including while it later reattaches its worktree.
+func TestEnvSwitchDoesNotStopSharedSandboxes(t *testing.T) {
+	t.Parallel()
+	wfEnv := newEnvSwitchTestEnv(t)
+	recorder := &envSwitchRecorder{}
+	mockSwitchBookkeeping(wfEnv, recorder)
+	wfEnv.OnActivity(env.StopSandboxActivity, mock.Anything, mock.Anything).
+		Return(func(context.Context, env.StopSandboxInput) (env.StopSandboxOutput, error) {
+			t.Error("switching must not stop a repository-shared sandbox")
+			return env.StopSandboxOutput{}, nil
+		}).Maybe()
+	devpod := mockSwitchDevPodProvisioning(wfEnv)
+	openshell := mockSwitchOpenShellProvisioning(wfEnv)
+	sources := []env.EnvContainer{devpod, openshell}
+	targets := []env.EnvContainer{openshell, devpod}
+	desired := make([]EnvSettings, len(targets))
+	for i, target := range targets {
+		gate := make(chan struct{})
+		mockSwitchTransfer(wfEnv, recorder, sources[i], target, gate, nil)
+		mockSwitchProbes(wfEnv, recorder, devpod, target, gate)
+		desired[i] = EnvSettings{EnvType: string(target.Env.GetType())}
+	}
+	callbacks := registerSwitchProbeUpdates(t, wfEnv, desired)
+	wfEnv.ExecuteWorkflow(envSwitchTestWorkflow, envSwitchTestInput{Source: &devpod, Probes: 2})
+
+	require.NoError(t, wfEnv.GetWorkflowError())
+	for _, callback := range callbacks {
+		callback.requireApplied(t)
+	}
+	wfEnv.AssertNotCalled(t, "StopSandboxActivity", mock.Anything, mock.Anything)
+
+	var result envSwitchWorkflowResult
+	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+	require.Equal(t, devpod, result.EnvContainer)
+	require.Len(t, result.Probes, 2)
+	for i, probe := range result.Probes {
+		require.Equal(t, targets[i], probe.Current)
+		require.Len(t, probe.Retired, 1)
+		require.Equal(t, sources[i], probe.Retired[0].EnvContainer)
+		require.False(t, probe.Retired[0].StopRequested)
+		require.False(t, probe.Retired[0].Stopped)
+	}
+	require.Len(t, result.Retired, 1)
+	require.Equal(t, openshell, result.Retired[0].EnvContainer)
+}
+
+// A config change is itself an env switch, so a type switch arriving while
+// one is in flight is refused rather than queued; once the change has
+// published its env, a switch starts from that env.
+func TestEnvSwitchDuringConfigUpdateIsRefusedUntilItPublishes(t *testing.T) {
 	t.Parallel()
 	wfEnv := newEnvSwitchTestEnv(t)
 	recorder := &envSwitchRecorder{}
 	mockSwitchToModal(wfEnv, recorder, nil)
-	wfEnv.OnActivity(env.VerifySwitchActivity, mock.Anything, mock.Anything).
-		Return(env.VerifySwitchOutput{Head: switchTestHead}, nil).Once()
 
-	// The reconciliation stays in flight long enough for the switch to
-	// arrive, and ends early if the switch wrongly starts meanwhile.
-	recorder.switchStarted = make(chan struct{})
+	// The reconciliation stays in flight until well after the first switch
+	// has been submitted, so that switch arrives while the env is changing.
+	switchSubmitted := make(chan struct{})
 	reconciledForwards := []common.PortForwardConfig{{HostPort: 4000}}
 	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
 			select {
-			case <-recorder.switchStarted:
-			case <-time.After(300 * time.Millisecond):
+			case <-switchSubmitted:
+			case <-time.After(5 * time.Second):
+				t.Error("the switch was never submitted while the config update was in flight")
 			}
 			devPodEnv := *input.EnvContainer.Env.(*env.DevPodEnv)
 			devPodEnv.PortForwards = input.Desired.PortForwards
@@ -532,23 +704,52 @@ func TestEnvSwitchWaitsForInFlightConfigUpdate(t *testing.T) {
 		}).Once()
 
 	configCallbacks := &envUpdateCallbacks{}
-	switchCallbacks := &envUpdateCallbacks{}
+	refusedCallbacks := &envUpdateCallbacks{}
+	// The probe only keeps the workflow alive until the last switch returns.
+	switchCallbacks := &envSwitchProbeCallbacks{onComplete: func() { wfEnv.SignalWorkflow("probe", false) }}
+	wfEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			return env.EnvRunCommandActivityOutput{Stdout: switchTestEnvDescription(input.EnvContainer)}, nil
+		}).Maybe()
 	wfEnv.RegisterDelayedCallback(func() {
 		wfEnv.UpdateWorkflow(UpdateNameEnv, "config-update", configCallbacks,
 			EnvSettings{EnvType: string(env.EnvTypeDevPod), PortForwards: reconciledForwards})
 	}, 5*time.Millisecond)
 	wfEnv.RegisterDelayedCallback(func() {
-		wfEnv.UpdateWorkflow(UpdateNameEnv, "switch-to-modal", switchCallbacks, EnvSettings{EnvType: string(env.EnvTypeModal)})
+		wfEnv.UpdateWorkflow(UpdateNameEnv, "switch-during-config-update", refusedCallbacks, EnvSettings{EnvType: string(env.EnvTypeModal)})
+		wfEnv.RegisterDelayedCallback(func() { close(switchSubmitted) }, 30*time.Millisecond)
 	}, 6*time.Millisecond)
+	polls := 0
+	var submitSwitch func()
+	submitSwitch = func() {
+		if !recorder.switchActionReached(domain.ActionStatusComplete) {
+			polls++
+			require.Less(t, polls, 1000, "the config update's switch never completed")
+			wfEnv.RegisterDelayedCallback(submitSwitch, 10*time.Millisecond)
+			return
+		}
+		// The switch lets go of its state right after persisting completion;
+		// submitting on the next tick lets the workflow process that first.
+		wfEnv.RegisterDelayedCallback(func() {
+			wfEnv.UpdateWorkflow(UpdateNameEnv, "switch-to-modal", switchCallbacks, EnvSettings{EnvType: string(env.EnvTypeModal)})
+		}, 10*time.Millisecond)
+	}
+	wfEnv.RegisterDelayedCallback(submitSwitch, 7*time.Millisecond)
 
-	wfEnv.ExecuteWorkflow(envSwitchTestWorkflow, worktreeFlow)
+	wfEnv.ExecuteWorkflow(envSwitchTestWorkflow, envSwitchTestInput{Probes: 1})
 
 	require.True(t, wfEnv.IsWorkflowCompleted())
 	require.NoError(t, wfEnv.GetWorkflowError())
 	configCallbacks.requireApplied(t)
+	require.ErrorIs(t, refusedCallbacks.rejection, errEnvSwitchInProgress)
+	require.False(t, refusedCallbacks.accepted)
 	switchCallbacks.requireApplied(t)
-	require.Equal(t, []string{"config reconciled", "switch started"}, recorder.events,
-		"a switch must not start while a config update is still changing the env")
+	require.Equal(t, domain.ActionStatusComplete, recorder.lastSwitchAction(t).ActionStatus)
+	reconciled := recorder.indexOf("config reconciled", 1)
+	modalSwitchStarted := recorder.indexOf("switch started", 2)
+	require.Positive(t, reconciled, "events: %v", recorder.events)
+	require.Positive(t, modalSwitchStarted, "events: %v", recorder.events)
+	require.Less(t, reconciled, modalSwitchStarted, "events: %v", recorder.events)
 
 	require.Len(t, recorder.exportInputs, 1)
 	exported, ok := recorder.exportInputs[0].EnvContainer.Env.(*env.DevPodEnv)
@@ -571,8 +772,6 @@ func TestConcurrentEnvSwitchIsRejected(t *testing.T) {
 	recorder := &envSwitchRecorder{}
 	secondSubmitted := make(chan struct{})
 	mockSwitchToModal(wfEnv, recorder, secondSubmitted)
-	wfEnv.OnActivity(env.VerifySwitchActivity, mock.Anything, mock.Anything).
-		Return(env.VerifySwitchOutput{Head: switchTestHead}, nil).Once()
 
 	first := &envUpdateCallbacks{}
 	second := &envUpdateCallbacks{}
@@ -732,14 +931,7 @@ func mockSwitchTransfer(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envS
 		Bundle:       switchTestBundle,
 	}).Return(func(context.Context, env.RestoreFromSwitchInput) (env.RestoreFromSwitchOutput, error) {
 		recorder.record("restored")
-		return env.RestoreFromSwitchOutput{}, nil
-	}).Once()
-	wfEnv.OnActivity(env.VerifySwitchActivity, mock.Anything, env.VerifySwitchInput{
-		EnvContainer: target,
-		ExpectedHead: switchTestHead,
-	}).Return(func(context.Context, env.VerifySwitchInput) (env.VerifySwitchOutput, error) {
-		recorder.record("verified")
-		return env.VerifySwitchOutput{Head: switchTestHead}, verifyErr
+		return env.RestoreFromSwitchOutput{}, verifyErr
 	}).Once()
 }
 
@@ -862,7 +1054,7 @@ func TestEnvSwitchLocalWorktreeActivityGate(t *testing.T) {
 			}
 			require.Equal(t, []string{
 				string(domain.ActionStatusStarted), "update returned", "pinned", "exported",
-				"restored", "verified", string(status), "probe", "after",
+				"restored", string(status), "probe", "after",
 			}, recorder.events)
 			require.NotEmpty(t, recorder.persistedWorktrees)
 			for _, worktree := range recorder.persistedWorktrees {
@@ -1093,7 +1285,9 @@ func TestEnvSwitchSettingsValidatorFromLocalWorktree(t *testing.T) {
 	}
 }
 
-func TestEnvSwitchSameTypeReconcilesSynchronously(t *testing.T) {
+// A same-type change runs through the same tracked switch as a type change:
+// env work scheduled meanwhile waits for it and lands on the adjusted env.
+func TestEnvSwitchSameTypeIsTrackedAndGatesEnvWork(t *testing.T) {
 	t.Parallel()
 	wfEnv := newEnvSwitchTestEnv(t)
 	source := switchTestSourceEnv()
@@ -1105,18 +1299,22 @@ func TestEnvSwitchSameTypeReconcilesSynchronously(t *testing.T) {
 	updated.PortForwards = desired.PortForwards
 	target := env.EnvContainer{Env: &updated}
 	recorder := &envSwitchRecorder{}
+	mockSwitchBookkeeping(wfEnv, recorder)
+	adjustGate := make(chan struct{})
 	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, env.UpdateEnvConfigInput{
 		EnvContainer: source,
 		Current:      env.EnvConfig{},
 		Desired:      env.EnvConfig{PortForwards: desired.PortForwards},
 	}).Return(func(context.Context, env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
-		recorder.record("reconciled")
+		recorder.recordSwitchStarted()
+		<-adjustGate
+		recorder.record("adjusted")
 		return env.UpdateEnvConfigOutput{
 			EnvContainer: target,
 			Config:       env.EnvConfig{PortForwards: desired.PortForwards},
 		}, nil
 	}).Once()
-	mockSwitchProbes(wfEnv, recorder, source, target, nil)
+	mockSwitchProbes(wfEnv, recorder, source, target, adjustGate)
 	callbacks := &envSwitchProbeCallbacks{onComplete: func() {
 		recorder.record("update returned")
 		wfEnv.SignalWorkflow("probe", false)
@@ -1128,18 +1326,61 @@ func TestEnvSwitchSameTypeReconcilesSynchronously(t *testing.T) {
 
 	require.NoError(t, wfEnv.GetWorkflowError())
 	callbacks.requireApplied(t)
-	require.Empty(t, callbacks.result.FlowActionId)
-	require.Equal(t, desired, callbacks.result.Settings)
-	require.GreaterOrEqual(t, len(recorder.events), 2)
-	require.Equal(t, []string{"reconciled", "update returned"}, recorder.events[:2])
+	require.NotEmpty(t, callbacks.result.FlowActionId)
+	require.Equal(t, EnvSettings{EnvType: "devpod"}, callbacks.result.Settings, "the update returns before the change is published")
+	action := recorder.lastSwitchAction(t)
+	require.Equal(t, domain.ActionStatusComplete, action.ActionStatus)
+	require.Equal(t, map[string]interface{}{"from": "devpod", "to": "devpod"}, action.ActionParams)
+	requireEventOrder(t, recorder, "started", "update returned", "adjusted", "complete")
 	var result envSwitchWorkflowResult
 	require.NoError(t, wfEnv.GetWorkflowResult(&result))
 	require.Equal(t, target, result.EnvContainer)
 	require.Equal(t, desired.PortForwards, result.PortForwards)
-	require.Empty(t, result.Retired)
+	require.Empty(t, result.Retired, "an in-place adjustment keeps the same sandbox")
 	require.False(t, result.SwitchInProgress)
 	require.Equal(t, []env.EnvIdentity{env.IdentityOf(source)}, result.Lineage)
 	require.Len(t, result.Probes, 1)
-	require.False(t, result.Probes[0].StartedWhileSwitching)
-	require.False(t, result.Probes[0].PinnedWhileSwitching)
+	require.True(t, result.Probes[0].StartedWhileSwitching)
+	require.True(t, result.Probes[0].PinnedWhileSwitching, "the pinned activity bypasses the gate and runs mid-switch")
+	require.Equal(t, switchTestEnvDescription(target), result.Probes[0].Resolved)
+	require.Equal(t, switchTestEnvDescription(source), result.Probes[0].Pinned)
+}
+
+func TestSupersededModalSandboxStopRetries(t *testing.T) {
+	t.Parallel()
+	wfEnv := newEnvSwitchTestEnv(t)
+	previous := env.EnvContainer{Env: &env.ModalEnv{
+		WorkingDirectory: "/root/repo",
+		SandboxName:      "previous",
+	}}
+	current := env.EnvContainer{Env: &env.ModalEnv{
+		WorkingDirectory: "/root/repo",
+		SandboxName:      "successor",
+	}}
+	input := env.StopSandboxInput{EnvType: env.EnvTypeModal, SandboxName: "previous"}
+	wfEnv.OnActivity(env.StopSandboxActivity, mock.Anything, input).
+		Return(env.StopSandboxOutput{}, temporal.NewApplicationError("temporarily unavailable", "Unavailable")).Twice()
+	wfEnv.OnActivity(env.StopSandboxActivity, mock.Anything, input).
+		Return(env.StopSandboxOutput{}, nil).Once()
+
+	wfEnv.ExecuteWorkflow(func(ctx workflow.Context) (retiredEnv, error) {
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+		state := newFlowEnvState(gs)
+		state.publish(&current)
+		state.retire(retiredEnv{EnvContainer: previous})
+		stopSupersededSandbox(ctx, state, workflow.NewMutex(ctx), previous, current)
+		err := workflow.Await(ctx, func() bool {
+			return state.retiredEntry(previous).Stopped
+		})
+		return *state.retiredEntry(previous), err
+	})
+
+	require.NoError(t, wfEnv.GetWorkflowError())
+	var result retiredEnv
+	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+	require.Equal(t, previous, result.EnvContainer)
+	require.True(t, result.StopRequested)
+	require.True(t, result.Stopped)
+	wfEnv.AssertExpectations(t)
 }

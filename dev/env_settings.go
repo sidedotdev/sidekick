@@ -1,8 +1,6 @@
 package dev
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sidekick/common"
@@ -27,8 +25,8 @@ const (
 	globalStateKeyModalConfig  = "modalConfig"
 	globalStateKeyPortForwards = "portForwards"
 
-	// envSettingsHandlersVersionChangeID gates the env-type-aware update_env
-	// handler, which replaced the Modal-only configuration handlers.
+	// Legacy handlers must remain registered to replay their accepted updates.
+	// The unified handlers are available regardless of this version.
 	envSettingsHandlersVersionChangeID = "env-settings-handlers"
 
 	// envConfigUpdateVersionChangeID gates routing Modal setting updates
@@ -39,9 +37,10 @@ const (
 
 var errEnvSwitchInProgress = errors.New("an environment switch is already in progress for this flow; wait for it to finish")
 
-// EnvSettings is the full desired environment of a running flow. Changing
-// EnvType switches the flow to a new env; otherwise the remaining settings
-// are reconciled on the current env.
+// EnvSettings is the full desired environment of a running flow. Any change
+// to it moves the flow onto an env matching the settings through the same
+// tracked env switch, whether that means another env type, a replacement
+// sandbox or an in-place adjustment.
 type EnvSettings struct {
 	EnvType      string                     `json:"envType"`
 	PortForwards []common.PortForwardConfig `json:"portForwards"`
@@ -58,9 +57,17 @@ func (s EnvSettings) Validate() error {
 	return common.ValidatePortForwards(s.PortForwards)
 }
 
+// equivalent reports whether applying s to a flow running on current would
+// change anything, ignoring cosmetic differences in how settings are spelled.
+func (s EnvSettings) equivalent(current EnvSettings) bool {
+	return normalizedEnvType(s.EnvType) == normalizedEnvType(current.EnvType) &&
+		env.EnvConfig{PortForwards: s.PortForwards, Modal: s.Modal}.Equivalent(
+			env.EnvConfig{PortForwards: current.PortForwards, Modal: current.Modal})
+}
+
 type EnvUpdateResult struct {
-	// FlowActionId identifies the env_switch flow action tracking a switch
-	// started by the update; empty when only configuration changed.
+	// FlowActionId identifies the env_switch flow action tracking the change
+	// started by the update; empty when the settings already matched.
 	FlowActionId string `json:"flowActionId,omitempty"`
 	// Settings are those in effect when the update returned, so a started
 	// switch is only reflected once its flow action completes.
@@ -80,8 +87,11 @@ func SetupEnvSettingsHandlers(dCtx DevContext) error {
 	if dCtx.EnvContainer == nil {
 		return nil
 	}
+	legacyUpdates := &legacyEnvUpdateGate{}
 	if workflow.GetVersion(dCtx, envSettingsHandlersVersionChangeID, workflow.DefaultVersion, 1) == workflow.DefaultVersion {
-		return setupLegacyModalConfigHandlers(dCtx)
+		if err := setupLegacyModalConfigHandlers(dCtx, legacyUpdates); err != nil {
+			return err
+		}
 	}
 
 	dCtx.GlobalState.SetValue(globalStateKeyModalConfig, dCtx.RepoConfig.ModalConfig)
@@ -109,18 +119,24 @@ func SetupEnvSettingsHandlers(dCtx DevContext) error {
 			if err := updateLock.Lock(ctx); err != nil {
 				return EnvUpdateResult{}, err
 			}
+			legacyUpdates.unifiedActive = true
+			defer func() { legacyUpdates.unifiedActive = false }()
+			if err := workflow.Await(ctx, func() bool { return legacyUpdates.active == 0 }); err != nil {
+				updateLock.Unlock()
+				return EnvUpdateResult{}, err
+			}
 			if err := checkEnvUnchangedSinceRequest(dCtx, state, requestedFrom); err != nil {
 				updateLock.Unlock()
 				return EnvUpdateResult{}, err
 			}
-			if desired.EnvType != requestedFrom {
-				return startEnvSwitch(ctx, &dCtx, updateLock, desired)
+			if current := currentEnvSettings(dCtx); desired.equivalent(current) {
+				updateLock.Unlock()
+				return EnvUpdateResult{Settings: current}, nil
 			}
-			defer updateLock.Unlock()
-			return updateEnvConfig(ctx, &dCtx, desired)
+			return startEnvSwitch(ctx, &dCtx, updateLock, desired)
 		},
 		workflow.UpdateHandlerOptions{
-			// Accepted updates may recreate the env or provision a new one,
+			// Accepted updates may replace the env or provision a new one,
 			// so bad settings must be rejected before that begins.
 			Validator: func(_ workflow.Context, desired EnvSettings) error {
 				if err := desired.Validate(); err != nil {
@@ -150,21 +166,9 @@ func checkEnvUnchangedSinceRequest(dCtx DevContext, state flowEnvState, requeste
 	return nil
 }
 
-// updateEnvConfig reconciles the current env with desired. The caller must
-// hold the env settings lock.
-func updateEnvConfig(ctx workflow.Context, dCtx *DevContext, desired EnvSettings) (EnvUpdateResult, error) {
-	current := currentEnvConfig(*dCtx)
-	desiredConfig := env.EnvConfig{PortForwards: desired.PortForwards, Modal: desired.Modal}
-	if !envConfigsEqual(current, desiredConfig) {
-		if _, err := reconcileEnvConfig(ctx, dCtx, current, desiredConfig); err != nil {
-			return EnvUpdateResult{}, err
-		}
-	}
-	return EnvUpdateResult{Settings: currentEnvSettings(*dCtx)}, nil
-}
-
 // reconcileEnvConfig applies desired to the live env and publishes the
-// result only once the env actually reflects it.
+// result only once the env actually reflects it. It serves the legacy
+// Modal-only updates; update_env goes through the env switch instead.
 func reconcileEnvConfig(ctx workflow.Context, dCtx *DevContext, current, desired env.EnvConfig) (env.EnvConfig, error) {
 	var output env.UpdateEnvConfigOutput
 	err := workflow.ExecuteActivity(
@@ -179,19 +183,8 @@ func reconcileEnvConfig(ctx workflow.Context, dCtx *DevContext, current, desired
 	if err != nil {
 		return env.EnvConfig{}, err
 	}
-	*dCtx.EnvContainer = output.EnvContainer
-	newFlowEnvState(dCtx.GlobalState).publish(dCtx.EnvContainer)
-	dCtx.RepoConfig.ModalConfig = output.Config.Modal
-	dCtx.RepoConfig.PortForwards = output.Config.PortForwards
-	dCtx.GlobalState.SetValue(globalStateKeyModalConfig, output.Config.Modal)
-	dCtx.GlobalState.SetValue(globalStateKeyPortForwards, output.Config.PortForwards)
+	publishEnvConfig(dCtx, newFlowEnvState(dCtx.GlobalState), output.EnvContainer, output.Config)
 	return output.Config, nil
-}
-
-func envConfigsEqual(a, b env.EnvConfig) bool {
-	aJson, errA := json.Marshal(a)
-	bJson, errB := json.Marshal(b)
-	return errA == nil && errB == nil && bytes.Equal(aJson, bJson)
 }
 
 // envPortForwards returns the port mappings an env was provisioned with,
@@ -237,7 +230,7 @@ func currentEnvConfig(dCtx DevContext) env.EnvConfig {
 // setupLegacyModalConfigHandlers registers the Modal-only configuration
 // handlers that executions predating update_env were started with. It is a
 // no-op for non-Modal environments.
-func setupLegacyModalConfigHandlers(dCtx DevContext) error {
+func setupLegacyModalConfigHandlers(dCtx DevContext, gate *legacyEnvUpdateGate) error {
 	modalEnv, ok := dCtx.EnvContainer.Env.(*env.ModalEnv)
 	if !ok {
 		return nil
@@ -274,6 +267,10 @@ func setupLegacyModalConfigHandlers(dCtx DevContext) error {
 		dCtx,
 		UpdateNameModalConfig,
 		func(ctx workflow.Context, config common.ModalEnvConfig) (common.ModalEnvConfig, error) {
+			if err := gate.begin(ctx, dCtx); err != nil {
+				return common.ModalEnvConfig{}, err
+			}
+			defer func() { gate.active-- }()
 			if workflow.GetVersion(ctx, envConfigUpdateVersionChangeID, workflow.DefaultVersion, 1) == workflow.DefaultVersion {
 				return recreateModalSandbox(ctx, dCtx, config)
 			}
@@ -287,6 +284,9 @@ func setupLegacyModalConfigHandlers(dCtx DevContext) error {
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(_ workflow.Context, config common.ModalEnvConfig) error {
+				if err := requireLegacyModalEnv(dCtx); err != nil {
+					return err
+				}
 				return config.Validate()
 			},
 		},
@@ -298,6 +298,10 @@ func setupLegacyModalConfigHandlers(dCtx DevContext) error {
 		dCtx,
 		UpdateNamePortForwards,
 		func(ctx workflow.Context, config PortForwardsConfig) (PortForwardsConfig, error) {
+			if err := gate.begin(ctx, dCtx); err != nil {
+				return PortForwardsConfig{}, err
+			}
+			defer func() { gate.active-- }()
 			// An execution pinned to the legacy path recreates its sandbox
 			// outside the update lock, so a concurrent port update could
 			// publish an environment the recreation just replaced.
@@ -314,6 +318,9 @@ func setupLegacyModalConfigHandlers(dCtx DevContext) error {
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(_ workflow.Context, config PortForwardsConfig) error {
+				if err := requireLegacyModalEnv(dCtx); err != nil {
+					return err
+				}
 				return common.ValidatePortForwards(config.PortForwards)
 			},
 		},
@@ -344,4 +351,35 @@ func recreateModalSandbox(ctx workflow.Context, dCtx DevContext, config common.M
 	dCtx.RepoConfig.ModalConfig = config
 	dCtx.GlobalState.SetValue(globalStateKeyModalConfig, config)
 	return config, nil
+}
+
+// Legacy-only concurrency must remain unchanged during replay. Unified updates
+// exclude all legacy updates, including recreations outside the legacy mutex.
+type legacyEnvUpdateGate struct {
+	active        int
+	unifiedActive bool
+}
+
+func (g *legacyEnvUpdateGate) begin(ctx workflow.Context, dCtx DevContext) error {
+	if err := requireLegacyModalEnv(dCtx); err != nil {
+		return err
+	}
+	state := newFlowEnvState(dCtx.GlobalState)
+	if err := workflow.Await(ctx, func() bool {
+		return !g.unifiedActive && !state.SwitchInProgress()
+	}); err != nil {
+		return err
+	}
+	if err := requireLegacyModalEnv(dCtx); err != nil {
+		return err
+	}
+	g.active++
+	return nil
+}
+
+func requireLegacyModalEnv(dCtx DevContext) error {
+	if currentEnvType(dCtx) != string(env.EnvTypeModal) {
+		return fmt.Errorf("legacy environment configuration requires a Modal environment; current environment is %s", currentEnvType(dCtx))
+	}
+	return nil
 }

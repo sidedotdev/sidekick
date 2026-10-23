@@ -59,6 +59,23 @@ func IdentityOf(c EnvContainer) EnvIdentity {
 	return EnvIdentity{EnvType: c.Env.GetType(), WorkingDirectory: c.Env.GetWorkingDirectory()}
 }
 
+// EnvInstance distinguishes the physical envs behind one EnvIdentity: a
+// sandbox replaced by a successor restored from its snapshot keeps the
+// identity (so stale references still resolve to the flow env) but is a
+// different sandbox that must be cleaned up on its own.
+type EnvInstance struct {
+	EnvIdentity
+	SandboxName string `json:"sandboxName,omitempty"`
+}
+
+func InstanceOf(c EnvContainer) EnvInstance {
+	instance := EnvInstance{EnvIdentity: IdentityOf(c)}
+	if sandbox, ok := c.Env.(SandboxEnv); ok {
+		instance.SandboxName = sandbox.GetSandboxName()
+	}
+	return instance
+}
+
 // EnvTracker exposes a flow's env switching state to the activity gate
 // installed by NewEnvSwitchGateInterceptor.
 type EnvTracker interface {
@@ -371,38 +388,12 @@ func RestoreFromSwitchActivity(ctx context.Context, input RestoreFromSwitchInput
 	if err := switchable.RestoreFromSwitch(ctx, input.Bundle); err != nil {
 		return RestoreFromSwitchOutput{}, err
 	}
+	head, err := gitOutputForSwitch(ctx, switchable, "rev-parse", "HEAD")
+	if err != nil {
+		return RestoreFromSwitchOutput{}, err
+	}
+	if head != input.Bundle.HeadCommit {
+		return RestoreFromSwitchOutput{}, fmt.Errorf("switched env HEAD is %s, expected %s", head, input.Bundle.HeadCommit)
+	}
 	return RestoreFromSwitchOutput{}, nil
-}
-
-type VerifySwitchInput struct {
-	EnvContainer EnvContainer `json:"envContainer"`
-	ExpectedHead string       `json:"expectedHead"`
-}
-
-type VerifySwitchOutput struct {
-	Head string `json:"head"`
-}
-
-// VerifySwitchActivity checks that a newly provisioned env runs commands and
-// has the exported head checked out before it is published to the flow.
-func VerifySwitchActivity(ctx context.Context, input VerifySwitchInput) (VerifySwitchOutput, error) {
-	e := input.EnvContainer.Env
-	if e == nil {
-		return VerifySwitchOutput{}, fmt.Errorf("no env to verify")
-	}
-	out, err := e.RunCommand(ctx, EnvRunCommandInput{Command: "true"})
-	if err != nil {
-		return VerifySwitchOutput{}, fmt.Errorf("switched env failed to run a command: %w", err)
-	}
-	if out.ExitStatus != 0 {
-		return VerifySwitchOutput{}, fmt.Errorf("switched env failed to run a command (exit %d): %s", out.ExitStatus, strings.TrimSpace(out.Stderr))
-	}
-	head, err := gitOutputForSwitch(ctx, e, "rev-parse", "HEAD")
-	if err != nil {
-		return VerifySwitchOutput{}, err
-	}
-	if head != input.ExpectedHead {
-		return VerifySwitchOutput{Head: head}, fmt.Errorf("switched env HEAD is %s, expected %s", head, input.ExpectedHead)
-	}
-	return VerifySwitchOutput{Head: head}, nil
 }
