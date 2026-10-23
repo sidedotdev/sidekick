@@ -1952,7 +1952,7 @@ func explainMissingWorkingDir(ctx context.Context, input EnvRunCommandActivityIn
 	if relDir == "" || relDir == "." {
 		return runErr
 	}
-	if _, statErr := input.EnvContainer.Env.Stat(ctx, relDir); statErr != nil && os.IsNotExist(statErr) {
+	if _, statErr := input.EnvContainer.Env.Stat(ctx, relDir); errors.Is(statErr, fs.ErrNotExist) {
 		return temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("working directory %q does not exist relative to the repository root (check the workingDir argument): %v", relDir, runErr),
 			ErrTypeMissingWorkingDir,
