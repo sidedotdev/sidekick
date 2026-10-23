@@ -130,7 +130,11 @@ func TestProviderAuthFailureHandler_RateLimitsSkipActivityRetries(t *testing.T) 
 
 	assert.Equal(t, "success", result.Value)
 	assert.Equal(t, int32(len(outcomes)), atomic.LoadInt32(&calls), "each failure must reach the workflow after one attempt")
-	assert.Equal(t, (1+2+1)*time.Minute.Milliseconds(), result.ElapsedMs)
+	// Waits are 1, 2, then 1 minute again since the generic failure resets
+	// the backoff, each jittered by up to 25%.
+	nominalMs := (1 + 2 + 1) * time.Minute.Milliseconds()
+	assert.GreaterOrEqual(t, result.ElapsedMs, nominalMs*3/4)
+	assert.LessOrEqual(t, result.ElapsedMs, nominalMs*5/4)
 	require.Len(t, result.Requests, 4)
 	for i, req := range result.Requests {
 		rateLimitedReq, _ := req.RequestParams["rateLimited"].(bool)
