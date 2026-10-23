@@ -66,40 +66,79 @@ func (a *AdvisorActivities) summarizeExecutorHistory(
 
 // renderExecutorTranscript renders the trailing executor messages into a plain
 // text transcript for the advisor prompt, capped at maxRecent when positive.
+//
+// User feedback older than the window is still listed up front: the executor's
+// history management retains it indefinitely, whereas the advisor only sees
+// this tail and its own history is trimmed down to the latest turn prompts, so
+// without it the advisor loses track of user decisions and contradicts them.
 func renderExecutorTranscript(msgs []common.Message, maxRecent int) string {
 	start := 0
 	if maxRecent > 0 && len(msgs) > maxRecent {
 		start = len(msgs) - maxRecent
 	}
-	var b strings.Builder
-	for _, m := range msgs[start:] {
-		var contentBlocks []llm2.ContentBlock
-		switch message := m.(type) {
-		case llm2.Message:
-			contentBlocks = message.Content
-		case *llm2.Message:
-			if message != nil {
-				contentBlocks = message.Content
-			}
-		}
-		for _, block := range contentBlocks {
-			if block.Reasoning == nil {
-				continue
-			}
-			summary := strings.TrimSpace(block.Reasoning.Summary)
-			if summary != "" {
-				b.WriteString(fmt.Sprintf("[%s] thinking_summary %s\n", m.GetRole(), summary))
-			}
-		}
-		content := strings.TrimSpace(m.GetContentString())
-		if content != "" {
-			b.WriteString(fmt.Sprintf("[%s] %s\n", m.GetRole(), content))
-		}
-		for _, tc := range m.GetToolCalls() {
-			b.WriteString(fmt.Sprintf("[%s] tool_call %s(%s)\n", m.GetRole(), tc.Name, tc.Arguments))
+	var earlierFeedback []common.Message
+	for _, m := range msgs[:start] {
+		if executorMessageContextType(m) == persisted_ai.ContextTypeUserFeedback {
+			earlierFeedback = append(earlierFeedback, m)
 		}
 	}
+
+	var b strings.Builder
+	if len(earlierFeedback) > 0 {
+		b.WriteString("Earlier user feedback (before the recent messages below, oldest first):\n")
+		for _, m := range earlierFeedback {
+			writeExecutorMessage(&b, m)
+		}
+		b.WriteString("\nRecent executor messages:\n")
+	}
+	for _, m := range msgs[start:] {
+		writeExecutorMessage(&b, m)
+	}
 	return b.String()
+}
+
+func writeExecutorMessage(b *strings.Builder, m common.Message) {
+	var contentBlocks []llm2.ContentBlock
+	switch message := m.(type) {
+	case llm2.Message:
+		contentBlocks = message.Content
+	case *llm2.Message:
+		if message != nil {
+			contentBlocks = message.Content
+		}
+	}
+	for _, block := range contentBlocks {
+		if block.Reasoning == nil {
+			continue
+		}
+		summary := strings.TrimSpace(block.Reasoning.Summary)
+		if summary != "" {
+			b.WriteString(fmt.Sprintf("[%s] thinking_summary %s\n", m.GetRole(), summary))
+		}
+	}
+	content := strings.TrimSpace(m.GetContentString())
+	if content != "" {
+		b.WriteString(fmt.Sprintf("[%s] %s\n", m.GetRole(), content))
+	}
+	for _, tc := range m.GetToolCalls() {
+		b.WriteString(fmt.Sprintf("[%s] tool_call %s(%s)\n", m.GetRole(), tc.Name, tc.Arguments))
+	}
+}
+
+// executorMessageContextType returns the retention context type of an executor
+// message across the llm2 and legacy message representations.
+func executorMessageContextType(msg common.Message) string {
+	switch m := msg.(type) {
+	case llm2.Message:
+		return llm2MessageContextType(m)
+	case *llm2.Message:
+		if m != nil {
+			return llm2MessageContextType(*m)
+		}
+	case common.ChatMessage:
+		return m.ContextType
+	}
+	return ""
 }
 
 // SeedAdvisorRequirementsInput is the activity input for extracting the
@@ -168,16 +207,7 @@ func llm2MessageContextType(msg llm2.Message) string {
 func renderExecutorRecentTranscript(msgs []common.Message, maxRecent int) string {
 	filtered := make([]common.Message, 0, len(msgs))
 	for _, msg := range msgs {
-		isInitialInstructions := false
-		switch m := msg.(type) {
-		case llm2.Message:
-			isInitialInstructions = llm2MessageContextType(m) == persisted_ai.ContextTypeInitialInstructions
-		case *llm2.Message:
-			isInitialInstructions = m != nil && llm2MessageContextType(*m) == persisted_ai.ContextTypeInitialInstructions
-		case common.ChatMessage:
-			isInitialInstructions = m.ContextType == persisted_ai.ContextTypeInitialInstructions
-		}
-		if !isInitialInstructions {
+		if executorMessageContextType(msg) != persisted_ai.ContextTypeInitialInstructions {
 			filtered = append(filtered, msg)
 		}
 	}
