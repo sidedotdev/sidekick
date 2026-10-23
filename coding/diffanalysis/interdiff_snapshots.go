@@ -290,7 +290,7 @@ func compareReviewTrees(prior, current map[string]reviewFile) (string, error) {
 	for _, path := range newPaths {
 		next := current[path]
 		source := ""
-		if old, exists := prior[path]; exists && old.origin == next.origin {
+		if old, exists := prior[path]; exists && (old.origin == next.origin || reviewFilesComparable(old, next)) {
 			source = path
 		} else if next.origin != "" {
 			for _, candidate := range oldPaths {
@@ -298,11 +298,6 @@ func compareReviewTrees(prior, current map[string]reviewFile) (string, error) {
 					source = candidate
 					break
 				}
-			}
-		}
-		if source == "" {
-			if old, exists := prior[path]; exists && old.origin == "" && next.origin == "" {
-				source = path
 			}
 		}
 		old, exists := prior[source]
@@ -348,6 +343,19 @@ func compareReviewTrees(prior, current map[string]reviewFile) (string, error) {
 		removed.WriteString(section)
 	}
 	return removed.String() + out.String(), nil
+}
+
+// Reviews may disagree on a path's origin because Git's rename detection
+// depends on similarity. Its versions remain comparable when the content
+// omitted from both reviews is the same base content, in the same order.
+func reviewFilesComparable(old, next reviewFile) bool {
+	if old.binaryID != "" || next.binaryID != "" {
+		return false
+	}
+	omitted := func(spans []reviewSpan) []reviewSpan {
+		return slices.DeleteFunc(slices.Clone(spans), func(span reviewSpan) bool { return span.origin == "" })
+	}
+	return slices.Equal(omitted(old.spans), omitted(next.spans))
 }
 
 func renderReviewFile(file *gitdiff.File, old, next reviewFile) (string, error) {

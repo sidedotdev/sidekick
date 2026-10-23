@@ -1,0 +1,1205 @@
+diff --git a/dev/env_settings_test.go b/dev/env_settings_test.go
+new file mode 100644
+index 00000000..6e9a55ce
+--- /dev/null
++++ b/dev/env_settings_test.go
+@@ -0,0 +1,732 @@
++package dev
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/mock"
++	"github.com/stretchr/testify/require"
++	"go.temporal.io/sdk/temporal"
++	"go.temporal.io/sdk/testsuite"
++	"go.temporal.io/sdk/workflow"
++
++	"sidekick/common"
++	"sidekick/domain"
++	"sidekick/env"
++	"sidekick/flow_action"
++	"sidekick/utils"
++)
++
++type envUpdateCallbacks struct {
++	accepted  bool
++	rejection error
++	completed bool
++	result    EnvUpdateResult
++	err       error
++}
++
++func (c *envUpdateCallbacks) Accept() { c.accepted = true }
++
++func (c *envUpdateCallbacks) Reject(err error) { c.rejection = err }
++
++func (c *envUpdateCallbacks) Complete(success interface{}, err error) {
++	c.completed = true
++	c.err = err
++	if result, ok := success.(EnvUpdateResult); ok {
++		c.result = result
++	}
++}
++
++func (c *envUpdateCallbacks) requireApplied(t *testing.T) {
++	t.Helper()
++	require.True(t, c.accepted)
++	require.NoError(t, c.rejection)
++	require.True(t, c.completed)
++	require.NoError(t, c.err)
++}
++
++func requireUpdateApplied(t *testing.T, callbacks *modelConfigUpdateCallbacks) {
++	t.Helper()
++	require.True(t, callbacks.accepted)
++	require.NoError(t, callbacks.rejection)
++	require.True(t, callbacks.completed)
++	require.NoError(t, callbacks.err)
++}
++
++type envSettingsWorkflowResult struct {
++	Config       common.ModalEnvConfig
++	PortForwards []common.PortForwardConfig
++	SandboxName  string
++	SSHHost      string
++	SSHPort      int
++	EnvForwards  []common.PortForwardConfig
++	Retired      []retiredEnv
++	Lineage      []env.EnvIdentity
++}
++
++func mockRepoDeepening(wfEnv *testsuite.TestWorkflowEnvironment) {
++	wfEnv.OnActivity(env.DeepenRepoActivity, mock.Anything, mock.Anything).
++		Return(env.DeepenRepoOutput{}, nil).Maybe()
++}
++
++func mustJSON(t *testing.T, value interface{}) []byte {
++	t.Helper()
++	data, err := json.Marshal(value)
++	require.NoError(t, err)
++	return data
++}
++
++type envSettingsWorkflowInput struct {
++	Modal        common.ModalEnvConfig
++	PortForwards []common.PortForwardConfig
++}
++
++func envSettingsTestWorkflow(ctx workflow.Context, input envSettingsWorkflowInput) (envSettingsWorkflowResult, error) {
++	globalState := &flow_action.GlobalState{}
++	globalState.InitValues()
++	envContainer := &env.EnvContainer{Env: &env.ModalEnv{
++		WorkingDirectory: "/root/repo",
++		SandboxName:      "side--repo-abc",
++		SSHHost:          "old.modal.host",
++		SSHPort:          1111,
++		LocalRepoDir:     "/host/repo",
++		PortForwards:     input.PortForwards,
++	}}
++	dCtx := DevContext{
++		ExecContext: flow_action.ExecContext{
++			Context:      ctx,
++			GlobalState:  globalState,
++			EnvContainer: envContainer,
++		},
++		RepoConfig: common.RepoConfig{ModalConfig: input.Modal},
++	}
++
++	if err := SetupEnvSettingsHandlers(dCtx); err != nil {
++		return envSettingsWorkflowResult{}, err
++	}
++
++	// Give the test's delayed updates time to arrive, then let every
++	// accepted one and the switch it may have started finish before
++	// reporting the state they left behind.
++	_ = workflow.Sleep(ctx, 100*time.Millisecond)
++	_ = workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) })
++	state := newFlowEnvState(globalState)
++	_ = workflow.Await(ctx, func() bool { return !state.SwitchInProgress() })
++	_, _ = workflow.AwaitWithTimeout(ctx, time.Second, func() bool {
++		for _, retired := range state.retiredEnvs() {
++			if _, isSandbox := retired.EnvContainer.Env.(env.SandboxEnv); isSandbox && !retired.Stopped {
++				return false
++			}
++		}
++		return true
++	})
++
++	modalEnv := envContainer.Env.(*env.ModalEnv)
++	config, _ := globalState.GetValue(globalStateKeyModalConfig).(common.ModalEnvConfig)
++	portForwards, _ := globalState.GetValue(globalStateKeyPortForwards).([]common.PortForwardConfig)
++	return envSettingsWorkflowResult{
++		Config:       config,
++		PortForwards: portForwards,
++		SandboxName:  modalEnv.SandboxName,
++		SSHHost:      modalEnv.SSHHost,
++		SSHPort:      modalEnv.SSHPort,
++		EnvForwards:  modalEnv.PortForwards,
++		Retired:      state.retiredEnvs(),
++		Lineage:      state.lineage(),
++	}, nil
++}
++
++func newEnvSettingsTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
++	t.Helper()
++	var workflowSuite testsuite.WorkflowTestSuite
++	wfEnv := workflowSuite.NewTestWorkflowEnvironment()
++	wfEnv.SetWorkerOptions(utils.TestWorkerOptions())
++	t.Cleanup(func() { wfEnv.AssertExpectations(t) })
++	return wfEnv
++}
++
++// newEnvChangeTestEnv additionally mocks the bookkeeping every env change
++// performs through the env switch: flow action tracking and stopping the
++// sandbox a replacement supersedes.
++func newEnvChangeTestEnv(t *testing.T) (*testsuite.TestWorkflowEnvironment, *envSwitchRecorder) {
++	t.Helper()
++	wfEnv := newEnvSettingsTestEnv(t)
++	recorder := &envSwitchRecorder{}
++	mockSwitchBookkeeping(wfEnv, recorder)
++	wfEnv.OnActivity(env.StopSandboxActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.StopSandboxInput) (env.StopSandboxOutput, error) {
++			recorder.record("stopped:" + input.SandboxName)
++			return env.StopSandboxOutput{}, nil
++		}).Maybe()
++	return wfEnv, recorder
++}
++
++func requireEnvChangeTracked(t *testing.T, callbacks *envUpdateCallbacks, recorder *envSwitchRecorder, status domain.ActionStatus) domain.FlowAction {
++	t.Helper()
++	callbacks.requireApplied(t)
++	require.NotEmpty(t, callbacks.result.FlowActionId, "every env change is tracked by an env_switch flow action")
++	action := recorder.lastSwitchAction(t)
++	require.Equal(t, callbacks.result.FlowActionId, action.Id)
++	require.Equal(t, status, action.ActionStatus)
++	return action
++}
++
++func modalSettings(modal common.ModalEnvConfig, portForwards []common.PortForwardConfig) EnvSettings {
++	return EnvSettings{EnvType: string(env.EnvTypeModal), Modal: modal, PortForwards: portForwards}
++}
++
++func TestEnvSettingsUpdateReplacesModalSandboxAndRejectsInvalidConfig(t *testing.T) {
++	t.Parallel()
++	wfEnv, recorder := newEnvChangeTestEnv(t)
++
++	initial := envSettingsWorkflowInput{
++		Modal:        common.ModalEnvConfig{Memory: 1024},
++		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
++	}
++	validUpdate := common.ModalEnvConfig{Memory: 2048, MemoryLimit: 8192}
++	invalidUpdate := common.ModalEnvConfig{
++		Volumes: []common.ModalVolumeMount{
++			{Name: "a", MountPath: "/cache"},
++			{Name: "b", MountPath: "/cache/"},
++		},
++	}
++
++	successorName := env.ModalReplacementSandboxName("side--repo-abc")
++	successor := env.EnvContainer{Env: &env.ModalEnv{
++		WorkingDirectory: "/root/repo",
++		SandboxName:      successorName,
++		SSHHost:          "new.modal.host",
++		SSHPort:          2222,
++		LocalRepoDir:     "/host/repo",
++		PortForwards:     initial.PortForwards,
++	}}
++	wfEnv.OnActivity(env.ModalReplaceSandboxActivity, mock.Anything, mock.MatchedBy(func(input env.ModalReplaceSandboxInput) bool {
++		return input.EnvContainer.Env.(*env.ModalEnv).SandboxName == "side--repo-abc" &&
++			input.Config.Memory == validUpdate.Memory &&
++			input.Config.MemoryLimit == validUpdate.MemoryLimit &&
++			len(input.PortForwards) == 1
++	})).Return(func(context.Context, env.ModalReplaceSandboxInput) (env.ModalReplaceSandboxOutput, error) {
++		recorder.record("replaced")
++		return env.ModalReplaceSandboxOutput{EnvContainer: successor}, nil
++	}).Once()
++
++	invalidCallbacks := &envUpdateCallbacks{}
++	validCallbacks := &envUpdateCallbacks{}
++	var queried EnvSettings
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "invalid-modal-config-update", invalidCallbacks, modalSettings(invalidUpdate, initial.PortForwards))
++	}, 5*time.Millisecond)
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "valid-modal-config-update", validCallbacks, modalSettings(validUpdate, initial.PortForwards))
++	}, 10*time.Millisecond)
++	wfEnv.RegisterDelayedCallback(func() {
++		value, err := wfEnv.QueryWorkflow(QueryNameEnv)
++		require.NoError(t, err)
++		require.NoError(t, value.Get(&queried))
++	}, 50*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++
++	// The invalid configuration must be rejected by the validator, before any
++	// reconciliation activity runs.
++	require.False(t, invalidCallbacks.accepted)
++	require.Error(t, invalidCallbacks.rejection)
++	require.Contains(t, invalidCallbacks.rejection.Error(), "configured more than once")
++
++	action := requireEnvChangeTracked(t, validCallbacks, recorder, domain.ActionStatusComplete)
++	require.Equal(t, map[string]interface{}{"from": "modal", "to": "modal"}, action.ActionParams)
++	require.Equal(t, modalSettings(initial.Modal, initial.PortForwards), validCallbacks.result.Settings,
++		"the update returns before the replacement is published")
++
++	require.Equal(t, modalSettings(validUpdate, initial.PortForwards), queried)
++	var result envSettingsWorkflowResult
++	require.NoError(t, wfEnv.GetWorkflowResult(&result))
++	require.Equal(t, validUpdate, result.Config)
++	require.Equal(t, initial.PortForwards, result.PortForwards)
++	require.Equal(t, successorName, result.SandboxName)
++	require.Equal(t, "new.modal.host", result.SSHHost)
++	require.Equal(t, 2222, result.SSHPort)
++
++	// The predecessor is retired for flow-end cleanup and stopped only once
++	// its successor has been published and the switch has completed.
++	require.Equal(t, []string{"started", "replaced", "complete", "stopped:side--repo-abc"}, recorder.events)
++	require.Len(t, result.Retired, 1)
++	require.Equal(t, "side--repo-abc", result.Retired[0].EnvContainer.Env.(*env.ModalEnv).SandboxName)
++	require.True(t, result.Retired[0].Stopped)
++	require.Equal(t, []env.EnvIdentity{{EnvType: env.EnvTypeModal, WorkingDirectory: "/root/repo"}}, result.Lineage,
++		"a replacement keeps the flow's env identity")
++}
++
++func TestEnvSettingsUpdateFallsBackToTransferWhenSnapshotCannotBeReused(t *testing.T) {
++	t.Parallel()
++	wfEnv, recorder := newEnvChangeTestEnv(t)
++
++	initial := envSettingsWorkflowInput{Modal: common.ModalEnvConfig{Memory: 1024}}
++	update := common.ModalEnvConfig{Memory: 1024, Volumes: []common.ModalVolumeMount{{Name: "data", MountPath: "/data"}}}
++	successorName := env.ModalReplacementSandboxName("side--repo-abc")
++	fresh := env.EnvContainer{Env: &env.ModalEnv{
++		WorkingDirectory: "/root/repo",
++		SandboxName:      successorName,
++		SSHHost:          "fresh.modal.host",
++		SSHPort:          3333,
++		LocalRepoDir:     "/host/repo",
++	}}
++
++	wfEnv.OnActivity(env.ModalReplaceSandboxActivity, mock.Anything, mock.Anything).
++		Return(env.ModalReplaceSandboxOutput{}, temporal.NewNonRetryableApplicationError(
++			"snapshot predates the new volume mount", env.ErrTypeModalSnapshotIncompatible, nil)).Once()
++	wfEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
++		return input.Command == "git" && len(input.Args) == 3 && input.Args[2] == "HEAD"
++	})).Return(env.EnvRunCommandActivityOutput{Stdout: "main\n"}, nil).Once()
++	wfEnv.OnActivity(env.ExportForSwitchActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.ExportForSwitchInput) (env.ExportForSwitchOutput, error) {
++			recorder.record("exported:" + input.Branch)
++			return env.ExportForSwitchOutput{Bundle: env.SwitchBundle{Branch: input.Branch, HeadCommit: "abc123", LocalRepoDir: "/host/repo"}}, nil
++		}).Once()
++	var createInput env.CreateSandboxInput
++	wfEnv.OnActivity(env.CreateSandboxActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.CreateSandboxInput) (env.CreateSandboxOutput, error) {
++			createInput = input
++			recorder.record("created:" + input.Name)
++			return env.CreateSandboxOutput{SandboxName: input.Name, SSHHost: "fresh.modal.host", SSHPort: 3333}, nil
++		}).Once()
++	wfEnv.OnActivity(env.SyncRepoToRemoteActivity, mock.Anything, mock.Anything).
++		Return(env.SyncRepoToRemoteOutput{RemoteRepoDir: "/root/repo"}, nil).Once()
++	wfEnv.OnActivity(env.RestoreFromSwitchActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.RestoreFromSwitchInput) (env.RestoreFromSwitchOutput, error) {
++			recorder.record("restored:" + input.EnvContainer.Env.(*env.ModalEnv).SandboxName)
++			return env.RestoreFromSwitchOutput{}, nil
++		}).Once()
++	mockRepoDeepening(wfEnv)
++
++	callbacks := &envUpdateCallbacks{}
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "volume-update", callbacks, modalSettings(update, nil))
++	}, 5*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++	requireEnvChangeTracked(t, callbacks, recorder, domain.ActionStatusComplete)
++	require.Equal(t, []string{"started", "exported:main", "created:" + successorName, "restored:" + successorName, "complete", "stopped:side--repo-abc"}, recorder.events,
++		"a fresh sandbox is provisioned beside the current one, the flow's work transferred into it, and the predecessor stopped once the switch completes")
++	require.JSONEq(t, string(mustJSON(t, update)), string(createInput.Config))
++
++	var result envSettingsWorkflowResult
++	require.NoError(t, wfEnv.GetWorkflowResult(&result))
++	require.Equal(t, update, result.Config)
++	require.Equal(t, fresh.Env.(*env.ModalEnv).SandboxName, result.SandboxName)
++	require.Equal(t, "fresh.modal.host", result.SSHHost)
++	require.Len(t, result.Retired, 1)
++	require.True(t, result.Retired[0].Stopped)
++}
++
++func TestEnvSettingsUpdateRejectsInvalidEnvType(t *testing.T) {
++	t.Parallel()
++	wfEnv := newEnvSettingsTestEnv(t)
++
++	initial := envSettingsWorkflowInput{Modal: common.ModalEnvConfig{Memory: 1024}}
++	callbacks := &envUpdateCallbacks{}
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "invalid-env-type-update", callbacks, EnvSettings{EnvType: "mainframe", Modal: initial.Modal})
++	}, 5*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++	require.False(t, callbacks.accepted)
++	require.Error(t, callbacks.rejection)
++	require.Contains(t, callbacks.rejection.Error(), `invalid environment type "mainframe"`)
++}
++
++func TestEnvSettingsUpdateWithUnchangedSettingsSkipsReconciliation(t *testing.T) {
++	t.Parallel()
++	wfEnv := newEnvSettingsTestEnv(t)
++
++	initial := envSettingsWorkflowInput{
++		Modal:        common.ModalEnvConfig{Memory: 1024},
++		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
++	}
++	reconcileCalls := 0
++	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
++			reconcileCalls++
++			return env.UpdateEnvConfigOutput{EnvContainer: input.EnvContainer, Config: input.Desired}, nil
++		}).Maybe()
++
++	callbacks := &envUpdateCallbacks{}
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "unchanged-update", callbacks, modalSettings(initial.Modal, initial.PortForwards))
++	}, 5*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++	callbacks.requireApplied(t)
++	require.Zero(t, reconcileCalls)
++	require.Equal(t, modalSettings(initial.Modal, initial.PortForwards), callbacks.result.Settings)
++}
++
++func TestLegacyModalConfigUpdateRecreatesSandboxDirectly(t *testing.T) {
++	t.Parallel()
++	wfEnv := newEnvSettingsTestEnv(t)
++	wfEnv.OnGetVersion(envSettingsHandlersVersionChangeID, workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
++	wfEnv.OnGetVersion(envConfigUpdateVersionChangeID, workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
++
++	initial := envSettingsWorkflowInput{Modal: common.ModalEnvConfig{Memory: 1024}}
++	update := common.ModalEnvConfig{Memory: 2048}
++	recreatedEnvContainer := env.EnvContainer{Env: &env.ModalEnv{
++		WorkingDirectory: "/root/repo",
++		SandboxName:      "side--repo-abc",
++		SSHHost:          "new.modal.host",
++		SSHPort:          2222,
++		LocalRepoDir:     "/host/repo",
++	}}
++	wfEnv.OnActivity(env.ModalRecreateSandboxActivity, mock.Anything, mock.MatchedBy(func(input env.ModalRecreateSandboxInput) bool {
++		return input.Config.Memory == update.Memory
++	})).Return(env.ModalRecreateSandboxOutput{EnvContainer: recreatedEnvContainer}, nil).Once()
++
++	callbacks := &modelConfigUpdateCallbacks{}
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameModalConfig, "legacy-modal-config-update", callbacks, update)
++	}, 5*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++	requireUpdateApplied(t, callbacks)
++
++	var result envSettingsWorkflowResult
++	require.NoError(t, wfEnv.GetWorkflowResult(&result))
++	require.Equal(t, update, result.Config)
++	require.Equal(t, "new.modal.host", result.SSHHost)
++}
++
++func TestLegacyModalConfigUpdateReconcilesThroughEnvConfigActivity(t *testing.T) {
++	t.Parallel()
++	wfEnv := newEnvSettingsTestEnv(t)
++	wfEnv.OnGetVersion(envSettingsHandlersVersionChangeID, workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
++
++	initial := envSettingsWorkflowInput{
++		Modal:        common.ModalEnvConfig{Memory: 1024},
++		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
++	}
++	update := common.ModalEnvConfig{Memory: 4096}
++	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.MatchedBy(func(input env.UpdateEnvConfigInput) bool {
++		return input.Current.Modal.Memory == initial.Modal.Memory && input.Desired.Modal.Memory == update.Memory
++	})).Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
++		return env.UpdateEnvConfigOutput{EnvContainer: input.EnvContainer, Config: input.Desired}, nil
++	}).Once()
++
++	callbacks := &modelConfigUpdateCallbacks{}
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameModalConfig, "legacy-reconciled-update", callbacks, update)
++	}, 5*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++	requireUpdateApplied(t, callbacks)
++
++	var result envSettingsWorkflowResult
++	require.NoError(t, wfEnv.GetWorkflowResult(&result))
++	require.Equal(t, update, result.Config)
++	require.Equal(t, initial.PortForwards, result.PortForwards)
++}
++
++func TestLegacyPortForwardsUpdateIsRefusedOnLegacyConfigUpdateExecutions(t *testing.T) {
++	t.Parallel()
++	wfEnv := newEnvSettingsTestEnv(t)
++	wfEnv.OnGetVersion(envSettingsHandlersVersionChangeID, workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
++	wfEnv.OnGetVersion(envConfigUpdateVersionChangeID, workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
++
++	initial := envSettingsWorkflowInput{
++		Modal:        common.ModalEnvConfig{Memory: 1024},
++		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
++	}
++	update := PortForwardsConfig{PortForwards: []common.PortForwardConfig{{HostPort: 3000}}}
++	reconcileCalls := 0
++	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
++			reconcileCalls++
++			return env.UpdateEnvConfigOutput{EnvContainer: input.EnvContainer, Config: input.Desired}, nil
++		}).Maybe()
++
++	callbacks := &modelConfigUpdateCallbacks{}
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNamePortForwards, "legacy-port-forwards-update", callbacks, update)
++	}, 5*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++	require.True(t, callbacks.completed)
++	require.Error(t, callbacks.err)
++	require.Contains(t, callbacks.err.Error(), "start a new flow")
++	require.Zero(t, reconcileCalls)
++
++	var result envSettingsWorkflowResult
++	require.NoError(t, wfEnv.GetWorkflowResult(&result))
++	require.Equal(t, initial.PortForwards, result.PortForwards)
++	require.Equal(t, initial.PortForwards, result.EnvForwards)
++}
++
++func TestEnvSettingsUpdateAppliesPortForwardsAndRejectsInvalidLists(t *testing.T) {
++	t.Parallel()
++	wfEnv, recorder := newEnvChangeTestEnv(t)
++
++	initial := envSettingsWorkflowInput{
++		Modal:        common.ModalEnvConfig{Memory: 1024},
++		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
++	}
++	validForwards := []common.PortForwardConfig{
++		{HostPort: 3000, ContainerPort: 3001},
++		{HostPort: 5432},
++	}
++	invalidForwards := []common.PortForwardConfig{
++		{HostPort: 3000, ContainerPort: 4000},
++		{HostPort: 4000},
++	}
++
++	var activityInput env.UpdateEnvConfigInput
++	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
++			activityInput = input
++			modalEnv := *input.EnvContainer.Env.(*env.ModalEnv)
++			modalEnv.PortForwards = input.Desired.PortForwards
++			return env.UpdateEnvConfigOutput{EnvContainer: env.EnvContainer{Env: &modalEnv}, Config: input.Desired}, nil
++		}).Once()
++
++	invalidCallbacks := &envUpdateCallbacks{}
++	validCallbacks := &envUpdateCallbacks{}
++	var queried EnvSettings
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "invalid-port-forwards-update", invalidCallbacks, modalSettings(initial.Modal, invalidForwards))
++	}, 5*time.Millisecond)
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "valid-port-forwards-update", validCallbacks, modalSettings(initial.Modal, validForwards))
++	}, 10*time.Millisecond)
++	wfEnv.RegisterDelayedCallback(func() {
++		value, err := wfEnv.QueryWorkflow(QueryNameEnv)
++		require.NoError(t, err)
++		require.NoError(t, value.Get(&queried))
++	}, 50*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++
++	require.False(t, invalidCallbacks.accepted)
++	require.Error(t, invalidCallbacks.rejection)
++	require.Contains(t, invalidCallbacks.rejection.Error(), "container_port 4000 is used by both")
++
++	requireEnvChangeTracked(t, validCallbacks, recorder, domain.ActionStatusComplete)
++	require.Equal(t, initial.PortForwards, activityInput.Current.PortForwards)
++	require.Equal(t, initial.Modal, activityInput.Current.Modal)
++	require.Equal(t, validForwards, activityInput.Desired.PortForwards)
++	require.Equal(t, initial.Modal, activityInput.Desired.Modal, "a port update must not touch sandbox settings")
++
++	require.Equal(t, validForwards, queried.PortForwards)
++	var result envSettingsWorkflowResult
++	require.NoError(t, wfEnv.GetWorkflowResult(&result))
++	require.Equal(t, validForwards, result.PortForwards)
++	require.Equal(t, validForwards, result.EnvForwards)
++	require.Equal(t, initial.Modal, result.Config)
++	require.Equal(t, "side--repo-abc", result.SandboxName)
++	require.Empty(t, result.Retired, "an in-place adjustment keeps the same sandbox")
++	require.NotContains(t, recorder.events, "stopped:side--repo-abc", "nothing is stopped when the sandbox is adjusted in place")
++}
++
++func TestEnvSettingsUpdateRetryStartsFromUnchangedPublishedState(t *testing.T) {
++	t.Parallel()
++	wfEnv, recorder := newEnvChangeTestEnv(t)
++
++	initial := envSettingsWorkflowInput{
++		Modal:        common.ModalEnvConfig{Memory: 1024},
++		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
++	}
++	updatedForwards := []common.PortForwardConfig{{HostPort: 3000, ContainerPort: 3001}}
++
++	var inputs []env.UpdateEnvConfigInput
++	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
++			inputs = append(inputs, input)
++			if len(inputs) == 1 {
++				return env.UpdateEnvConfigOutput{}, errors.New("ssh connection reset")
++			}
++			modalEnv := *input.EnvContainer.Env.(*env.ModalEnv)
++			modalEnv.PortForwards = input.Desired.PortForwards
++			return env.UpdateEnvConfigOutput{EnvContainer: env.EnvContainer{Env: &modalEnv}, Config: input.Desired}, nil
++		}).Twice()
++
++	callbacks := &envUpdateCallbacks{}
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "retried-port-forwards-update", callbacks, modalSettings(initial.Modal, updatedForwards))
++	}, 5*time.Millisecond)
++
++	// The retry policy backs off for a second before the second attempt, so
++	// a query in between observes what the failed attempt left published.
++	var duringBackoff EnvSettings
++	wfEnv.RegisterDelayedCallback(func() {
++		require.Len(t, inputs, 1, "first attempt should have failed by now")
++		require.Equal(t, []string{"started"}, recorder.events, "the change is still in progress")
++		value, err := wfEnv.QueryWorkflow(QueryNameEnv)
++		require.NoError(t, err)
++		require.NoError(t, value.Get(&duringBackoff))
++	}, 500*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++	requireEnvChangeTracked(t, callbacks, recorder, domain.ActionStatusComplete)
++	require.Equal(t, initial.PortForwards, duringBackoff.PortForwards)
++
++	require.Len(t, inputs, 2)
++	for _, input := range inputs {
++		require.Equal(t, initial.PortForwards, input.Current.PortForwards)
++		require.Equal(t, initial.Modal, input.Current.Modal)
++		require.Equal(t, updatedForwards, input.Desired.PortForwards)
++		require.Equal(t, initial.Modal, input.Desired.Modal)
++		require.Equal(t, "side--repo-abc", input.EnvContainer.Env.(*env.ModalEnv).SandboxName)
++	}
++
++	var result envSettingsWorkflowResult
++	require.NoError(t, wfEnv.GetWorkflowResult(&result))
++	require.Equal(t, updatedForwards, result.PortForwards)
++	require.Equal(t, updatedForwards, result.EnvForwards)
++	require.Equal(t, initial.Modal, result.Config)
++}
++
++func TestEnvSettingsUpdateFailureKeepsPublishedState(t *testing.T) {
++	t.Parallel()
++	initial := envSettingsWorkflowInput{
++		Modal:        common.ModalEnvConfig{Memory: 1024},
++		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
++	}
++	tests := []struct {
++		name    string
++		desired EnvSettings
++		mock    func(wfEnv *testsuite.TestWorkflowEnvironment)
++	}{
++		{
++			name:    "in-place adjustment fails",
++			desired: modalSettings(initial.Modal, []common.PortForwardConfig{{HostPort: 3000}}),
++			mock: func(wfEnv *testsuite.TestWorkflowEnvironment) {
++				wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
++					Return(env.UpdateEnvConfigOutput{}, temporal.NewNonRetryableApplicationError("remote port busy", "ReplaceFailed", nil)).Once()
++			},
++		},
++		{
++			name:    "sandbox replacement fails",
++			desired: modalSettings(common.ModalEnvConfig{Memory: 4096}, initial.PortForwards),
++			mock: func(wfEnv *testsuite.TestWorkflowEnvironment) {
++				wfEnv.OnActivity(env.ModalReplaceSandboxActivity, mock.Anything, mock.Anything).
++					Return(env.ModalReplaceSandboxOutput{}, temporal.NewNonRetryableApplicationError("remote port busy", "ReplaceFailed", nil)).Once()
++			},
++		},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			wfEnv, recorder := newEnvChangeTestEnv(t)
++			tc.mock(wfEnv)
++
++			callbacks := &envUpdateCallbacks{}
++			wfEnv.RegisterDelayedCallback(func() {
++				wfEnv.UpdateWorkflow(UpdateNameEnv, "failing-update", callbacks, tc.desired)
++			}, 5*time.Millisecond)
++
++			wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++			require.True(t, wfEnv.IsWorkflowCompleted())
++			require.NoError(t, wfEnv.GetWorkflowError())
++			action := requireEnvChangeTracked(t, callbacks, recorder, domain.ActionStatusFailed)
++			require.Contains(t, action.ActionResult, "remote port busy")
++
++			var result envSettingsWorkflowResult
++			require.NoError(t, wfEnv.GetWorkflowResult(&result))
++			require.Equal(t, initial.Modal, result.Config)
++			require.Equal(t, initial.PortForwards, result.PortForwards)
++			require.Equal(t, initial.PortForwards, result.EnvForwards)
++			require.Equal(t, "old.modal.host", result.SSHHost)
++			require.Equal(t, "side--repo-abc", result.SandboxName)
++			if tc.desired.Modal.Memory != initial.Modal.Memory {
++				require.Len(t, result.Retired, 1)
++				partial := result.Retired[0]
++				successor := partial.EnvContainer.Env.(*env.ModalEnv)
++				require.Equal(t, env.ModalReplacementSandboxName("side--repo-abc"), successor.SandboxName)
++				require.Empty(t, successor.SSHHost)
++				require.Zero(t, successor.SSHPort)
++				require.Nil(t, partial.Worktree)
++			} else {
++				require.Empty(t, result.Retired)
++			}
++			require.NotContains(t, recorder.events, "stopped:side--repo-abc")
++		})
++	}
++}
++
++func TestEnvSettingsUpdateIsRejectedWhileAnotherChangeIsInProgress(t *testing.T) {
++	t.Parallel()
++	wfEnv, recorder := newEnvChangeTestEnv(t)
++
++	initial := envSettingsWorkflowInput{
++		Modal:        common.ModalEnvConfig{Memory: 1024},
++		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
++	}
++	modalUpdate := common.ModalEnvConfig{Memory: 4096}
++	portUpdate := []common.PortForwardConfig{{HostPort: 3000}}
++
++	// The replacement stays in flight until the second update has been
++	// submitted, so the second one arrives mid-change.
++	secondUpdateSubmitted := make(chan struct{})
++	wfEnv.OnActivity(env.ModalReplaceSandboxActivity, mock.Anything, mock.Anything).
++		Return(func(_ context.Context, input env.ModalReplaceSandboxInput) (env.ModalReplaceSandboxOutput, error) {
++			select {
++			case <-secondUpdateSubmitted:
++			case <-time.After(5 * time.Second):
++				t.Error("second update was never submitted while the first was in flight")
++			}
++			successor := *input.EnvContainer.Env.(*env.ModalEnv)
++			successor.SandboxName = env.ModalReplacementSandboxName(successor.SandboxName)
++			return env.ModalReplaceSandboxOutput{EnvContainer: env.EnvContainer{Env: &successor}}, nil
++		}).Once()
++
++	modalCallbacks := &envUpdateCallbacks{}
++	portCallbacks := &envUpdateCallbacks{}
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "modal-config-update", modalCallbacks, modalSettings(modalUpdate, initial.PortForwards))
++	}, 5*time.Millisecond)
++	wfEnv.RegisterDelayedCallback(func() {
++		wfEnv.UpdateWorkflow(UpdateNameEnv, "port-forwards-update", portCallbacks, modalSettings(modalUpdate, portUpdate))
++		close(secondUpdateSubmitted)
++	}, 6*time.Millisecond)
++
++	wfEnv.ExecuteWorkflow(envSettingsTestWorkflow, initial)
++
++	require.True(t, wfEnv.IsWorkflowCompleted())
++	require.NoError(t, wfEnv.GetWorkflowError())
++	requireEnvChangeTracked(t, modalCallbacks, recorder, domain.ActionStatusComplete)
++	require.False(t, portCallbacks.accepted)
++	require.ErrorIs(t, portCallbacks.rejection, errEnvSwitchInProgress)
++
++	var result envSettingsWorkflowResult
++	require.NoError(t, wfEnv.GetWorkflowResult(&result))
++	require.Equal(t, modalUpdate, result.Config)
++	require.Equal(t, initial.PortForwards, result.PortForwards)
++	require.Equal(t, initial.PortForwards, result.EnvForwards)
++}
+diff --git a/dev/modal_config_test.go b/dev/modal_config_test.go
+deleted file mode 100644
+index aaf0d112..00000000
+--- a/dev/modal_config_test.go
++++ /dev/null
+@@ -1,461 +0,0 @@
+-package dev
+-
+-import (
+-	"context"
+-	"errors"
+-	"testing"
+-	"time"
+-
+-	"github.com/stretchr/testify/mock"
+-	"github.com/stretchr/testify/require"
+-	"go.temporal.io/sdk/temporal"
+-	"go.temporal.io/sdk/testsuite"
+-	"go.temporal.io/sdk/workflow"
+-
+-	"sidekick/common"
+-	"sidekick/env"
+-	"sidekick/flow_action"
+-	"sidekick/utils"
+-)
+-
+-type modalConfigWorkflowResult struct {
+-	Config       common.ModalEnvConfig
+-	PortForwards []common.PortForwardConfig
+-	SandboxName  string
+-	SSHHost      string
+-	SSHPort      int
+-	EnvForwards  []common.PortForwardConfig
+-}
+-
+-type modalConfigWorkflowInput struct {
+-	Modal        common.ModalEnvConfig
+-	PortForwards []common.PortForwardConfig
+-}
+-
+-func modalConfigTestWorkflow(ctx workflow.Context, input modalConfigWorkflowInput) (modalConfigWorkflowResult, error) {
+-	globalState := &flow_action.GlobalState{}
+-	globalState.InitValues()
+-	envContainer := &env.EnvContainer{Env: &env.ModalEnv{
+-		WorkingDirectory: "/root/repo",
+-		SandboxName:      "side--repo-abc",
+-		SSHHost:          "old.modal.host",
+-		SSHPort:          1111,
+-		LocalRepoDir:     "/host/repo",
+-		PortForwards:     input.PortForwards,
+-	}}
+-	dCtx := DevContext{
+-		ExecContext: flow_action.ExecContext{
+-			Context:      ctx,
+-			GlobalState:  globalState,
+-			EnvContainer: envContainer,
+-		},
+-		RepoConfig: common.RepoConfig{ModalConfig: input.Modal},
+-	}
+-
+-	if err := SetupModalConfigHandlers(dCtx); err != nil {
+-		return modalConfigWorkflowResult{}, err
+-	}
+-
+-	// Give the test's delayed updates time to arrive, then let every
+-	// accepted one finish before reporting the state they left behind.
+-	_ = workflow.Sleep(ctx, 100*time.Millisecond)
+-	_ = workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) })
+-
+-	modalEnv := envContainer.Env.(*env.ModalEnv)
+-	config, _ := globalState.GetValue(globalStateKeyModalConfig).(common.ModalEnvConfig)
+-	portForwards, _ := globalState.GetValue(globalStateKeyPortForwards).([]common.PortForwardConfig)
+-	return modalConfigWorkflowResult{
+-		Config:       config,
+-		PortForwards: portForwards,
+-		SandboxName:  modalEnv.SandboxName,
+-		SSHHost:      modalEnv.SSHHost,
+-		SSHPort:      modalEnv.SSHPort,
+-		EnvForwards:  modalEnv.PortForwards,
+-	}, nil
+-}
+-
+-func newModalConfigTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+-	t.Helper()
+-	var workflowSuite testsuite.WorkflowTestSuite
+-	wfEnv := workflowSuite.NewTestWorkflowEnvironment()
+-	wfEnv.SetWorkerOptions(utils.TestWorkerOptions())
+-	t.Cleanup(func() { wfEnv.AssertExpectations(t) })
+-	return wfEnv
+-}
+-
+-func requireUpdateApplied(t *testing.T, callbacks *modelConfigUpdateCallbacks) {
+-	t.Helper()
+-	require.True(t, callbacks.accepted)
+-	require.NoError(t, callbacks.rejection)
+-	require.True(t, callbacks.completed)
+-	require.NoError(t, callbacks.err)
+-}
+-
+-func TestModalConfigUpdateReconcilesSandboxAndRejectsInvalidConfig(t *testing.T) {
+-	t.Parallel()
+-	wfEnv := newModalConfigTestEnv(t)
+-
+-	initial := modalConfigWorkflowInput{
+-		Modal:        common.ModalEnvConfig{Memory: 1024},
+-		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
+-	}
+-	validUpdate := common.ModalEnvConfig{Memory: 2048, MemoryLimit: 8192}
+-	invalidUpdate := common.ModalEnvConfig{
+-		Volumes: []common.ModalVolumeMount{
+-			{Name: "a", MountPath: "/cache"},
+-			{Name: "b", MountPath: "/cache/"},
+-		},
+-	}
+-
+-	recreatedEnvContainer := env.EnvContainer{Env: &env.ModalEnv{
+-		WorkingDirectory: "/root/repo",
+-		SandboxName:      "side--repo-abc",
+-		SSHHost:          "new.modal.host",
+-		SSHPort:          2222,
+-		LocalRepoDir:     "/host/repo",
+-		PortForwards:     initial.PortForwards,
+-	}}
+-	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.MatchedBy(func(input env.UpdateEnvConfigInput) bool {
+-		return input.Current.Modal.Memory == initial.Modal.Memory &&
+-			len(input.Current.PortForwards) == 1 &&
+-			input.Desired.Modal.Memory == validUpdate.Memory &&
+-			input.Desired.Modal.MemoryLimit == validUpdate.MemoryLimit &&
+-			len(input.Desired.PortForwards) == 1
+-	})).Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
+-		return env.UpdateEnvConfigOutput{EnvContainer: recreatedEnvContainer, Config: input.Desired}, nil
+-	}).Once()
+-
+-	invalidCallbacks := &modelConfigUpdateCallbacks{}
+-	validCallbacks := &modelConfigUpdateCallbacks{}
+-	var queriedConfig common.ModalEnvConfig
+-	var queriedForwards PortForwardsConfig
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNameModalConfig, "invalid-modal-config-update", invalidCallbacks, invalidUpdate)
+-	}, 5*time.Millisecond)
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNameModalConfig, "valid-modal-config-update", validCallbacks, validUpdate)
+-	}, 10*time.Millisecond)
+-	wfEnv.RegisterDelayedCallback(func() {
+-		value, err := wfEnv.QueryWorkflow(QueryNameModalConfig)
+-		require.NoError(t, err)
+-		require.NoError(t, value.Get(&queriedConfig))
+-		value, err = wfEnv.QueryWorkflow(QueryNamePortForwards)
+-		require.NoError(t, err)
+-		require.NoError(t, value.Get(&queriedForwards))
+-	}, 50*time.Millisecond)
+-
+-	wfEnv.ExecuteWorkflow(modalConfigTestWorkflow, initial)
+-
+-	require.True(t, wfEnv.IsWorkflowCompleted())
+-	require.NoError(t, wfEnv.GetWorkflowError())
+-
+-	// The invalid configuration must be rejected by the validator, before any
+-	// reconciliation activity runs.
+-	require.False(t, invalidCallbacks.accepted)
+-	require.Error(t, invalidCallbacks.rejection)
+-	require.Contains(t, invalidCallbacks.rejection.Error(), "configured more than once")
+-
+-	requireUpdateApplied(t, validCallbacks)
+-
+-	require.Equal(t, validUpdate, queriedConfig)
+-	require.Equal(t, initial.PortForwards, queriedForwards.PortForwards)
+-	var result modalConfigWorkflowResult
+-	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+-	require.Equal(t, validUpdate, result.Config)
+-	require.Equal(t, initial.PortForwards, result.PortForwards)
+-	require.Equal(t, "side--repo-abc", result.SandboxName)
+-	require.Equal(t, "new.modal.host", result.SSHHost)
+-	require.Equal(t, 2222, result.SSHPort)
+-}
+-
+-func TestModalConfigUpdateLegacyVersionRecreatesSandboxDirectly(t *testing.T) {
+-	t.Parallel()
+-	wfEnv := newModalConfigTestEnv(t)
+-	wfEnv.OnGetVersion(envConfigUpdateVersionChangeID, workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+-
+-	initial := modalConfigWorkflowInput{Modal: common.ModalEnvConfig{Memory: 1024}}
+-	update := common.ModalEnvConfig{Memory: 2048}
+-	recreatedEnvContainer := env.EnvContainer{Env: &env.ModalEnv{
+-		WorkingDirectory: "/root/repo",
+-		SandboxName:      "side--repo-abc",
+-		SSHHost:          "new.modal.host",
+-		SSHPort:          2222,
+-		LocalRepoDir:     "/host/repo",
+-	}}
+-	wfEnv.OnActivity(env.ModalRecreateSandboxActivity, mock.Anything, mock.MatchedBy(func(input env.ModalRecreateSandboxInput) bool {
+-		return input.Config.Memory == update.Memory
+-	})).Return(env.ModalRecreateSandboxOutput{EnvContainer: recreatedEnvContainer}, nil).Once()
+-
+-	callbacks := &modelConfigUpdateCallbacks{}
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNameModalConfig, "legacy-modal-config-update", callbacks, update)
+-	}, 5*time.Millisecond)
+-
+-	wfEnv.ExecuteWorkflow(modalConfigTestWorkflow, initial)
+-
+-	require.True(t, wfEnv.IsWorkflowCompleted())
+-	require.NoError(t, wfEnv.GetWorkflowError())
+-	requireUpdateApplied(t, callbacks)
+-
+-	var result modalConfigWorkflowResult
+-	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+-	require.Equal(t, update, result.Config)
+-	require.Equal(t, "new.modal.host", result.SSHHost)
+-}
+-
+-func TestPortForwardsUpdateIsRefusedOnLegacyVersionExecutions(t *testing.T) {
+-	t.Parallel()
+-	wfEnv := newModalConfigTestEnv(t)
+-	wfEnv.OnGetVersion(envConfigUpdateVersionChangeID, workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+-
+-	initial := modalConfigWorkflowInput{
+-		Modal:        common.ModalEnvConfig{Memory: 1024},
+-		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
+-	}
+-	update := PortForwardsConfig{PortForwards: []common.PortForwardConfig{{HostPort: 3000}}}
+-	reconcileCalls := 0
+-	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
+-		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
+-			reconcileCalls++
+-			return env.UpdateEnvConfigOutput{EnvContainer: input.EnvContainer, Config: input.Desired}, nil
+-		}).Maybe()
+-
+-	callbacks := &modelConfigUpdateCallbacks{}
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNamePortForwards, "legacy-port-forwards-update", callbacks, update)
+-	}, 5*time.Millisecond)
+-
+-	wfEnv.ExecuteWorkflow(modalConfigTestWorkflow, initial)
+-
+-	require.True(t, wfEnv.IsWorkflowCompleted())
+-	require.NoError(t, wfEnv.GetWorkflowError())
+-	require.True(t, callbacks.completed)
+-	require.Error(t, callbacks.err)
+-	require.Contains(t, callbacks.err.Error(), "start a new flow")
+-	require.Zero(t, reconcileCalls)
+-
+-	var result modalConfigWorkflowResult
+-	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+-	require.Equal(t, initial.PortForwards, result.PortForwards)
+-	require.Equal(t, initial.PortForwards, result.EnvForwards)
+-}
+-
+-func TestPortForwardsUpdateAppliesMappingsAndRejectsInvalidLists(t *testing.T) {
+-	t.Parallel()
+-	wfEnv := newModalConfigTestEnv(t)
+-
+-	initial := modalConfigWorkflowInput{
+-		Modal:        common.ModalEnvConfig{Memory: 1024},
+-		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
+-	}
+-	validUpdate := PortForwardsConfig{PortForwards: []common.PortForwardConfig{
+-		{HostPort: 3000, ContainerPort: 3001},
+-		{HostPort: 5432},
+-	}}
+-	invalidUpdate := PortForwardsConfig{PortForwards: []common.PortForwardConfig{
+-		{HostPort: 3000, ContainerPort: 4000},
+-		{HostPort: 4000},
+-	}}
+-
+-	var activityInput env.UpdateEnvConfigInput
+-	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
+-		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
+-			activityInput = input
+-			modalEnv := *input.EnvContainer.Env.(*env.ModalEnv)
+-			modalEnv.PortForwards = input.Desired.PortForwards
+-			return env.UpdateEnvConfigOutput{EnvContainer: env.EnvContainer{Env: &modalEnv}, Config: input.Desired}, nil
+-		}).Once()
+-
+-	invalidCallbacks := &modelConfigUpdateCallbacks{}
+-	validCallbacks := &modelConfigUpdateCallbacks{}
+-	var queriedForwards PortForwardsConfig
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNamePortForwards, "invalid-port-forwards-update", invalidCallbacks, invalidUpdate)
+-	}, 5*time.Millisecond)
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNamePortForwards, "valid-port-forwards-update", validCallbacks, validUpdate)
+-	}, 10*time.Millisecond)
+-	wfEnv.RegisterDelayedCallback(func() {
+-		value, err := wfEnv.QueryWorkflow(QueryNamePortForwards)
+-		require.NoError(t, err)
+-		require.NoError(t, value.Get(&queriedForwards))
+-	}, 50*time.Millisecond)
+-
+-	wfEnv.ExecuteWorkflow(modalConfigTestWorkflow, initial)
+-
+-	require.True(t, wfEnv.IsWorkflowCompleted())
+-	require.NoError(t, wfEnv.GetWorkflowError())
+-
+-	require.False(t, invalidCallbacks.accepted)
+-	require.Error(t, invalidCallbacks.rejection)
+-	require.Contains(t, invalidCallbacks.rejection.Error(), "container_port 4000 is used by both")
+-
+-	requireUpdateApplied(t, validCallbacks)
+-	require.Equal(t, initial.PortForwards, activityInput.Current.PortForwards)
+-	require.Equal(t, initial.Modal, activityInput.Current.Modal)
+-	require.Equal(t, validUpdate.PortForwards, activityInput.Desired.PortForwards)
+-	require.Equal(t, initial.Modal, activityInput.Desired.Modal, "a port update must not touch sandbox settings")
+-
+-	require.Equal(t, validUpdate.PortForwards, queriedForwards.PortForwards)
+-	var result modalConfigWorkflowResult
+-	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+-	require.Equal(t, validUpdate.PortForwards, result.PortForwards)
+-	require.Equal(t, validUpdate.PortForwards, result.EnvForwards)
+-	require.Equal(t, initial.Modal, result.Config)
+-	require.Equal(t, "side--repo-abc", result.SandboxName)
+-}
+-
+-func TestPortForwardsUpdateRetryStartsFromUnchangedPublishedState(t *testing.T) {
+-	t.Parallel()
+-	wfEnv := newModalConfigTestEnv(t)
+-
+-	initial := modalConfigWorkflowInput{
+-		Modal:        common.ModalEnvConfig{Memory: 1024},
+-		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
+-	}
+-	update := PortForwardsConfig{PortForwards: []common.PortForwardConfig{{HostPort: 3000, ContainerPort: 3001}}}
+-
+-	var inputs []env.UpdateEnvConfigInput
+-	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
+-		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
+-			inputs = append(inputs, input)
+-			if len(inputs) == 1 {
+-				return env.UpdateEnvConfigOutput{}, errors.New("ssh connection reset")
+-			}
+-			modalEnv := *input.EnvContainer.Env.(*env.ModalEnv)
+-			modalEnv.PortForwards = input.Desired.PortForwards
+-			return env.UpdateEnvConfigOutput{EnvContainer: env.EnvContainer{Env: &modalEnv}, Config: input.Desired}, nil
+-		}).Twice()
+-
+-	callbacks := &modelConfigUpdateCallbacks{}
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNamePortForwards, "retried-port-forwards-update", callbacks, update)
+-	}, 5*time.Millisecond)
+-
+-	// The retry policy backs off for a second before the second attempt, so
+-	// a query in between observes what the failed attempt left published.
+-	var forwardsDuringBackoff PortForwardsConfig
+-	wfEnv.RegisterDelayedCallback(func() {
+-		require.Len(t, inputs, 1, "first attempt should have failed by now")
+-		require.False(t, callbacks.completed)
+-		value, err := wfEnv.QueryWorkflow(QueryNamePortForwards)
+-		require.NoError(t, err)
+-		require.NoError(t, value.Get(&forwardsDuringBackoff))
+-	}, 500*time.Millisecond)
+-
+-	wfEnv.ExecuteWorkflow(modalConfigTestWorkflow, initial)
+-
+-	require.True(t, wfEnv.IsWorkflowCompleted())
+-	require.NoError(t, wfEnv.GetWorkflowError())
+-	requireUpdateApplied(t, callbacks)
+-	require.Equal(t, initial.PortForwards, forwardsDuringBackoff.PortForwards)
+-
+-	require.Len(t, inputs, 2)
+-	for _, input := range inputs {
+-		require.Equal(t, initial.PortForwards, input.Current.PortForwards)
+-		require.Equal(t, initial.Modal, input.Current.Modal)
+-		require.Equal(t, update.PortForwards, input.Desired.PortForwards)
+-		require.Equal(t, initial.Modal, input.Desired.Modal)
+-		require.Equal(t, "side--repo-abc", input.EnvContainer.Env.(*env.ModalEnv).SandboxName)
+-	}
+-
+-	var result modalConfigWorkflowResult
+-	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+-	require.Equal(t, update.PortForwards, result.PortForwards)
+-	require.Equal(t, update.PortForwards, result.EnvForwards)
+-	require.Equal(t, initial.Modal, result.Config)
+-}
+-
+-func TestPortForwardsUpdateFailureKeepsPublishedState(t *testing.T) {
+-	t.Parallel()
+-	wfEnv := newModalConfigTestEnv(t)
+-
+-	initial := modalConfigWorkflowInput{
+-		Modal:        common.ModalEnvConfig{Memory: 1024},
+-		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
+-	}
+-	update := PortForwardsConfig{PortForwards: []common.PortForwardConfig{{HostPort: 3000}}}
+-	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
+-		Return(env.UpdateEnvConfigOutput{}, temporal.NewNonRetryableApplicationError("remote port busy", "ReplaceFailed", nil)).Once()
+-
+-	callbacks := &modelConfigUpdateCallbacks{}
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNamePortForwards, "failing-port-forwards-update", callbacks, update)
+-	}, 5*time.Millisecond)
+-
+-	wfEnv.ExecuteWorkflow(modalConfigTestWorkflow, initial)
+-
+-	require.True(t, wfEnv.IsWorkflowCompleted())
+-	require.NoError(t, wfEnv.GetWorkflowError())
+-	require.True(t, callbacks.accepted)
+-	require.True(t, callbacks.completed)
+-	require.Error(t, callbacks.err)
+-	require.Contains(t, callbacks.err.Error(), "remote port busy")
+-
+-	var result modalConfigWorkflowResult
+-	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+-	require.Equal(t, initial.PortForwards, result.PortForwards)
+-	require.Equal(t, initial.PortForwards, result.EnvForwards)
+-	require.Equal(t, "old.modal.host", result.SSHHost)
+-}
+-
+-func TestConcurrentModalAndPortForwardUpdatesAreSerialized(t *testing.T) {
+-	t.Parallel()
+-	wfEnv := newModalConfigTestEnv(t)
+-
+-	initial := modalConfigWorkflowInput{
+-		Modal:        common.ModalEnvConfig{Memory: 1024},
+-		PortForwards: []common.PortForwardConfig{{HostPort: 18855}},
+-	}
+-	modalUpdate := common.ModalEnvConfig{Memory: 4096}
+-	portUpdate := PortForwardsConfig{PortForwards: []common.PortForwardConfig{{HostPort: 3000}}}
+-
+-	// The first reconciliation stays in flight until the second update has
+-	// been submitted, so both handlers contend for the environment.
+-	portUpdateSubmitted := make(chan struct{})
+-	var inputs []env.UpdateEnvConfigInput
+-	wfEnv.OnActivity(env.UpdateEnvConfigActivity, mock.Anything, mock.Anything).
+-		Return(func(_ context.Context, input env.UpdateEnvConfigInput) (env.UpdateEnvConfigOutput, error) {
+-			inputs = append(inputs, input)
+-			if len(inputs) == 1 {
+-				select {
+-				case <-portUpdateSubmitted:
+-				case <-time.After(5 * time.Second):
+-					t.Error("port forwards update was never submitted while the Modal update was in flight")
+-				}
+-			}
+-			modalEnv := *input.EnvContainer.Env.(*env.ModalEnv)
+-			modalEnv.PortForwards = input.Desired.PortForwards
+-			return env.UpdateEnvConfigOutput{EnvContainer: env.EnvContainer{Env: &modalEnv}, Config: input.Desired}, nil
+-		}).Twice()
+-
+-	modalCallbacks := &modelConfigUpdateCallbacks{}
+-	portCallbacks := &modelConfigUpdateCallbacks{}
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNameModalConfig, "modal-config-update", modalCallbacks, modalUpdate)
+-	}, 5*time.Millisecond)
+-	wfEnv.RegisterDelayedCallback(func() {
+-		wfEnv.UpdateWorkflow(UpdateNamePortForwards, "port-forwards-update", portCallbacks, portUpdate)
+-		close(portUpdateSubmitted)
+-	}, 6*time.Millisecond)
+-
+-	wfEnv.ExecuteWorkflow(modalConfigTestWorkflow, initial)
+-
+-	require.True(t, wfEnv.IsWorkflowCompleted())
+-	require.NoError(t, wfEnv.GetWorkflowError())
+-	requireUpdateApplied(t, modalCallbacks)
+-	requireUpdateApplied(t, portCallbacks)
+-
+-	require.Len(t, inputs, 2)
+-	require.Equal(t, initial.Modal, inputs[0].Current.Modal)
+-	require.Equal(t, modalUpdate, inputs[0].Desired.Modal)
+-	require.Equal(t, inputs[0].Desired, inputs[1].Current, "second update must start from what the first left in effect")
+-	require.Equal(t, modalUpdate, inputs[1].Desired.Modal)
+-	require.Equal(t, portUpdate.PortForwards, inputs[1].Desired.PortForwards)
+-
+-	var result modalConfigWorkflowResult
+-	require.NoError(t, wfEnv.GetWorkflowResult(&result))
+-	require.Equal(t, modalUpdate, result.Config)
+-	require.Equal(t, portUpdate.PortForwards, result.PortForwards)
+-	require.Equal(t, portUpdate.PortForwards, result.EnvForwards)
+-}
