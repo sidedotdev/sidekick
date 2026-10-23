@@ -65,23 +65,16 @@ func dockerEngineResponsive(ctx context.Context, timeout time.Duration) bool {
 	return cmd.Run() == nil
 }
 
-// withDockerEngineWatchdog runs fn while monitoring docker engine health. If the
-// engine stops responding for long enough while fn is in flight, it restarts the
-// engine and cancels fn so the caller does not block until its activity's
-// StartToClose timeout. In that case it returns a retryable error so the
-// operation can be re-attempted against the recovered engine. When auto-restart
-// is disabled it runs fn without monitoring.
+// withDockerEngineWatchdog cancels operations blocked on an unresponsive engine
+// before their activity timeout. Restarting the engine requires user approval.
 func withDockerEngineWatchdog(ctx context.Context, fn func(ctx context.Context) error) error {
-	if !dockerAutoRestartEnabled() {
-		return fn(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var (
-		engineRestarted bool
-		restartErr      error
-	)
+	var engineUnavailable bool
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -107,10 +100,9 @@ func withDockerEngineWatchdog(ctx context.Context, fn func(ctx context.Context) 
 					continue
 				}
 				log.Warn().Int("consecutiveFailures", consecutiveFailures).
-					Msg("docker engine unresponsive during operation; killing operation and restarting engine")
+					Msg("docker engine unresponsive during operation; canceling operation")
+				engineUnavailable = true
 				cancel()
-				restartErr = restartDockerEngineFunc(ctx)
-				engineRestarted = true
 				return
 			}
 		}
@@ -120,11 +112,11 @@ func withDockerEngineWatchdog(ctx context.Context, fn func(ctx context.Context) 
 	cancel()
 	<-done
 
-	if engineRestarted {
-		if restartErr != nil {
-			return fmt.Errorf("docker engine became unresponsive and could not be restarted: %w", restartErr)
-		}
-		return errors.New("docker engine became unresponsive and was restarted; operation must be retried")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if engineUnavailable {
+		return dockerEngineUnavailable(runErr)
 	}
 	return runErr
 }

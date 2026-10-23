@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidekick Android — redesign wireframe</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page-bg: #ECEDEF;
+    --page-text: #1c1c1e;
+    --page-muted: #6b6b70;
+    --control-bg: #ffffff;
+    --control-border: #d6d6db;
+    --control-active: #1c1c1e;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  body { margin: 0; background: var(--page-bg); color: var(--page-text); }
+  header { padding: 20px 24px 8px; }
+  header h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+  header p { margin: 0 0 12px; color: var(--page-muted); font-size: 13px; max-width: 70ch; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 22px; padding: 0 24px 12px; }
+  .group { display: flex; flex-direction: column; gap: 4px; }
+  .group.disabled { opacity: .4; pointer-events: none; }
+  .group label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--page-muted); }
+  .seg { display: inline-flex; border: 1px solid var(--control-border); border-radius: 8px; overflow: hidden; background: var(--control-bg); }
+  .seg button { border: 0; background: transparent; padding: 6px 10px; font-size: 13px; cursor: pointer; color: var(--page-text); border-right: 1px solid var(--control-border); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--control-active); color: #fff; }
+  .hint { padding: 0 24px 12px; font-size: 12px; color: var(--page-muted); }
+  .hint code { background: #fff; padding: 1px 5px; border-radius: 4px; }
+  main { display: flex; flex-wrap: wrap; gap: 28px; padding: 8px 24px 40px; align-items: flex-start; }
+  .frame { display: flex; flex-direction: column; gap: 8px; }
+  .frame h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--page-muted); }
+  .frame .note { font-size: 12px; color: var(--page-muted); max-width: 360px; margin: 0; }
+
+  /* ---------- phone + theme tokens (1 CSS px = 1 dp) ---------- */
+  .phone {
+    position: relative; width: 360px; height: 640px; overflow: hidden;
+    border-radius: 22px; border: 6px solid #202024; box-shadow: 0 10px 30px rgba(0,0,0,.18);
+    background: var(--bg); color: var(--text); display: flex; flex-direction: column;
+    font-size: 14px; line-height: 1.3;
+    --bg: #FAFAFA; --surface: #FFFFFF; --surface2: #F0F0F2; --text: #1B1B1F; --muted: #6E6E76;
+    --divider: #E6E6EA; --scrim: rgba(0,0,0,.35);
+    /* Accent matches the web frontend CTA/brand purple (--color-primary: rgb(131,58,180)). */
+    --accent: #833AB4; --on-accent: #FFFFFF;
+    --red: #C92A2A; --amber: #B7791F; --green: #2B8A3E;
+  }
+  .phone[data-theme="dark"] {
+    --bg: #101013; --surface: #1A1A1E; --surface2: #25252A; --text: #ECECF1; --muted: #9A9AA4;
+    --divider: #2B2B31; --scrim: rgba(0,0,0,.55);
+    --accent: #C58BF0; --on-accent: #2E0A4A;
+    --red: #FF8A8A; --amber: #F2C35B; --green: #8CE99A;
+  }
+  .phone[data-palette="moss"] { --accent: #2F855A; --on-accent: #fff; --bg: #F7F8F6; }
+  .phone[data-palette="moss"][data-theme="dark"] { --accent: #6CCB93; --on-accent: #06301A; --bg: #0F1210; --surface: #171B18; --surface2: #212723; --divider: #283029; }
+  .phone[data-palette="ember"] { --accent: #D9480F; --on-accent: #fff; }
+  .phone[data-palette="ember"][data-theme="dark"] { --accent: #FF8A5B; --on-accent: #3D1500; }
+
+  .statusbar { height: 24px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-size: 11px; color: var(--muted); }
+  .topbar { height: 56px; flex: none; display: flex; align-items: center; padding: 0 4px 0 12px; gap: 4px; background: var(--bg); }
+  .topbar .grow { flex: 1; min-width: 0; }
+  .icon-btn { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--text); flex: none; }
+  .icon-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .ws-title { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 8px 6px 0; border-radius: 10px; }
+  .ws-title .name { font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 22px; }
+  .ws-title .chev { display: inline-flex; flex: none; }
+  .ws-title .chev svg { width: 18px; height: 18px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  /* "pill" hints tappability with a soft surface behind the name instead of an icon. */
+  .ws-title.pill { padding: 5px 12px; background: var(--surface2); }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex: none; }
+  .avatar.sm { width: 24px; height: 24px; font-size: 12px; }
+  .avatar.muted { background: var(--surface2); color: var(--text); }
+
+  .body { flex: 1; min-height: 0; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+  .list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+
+  /* ---------- task rows ---------- */
+  .row { display: flex; flex-direction: column; gap: 3px; padding: 10px 16px; }
+  .phone[data-palette="graphite"] .row + .row,
+  .phone[data-palette="ember"] .row + .row,
+  .phone[data-palette="graphite"] .row + .collapsed, .phone[data-palette="ember"] .row + .collapsed,
+  .phone[data-palette="graphite"] .collapsed + .collapsed, .phone[data-palette="ember"] .collapsed + .collapsed { border-top: 1px solid var(--divider); }
+  .phone[data-palette="ember"] .row + .row { border-top: 1px solid var(--divider); margin-left: 16px; padding-left: 0; }
+  .phone[data-palette="moss"] .row { margin: 0 8px 4px; padding: 9px 8px; border-radius: 10px; background: var(--surface); }
+  .phone[data-palette="moss"][data-theme="light"] .row { box-shadow: 0 0 0 1px var(--divider); }
+  .row .line1 { display: flex; align-items: baseline; gap: 10px; }
+  .row .title { flex: 1; font-size: 14.5px; font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .row .time { font-size: 11.5px; color: var(--muted); flex: none; }
+  .row .line2 { display: flex; align-items: center; gap: 8px; min-height: 18px; }
+  .row .desc { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; letter-spacing: .01em; padding: 1px 7px; border-radius: 6px; line-height: 16px; flex: none; color: var(--c); }
+  .phone[data-chip="tinted"] .chip { background: color-mix(in srgb, var(--c) 14%, transparent); }
+  .phone[data-chip="outlined"] .chip { border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
+  .phone[data-chip="dot"] .chip { padding: 0; color: var(--muted); font-weight: 500; }
+  .phone[data-chip="dot"] .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+  .s-blocked { --c: var(--red); } .s-in_review { --c: var(--amber); } .s-in_progress { --c: var(--accent); }
+  .s-to_do { --c: var(--muted); } .s-drafting { --c: var(--muted); } .s-complete { --c: var(--green); }
+  .s-failed { --c: var(--red); } .s-canceled { --c: var(--muted); }
+  .s-drafting { opacity: .85; }
+
+  .section-header { padding: 10px 16px 4px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .section-header.attention { color: var(--amber); }
+  .collapsed { display: flex; align-items: center; gap: 8px; padding: 12px 16px; color: var(--muted); font-size: 13.5px; cursor: pointer; user-select: none; }
+  .collapsed .count { background: var(--surface2); color: var(--text); border-radius: 10px; padding: 0 7px; font-size: 11.5px; line-height: 18px; }
+  .collapsed .spacer { flex: 1; }
+  .collapsed svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+  .collapsed.open svg { transform: rotate(180deg); }
+  .phone[data-palette="moss"] .collapsed { margin: 0 8px; padding: 10px 8px; }
+
+  .chiprow { display: flex; gap: 8px; padding: 4px 16px 8px; flex: none; overflow: hidden; }
+  .fchip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; border: 1px solid var(--divider); color: var(--text); cursor: pointer; user-select: none; white-space: nowrap; }
+  .fchip .count { color: var(--muted); font-size: 12px; }
+  .fchip.on { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: transparent; color: var(--accent); font-weight: 600; }
+  .fchip.on .count { color: inherit; }
+  /* M3 navigation-bar style: three exclusive views, thumb-reachable. */
+  .bottombar { flex: none; height: 64px; display: flex; align-items: stretch; background: var(--surface); border-top: 1px solid var(--divider); padding-bottom: 6px; }
+  .navitem { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+  .navitem .ind { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 14px; border-radius: 14px; font-size: 13px; font-weight: 600; }
+  .navitem .ind .count { font-size: 11px; font-weight: 500; opacity: .8; }
+  .navitem.on { color: var(--text); }
+  .navitem.on .ind { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+
+  .empty { padding: 48px 24px; text-align: center; color: var(--muted); font-size: 14px; }
+
+  /* ---------- search bar ---------- */
+  .searchbar { height: 56px; display: flex; align-items: center; padding: 0 4px; gap: 4px; }
+  .field { flex: 1; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border-radius: 10px; background: var(--surface2); font-size: 15px; }
+  .field .ph { color: var(--muted); }
+  .field .caret { width: 1.5px; height: 18px; background: var(--accent); }
+  .field svg { width: 18px; height: 18px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .result-note { padding: 6px 16px 2px; font-size: 11.5px; color: var(--muted); }
+
+  /* ---------- switcher containers ---------- */
+  .scrim { position: absolute; inset: 0; background: var(--scrim); }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--surface); border-radius: 20px 20px 0 0; padding: 8px 0 12px; }
+  .sheet .handle { width: 32px; height: 4px; border-radius: 2px; background: var(--divider); margin: 0 auto 10px; }
+  .sheet-title { padding: 2px 16px 8px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .ws-filter { margin: 0 16px 6px; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 10px; background: var(--surface2); color: var(--muted); font-size: 14px; }
+  .ws-filter svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .ws-row { display: flex; align-items: center; gap: 12px; padding: 9px 16px; }
+  .ws-row.current { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .ws-row .ws-text { flex: 1; min-width: 0; }
+  .ws-row .ws-name { font-size: 15px; font-weight: 500; }
+  .ws-row.current .ws-name { color: var(--accent); }
+  .ws-row .ws-path { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ws-row svg { width: 20px; height: 20px; fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .ws-scan { display: flex; align-items: center; gap: 12px; padding: 12px 16px; font-size: 14px; color: var(--text); border-top: 1px solid var(--divider); margin-top: 4px; }
+  .ws-scan svg { width: 20px; height: 20px; fill: none; stroke: var(--muted); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .dropdown { position: absolute; top: 76px; left: 8px; width: 300px; background: var(--surface); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.28); padding: 8px 0 4px; }
+  .phone[data-theme="dark"] .dropdown { box-shadow: 0 8px 28px rgba(0,0,0,.6), 0 0 0 1px var(--divider); }
+  .dropdown .ws-filter { margin: 0 12px 6px; }
+  .dropdown .ws-row { padding: 8px 12px; }
+  .dropdown .ws-scan { padding: 10px 12px; }
+  .fullscreen { position: absolute; inset: 0; background: var(--bg); display: flex; flex-direction: column; }
+  .fullscreen .topbar .title { font-size: 17px; font-weight: 600; flex: 1; }
+
+  /* ---------- detail ---------- */
+  .detail { padding: 8px 16px 0; display: flex; flex-direction: column; gap: 12px; flex: 1; }
+  .detail h3 { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.25; }
+  .detail .meta { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+  .detail .descr { font-size: 14px; line-height: 1.45; white-space: pre-line; }
+  .soon { border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 10px; padding: 10px 12px; font-size: 13px; color: var(--text); }
+  .soon b { color: var(--accent); display: block; margin-bottom: 2px; }
+  .actions { margin-top: auto; display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--divider); }
+  .btn { flex: 1; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 10px; font-size: 14px; font-weight: 600; border: 1px solid var(--divider); color: var(--text); }
+  .btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+  .btn.danger { color: var(--red); }
+  .snackbar { position: absolute; left: 12px; right: 12px; bottom: 76px; background: var(--text); color: var(--bg); border-radius: 8px; padding: 12px 16px; font-size: 14px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+
+  /* ---------- pairing ---------- */
+  .pairing { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px 32px; gap: 10px; }
+  .mark { width: 56px; height: 56px; border-radius: 16px; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 24px; margin-bottom: 8px; }
+  .pairing h3 { margin: 0; font-size: 22px; font-weight: 600; }
+  .pairing p { margin: 0 0 14px; color: var(--muted); font-size: 14px; line-height: 1.45; }
+  .pairing .btn { flex: none; width: 100%; height: 44px; }
+  .pairing .foot { margin-top: auto; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sidekick Android — Tasks redesign wireframe</h1>
+  <p>360×640dp frames. Every open UX choice is a toggle below; the URL hash records the current combination so it can be shared. Drafts/Done rows and filter chips in the Tasks frame are clickable.</p>
+</header>
+<div class="controls" id="controls"></div>
+<div class="hint">Share a combination by copying the URL, e.g. <code id="permalink"></code></div>
+<main id="screens"></main>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- toggles ----------
+  const OPTIONS = {
+    affordance: { label: 'Workspace affordance', values: { plain: 'Name only (discoverable)', pill: 'Name in soft pill', chevron: 'Name + chevron', avatar: 'Avatar + name' } },
+    container:  { label: 'Switcher container', values: { sheet: 'Bottom sheet', dropdown: 'Dropdown', fullscreen: 'Full screen' } },
+    buckets:    { label: 'Bucket presentation', values: { headers: 'Section headers', none: 'No headers', chips: 'Top filter chips', bottombar: 'Bottom filter bar' } },
+    collapsed:  { label: 'Drafts / Done access', values: { bottom: 'Bottom rows', top: 'Top chips' } },
+    palette:    { label: 'Style variant', values: { graphite: 'A · Graphite / brand purple, hairline dividers', moss: 'B · Moss / green, flat rows', ember: 'C · Ember / orange, inset dividers' } },
+    chip:       { label: 'Status chip style', values: { tinted: 'Tinted', outlined: 'Outlined', dot: 'Dot + label' } },
+    theme:      { label: 'Theme', values: { light: 'Light', dark: 'Dark' } },
+  };
+  // Approved design; the other toggle values remain for comparison only.
+  const DEFAULTS = { affordance: 'chevron', container: 'fullscreen', buckets: 'chips', collapsed: 'top', palette: 'graphite', chip: 'dot', theme: 'dark' };
+
+  const state = Object.assign({}, DEFAULTS, parseHash());
+  // Interactive list state (Tasks frame only).
+  const listState = { draftsOpen: false, doneOpen: false, chipFilter: 'open' };
+
+  function parseHash() {
+    const out = {};
+    location.hash.replace(/^#/, '').split('&').forEach(kv => {
+      const [k, v] = kv.split('=');
+      if (OPTIONS[k] && OPTIONS[k].values[v]) out[k] = v;
+    });
+    return out;
+  }
+  function writeHash() {
+    const h = Object.keys(OPTIONS).map(k => `${k}=${state[k]}`).join('&');
+    history.replaceState(null, '', '#' + h);
+    document.getElementById('permalink').textContent = location.href;
+  }
+
+  function renderControls() {
+    const root = document.getElementById('controls');
+    root.innerHTML = '';
+    for (const key of Object.keys(OPTIONS)) {
+      const opt = OPTIONS[key];
+      const g = document.createElement('div');
+      g.className = 'group' + (key === 'collapsed' && isFilterView() ? ' disabled' : '');
+      g.innerHTML = `<label>${opt.label}</label>`;
+      const seg = document.createElement('div');
+      seg.className = 'seg';
+      for (const v of Object.keys(opt.values)) {
+        const b = document.createElement('button');
+        b.textContent = opt.values[v];
+        b.className = state[key] === v ? 'on' : '';
+        b.onclick = () => { state[key] = v; update(); };
+        seg.appendChild(b);
+      }
+      g.appendChild(seg);
+      root.appendChild(g);
+    }
+  }
+
+  // ---------- sample data ----------
+  const WORKSPACES = [
+    { id: 'w1', name: 'sidekick', path: '~/code/sidekick' },
+    { id: 'w2', name: 'dotfiles', path: '~/dotfiles' },
+    { id: 'w3', name: 'infra-terraform', path: '~/code/infra' },
+    { id: 'w4', name: 'blog', path: '~/code/blog' },
+  ];
+  const CURRENT_WS = WORKSPACES[0];
+
+  // `ago` is minutes since update; the app derives this from the ISO-8601 `updated` field.
+  const TASKS = [
+    { id: 't1',  title: 'Fix flaky pairing test on CI', description: 'PairingEntryInstrumentedTest times out on the API 34 emulator', status: 'in_review', ago: 5 },
+    { id: 't2',  title: 'Add pull-to-refresh to the task list', description: 'Waiting on decision: indicator inside list vs. under top bar', status: 'blocked', ago: 65 },
+    { id: 't3',  title: 'Persist last selected workspace in DataStore', description: '', status: 'in_progress', ago: 20 },
+    { id: 't4',  title: 'Refactor IrohTransport error handling so connect timeouts surface as retryable errors', description: 'Map transport failures to user-facing strings', status: 'in_progress', ago: 190 },
+    { id: 't5',  title: 'Support deep links from the QR pairing payload', description: '', status: 'to_do', ago: 60 * 26 },
+    { id: 't6',  title: 'Write README for the Android app', description: 'Build, test and pairing instructions', status: 'to_do', ago: 60 * 49 },
+    { id: 't7',  title: 'Explore Compose previews for theme variants', description: '', status: 'drafting', ago: 60 * 24 * 4 },
+    { id: 't8',  title: 'Investigate pairing token refresh', description: 'Tokens currently never expire', status: 'drafting', ago: 60 * 24 * 6 },
+    { id: 't9',  title: 'Document pairing flow in README', description: '', status: 'complete', ago: 60 * 24 * 3 },
+    { id: 't10', title: 'Upgrade AGP to 8.7', description: 'Gradle sync fails on kotlinx-serialization plugin', status: 'failed', ago: 60 * 24 * 5 },
+    { id: 't11', title: 'Spike: iroh transport on iOS', description: '', status: 'canceled', ago: 60 * 24 * 15 },
+  ];
+
+  const LABELS = { drafting: 'Draft', to_do: 'To do', in_progress: 'In progress', blocked: 'Blocked', in_review: 'In review', complete: 'Complete', failed: 'Failed', canceled: 'Canceled' };
+  const BUCKET_ORDER = { blocked: 0, in_review: 0, in_progress: 1, to_do: 1, drafting: 3, complete: 4, failed: 4, canceled: 4 };
+  function bucketRank(status) { return BUCKET_ORDER[status] ?? 2; } // unknown → end of Active
+  function rank(tasks) { return tasks.slice().sort((a, b) => bucketRank(a.status) - bucketRank(b.status) || a.ago - b.ago); }
+  function bucket(name) {
+    const set = { attention: ['blocked', 'in_review'], active: ['in_progress', 'to_do'], drafts: ['drafting'], done: ['complete', 'failed', 'canceled'] }[name];
+    return rank(TASKS.filter(t => set.includes(t.status) || (name === 'active' && !(t.status in BUCKET_ORDER))));
+  }
+  function relTime(min) {
+    if (min < 1) return 'just now';
+    if (min < 60) return `${min}m ago`;
+    if (min < 60 * 24) return `${Math.floor(min / 60)}h ago`;
+    if (min < 60 * 24 * 7) return `${Math.floor(min / 1440)}d ago`;
+    return `${Math.floor(min / 10080)}w ago`;
+  }
+  function esc(s) { return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  // ---------- icons ----------
+  const I = {
+    search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+    add: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+    more: '<svg viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>',
+    back: '<svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>',
+    close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+    down: '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
+    check: '<svg viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></svg>',
+    qr: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM19 14h2M14 19h2M19 19h2v2"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2"><path d="M4 20h4l10-10-4-4L4 16v4z"/></svg>',
+  };
+
+  // ---------- building blocks ----------
+  function phone(inner, extraAttrs = '') {
+    return `<div class="phone" data-theme="${state.theme}" data-palette="${state.palette}" data-chip="${state.chip}" ${extraAttrs}>
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ 100%</span></div>${inner}</div>`;
+  }
+  function wsTitle(name) {
+    const label = `<span class="name">${esc(name)}</span>`;
+    switch (state.affordance) {
+      case 'avatar': return `<div class="ws-title grow"><span class="avatar">${esc(name[0].toUpperCase())}</span>${label}</div>`;
+      case 'chevron': return `<div class="ws-title grow">${label}<span class="chev">${I.down}</span></div>`;
+      case 'pill': return `<div class="grow"><span class="ws-title pill">${label}</span></div>`;
+      default: return `<div class="ws-title grow">${label}</div>`;
+    }
+  }
+  function tasksTopbar() {
+    return `<div class="topbar">${wsTitle(CURRENT_WS.name)}
+      <span class="icon-btn">${I.search}</span><span class="icon-btn">${I.add}</span><span class="icon-btn">${I.more}</span></div>`;
+  }
+  function row(t) {
+    const desc = t.description ? `<span class="desc">${esc(t.description)}</span>` : '';
+    return `<div class="row"><div class="line1"><span class="title">${esc(t.title)}</span><span class="time">${relTime(t.ago)}</span></div>
+      <div class="line2"><span class="chip s-${t.status}">${LABELS[t.status] || t.status}</span>${desc}</div></div>`;
+  }
+  function header(text, cls = '') { return state.buckets === 'headers' ? `<div class="section-header ${cls}">${text}</div>` : ''; }
+  function collapsedRow(key, label, tasks, open) {
+    return `<div class="collapsed ${open ? 'open' : ''}" data-toggle="${key}"><span>${label}</span><span class="count">${tasks.length}</span><span class="spacer"></span>${I.down}</div>`
+      + (open ? tasks.map(row).join('') : '');
+  }
+  function fchip(key, label, count, on) {
+    return `<span class="fchip ${on ? 'on' : ''}" data-chip-filter="${key}">${label}${count != null ? `<span class="count">${count}</span>` : ''}</span>`;
+  }
+  function navItem(key, label, count, on) {
+    return `<span class="navitem ${on ? 'on' : ''}" data-chip-filter="${key}"><span class="ind">${label}<span class="count">${count}</span></span></span>`;
+  }
+  // Filter views show one bucket group at a time, so the Drafts/Done placement toggle does not apply.
+  function isFilterView() { return state.buckets === 'chips' || state.buckets === 'bottombar'; }
+
+  // ---------- screens ----------
+  function tasksBody() {
+    const attention = bucket('attention'), active = bucket('active'), drafts = bucket('drafts'), done = bucket('done');
+    let top = '', list = '', bottom = '';
+
+    if (isFilterView()) {
+      const f = listState.chipFilter;
+      const filters = [['open', 'Open', attention.length + active.length], ['drafts', 'Drafts', drafts.length], ['done', 'Done', done.length]];
+      if (state.buckets === 'chips') {
+        top = `<div class="chiprow">${filters.map(([k, l, n]) => fchip(k, l, n, f === k)).join('')}</div>`;
+      } else {
+        bottom = `<div class="bottombar">${filters.map(([k, l, n]) => navItem(k, l, n, f === k)).join('')}</div>`;
+      }
+      const shown = f === 'open' ? attention.concat(active) : f === 'drafts' ? drafts : done;
+      list = shown.map(row).join('');
+    } else {
+      list = header('Needs attention', 'attention') + attention.map(row).join('') + header('Active') + active.map(row).join('');
+      if (state.collapsed === 'top') {
+        top = `<div class="chiprow">${fchip('drafts', 'Drafts', drafts.length, listState.draftsOpen)}${fchip('done', 'Done', done.length, listState.doneOpen)}</div>`;
+        if (listState.draftsOpen) list += header('Drafts') + drafts.map(row).join('');
+        if (listState.doneOpen) list += header('Done') + done.map(row).join('');
+      } else {
+        list += collapsedRow('drafts', 'Drafts', drafts, listState.draftsOpen) + collapsedRow('done', 'Done', done, listState.doneOpen);
+      }
+    }
+    return `${top}<div class="list">${list}</div>${bottom}`;
+  }
+
+  function tasksScreen() {
+    return phone(`${tasksTopbar()}<div class="body">${tasksBody()}</div>`, 'id="tasks-frame"');
+  }
+
+  function searchScreen() {
+    const q = 'pairing';
+    const results = rank(TASKS.filter(t => (t.title + ' ' + t.description).toLowerCase().includes(q)));
+    return phone(`<div class="searchbar"><span class="icon-btn">${I.back}</span>
+        <div class="field">${I.search}<span>${q}</span><span class="caret"></span><span class="ph" style="margin-left:auto">${I.close}</span></div></div>
+      <div class="body"><div class="result-note">${results.length} results · drafts and done ranked last</div><div class="list">${results.map(row).join('')}</div></div>`);
+  }
+
+  function switcherList(compact) {
+    const rows = WORKSPACES.map(w => `<div class="ws-row ${w.id === CURRENT_WS.id ? 'current' : ''}">
+        <span class="avatar sm ${w.id === CURRENT_WS.id ? '' : 'muted'}">${esc(w.name[0].toUpperCase())}</span>
+        <span class="ws-text"><div class="ws-name">${esc(w.name)}</div>${compact ? '' : `<div class="ws-path">${esc(w.path)}</div>`}</span>
+        ${w.id === CURRENT_WS.id ? I.check : ''}</div>`).join('');
+    return `<div class="ws-filter">${I.search}<span>Filter workspaces</span></div>${rows}
+      <div class="ws-scan">${I.qr}<span>Scan a different pairing code</span></div>`;
+  }
+
+  function switcherScreen() {
+    const base = `${tasksTopbar()}<div class="body">${tasksBody()}</div>`;
+    let overlay;
+    if (state.container === 'sheet') {
+      overlay = `<div class="scrim"></div><div class="sheet"><div class="handle"></div><div class="sheet-title">Workspaces</div>${switcherList(false)}</div>`;
+    } else if (state.container === 'dropdown') {
+      overlay = `<div class="dropdown">${switcherList(true)}</div>`;
+    } else {
+      overlay = `<div class="fullscreen"><div class="statusbar"><span>9:41</span><span>▮▮▮ 100%</span></div>
+        <div class="topbar"><span class="icon-btn">${I.close}</span><span class="title">Switch workspace</span></div>${switcherList(false)}</div>`;
+    }
+    return phone(base + overlay);
+  }
+
+  function detailScreen() {
+    const t = TASKS[1];
+    return phone(`<div class="topbar"><span class="icon-btn">${I.back}</span><span class="grow"></span><span class="icon-btn">${I.more}</span></div>
+      <div class="body"><div class="detail">
+        <h3>${esc(t.title)}</h3>
+        <div class="meta"><span class="chip s-${t.status}">${LABELS[t.status]}</span><span>Updated ${relTime(t.ago)}</span><span>·</span><span>Agent: LLM</span></div>
+        <div class="descr">${esc(t.description)}.\n\nThe list currently jumps when the indicator is rendered inside the LazyColumn; try PullToRefreshBox with the indicator anchored to the top bar instead.</div>
+        <div class="soon"><b>Coming soon</b>Flow progress, chat and actions for this task will appear here. For now, use the Sidekick web UI.</div>
+      </div>
+      <div class="actions"><span class="btn">${I.edit} Edit</span><span class="btn">Cancel</span><span class="btn danger">Archive</span></div>
+      <div class="snackbar">Not available yet</div></div>`);
+  }
+
+  function pairingScreen() {
+    return phone(`<div class="topbar"></div><div class="pairing">
+        <div class="mark">S</div>
+        <h3>Connect to Sidekick</h3>
+        <p>Open Sidekick on your computer, choose <b>Pair mobile</b>, and scan the QR code shown there.</p>
+        <span class="btn primary">${I.qr} Scan pairing code</span>
+        <div class="foot">Connection is end-to-end encrypted via iroh.</div>
+      </div>`);
+  }
+
+  function frame(title, note, html) {
+    return `<section class="frame"><h2>${title}</h2>${html}<p class="note">${note}</p></section>`;
+  }
+
+  function renderScreens() {
+    document.getElementById('screens').innerHTML = [
+      frame('1 · Pairing (unpaired only)', 'Shown only when no credentials are stored. Paired launches land directly on Tasks.', pairingScreen()),
+      frame('2 · Tasks (landing)', 'Blocked / In review first, then Active by updated time. Tap Drafts / Done to reveal; tap a row for detail; “+” shows “Not available yet”.', tasksScreen()),
+      frame('3 · Tasks — search active', 'Client-side substring match on title + description across all buckets; flat list keeps bucket order so Drafts/Done sink.', searchScreen()),
+      frame('4 · Workspace switcher', 'Opened from the workspace title. Type-to-filter, current highlighted, “Scan a different pairing code” at the bottom.', switcherScreen()),
+      frame('5 · Task detail placeholder', 'Title, status, full description and a Coming-soon note. Edit / Cancel / Archive show a snackbar.', detailScreen()),
+    ].join('');
+
+    const tasks = document.getElementById('tasks-frame');
+    tasks.querySelectorAll('[data-toggle]').forEach(el => el.onclick = () => {
+      const k = el.dataset.toggle;
+      if (k === 'drafts') listState.draftsOpen = !listState.draftsOpen; else listState.doneOpen = !listState.doneOpen;
+      renderScreens();
+    });
+    tasks.querySelectorAll('[data-chip-filter]').forEach(el => el.onclick = () => {
+      const k = el.dataset.chipFilter;
+      if (isFilterView()) listState.chipFilter = k;
+      else if (k === 'drafts') listState.draftsOpen = !listState.draftsOpen;
+      else listState.doneOpen = !listState.doneOpen;
+      renderScreens();
+    });
+  }
+
+  function update() { writeHash(); renderControls(); renderScreens(); }
+  window.addEventListener('hashchange', () => { Object.assign(state, DEFAULTS, parseHash()); update(); });
+  update();
+})();
+</script>
+</body>
+</html>

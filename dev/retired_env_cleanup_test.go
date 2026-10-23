@@ -18,6 +18,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/srv"
 	"sidekick/utils"
@@ -353,7 +354,7 @@ func retiredEnvMergeTestWorkflow(ctx workflow.Context, retired []retiredEnv) (Me
 		Requirements:   "Implement the thing",
 		StartBranch:    &startBranch,
 		AutoMerge:      true,
-	}, "", "")
+	}, "", coding.ReviewDiffBaseline{})
 	return mergeInfo, err
 }
 
@@ -378,6 +379,11 @@ func TestMergedFlowCleansUpRetiredEnvs(t *testing.T) {
 		Return(coding.GenerateReviewDiffsResult{FullDiff: "diff content"}, nil).Maybe()
 	wfEnv.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil).Maybe()
 	wfEnv.OnActivity(git.GitMergeActivity, mock.Anything, mock.Anything, mock.Anything).Return(git.MergeActivityResult{}, nil)
+	// Title-based commits keep this test focused on env cleanup rather than
+	// the LLM commit message flow.
+	var flagActivities *fflag.FFlagActivities
+	wfEnv.OnActivity(flagActivities.EvaluateFlags, mock.Anything, mock.Anything).Return(
+		fflag.EvaluateFlagsOutput{BoolValues: map[string]bool{fflag.LlmCommitMessages: false}}, nil).Maybe()
 
 	retired := retiredModalEnv(retiredWorktreeDir, "side--modal-retired", true)
 	wfEnv.ExecuteWorkflow(retiredEnvMergeTestWorkflow, []retiredEnv{retired})

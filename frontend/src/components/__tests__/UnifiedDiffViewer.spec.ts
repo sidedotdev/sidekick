@@ -37,10 +37,14 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 })
 
-// Mock the parseDiff function
-vi.mock('../../lib/diffUtils', () => ({
-  parseDiff: vi.fn()
-}))
+// Mock only parseDiff; DiffFile still relies on the real helpers.
+vi.mock('../../lib/diffUtils', async (importOriginal) => {
+  const actual: Record<string, unknown> = await importOriginal()
+  return {
+    ...actual,
+    parseDiff: vi.fn()
+  }
+})
 
 import { parseDiff } from '../../lib/diffUtils'
 const mockParseDiff = vi.mocked(parseDiff)

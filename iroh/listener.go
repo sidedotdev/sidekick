@@ -20,6 +20,7 @@ type listener struct {
 
 	closeOnce sync.Once
 	errOnce   sync.Once
+	errMu     sync.Mutex
 	acceptErr error
 }
 
@@ -63,6 +64,8 @@ func (l *listener) acceptStreams(conn *iroh.Conn) {
 
 func (l *listener) fail(err error) {
 	l.errOnce.Do(func() {
+		l.errMu.Lock()
+		defer l.errMu.Unlock()
 		l.acceptErr = err
 	})
 	l.cancel()
@@ -74,6 +77,8 @@ func (l *listener) Accept() (net.Conn, error) {
 	case c := <-l.conns:
 		return c, nil
 	case <-l.ctx.Done():
+		l.errMu.Lock()
+		defer l.errMu.Unlock()
 		if l.acceptErr != nil {
 			return nil, l.acceptErr
 		}

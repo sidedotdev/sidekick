@@ -7,6 +7,8 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +33,8 @@ class IrohLoopbackProxy(
     private val ticket: String,
     private val connector: IrohConnector,
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /** Receives a one-line timing/byte summary each time a proxied connection ends. */
+    private val onStreamFinished: (summary: String) -> Unit = { summary -> Log.d(TAG, summary) },
     private val onConnectionError: (message: String, error: Throwable) -> Unit = { message, error ->
         Log.w(TAG, message, error)
     },
@@ -38,6 +42,8 @@ class IrohLoopbackProxy(
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val connectionMutex = Mutex()
     private val activeSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
+    private val activeTraces = ConcurrentHashMap<Socket, StreamTrace>()
+    private val streamSequence = AtomicInteger()
 
     // Guards publication of every owned resource against close(), so a resource
     // is either visible to close() or rejected by its creator, never leaked.
@@ -59,6 +65,30 @@ class IrohLoopbackProxy(
             val host = if (address is Inet6Address) "[${address.hostAddress}]" else address.hostAddress
             return "http://$host:${server.localPort}/"
         }
+
+    /**
+     * Snapshot of the listener and tunnel state for attaching to connection
+     * failures, so a client-side connect timeout can be told apart from a
+     * closed listener, an accept loop that stopped, or a missing iroh connection.
+     */
+    fun describeState(): String {
+        val server = serverSocket
+        val listener = when {
+            server == null -> "not started"
+            server.isClosed -> "closed"
+            else -> "listening on ${server.inetAddress.hostAddress}:${server.localPort}"
+        }
+        val paths = connection?.let { current ->
+            try {
+                current.pathSummary()
+            } catch (error: Exception) {
+                "unavailable (${error.javaClass.simpleName})"
+            }
+        } ?: "none"
+        return "listener=$listener closed=$closed activeSockets=${activeSockets.size} " +
+            "streamsStarted=${streamSequence.get()} irohConnection=$paths " +
+            "activeStreams=${activeTraces.values.joinToString(separator = "; ")}"
+    }
 
     fun start() {
         val server = synchronized(lifecycleLock) {
@@ -112,46 +142,70 @@ class IrohLoopbackProxy(
 
     private suspend fun proxyConnection(socket: Socket) {
         var stream: IrohStream? = null
+        val trace = StreamTrace(streamSequence.incrementAndGet())
+        activeTraces[socket] = trace
         try {
             socket.tcpNoDelay = true
             val opened = openStream()
+            trace.markOpened()
             stream = opened
             coroutineScope {
-                launch { pumpTcpToStream(socket, opened) }
-                launch { pumpStreamToTcp(opened, socket) }
+                launch { pumpTcpToStream(socket, opened, trace) }
+                launch { pumpStreamToTcp(opened, socket, trace) }
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            if (!closed) onConnectionError("proxied connection failed", error)
+            if (!closed) onConnectionError("proxied connection failed ($trace)", error)
         } finally {
             closeQuietly(stream)
             closeQuietly(socket)
             activeSockets -= socket
+            activeTraces -= socket
+            if (!closed) reportStreamFinished(trace)
         }
     }
 
-    private suspend fun pumpTcpToStream(socket: Socket, stream: IrohStream) {
+    private fun reportStreamFinished(trace: StreamTrace) {
+        val paths = try {
+            connection?.pathSummary() ?: "none"
+        } catch (error: Exception) {
+            "unavailable (${error.javaClass.simpleName})"
+        }
+        try {
+            onStreamFinished("stream finished $trace paths=$paths")
+        } catch (error: Exception) {
+            onConnectionError("stream diagnostics failed", error)
+        }
+    }
+
+    private suspend fun pumpTcpToStream(socket: Socket, stream: IrohStream, trace: StreamTrace) {
         closingBothOnFailure(socket, stream) {
             val input = socket.getInputStream()
             val buffer = ByteArray(TCP_READ_BUFFER_SIZE)
             while (true) {
                 val count = input.read(buffer)
                 if (count < 0) break
-                if (count > 0) stream.write(buffer.copyOf(count))
+                if (count > 0) {
+                    stream.write(buffer.copyOf(count))
+                    trace.upBytes.addAndGet(count.toLong())
+                }
             }
             stream.finish()
         }
     }
 
-    private suspend fun pumpStreamToTcp(stream: IrohStream, socket: Socket) {
+    private suspend fun pumpStreamToTcp(stream: IrohStream, socket: Socket, trace: StreamTrace) {
         closingBothOnFailure(socket, stream) {
             val output = socket.getOutputStream()
             while (true) {
                 val chunk = stream.read() ?: break
+                trace.recordDown(chunk.size)
                 output.write(chunk)
                 output.flush()
+                trace.forwardedBytes.addAndGet(chunk.size.toLong())
             }
+            trace.markEof()
             shutdownOutputQuietly(socket)
         }
     }
@@ -205,5 +259,51 @@ class IrohLoopbackProxy(
             }
         }
         closeQuietly(stale)
+    }
+}
+
+/**
+ * Byte and timing accounting for one proxied stream, so a slow or truncated
+ * transfer can be told apart from a slow server or a client-side timeout.
+ */
+private class StreamTrace(private val id: Int) {
+    private val startedAtNanos = System.nanoTime()
+    val upBytes = AtomicLong()
+    val forwardedBytes = AtomicLong()
+    private val downBytes = AtomicLong()
+    private val downChunks = AtomicLong()
+    private val lastDownAtNanos = AtomicLong(startedAtNanos)
+
+    @Volatile
+    private var openedAtNanos = 0L
+
+    @Volatile
+    private var firstDownAtNanos = 0L
+
+    @Volatile
+    private var eofAtNanos = 0L
+
+    fun markOpened() {
+        openedAtNanos = System.nanoTime()
+    }
+
+    fun markEof() {
+        eofAtNanos = System.nanoTime()
+    }
+
+    fun recordDown(count: Int) {
+        val now = System.nanoTime()
+        if (downChunks.getAndIncrement() == 0L) firstDownAtNanos = now
+        downBytes.addAndGet(count.toLong())
+        lastDownAtNanos.set(now)
+    }
+
+    override fun toString(): String {
+        fun sinceStart(atNanos: Long) = if (atNanos == 0L) "-" else "${(atNanos - startedAtNanos) / 1_000_000}ms"
+        return "stream#$id up=${upBytes.get()}B down=${downBytes.get()}B/${downChunks.get()}chunks " +
+            "forwarded=${forwardedBytes.get()}B " +
+            "open@${sinceStart(openedAtNanos)} firstDown@${sinceStart(firstDownAtNanos)} " +
+            "lastDown@${sinceStart(lastDownAtNanos.get())} eof@${sinceStart(eofAtNanos)} " +
+            "age=${(System.nanoTime() - startedAtNanos) / 1_000_000}ms"
     }
 }

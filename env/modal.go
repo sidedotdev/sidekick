@@ -205,15 +205,21 @@ func modalTunnelEndpoint(ctx context.Context, sb *modal.Sandbox) (string, int, e
 // waitForModalSSHD blocks until sshd is accepting work inside the sandbox,
 // so callers never hand out an endpoint that refuses connections.
 func waitForModalSSHD(ctx context.Context, sb *modal.Sandbox) error {
+	// The script itself writes nothing to stderr, so anything captured there
+	// comes from the runtime and identifies a missing container.
 	proc, err := sb.Exec(ctx, []string{"sh", "-c",
 		"i=0; while [ $i -lt 120 ]; do pgrep -x sshd >/dev/null 2>&1 && exit 0; sleep 1; i=$((i+1)); done; exit 1",
-	}, &modal.SandboxExecParams{Stdout: modal.Ignore, Stderr: modal.Ignore})
+	}, &modal.SandboxExecParams{Stdout: modal.Ignore, Stderr: modal.Pipe})
 	if err != nil {
 		return fmt.Errorf("failed to exec sshd readiness check in modal sandbox: %w", err)
 	}
+	stderr, readErr := io.ReadAll(proc.Stderr)
 	exitCode, err := proc.Wait(ctx)
 	if err != nil {
 		return fmt.Errorf("sshd readiness check failed in modal sandbox: %w", err)
+	}
+	if readErr == nil && isModalContainerGoneOutput(exitCode, "", string(stderr)) {
+		return fmt.Errorf("sshd readiness check could not run in modal sandbox (exit %d): %w", exitCode, errModalContainerGone)
 	}
 	if exitCode != 0 {
 		return fmt.Errorf("sshd did not come up in modal sandbox (exit %d)", exitCode)
@@ -479,9 +485,51 @@ func modalSSHArgs(sandboxName, sshHost string, sshPort int, identityFile string)
 }
 
 // errModalSandboxNotRunning is reported by API-side operations when no live
-// sandbox exists under the requested name. Because the API never started
-// anything, callers can treat it as proof the sandbox vanished and restore it.
+// sandbox exists under the requested name, or its container no longer does.
+// Because the API never started anything, callers can treat it as proof the
+// sandbox vanished and restore it.
 var errModalSandboxNotRunning = errors.New("modal sandbox is not running")
+
+// A sandbox can keep polling as running after its container is gone, e.g.
+// while a terminate tears it down. Modal still admits execs into it, but the
+// gVisor runtime refuses them with this exit code and message, before any
+// process starts.
+const (
+	modalContainerGoneExitCode = 137
+	modalContainerGoneMessage  = "FetchSpec failed: loading container: file does not exist"
+)
+
+var errModalContainerGone = errors.New("modal sandbox container no longer exists")
+
+// isModalContainerGoneOutput reports whether an exec's result is exactly the
+// runtime's refusal to start a process in a missing container. Any other
+// output means a process ran, so the result is the command's own.
+func isModalContainerGoneOutput(exitCode int, stdout, stderr string) bool {
+	return exitCode == modalContainerGoneExitCode && stdout == "" &&
+		strings.TrimSpace(stderr) == modalContainerGoneMessage
+}
+
+// modalContainerGoneError reports an exec as never having run when its result
+// is the runtime's refusal and the sandbox cannot run anything else either; a
+// command that merely printed the refusal leaves the sandbox executing.
+func modalContainerGoneError(sandboxName string, exitCode int, stdout, stderr string, sandboxExecutes func() bool) error {
+	if isModalContainerGoneOutput(exitCode, stdout, stderr) && !sandboxExecutes() {
+		return fmt.Errorf("%w: %s: %w", errModalSandboxNotRunning, sandboxName, errModalContainerGone)
+	}
+	return nil
+}
+
+// modalSandboxExecutes reports whether the sandbox can still run a trivial
+// command. It distinguishes a missing container from a command that merely
+// reproduced the runtime's refusal itself.
+func modalSandboxExecutes(ctx context.Context, sb *modal.Sandbox) bool {
+	proc, err := sb.Exec(ctx, []string{"true"}, &modal.SandboxExecParams{Stdout: modal.Ignore, Stderr: modal.Ignore})
+	if err != nil {
+		return false
+	}
+	exitCode, err := proc.Wait(ctx)
+	return err == nil && exitCode == 0
+}
 
 // Exit codes the fence below uses to refuse a command. Each is paired with a
 // marker on stderr, though neither is proof on its own: a command is free to
@@ -577,6 +625,10 @@ func modalExecCommand(ctx context.Context, sandboxName, command string) (EnvRunC
 	exitCode, err := process.Wait(ctx)
 	if err != nil {
 		return EnvRunCommandOutput{}, fmt.Errorf("failed to wait for command in modal sandbox %s: %w", sandboxName, err)
+	}
+	sandboxExecutes := func() bool { return modalSandboxExecutes(ctx, sb) }
+	if err := modalContainerGoneError(sandboxName, exitCode, string(stdout), string(stderr), sandboxExecutes); err != nil {
+		return EnvRunCommandOutput{}, err
 	}
 	// A refusal means nothing ran, so it surfaces as an error rather than as
 	// a failed command: an empty result must not be read as the command's
@@ -1130,18 +1182,12 @@ func (r modalEndpointRefresh) restoreNotice(sandboxName string) string {
 		sandboxName, r.previousSandboxDescription(), r.snapshotDescription())
 }
 
-// refreshModalEndpoint re-resolves a sandbox's SSH tunnel endpoint after a
-// connection failure. If the sandbox no longer exists but the guard holds a
-// filesystem snapshot of it (taken by the idle watchdog), the sandbox is
-// recreated from that snapshot first.
-func refreshModalEndpoint(ctx context.Context, sandboxName string) (string, int, error) {
-	refresh, err := refreshModalEndpointDetailed(ctx, sandboxName)
-	return refresh.SSHHost, refresh.SSHPort, err
-}
-
-// refreshModalEndpointDetailed is refreshModalEndpoint reporting whether the
-// sandbox was restored from a snapshot; a seam so RunCommand tests can drive
-// the restore outcome without a Modal client.
+// refreshModalEndpointDetailed re-resolves a sandbox's SSH tunnel endpoint
+// after a connection failure, reporting whether the sandbox had to be restored
+// from a snapshot: if it no longer exists but the guard holds a filesystem
+// snapshot of it (taken by the idle watchdog), it is recreated from that
+// snapshot first. A package variable so tests can drive the restore outcome
+// without a Modal client.
 var refreshModalEndpointDetailed = func(ctx context.Context, sandboxName string) (modalEndpointRefresh, error) {
 	client, err := getModalClient()
 	if err != nil {
@@ -1157,7 +1203,16 @@ var refreshModalEndpointDetailed = func(ctx context.Context, sandboxName string)
 			host, port, err := modalTunnelEndpoint(ctx, sb)
 			return modalEndpointRefresh{SSHHost: host, SSHPort: port}, err
 		}
-		if !isModalSandboxTerminatingOrTerminated(err) {
+		switch {
+		case errors.Is(err, errModalContainerGone):
+			// Nothing can run in it again, yet it may keep polling as running
+			// and holding its name; terminating it frees the name for the
+			// restore below.
+			log.Warn().Err(err).Str("sandbox", sandboxName).Msg("modal sandbox container is gone; terminating it to restore from its snapshot")
+			if _, termErr := sb.Terminate(ctx, nil); termErr != nil && !isModalSandboxTerminatingOrTerminated(termErr) {
+				return modalEndpointRefresh{}, fmt.Errorf("failed to terminate modal sandbox %s whose container is gone: %w", sandboxName, termErr)
+			}
+		case !isModalSandboxTerminatingOrTerminated(err):
 			return modalEndpointRefresh{}, err
 		}
 		// The sandbox is mid-shutdown (idle watchdog terminate): wait it out,
@@ -1612,6 +1667,13 @@ type modalSandboxProvider struct{}
 
 func init() {
 	RegisterSandboxProvider(EnvTypeModal, modalSandboxProvider{})
+}
+
+// SupportsWorktreeHibernation is false because an idle Modal sandbox is
+// snapshotted and terminated wholesale by its watchdog, so hibernating its
+// worktree to reclaim disk buys nothing.
+func (modalSandboxProvider) SupportsWorktreeHibernation() bool {
+	return false
 }
 
 func (modalSandboxProvider) CreateSandbox(ctx context.Context, input CreateSandboxInput) (CreateSandboxOutput, error) {

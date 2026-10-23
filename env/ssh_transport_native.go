@@ -482,9 +482,13 @@ func (t *nativeSSHTransport) connConfig(ctx context.Context) (SSHConnConfig, err
 func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativeSSHConn, client *ssh.Client) error) error {
 	// The loop is bounded so that a shutdown storm cannot spin here: each pass
 	// either runs the operation or re-acquires an entry shutdown took away.
-	const maxAttempts = 4
+	// Connection recovery is itself bounded per operation (one key repair and
+	// a limited number of endpoint refreshes), and only ever wraps acquiring
+	// the connection, never the operation, so nothing is replayed after it may
+	// have run.
+	const maxAttempts = 6
 	opAttempts := 0
-	recoveryAttempted := false
+	var recovery sshTransportRecovery
 	var lastErr error
 	for range maxAttempts {
 		config, err := t.connConfig(ctx)
@@ -500,13 +504,15 @@ func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativ
 				continue
 			}
 			recoverer, ok := t.sshEnv.(sshTransportRecoverer)
-			if !ok || recoveryAttempted || ctx.Err() != nil {
+			if !ok || ctx.Err() != nil {
 				return err
 			}
-			recoveryAttempted = true
-			recovered, recoveryErr := recoverer.recoverSSHTransport(ctx, err)
+			if recovery == nil {
+				recovery = recoverer.newSSHTransportRecovery()
+			}
+			recovered, recoveryErr := recovery.recover(ctx, err)
 			if recoveryErr != nil {
-				return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+				return wrapDockerOperationError("failed to recover SSH transport", fmt.Errorf("%w: %w", err, recoveryErr))
 			}
 			if !recovered {
 				return err
@@ -517,6 +523,10 @@ func (t *nativeSSHTransport) withClient(ctx context.Context, op func(conn *nativ
 		conn.endOp()
 		if opErr == nil {
 			return nil
+		}
+		var execErr *agentExecTransportError
+		if errors.As(opErr, &execErr) {
+			return opErr
 		}
 		opAttempts++
 		if opAttempts > 1 || ctx.Err() != nil || nativeConnectionAlive(client) {
@@ -631,13 +641,13 @@ func (ch *nativeExecChannel) close() {
 	ch.client.Close()
 }
 
-// execFailure enriches a command failure with whatever the remote wrote to the
-// session's stderr, which is where the agent reports pre-protocol problems.
+// execFailure preserves the uncertain command outcome so connection recovery
+// cannot replay a command whose result was lost.
 func (ch *nativeExecChannel) execFailure(execErr error) error {
-	if details := strings.TrimSpace(ch.diagnostics.String()); details != "" {
-		return fmt.Errorf("%w: remote diagnostics: %s", execErr, details)
+	return &agentExecTransportError{
+		cause:       execErr,
+		diagnostics: strings.TrimSpace(ch.diagnostics.String()),
 	}
-	return execErr
 }
 
 // runPooledAgentExec runs req over the connection's pooled exec channel,
@@ -895,12 +905,17 @@ func (c *nativeSSHConn) runPooledSFTPOp(ctx context.Context, client *ssh.Client,
 	case result := <-resultCh:
 		if result.err != nil {
 			if sftpFailureWarrantsReconnect(ctx, result.err, op) {
+				log.Ctx(ctx).Warn().Err(result.err).Str("remote", c.remoteKey).
+					Str("operation", op.Name).Str("path", op.Path).Msg("discarding failed shared sftp channel")
 				c.invalidateSFTPClient(sftpClient)
 			}
 			return nil, fmt.Errorf("%s %s: %w", op.Name, op.Path, result.err)
 		}
 		return result.value, nil
 	case <-opCtx.Done():
+		log.Ctx(ctx).Warn().Err(opCtx.Err()).AnErr("callerError", ctx.Err()).
+			Str("remote", c.remoteKey).Str("operation", op.Name).Str("path", op.Path).
+			Msg("discarding interrupted shared sftp channel")
 		c.invalidateSFTPClient(sftpClient)
 		return nil, fmt.Errorf("%s %s: %w", op.Name, op.Path, opCtx.Err())
 	}
@@ -1624,9 +1639,21 @@ func nativeHostKeyCallback(config SSHConnConfig) (ssh.HostKeyCallback, error) {
 			}
 			knownHostsFiles = []string{filepath.Join(home, ".ssh", "known_hosts")}
 		}
-		callback, err := knownhosts.New(knownHostsFiles...)
+		existingFiles := make([]string, 0, len(knownHostsFiles))
+		for _, file := range knownHostsFiles {
+			_, err := os.Stat(file)
+			if errors.Is(err, os.ErrNotExist) {
+				// OpenSSH's default list includes optional files such as known_hosts2.
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read known hosts %s: %w", file, err)
+			}
+			existingFiles = append(existingFiles, file)
+		}
+		callback, err := knownhosts.New(existingFiles...)
 		if err != nil {
-			return nil, fmt.Errorf("read known hosts %s: %w", strings.Join(knownHostsFiles, " "), err)
+			return nil, fmt.Errorf("read known hosts %s: %w", strings.Join(existingFiles, " "), err)
 		}
 		return callback, nil
 	default:

@@ -353,3 +353,17 @@ func (d Delegator) GetProjects(ctx context.Context, workspaceId string) ([]domai
 func (d Delegator) DeleteProject(ctx context.Context, workspaceId, projectId string) error {
 	return d.storage.DeleteProject(ctx, workspaceId, projectId)
 }
+
+func (d Delegator) GetFlowActionsPage(ctx context.Context, workspaceID, flowID string, page domain.HistoryPageRequest) (domain.FlowActionsPage, error) {
+	if storage, ok := d.storage.(domain.FlowHistoryStorage); ok {
+		return storage.GetFlowActionsPage(ctx, workspaceID, flowID, page)
+	}
+	return legacyFlowActionsPage(ctx, d.storage, workspaceID, flowID, page)
+}
+
+func (d Delegator) GetSubflowsPage(ctx context.Context, workspaceID, flowID string, page domain.HistoryPageRequest) (domain.SubflowsPage, error) {
+	if storage, ok := d.storage.(domain.FlowHistoryStorage); ok {
+		return storage.GetSubflowsPage(ctx, workspaceID, flowID, page)
+	}
+	return legacySubflowsPage(ctx, d.storage, workspaceID, flowID, page)
+}

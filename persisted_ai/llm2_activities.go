@@ -121,7 +121,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, event)
 			}
-			if event.Type == llm2.EventHeartbeat || input.FlowActionId == "" {
+			if event.Type == llm2.EventHeartbeat || event.Type == llm2.EventUpstreamActivity || input.FlowActionId == "" {
 				continue
 			}
 
@@ -171,6 +171,11 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	}
 
 	options := input.Options
+	if options.PromptCacheKey == "" {
+		// Requests within a flow share long prompt prefixes, so routing them
+		// together maximizes provider-side prompt cache hits.
+		options.PromptCacheKey = input.FlowId
+	}
 	messages := llm2History.Llm2Messages()
 	if input.ToolNameMapping != nil {
 		options = mapOptionsToolNames(options, input.ToolNameMapping)

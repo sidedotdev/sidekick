@@ -302,11 +302,11 @@ func (c *mergeCoordinator) relocateResolution(ctx context.Context, transport mer
 	if _, err := source.script(ctx, sourceDir, "git update-ref "+shellQuote(ref+"-relocated")+" "+shellQuote(stash)); err != nil {
 		return err
 	}
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: source.envContainer,
 		Command:      "git",
 		Args:         []string{"-C", sourceDir, "stash", "apply", stash},
-	})
+	}, sourceDir)
 	if err != nil {
 		return err
 	}
@@ -494,11 +494,11 @@ func (c *mergeCoordinator) relocateStashConflict(ctx context.Context, transport 
 			}
 		}
 		if !dirty {
-			out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			out, err := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: source.envContainer,
 				Command:      "git",
 				Args:         []string{"-C", sourceDir, "stash", "apply", stash},
-			})
+			}, sourceDir)
 			if err != nil {
 				return err
 			}
@@ -602,6 +602,20 @@ fi`, shellQuote(ref), shellQuote(": "+message), shellQuote(message), shellQuote(
 	return sha, ref, err
 }
 
+// mergeLanded reports whether the merge owning the pending stash at
+// pendingRef already landed at the worktree's current HEAD.
+func (r mergeRepository) mergeLanded(ctx context.Context, dir, pendingRef string) (bool, error) {
+	out, err := r.script(ctx, dir, fmt.Sprintf(`
+landed=$(git rev-parse --verify --quiet %s) || exit 0
+if [ "$landed" = "$(git rev-parse HEAD)" ]; then printf landed; fi`, shellQuote(pendingRef+"-merged")))
+	return out == "landed", err
+}
+
+func (r mergeRepository) recordMergeLanded(ctx context.Context, dir, pendingRef string) error {
+	_, err := r.script(ctx, dir, "git update-ref "+shellQuote(pendingRef+"-merged")+" HEAD")
+	return err
+}
+
 func restoreOwnedMergeStash(ctx context.Context, container env.EnvContainer, dir, sha, ref string, vars []string) (bool, error) {
 	repository := mergeRepository{envContainer: container}
 	restored, err := repository.restoredMergeStash(ctx, dir, sha, ref)
@@ -611,12 +625,12 @@ func restoreOwnedMergeStash(ctx context.Context, container env.EnvContainer, dir
 	if restored {
 		return false, repository.finishMergeRestore(ctx, dir, sha, ref, vars)
 	}
-	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	out, err := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: container,
 		Command:      "git",
 		Args:         []string{"-C", dir, "stash", "apply", "--index", sha},
 		EnvVars:      vars,
-	})
+	}, dir)
 	if err != nil {
 		return false, err
 	}
@@ -633,12 +647,12 @@ func restoreOwnedMergeStash(ctx context.Context, container env.EnvContainer, dir
 			if _, err := repository.script(ctx, dir, "git diff --cached --quiet HEAD"); err != nil {
 				return false, fmt.Errorf("stash index restoration incomplete; stash %s preserved: %w", sha, err)
 			}
-			out, err = env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			out, err = runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: container,
 				Command:      "git",
 				Args:         []string{"-C", dir, "stash", "apply", sha},
 				EnvVars:      vars,
-			})
+			}, dir)
 			if err != nil {
 				return false, err
 			}
@@ -678,7 +692,7 @@ func (r mergeRepository) clearMergeState(ctx context.Context, dir, stash string)
 git for-each-ref --format='%%(refname) %%(objectname)' refs/sidekick-merge/pending |
 while read -r ref sha; do
 	if [ "$sha" = %s ]; then
-		printf 'delete %%s %%s\ndelete %%s\ndelete %%s\n' "$ref" "$sha" "$ref-restore-tree" "$ref-restore-index" | git update-ref --stdin || exit
+		printf 'delete %%s %%s\ndelete %%s\ndelete %%s\ndelete %%s\n' "$ref" "$sha" "$ref-restore-tree" "$ref-restore-index" "$ref-merged" | git update-ref --stdin || exit
 	fi
 done || exit
 git update-ref -d %s &&
@@ -728,8 +742,8 @@ func (r mergeRepository) finishMergeRestore(ctx context.Context, dir, sha, ref s
 	if err := dropStashBySha(ctx, r.envContainer, dir, sha, vars); err != nil {
 		return err
 	}
-	_, err := r.script(ctx, dir, fmt.Sprintf("printf 'delete %%s %%s\\ndelete %%s\\ndelete %%s\\n' %s %s %s %s | git update-ref --stdin",
-		shellQuote(ref), shellQuote(sha), shellQuote(ref+"-restore-tree"), shellQuote(ref+"-restore-index")))
+	_, err := r.script(ctx, dir, fmt.Sprintf("printf 'delete %%s %%s\\ndelete %%s\\ndelete %%s\\ndelete %%s\\n' %s %s %s %s %s | git update-ref --stdin",
+		shellQuote(ref), shellQuote(sha), shellQuote(ref+"-restore-tree"), shellQuote(ref+"-restore-index"), shellQuote(ref+"-merged")))
 	return err
 }
 

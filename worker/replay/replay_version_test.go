@@ -6,14 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/mock"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
-	"go.temporal.io/sdk/mocks"
 )
 
 func TestIsReplayableVersion(t *testing.T) {
@@ -129,13 +128,13 @@ func TestListRecentRunningWorkflowsUsesWorkerBuild(t *testing.T) {
 				}
 				info.Memo = &commonpb.Memo{Fields: map[string]*commonpb.Payload{"sidekickVersion": payload}}
 			}
-			c := mocks.NewClient(t)
-			c.On("ListWorkflow", mock.Anything, mock.Anything).
-				Return(&workflowservice.ListWorkflowExecutionsResponse{
+			c := newReplayVisibilityClient(t, func(context.Context, *workflowservice.ListWorkflowExecutionsRequest) (*workflowservice.ListWorkflowExecutionsResponse, error) {
+				return &workflowservice.ListWorkflowExecutionsResponse{
 					Executions: []*workflowpb.WorkflowExecutionInfo{info},
-				}, nil).Once()
+				}, nil
+			})
 
-			listed, err := listRecentRunningWorkflows(context.Background(), c, 1)
+			listed, err := listRecentRunningWorkflows(context.Background(), c.WorkflowService(), client.DefaultNamespace, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -308,6 +307,57 @@ func TestSelectReplayCandidatesIgnoresVisibilityBuild(t *testing.T) {
 			selected := selectReplayCandidates(t, listed, map[string]struct{}{"blacklisted": {}}, 1)
 			if len(selected) != 1 || selected[0].id != "candidate" {
 				t.Fatalf("selected = %+v; want only candidate, regardless of visibility build", selected)
+			}
+		})
+	}
+}
+
+func TestIsDivergentBuild(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init")
+	git("config", "user.email", "test@example.com")
+	git("config", "user.name", "Test")
+	git("commit", "--allow-empty", "-m", "ancestor")
+	ancestor := git("rev-parse", "HEAD")
+	git("commit", "--allow-empty", "-m", "head")
+	head := git("rev-parse", "HEAD")
+	git("checkout", "--detach", ancestor)
+	git("commit", "--allow-empty", "-m", "divergent")
+	divergent := git("rev-parse", "HEAD")
+
+	t.Setenv("GIT_DIR", dir+"/.git")
+	t.Setenv("GIT_WORK_TREE", dir)
+	for _, tt := range []struct {
+		name    string
+		current string
+		build   string
+		want    bool
+	}{
+		{"ancestor", head, ancestor, false},
+		{"equal", head, head, false},
+		{"dirty ancestor", head, ancestor + "-dirty", false},
+		{"divergent", head, divergent, true},
+		{"dirty divergent", head, divergent + "-dirty", true},
+		{"unavailable commit", head, strings.Repeat("1", 40), true},
+		{"missing current", "", divergent, false},
+		{"missing build", head, "", false},
+		{"unknown build", head, "unknown", false},
+		{"sdk binary checksum", head, "8ac10dfc0d9a346a97e3f39170dc3dc8", false},
+		{"symbolic ref", head, "HEAD~1", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDivergentBuild(tt.current, tt.build); got != tt.want {
+				t.Fatalf("isDivergentBuild(%q, %q) = %v, want %v",
+					tt.current, tt.build, got, tt.want)
 			}
 		})
 	}

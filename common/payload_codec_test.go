@@ -124,7 +124,7 @@ func TestPayloadCodec_BelowThreshold(t *testing.T) {
 		t.Fatalf("expected 1 payload, got %d", len(encoded))
 	}
 	// Should pass through unchanged
-	if _, ok := encoded[0].Metadata[codecMetadataKey]; ok {
+	if _, ok := encoded[0].Metadata[CodecMetadataKey]; ok {
 		t.Fatal("expected payload below threshold to pass through unchanged")
 	}
 
@@ -151,12 +151,12 @@ func TestPayloadCodec_AboveThreshold(t *testing.T) {
 		t.Fatalf("Encode error: %v", err)
 	}
 	// Should be a reference payload
-	keyBytes, ok := encoded[0].Metadata[codecMetadataKey]
+	keyBytes, ok := encoded[0].Metadata[CodecMetadataKey]
 	if !ok {
 		t.Fatal("expected reference metadata key in encoded payload")
 	}
-	if !strings.HasPrefix(string(keyBytes), codecKeyPrefix) {
-		t.Fatalf("expected key prefix %q, got %q", codecKeyPrefix, string(keyBytes))
+	if !strings.HasPrefix(string(keyBytes), CodecKeyPrefix) {
+		t.Fatalf("expected key prefix %q, got %q", CodecKeyPrefix, string(keyBytes))
 	}
 
 	decoded, err := codec.Decode(encoded)
@@ -185,10 +185,10 @@ func TestPayloadCodec_MixedPayloads(t *testing.T) {
 	}
 
 	// First should pass through, second should be reference
-	if _, ok := encoded[0].Metadata[codecMetadataKey]; ok {
+	if _, ok := encoded[0].Metadata[CodecMetadataKey]; ok {
 		t.Fatal("small payload should not be offloaded")
 	}
-	if _, ok := encoded[1].Metadata[codecMetadataKey]; !ok {
+	if _, ok := encoded[1].Metadata[CodecMetadataKey]; !ok {
 		t.Fatal("large payload should be offloaded")
 	}
 
@@ -209,7 +209,7 @@ func TestPayloadCodec_DecodeNotFound(t *testing.T) {
 
 	ref := &commonpb.Payload{
 		Metadata: map[string][]byte{
-			codecMetadataKey: []byte("codec/nonexistent"),
+			CodecMetadataKey: []byte("codec/nonexistent"),
 		},
 	}
 	_, err := codec.Decode([]*commonpb.Payload{ref})

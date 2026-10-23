@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sidekick/common"
 	"sidekick/env"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sourcegraph/jsonrpc2"
@@ -35,6 +37,7 @@ type Jsonrpc2LSPClient struct {
 	Conn               *jsonrpc2.Conn
 	ServerCapabilities ServerCapabilities
 	LanguageName       string
+	transport          *ReadWriteCloser
 	// EnvContainer determines where the language server runs. For SSH-capable
 	// environments (e.g. a dev container) the server is launched inside the
 	// environment over SSH so it operates on the environment's filesystem;
@@ -45,16 +48,33 @@ type Jsonrpc2LSPClient struct {
 type ReadWriteCloser struct {
 	io.Reader
 	io.WriteCloser
+	command  *exec.Cmd
+	waited   <-chan error
+	once     sync.Once
+	closeErr error
 }
 
 func (rwc *ReadWriteCloser) Close() error {
-	if err := rwc.WriteCloser.Close(); err != nil {
-		return err
-	}
-	if closer, ok := rwc.Reader.(io.Closer); ok {
-		return closer.Close()
-	}
-	return nil
+	rwc.once.Do(func() {
+		recordError := func(err error) {
+			if !errors.Is(err, os.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
+				rwc.closeErr = errors.Join(rwc.closeErr, err)
+			}
+		}
+		recordError(rwc.WriteCloser.Close())
+		if closer, ok := rwc.Reader.(io.Closer); ok {
+			recordError(closer.Close())
+		}
+		if rwc.command != nil {
+			select {
+			case <-rwc.waited:
+			case <-time.After(2 * time.Second):
+				_ = rwc.command.Process.Kill()
+				<-rwc.waited
+			}
+		}
+	})
+	return rwc.closeErr
 }
 
 var ErrUnsupportedLanguage = errors.New("unsupported language")
@@ -73,24 +93,34 @@ func lspServerStdioReadWriteCloser(ctx context.Context, languageName string, env
 	if err != nil {
 		return nil, err
 	}
+	return startServerTransport(cmd)
+}
+
+func startServerTransport(cmd *exec.Cmd) (*ReadWriteCloser, error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("cmd.StdinPipe() failed: %v", err)
+		return nil, fmt.Errorf("cmd.StdinPipe() failed: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("cmd.StdoutPipe() failed: %v", err)
+		_ = stdin.Close()
+		return nil, fmt.Errorf("cmd.StdoutPipe() failed: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("cmd.Start() failed: %v", err)
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return nil, fmt.Errorf("cmd.Start() failed: %w", err)
 	}
-	return &ReadWriteCloser{stdout, stdin}, nil
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+	return &ReadWriteCloser{
+		Reader: stdout, WriteCloser: stdin, command: cmd, waited: waited,
+	}, nil
 }
 
-// goplsServerArgs are the flags used to launch gopls as a stdio LSP server. The
-// -remote=auto flag makes gopls attach to (or spawn) a shared daemon, so state
-// is retained across reconnects and repeated connections do not leak servers.
-var goplsServerArgs = []string{"-remote=auto", "-logfile=auto", "-debug=:0", "-remote.debug=:0", "-rpc.trace", "-remote.listen.timeout=0"}
+// A stdio server belongs to its client. A shared daemon would retain workspace
+// graphs after cache eviction and escape the owner's lifetime bound.
+var goplsServerArgs = []string{}
 
 // lspServerCommand builds the (unstarted) command whose stdio is used as the
 // JSON-RPC transport to the language server. When envContainer wraps an
@@ -122,12 +152,16 @@ func lspServerCommand(ctx context.Context, languageName string, envContainer *en
 		// Modal sandboxes expose the go toolchain on PATH only in a login
 		// shell (ModalEnv.RunCommand itself wraps commands in `bash -lc`, and
 		// Modal images are Debian-based so bash is guaranteed). gopls must be
-		// launched the same way, or the daemon it spawns cannot find `go` and
-		// fails to build workspace views. Other SSH envs keep a raw exec:
+		// launched the same way to find `go` and build workspace views.
+		// Other SSH envs keep a raw exec:
 		// their images may provide only POSIX sh, and their sshd environment
 		// already matches the one RunCommand probed gopls under.
 		if envContainer.Env.GetType() == env.EnvTypeModal {
 			remoteCommand = "bash -lc " + lspShellQuote(remoteCommand)
+		}
+		remoteCommand, err = env.ManagedBackgroundCommand(remoteCommand)
+		if err != nil {
+			return nil, fmt.Errorf("prepare managed analysis command: %w", err)
 		}
 		args := append(append([]string{}, sshArgs...), remoteCommand)
 		return exec.Command("ssh", args...), nil
@@ -252,30 +286,31 @@ func (noopHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc
 
 // TODO make the ReadWriteCloser a parameter, so that multiple different language servers can be supported
 func (l *Jsonrpc2LSPClient) Initialize(ctx context.Context, params InitializeParams) (InitializeResponse, error) {
-	// start lsp server (if needed) and connect to it
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	release, err := l.BeginActivity(ctx, cancel)
+	if err != nil {
+		return InitializeResponse{}, err
+	}
+	defer release()
 	rwc, err := lspServerStdioReadWriteCloser(ctx, l.LanguageName, l.EnvContainer)
 	if err != nil {
 		return InitializeResponse{}, fmt.Errorf("gopls failure: %w", err)
 	}
-	// Setup JSON-RPC 2.0 connection
-	(*l).Conn = jsonrpc2.NewConn(ctx, jsonrpc2.NewBufferedStream(rwc, jsonrpc2.VSCodeObjectCodec{}), &noopHandler{})
+	l.transport = rwc
+	// An activity's cancellation must not tear down a reusable connection.
+	l.Conn = jsonrpc2.NewConn(context.WithoutCancel(ctx), jsonrpc2.NewBufferedStream(rwc, jsonrpc2.VSCodeObjectCodec{}), &noopHandler{})
 
-	// Send request and handle response
 	var resp InitializeResponse
-	err = l.Conn.Call(ctx, "initialize", &params, &resp)
-	if err != nil {
-		return InitializeResponse{}, fmt.Errorf("initialize call failed: %v", err)
+	if err := l.Conn.Call(ctx, "initialize", &params, &resp); err != nil {
+		_ = l.Close()
+		return InitializeResponse{}, fmt.Errorf("initialize call failed: %w", err)
 	}
-	//utils.PrettyPrint(resp) // debug
-
+	if err := l.Conn.Notify(ctx, "initialized", &struct{}{}); err != nil {
+		_ = l.Close()
+		return InitializeResponse{}, fmt.Errorf("initialized notification failed: %w", err)
+	}
 	l.ServerCapabilities = resp.Capabilities
-
-	// let the LSP server know that we initialized successfully
-	err = l.Conn.Call(ctx, "initialized", &map[string]string{}, &map[string]string{})
-	if err != nil {
-		return InitializeResponse{}, fmt.Errorf("initialized response failed: %v", err)
-	}
-
 	return resp, nil
 }
 
@@ -438,4 +473,41 @@ func (l *Jsonrpc2LSPClient) TextDocumentDidClose(ctx context.Context, params Did
 		return fmt.Errorf("TextDocumentDidClose called before Initialize")
 	}
 	return l.Conn.Notify(ctx, "textDocument/didClose", params)
+}
+
+func (l *Jsonrpc2LSPClient) SetEnvContainer(container *env.EnvContainer) {
+	l.EnvContainer = container
+}
+
+func (l *Jsonrpc2LSPClient) Close() error {
+	var result error
+	if l.Conn != nil {
+		result = l.Conn.Close()
+		if errors.Is(result, jsonrpc2.ErrClosed) {
+			result = nil
+		}
+	}
+	if l.transport != nil {
+		result = errors.Join(result, l.transport.Close())
+	}
+	return result
+}
+
+func (l *Jsonrpc2LSPClient) BeginActivity(ctx context.Context, onLost func(error)) (func(), error) {
+	if l.EnvContainer == nil {
+		return func() {}, ctx.Err()
+	}
+	return env.BeginActivity(ctx, l.EnvContainer.Env, onLost)
+}
+
+func (l *Jsonrpc2LSPClient) IsConnected() bool {
+	if l.Conn == nil {
+		return false
+	}
+	select {
+	case <-l.Conn.DisconnectNotify():
+		return false
+	default:
+		return true
+	}
 }

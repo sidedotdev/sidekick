@@ -169,6 +169,7 @@ func ensureDevPodEnv(ctx workflow.Context, p ensureEnvParams) (ensuredEnv, error
 			WorkspaceName:    workspaceName,
 			LocalRepoDir:     p.RepoDir,
 			PortForwards:     repoConfig.PortForwards,
+			EnvVars:          repoConfig.DevPodConfig.EnvVars,
 		}
 	}
 

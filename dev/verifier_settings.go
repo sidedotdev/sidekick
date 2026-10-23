@@ -2,7 +2,6 @@ package dev
 
 import (
 	"sidekick/fflag"
-	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -11,25 +10,9 @@ import (
 // fallback must not change either the rollout assignment or resolved defaults.
 func resolveVerifierSettings(dCtx DevContext, modelId string) VerifierSettings {
 	info := workflow.GetInfo(dCtx)
-	key := "verifier-settings:" + info.WorkflowExecution.ID
-	if cached, ok := dCtx.GlobalState.GetValue(key).(workflow.Future); ok {
-		var settings VerifierSettings
-		_ = cached.Get(dCtx, &settings)
-		return settings
-	}
-
-	future, result := workflow.NewFuture(dCtx)
-	dCtx.GlobalState.SetValue(key, future)
-	settings := DefaultVerifierSettings()
-	var activities *fflag.FFlagActivities
-	var output fflag.EvaluateFlagsOutput
-	err := workflow.ExecuteActivity(utils.SingleRetryCtx(dCtx), activities.EvaluateFlags,
-		verifierFlagsInput(info.WorkflowExecution.ID, info.WorkflowType.Name, modelId)).Get(dCtx, &output)
-	if err == nil {
-		settings = verifierSettingsFromFlags(output)
-	}
-	result.Set(settings, nil)
-	return settings
+	output := fflag.EvaluateWithoutVersioning(dCtx, "verifier-settings",
+		verifierFlagsInput(info.WorkflowExecution.ID, info.WorkflowType.Name, modelId))
+	return verifierSettingsFromFlags(output)
 }
 
 func verifierFlagsInput(flowId, flowType, modelId string) fflag.EvaluateFlagsInput {

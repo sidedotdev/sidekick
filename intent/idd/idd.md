@@ -47,6 +47,12 @@ intent_links:
       - dev/idd_workflow.go:cancelPendingSubtasks
       - frontend/src/views/IntentCanvasView.vue
       - frontend/src/components/UserRequest.vue
+  - intent: "#commit-messages"
+    code:
+      - dev/idd_workflow.go:commitIntent
+      - dev/intent_commit_message.go:intentCommitParams
+      - dev/intent_commit_message.go:generateIddFinishMessage
+      - dev/idd_merge_approval.go:iddMergeApproval
   - intent: "#idd-instructions-for-coding-agents"
     code:
       - dev/prompts/author_edit_block/idd_instructions.mustache
@@ -270,6 +276,22 @@ Pressing the button to start immediately results in these actions:
   chunks (some heuristic to ensure LLM isn't invoked for partial edits, and
   always invoked if there are unproceesed edits and there has been no activity
   for a while)
+
+### Commit Messages
+
+- Intent commits use a custom Conventional Commits type, `intent`, with a
+  present-tense subject that minimally states what the intent now says, e.g.
+  `intent: require profile re-resolution when a flow resumes`. No body.
+  - The subject is LLM-generated from the staged intent diff. If that fails, it
+    falls back to `intent: update <changed paths>`, with paths relative to the
+    `intent/` directory.
+  - The human is the author and Sidekick is the committer, the reverse of code
+    commits, since the human wrote the intent.
+- Conventional Commits allows custom types, but any future commitlint or
+  changelog tooling must list `intent` as an allowed type.
+- Finishing merges with a short, one-line LLM-generated message describing
+  which intent was realized, generated from the overall intent diff. No body and
+  no list of sub-tasks.
 
 ### Background Orchestrator Agent
 

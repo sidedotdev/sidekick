@@ -1,151 +1,14 @@
 package llm2
 
 import (
+	"os"
+	"path/filepath"
+	"sidekick/common"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-func TestResolveOpenAIReasoningEffort(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		effort   string
-		model    string
-		expected string
-	}{
-		// Non-meta values pass through unchanged
-		{"passthrough empty", "", "gpt-5", ""},
-		{"passthrough low", "low", "gpt-5", "low"},
-		{"passthrough medium", "medium", "o3", "medium"},
-		{"passthrough high", "high", "gpt-5-codex", "high"},
-
-		// o1, o3, o3-mini, o4-mini
-		{"o1 lowest", "lowest", "o1", "low"},
-		{"o1 highest", "highest", "o1", "high"},
-		{"o3 lowest", "lowest", "o3", "low"},
-		{"o3 highest", "highest", "o3", "high"},
-		{"o3-mini lowest", "lowest", "o3-mini", "low"},
-		{"o3-mini highest", "highest", "o3-mini", "high"},
-		{"o4-mini lowest", "lowest", "o4-mini", "low"},
-		{"o4-mini highest", "highest", "o4-mini", "high"},
-
-		// Explicit GPT-5 family mappings
-		{"gpt-5 lowest", "lowest", "gpt-5", "minimal"},
-		{"gpt-5 highest", "highest", "gpt-5", "high"},
-		{"GPT-5 uppercase lowest", "lowest", "GPT-5", "minimal"},
-		{"gpt-5-mini lowest", "lowest", "gpt-5-mini", "minimal"},
-		{"gpt-5-mini highest", "highest", "gpt-5-mini", "high"},
-		{"gpt-5-nano lowest", "lowest", "gpt-5-nano", "minimal"},
-		{"gpt-5-nano highest", "highest", "gpt-5-nano", "high"},
-		{"gpt-5-codex lowest", "lowest", "gpt-5-codex", "low"},
-		{"gpt-5-codex highest", "highest", "gpt-5-codex", "high"},
-		{"gpt-5-pro lowest", "lowest", "gpt-5-pro", "high"},
-		{"gpt-5-pro highest", "highest", "gpt-5-pro", "high"},
-		{"gpt-5.1 lowest", "lowest", "gpt-5.1", "none"},
-		{"gpt-5.1 highest", "highest", "gpt-5.1", "high"},
-		{"gpt-5.1-codex lowest", "lowest", "gpt-5.1-codex", "low"},
-		{"gpt-5.1-codex highest", "highest", "gpt-5.1-codex", "high"},
-		{"gpt-5.1-codex-mini lowest", "lowest", "gpt-5.1-codex-mini", "low"},
-		{"gpt-5.1-codex-mini highest", "highest", "gpt-5.1-codex-mini", "high"},
-		{"gpt-5.1-codex-max lowest", "lowest", "gpt-5.1-Codex-Max", "low"},
-		{"gpt-5.1-codex-max highest", "highest", "gpt-5.1-Codex-Max", "xhigh"},
-		{"gpt-5.2 lowest", "lowest", "gpt-5.2", "none"},
-		{"gpt-5.2 highest", "highest", "gpt-5.2", "xhigh"},
-		{"gpt-5.2-pro lowest", "lowest", "gpt-5.2-pro", "medium"},
-		{"gpt-5.2-pro highest", "highest", "gpt-5.2-pro", "xhigh"},
-		{"gpt-5.2-codex lowest", "lowest", "gpt-5.2-codex", "low"},
-		{"gpt-5.2-codex highest", "highest", "gpt-5.2-codex", "xhigh"},
-		{"gpt-5.3-codex lowest", "lowest", "gpt-5.3-Codex", "low"},
-		{"gpt-5.3-codex highest", "highest", "gpt-5.3-Codex", "xhigh"},
-		{"gpt-5.4 lowest", "lowest", "gpt-5.4", "none"},
-		{"gpt-5.4 highest", "highest", "gpt-5.4", "xhigh"},
-		{"gpt-5.4-mini lowest", "lowest", "gpt-5.4-mini", "none"},
-		{"gpt-5.4-mini highest", "highest", "gpt-5.4-mini", "xhigh"},
-		{"gpt-5.4-nano lowest", "lowest", "gpt-5.4-nano", "none"},
-		{"gpt-5.4-nano highest", "highest", "gpt-5.4-nano", "xhigh"},
-		{"gpt-5.4-pro lowest", "lowest", "gpt-5.4-pro", "medium"},
-		{"gpt-5.4-pro highest", "highest", "gpt-5.4-pro", "xhigh"},
-		{"gpt-5.5 lowest", "lowest", "gpt-5.5", "none"},
-		{"gpt-5.5 highest", "highest", "gpt-5.5", "xhigh"},
-		{"gpt-5.5-pro lowest", "lowest", "gpt-5.5-pro", "medium"},
-		{"gpt-5.5-pro highest", "highest", "gpt-5.5-pro", "xhigh"},
-
-		// Newer unreleased GPT model heuristics
-		{"newer gpt pro lowest", "lowest", "gpt-5.6-pro", "medium"},
-		{"newer gpt pro highest", "highest", "gpt-5.6-pro", "xhigh"},
-		{"newer gpt codex lowest", "lowest", "gpt-5.6-codex", "low"},
-		{"newer gpt codex highest", "highest", "gpt-5.6-codex", "xhigh"},
-		{"newer general gpt lowest", "lowest", "gpt-5.6", "none"},
-		{"newer general gpt highest", "highest", "gpt-5.6", "xhigh"},
-
-		// Unrecognized non-GPT models
-		{"unknown model lowest", "lowest", "some-new-model", "none"},
-		{"unknown model highest", "highest", "some-new-model", "high"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := resolveOpenAIReasoningEffort(tt.effort, tt.model)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestResolveAnthropicReasoningEffort(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		effort   string
-		model    string
-		expected string
-	}{
-		// Non-meta values pass through unchanged
-		{"passthrough empty", "", "claude-opus-4-5", ""},
-		{"passthrough low", "low", "claude-opus-4-5", "low"},
-		{"passthrough high", "high", "claude-sonnet-4", "high"},
-
-		// lowest → empty (thinking off)
-		{"lowest any model", "lowest", "claude-opus-4-5", ""},
-		{"lowest sonnet", "lowest", "claude-sonnet-4", ""},
-
-		// highest → max for adaptive models (opus/sonnet 4.6+), high for others
-		{"highest opus-4-6", "highest", "claude-opus-4-6", "max"},
-		{"highest opus-4.6", "highest", "claude-opus-4.6", "max"},
-		{"highest opus-4-6 case insensitive", "highest", "Claude-Opus-4-6-latest", "max"},
-		{"highest sonnet-4-6", "highest", "claude-sonnet-4-6", "max"},
-		{"highest opus-5", "highest", "claude-opus-5", "max"},
-		{"highest sonnet-5", "highest", "claude-sonnet-5", "max"},
-		{"highest fable-5", "highest", "claude-fable-5", "max"},
-		{"highest unknown family legendary-5", "highest", "claude-legendary-5", "max"},
-		{"highest opus-4-5", "highest", "claude-opus-4-5", "high"},
-		{"highest sonnet-4", "highest", "claude-sonnet-4", "high"},
-		{"highest haiku", "highest", "claude-haiku-3", "high"},
-
-		// GPT mappings are provider-agnostic
-		{"gpt-5.1 lowest", "lowest", "gpt-5.1", "none"},
-		{"gpt-5.1 highest", "highest", "gpt-5.1", "high"},
-		{"gpt-5.4-pro lowest", "lowest", "gpt-5.4-pro", "medium"},
-		{"gpt-5.4-pro highest", "highest", "gpt-5.4-pro", "xhigh"},
-		{"newer gpt codex lowest", "lowest", "gpt-5.6-codex", "low"},
-		{"newer general gpt highest", "highest", "gpt-5.6", "xhigh"},
-
-		// Unrecognized models
-		{"unknown model lowest", "lowest", "some-new-model", ""},
-		{"unknown model highest", "highest", "some-new-model", "high"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := resolveAnthropicReasoningEffort(tt.effort, tt.model)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
 
 func TestAnthropicSupportsAdaptiveThinking(t *testing.T) {
 	t.Parallel()
@@ -212,62 +75,102 @@ func TestAnthropicSupportsAdaptiveThinking(t *testing.T) {
 	}
 }
 
-func TestResolveGoogleReasoningEffort(t *testing.T) {
-	t.Parallel()
+func setupModelsDevFixture(t *testing.T, rawJSON string) {
+	t.Helper()
+	common.ClearModelsCache()
+	t.Cleanup(common.ClearModelsCache)
+	tmpDir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", tmpDir)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "models.dev.json"), []byte(rawJSON), 0644))
+}
+
+const reasoningEffortModelsDevFixture = `{
+	"openai": {"models": {
+		"gpt-5.2": {"id": "gpt-5.2", "reasoning": true, "release_date": "2025-12-11",
+			"reasoning_options": [{"type": "effort", "values": ["none", "low", "medium", "high", "xhigh"]}]},
+		"gpt-5.5": {"id": "gpt-5.5", "reasoning": true, "release_date": "2026-04-23",
+			"reasoning_options": [{"type": "effort", "values": ["none", "low", "medium", "high", "xhigh", "max"]}]},
+		"o3": {"id": "o3", "reasoning": true, "release_date": "2025-04-16",
+			"reasoning_options": [{"type": "effort", "values": ["low", "medium", "high"]}]},
+		"gpt-4o": {"id": "gpt-4o", "reasoning": false, "release_date": "2026-12-01", "reasoning_options": []}
+	}},
+	"anthropic": {"models": {
+		"claude-sonnet-4-5": {"id": "claude-sonnet-4-5", "reasoning": true, "release_date": "2025-09-29",
+			"reasoning_options": [{"type": "budget_tokens", "min": 1024}]},
+		"claude-opus-4-6": {"id": "claude-opus-4-6", "reasoning": true, "release_date": "2026-02-05",
+			"reasoning_options": [{"type": "budget_tokens", "min": 1024}]}
+	}},
+	"google": {"models": {
+		"gemini-3.1-pro-preview": {"id": "gemini-3.1-pro-preview", "reasoning": true, "release_date": "2026-02-19",
+			"reasoning_options": [{"type": "effort", "values": ["minimal", "low", "medium", "high"]}]},
+		"gemini-2.5-pro": {"id": "gemini-2.5-pro", "reasoning": true, "release_date": "2025-03-20",
+			"reasoning_options": [{"type": "budget_tokens", "min": 128, "max": 32768}]}
+	}},
+	"amazon-bedrock": {"models": {
+		"global.anthropic.claude-sonnet-4-6": {"id": "global.anthropic.claude-sonnet-4-6", "reasoning": true, "release_date": "2026-02-17",
+			"reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "max"]}]},
+		"us.anthropic.claude-opus-4-7": {"id": "us.anthropic.claude-opus-4-7", "reasoning": true, "release_date": "2026-04-16",
+			"reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "xhigh"]}]}
+	}}
+}`
+
+func TestResolveReasoningEffort(t *testing.T) {
+	setupModelsDevFixture(t, reasoningEffortModelsDevFixture)
 
 	tests := []struct {
 		name     string
-		effort   string
+		provider string
 		model    string
+		effort   string
 		expected string
 	}{
-		// Non-meta values pass through unchanged
-		{"passthrough empty", "", "gemini-3.1-pro-preview", ""},
-		{"passthrough low", "low", "gemini-2.5-pro", "low"},
-		{"passthrough high", "high", "gemini-3.1-pro-preview", "high"},
+		{"exact ladder highest", "openai", "gpt-5.2", "highest", "xhigh"},
+		{"exact ladder lowest", "openai", "gpt-5.2", "lowest", "none"},
+		{"exact ladder max without max", "openai", "gpt-5.2", "max", "xhigh"},
+		{"exact ladder max present", "openai", "gpt-5.5", "max", "max"},
+		{"exact ladder highest with max", "openai", "gpt-5.5", "highest", "max"},
+		{"exact o3 lowest", "openai", "o3", "lowest", "low"},
+		{"exact o3 highest", "openai", "o3", "highest", "high"},
+		{"exact gemini lowest", "google", "gemini-3.1-pro-preview", "lowest", "minimal"},
+		{"exact gemini highest", "google", "gemini-3.1-pro-preview", "highest", "high"},
+		{"exact gemini max", "google", "gemini-3.1-pro-preview", "max", "high"},
 
-		// lowest → none (thinking disabled)
-		{"lowest newer model", "lowest", "gemini-3.1-pro-preview", "none"},
-		{"lowest legacy 2.5-pro", "lowest", "gemini-2.5-pro", "none"},
-		{"lowest legacy 2.5-flash", "lowest", "gemini-2.5-flash", "none"},
+		{"family gpt-7 highest", "openai", "gpt-7", "highest", "max"},
+		{"family gpt-7 lowest", "openai", "gpt-7", "lowest", "none"},
+		{"family case insensitive", "openai", "GPT-6-Astra", "highest", "max"},
+		{"family o4-mini lowest", "openai", "o4-mini", "lowest", "low"},
+		{"family o4-mini highest", "openai", "o4-mini", "highest", "high"},
+		{"family gemini budget-only model", "google", "gemini-2.5-pro", "highest", "high"},
+		{"family unknown gemini", "google", "gemini-4-pro", "lowest", "minimal"},
+		{"family bedrock prefixed claude highest", "bedrock", "us.anthropic.claude-sonnet-5", "highest", "xhigh"},
+		{"family bedrock prefixed claude max passes through", "bedrock", "eu.anthropic.claude-opus-5-v1", "max", "max"},
+		{"family o4-mini max passes through", "openai", "o4-mini", "max", "max"},
+		{"family gpt-7 max passes through", "openai", "gpt-7", "max", "max"},
+		{"budget-only model max passes through", "anthropic", "claude-sonnet-4-5", "max", "max"},
 
-		// highest → max
-		{"highest newer model", "highest", "gemini-3.1-pro-preview", "max"},
-		{"highest legacy model", "highest", "gemini-2.5-pro", "max"},
+		{"default claude-opus-5 highest", "anthropic", "claude-opus-5", "highest", "max"},
+		{"default claude-opus-5 lowest", "anthropic", "claude-opus-5", "lowest", "low"},
+		{"default budget-only claude highest", "anthropic", "claude-sonnet-4-5", "highest", "max"},
+		{"default unknown model lowest", "openai", "some-new-model", "lowest", "low"},
+		{"default unknown model highest", "openai", "some-new-model", "highest", "max"},
+		{"default unknown provider max", "unknown-provider", "some-new-model", "max", "max"},
+	}
 
-		// GPT mappings are provider-agnostic
-		{"gpt-5.1 lowest", "lowest", "gpt-5.1", "none"},
-		{"gpt-5.1 highest", "highest", "gpt-5.1", "high"},
-		{"gpt-5.4-pro lowest", "lowest", "gpt-5.4-pro", "medium"},
-		{"gpt-5.4-pro highest", "highest", "gpt-5.4-pro", "xhigh"},
-		{"newer gpt codex lowest", "lowest", "gpt-5.6-codex", "low"},
-		{"newer general gpt highest", "highest", "gpt-5.6", "xhigh"},
-
-		// Unrecognized models
-		{"unknown model lowest", "lowest", "some-new-model", ""},
-		{"unknown model highest", "highest", "some-new-model", "high"},
+	for _, provider := range []string{"openai", "anthropic", "google", "bedrock", "unknown-provider"} {
+		for _, effort := range []string{"", "low", "medium", "xhigh", "none", "ultra", "custom-level"} {
+			tests = append(tests, struct {
+				name     string
+				provider string
+				model    string
+				effort   string
+				expected string
+			}{"passthrough " + provider + " " + effort, provider, "gpt-5.2", effort, effort})
+		}
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := resolveGoogleReasoningEffort(tt.effort, tt.model)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestResolveOpenAIReasoningEffortFutureGenerations(t *testing.T) {
-	t.Parallel()
-	for _, model := range []string{
-		"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol",
-		"gpt-6", "gpt-6-astra", "gpt-6.5", "gpt-7", "gpt-10",
-	} {
-		t.Run(model, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, "xhigh", resolveOpenAIReasoningEffort("highest", model))
-			assert.Equal(t, "none", resolveOpenAIReasoningEffort("lowest", model))
-			assert.Equal(t, "high", resolveOpenAIReasoningEffort("high", model))
+			assert.Equal(t, tt.expected, resolveReasoningEffort(tt.provider, tt.model, tt.effort))
 		})
 	}
 }

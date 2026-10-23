@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -11,7 +12,7 @@ import (
 	"sidekick/env"
 	"sidekick/utils"
 	"strings"
-	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -23,9 +24,8 @@ var lspTracer = otel.Tracer("sidekick/coding/lsp")
 // NewLSPActivities creates a new LSPActivities instance with proper initialization
 func NewLSPActivities(lspClientProvider func(lang string) LSPClient) *LSPActivities {
 	return &LSPActivities{
-		LSPClientProvider:     lspClientProvider,
-		InitializedClients:    make(map[string]LSPClient),
-		InitializationLockers: sync.Map{},
+		LSPClientProvider:  lspClientProvider,
+		InitializedClients: make(map[string]LSPClient),
 	}
 }
 
@@ -49,10 +49,11 @@ type FindReferencesActivityInput struct {
 func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input FindReferencesActivityInput) ([]Location, error) {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	lang := utils.InferLanguageNameFromFilePath(input.RelativeFilePath)
-	lspClient, err := lspa.findOrInitClient(ctx, baseDir, lang, &input.EnvContainer)
+	ctx, lspClient, release, err := lspa.findOrInitClient(ctx, baseDir, lang, &input.EnvContainer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find or initialize lsp client: %w", err)
 	}
+	defer release()
 
 	fileBytes := input.PreloadedFileContent
 	if fileBytes == nil {
@@ -81,55 +82,91 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 	return references, nil
 }
 
-func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string, lang string, envContainer *env.EnvContainer) (LSPClient, error) {
+func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string, lang string, envContainer *env.EnvContainer) (context.Context, LSPClient, func(), error) {
 	_, span := lspTracer.Start(ctx, "findOrInitClient")
 	defer span.End()
 	span.SetAttributes(attribute.String("language", lang), attribute.String("baseDir", baseDir))
 
-	key := baseDir + ":" + lang
-
-	// init lsp client once per baseDir and lang
-	locker, _ := lspa.InitializationLockers.LoadOrStore(key, &sync.Mutex{})
-	locker.(*sync.Mutex).Lock()
-	defer locker.(*sync.Mutex).Unlock()
-
+	if err := ctx.Err(); err != nil {
+		return ctx, nil, nil, err
+	}
+	gate := lspa.gate()
+	select {
+	case <-ctx.Done():
+		return ctx, nil, nil, ctx.Err()
+	case <-gate:
+	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			gate <- struct{}{}
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return ctx, nil, nil, err
+	}
+	if lspa.closed {
+		return ctx, nil, nil, fmt.Errorf("LSP activities are closed")
+	}
+	key, err := clientCacheKey(baseDir, lang, envContainer)
+	if err != nil {
+		return ctx, nil, nil, err
+	}
+	lspa.idleGeneration++
+	if lspa.idleTimer != nil {
+		lspa.idleTimer.Stop()
+	}
 	if lspa.InitializedClients == nil {
 		lspa.InitializedClients = make(map[string]LSPClient)
 	}
-
-	lspClient, ok := lspa.InitializedClients[key]
-	if !ok {
-		span.SetAttributes(attribute.Bool("initialized", true))
-		// Initialize LSP client
-		lspClient = lspa.LSPClientProvider(lang)
-		if jsonrpcClient, ok := lspClient.(*Jsonrpc2LSPClient); ok {
-			jsonrpcClient.EnvContainer = envContainer
-		}
-		rootUri, err := url.Parse("file://" + baseDir)
-		if err != nil {
-			err = fmt.Errorf("failed to parse rootUri file://%s: %w", baseDir, err)
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return nil, err
-		}
-		params := InitializeParams{
-			ProcessID:    1,
-			RootURI:      rootUri.String(),
-			Capabilities: defaultClientCapabilities,
-		}
-		_, err = lspClient.Initialize(ctx, params)
-		if err != nil {
-			err = fmt.Errorf("failed to initialize LSP client: %w", err)
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return nil, err
-		}
-		lspa.InitializedClients[key] = lspClient
-	} else {
-		span.SetAttributes(attribute.Bool("cached", true))
+	if lspa.clientBorn.IsZero() {
+		lspa.clientBorn = time.Now()
 	}
-
-	return lspClient, nil
+	for range 2 {
+		lspClient, ok := lspa.InitializedClients[key]
+		if !ok || time.Since(lspa.clientBorn) >= lspa.maxClientAge || !clientIsConnected(lspClient) {
+			if err := lspa.closeClients(); err != nil {
+				return ctx, nil, nil, fmt.Errorf("close previous analysis client: %w", err)
+			}
+			span.SetAttributes(attribute.Bool("initialized", true))
+			lspClient = lspa.LSPClientProvider(lang)
+			if client, ok := lspClient.(interface{ SetEnvContainer(*env.EnvContainer) }); ok {
+				client.SetEnvContainer(envContainer)
+			}
+			params := InitializeParams{
+				ProcessID:    0,
+				RootURI:      (&url.URL{Scheme: "file", Path: baseDir}).String(),
+				Capabilities: defaultClientCapabilities,
+			}
+			if _, err := lspClient.Initialize(ctx, params); err != nil {
+				err = fmt.Errorf("failed to initialize LSP client: %w", errors.Join(err, closeClient(lspClient)))
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				return ctx, nil, nil, err
+			}
+			lspa.InitializedClients[key] = lspClient
+			lspa.clientBorn = time.Now()
+		} else {
+			span.SetAttributes(attribute.Bool("cached", true))
+		}
+		operationCtx, finish, err := lspa.beginClientActivity(ctx, lspClient)
+		if err != nil {
+			return operationCtx, nil, nil, errors.Join(err, lspa.closeClients())
+		}
+		if !clientIsConnected(lspClient) {
+			finish()
+			if err := lspa.closeClients(); err != nil {
+				return ctx, nil, nil, err
+			}
+			continue
+		}
+		succeeded = true
+		return operationCtx, lspClient, func() {
+			finish()
+			lspa.releaseClient()
+		}, nil
+	}
+	return ctx, nil, nil, fmt.Errorf("analysis connection disconnected during acquisition")
 }
 
 // findSymbolPosition finds the position of the last character of the first matching text in the file content

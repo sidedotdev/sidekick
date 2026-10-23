@@ -44,33 +44,6 @@ func (t *customHeadersTransport) RoundTrip(req *http.Request) (*http.Response, e
 	return t.base.RoundTrip(req)
 }
 
-func resolveGoogleReasoningEffort(effort, model string) string {
-	if effort != "lowest" && effort != "highest" {
-		return effort
-	}
-
-	// Google-compatible endpoints can proxy GPT models, such as LiteLLM routing OpenAI models through another provider API.
-	if resolvedEffort, ok := resolveGPTReasoningEffort(effort, model); ok {
-		return resolvedEffort
-	}
-
-	modelLower := strings.ToLower(model)
-	if !strings.Contains(modelLower, "gemini") {
-		if effort == "lowest" {
-			// Some Google models/configs separate enabling thinking from tuning its strength.
-			// Returning "" maps "lowest" to "default effort + no thinking" without guessing provider-specific values.
-			return ""
-		}
-		return "high"
-	}
-
-	if effort == "lowest" {
-		return "none"
-	}
-	// highest
-	return "max"
-}
-
 func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options
@@ -80,9 +53,11 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	if err != nil {
 		apiKey, err = request.SecretManager.GetSecret(geminiApiKeySecretName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get %s API key: %w", providerName, err)
+			return nil, apiKeyLookupError(request.SecretManager, providerName, common.ProviderAuthTypeAPI,
+				fmt.Errorf("failed to get %s API key: %w", providerName, err))
 		}
 	}
+	requestAuth := newProviderRequestAuth(request.SecretManager, providerName, common.ProviderAuthTypeAPI, false)
 
 	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	if len(p.CustomHeaders) > 0 {
@@ -91,6 +66,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 			headers: p.CustomHeaders,
 		}
 	}
+	httpClient = withResponseDump(httpClient)
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
@@ -140,7 +116,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 		}
 	}
 
-	resolvedGoogleEffort := resolveGoogleReasoningEffort(options.ReasoningEffort, model)
+	resolvedGoogleEffort := resolveReasoningEffort(providerName, model, options.ReasoningEffort)
 	var actualReasoningEffort string
 	if isReasoningModel {
 		if resolvedGoogleEffort == "none" || resolvedGoogleEffort == "" {
@@ -186,7 +162,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 
 	for result, err := range stream {
 		if err != nil {
-			return nil, fmt.Errorf("failed to iterate on %s stream: %w", providerName, err)
+			return nil, requestAuth.classifyHTTPError(err, fmt.Errorf("failed to iterate on %s stream: %w", providerName, err))
 		}
 		lastResult = result
 		if len(result.Candidates) > 0 && result.Candidates[0].GroundingMetadata != nil {
@@ -213,6 +189,10 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 
 	output := reorderSyntheticGroundingBlocks(accumulateGoogleEventsToMessage(events))
+	stampCoreBlockMetadata(&output, CoreBlockMetadata{
+		Provider:     providerName,
+		ProviderType: string(common.GoogleToolChatProviderType),
+	})
 
 	usage := Usage{}
 	if lastResult != nil && lastResult.UsageMetadata != nil {

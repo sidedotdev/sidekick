@@ -4,14 +4,22 @@ import com.example.app.core.data.FlowRepository
 import com.example.app.core.data.TaskRepository
 import com.example.app.core.remote.realtime.RealtimeConnectionManager
 import com.example.app.core.remote.realtime.asWebSocketOpener
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import okhttp3.CompressionInterceptor
+import okhttp3.Gzip
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
+import okhttp3.ResponseBody
+import okhttp3.zstd.Zstd
+import okio.Buffer
+import okio.ForwardingSource
+import okio.buffer
 
 private const val CONNECT_TIMEOUT_SECONDS = 30L
 private const val READ_TIMEOUT_SECONDS = 60L
@@ -51,7 +59,10 @@ class SidekickRemoteSession internal constructor(
         get() = proxy.baseUrl
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
+        // Outermost so proxy failure diagnostics count wire bytes against the compressed Content-Length.
+        .addInterceptor(CompressionInterceptor(Zstd, Gzip))
         .addInterceptor(BearerTokenInterceptor(token))
+        .addInterceptor(ProxyStateOnFailureInterceptor(proxy))
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .writeTimeout(WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -113,6 +124,47 @@ private class BearerTokenInterceptor(private val token: String) : Interceptor {
                 .header("Authorization", "Bearer $token")
                 .build(),
         )
+}
+
+/**
+ * Every request travels loopback to the proxy first, so an I/O failure alone
+ * cannot say whether the local listener, the iroh tunnel or the server was at
+ * fault. Attaching the proxy's state at failure time makes the eventual error
+ * report actionable.
+ */
+private class ProxyStateOnFailureInterceptor(private val proxy: IrohLoopbackProxy) : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val started = System.nanoTime()
+        fun failure(stage: String, error: IOException): IOException {
+            val elapsed = (System.nanoTime() - started) / 1_000_000
+            return IOException("$stage after ${elapsed}ms [proxy ${proxy.describeState()}]", error)
+        }
+
+        val response = try {
+            chain.proceed(chain.request())
+        } catch (error: IOException) {
+            throw failure("before-response-headers", error)
+        }
+        val body = response.body
+        val source = object : ForwardingSource(body.source()) {
+            private var received = 0L
+
+            override fun read(sink: Buffer, byteCount: Long): Long = try {
+                super.read(sink, byteCount).also { if (it > 0) received += it }
+            } catch (error: IOException) {
+                throw failure(
+                    "response-body status=${response.code} received=${received}B " +
+                        "expected=${body.contentLength()}B",
+                    error,
+                )
+            }
+        }.buffer()
+        return response.newBuilder().body(object : ResponseBody() {
+            override fun contentType() = body.contentType()
+            override fun contentLength() = body.contentLength()
+            override fun source() = source
+        }).build()
+    }
 }
 
 /**

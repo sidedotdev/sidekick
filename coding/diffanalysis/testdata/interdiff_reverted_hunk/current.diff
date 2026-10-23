@@ -1,0 +1,78 @@
+diff --git a/api/provider_auth.go b/api/provider_auth.go
+index 8567d33..96869a8 100644
+--- a/api/provider_auth.go
++++ b/api/provider_auth.go
+@@ -11,7 +11,7 @@ import (
+ 	"time"
+ 
+ 	"sidekick/common"
+-	"sidekick/flow_action"
++	"sidekick/domain"
+ 	"sidekick/provider_auth"
+ 	"sidekick/secret_manager"
+ 
+@@ -184,7 +184,10 @@ func (ctrl *Controller) StartProviderOAuthHandler(c *gin.Context) {
+ func (ctrl *Controller) finishProviderOAuth(sessionId string, entry *providerOAuthEntry) {
+ 	<-entry.session.Done()
+ 	if status, _ := entry.session.Status(); status == provider_auth.OAuthStatusSucceeded {
+-		ctrl.broadcastProviderAuthUpdated(context.Background(), provider_auth.NewCredentialUpdatedEvent(entry.provider, entry.profileId, entry.method))
++		event := provider_auth.NewCredentialUpdatedEvent(entry.provider, entry.profileId, entry.method)
++		if err := ctrl.recordProviderAuthEvent(context.Background(), event); err != nil {
++			log.Error().Err(err).Str("provider", entry.provider).Str("profileId", entry.profileId).Msg("Failed to record provider auth event after OAuth login")
++		}
+ 	}
+ 	sessions := ctrl.providerOAuth
+ 	time.AfterFunc(providerOAuthSessionRetention, func() { sessions.remove(sessionId) })
+@@ -285,7 +288,12 @@ func (ctrl *Controller) SaveProviderAPIKeyHandler(c *gin.Context) {
+ 		return
+ 	}
+ 
+-	ctrl.broadcastProviderAuthUpdated(c.Request.Context(), provider_auth.NewCredentialUpdatedEvent(req.Provider, profileId, provider_auth.MethodAPIKey))
++	event := provider_auth.NewCredentialUpdatedEvent(req.Provider, profileId, provider_auth.MethodAPIKey)
++	if err := ctrl.recordProviderAuthEvent(c.Request.Context(), event); err != nil {
++		log.Error().Err(err).Str("provider", req.Provider).Str("profileId", profileId).Msg("Failed to record provider auth event")
++		c.JSON(http.StatusInternalServerError, gin.H{"error": "API key saved, but flows waiting on it could not be notified"})
++		return
++	}
+ 	c.JSON(http.StatusOK, gin.H{})
+ }
+ 
+@@ -307,27 +315,24 @@ func (ctrl *Controller) CredentialUpdatedHandler(c *gin.Context) {
+ 		return
+ 	}
+ 
+-	ctrl.broadcastProviderAuthUpdated(c.Request.Context(), provider_auth.NewCredentialUpdatedEvent(event.Provider, profileId, event.Method))
++	normalized := provider_auth.NewCredentialUpdatedEvent(event.Provider, profileId, event.Method)
++	if err := ctrl.recordProviderAuthEvent(c.Request.Context(), normalized); err != nil {
++		log.Error().Err(err).Str("provider", normalized.Provider).Str("profileId", normalized.ProfileId).Msg("Failed to record provider auth event")
++		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to notify flows waiting on the credential"})
++		return
++	}
+ 	c.JSON(http.StatusOK, gin.H{})
+ }
+ 
+-// broadcastProviderAuthUpdated tells every active flow about a saved
+-// credential; flows decide for themselves whether it unblocks them.
+-func (ctrl *Controller) broadcastProviderAuthUpdated(ctx context.Context, event provider_auth.CredentialUpdatedEvent) {
+-	workspaces, err := ctrl.service.GetAllWorkspaces(ctx)
+-	if err != nil {
+-		log.Error().Err(err).Msg("Failed to list workspaces for provider auth update")
+-		return
+-	}
+-	signal := flow_action.ProviderAuthUpdated{
++// recordProviderAuthEvent appends a saved credential to the persistent
++// provider auth stream, which flows blocked on that credential consume.
++func (ctrl *Controller) recordProviderAuthEvent(ctx context.Context, event provider_auth.CredentialUpdatedEvent) error {
++	return ctrl.service.AddProviderAuthEvent(ctx, domain.ProviderAuthEvent{
+ 		Provider:  event.Provider,
+ 		ProfileId: event.ProfileId,
+ 		Method:    string(event.Method),
+ 		AuthType:  event.AuthType,
+-	}
+-	for _, workspace := range workspaces {
+-		ctrl.signalActiveFlows(ctx, workspace.Id, flow_action.SignalNameProviderAuthUpdated, signal)
+-	}
++	})
+ }
+ 
+ // providerAuthMethodOffered reports whether choice is one of the methods a

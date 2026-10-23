@@ -133,7 +133,7 @@ func TestOpenaiWebSearchActionFromJSON(t *testing.T) {
 		action, err := openaiWebSearchActionFromJSON(`{"type":"search","query":"golang","sources":[{"url":"https://go.dev"}]}`)
 		require.NoError(t, err)
 		require.NotNil(t, action.OfSearch)
-		assert.Equal(t, "golang", action.OfSearch.Query)
+		assert.Equal(t, "golang", action.OfSearch.Query.Value)
 		require.Len(t, action.OfSearch.Sources, 1)
 		assert.Equal(t, "https://go.dev", action.OfSearch.Sources[0].URL)
 	})
@@ -143,7 +143,7 @@ func TestOpenaiWebSearchActionFromJSON(t *testing.T) {
 		action, err := openaiWebSearchActionFromJSON(`{"type":"open_page","url":"https://go.dev"}`)
 		require.NoError(t, err)
 		require.NotNil(t, action.OfOpenPage)
-		assert.Equal(t, "https://go.dev", action.OfOpenPage.URL)
+		assert.Equal(t, "https://go.dev", action.OfOpenPage.URL.Value)
 	})
 
 	t.Run("find", func(t *testing.T) {
@@ -154,7 +154,7 @@ func TestOpenaiWebSearchActionFromJSON(t *testing.T) {
 			require.NotNil(t, action.OfFind)
 			assert.Equal(t, "generics", action.OfFind.Pattern)
 
-			// The API rejects the SDK's default "find" type on the wire.
+			// The API only accepts "find_in_page", not "find", on the wire.
 			data, err := json.Marshal(action.OfFind)
 			require.NoError(t, err)
 			assert.Contains(t, string(data), `"type":"find_in_page"`)

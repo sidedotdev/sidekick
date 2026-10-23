@@ -53,6 +53,68 @@ type ModelInfo struct {
 	OpenWeights bool       `json:"open_weights,omitempty"`
 	Cost        Cost       `json:"cost,omitempty"`
 	Limit       Limit      `json:"limit,omitempty"`
+	// Option types other than effort, budget_tokens and toggle may appear and
+	// are ignored by consumers.
+	ReasoningOptions []ReasoningOption `json:"reasoning_options,omitempty"`
+	// Passed through unparsed so the frontend can read alternative modes (e.g.
+	// service tiers under experimental.modes) without a schema change there
+	// ever breaking decoding of the rest of models.dev.
+	Experimental json.RawMessage `json:"experimental,omitempty"`
+}
+
+const reasoningOptionTypeEffort = "effort"
+
+// ReasoningOption describes one way a model's reasoning can be controlled, as
+// published by models.dev: "effort" (discrete Values), "budget_tokens"
+// (Min/Max token budget) or "toggle" (on/off).
+type ReasoningOption struct {
+	Type   string   `json:"type"`
+	Values []string `json:"values,omitempty"`
+	Min    int      `json:"min,omitempty"`
+	Max    int      `json:"max,omitempty"`
+}
+
+// EffortLevels returns the model's effort ladder in models.dev's declared
+// order, which is treated as ascending effort. Returns nil when the model has
+// no effort-type reasoning option.
+func (m *ModelInfo) EffortLevels() []string {
+	if m == nil {
+		return nil
+	}
+	for _, option := range m.ReasoningOptions {
+		if option.Type != reasoningOptionTypeEffort {
+			continue
+		}
+		if len(option.Values) == 0 {
+			return nil
+		}
+		return option.Values
+	}
+	return nil
+}
+
+// HasModeBodyValue reports whether any models.dev experimental mode of the
+// model sets the given request body field to value.
+func (m *ModelInfo) HasModeBodyValue(field string, value string) bool {
+	if len(m.Experimental) == 0 {
+		return false
+	}
+	var experimental struct {
+		Modes map[string]struct {
+			Provider struct {
+				Body map[string]any `json:"body"`
+			} `json:"provider"`
+		} `json:"modes"`
+	}
+	if err := json.Unmarshal(m.Experimental, &experimental); err != nil {
+		return false
+	}
+	for _, mode := range experimental.Modes {
+		if bodyValue, ok := mode.Provider.Body[field].(string); ok && bodyValue == value {
+			return true
+		}
+	}
+	return false
 }
 
 type ProviderInfo struct {
@@ -185,17 +247,11 @@ func GetModel(provider string, model string) (*ModelInfo, bool) {
 		return nil, false
 	}
 
-	providerLower := strings.ToLower(provider)
-	if aliased, ok := modelsDevProviderAliases[providerLower]; ok {
-		providerLower = strings.ToLower(aliased)
-	}
-	for providerKey, providerData := range data {
-		if strings.ToLower(providerKey) == providerLower {
-			if modelData, exists := providerData.Models[model]; exists {
-				return &modelData, true
-			}
-			return nil, false
+	if providerData, ok := findModelsDevProvider(data, provider); ok {
+		if modelData, exists := providerData.Models[model]; exists {
+			return &modelData, true
 		}
+		return nil, false
 	}
 
 	for providerKey, providerData := range data {
@@ -210,6 +266,95 @@ func GetModel(provider string, model string) (*ModelInfo, bool) {
 	}
 
 	return nil, false
+}
+
+func findModelsDevProvider(data modelsDevData, provider string) (ProviderInfo, bool) {
+	providerLower := strings.ToLower(provider)
+	if aliased, ok := modelsDevProviderAliases[providerLower]; ok {
+		providerLower = strings.ToLower(aliased)
+	}
+	for providerKey, providerData := range data {
+		if strings.ToLower(providerKey) == providerLower {
+			return providerData, true
+		}
+	}
+	return ProviderInfo{}, false
+}
+
+// DefaultEffortLadder is used when neither the model nor any model of its
+// family publishes an effort ladder in models.dev.
+var DefaultEffortLadder = []string{"low", "medium", "high", "xhigh", "max"}
+
+// GetEffortLadder returns the ascending effort ladder for a model, never nil.
+// Lookup order: the model's own effort levels, then those of the latest
+// same-family model on the same models.dev provider, then DefaultEffortLadder.
+// The returned slice is shared and must not be modified.
+func GetEffortLadder(provider, model string) []string {
+	if info, _ := GetModel(provider, model); info.EffortLevels() != nil {
+		return info.EffortLevels()
+	}
+	if ladder := latestFamilyEffortLevels(provider, model); ladder != nil {
+		return ladder
+	}
+	return DefaultEffortLadder
+}
+
+func latestFamilyEffortLevels(provider, model string) []string {
+	family := modelFamily(model)
+	if family == "" {
+		return nil
+	}
+	data, err := LoadModelsDev()
+	if err != nil {
+		return nil
+	}
+	providerData, ok := findModelsDevProvider(data, provider)
+	if !ok {
+		return nil
+	}
+
+	var latest *ModelInfo
+	var latestID string
+	for id, info := range providerData.Models {
+		if info.EffortLevels() == nil || modelFamily(id) != family {
+			continue
+		}
+		if latest != nil {
+			if info.ReleaseDate != latest.ReleaseDate {
+				if info.ReleaseDate < latest.ReleaseDate {
+					continue
+				}
+			} else if info.LastUpdated != latest.LastUpdated {
+				if info.LastUpdated < latest.LastUpdated {
+					continue
+				}
+			} else if id < latestID {
+				continue
+			}
+		}
+		latest, latestID = &info, id
+	}
+	return latest.EffortLevels()
+}
+
+// modelFamily returns the leading alphabetic token of a model id, e.g. "gpt"
+// for "gpt-5.2", "o" for "o4-mini" and "claude" for
+// "us.anthropic.claude-sonnet-4-5". Purely alphabetic dot-separated prefixes
+// (Bedrock region/vendor) are stripped first.
+func modelFamily(id string) string {
+	id = strings.ToLower(id)
+	isNotLetter := func(r rune) bool { return r < 'a' || r > 'z' }
+	for {
+		dot := strings.IndexByte(id, '.')
+		if dot < 0 || strings.IndexFunc(id[:dot], isNotLetter) >= 0 {
+			break
+		}
+		id = id[dot+1:]
+	}
+	if end := strings.IndexFunc(id, isNotLetter); end >= 0 {
+		return id[:end]
+	}
+	return id
 }
 
 type ModelMetadata struct {

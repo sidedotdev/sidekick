@@ -7,7 +7,9 @@
     >
       <h2 v-if="showHeadings">
         {{ columnNames[agentType] }}
-        <button v-if="agentType !== 'none'" class="new-task mini-button" @click="emit('addTask', agentType)">+</button>
+        <ShortcutTooltip v-if="agentType !== 'none'" :label="agentType === 'human' ? 'Draft task' : 'Queue task'" shortcut="T" position="bottom">
+          <button class="new-task mini-button" :aria-label="agentType === 'human' ? 'Draft task' : 'Queue task'" @click="emit('addTask', agentType)">+</button>
+        </ShortcutTooltip>
         <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="emit('archiveFinished')">📦</button>
       </h2>
       <VirtualTaskList
@@ -21,12 +23,13 @@
         @copy="(task: Task) => emit('copy', task)"
         @error="(e: any) => emit('error', e)"
       />
-      <button class="new-task" v-if="agentType == 'human'" @click="emit('addTask', agentType)">
+      <button class="new-task" v-if="agentType == 'human'" :data-board-nav="addTaskControlId(agentType)" @click="emit('addTask', agentType)">
         + Draft Task
         <ShortcutHint v-if="newTaskShortcutLabel" :label="newTaskShortcutLabel" />
       </button>
-      <button class="new-task" v-if="agentType == 'llm'" @click="emit('addTask', agentType)">
+      <button class="new-task" v-if="agentType == 'llm'" :data-board-nav="addTaskControlId(agentType)" @click="emit('addTask', agentType)">
         + Queue Task
+        <ShortcutHint v-if="newTaskShortcutLabel" :label="newTaskShortcutLabel" />
       </button>
     </div>
   </div>
@@ -35,8 +38,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { FullTask, AgentType, Task } from '../lib/models'
+import { boardControlIds, groupTasksByAgentType } from '../lib/kanbanNavigation'
 import VirtualTaskList from './VirtualTaskList.vue'
 import ShortcutHint from './ShortcutHint.vue'
+import ShortcutTooltip from './ShortcutTooltip.vue'
 
 const props = withDefaults(defineProps<{
   tasks: FullTask[]
@@ -45,9 +50,15 @@ const props = withDefaults(defineProps<{
   // groups), the per-column headings are omitted and the columns lose their
   // boxed styling; the add-task buttons remain visible in each column
   showHeadings?: boolean
+  // Identifies the add-task buttons for board keyboard navigation
+  groupKey?: string
 }>(), {
   showHeadings: true,
+  groupKey: undefined,
 })
+
+const addTaskControlId = (agentType: AgentType): string | undefined =>
+  props.groupKey === undefined ? undefined : boardControlIds.groupAddTask(props.groupKey, agentType)
 
 const emit = defineEmits<{
   (e: 'addTask', agentType: AgentType): void
@@ -64,26 +75,7 @@ const columnNames = {
   none: 'Finished',
 }
 
-const groupedTasks = computed(() => {
-  const grouped = props.tasks.reduce((acc, task) => {
-    if (!acc[task.agentType]) {
-      acc[task.agentType] = [];
-    }
-    acc[task.agentType].push(task);
-    return acc;
-  }, {} as Record<AgentType, FullTask[]>);
-
-  for (const agentType in grouped) {
-    grouped[agentType as AgentType].sort((a: FullTask, b: FullTask) => {
-      if (b.updated === a.updated) {
-        return b.id > a.id ? 1 : -1;
-      }
-      return b.updated > a.updated ? 1 : -1;
-    });
-  }
-
-  return grouped;
-})
+const groupedTasks = computed(() => groupTasksByAgentType(props.tasks))
 </script>
 
 <style scoped>

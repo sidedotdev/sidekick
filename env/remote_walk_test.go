@@ -229,9 +229,7 @@ func setupLocalAndRemoteGitRepos(t testing.TB, files map[string]string) (localRe
 	}
 
 	seed := t.TempDir()
-	runGit(t, seed, "init", "-q", "-b", "main")
-	runGit(t, seed, "config", "user.name", "Test")
-	runGit(t, seed, "config", "user.email", "test@example.com")
+	require.NoError(t, walkSeedFixture.CopyTo(seed))
 	for p, content := range files {
 		full := filepath.Join(seed, p)
 		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0755))
@@ -241,16 +239,14 @@ func setupLocalAndRemoteGitRepos(t testing.TB, files map[string]string) (localRe
 	runGit(t, seed, "commit", "-q", "-m", "initial")
 
 	localRepo = t.TempDir()
-	runGit(t, ".", "clone", "-q", seed, localRepo)
-	runGit(t, localRepo, "config", "user.name", "Test")
-	runGit(t, localRepo, "config", "user.email", "test@example.com")
+	runGit(t, ".", "clone", "-q",
+		"-c", "user.name=Test", "-c", "user.email=test@example.com", seed, localRepo)
 
 	remoteRepo = t.TempDir()
-	runGit(t, ".", "clone", "-q", seed, remoteRepo)
-	runGit(t, remoteRepo, "config", "user.name", "Test")
-	runGit(t, remoteRepo, "config", "user.email", "test@example.com")
-	runGit(t, remoteRepo, "config", "uploadpack.allowAnySHA1InWant", "true")
-	runGit(t, remoteRepo, "config", "uploadpack.allowReachableSHA1InWant", "true")
+	runGit(t, ".", "clone", "-q",
+		"-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"-c", "uploadpack.allowAnySHA1InWant=true",
+		"-c", "uploadpack.allowReachableSHA1InWant=true", seed, remoteRepo)
 
 	if resolved, err := filepath.EvalSymlinks(localRepo); err == nil {
 		localRepo = resolved
@@ -344,7 +340,7 @@ func TestSplitSSHDestination(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dest, opts := splitSSHDestination(tc.args)
+			dest, opts := SplitSSHDestination(tc.args)
 			require.Equal(t, tc.wantDest, dest)
 			if tc.wantOpts == nil {
 				require.Empty(t, opts)

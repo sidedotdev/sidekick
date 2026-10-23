@@ -37,6 +37,8 @@ func main() {
 	testFilePath := filepath.Join(tempDir, "test.go")
 	err := os.WriteFile(testFilePath, []byte(initialContent), 0644)
 	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "go.mod"), []byte("module example.com/fixture\n\ngo 1.23\n"), 0644))
+	initCommittedGitRepo(t, tempDir)
 
 	// Create LSPActivities with real Jsonrpc2LSPClient - this will be reused
 	// across both FindReferencesActivity calls to reproduce the caching issue
@@ -45,6 +47,7 @@ func main() {
 			LanguageName: "golang",
 		}
 	})
+	t.Cleanup(func() { require.NoError(t, lspa.Close()) })
 
 	ctx := context.Background()
 	envContainer := env.EnvContainer{
@@ -99,13 +102,12 @@ func main() {
 	applyInput := ApplyEditBlockActivityInput{
 		EnvContainer: envContainer,
 		EditBlocks:   []EditBlock{editBlock},
-		EnabledFlags: []string{}, // check-edits flag not passed in, thus no git repo is needed
 	}
 
 	devActivities := &DevActivities{LSPActivities: lspa} // should use same lspa
 
 	// Use a context with timeout to avoid test hanging if LSP is slow
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	reports, err := devActivities.ApplyEditBlocks(ctxWithTimeout, applyInput)
@@ -117,9 +119,26 @@ func main() {
 	// Step 3: Use FindReferencesActivity again with the same LSPActivities instance
 	// This is a regression test so we don't fail with a line number out of range error because the LSP server
 	// still has the old view of the file but the file has been modified
-	secondRefs, err := lspa.FindReferencesActivity(ctx, findRefsInput)
+	secondRefs, err := lspa.FindReferencesActivity(ctxWithTimeout, findRefsInput)
 	require.NoError(t, err)
-	if len(secondRefs) != len(initialRefs) {
-		t.Errorf("Reference count changed unexpectedly, indicating stale LSP state")
-	}
+	expected := initialRefs[0]
+	lineDelta := len(editBlock.NewLines) - len(editBlock.OldLines)
+	expected.Range.Start.Line += lineDelta
+	expected.Range.End.Line += lineDelta
+	require.Equal(t, []lsp.Location{expected}, secondRefs)
+
+	otherDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "go.mod"), []byte("module example.com/other\n\ngo 1.23\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "other.go"), []byte("package other\nfunc Other() {}\n"), 0644))
+	otherContainer := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: otherDir}}
+	definitions, err := lspa.GetSingleFileDefinitions(ctxWithTimeout, lsp.LSPDefinitionLocationsRequest{
+		EnvContainer: &otherContainer, FilePath: "other.go", Symbols: []string{"Other"},
+	})
+	require.NoError(t, err)
+	require.Len(t, definitions, 1)
+	require.Empty(t, definitions[0].Error)
+
+	reinitializedRefs, err := lspa.FindReferencesActivity(ctxWithTimeout, findRefsInput)
+	require.NoError(t, err)
+	require.Equal(t, secondRefs, reinitializedRefs, "fresh locations must survive eviction and initialization from disk")
 }

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -32,14 +33,9 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 	"github.com/segmentio/ksuid"
-	"github.com/zalando/go-keyring"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
-
-// keyringGet is the function used to read secrets from the keyring.
-// Overridable in tests to avoid OS keyring dependency.
-var keyringGet = keyring.Get
 
 type InitCommandHandler struct {
 	storage srv.Storage
@@ -113,7 +109,7 @@ func (h *InitCommandHandler) handleInitCommand(requestedProfileId string) error 
 			return fmt.Errorf("error prompting for test command: %w", err)
 		}
 		if len(config.TestCommands) > 0 {
-			fmt.Println("✔ Your test command has been saved in side.yml (commit this)")
+			fmt.Println("✔ Your test command has been saved and auto-approved in side.yml (commit this)")
 		} else {
 			fmt.Println("ℹ Skipping test command configuration. You can add test commands to side.yml later for best results.")
 		}
@@ -622,12 +618,39 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 	config.TestCommands = []common.CommandConfig{
 		{Command: testCommand},
 	}
+	autoApproveCommand(&config.CommandPermissions, testCommand)
 
 	if err := saveConfig(filePath, *config); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// literalCommandPattern builds a permission pattern matching the given command
+// literally. Permission patterns containing regex metacharacters are evaluated
+// as regexes, so such commands are escaped and given the same trailing word
+// boundary that literal prefix matching enforces.
+func literalCommandPattern(command string) string {
+	quoted := regexp.QuoteMeta(command)
+	if quoted == command {
+		return command
+	}
+	if last := command[len(command)-1]; isPermissionWordChar(last) {
+		quoted += `(?:$|[^A-Za-z0-9_-])`
+	}
+	return quoted
+}
+
+func isPermissionWordChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+}
+
+func autoApproveCommand(permissions *common.CommandPermissionConfig, command string) {
+	if result, _ := common.EvaluateCommandPermission(*permissions, command); result == common.PermissionAutoApprove {
+		return
+	}
+	permissions.AutoApprove = append(permissions.AutoApprove, common.CommandPattern{Pattern: literalCommandPattern(command)})
 }
 
 func getConfiguredBuiltinLLMProviders() []string {
@@ -644,7 +667,7 @@ func getConfiguredBuiltinLLMProviders() []string {
 	}
 
 	// Check Anthropic (either API key or OAuth)
-	if configuredSecretExists(llm.AnthropicApiKeySecretName) || configuredSecretExists(AnthropicOAuthSecretName) {
+	if configuredSecretExists(llm.AnthropicApiKeySecretName) || configuredSecretExists(llm.AnthropicOAuthSecretName) {
 		providers = append(providers, "anthropic")
 	}
 
@@ -679,13 +702,16 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 
 	// Add custom providers from local config
 	for _, provider := range localConfig.Providers {
+		if provider.Type == "cohere" {
+			continue
+		}
 		options = append(options, provider.Name)
 	}
 
 	// If no providers configured at all, go directly to auth flow
 	if len(options) == 0 {
 		fmt.Println("No LLM providers configured. Let's set one up.")
-		if err := handleAuthCommand(); err != nil {
+		if err := handleLLMAuthCommand(); err != nil {
 			return "", err
 		}
 		// After auth, determine which provider was added
@@ -705,7 +731,7 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	}
 
 	if selected == "Add new provider" {
-		if err := handleAuthCommand(); err != nil {
+		if err := handleLLMAuthCommand(); err != nil {
 			return "", err
 		}
 		// After auth, determine which provider was added

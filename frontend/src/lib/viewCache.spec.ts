@@ -31,7 +31,11 @@ function makeProject(id: string): Project {
   }
 }
 
-function makeFlowViewCache(flowId: string): FlowViewCacheEntry {
+function makeFlowViewCache(flowId: string): FlowViewCacheEntry & {
+  flowActions: unknown[]
+  subflowsById: Record<string, Subflow>
+  subflowTrees: SubflowTree[]
+} {
   return {
     flow: { id: flowId, workspaceId: 'ws1', status: 'in_progress' } as Flow,
     flowActions: [{ id: `action_${flowId}`, flowId } as any],
@@ -117,44 +121,30 @@ describe('ViewCache', () => {
       expect(viewCache.getFlowView('unknown_flow')).toBeNull()
     })
 
-    it('stores and retrieves flow view data', () => {
+    it('retains metadata without retaining paginated history', () => {
       const entry = makeFlowViewCache('flow1')
       viewCache.setFlowView('flow1', entry)
-
-      const cached = viewCache.getFlowView('flow1')
-      expect(cached).not.toBeNull()
-      expect(cached!.flow.id).toBe('flow1')
-      expect(cached!.flowActions).toHaveLength(1)
-      expect(cached!.subflowsById[`sf_flow1`]).toBeDefined()
-      expect(cached!.subflowTrees).toHaveLength(1)
-    })
-
-    it('stores shallow copies so mutations do not affect cache', () => {
-      const entry = makeFlowViewCache('flow1')
-      viewCache.setFlowView('flow1', entry)
-
-      entry.flowActions.push({ id: 'extra' } as any)
-      expect(viewCache.getFlowView('flow1')!.flowActions).toHaveLength(1)
+      expect(viewCache.getFlowView('flow1')).toEqual({
+        flow: entry.flow,
+        workspace: entry.workspace,
+      })
     })
 
     it('evicts oldest entries when exceeding max size', () => {
       for (let i = 0; i < 12; i++) {
         viewCache.setFlowView(`flow_${i}`, makeFlowViewCache(`flow_${i}`))
       }
-
-      // Oldest entries should be evicted (max 10, plus 'reset' from beforeEach = 11 total before eviction)
-      // After inserting 12 + 1 (reset), the oldest should be gone
+      expect(viewCache.getFlowView('flow_0')).toBeNull()
       expect(viewCache.getFlowView('flow_11')).not.toBeNull()
       expect(viewCache.getFlowView('flow_10')).not.toBeNull()
     })
 
-    it('updates existing entry without growing cache', () => {
+    it('updates existing metadata', () => {
       viewCache.setFlowView('flow1', makeFlowViewCache('flow1'))
       const updatedEntry = makeFlowViewCache('flow1')
-      updatedEntry.flowActions = []
+      updatedEntry.flow = { ...updatedEntry.flow, title: 'Updated' }
       viewCache.setFlowView('flow1', updatedEntry)
-
-      expect(viewCache.getFlowView('flow1')!.flowActions).toHaveLength(0)
+      expect(viewCache.getFlowView('flow1')!.flow.title).toBe('Updated')
     })
   })
 })

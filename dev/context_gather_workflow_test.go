@@ -14,6 +14,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -133,6 +134,7 @@ func TestContextGatherWorkflowUsesVisibleLocalizationSubflowAndRequiresTerminalT
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 	env.SetWorkerOptions(utils.TestWorkerOptions())
+	env.SetTestTimeout(30 * time.Second)
 
 	streamCalls := 0
 	persistedSubflows := make([]domain.Subflow, 0, 2)

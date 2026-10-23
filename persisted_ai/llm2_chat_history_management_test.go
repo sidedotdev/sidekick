@@ -2,10 +2,13 @@ package persisted_ai
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,6 +18,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// useFallbackModelLimits forces model context limits to resolve from
+// SIDE_FALLBACK_MAX_TOKENS. Seeding a fresh, empty models.dev cache keeps the
+// lookup off the network, which would otherwise block on a real download.
+func useFallbackModelLimits(t *testing.T, maxTokens string) {
+	t.Helper()
+	common.ClearModelsCache()
+	t.Cleanup(common.ClearModelsCache)
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", maxTokens)
+	cacheHome := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", cacheHome)
+	require.NoError(t, os.WriteFile(filepath.Join(cacheHome, "models.dev.json"), []byte("{}"), 0o644))
+}
 
 func textMsg(role llm2.Role, text string) llm2.Message {
 	return llm2.Message{
@@ -281,10 +297,7 @@ func TestManageLlm2ChatHistory_LargeToolResponseTruncation(t *testing.T) {
 	// maxInput = int(100000*1.9) = 190000, threshold = maxInput/4 = 47500.
 	// The total length exceeds the truncation trigger, and the retained tool
 	// result exceeds the threshold, so it is truncated even though retained.
-	common.ClearModelsCache()
-	t.Cleanup(common.ClearModelsCache)
-	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
-	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+	useFallbackModelLimits(t, "100000")
 	ca := &ChatHistoryActivities{}
 	largeContent := strings.Repeat("X", 60000)
 
@@ -819,10 +832,7 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 	// maxInput = int(100000*1.9) = 190000, threshold = maxInput/4 = 47500.
 	// Total exceeds the truncation trigger; truncating the oldest oversized
 	// response alone brings the total under the keep length, sparing the newer.
-	common.ClearModelsCache()
-	t.Cleanup(common.ClearModelsCache)
-	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
-	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+	useFallbackModelLimits(t, "100000")
 	ca := &ChatHistoryActivities{}
 	largeContent1 := strings.Repeat("A", 130000)
 	largeContent2 := strings.Repeat("B", 50000)
@@ -987,10 +997,7 @@ func TestManageLlm2ChatHistory_BelowTriggerLeftUnchanged(t *testing.T) {
 	// requestedKeepLength=10000 => buffer=235*sqrt(10000)=23500, trigger=33500.
 	// A large model window avoids the 70/30 split, so total length between the
 	// keep length and the trigger must leave history untouched.
-	common.ClearModelsCache()
-	t.Cleanup(common.ClearModelsCache)
-	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
-	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+	useFallbackModelLimits(t, "100000")
 	ca := &ChatHistoryActivities{}
 
 	messages := []llm2.Message{
@@ -1009,10 +1016,7 @@ func TestManageLlm2ChatHistory_BelowTriggerLeftUnchanged(t *testing.T) {
 func TestManageLlm2ChatHistory_AboveTriggerDropsOlder(t *testing.T) {
 	// requestedKeepLength=10000 => trigger=33500. Total ~45000 exceeds the
 	// trigger, so older non-retained messages are dropped toward the keep length.
-	common.ClearModelsCache()
-	t.Cleanup(common.ClearModelsCache)
-	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
-	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+	useFallbackModelLimits(t, "100000")
 	ca := &ChatHistoryActivities{}
 
 	messages := []llm2.Message{
@@ -1033,10 +1037,7 @@ func TestManageLlm2ChatHistory_AboveTriggerDropsOlder(t *testing.T) {
 }
 
 func TestResolveKeepAndTrigger_NoWindowSplit(t *testing.T) {
-	common.ClearModelsCache()
-	t.Cleanup(common.ClearModelsCache)
-	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "100000")
-	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+	useFallbackModelLimits(t, "100000")
 
 	keep, trigger := resolveKeepAndTrigger(10000, common.ModelConfig{})
 	assert.Equal(t, 10000, keep)
@@ -1047,10 +1048,7 @@ func TestResolveKeepAndTrigger_NoWindowSplit(t *testing.T) {
 func TestResolveKeepAndTrigger_WindowSplit(t *testing.T) {
 	// A tiny model window forces keep+buffer to be scaled down to a 70/30 split
 	// of the model's max input chars (int(1000*1.9)=1900).
-	common.ClearModelsCache()
-	t.Cleanup(common.ClearModelsCache)
-	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "1000")
-	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
+	useFallbackModelLimits(t, "1000")
 
 	maxInput := common.MaxCharsForModel("", "")
 	require.Equal(t, 1900, maxInput)
@@ -1168,4 +1166,107 @@ func TestManageLlm2ChatHistory_IntentStartPairs(t *testing.T) {
 	got, err := (&ChatHistoryActivities{}).ManageLlm2ChatHistory(messages, 1, common.ModelConfig{})
 	require.NoError(t, err)
 	require.Equal(t, expected, got)
+}
+
+func TestManageLlm2ChatHistoryWithPolicy_TriggerBoundary(t *testing.T) {
+	t.Parallel()
+	first := textMsgWithCtx(llm2.RoleUser, "instructions", ContextTypeInitialInstructions)
+	orphan := toolUseMsg("orphan", "search", "{}")
+	old := textMsg(llm2.RoleAssistant, strings.Repeat("o", 100))
+	last := textMsg(llm2.RoleUser, "latest")
+	messages := []llm2.Message{first, orphan, old, last}
+	total := MeasureLlm2Messages("", messages)
+	keep := MeasureLlm2Messages("", []llm2.Message{first, last})
+
+	cases := []struct {
+		name    string
+		trigger int
+		want    []llm2.Message
+	}{
+		// Below the trigger only orphaned tool calls are repaired.
+		{"below trigger", total + 1, []llm2.Message{first, old, last}},
+		// Reaching the trigger drops everything the keep budget can't hold.
+		{"at trigger", total, []llm2.Message{first, last}},
+		{"zero trigger", 0, []llm2.Message{first, last}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{KeepLength: keep, TruncationTrigger: tc.trigger}, common.ModelConfig{})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestManageLlm2ChatHistoryWithPolicy_MinRecentTurns(t *testing.T) {
+	t.Parallel()
+	first := textMsgWithCtx(llm2.RoleUser, "instructions", ContextTypeInitialInstructions)
+	oldTurn := []llm2.Message{
+		toolUseMsg("old", "search", strings.Repeat("o", 2000)),
+		toolResultMsg("old", "search", strings.Repeat("o", 2000)),
+	}
+	// The second-last turn issues parallel tool calls answered across two
+	// user messages; all of them belong to that turn.
+	parallel := toolUseMsg("p1", "read_file", strings.Repeat("p", 2000))
+	parallel.Content = append(parallel.Content, toolUseMsg("p2", "read_file", strings.Repeat("q", 2000)).Content...)
+	turnTwo := []llm2.Message{
+		parallel,
+		toolResultMsg("p1", "read_file", strings.Repeat("r", 2000)),
+		toolResultMsg("p2", "read_file", strings.Repeat("s", 2000)),
+	}
+	// The pending turn: assistant tool call and its result, no reply yet.
+	turnOne := []llm2.Message{
+		toolUseMsg("latest", "run_tests", strings.Repeat("t", 2000)),
+		toolResultMsg("latest", "run_tests", strings.Repeat("u", 2000)),
+	}
+	messages := []llm2.Message{first}
+	messages = append(messages, oldTurn...)
+	messages = append(messages, turnTwo...)
+	messages = append(messages, turnOne...)
+
+	cases := []struct {
+		name  string
+		turns int
+		want  []llm2.Message
+	}{
+		{"no floor keeps only the mandatory tail", 0, append([]llm2.Message{first}, turnOne...)},
+		{"one turn is the pending turn", 1, append([]llm2.Message{first}, turnOne...)},
+		{"two turns include parallel results", 2, append(append([]llm2.Message{first}, turnTwo...), turnOne...)},
+		{"more turns than exist keeps everything", 5, messages},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{
+				KeepLength: 0, TruncationTrigger: 0, MinRecentTurns: tc.turns,
+			}, common.ModelConfig{})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestManageLlm2ChatHistoryWithPolicy_DoesNotMutateInput(t *testing.T) {
+	t.Parallel()
+	modelConfig := common.ModelConfig{Provider: "anthropic", Model: "claude-opus-5-5"}
+	threshold := common.MaxCharsForModel(modelConfig.Provider, modelConfig.Model) / 4
+	require.Greater(t, threshold, 0)
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "instructions", ContextTypeInitialInstructions),
+		toolUseMsg("orphan", "search", "{}"),
+		toolUseMsg("big", "read_file", "{}"),
+		toolResultMsg("big", "read_file", strings.Repeat("x", threshold+1)),
+	}
+	before, err := json.Marshal(messages)
+	require.NoError(t, err)
+
+	got, err := ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{KeepLength: 1, TruncationTrigger: 1}, modelConfig)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Contains(t, got[2].Content[0].ToolResult.TextContent(), "truncated", "oversized retained result is truncated")
+
+	after, err := json.Marshal(messages)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(before), string(after))
 }

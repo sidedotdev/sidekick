@@ -246,6 +246,7 @@ func createArchiveTag(ctx context.Context, envContainer env.EnvContainer, baseTa
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         tagArgs,
+		EnvVars:      BuildGitEnvVars(SidekickGitName, SidekickGitEmail),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to execute tag creation command: %v", err)

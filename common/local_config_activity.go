@@ -13,6 +13,7 @@ type LocalPublicConfig struct {
 	Profiles           []Profile                   `json:"profiles,omitempty"`
 	LLM                LLMConfig                   `json:"llm"`
 	Embedding          EmbeddingConfig             `json:"embedding"`
+	Reranking          RerankingConfig             `json:"reranking"`
 	CommandPermissions CommandPermissionConfig     `json:"commandPermissions,omitempty"`
 }
 
@@ -112,8 +113,22 @@ func localPublicConfigFrom(config LocalConfig) (LocalPublicConfig, error) {
 		}
 	}
 
+	rerankingConfig := RerankingConfig{
+		UseCaseConfigs: make(map[string][]ModelConfig),
+	}
+	if defaults, ok := config.Reranking[DefaultKey]; ok {
+		rerankingConfig.Defaults = defaults
+	} else if defaults, ok := config.Reranking["defaults"]; ok {
+		rerankingConfig.Defaults = defaults
+	}
+	for key, models := range config.Reranking {
+		if key != DefaultKey && key != "defaults" {
+			rerankingConfig.UseCaseConfigs[key] = models
+		}
+	}
+
 	// Verify that at least one config has defaults
-	if len(llmConfig.Defaults) == 0 && len(embeddingConfig.Defaults) == 0 {
+	if len(llmConfig.Defaults) == 0 && len(embeddingConfig.Defaults) == 0 && len(rerankingConfig.Defaults) == 0 {
 		return LocalPublicConfig{}, temporal.NewNonRetryableApplicationError(
 			"no default models configured in local config",
 			"LocalConfigNoDefaults",
@@ -126,6 +141,7 @@ func localPublicConfigFrom(config LocalConfig) (LocalPublicConfig, error) {
 		Profiles:           config.ResolveProfiles(),
 		LLM:                llmConfig,
 		Embedding:          embeddingConfig,
+		Reranking:          rerankingConfig,
 		CommandPermissions: config.CommandPermissions,
 	}, nil
 }

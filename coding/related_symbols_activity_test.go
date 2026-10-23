@@ -41,6 +41,7 @@ func TestE2eRelatedSymbolsActivity(t *testing.T) {
 		},
 		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 	}
+	t.Cleanup(func() { require.NoError(t, ca.LSPActivities.Close()) })
 
 	type symAndFile struct {
 		symbol      string
@@ -320,4 +321,63 @@ func TestRelatedSymbolsActivityLoadsReferencingFilesConcurrently(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, related, numRefFiles)
+}
+
+func TestRelatedSymbolsAcrossWorkspaceEvictionAndEdits(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	var created atomic.Int32
+	activities := lsp.NewLSPActivities(func(language string) lsp.LSPClient {
+		created.Add(1)
+		return &lsp.Jsonrpc2LSPClient{LanguageName: language}
+	})
+	t.Cleanup(func() { require.NoError(t, activities.Close()) })
+	ca := &CodingActivities{
+		LSPActivities:        activities,
+		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+	}
+	containers := make([]env.EnvContainer, 2)
+	for i := range containers {
+		dir := t.TempDir()
+		containers[i] = env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: dir}}
+		files := map[string]string{
+			"go.mod":    fmt.Sprintf("module example.com/workspace%d\n\ngo 1.23\n", i),
+			"model.go":  "package fixture\n\nfunc Target() {}\nfunc Other() {}\n",
+			"shadow.go": "package fixture\n\nfunc Shadow() { Target := func() {}; Target() }\n",
+		}
+		for path, content := range files {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, path), []byte(content), 0644))
+		}
+	}
+
+	for round, target := range []string{"Target", "Other"} {
+		for i, container := range containers {
+			caller := fmt.Sprintf("Caller%dRound%d", i, round)
+			content := fmt.Sprintf("package fixture\n\n%sfunc %s() { %s() }\n", strings.Repeat("\n", round*3), caller, target)
+			require.NoError(t, os.WriteFile(filepath.Join(container.Env.GetWorkingDirectory(), "caller.go"), []byte(content), 0644))
+			_, err := activities.SyncDocumentActivity(ctx, lsp.SyncDocumentActivityInput{
+				EnvContainer: container, FilePath: "caller.go", Content: content,
+			})
+			require.NoError(t, err)
+
+			for _, symbol := range []string{"Target", "Other"} {
+				related, err := ca.RelatedSymbolsActivity(ctx, RelatedSymbolsActivityInput{
+					EnvContainer: container, RelativeFilePath: "model.go", SymbolText: symbol,
+				})
+				require.NoError(t, err)
+				if symbol != target {
+					require.Empty(t, related, "references to the old target must disappear")
+					continue
+				}
+				require.Len(t, related, 1, "a same-spelled local function must not contribute context")
+				require.Equal(t, caller, related[0].Symbol.Content)
+				require.Equal(t, "caller.go", related[0].RelativeFilePath)
+				require.False(t, related[0].InSignature)
+				require.Len(t, related[0].Locations, 1)
+				require.Equal(t, 2+round*3, related[0].Locations[0].Range.Start.Line)
+			}
+		}
+	}
+	require.EqualValues(t, 4, created.Load(), "returning to an evicted workspace must initialize a new client")
 }

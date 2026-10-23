@@ -17,17 +17,20 @@ type openAIRequestCredentials struct {
 	authType  common.ProviderAuthType
 }
 
+// openAICredentialsForRequest resolves credentials for the configured provider
+// name (not normalized); credential problems surface as provider auth errors
+// attributed to that provider.
 func openAICredentialsForRequest(
 	secretManager secret_manager.SecretManager,
-	providerName string,
+	provider string,
 	authType common.ProviderAuthType,
 ) (openAIRequestCredentials, error) {
-	apiKeySecretName := fmt.Sprintf("%s_API_KEY", providerName)
 	oauthSecretName := openai_oauth.SecretName
+	normalizedAuthType := common.NormalizeProviderAuthType(string(authType))
 
-	switch common.NormalizeProviderAuthType(string(authType)) {
+	switch normalizedAuthType {
 	case common.ProviderAuthTypeAPI:
-		token, err := secretManager.GetSecret(apiKeySecretName)
+		token, err := providerAPIKey(secretManager, provider, normalizedAuthType)
 		if err != nil {
 			return openAIRequestCredentials{}, err
 		}
@@ -36,16 +39,18 @@ func openAICredentialsForRequest(
 			authType: common.ProviderAuthTypeAPI,
 		}, nil
 	case common.ProviderAuthTypeSubscription:
-		credentials, err := getOpenAIOAuthCredentials(secretManager, oauthSecretName)
+		credentials, err := getOpenAIOAuthCredentials(secretManager, oauthSecretName, provider, normalizedAuthType)
 		if err != nil {
 			if errors.Is(err, secret_manager.ErrSecretNotFound) {
-				return openAIRequestCredentials{}, fmt.Errorf("OpenAI subscription auth requires OAuth credentials: %w", err)
+				return openAIRequestCredentials{}, newCredentialAuthError(secretManager, provider, normalizedAuthType,
+					common.ProviderAuthErrorReasonInvalidOAuth,
+					fmt.Errorf("OpenAI subscription auth requires OAuth credentials: %w", err))
 			}
 			return openAIRequestCredentials{}, err
 		}
 		return credentials, nil
 	case common.ProviderAuthTypeAny:
-		credentials, err := getOpenAIOAuthCredentials(secretManager, oauthSecretName)
+		credentials, err := getOpenAIOAuthCredentials(secretManager, oauthSecretName, provider, normalizedAuthType)
 		if err == nil {
 			return credentials, nil
 		}
@@ -53,7 +58,7 @@ func openAICredentialsForRequest(
 			return openAIRequestCredentials{}, err
 		}
 
-		token, err := secretManager.GetSecret(apiKeySecretName)
+		token, err := providerAPIKey(secretManager, provider, normalizedAuthType)
 		if err != nil {
 			return openAIRequestCredentials{}, err
 		}
@@ -69,18 +74,22 @@ func openAICredentialsForRequest(
 func getOpenAIOAuthCredentials(
 	secretManager secret_manager.SecretManager,
 	secretName string,
+	provider string,
+	authType common.ProviderAuthType,
 ) (openAIRequestCredentials, error) {
 	rawCredentials, err := secretManager.GetSecret(secretName)
 	if err != nil {
-		return openAIRequestCredentials{}, err
+		return openAIRequestCredentials{}, common.ReattributeProviderAuthError(err, provider, authType)
 	}
 	if rawCredentials == "" {
-		return openAIRequestCredentials{}, fmt.Errorf("OpenAI OAuth secret is empty")
+		return openAIRequestCredentials{}, newCredentialAuthError(secretManager, provider, authType,
+			common.ProviderAuthErrorReasonInvalidOAuth, errors.New("OpenAI OAuth secret is empty"))
 	}
 
 	credentials, err := openai_oauth.ParseCredentials(rawCredentials)
 	if err != nil {
-		return openAIRequestCredentials{}, err
+		return openAIRequestCredentials{}, newCredentialAuthError(secretManager, provider, authType,
+			common.ProviderAuthErrorReasonInvalidOAuth, err)
 	}
 
 	return openAIRequestCredentials{

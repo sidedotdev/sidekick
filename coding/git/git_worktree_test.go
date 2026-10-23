@@ -734,3 +734,83 @@ func TestCleanupWorktreesSharingBranch(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanupWorktreeArchiveIdentity(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	for _, key := range []string{"GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"} {
+		t.Setenv(key, "")
+		require.NoError(t, os.Unsetenv(key))
+	}
+
+	tests := []struct {
+		name            string
+		message         string
+		configuredUser  bool
+		existingArchive bool
+	}{
+		{name: "annotated without identity", message: "Archive completed work"},
+		{name: "annotated with configured identity", message: "Archive completed work", configuredUser: true},
+		{name: "annotated with existing archive", message: "Archive completed work", existingArchive: true},
+		{name: "lightweight without identity"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			repoDir := setupTestGitRepo(t)
+			createCommit(t, repoDir, "Initial commit")
+			runGitCommandInTestRepo(t, repoDir, "config", "user.useConfigOnly", "true")
+			if tt.configuredUser {
+				runGitCommandInTestRepo(t, repoDir, "config", "user.name", "Developer")
+				runGitCommandInTestRepo(t, repoDir, "config", "user.email", "developer@example.com")
+			}
+
+			branchName := "side/archive-identity"
+			devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, domain.Worktree{
+				Name:        branchName,
+				WorkspaceId: "test-" + ksuid.New().String(),
+			})
+			require.NoError(t, err)
+			worktreePath := devEnv.GetWorkingDirectory()
+			t.Cleanup(func() { _ = os.RemoveAll(worktreePath) })
+			envContainer := env.EnvContainer{Env: devEnv}
+
+			identity, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+				EnvContainer: envContainer,
+				Command:      "git",
+				Args:         []string{"var", "GIT_COMMITTER_IDENT"},
+			})
+			require.NoError(t, err)
+			if tt.configuredUser {
+				require.Zero(t, identity.ExitStatus, identity.Stderr)
+			} else {
+				require.NotZero(t, identity.ExitStatus, "Git must have no usable identity before cleanup")
+			}
+
+			tagName := "archive/" + branchName
+			if tt.existingArchive {
+				runGitCommandInTestRepo(t, repoDir, "tag", tagName, branchName)
+				tagName += "-2"
+			}
+			tip := runGitCommandInTestRepo(t, repoDir, "rev-parse", branchName)
+			configBefore := runGitCommandInTestRepo(t, repoDir, "config", "--local", "--list")
+
+			err = CleanupWorktreeActivity(ctx, envContainer, worktreePath, branchName, tt.message)
+			require.NoError(t, err)
+			assert.NoDirExists(t, worktreePath)
+			assert.Empty(t, runGitCommandInTestRepo(t, repoDir, "branch", "--list", branchName))
+			assert.Equal(t, tip, runGitCommandInTestRepo(t, repoDir, "rev-parse", tagName+"^{commit}"))
+			assert.Equal(t, configBefore, runGitCommandInTestRepo(t, repoDir, "config", "--local", "--list"))
+
+			if tt.message == "" {
+				assert.Equal(t, "commit", runGitCommandInTestRepo(t, repoDir, "cat-file", "-t", tagName))
+			} else {
+				assert.Equal(t, "tag", runGitCommandInTestRepo(t, repoDir, "cat-file", "-t", tagName))
+				assert.Equal(t, SidekickGitName+"|<"+SidekickGitEmail+">|"+tt.message,
+					runGitCommandInTestRepo(t, repoDir, "for-each-ref",
+						"--format=%(taggername)|%(taggeremail)|%(contents:subject)", "refs/tags/"+tagName))
+			}
+		})
+	}
+}

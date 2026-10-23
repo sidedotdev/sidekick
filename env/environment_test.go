@@ -19,49 +19,18 @@ import (
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 )
 
 // setupTestGitRepo creates a temporary Git repository with a main branch and initial commit.
 // It returns the repo directory path and sets up cleanup via t.Cleanup.
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()
-
-	// Check if git is available
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git command not found in PATH")
 	}
-
 	repoDir := t.TempDir()
-
-	// Initialize git repo
-	cmd := exec.Command("git", "init")
-	cmd.Dir = repoDir
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git init failed: %s", string(output))
-
-	// Create main branch
-	cmd = exec.Command("git", "checkout", "-b", "main")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git checkout -b main failed: %s", string(output))
-
-	// Configure local user for commits (avoid relying on global config)
-	cmd = exec.Command("git", "config", "user.name", "Test User")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git config user.name failed: %s", string(output))
-
-	cmd = exec.Command("git", "config", "user.email", "test@example.com")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git config user.email failed: %s", string(output))
-
-	// Create initial empty commit
-	cmd = exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git commit failed: %s", string(output))
-
+	require.NoError(t, initialRepoFixture.CopyTo(repoDir))
 	return repoDir
 }
 
@@ -419,6 +388,49 @@ func TestGetEnvironmentInfoActivity(t *testing.T) {
 	assert.Contains(t, formatted, "Arch:")
 }
 
+func TestEnvRunCommandActivity_MissingWorkingDir(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, "exists"), 0o755))
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: tempDir})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		relDir  string
+		wantErr string
+	}{
+		{name: "repo root", relDir: "."},
+		{name: "existing dir", relDir: "exists"},
+		{name: "missing dir", relDir: "null", wantErr: `working directory "null" does not exist`},
+		{name: "missing nested dir", relDir: "exists/missing", wantErr: `working directory "exists/missing" does not exist`},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := EnvRunCommandActivity(ctx, EnvRunCommandActivityInput{
+				EnvContainer:       EnvContainer{Env: localEnv},
+				Command:            "sh",
+				Args:               []string{"-c", "echo ok"},
+				RelativeWorkingDir: tt.relDir,
+			})
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, "ok\n", output.Stdout)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			var appErr *temporal.ApplicationError
+			require.ErrorAs(t, err, &appErr)
+			assert.True(t, appErr.NonRetryable())
+			assert.Equal(t, ErrTypeMissingWorkingDir, appErr.Type())
+		})
+	}
+}
+
 func TestCreateDevPodWorktreeActivity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -444,13 +456,22 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 			WorkspaceId:  "ws-" + ksuid.New().String(),
 		})
 		require.NoError(t, err)
-		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
-		// Worktrees must live beside the repo (inside the persistent workspace
-		// mount) rather than in a system temp path.
-		assert.Equal(t, filepath.Join(filepath.Dir(repoDir), "sidekick-worktrees"),
+		// Local-folder DevPods mount the repository, not its parent directory.
+		assert.Equal(t, filepath.Join(repoDir, ".side", "worktrees"),
 			filepath.Dir(filepath.Dir(output.WorktreePath)))
 		assert.DirExists(t, output.WorktreePath)
 		assertSideTmpReady(t, output.WorktreePath)
+
+		relativePath, err := filepath.Rel(repoDir, output.WorktreePath)
+		require.NoError(t, err)
+		ignored, err := exec.Command("git", "-C", repoDir, "check-ignore", relativePath).CombinedOutput()
+		require.NoError(t, err, "%s", ignored)
+
+		gitDirOutput, err := exec.Command("git", "-C", output.WorktreePath, "rev-parse", "--absolute-git-dir").Output()
+		require.NoError(t, err)
+		lock, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(gitDirOutput)), "locked"))
+		require.NoError(t, err)
+		assert.Equal(t, WorktreeLockReason, strings.TrimSpace(string(lock)))
 
 		// Verify the branch was created inside the worktree
 		cmd := exec.Command("git", "branch", "--show-current")
@@ -1007,7 +1028,7 @@ func TestModalRecoverSSHTransport(t *testing.T) {
 				},
 			}
 
-			recovered, err := modalEnv.recoverSSHTransport(context.Background(), tt.cause)
+			recovered, err := modalEnv.newSSHTransportRecovery().recover(context.Background(), tt.cause)
 
 			assert.Equal(t, tt.wantRecovered, recovered)
 			assert.Equal(t, tt.wantRefreshes, refreshes)
@@ -1492,6 +1513,84 @@ func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 				if !strings.Contains(output.Stderr, want) {
 					t.Errorf("restore notice missing %q: %q", want, output.Stderr)
 				}
+			}
+		})
+	}
+}
+
+// TestModalRunCommandRecoversWhenContainerIsGone covers a sandbox that still
+// polls as running after its container is gone: the runtime refuses the API
+// fallback before anything starts, so recovery must restore the sandbox from
+// its snapshot and rerun the command instead of reporting the refusal as the
+// command's result. Not parallel: it swaps the package-level refresh seam.
+func TestModalRunCommandRecoversWhenContainerIsGone(t *testing.T) {
+	const transportFailure = "ssh transport failure before agent channel established: ssh handshake with old.host:1 timed out after 10s"
+	refusal := EnvRunCommandOutput{ExitStatus: modalContainerGoneExitCode, Stderr: modalContainerGoneMessage + "\n"}
+	cases := []struct {
+		name            string
+		sandboxExecutes bool
+		wantExit        int
+		wantStdout      string
+		wantRefreshes   int
+		wantRestored    bool
+	}{
+		{
+			name:          "container gone restores and reruns the command",
+			wantExit:      0,
+			wantStdout:    "ok\n",
+			wantRefreshes: 2,
+			wantRestored:  true,
+		},
+		{
+			name:            "command that printed the refusal itself keeps its result",
+			sandboxExecutes: true,
+			wantExit:        modalContainerGoneExitCode,
+			wantRefreshes:   1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			refreshes := 0
+			prev := refreshModalEndpointDetailed
+			t.Cleanup(func() { refreshModalEndpointDetailed = prev })
+			refreshModalEndpointDetailed = func(context.Context, string) (modalEndpointRefresh, error) {
+				refreshes++
+				if refreshes == 1 {
+					return modalEndpointRefresh{SSHHost: "stale.host", SSHPort: 2}, nil
+				}
+				return modalEndpointRefresh{SSHHost: "restored.host", SSHPort: 3, Restored: true, SnapshotImageId: "im-restored"}, nil
+			}
+
+			apiAttempts := 0
+			e := &ModalEnv{SandboxName: "side--test", SSHHost: "old.host", SSHPort: 1}
+			e.runModalCommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+				if e.SSHHost == "restored.host" {
+					return EnvRunCommandOutput{Stdout: "ok\n"}, "", nil
+				}
+				return EnvRunCommandOutput{ExitStatus: 255}, transportFailure, nil
+			}
+			e.runModalAPICommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+				apiAttempts++
+				sandboxExecutes := func() bool { return tc.sandboxExecutes }
+				if err := modalContainerGoneError(e.SandboxName, refusal.ExitStatus, refusal.Stdout, refusal.Stderr, sandboxExecutes); err != nil {
+					return EnvRunCommandOutput{}, err
+				}
+				return refusal, nil
+			}
+
+			output, err := e.RunCommand(context.Background(), EnvRunCommandInput{Command: "go test ./..."})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantExit, output.ExitStatus)
+			assert.Equal(t, tc.wantStdout, output.Stdout)
+			assert.Equal(t, tc.wantRefreshes, refreshes)
+			assert.Equal(t, 1, apiAttempts)
+			if tc.wantRestored {
+				assert.Contains(t, output.Stderr, "im-restored")
+				assert.Contains(t, output.Stderr, "lost")
+				assert.NotContains(t, output.Stderr, modalContainerGoneMessage)
+			} else {
+				assert.Equal(t, refusal.Stderr, output.Stderr)
 			}
 		})
 	}

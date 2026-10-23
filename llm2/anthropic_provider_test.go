@@ -1254,7 +1254,9 @@ func TestAnthropicProvider_RateLimitDoesNotWaitForRetryAfter(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	// Far below the 3600s Retry-After, yet generous enough to avoid flaking
+	// when the full suite saturates the CPU.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	provider := AnthropicProvider{

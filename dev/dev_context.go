@@ -299,6 +299,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		profileId = resolved.ProfileId
 		finalProviders, llmConfig, embeddingConfig = applyConfigOverrides(resolved, configOverrides)
 		unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig = unscopedOverriddenConfigs(resolved, configOverrides)
+		configureReranking(&tempLocalExecContext, resolved, configOverrides)
 	}
 
 	eCtx := flow_action.ExecContext{
@@ -320,9 +321,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	eCtx.SetLLMConfig(llmConfig)
 	eCtx.SetProviders(finalProviders)
 	eCtx.SetEmbeddingConfig(embeddingConfig)
-	if enableBranchNameGeneration {
-		copyUnscopedConfigs(tempLocalExecContext, eCtx)
-	} else {
+	eCtx.SetRerankingConfig(tempLocalExecContext.GetRerankingConfig())
+	copyUnscopedConfigs(tempLocalExecContext, eCtx)
+	if !enableBranchNameGeneration {
 		persistUnscopedConfigs(eCtx, unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig)
 	}
 
@@ -674,13 +675,14 @@ type resolvedConfigs struct {
 	// ones when configs are filtered again after per-flow overrides.
 	declaredProviders []common.ModelProviderPublicConfig
 
-	// unscopedLLMConfig/unscopedEmbeddingConfig retain the pre-profile-filter
-	// model selectors so a mid-flow profile change can re-derive
-	// profile-scoped configs from them.
+	// Unscoped model selectors allow a mid-flow profile change to re-derive
+	// profile-scoped configs.
 	unscopedLLMConfig       common.LLMConfig
 	unscopedEmbeddingConfig common.EmbeddingConfig
+	unscopedRerankingConfig common.RerankingConfig
 
 	profileFilterEnabled bool
+	rerankingEnabled     bool
 }
 
 func getConfigs(ctx workflow.Context, workspaceId string) (resolvedConfigs, error) {
@@ -691,8 +693,12 @@ func getConfigs(ctx workflow.Context, workspaceId string) (resolvedConfigs, erro
 	// gated so that replays of workflows started before profiles existed keep
 	// their original configs and activity inputs
 	enableProfileFiltering := workflow.GetVersion(ctx, "workspace-profile-config-filtering", workflow.DefaultVersion, 1) >= 1
+	enableReranking := workflow.GetVersion(ctx, "reranking-config", workflow.DefaultVersion, 1) >= 1
 
-	resolved := resolvedConfigs{ProfileId: defaultWorkspaceProfileId, profileFilterEnabled: enableProfileFiltering}
+	resolved := resolvedConfigs{
+		ProfileId: defaultWorkspaceProfileId, profileFilterEnabled: enableProfileFiltering,
+		rerankingEnabled: enableReranking,
+	}
 
 	localConfigErr := workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &resolved.LocalConfig)
 	resolved.declaredProviders = resolved.LocalConfig.Providers
@@ -731,6 +737,9 @@ func getConfigs(ctx workflow.Context, workspaceId string) (resolvedConfigs, erro
 					return resolved, fmt.Errorf("failed to get local config: %v", localConfigErr)
 				}
 				workspaceHasDefaults := len(resolved.WorkspaceConfig.LLM.Defaults) > 0 || len(resolved.WorkspaceConfig.Embedding.Defaults) > 0
+				if enableReranking {
+					workspaceHasDefaults = workspaceHasDefaults || len(resolved.WorkspaceConfig.Reranking.Defaults) > 0
+				}
 				if !workspaceHasDefaults {
 					return resolved, fmt.Errorf("no default models configured in local and workspace configs; configure defaults in one source or switch config mode")
 				}
@@ -754,6 +763,16 @@ func getConfigs(ctx workflow.Context, workspaceId string) (resolvedConfigs, erro
 		resolved.LLMConfig, resolved.EmbeddingConfig = mergeConfigs(resolved.LocalConfig.LLM, resolved.LocalConfig.Embedding, resolved.WorkspaceConfig.LLM, resolved.WorkspaceConfig.Embedding)
 	}
 
+	if enableReranking {
+		switch configMode {
+		case "local":
+			resolved.unscopedRerankingConfig = resolved.LocalConfig.Reranking
+		case "workspace":
+			resolved.unscopedRerankingConfig = resolved.WorkspaceConfig.Reranking
+		default:
+			resolved.unscopedRerankingConfig = mergeRerankingConfigs(resolved.LocalConfig.Reranking, resolved.WorkspaceConfig.Reranking)
+		}
+	}
 	resolved.unscopedLLMConfig = resolved.LLMConfig
 	resolved.unscopedEmbeddingConfig = resolved.EmbeddingConfig
 
@@ -985,5 +1004,6 @@ func NewTempLocalExecContext(ctx workflow.Context, workspaceId, repoDir string, 
 	}
 	unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig := unscopedOverriddenConfigs(resolved, configOverrides)
 	persistUnscopedConfigs(eCtx, unscopedProviders, unscopedLLMConfig, unscopedEmbeddingConfig)
+	configureReranking(&eCtx, resolved, configOverrides)
 	return eCtx, resolved.LocalConfig, resolved.WorkspaceConfig, nil
 }

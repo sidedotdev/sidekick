@@ -16,6 +16,9 @@ import (
 
 	"sidekick/env"
 	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
+	"sidekick/srv/sqlite"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -204,6 +207,44 @@ func TestReadImageActivity_Success(t *testing.T) {
 	url, ok := imgRef["url"].(string)
 	require.True(t, ok)
 	assert.True(t, strings.HasPrefix(url, "data:image/png;base64,"), "image URL should be a data URL")
+}
+
+func TestReadImageActivity_NullStringArgsNotePersisted(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	createTestImage(t, workDir, "test.png")
+
+	storage := sqlite.NewTestSqliteStorage(t, "read_image_null_note_test")
+	activities := &ReadImageActivities{Storage: storage}
+
+	input := ReadImageInput{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: workDir}},
+		FilePath:     "test.png",
+		FlowId:       "flow-123",
+		ToolCall:     &llm.ToolCall{Id: "call-abc", Name: "read_image", Arguments: `{"file_path":"test.png","url":"null"}`},
+		WorkspaceId:  "ws-456",
+	}
+
+	output, err := activities.ReadImageActivity(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, output.Ref.BlockKeys, 1)
+
+	values, err := storage.MGet(context.Background(), input.WorkspaceId, []string{persisted_ai.StorageKey(input.FlowId, output.Ref.BlockKeys[0])})
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	require.NotNil(t, values[0])
+
+	var block llm2.ContentBlock
+	require.NoError(t, json.Unmarshal(values[0], &block))
+	require.NotNil(t, block.ToolResult)
+	require.Len(t, block.ToolResult.Content, 2)
+	assert.Equal(t, llm2.ContentBlockTypeImage, block.ToolResult.Content[0].Type)
+	require.NotNil(t, block.ToolResult.Content[0].Image)
+	assert.True(t, strings.HasPrefix(block.ToolResult.Content[0].Image.Url, "data:image/png;base64,"))
+	assert.Equal(t, llm2.ContentBlockTypeText, block.ToolResult.Content[1].Type)
+	assert.Contains(t, block.ToolResult.Content[1].Text, `"null"`)
+	assert.Contains(t, block.ToolResult.Content[1].Text, "url")
 }
 
 func TestReadImageActivity_PathTraversal(t *testing.T) {

@@ -88,6 +88,7 @@ func TestDevPodIntegration(t *testing.T) {
 	if _, err := exec.LookPath("devpod"); err != nil {
 		t.Skip("devpod command not found in PATH")
 	}
+	t.Parallel()
 
 	// Key the cached workspace + built image by the fixture Dockerfile hash so
 	// repeated runs reuse them. The workspace is intentionally not deleted on
@@ -141,7 +142,7 @@ func TestDevPodIntegration(t *testing.T) {
 	})
 
 	t.Run("create worktree inside container", func(t *testing.T) {
-		containerRepoDir := "/tmp/devpod-e2e-repo-" + ksuid.New().String()
+		containerRepoDir := containerWorkDir + "/.side/tmp/devpod-e2e-repo-" + ksuid.New().String()
 		initScript := strings.Join([]string{
 			"mkdir -p " + containerRepoDir,
 			"cd " + containerRepoDir,
@@ -186,23 +187,11 @@ func TestDevPodIntegration(t *testing.T) {
 		})
 		require.NoError(t, err, "CreateDevPodWorktreeActivity failed")
 		assert.NotEmpty(t, output.WorktreePath)
-		// The worktree must be created beside the repo dir so that in
-		// production (repo under /workspaces) it lands in the persistent
-		// workspace mount rather than the ephemeral container layer.
-		assert.Equal(t, filepath.Join(filepath.Dir(containerRepoDir), "sidekick-worktrees", wsId),
+		// Only the repository mount survives replacement of a local-folder
+		// DevPod; a sibling of that mount remains container-local.
+		assert.Equal(t, filepath.Join(containerRepoDir, ".side", "worktrees", wsId),
 			filepath.Dir(output.WorktreePath))
 		t.Logf("worktree created at: %s", output.WorktreePath)
-
-		// The workspace volume is reused across runs, so remove this run's
-		// unique worktree dir to avoid unbounded accumulation.
-		t.Cleanup(func() {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_, _ = devEnv.RunCommand(cleanupCtx, EnvRunCommandInput{
-				Command: "rm",
-				Args:    []string{"-rf", filepath.Dir(output.WorktreePath)},
-			})
-		})
 
 		verifyOut, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
 			Command: "test",
@@ -210,6 +199,14 @@ func TestDevPodIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 0, verifyOut.ExitStatus, "worktree directory does not exist in container")
+
+		markerPath := filepath.Join(output.WorktreePath, "uncommitted.txt")
+		require.NoError(t, devEnv.WriteFile(ctx, markerPath, []byte("survives replacement\n"), 0o644))
+		relativeMarker, err := filepath.Rel(containerWorkDir, markerPath)
+		require.NoError(t, err)
+		persisted, err := os.ReadFile(filepath.Join(workspacePath, relativeMarker))
+		require.NoError(t, err, "uncommitted work must be present on the host bind mount")
+		assert.Equal(t, "survives replacement\n", string(persisted))
 	})
 
 	t.Run("hibernate and wake worktree inside container", func(t *testing.T) {
@@ -319,4 +316,95 @@ func TestDevPodIntegration(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, lsOut2.Stdout, ".sidekick-hibernation", "sentinels should be gone after wake")
 	})
+}
+
+func TestDevPodWorktreePersistenceAcrossRecreate(t *testing.T) {
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		t.Skip("skipping DevPod integration test; SIDE_E2E_TEST not set to true")
+	}
+	if common.IsActiveEnvNonLocal() {
+		t.Skip("container-in-container is not supported in non-local sidekick environments")
+	}
+	if _, err := exec.LookPath("devpod"); err != nil {
+		t.Skip("devpod command not found in PATH")
+	}
+	t.Parallel()
+
+	id := strings.ToLower(ksuid.New().String())
+	workspaceName := "side-e2e-persist-" + id
+	workspacePath := setupMinimalWorkspace(t, minimalDockerfileHash(t)+"-"+id)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+		if err := devPodDeleteWorkspace(cleanupCtx, workspaceName); err != nil {
+			t.Errorf("delete disposable workspace: %v", err)
+			return
+		}
+		assert.NoError(t, os.RemoveAll(workspacePath))
+	})
+	require.NoError(t, DevPodUpActivity(ctx, DevPodUpInput{
+		WorkspacePath: workspacePath, WorkspaceId: workspaceName, IDE: "none",
+	}))
+
+	repoEnv := &DevPodEnv{
+		WorkingDirectory: "/workspaces/" + workspaceName,
+		WorkspaceName:    workspaceName,
+		LocalRepoDir:     workspacePath,
+	}
+	run := func(e Env, script string) string {
+		t.Helper()
+		out, err := e.RunCommand(ctx, EnvRunCommandInput{
+			Command: "sh", Args: []string{"-eu", "-c", script},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, out.ExitStatus, "script: %s\nstderr: %s", script, out.Stderr)
+		return out.Stdout
+	}
+	run(repoEnv, "printf 'original\\n' > tracked.txt; git add tracked.txt; git commit -m fixture")
+	worktree, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
+		EnvContainer: EnvContainer{Env: repoEnv},
+		RepoDir:      repoEnv.WorkingDirectory,
+		BranchName:   "side/persistence",
+		WorkspaceId:  "ws-persistence",
+	})
+	require.NoError(t, err)
+	worktreeEnv := EnvWithDir(repoEnv, worktree.WorktreePath)
+	run(worktreeEnv, `printf 'committed\n' > committed.txt
+git add committed.txt
+git commit -m 'worktree commit'
+printf 'staged\n' > tracked.txt
+git add tracked.txt
+printf 'unstaged\n' >> tracked.txt
+printf 'untracked\n' > untracked.txt
+printf 'scratch\n' > .side/tmp/scratch.txt`)
+	beforeStatus := run(worktreeEnv, "git status --porcelain")
+	require.Contains(t, beforeStatus, "MM tracked.txt")
+	require.Contains(t, beforeStatus, "?? untracked.txt")
+	beforeHead := run(worktreeEnv, "git rev-parse HEAD")
+	run(repoEnv, "printf 'ephemeral\\n' > /tmp/sidekick-replacement-control")
+	require.Equal(t, "ephemeral\n", run(repoEnv, "cat /tmp/sidekick-replacement-control"))
+
+	CloseDevPodSSHMaster(workspaceName)
+	recreate := exec.CommandContext(ctx, "devpod", "up", workspacePath,
+		"--id", workspaceName, "--ide", "none", "--recreate")
+	recreateOutput, err := recreate.CombinedOutput()
+	require.NoError(t, err, "recreate disposable workspace: %s", recreateOutput)
+
+	// Recreating the container also invalidates any cached SSH transport.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		out, err := repoEnv.RunCommand(ctx, EnvRunCommandInput{Command: "true"})
+		assert.NoError(c, err)
+		assert.Equal(c, 0, out.ExitStatus, "%s", out.Stderr)
+	}, 20*time.Second, 200*time.Millisecond)
+	run(repoEnv, "test ! -e /tmp/sidekick-replacement-control")
+	assert.Equal(t, beforeHead, run(worktreeEnv, "git rev-parse HEAD"))
+	assert.Equal(t, "side/persistence\n", run(worktreeEnv, "git branch --show-current"))
+	assert.Equal(t, beforeStatus, run(worktreeEnv, "git status --porcelain"))
+	assert.Equal(t, "committed\n", run(worktreeEnv, "cat committed.txt"))
+	assert.Equal(t, "staged\n", run(worktreeEnv, "git show :tracked.txt"))
+	assert.Equal(t, "staged\nunstaged\n", run(worktreeEnv, "cat tracked.txt"))
+	assert.Equal(t, "untracked\n", run(worktreeEnv, "cat untracked.txt"))
+	assert.Equal(t, "scratch\n", run(worktreeEnv, "cat .side/tmp/scratch.txt"))
 }

@@ -6,7 +6,7 @@ intent_links:
       - fflag/assignment_journal.go:appendFlagAssignment
   - intent: "#verifier-report-experiment"
     code:
-      - flags.yml
+      - fflag/flags.yml
       - dev/verifier_settings.go:verifierFlagsInput
       - dev/verifier_settings.go:verifierSettingsFromFlags
       - dev/verifier_settings_types.go:DefaultVerifierSettings

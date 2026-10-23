@@ -3,9 +3,7 @@ package com.example.app
 import com.example.app.core.coroutine.DispatcherProvider
 import com.example.app.core.remote.PairingCredentialStore
 import com.example.app.core.remote.PairingCredentials
-import com.example.app.core.remote.StubSidekickRemoteApi
-import com.example.app.core.remote.Workspace
-import com.example.app.core.remote.WorkspaceListResponse
+import com.example.app.feature.pairing.PairingUiState
 import com.example.app.feature.pairing.PairingViewModel
 import java.io.IOException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -25,206 +23,126 @@ import org.junit.Test
 class PairingViewModelTest {
 
     @Test
-    fun `scan saves credentials and loads workspaces`() = runTest {
+    fun `stored credentials mark the app paired without a workspace hint`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val store = FakeCredentialStore()
-        val api = FakeRemoteApi(
-            workspaces = listOf(
-                Workspace(id = "one", name = "First workspace"),
-                Workspace(id = "two", name = "Second workspace"),
-            ),
+        val store = FakeCredentialStore(PairingCredentials("stored-ticket", "stored-token"))
+        val viewModel = createViewModel(store, dispatcher)
+
+        assertTrue(viewModel.uiState.value.isCheckingStoredPairing)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(
+            PairingUiState(isCheckingStoredPairing = false, isPaired = true),
+            viewModel.uiState.value,
         )
-        val viewModel = createViewModel(store, api, dispatcher)
+    }
+
+    @Test
+    fun `no stored credentials leaves the scanner available`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = createViewModel(FakeCredentialStore(), dispatcher)
         dispatcher.scheduler.advanceUntilIdle()
 
-        assertFalse(viewModel.uiState.value.isLoading)
-        assertFalse(viewModel.uiState.value.isPaired)
+        assertEquals(PairingUiState(isCheckingStoredPairing = false), viewModel.uiState.value)
+    }
 
-        viewModel.onPairingPayload("""{"ticket":"ticket-1","token":"token-1"}""")
+    @Test
+    fun `scan saves credentials and reports the hinted workspace`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        for (hint in listOf("two", null)) {
+            val store = FakeCredentialStore()
+            val viewModel = createViewModel(store, dispatcher)
+            dispatcher.scheduler.advanceUntilIdle()
 
-        assertTrue(viewModel.uiState.value.isLoading)
-        dispatcher.scheduler.advanceUntilIdle()
+            val payload = if (hint == null) {
+                """{"ticket":" ticket-1 ","token":" token-1 "}"""
+            } else {
+                """{"ticket":" ticket-1 ","token":" token-1 ","workspaceId":"$hint"}"""
+            }
+            viewModel.onPairingPayload(payload)
+            dispatcher.scheduler.advanceUntilIdle()
 
-        assertEquals(PairingCredentials("ticket-1", "token-1"), store.savedCredentials)
-        assertTrue(viewModel.uiState.value.isPaired)
-        assertFalse(viewModel.uiState.value.isLoading)
-        assertEquals(listOf("one", "two"), viewModel.uiState.value.workspaces.map { it.id })
+            assertEquals(PairingCredentials("ticket-1", "token-1", hint), store.savedCredentials)
+            assertEquals(
+                PairingUiState(isCheckingStoredPairing = false, isPaired = true, hintedWorkspaceId = hint),
+                viewModel.uiState.value,
+            )
+        }
     }
 
     @Test
     fun `invalid scan shows an error without saving credentials`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val store = FakeCredentialStore()
-        val viewModel = createViewModel(store, FakeRemoteApi(), dispatcher)
+        val viewModel = createViewModel(store, dispatcher)
         dispatcher.scheduler.advanceUntilIdle()
 
         viewModel.onPairingPayload("not-json")
 
-        assertFalse(viewModel.uiState.value.isLoading)
+        assertFalse(viewModel.uiState.value.isCheckingStoredPairing)
         assertFalse(viewModel.uiState.value.isPaired)
         assertTrue(viewModel.uiState.value.errorMessage!!.contains("not a valid"))
         assertNull(store.savedCredentials)
     }
 
     @Test
-    fun `stored pairing failure can be retried`() = runTest {
-        val dispatcher = StandardTestDispatcher(testScheduler)
-        val credentials = PairingCredentials("stored-ticket", "stored-token")
-        val store = FakeCredentialStore(credentials)
-        val api = FakeRemoteApi(error = IOException("offline"))
-        val viewModel = createViewModel(store, api, dispatcher)
-
-        assertTrue(viewModel.uiState.value.isLoading)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertFalse(viewModel.uiState.value.isLoading)
-        assertTrue(viewModel.uiState.value.isPaired)
-        assertTrue(viewModel.uiState.value.errorMessage!!.contains("could not be loaded"))
-
-        api.error = null
-        api.workspaces = listOf(Workspace(id = "workspace", name = "Workspace"))
-        viewModel.onRetry()
-
-        assertTrue(viewModel.uiState.value.isLoading)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertFalse(viewModel.uiState.value.isLoading)
-        assertNull(viewModel.uiState.value.errorMessage)
-        assertEquals("workspace", viewModel.uiState.value.workspaces.single().id)
-        assertEquals(2, api.workspaceRequests)
-    }
-
-    @Test
-    fun `workspace selection only accepts a loaded workspace`() = runTest {
-        val dispatcher = StandardTestDispatcher(testScheduler)
-        val store = FakeCredentialStore(PairingCredentials("ticket", "token"))
-        val api = FakeRemoteApi(
-            workspaces = listOf(Workspace(id = "workspace", name = "Workspace")),
-        )
-        val viewModel = createViewModel(store, api, dispatcher)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        viewModel.onWorkspaceSelected("missing")
-        assertNull(viewModel.uiState.value.selectedWorkspaceId)
-
-        viewModel.onWorkspaceSelected("workspace")
-        assertEquals("workspace", viewModel.uiState.value.selectedWorkspaceId)
-    }
-
-    @Test
-    fun `empty workspace response exposes a completed paired state`() = runTest {
-        val dispatcher = StandardTestDispatcher(testScheduler)
-        val credentials = PairingCredentials("ticket", "token")
-        val store = FakeCredentialStore(credentials)
-        val viewModel = createViewModel(store, FakeRemoteApi(), dispatcher)
-
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertTrue(viewModel.uiState.value.isPaired)
-        assertFalse(viewModel.uiState.value.isLoading)
-        assertTrue(viewModel.uiState.value.workspaces.isEmpty())
-        assertNull(viewModel.uiState.value.errorMessage)
-    }
-
-    @Test
-    fun `save failure resets pairing state and exposes an actionable error`() = runTest {
+    fun `save failure keeps the app unpaired and exposes an actionable error`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val store = FakeCredentialStore(saveError = IOException("disk full"))
-        val viewModel = createViewModel(store, FakeRemoteApi(), dispatcher)
+        val viewModel = createViewModel(store, dispatcher)
         dispatcher.scheduler.advanceUntilIdle()
 
         viewModel.onPairingPayload("""{"ticket":"ticket-1","token":"token-1"}""")
         dispatcher.scheduler.advanceUntilIdle()
 
         assertFalse(viewModel.uiState.value.isPaired)
-        assertFalse(viewModel.uiState.value.isLoading)
-        assertTrue(viewModel.uiState.value.workspaces.isEmpty())
+        assertFalse(viewModel.uiState.value.isCheckingStoredPairing)
         assertTrue(viewModel.uiState.value.errorMessage!!.contains("could not be saved"))
         assertNull(store.savedCredentials)
     }
 
     @Test
-    fun `stored credential read failure exposes a pairing error without calling the api`() = runTest {
+    fun `stored credential read failure exposes a pairing error and a successful scan clears it`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val store = FakeCredentialStore(readError = IOException("unreadable"))
-        val api = FakeRemoteApi()
-        val viewModel = createViewModel(store, api, dispatcher)
-
+        val viewModel = createViewModel(store, dispatcher)
         dispatcher.scheduler.advanceUntilIdle()
 
         assertFalse(viewModel.uiState.value.isPaired)
-        assertFalse(viewModel.uiState.value.isLoading)
+        assertFalse(viewModel.uiState.value.isCheckingStoredPairing)
         assertTrue(viewModel.uiState.value.errorMessage!!.contains("could not be read"))
-        assertEquals(0, api.workspaceRequests)
+
+        viewModel.onPairingPayload("""{"ticket":"ticket-1","token":"token-1"}""")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isPaired)
+        assertNull(viewModel.uiState.value.errorMessage)
     }
 
     @Test
-    fun `remote factory receives scanned credentials`() = runTest {
+    fun `scanning a different code ignores stored credentials until a new code is scanned`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val store = FakeCredentialStore()
-        val api = FakeRemoteApi()
-        val viewModel = createViewModel(store, api, dispatcher)
+        val store = FakeCredentialStore(PairingCredentials("stored-ticket", "stored-token"))
+        val viewModel = createViewModel(store, dispatcher, restoreStoredPairing = false)
+
+        assertEquals(PairingUiState(isCheckingStoredPairing = false), viewModel.uiState.value)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(PairingUiState(isCheckingStoredPairing = false), viewModel.uiState.value)
+
+        viewModel.onPairingPayload("""{"ticket":"new-ticket","token":"new-token"}""")
         dispatcher.scheduler.advanceUntilIdle()
 
-        viewModel.onPairingPayload("""{"ticket":" scanned-ticket ","token":" scanned-token "}""")
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(PairingCredentials("scanned-ticket", "scanned-token"), api.receivedCredentials)
-    }
-
-    @Test
-    fun `scan selects only an available hinted workspace`() = runTest {
-        val dispatcher = StandardTestDispatcher(testScheduler)
-        for (hint in listOf("two", "missing", null)) {
-            val viewModel = createViewModel(
-                FakeCredentialStore(),
-                FakeRemoteApi(workspaces = listOf(
-                    Workspace(id = "one", name = "One"),
-                    Workspace(id = "two", name = "Two"),
-                )),
-                dispatcher,
-            )
-            dispatcher.scheduler.advanceUntilIdle()
-
-            val payload = if (hint == null) {
-                """{"ticket":"ticket","token":"token"}"""
-            } else {
-                """{"ticket":"ticket","token":"token","workspaceId":"$hint"}"""
-            }
-            viewModel.onPairingPayload(payload)
-            dispatcher.scheduler.advanceUntilIdle()
-
-            assertEquals(
-                hint.takeIf { it == "two" },
-                viewModel.uiState.value.selectedWorkspaceId,
-            )
-            assertEquals(
-                hint.takeIf { it == "two" },
-                viewModel.uiState.value.workspaceToOpen?.id,
-            )
-
-            viewModel.onWorkspaceOpened()
-            assertNull(viewModel.uiState.value.workspaceToOpen)
-            viewModel.onRetry()
-            dispatcher.scheduler.advanceUntilIdle()
-            assertNull(viewModel.uiState.value.workspaceToOpen)
-
-            viewModel.onWorkspaceSelected("one")
-            assertEquals("one", viewModel.uiState.value.selectedWorkspaceId)
-            assertNull(viewModel.uiState.value.workspaceToOpen)
-        }
+        assertEquals(PairingCredentials("new-ticket", "new-token"), store.savedCredentials)
+        assertTrue(viewModel.uiState.value.isPaired)
     }
 
     private fun createViewModel(
         store: FakeCredentialStore,
-        api: FakeRemoteApi,
         dispatcher: CoroutineDispatcher,
+        restoreStoredPairing: Boolean = true,
     ) = PairingViewModel(
         credentialStore = store,
-        remoteApiFactory = { credentials ->
-            api.receivedCredentials = credentials
-            api
-        },
+        restoreStoredPairing = restoreStoredPairing,
         dispatchers = TestDispatcherProvider(dispatcher),
     )
 
@@ -251,20 +169,6 @@ class PairingViewModelTest {
         override suspend fun clear() {
             savedCredentials = null
             credentialFlow.value = null
-        }
-    }
-
-    private class FakeRemoteApi(
-        var workspaces: List<Workspace> = emptyList(),
-        var error: Throwable? = null,
-    ) : StubSidekickRemoteApi() {
-        var workspaceRequests = 0
-        var receivedCredentials: PairingCredentials? = null
-
-        override suspend fun getWorkspaces(): WorkspaceListResponse {
-            workspaceRequests += 1
-            error?.let { throw it }
-            return WorkspaceListResponse(workspaces)
         }
     }
 

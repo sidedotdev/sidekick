@@ -180,15 +180,63 @@ func resolveKeepAndTrigger(requestedKeepLength int, modelConfig common.ModelConf
 	return keepLength, keepLength + buffer
 }
 
+// ManagePolicy fully determines when and how far history is cut. Production
+// derives it via resolveKeepAndTrigger; simulations supply it directly.
+type ManagePolicy struct {
+	// KeepLength is the size (chars) truncation tries to drop back to.
+	KeepLength int
+	// TruncationTrigger is the size (chars) at or above which truncation runs.
+	TruncationTrigger int
+	// MinRecentTurns retains the most recent complete turns regardless of
+	// budget. A turn is an assistant message plus the user messages that
+	// follow it up to the next assistant message, so the pending turn's tool
+	// results are part of the last turn.
+	MinRecentTurns int
+}
+
 // ManageLlm2ChatHistory applies retention logic to llm2 messages.
 // This mirrors the logic in manageChatHistoryV2 but operates on llm2.Message types.
 func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, requestedKeepLength int, modelConfig common.ModelConfig) ([]llm2.Message, error) {
+	keepLength, truncationTrigger := resolveKeepAndTrigger(requestedKeepLength, modelConfig)
+	return ManageLlm2ChatHistoryWithPolicy(messages, ManagePolicy{
+		KeepLength:        keepLength,
+		TruncationTrigger: truncationTrigger,
+	}, modelConfig)
+}
+
+// retainRecentTurns marks the last n complete turns as retained. With fewer
+// than n assistant messages, everything is retained.
+func retainRecentTurns(messages []llm2.Message, isRetained []bool, n int) {
+	if n <= 0 {
+		return
+	}
+	start := 0
+	seen := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != llm2.RoleAssistant {
+			continue
+		}
+		seen++
+		if seen == n {
+			start = i
+			break
+		}
+	}
+	for i := start; i < len(messages); i++ {
+		isRetained[i] = true
+	}
+}
+
+// ManageLlm2ChatHistoryWithPolicy is the policy-explicit core of
+// ManageLlm2ChatHistory. The input slice is not modified.
+func ManageLlm2ChatHistoryWithPolicy(messages []llm2.Message, policy ManagePolicy, modelConfig common.ModelConfig) ([]llm2.Message, error) {
 	provider := modelConfig.Provider
 	if len(messages) == 0 {
 		return []llm2.Message{}, nil
 	}
+	messages = append([]llm2.Message(nil), messages...)
 
-	keepLength, truncationTrigger := resolveKeepAndTrigger(requestedKeepLength, modelConfig)
+	keepLength, truncationTrigger := policy.KeepLength, policy.TruncationTrigger
 
 	// Leave valid history untouched while below the trigger to preserve the
 	// cached prefix; malformed tool-call turns still need repair because
@@ -213,6 +261,7 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 			isRetained[lastIndex-1] = true
 		}
 	}
+	retainRecentTurns(messages, isRetained, policy.MinRecentTurns)
 
 	// Incremental intent updates depend on every preceding update surviving.
 	for i, msg := range messages {
@@ -499,6 +548,21 @@ func truncateToolResultMiddle(block *llm2.ContentBlock, oldText string, maxChars
 // cleanLlm2ToolCallsAndResponses removes orphaned tool calls and tool results.
 func cleanLlm2ToolCallsAndResponses(messages *[]llm2.Message) {
 	validCalls := make(map[string]bool)
+	protected := protectedHistoryBlocks(*messages)
+	protectedCalls := make(map[string]bool)
+	for i, msg := range *messages {
+		for j, block := range msg.Content {
+			if !protected[i][j] {
+				continue
+			}
+			if block.ToolUse != nil {
+				protectedCalls[block.ToolUse.Id] = true
+			}
+			if block.ToolResult != nil && protectedCalls[block.ToolResult.ToolCallId] {
+				validCalls[block.ToolResult.ToolCallId] = true
+			}
+		}
+	}
 	for i, msg := range *messages {
 		calls := getToolUseBlocks(msg)
 		if len(calls) == 0 {
@@ -556,45 +620,56 @@ func MeasureLlm2Messages(provider string, messages []llm2.Message) int {
 	return total
 }
 
-func hasHumanContext(block llm2.ContentBlock) bool {
-	switch GetContextType(block) {
+// HumanContextType returns the context type of human-authored content in the
+// block, including content nested in tool results, or "" when there is none.
+func HumanContextType(block llm2.ContentBlock) string {
+	switch contextType := GetContextType(block); contextType {
 	case ContextTypeInitialInstructions, ContextTypeUserFeedback:
-		return true
+		return contextType
 	}
 	if block.ToolResult != nil {
 		for _, nested := range block.ToolResult.Content {
-			if hasHumanContext(nested) {
-				return true
+			if contextType := HumanContextType(nested); contextType != "" {
+				return contextType
 			}
 		}
 	}
-	return false
+	return ""
+}
+
+func hasHumanContext(block llm2.ContentBlock) bool {
+	return HumanContextType(block) != ""
+}
+
+// AlwaysRetainedBlocks reports, per message and content block, which blocks
+// history management keeps regardless of the length budget.
+func AlwaysRetainedBlocks(messages []llm2.Message) [][]bool {
+	return protectedHistoryBlocks(messages)
 }
 
 func protectedHistoryBlocks(messages []llm2.Message) [][]bool {
+	protected := protectedDeliverableBlocks(messages)
 	pairs := make(map[string]bool)
-	for _, msg := range messages {
+	for i, msg := range messages {
 		intentStart := false
-		for _, block := range msg.Content {
+		for j, block := range msg.Content {
 			if GetContextType(block) == "IntentTaskStart" {
 				intentStart = true
 			}
-			if block.ToolResult != nil && hasHumanContext(block) {
+			protected[i][j] = protected[i][j] || hasHumanContext(block)
+			if block.ToolResult != nil && protected[i][j] {
 				pairs[block.ToolResult.ToolCallId] = true
 			}
 		}
-		for _, block := range msg.Content {
-			if block.ToolUse != nil && (hasHumanContext(block) ||
+		for j, block := range msg.Content {
+			if block.ToolUse != nil && (protected[i][j] ||
 				(intentStart && block.ToolUse.Name == "start_intent_subtask")) {
 				pairs[block.ToolUse.Id] = true
 			}
 		}
 	}
-	protected := make([][]bool, len(messages))
 	for i, msg := range messages {
-		protected[i] = make([]bool, len(msg.Content))
 		for j, block := range msg.Content {
-			protected[i][j] = hasHumanContext(block)
 			if block.ToolUse != nil && pairs[block.ToolUse.Id] {
 				protected[i][j] = true
 			}

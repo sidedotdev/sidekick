@@ -88,6 +88,9 @@ type sshTestServerOptions struct {
 	StallGlobalRequests bool
 	SFTPHandler         func(ssh.Channel)
 	NoClientAuth        bool
+	// KeyAuthorized, when set, gates the client's key on every handshake, so
+	// a test can model authorized_keys being clobbered and later reinstalled.
+	KeyAuthorized func() bool
 }
 
 // harnessWaitTimeout bounds every harness wait, so a protocol mistake fails
@@ -131,6 +134,9 @@ func startSSHTestServer(t *testing.T, opts sshTestServerOptions) *sshTestServer 
 	serverConfig := &ssh.ServerConfig{
 		NoClientAuth: opts.NoClientAuth,
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if opts.KeyAuthorized != nil && !opts.KeyAuthorized() {
+				return nil, fmt.Errorf("authorized_keys clobbered")
+			}
 			if string(key.Marshal()) != string(authorized) {
 				return nil, fmt.Errorf("unauthorized key")
 			}

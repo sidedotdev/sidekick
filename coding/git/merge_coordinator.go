@@ -58,6 +58,12 @@ func (c *mergeCoordinator) recreateHostConflict(ctx context.Context, transport m
 	if err := transport.copyRef(ctx, ref, false); err != nil {
 		return result, fmt.Errorf("failed to transport host target for conflict resolution: %w", err)
 	}
+	// Review diffs taken in the source env compare against the target branch
+	// by name, so it must include the commit merged in here. Otherwise the
+	// stale branch makes the target's own changes look like ours.
+	if err := syncTargetBranchFromLocal(ctx, c.repository.envContainer, params.TargetBranch); err != nil {
+		return result, err
+	}
 	sourceDir := c.repository.envContainer.Env.GetWorkingDirectory()
 	_, err = GitMergeIntoWorktreeActivity(ctx, c.repository.envContainer, GitMergeIntoWorktreeParams{
 		WorktreePath: sourceDir, SourceBranch: sha,

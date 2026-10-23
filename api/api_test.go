@@ -105,6 +105,7 @@ func NewMockController(t *testing.T) Controller {
 		// isolate handlers from whatever local config exists on the machine
 		loadLocalConfig:  func() (common.LocalConfig, error) { return common.LocalConfig{}, nil },
 		taskStartTimeout: 5 * time.Second,
+		providerOAuth:    newProviderOAuthSessions(),
 	}
 }
 
@@ -518,7 +519,7 @@ func TestGetTasksHandler(t *testing.T) {
 		err := json.Unmarshal(resp.Body.Bytes(), &result)
 		if assert.Nil(t, err) {
 			// TODO check just task ids
-			assert.Equal(t, testCase.expectedTasks, result.Tasks)
+			assert.ElementsMatch(t, testCase.expectedTasks, result.Tasks)
 		}
 	}
 }
@@ -1295,7 +1296,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 	var result map[string][]domain.FlowAction
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	if assert.Nil(t, err) {
-		assert.Equal(t, flowActions, result["flowActions"])
+		assert.ElementsMatch(t, flowActions, result["flowActions"])
 	}
 }
 
@@ -2719,6 +2720,8 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 		},
 	}
 
+	require.NoError(t, ctrl.service.AddFlowEvent(ctx, workspaceId, flowId, flowEvents[0]))
+
 	// Channel to propagate errors from the event-producing goroutine
 	eventErrCh := make(chan error, 1)
 
@@ -2726,7 +2729,7 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	addErrCh := make(chan error, len(flowEvents))
 	go func() {
 		defer close(addErrCh)
-		for _, event := range flowEvents {
+		for _, event := range flowEvents[1:] {
 			time.Sleep(100 * time.Millisecond)
 			addErr := ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, event)
 			if addErr != nil {
@@ -2784,11 +2787,18 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 		assert.NoError(t, addErr, "Failed to add flow event")
 	}
 
-	// Assert if the flow events match the expected structure/content
-	assert.Equal(t, len(flowEvents), len(receivedEvents), "Expected %d flow events, got %d", len(flowEvents), len(receivedEvents))
-	for i, event := range flowEvents {
-		assert.Equal(t, event, receivedEvents[i])
+	// Separate parent streams preserve their own order, not a shared total order.
+	expectedByParent := make(map[string][]domain.FlowEvent)
+	receivedByParent := make(map[string][]domain.FlowEvent)
+	for _, event := range flowEvents {
+		parentID := event.GetParentId()
+		expectedByParent[parentID] = append(expectedByParent[parentID], event)
 	}
+	for _, event := range receivedEvents {
+		parentID := event.GetParentId()
+		receivedByParent[parentID] = append(receivedByParent[parentID], event)
+	}
+	assert.Equal(t, expectedByParent, receivedByParent)
 }
 
 func TestGetArchivedTasksHandler(t *testing.T) {

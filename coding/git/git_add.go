@@ -2,9 +2,11 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sidekick/env"
 	"sidekick/flow_action"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
@@ -14,6 +16,12 @@ type GitAddActivityInput struct {
 	EnvContainer env.EnvContainer
 	Path         string
 }
+
+// ErrPathIgnored indicates git refused to stage a path because it matches an
+// ignore rule (.gitignore, info/exclude or core.excludesFile).
+var ErrPathIgnored = errors.New("path is ignored by git")
+
+const gitAddIgnoredPathMessage = "ignored by one of your .gitignore files"
 
 func GitAddActivity(ctx context.Context, input GitAddActivityInput) error {
 	// "Add all" must not stage newly introduced binary files, which are usually
@@ -34,7 +42,11 @@ func GitAddActivity(ctx context.Context, input GitAddActivityInput) error {
 		return fmt.Errorf("failed to git add: %v", err)
 	}
 	if gitAddOutput.ExitStatus != 0 {
-		return fmt.Errorf("git add failed: %s", gitAddOutput.Stdout+"\n"+gitAddOutput.Stderr)
+		combinedOutput := gitAddOutput.Stdout + "\n" + gitAddOutput.Stderr
+		if strings.Contains(combinedOutput, gitAddIgnoredPathMessage) {
+			return fmt.Errorf("git add failed: %w: %s", ErrPathIgnored, combinedOutput)
+		}
+		return fmt.Errorf("git add failed: %s", combinedOutput)
 	}
 	return nil
 }

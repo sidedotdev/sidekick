@@ -40,10 +40,9 @@ func TestSummarizeExecutorHistoryActivity_NonHydrated(t *testing.T) {
 
 	a := &AdvisorActivities{Storage: storage}
 	ref, err := a.SummarizeExecutorHistoryActivity(ctx, SummarizeExecutorHistoryInput{
-		ExecutorHistory:   executorHistory,
-		MaxRecentMessages: advisorMaxRecentMessages,
-		FlowId:            flowId,
-		WorkspaceId:       workspaceId,
+		ExecutorHistory: executorHistory,
+		FlowId:          flowId,
+		WorkspaceId:     workspaceId,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, ref)
@@ -70,10 +69,9 @@ func TestSummarizeExecutorHistoryActivity_NilHistory(t *testing.T) {
 
 	a := &AdvisorActivities{Storage: storage}
 	ref, err := a.SummarizeExecutorHistoryActivity(ctx, SummarizeExecutorHistoryInput{
-		ExecutorHistory:   nil,
-		MaxRecentMessages: advisorMaxRecentMessages,
-		FlowId:            "flow_test",
-		WorkspaceId:       "ws_test",
+		ExecutorHistory: nil,
+		FlowId:          "flow_test",
+		WorkspaceId:     "ws_test",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, ref)
@@ -83,7 +81,7 @@ func TestSummarizeExecutorHistoryActivity_NilHistory(t *testing.T) {
 func TestRenderExecutorTranscript_IncludesThinkingSummaries(t *testing.T) {
 	t.Parallel()
 
-	transcript := renderExecutorTranscript([]common.Message{
+	transcript := advisorTurnText(renderAdvisorTurn([]common.Message{
 		llm2.Message{
 			Role: llm2.RoleAssistant,
 			Content: []llm2.ContentBlock{
@@ -103,7 +101,7 @@ func TestRenderExecutorTranscript_IncludesThinkingSummaries(t *testing.T) {
 				{Type: llm2.ContentBlockTypeText, Text: "I will make the changes."},
 			},
 		},
-	}, advisorMaxRecentMessages)
+	}, executorTranscriptWindow{}))
 
 	assert.Contains(t, transcript, "[assistant] thinking_summary Reviewed the implementation plan.")
 	assert.Contains(t, transcript, "[assistant] thinking_summary Identified the affected files.")
@@ -234,10 +232,9 @@ func TestSummarizeExecutorHistoryActivity_ExcludesSeededInitialInstructions(t *t
 
 	a := &AdvisorActivities{Storage: storage}
 	ref, err := a.SummarizeExecutorRecentHistoryActivity(ctx, SummarizeExecutorHistoryInput{
-		ExecutorHistory:   executorHistory,
-		MaxRecentMessages: advisorMaxRecentMessages,
-		FlowId:            flowId,
-		WorkspaceId:       workspaceId,
+		ExecutorHistory: executorHistory,
+		FlowId:          flowId,
+		WorkspaceId:     workspaceId,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, ref)

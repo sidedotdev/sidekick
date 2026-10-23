@@ -2,6 +2,7 @@ package dev
 
 import (
 	"sidekick/coding/git"
+	"sidekick/env"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -54,6 +55,11 @@ func SetupHibernateHandler(dCtx DevContext) {
 }
 
 func hibernateWorktree(dCtx DevContext) {
+	if !env.SupportsWorktreeHibernation(dCtx.EnvContainer.Env.GetType()) &&
+		workflow.GetVersion(dCtx, "skip-unsupported-worktree-hibernation", workflow.DefaultVersion, 1) >= 1 {
+		return
+	}
+
 	// Don't short-circuit on GlobalState alone: if Env.RunCommand auto-woke
 	// the worktree, GlobalState may still say "hibernated" while the
 	// filesystem sentinels are gone. HibernateEnv is idempotent at the

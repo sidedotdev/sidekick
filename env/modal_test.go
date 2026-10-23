@@ -1259,3 +1259,27 @@ func TestModalEnvReconcileConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestIsModalContainerGoneOutput(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		exitCode int
+		stdout   string
+		stderr   string
+		want     bool
+	}{
+		{name: "runtime refusal", exitCode: 137, stderr: "FetchSpec failed: loading container: file does not exist\n", want: true},
+		{name: "other exit code", exitCode: 1, stderr: modalContainerGoneMessage},
+		{name: "command produced stdout", exitCode: 137, stdout: "partial", stderr: modalContainerGoneMessage},
+		{name: "command stderr precedes the message", exitCode: 137, stderr: "building\n" + modalContainerGoneMessage},
+		{name: "ordinary kill", exitCode: 137, stderr: "Killed\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, isModalContainerGoneOutput(tc.exitCode, tc.stdout, tc.stderr))
+		})
+	}
+}

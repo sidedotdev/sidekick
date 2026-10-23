@@ -1,11 +1,28 @@
 package common
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// OpenAI rejects a null required list on function schemas in non-strict mode,
+// so an object without properties must still serialize an empty array.
+func TestJSONSchemaWithRequiredNullableOptionals_EmptyObjectEmitsEmptyRequired(t *testing.T) {
+	t.Parallel()
+
+	schema, err := JSONSchemaWithRequiredNullableOptionals(map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	})
+	require.NoError(t, err)
+
+	serialized, err := json.Marshal(schema)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"object","properties":{},"required":[]}`, string(serialized))
+}
 
 func TestJSONSchemaWithRequiredNullableOptionals(t *testing.T) {
 	t.Parallel()

@@ -47,6 +47,13 @@ type SandboxProvider interface {
 	DeleteSandbox(ctx context.Context, input DeleteSandboxInput) error
 }
 
+// WorktreeHibernationPolicy is optionally implemented by a SandboxProvider to
+// declare whether worktrees in its sandboxes should ever be hibernated.
+// Providers that don't implement it are assumed to support hibernation.
+type WorktreeHibernationPolicy interface {
+	SupportsWorktreeHibernation() bool
+}
+
 var sandboxProviders = map[EnvType]SandboxProvider{}
 
 // RegisterSandboxProvider makes a provider available to the generic sandbox

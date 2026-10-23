@@ -600,6 +600,14 @@ func (ima *DevAgentManagerActivities) FindHibernationCandidates(ctx context.Cont
 			continue
 		}
 
+		// Unsupported envs never write the sentinel checked above, so they
+		// would otherwise be re-signaled on every scheduled run. Tasks without
+		// an explicit envType (env from repo config) still get signaled, but
+		// the flow itself ignores it.
+		if envType, _ := task.FlowOptions["envType"].(string); !env.SupportsWorktreeHibernation(env.EnvType(envType)) {
+			continue
+		}
+
 		// Only hibernate worktrees whose tasks are waiting on user action
 		if task.Status != domain.TaskStatusBlocked && task.Status != domain.TaskStatusInReview {
 			continue

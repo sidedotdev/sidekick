@@ -299,6 +299,11 @@ func initFixtureGoplsClient(t *testing.T) (lsp.LSPClient, string) {
 	if err != nil {
 		t.Fatalf("failed to initialize gopls for fixture: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close fixture analysis client: %v", err)
+		}
+	})
 
 	rec := &recordingClient{
 		LSPClient: client,

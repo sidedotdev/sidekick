@@ -7,6 +7,7 @@ import com.example.app.core.remote.IrohConnection
 import com.example.app.core.remote.IrohStream
 import com.example.app.core.remote.PairingCredentials
 import com.example.app.core.remote.SidekickRemoteSession
+import android.os.SystemClock
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertNotNull
@@ -21,6 +22,8 @@ private const val WRITE_TIMEOUT_MS = 20_000L
 private const val FIRST_BYTE_TIMEOUT_MS = 30_000L
 private const val EOF_TIMEOUT_MS = 15_000L
 private const val API_TIMEOUT_MS = 60_000L
+private const val LARGE_BODY_TIMEOUT_MS = 180_000L
+private const val PROGRESS_LOG_INTERVAL_BYTES = 256 * 1024
 
 /**
  * Live on-device coverage of the remote access path: it dials the sidekick
@@ -47,6 +50,7 @@ class RemoteWorkspaceIrohInstrumentedTest {
         val arguments = InstrumentationRegistry.getArguments()
         val ticket = arguments.getString("sidekickTicket").orEmpty().trim()
         val token = arguments.getString("sidekickToken").orEmpty().trim()
+        val workspaceId = arguments.getString("sidekickWorkspaceId").orEmpty().trim()
         assumeTrue(
             "Requires live pairing credentials; run scripts/android_phone_remote_e2e/run.sh",
             ticket.isNotEmpty() && token.isNotEmpty(),
@@ -56,6 +60,9 @@ class RemoteWorkspaceIrohInstrumentedTest {
         try {
             runBlocking {
                 probeRawTransport(stages, ticket, token)
+                if (workspaceId.isNotEmpty()) {
+                    probeRawTaskListing(stages, ticket, token, workspaceId)
+                }
 
                 val session = stages.stage("api-build-client", API_TIMEOUT_MS) {
                     SidekickRemoteSession(
@@ -68,6 +75,12 @@ class RemoteWorkspaceIrohInstrumentedTest {
                         session.api.getWorkspaces().workspaces
                     }
                     stages.note("api returned ${workspaces.size} workspace(s)")
+                    if (workspaceId.isNotEmpty()) {
+                        val tasks = stages.stage("api-get-tasks", LARGE_BODY_TIMEOUT_MS) {
+                            session.api.getTasks(workspaceId).tasks
+                        }
+                        stages.note("api returned ${tasks.size} task(s) for $workspaceId")
+                    }
                 } finally {
                     stages.closeQuietly("remote-session", session)
                 }
@@ -140,9 +153,66 @@ private suspend fun probeRawTransport(stages: StageLog, ticket: String, token: S
     }
 }
 
-private fun rawWorkspaceRequest(token: String): ByteArray =
+/**
+ * Streams the task listing of one workspace over a raw iroh stream, logging
+ * the byte cadence so a slow or stalled large response can be told apart from
+ * an HTTP client or JSON decoding problem.
+ */
+private suspend fun probeRawTaskListing(stages: StageLog, ticket: String, token: String, workspaceId: String) {
+    var connection: IrohConnection? = null
+    var stream: IrohStream? = null
+    try {
+        val openedConnection = stages.stage("tasks-transport-connect", CONNECT_TIMEOUT_MS) {
+            FfiIrohConnector(onStage = stages::record).connect(ticket)
+        }
+        connection = openedConnection
+        val openedStream = stages.stage("tasks-transport-open-stream", OPEN_STREAM_TIMEOUT_MS) {
+            openedConnection.openBidirectionalStream()
+        }
+        stream = openedStream
+
+        val startedAt = SystemClock.elapsedRealtime()
+        stages.stage("tasks-transport-write-request", WRITE_TIMEOUT_MS) {
+            openedStream.write(rawRequest("/api/v1/workspaces/$workspaceId/tasks/", token))
+        }
+        val firstChunk = stages.stage("tasks-transport-first-response-chunk", FIRST_BYTE_TIMEOUT_MS) {
+            openedStream.read()
+        }
+        assertNotNull("Server closed the stream without sending any task listing", firstChunk)
+        stages.note("first chunk of ${firstChunk!!.size} byte(s) after ${SystemClock.elapsedRealtime() - startedAt}ms")
+
+        var totalBytes = firstChunk.size
+        var chunks = 1
+        var nextProgressLog = PROGRESS_LOG_INTERVAL_BYTES
+        val sawEof = stages.softStage("tasks-transport-read-to-eof", LARGE_BODY_TIMEOUT_MS) {
+            while (true) {
+                val chunk = openedStream.read() ?: break
+                totalBytes += chunk.size
+                chunks += 1
+                if (totalBytes >= nextProgressLog) {
+                    stages.note("received $totalBytes byte(s) in $chunks chunk(s) after ${SystemClock.elapsedRealtime() - startedAt}ms")
+                    nextProgressLog += PROGRESS_LOG_INTERVAL_BYTES
+                }
+            }
+            true
+        } ?: false
+        val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+        val kilobytesPerSecond = if (elapsedMs > 0) totalBytes * 1000L / elapsedMs / 1024 else -1
+        stages.note(
+            "tasks listing: $totalBytes byte(s) in $chunks chunk(s) over ${elapsedMs}ms " +
+                "(~${kilobytesPerSecond} KiB/s), status line: ${statusLine(firstChunk)}, eofObserved=$sawEof",
+        )
+    } finally {
+        stages.closeQuietly("tasks-transport-close-stream", stream)
+        stages.closeQuietly("tasks-transport-close-connection", connection)
+    }
+}
+
+private fun rawWorkspaceRequest(token: String): ByteArray = rawRequest("/api/v1/workspaces", token)
+
+private fun rawRequest(path: String, token: String): ByteArray =
     buildString {
-        append("GET /api/v1/workspaces HTTP/1.1\r\n")
+        append("GET ").append(path).append(" HTTP/1.1\r\n")
         append("Host: sidekick\r\n")
         append("Authorization: Bearer ").append(token).append("\r\n")
         append("Accept: application/json\r\n")

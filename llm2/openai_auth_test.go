@@ -145,6 +145,96 @@ func TestOpenAICredentialsForRequest(t *testing.T) {
 	}
 }
 
+func TestOpenAICredentialsForRequest_ProviderAuthErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		authType   common.ProviderAuthType
+		secrets    map[string]string
+		errs       map[string]error
+		wantReason common.ProviderAuthErrorReason
+		wantAuth   common.ProviderAuthType
+	}{
+		{
+			name:       "api key missing",
+			authType:   common.ProviderAuthTypeAPI,
+			wantReason: common.ProviderAuthErrorReasonMissingAPIKey,
+			wantAuth:   common.ProviderAuthTypeAPI,
+		},
+		{
+			name:       "any with no credentials",
+			authType:   common.ProviderAuthTypeAny,
+			wantReason: common.ProviderAuthErrorReasonMissingAPIKey,
+			wantAuth:   common.ProviderAuthTypeAny,
+		},
+		{
+			name:       "subscription without OAuth credential",
+			authType:   common.ProviderAuthTypeSubscription,
+			secrets:    map[string]string{"OPENAI_API_KEY": "api-key"},
+			wantReason: common.ProviderAuthErrorReasonInvalidOAuth,
+			wantAuth:   common.ProviderAuthTypeSubscription,
+		},
+		{
+			name:       "malformed OAuth credential",
+			authType:   common.ProviderAuthTypeAny,
+			secrets:    map[string]string{"OPENAI_OAUTH": "not-json"},
+			wantReason: common.ProviderAuthErrorReasonInvalidOAuth,
+			wantAuth:   common.ProviderAuthTypeAny,
+		},
+		{
+			name:     "refresh failure from secret source is reattributed",
+			authType: common.ProviderAuthTypeAny,
+			errs: map[string]error{
+				"OPENAI_OAUTH": common.NewProviderAuthError(common.ProviderAuthErrorDetails{
+					Provider:  "openai",
+					ProfileId: common.DefaultProfileId,
+					AuthType:  common.ProviderAuthTypeSubscription,
+					Reason:    common.ProviderAuthErrorReasonInvalidOAuth,
+				}, errors.New("token refresh failed with status 400")),
+			},
+			wantReason: common.ProviderAuthErrorReasonInvalidOAuth,
+			wantAuth:   common.ProviderAuthTypeAny,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := openAICredentialsForRequest(
+				&openAIAuthTestSecretManager{secrets: tt.secrets, errs: tt.errs},
+				"my-openai",
+				tt.authType,
+			)
+
+			require.Error(t, err)
+			details, ok := common.AsProviderAuthError(err)
+			require.True(t, ok, "expected provider auth error, got: %v", err)
+			assert.Equal(t, common.ProviderAuthErrorDetails{
+				Provider:  "my-openai",
+				ProfileId: common.DefaultProfileId,
+				AuthType:  tt.wantAuth,
+				Reason:    tt.wantReason,
+			}, *details)
+		})
+	}
+}
+
+func TestOpenAICredentialsForRequest_KeyringErrorIsNotAuthError(t *testing.T) {
+	t.Parallel()
+
+	_, err := openAICredentialsForRequest(
+		&openAIAuthTestSecretManager{errs: map[string]error{"OPENAI_OAUTH": errors.New("keyring unavailable")}},
+		"openai",
+		common.ProviderAuthTypeAny,
+	)
+
+	require.ErrorContains(t, err, "keyring unavailable")
+	_, ok := common.AsProviderAuthError(err)
+	assert.False(t, ok)
+}
+
 func TestOpenAICredentialsForRequest_UsesLiteralOAuthSecretName(t *testing.T) {
 	oauthJSON, err := json.Marshal(openai_oauth.Credentials{
 		AccessToken:  "oauth-token",

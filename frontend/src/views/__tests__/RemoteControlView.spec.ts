@@ -90,9 +90,14 @@ describe('RemoteControlView', () => {
     const history = createMemoryHistory()
     const entryUrl = query ? '/remote-control?workspaceId=z' : '/remote-control'
     history.replace(entryUrl)
+    const placeholder = { render: () => null }
     const router = createRouter({
       history,
-      routes: [{ path: '/remote-control', name: 'remote-control', component: RemoteControlView }],
+      routes: [
+        { path: '/remote-control', name: 'remote-control', component: RemoteControlView },
+        // App's navigation links resolve against other app routes on mount.
+        { path: '/:pathMatch(.*)*', component: placeholder },
+      ],
     })
     if (ready) await router.push(entryUrl)
     const wrapper = mount(App, { global: { plugins: [router, PrimeVue] } })
@@ -190,6 +195,7 @@ describe('RemoteControlView', () => {
   })
 
   it('surfaces the API error when pairing fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       if (init?.method === 'POST') {
         return jsonResponse({ error: 'remote server is not running' }, 503)

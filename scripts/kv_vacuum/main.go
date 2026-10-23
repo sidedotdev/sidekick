@@ -104,7 +104,7 @@ func runConversion(ctx context.Context, storage *sqlite.Storage, confirm bool) e
 	if !confirm {
 		log.Warn().
 			Str("dbSize", humanBytes(stats.TotalBytes())).
-			Str("freeDiskNeeded", humanBytes(stats.TotalBytes())).
+			Str("worstCaseFreeDiskNeeded", humanBytes(2*stats.TotalBytes())).
 			Str("dbPath", kvDatabasePath()).
 			Msg("conversion rewrites the entire database and holds an exclusive lock; stop Sidekick, make sure the free disk space above is available, then re-run with -yes")
 		return nil

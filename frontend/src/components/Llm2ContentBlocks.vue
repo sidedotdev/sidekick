@@ -1,7 +1,7 @@
 <template>
   <template v-for="(block, blockIndex) in blocks" :key="blockIndex">
     <div v-if="block.type === 'text' && block.text" class="llm2-text-block">
-      <vue-markdown :options="{ breaks: true }" :source="block.text" class="message-content markdown"/>
+      <vue-markdown :options="{ breaks: true }" :plugins="markdownPlugins" :source="block.text" class="message-content markdown"/>
     </div>
     <div v-else-if="block.type === 'image' && block.image?.url" class="llm2-image-block">
       <ImagePreview :src="block.image.url" />
@@ -11,7 +11,7 @@
       <JsonTree :deep="jsonTreeDepth" :data="argumentsFor(block, blockIndex)" class="action-result-function-args"/>
     </div>
     <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
-      <vue-markdown v-if="block.reasoning?.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+      <vue-markdown v-if="block.reasoning?.text" :options="{ breaks: true }" :plugins="markdownPlugins" :source="block.reasoning.text" class="message-content markdown reasoning"/>
       <p v-else class="reasoning-redacted"><em>Reasoning (content not available)</em></p>
       <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
     </div>
@@ -24,6 +24,7 @@
 
 <script setup lang="ts">
 import VueMarkdown from 'vue-markdown-render'
+import { markdownPlugins } from '../lib/markdownTables'
 import type { Llm2ContentBlock, Llm2ToolUseBlock } from '../lib/models'
 import { parseLlm2ToolArguments } from '../lib/toolArguments'
 import JsonTree from './JsonTree.vue'

@@ -199,4 +199,22 @@ describe.each([false, true])('web search rendering (history: %s)', (history) => 
       JSON.stringify(tree.props('data')) === JSON.stringify(block)
     )).toBe(true)
   })
+
+  it.each([
+    { status: 'in_progress', shownStatus: 'in_progress' },
+    { status: 'completed', shownStatus: 'completed' },
+    { status: undefined, shownStatus: '' }
+  ])('renders a search whose action is not yet known (status: $status)', async ({ status, shownStatus }) => {
+    const block = {
+      id: 'ws_test',
+      type: 'builtin_tool_use',
+      builtinToolUse: { id: 'ws_test', name: 'web_search', arguments: '', ...(status ? { status } : {}) }
+    }
+    const wrapper = await renderBlock(block, history)
+    const search = wrapper.get('.web-search-block')
+    expect(search.text()).toContain('Web search')
+    expect(search.find('.web-search-status').exists() ? search.get('.web-search-status').text() : '').toBe(shownStatus)
+    expect(search.findAll('li')).toHaveLength(0)
+    expect(search.findComponent(JsonTree).exists()).toBe(false)
+  })
 })

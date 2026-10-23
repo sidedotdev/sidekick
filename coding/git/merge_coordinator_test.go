@@ -666,8 +666,8 @@ type mergeSideEffectFailureEnv struct {
 	beforeRelocationApply  bool
 	afterRelocationApply   bool
 	afterRelocationCleanup bool
-	// Simulate git itself rejecting the relocation's stash apply (e.g. a
-	// held index lock) without touching the working tree.
+	// Simulate git itself rejecting the relocation's stash apply (e.g. an
+	// unwritable index) without touching the working tree.
 	rejectRelocationApply bool
 }
 
@@ -683,7 +683,7 @@ func (e *mergeSideEffectFailureEnv) RunCommand(ctx context.Context, input env.En
 	}
 	if e.rejectRelocationApply && input.Command == "git" && strings.Contains(command, "stash apply") {
 		e.rejectRelocationApply = false
-		return env.EnvRunCommandOutput{ExitStatus: 128, Stderr: "fatal: Unable to create index.lock: File exists."}, nil
+		return env.EnvRunCommandOutput{ExitStatus: 128, Stderr: "error: could not write index"}, nil
 	}
 	if e.afterRelocationApply && input.Command == "git" && strings.Contains(command, "stash apply") {
 		out, err := e.Env.RunCommand(ctx, input)
@@ -711,6 +711,77 @@ func (e *mergeSideEffectFailureEnv) RunCommand(ctx context.Context, input env.En
 		return env.EnvRunCommandOutput{}, os.ErrPermission
 	}
 	return out, err
+}
+
+// rejectStashApplyInEnv makes git reject the next plain `stash apply` run in
+// dir, as when another git process holds that worktree's index lock.
+type rejectStashApplyInEnv struct {
+	env.Env
+	dir      string
+	rejected bool
+}
+
+func (e *rejectStashApplyInEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
+	command := strings.Join(input.Args, " ")
+	if !e.rejected && input.Command == "git" && strings.Contains(command, e.dir+" stash apply") && !strings.Contains(command, "--index") {
+		e.rejected = true
+		return env.EnvRunCommandOutput{ExitStatus: 128, Stderr: "error: could not write index"}, nil
+	}
+	return e.Env.RunCommand(ctx, input)
+}
+
+// Once the merge has landed and the base stash restore conflicted, a failed
+// relocation leaves the base worktree with the conflicted restore. Retrying
+// must resume the relocation instead of merging into that worktree, which git
+// refuses with "unresolved conflict" and which was mistaken for a merge
+// conflict without any base stash to resolve, yielding an empty review diff.
+func TestMergeCoordinatorRetryAfterLandedMergeResumesStashRelocation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+	createCommitWithFile(t, repoDir, "Initial commit", "file.txt", "initial\n")
+	sourceDir := filepath.Join(t.TempDir(), "source")
+	runGitCommandInTestRepo(t, repoDir, "worktree", "add", "-b", "feature", sourceDir)
+	t.Cleanup(func() {
+		runGitCommandInTestRepo(t, repoDir, "worktree", "remove", "--force", sourceDir)
+	})
+	createCommitWithFile(t, sourceDir, "Feature commit", "file.txt", "feature\n")
+	featureTip := strings.TrimSpace(runGitCommandInTestRepo(t, sourceDir, "rev-parse", "HEAD"))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("local edit\n"), 0644))
+	localEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: sourceDir})
+	require.NoError(t, err)
+	params := GitMergeParams{SourceBranch: "feature", TargetBranch: "main", MergeStrategy: MergeStrategyMerge}
+
+	rejecting := &rejectStashApplyInEnv{Env: localEnv, dir: sourceDir}
+	_, err = newMergeCoordinator(env.EnvContainer{Env: rejecting}).Merge(ctx, params)
+	require.Error(t, err)
+	require.True(t, rejecting.rejected, "test premise: the relocation's stash apply must have been rejected")
+	runGitCommandInTestRepo(t, repoDir, "merge-base", "--is-ancestor", featureTip, "main")
+
+	container := env.EnvContainer{Env: localEnv}
+	result, err := newMergeCoordinator(container).Merge(ctx, params)
+	require.NoError(t, err)
+	require.True(t, result.HasConflicts)
+	assert.False(t, result.ConflictOnTargetBranch)
+	assert.Equal(t, evalSymlinks(t, repoDir), evalSymlinks(t, result.BaseStashWorktreePath))
+	require.NotEmpty(t, result.BaseStashSha)
+	content, err := os.ReadFile(filepath.Join(sourceDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "<<<<<<<")
+	assert.Contains(t, string(content), "local edit")
+
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "file.txt"), []byte("feature plus local edit\n"), 0644))
+	runGitCommandInTestRepo(t, sourceDir, "add", "file.txt")
+	transfer, err := GitTransferWorktreeChangesActivity(ctx, container, GitTransferWorktreeChangesParams{
+		SourceWorktreePath: sourceDir, TargetWorktreePath: repoDir, BaseStashSha: result.BaseStashSha,
+	})
+	require.NoError(t, err)
+	assert.False(t, transfer.HasConflicts)
+	content, err = os.ReadFile(filepath.Join(repoDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "feature plus local edit\n", string(content))
+	assert.Empty(t, runGitCommandInTestRepo(t, repoDir, "stash", "list"))
+	assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, repoDir, "for-each-ref", "refs/sidekick-merge/pending")))
 }
 
 func TestMergeCoordinatorRetriesLostRestoreResult(t *testing.T) {

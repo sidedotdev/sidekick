@@ -24,6 +24,11 @@ const (
 	defaultHibernationLockTimeout = 15 * time.Minute
 	hibernationLockTimeoutEnvVar  = "SIDE_HIBERNATION_LOCK_TIMEOUT"
 
+	// sideTmpDir is Sidekick's git-ignored scratch directory. Hibernation
+	// archives it wholesale (binary files included) since agents rely on its
+	// contents surviving across hibernation.
+	sideTmpDir = ".side/tmp"
+
 	// hibernatedRemoteExitCode is the exit status the remote read-lock wrapper
 	// uses to signal that the worktree is hibernated. The Go side catches it and
 	// retries after waking.
@@ -227,6 +232,14 @@ func isHibernatedExitError(err error) bool {
 	return false
 }
 
+// SupportsWorktreeHibernation reports whether worktrees in the given environment
+// type are ever hibernated, deferring to the env type's registered provider via
+// WorktreeHibernationPolicy.
+func SupportsWorktreeHibernation(envType EnvType) bool {
+	policy, ok := sandboxProviders[envType].(WorktreeHibernationPolicy)
+	return !ok || policy.SupportsWorktreeHibernation()
+}
+
 // IsHibernated reports whether the given local directory contains the
 // hibernation sentinel.
 func IsHibernated(workDir string) bool {
@@ -247,7 +260,8 @@ func IsHibernated(workDir string) bool {
 // Caveats:
 //   - If the branch advanced during hibernation, the worktree stays at detached HEAD.
 //   - Untracked files that are git-ignored are not captured (they are treated as
-//     regenerable), so they are not restored.
+//     regenerable), so they are not restored. The exception is .side/tmp, whose
+//     contents (including binary files) are always retained.
 //   - Untracked binary files are not captured either (also treated as regenerable,
 //     to keep the archive small); untracked text files and all tracked/staged
 //     changes, including staged binary changes, are restored.
@@ -436,7 +450,9 @@ fi`, shellQuote(repoDir), shellQuote(branch), shellQuote(head), shellQuote(branc
 }
 
 // restoreFilesFragment returns shell that overlays the captured working-tree
-// changes onto a clean HEAD checkout: it untars changed/untracked file contents
+// changes onto a clean HEAD checkout: it untars the retained .side/tmp scratch
+// directory (absent from archives written by earlier builds), untars
+// changed/untracked file contents
 // (preserving binary content, symlinks, and permissions), removes files that
 // were deleted, and re-applies the staged (index) state, including staged binary
 // changes carried by the --binary patch.
@@ -482,9 +498,16 @@ func restoreFilesFragment() string {
 	return fmt.Sprintf(`if [ -f %s ]; then
   rtmp=$(mktemp -d)
   tar xzf %s -C "$rtmp"
+  if [ -s "$rtmp/sidetmp.tgz" ]; then tar xzf "$rtmp/sidetmp.tgz"; fi
   if [ -s "$rtmp/changed.tgz" ]; then tar xzf "$rtmp/changed.tgz"; fi
   if [ -s "$rtmp/deleted.list" ]; then tr '\000' '\012' < "$rtmp/deleted.list" | while IFS= read -r d; do if [ -n "$d" ]; then rm -f -- "$d"; fi; done; fi
   if [ -s "$rtmp/staged.patch" ]; then git apply --cached --binary --allow-empty --whitespace=nowarn "$rtmp/staged.patch"; fi
+  for name in index ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_AUTOSTASH MERGE_RR AUTO_MERGE; do
+    if [ -f "$rtmp/git-state/$name" ]; then
+      path=$(git rev-parse --git-path "$name")
+      cp "$rtmp/git-state/$name" "$path"
+    fi
+  done
   rm -rf "$rtmp"
 fi`, shellQuote(HibernationPatchFile), shellQuote(HibernationPatchFile))
 }
@@ -502,11 +525,7 @@ func HibernateEnv(ctx context.Context, e Env, branchName string) (HibernationMet
 		return HibernationMetadata{}, fmt.Errorf("branch name is required for hibernation")
 	}
 
-	// Worktree hibernation is a disk-space-saving mechanism for environments
-	// backed by local storage. Modal sandboxes already snapshot their entire
-	// filesystem and terminate when idle, so hibernating their worktrees buys
-	// nothing and only adds overhead.
-	if _, isModal := e.(*ModalEnv); isModal {
+	if !SupportsWorktreeHibernation(e.GetType()) {
 		return HibernationMetadata{}, nil
 	}
 
@@ -578,8 +597,46 @@ func HibernateEnv(ctx context.Context, e Env, branchName string) (HibernationMet
 	// commit point), and delete every working file except the retained .git link
 	// that keeps the worktree registered. Running it as one script keeps hibernation atomic against
 	// concurrent wake/read commands even on remote envs, where a lock fd cannot
-	// be held across separate SSH round-trips.
-	hibernateScript := "set -e\n" + captureWIPFragment(shellQuote(tmpPatch)) + fmt.Sprintf(`mv %s %s
+	// be held across separate SSH round-trips. Untracked binary files are
+	// treated as regenerable and skipped to keep the archive small; the staged
+	// index (including staged binary changes) is preserved via a --binary patch.
+	// The git-ignored .side/tmp scratch directory is archived separately in full.
+	hibernateScript := fmt.Sprintf(`set -e
+tmpdir=$(mktemp -d)
+# Newline-delimited file lists (busybox tar has no --null); core.quotePath=false
+# keeps unicode paths literal so tar -T can open them.
+git -c core.quotePath=false diff --name-only --diff-filter=D HEAD > "$tmpdir/deleted.list"
+git -c core.quotePath=false diff --name-only --diff-filter=d HEAD > "$tmpdir/changed.list"
+git -c core.quotePath=false ls-files --others --exclude-standard | while IFS= read -r f; do
+  ns=$(git diff --no-index --numstat -- /dev/null "$f" 2>/dev/null | head -n1)
+  case "$ns" in
+    -*) ;;
+    *) printf '%%s\n' "$f" ;;
+  esac
+done >> "$tmpdir/changed.list"
+if [ -s "$tmpdir/changed.list" ]; then
+  tar czf "$tmpdir/changed.tgz" -T "$tmpdir/changed.list"
+else
+  : > "$tmpdir/changed.tgz"
+fi
+if [ -d %s ]; then
+  tar czf "$tmpdir/sidetmp.tgz" %s
+else
+  : > "$tmpdir/sidetmp.tgz"
+fi
+git diff --cached --binary > "$tmpdir/staged.patch"
+# Patches cannot encode conflict stages or pending merge parents.
+mkdir "$tmpdir/git-state"
+for name in index ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_AUTOSTASH MERGE_RR AUTO_MERGE; do
+  path=$(git rev-parse --git-path "$name")
+  if [ -f "$path" ]; then cp "$path" "$tmpdir/git-state/$name"; fi
+done
+if [ -f "$tmpdir/git-state/index" ]; then
+  GIT_INDEX_FILE="$tmpdir/git-state/index" git update-index --no-split-index
+fi
+tar czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch sidetmp.tgz git-state
+rm -rf "$tmpdir"
+mv %s %s
 cat > %s <<'SIDEKICK_HIB_EOF'
 %s
 SIDEKICK_HIB_EOF
@@ -587,6 +644,8 @@ find . -mindepth 1 ! -name .git ! -name %s ! -name %s -depth -exec rm -rf {} + 2
 remaining=$(find . -mindepth 1 ! -name .git ! -name %s ! -name %s | head -1)
 if [ -n "$remaining" ]; then echo "LEFTOVER"; else echo "CLEAN"; fi
 `,
+		shellQuote(sideTmpDir), shellQuote(sideTmpDir),
+		shellQuote(tmpPatch),
 		shellQuote(tmpPatch), shellQuote(HibernationPatchFile),
 		shellQuote(HibernationMetadataFile),
 		string(metadataBytes),
