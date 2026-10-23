@@ -45,7 +45,11 @@ func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSize
 
 func EditCodeWithModelConfigResolver(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
-		return editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		err := editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 
@@ -836,6 +840,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"doneRequired":                    doneRequired,
 		"doneFunctionName":                doneTool.Name,
 		"environmentContext":              environmentContext,
+		"isolatedSandbox":                 isIsolatedSandboxEnvironment(dCtx),
 		"idd":                             idd,
 	}
 	if doneRequired {
@@ -870,6 +875,7 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"doneRequired":                    doneRequired,
 		"hasPlan":                         true,
 		"environmentContext":              environmentContext,
+		"isolatedSandbox":                 isIsolatedSandboxEnvironment(dCtx),
 		"idd":                             idd,
 	}
 	if doneRequired {
@@ -1052,4 +1058,11 @@ func feedbackContextType(feedbackType string, disableHumanInTheLoop bool) string
 		}
 	}
 	return ""
+}
+
+func isIsolatedSandboxEnvironment(dCtx DevContext) bool {
+	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
+		return false
+	}
+	return common.IsolatedSandboxEnvTypes[string(dCtx.EnvContainer.Env.GetType())]
 }

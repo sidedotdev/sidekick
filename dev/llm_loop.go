@@ -16,6 +16,7 @@ type LlmIteration struct {
 	ExecCtx            DevContext
 	ChatHistory        *persisted_ai.ChatHistoryContainer
 	State              interface{}
+	feedbackIteration  int
 }
 
 // Option is a functional option for configuring LlmLoop
@@ -102,7 +103,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 				return nil, err
 			}
 		}
-		if !finalizing && iteration.Num > config.maxIterations && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
+		if !finalizing && iteration.Num-iteration.feedbackIteration > config.maxIterations && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return nil, ErrMaxAttemptsReached
 		}
 
@@ -119,7 +120,10 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 			}); err != nil {
 				return nil, err
 			}
-			iteration.AutoIterationCount = 0
+			iteration.resetAfterFeedback()
+		} else if response != nil &&
+			workflow.GetVersion(dCtx, "llm-loop-reset-after-feedback", workflow.DefaultVersion, 1) == 1 {
+			iteration.resetAfterFeedback()
 		}
 
 		// Inject proactive system message when nearing per-cycle tool-call limits
@@ -157,7 +161,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 				return nil, err
 			}
 
-			iteration.AutoIterationCount = 0
+			iteration.resetAfterFeedback()
 		}
 
 		result, err := loopFunc(iteration)
@@ -205,5 +209,17 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 		if result != nil {
 			return result, nil
 		}
+	}
+}
+
+func (iteration *LlmIteration) resetAfterFeedback() {
+	iteration.AutoIterationCount = 0
+	if workflow.GetVersion(iteration.ExecCtx, "llm-loop-reset-after-feedback", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		return
+	}
+
+	iteration.feedbackIteration = iteration.Num
+	if state, ok := iteration.State.(interface{ resetAfterFeedback() }); ok {
+		state.resetAfterFeedback()
 	}
 }

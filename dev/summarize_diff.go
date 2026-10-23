@@ -21,6 +21,8 @@ type SummarizeDiffActivityInput struct {
 	EnvContainer           env.EnvContainer
 	ModelConfig            common.ModelConfig
 	SecretManagerContainer secret_manager.SecretManagerContainer
+	RerankingConfig        common.RerankingConfig             `json:"rerankingConfig"`
+	Providers              []common.ModelProviderPublicConfig `json:"providers,omitempty"`
 	// MaxChars overrides DiffSummarizeMaxChars when set to a positive value.
 	MaxChars int
 }
@@ -51,7 +53,7 @@ func SummarizeDiffActivity(ctx context.Context, input SummarizeDiffActivityInput
 		return string(content), nil
 	}
 
-	reranker, err := persisted_ai.GetReranker(input.SecretManagerContainer.SecretManager)
+	reranker, err := persisted_ai.GetReranker(input.RerankingConfig.GetModelConfig("diff_summarize"), input.Providers, input.SecretManagerContainer.SecretManager)
 	if err != nil {
 		return "", fmt.Errorf("failed to get reranker: %w", err)
 	}

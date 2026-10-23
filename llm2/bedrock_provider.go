@@ -148,6 +148,10 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		Msg("bedrock stream complete")
 
 	output := accumulateBedrockEventsToMessage(collected)
+	stampCoreBlockMetadata(&output, CoreBlockMetadata{
+		Provider:     bedrockProviderName,
+		ProviderType: string(common.BedrockToolChatProviderType),
+	})
 
 	return &MessageResponse{
 		Model:           model,
@@ -248,13 +252,13 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 	case "max":
 		return map[string]any{"thinking": adaptiveThinking}, maxTokens, resolvedEffort
 	}
-	// max_tokens must be greater than thinking.budget_tokens; the Converse
-	// default max tokens can be lower than typical budgets, so always set it
-	// when budget-based thinking is enabled.
 	if maxTokens <= 0 {
-		maxTokens = anthropicDefaultMaxTokens
+		if modelInfo, _ := common.GetModel(options.Provider, model); modelInfo != nil && modelInfo.Limit.Output > 0 {
+			maxTokens = modelInfo.Limit.Output
+		}
 	}
-	if maxTokens <= budgetTokens {
+	// A supplied max_tokens must be greater than thinking.budget_tokens.
+	if maxTokens > 0 && maxTokens <= budgetTokens {
 		maxTokens = budgetTokens + 1000
 	}
 	return map[string]any{

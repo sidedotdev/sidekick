@@ -1,9 +1,16 @@
 package dev
 
-import "sidekick/domain"
+import (
+	"sidekick/domain"
 
-// Run tests in a loop until they pass or the LLM says they don't have to pass
+	"go.temporal.io/sdk/workflow"
+)
+
+// EnsurePrerequisites retains the placeholder subflow only for workflow replay.
 func EnsurePrerequisites(dCtx DevContext) error {
+	if workflow.GetVersion(dCtx, "skip-empty-prerequisites", workflow.DefaultVersion, 1) >= 1 {
+		return nil
+	}
 	return RunSubflowWithoutResult(dCtx, "prereqs", "Ensure Prerequisites", func(_ domain.Subflow) error {
 		return ensurePrerequisitesSubflow(dCtx)
 	})

@@ -25,23 +25,35 @@ type stdioReadWriteCloser struct {
 }
 
 func main() {
-	mode := "exec"
-	if len(os.Args) > 1 {
-		mode = os.Args[1]
-	}
-	var err error
-	switch mode {
-	case "exec":
-		err = sideagent.Serve(os.Stdin, os.Stdout)
-	case "sftp":
-		err = sideagent.ServeSFTP(&stdioReadWriteCloser{os.Stdin, os.Stdout})
-	case "gc":
-		sideagent.CleanupStaleSiblings()
-	default:
-		err = fmt.Errorf("unknown mode %q (expected \"exec\", \"sftp\" or \"gc\")", mode)
-	}
-	if err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "side-agent:", err)
 		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	mode := "exec"
+	if len(args) > 0 {
+		mode = args[0]
+	}
+	if mode == "exec" || mode == "sftp" || mode == "background" {
+		release, err := sideagent.RegisterManagedSession()
+		if err != nil {
+			return fmt.Errorf("register managed session: %w", err)
+		}
+		defer release()
+	}
+	switch mode {
+	case "exec":
+		return sideagent.Serve(os.Stdin, os.Stdout)
+	case "sftp":
+		return sideagent.ServeSFTP(&stdioReadWriteCloser{os.Stdin, os.Stdout})
+	case "background":
+		return sideagent.RunBackground(args[1:])
+	case "gc":
+		sideagent.CleanupStaleSiblings()
+		return nil
+	default:
+		return fmt.Errorf("unknown mode %q (expected \"exec\", \"sftp\", \"background\" or \"gc\")", mode)
 	}
 }

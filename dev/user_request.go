@@ -2,6 +2,7 @@ package dev
 
 import (
 	"fmt"
+	"sidekick/coding"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
@@ -68,11 +69,12 @@ const (
 
 // MergeApprovalParams contains parameters specific to merge approval requests
 type MergeApprovalParams struct {
-	DefaultTargetBranch  string        `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
-	SourceBranch         string        `json:"sourceBranch"`
-	Diff                 string        `json:"diff"`
-	DiffSinceLastReview  string        `json:"diffSinceLastReview,omitempty"`
-	DefaultMergeStrategy MergeStrategy `json:"defaultMergeStrategy,omitempty"` // default merge strategy, defaults to squash
+	DefaultTargetBranch  string                     `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
+	SourceBranch         string                     `json:"sourceBranch"`
+	Diff                 string                     `json:"diff"`
+	DiffSinceLastReview  string                     `json:"diffSinceLastReview,omitempty"`
+	DefaultMergeStrategy MergeStrategy              `json:"defaultMergeStrategy,omitempty"` // default merge strategy, defaults to squash
+	ReviewSnapshot       *coding.ReviewDiffSnapshot `json:"reviewSnapshot,omitempty"`
 }
 
 type MergeApprovalResponse struct {
@@ -84,8 +86,9 @@ type MergeApprovalResponse struct {
 	// Diffs as last shown to the user, which differ from the diffs the request
 	// started with when the user changed the target branch or whitespace
 	// handling mid-review. Empty when no human reviewed the request.
-	Diff                string `json:"diff"`
-	DiffSinceLastReview string `json:"diffSinceLastReview"`
+	Diff                string                     `json:"diff"`
+	DiffSinceLastReview string                     `json:"diffSinceLastReview"`
+	ReviewSnapshot      *coding.ReviewDiffSnapshot `json:"reviewSnapshot,omitempty"`
 }
 
 func GetUserMergeApproval(
@@ -144,10 +147,11 @@ func GetUserMergeApproval(
 	if hash, ok := req.RequestParams["lastReviewTreeHash"].(string); ok {
 		lastReviewTreeHash = hash
 	}
-	var lastReviewDiff string
+	var lastReview coding.ReviewDiffBaseline
 	if diff, ok := req.RequestParams["lastReviewDiff"].(string); ok {
-		lastReviewDiff = diff
+		lastReview.Diff = diff
 	}
+	lastReview.Snapshot, _ = req.RequestParams["lastReviewSnapshot"].(*coding.ReviewDiffSnapshot)
 	// Gated by the same extra marker as getMergeApproval so that legacy
 	// executions never read "diff-since-last-review" at a new point in their
 	// history, which replay would reject.
@@ -205,11 +209,12 @@ func GetUserMergeApproval(
 						// the new target: the previous target's diff must not
 						// stand in for it, since that would invite approving
 						// content nobody reviewed against this target.
-						diffs, diffErr := generateReviewDiffs(trackedCtx.DevContext, finalTarget, finalTarget, lastReviewDiff, ignoreWhitespace)
+						diffs, diffErr := generateReviewDiffs(trackedCtx.DevContext, finalTarget, finalTarget, lastReview, ignoreWhitespace)
 						if diffErr != nil {
 							return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, diffErr)
 						}
 						newDiff = diffs.FullDiff
+						mergeApprovalInfo.ReviewSnapshot = diffs.ReviewSnapshot
 						if diffs.SinceDiffError == "" {
 							newDiffSinceLastReview = diffs.SinceDiff
 						}
@@ -304,6 +309,7 @@ func GetUserMergeApproval(
 		Message:             userResponse.Content,
 		Diff:                mergeApprovalInfo.Diff,
 		DiffSinceLastReview: mergeApprovalInfo.DiffSinceLastReview,
+		ReviewSnapshot:      mergeApprovalInfo.ReviewSnapshot,
 	}, nil
 }
 

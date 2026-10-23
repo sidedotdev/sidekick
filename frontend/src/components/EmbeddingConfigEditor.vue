@@ -30,6 +30,7 @@ import { ref, reactive, watch, onMounted } from 'vue'
 import AutoComplete from 'primevue/autocomplete'
 import type { ModelConfig, EmbeddingConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
+import { searchModels as searchModelIds } from '../lib/modelSuggestions'
 
 const props = defineProps<{
   modelValue?: EmbeddingConfig | null
@@ -94,22 +95,7 @@ const modelsData = ref<ModelsData>({})
 const filteredModels = ref<string[]>([])
 
 const searchModels = (event: { query: string } | undefined, provider: string) => {
-  const query = (event?.query || '').toLowerCase()
-
-  let candidates: string[] = []
-  if (modelsData.value[provider]) {
-    candidates = Object.keys(modelsData.value[provider].models || {})
-  } else {
-    const allModels = new Set<string>()
-    for (const p of Object.values(modelsData.value)) {
-      if (p.models) {
-        Object.keys(p.models).forEach((m) => allModels.add(m))
-      }
-    }
-    candidates = Array.from(allModels)
-  }
-
-  filteredModels.value = candidates.filter((m) => m.toLowerCase().includes(query))
+  filteredModels.value = searchModelIds(modelsData.value, provider, event?.query || '')
 }
 
 const fetchModelsData = async () => {

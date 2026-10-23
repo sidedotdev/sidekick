@@ -2,7 +2,7 @@
   <form ref="formRef" tabindex="-1" v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
     <div v-if="isRateLimited" class="rate-limit-notice">
       <p>{{ rateLimitCopy }}</p>
-      <details v-if="flowAction.actionParams.requestContent" class="markdown-container">
+      <details v-if="flowAction.actionParams.requestContent" class="markdown-container" :style="{ '--level': level }">
         <summary>Details</summary>
         <vue-markdown
           :source="flowAction.actionParams.requestContent"
@@ -12,7 +12,7 @@
         />
       </details>
     </div>
-    <div v-else-if="flowAction.actionParams.requestContent && flowAction.actionParams.requestKind !== 'provider_auth'" class="markdown-container">
+    <div v-else-if="flowAction.actionParams.requestContent && flowAction.actionParams.requestKind !== 'provider_auth'" class="markdown-container" :style="{ '--level': level }">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
       </button>
@@ -45,7 +45,7 @@
     </div>
 
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
-      <AutogrowTextarea ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
+      <AutogrowTextarea v-if="flowAction.actionParams.rejectReasonRequired !== false" ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
@@ -58,7 +58,7 @@
       </button>
 
       <button type="button" class="secondary"
-        :disabled="!hasResponseText"
+        :disabled="flowAction.actionParams.rejectReasonRequired !== false && !hasResponseText"
         @click="submitUserResponse(false)"
       >
         {{ rejectCopy() }}
@@ -155,7 +155,11 @@
     </div>
   </form>
   <div v-if="expand && !isPending">
-    <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
+    <div
+      v-if="flowAction.actionParams.requestContent && (flowAction.actionParams.requestKind !== 'provider_auth' || flowAction.actionStatus !== 'complete')"
+      class="markdown-container"
+      :style="{ '--level': level }"
+    >
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
       </button>
@@ -617,6 +621,8 @@ const tags: {[key: string]: string} = {
   "reject_plan": "Revise",
   "done": "Done",
   "try_again": "Try Again",
+  "restart_docker": "Restart Docker",
+  "retry_without_restart": "Retry Without Restart",
 }
 
 function rejectCopy(): string {
@@ -840,7 +846,6 @@ label[for="targetBranch"] {
 
 .markdown-container {
   position: relative;
-  --level: v-bind(level);
 }
 
 .rate-limit-notice p {

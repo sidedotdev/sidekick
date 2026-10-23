@@ -3,7 +3,10 @@ export interface ModelConfig {
   model: string
   // Model-specific effort level; 'lowest'/'highest' are legacy aliases for the bottom/top of the model's ladder
   reasoningEffort?: string
-  speed?: '' | 'fast'
+  // Sent as the provider's service_tier, e.g. OpenAI's 'flex', 'priority' or 'ultrafast'; empty means standard
+  serviceTier?: string
+  // Anthropic fast mode ('fast'); empty means standard
+  speed?: string
 }
 
 export interface LLMConfig {
@@ -40,6 +43,11 @@ export interface EmbeddingConfig {
   useCaseConfigs: { [key: string]: ModelConfig[] }
 }
 
+export interface RerankingConfig {
+  defaults: ModelConfig[] | null
+  useCaseConfigs: { [key: string]: ModelConfig[] } | null
+}
+
 export interface Profile {
   id: string
   name: string
@@ -53,6 +61,7 @@ export interface Workspace {
   profileId?: string
   llmConfig?: LLMConfig | null
   embeddingConfig?: EmbeddingConfig | null
+  rerankingConfig?: RerankingConfig | null
 }
 
 // TODO /gen remove this and the components/views where it is used
@@ -261,6 +270,7 @@ export interface Subflow {
   parentSubflowId?: string; // ID of the parent subflow, if any
   flowId: string; // ID of the flow this subflow belongs to
   result?: string; // Result of the subflow, if any
+  updated?: Date;
 }
 // --- End From Go definition ---
 

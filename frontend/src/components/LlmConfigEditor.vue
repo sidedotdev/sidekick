@@ -3,7 +3,7 @@
     <!-- Default Model -->
     <div class="model-row">
       <span class="model-label">Default</span>
-      <select v-model="defaultConfig.provider" class="provider-select" @change="emitUpdate">
+      <select v-model="defaultConfig.provider" class="provider-select" @change="onModelChange(defaultConfig)">
         <option value="">Provider</option>
         <option v-for="p in providerOptions" :key="p" :value="p">{{ getProviderLabel(p) }}</option>
       </select>
@@ -15,9 +15,9 @@
         :suggestions="filteredModels"
         overlay-class="llm-config-editor-overlay"
         @complete="(e) => searchModels(e, defaultConfig.provider)"
-        @item-select="emitUpdate"
-        @change="emitUpdate"
-        @input="emitUpdate"
+        @item-select="onModelChange(defaultConfig)"
+        @change="onModelChange(defaultConfig)"
+        @input="(e: Event) => onModelInput(e, defaultConfig)"
         @keydown.enter.stop
       />
       <ReasoningEffortControl
@@ -27,16 +27,17 @@
         :models-data="modelsData"
         @update:model-value="emitUpdate"
       />
-      <button
-        v-if="providerSupportsSpeed(defaultConfig.provider)"
-        type="button"
-        class="speed-toggle"
-        :class="{ active: defaultConfig.speed === 'fast' }"
-        :title="defaultConfig.speed === 'fast' ? 'Fast mode on' : 'Fast mode off'"
-        :aria-pressed="defaultConfig.speed === 'fast'"
-        @click="toggleSpeed(defaultConfig)"
-      >⚡</button>
+      <ServiceTierControl
+        :model-value="tierSelection(defaultConfig)"
+        :provider="defaultConfig.provider"
+        :model="defaultConfig.model"
+        :models-data="modelsData"
+        @update:model-value="(tier) => applyTier(defaultConfig, tier)"
+      />
     </div>
+    <p v-if="requiresUsageCredits(defaultConfig.provider, tierSelection(defaultConfig))" class="usage-credits-note" role="note">
+      {{ USAGE_CREDITS_NOTE }}
+    </p>
 
     <div v-if="providersError" class="providers-error" role="alert">
       {{ providersError }}
@@ -53,7 +54,7 @@
           v-model="useCaseStates[useCase].config.provider"
           class="provider-select"
           :disabled="!useCaseStates[useCase].enabled"
-          @change="emitUpdate"
+          @change="onModelChange(useCaseStates[useCase].config)"
         >
           <option value="">Provider</option>
           <option v-for="p in providerOptions" :key="p" :value="p">{{ getProviderLabel(p) }}</option>
@@ -67,9 +68,9 @@
           :suggestions="filteredModels"
           overlay-class="llm-config-editor-overlay"
           @complete="(e) => searchModels(e, useCaseStates[useCase].config.provider)"
-          @item-select="emitUpdate"
-          @change="emitUpdate"
-          @input="emitUpdate"
+          @item-select="onModelChange(useCaseStates[useCase].config)"
+          @change="onModelChange(useCaseStates[useCase].config)"
+          @input="(e: Event) => onModelInput(e, useCaseStates[useCase].config)"
           @keydown.enter.stop
         />
         <ReasoningEffortControl
@@ -80,26 +81,35 @@
           :models-data="modelsData"
           @update:model-value="emitUpdate"
         />
-        <button
-          v-if="useCaseStates[useCase].enabled && providerSupportsSpeed(useCaseStates[useCase].config.provider)"
-          type="button"
-          class="speed-toggle"
-          :class="{ active: useCaseStates[useCase].config.speed === 'fast' }"
-          :title="useCaseStates[useCase].config.speed === 'fast' ? 'Fast mode on' : 'Fast mode off'"
-          :aria-pressed="useCaseStates[useCase].config.speed === 'fast'"
-          @click="toggleSpeed(useCaseStates[useCase].config)"
-        >⚡</button>
+        <ServiceTierControl
+          v-if="useCaseStates[useCase].enabled"
+          :model-value="tierSelection(useCaseStates[useCase].config)"
+          :provider="useCaseStates[useCase].config.provider"
+          :model="useCaseStates[useCase].config.model"
+          :models-data="modelsData"
+          @update:model-value="(tier) => applyTier(useCaseStates[useCase].config, tier)"
+        />
       </div>
+      <p
+        v-if="useCaseStates[useCase].enabled && requiresUsageCredits(useCaseStates[useCase].config.provider, tierSelection(useCaseStates[useCase].config))"
+        class="usage-credits-note"
+        role="note"
+      >
+        {{ USAGE_CREDITS_NOTE }}
+      </p>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted, toRaw } from 'vue'
 import AutoComplete from 'primevue/autocomplete'
 import ReasoningEffortControl from './ReasoningEffortControl.vue'
+import ServiceTierControl from './ServiceTierControl.vue'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
+import { completeModel, searchModels as searchModelIds } from '../lib/modelSuggestions'
+import { keepOfferedTier, requiresUsageCredits, type ServiceTierSelection } from '../lib/serviceTiers'
 
 const props = defineProps<{
   modelValue?: LLMConfig | null
@@ -110,6 +120,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:modelValue', value: LLMConfig): void
 }>()
+
+const USAGE_CREDITS_NOTE = 'Fast mode requires usage credits; it isn’t covered by your subscription.'
 
 const USE_CASES = ['planning', 'judging', 'code_localization', 'advising'] as const
 type UseCase = typeof USE_CASES[number]
@@ -184,22 +196,7 @@ const modelsData = ref<ModelsData>({})
 const filteredModels = ref<string[]>([])
 
 const searchModels = (event: { query: string }, provider: string) => {
-  const query = event.query.toLowerCase()
-
-  let candidates: string[] = []
-  if (modelsData.value[provider]) {
-    candidates = Object.keys(modelsData.value[provider].models || {})
-  } else {
-    const allModels = new Set<string>()
-    for (const p of Object.values(modelsData.value)) {
-      if (p.models) {
-        Object.keys(p.models).forEach((m) => allModels.add(m))
-      }
-    }
-    candidates = Array.from(allModels)
-  }
-
-  filteredModels.value = candidates.filter((m) => m.toLowerCase().includes(query))
+  filteredModels.value = searchModelIds(modelsData.value, provider, event.query)
 }
 
 const fetchModelsData = async () => {
@@ -227,11 +224,57 @@ const loadModelsData = () => {
   }
 }
 
-const providerSupportsSpeed = (provider: string): boolean => provider === 'anthropic'
+const tierSelection = (config: ModelConfig): ServiceTierSelection => ({
+  serviceTier: config.serviceTier ?? '',
+  speed: config.speed ?? '',
+})
 
-const toggleSpeed = (config: ModelConfig) => {
-  config.speed = config.speed === 'fast' ? '' : 'fast'
+// The tier each row last had chosen or loaded. Provider/model edits only
+// change the shown tier, so the chosen one comes back once a model offers it
+// again, e.g. after passing through partially typed model names.
+const chosenTiers = new WeakMap<ModelConfig, ServiceTierSelection>()
+
+const rememberTier = (config: ModelConfig) => {
+  chosenTiers.set(toRaw(config), tierSelection(config))
+}
+
+const setTier = (config: ModelConfig, tier: ServiceTierSelection) => {
+  config.serviceTier = tier.serviceTier
+  config.speed = tier.speed
+}
+
+const applyTier = (config: ModelConfig, tier: ServiceTierSelection) => {
+  setTier(config, tier)
+  rememberTier(config)
   emitUpdate()
+}
+
+// Called once the provider or model has been updated, so the tier can be
+// checked against the newly selected model.
+const onModelChange = (config: ModelConfig) => {
+  const chosen = chosenTiers.get(toRaw(config)) ?? tierSelection(config)
+  setTier(config, keepOfferedTier(modelsData.value, config.provider, config.model, chosen))
+  emitUpdate()
+}
+
+// Completes typed text with the newest matching model, selecting the
+// completed remainder so continued typing replaces it. Deletions, pastes and
+// edits before the end are left alone so they behave as usual.
+const completeTypedModel = (event: Event, config: ModelConfig) => {
+  const input = event.target
+  if ((event as InputEvent).inputType !== 'insertText' || !(input instanceof HTMLInputElement)) return
+  const typed = input.value
+  if (input.selectionEnd !== typed.length) return
+  const completion = completeModel(modelsData.value, config.provider, typed)
+  if (!completion || completion.length <= typed.length) return
+  input.value = completion
+  input.setSelectionRange(typed.length, completion.length)
+  config.model = completion
+}
+
+const onModelInput = (event: Event, config: ModelConfig) => {
+  completeTypedModel(event, config)
+  onModelChange(config)
 }
 
 onMounted(() => {
@@ -243,6 +286,7 @@ const initModelConfig = (source?: ModelConfig): ModelConfig => ({
   provider: source?.provider ?? '',
   model: source?.model ?? '',
   reasoningEffort: source?.reasoningEffort ?? '',
+  serviceTier: source?.serviceTier ?? '',
   speed: source?.speed ?? '',
 })
 
@@ -264,6 +308,9 @@ const initUseCaseStates = (): Record<UseCase, UseCaseState> => {
 
 const useCaseStates = reactive(initUseCaseStates())
 
+rememberTier(defaultConfig)
+for (const useCase of USE_CASES) rememberTier(useCaseStates[useCase].config)
+
 const buildLlmConfig = (): LLMConfig => {
   const llmConfig: LLMConfig = {
     defaults: [{ ...defaultConfig }],
@@ -284,22 +331,26 @@ const emitUpdate = () => {
   emit('update:modelValue', buildLlmConfig())
 }
 
+const MODEL_CONFIG_FIELDS = ['provider', 'model', 'reasoningEffort', 'serviceTier', 'speed'] as const
+
+// The parent echoes back each config we emit; only a config that differs from
+// the current state (e.g. a newly loaded preset) replaces the remembered tier.
+const syncModelConfig = (config: ModelConfig, incoming?: ModelConfig) => {
+  const next = initModelConfig(incoming)
+  const isEcho = MODEL_CONFIG_FIELDS.every((field) => (config[field] ?? '') === next[field])
+  Object.assign(config, next)
+  if (!isEcho) rememberTier(config)
+}
+
 watch(() => props.modelValue, (newValue) => {
   if (newValue) {
-    const newDefault = newValue.defaults?.[0] || { provider: '', model: '', reasoningEffort: '', speed: '' }
-    defaultConfig.provider = newDefault.provider
-    defaultConfig.model = newDefault.model
-    defaultConfig.reasoningEffort = newDefault.reasoningEffort || ''
-    defaultConfig.speed = newDefault.speed || ''
+    syncModelConfig(defaultConfig, newValue.defaults?.[0])
 
     for (const useCase of USE_CASES) {
       const existingConfig = newValue.useCaseConfigs?.[useCase]?.[0]
       useCaseStates[useCase].enabled = !!existingConfig
       if (existingConfig) {
-        useCaseStates[useCase].config.provider = existingConfig.provider
-        useCaseStates[useCase].config.model = existingConfig.model
-        useCaseStates[useCase].config.reasoningEffort = existingConfig.reasoningEffort || ''
-        useCaseStates[useCase].config.speed = existingConfig.speed || ''
+        syncModelConfig(useCaseStates[useCase].config, existingConfig)
       }
     }
   }
@@ -362,24 +413,6 @@ watch(() => props.modelValue, (newValue) => {
   color: var(--color-text);
 }
 
-.speed-toggle {
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-  background-color: var(--color-background);
-  color: var(--color-text);
-  font-size: 0.875rem;
-  cursor: pointer;
-  line-height: 1;
-  opacity: 0.5;
-}
-
-.speed-toggle.active {
-  opacity: 1;
-  border-color: var(--color-accent, var(--color-text));
-  background-color: var(--color-background-mute);
-}
-
 .providers-error {
   padding: 0.5rem;
   margin-bottom: 0.75rem;
@@ -388,6 +421,13 @@ watch(() => props.modelValue, (newValue) => {
   background-color: var(--color-error-background);
   color: var(--color-error-text);
   font-size: 0.875rem;
+}
+
+.usage-credits-note {
+  margin: -0.25rem 0 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-text-2);
+  text-align: right;
 }
 </style>
 

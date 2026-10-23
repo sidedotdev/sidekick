@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"sidekick/internal/testfixture"
 )
 
 // TestMain sets up an isolated git configuration for the whole package's tests.
@@ -39,6 +41,13 @@ func TestMain(m *testing.M) {
 
 	os.Setenv("GIT_CONFIG_GLOBAL", globalConfigPath)
 	os.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	gitPath, err := testfixture.DirectGitPath(tempHome)
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("PATH", gitPath); err != nil {
+		panic(err)
+	}
 
 	code := m.Run()
 	_ = os.RemoveAll(tempHome)

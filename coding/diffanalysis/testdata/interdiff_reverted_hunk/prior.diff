@@ -1,0 +1,81 @@
+diff --git a/api/provider_auth.go b/api/provider_auth.go
+index 8567d33..07e501f 100644
+--- a/api/provider_auth.go
++++ b/api/provider_auth.go
+@@ -11,6 +11,7 @@ import (
+ 	"time"
+ 
+ 	"sidekick/common"
++	"sidekick/domain"
+ 	"sidekick/flow_action"
+ 	"sidekick/provider_auth"
+ 	"sidekick/secret_manager"
+@@ -311,8 +312,8 @@ func (ctrl *Controller) CredentialUpdatedHandler(c *gin.Context) {
+ 	c.JSON(http.StatusOK, gin.H{})
+ }
+ 
+-// broadcastProviderAuthUpdated tells every active flow about a saved
+-// credential; flows decide for themselves whether it unblocks them.
++// broadcastProviderAuthUpdated completes matching authentication requests
++// and tells active flows about the saved credential.
+ func (ctrl *Controller) broadcastProviderAuthUpdated(ctx context.Context, event provider_auth.CredentialUpdatedEvent) {
+ 	workspaces, err := ctrl.service.GetAllWorkspaces(ctx)
+ 	if err != nil {
+@@ -326,7 +327,18 @@ func (ctrl *Controller) broadcastProviderAuthUpdated(ctx context.Context, event
+ 		AuthType:  event.AuthType,
+ 	}
+ 	for _, workspace := range workspaces {
+-		ctrl.signalActiveFlows(ctx, workspace.Id, flow_action.SignalNameProviderAuthUpdated, signal)
++		ctrl.forEachActiveFlow(ctx, workspace.Id, func(flow domain.Flow) {
++			// A credential signal can resolve the request before the UI submits
++			// its response, bypassing the normal completion path.
++			completed, err := ctrl.completeProviderAuthRequests(ctx, flow, event)
++			if err != nil {
++				log.Error().Err(err).Str("workspaceId", flow.WorkspaceId).Str("flowId", flow.Id).Msg("Failed to complete provider auth requests")
++				return
++			}
++			if !completed {
++				ctrl.signalFlow(ctx, flow, flow_action.SignalNameProviderAuthUpdated, signal)
++			}
++		})
+ 	}
+ }
+ 
+@@ -352,3 +364,37 @@ func providerAuthMethodOffered(offered any, choice string) bool {
+ 	}
+ 	return false
+ }
++
++func (ctrl *Controller) completeProviderAuthRequests(ctx context.Context, flow domain.Flow, event provider_auth.CredentialUpdatedEvent) (bool, error) {
++	actions, err := ctrl.service.GetFlowActions(ctx, flow.WorkspaceId, flow.Id)
++	if err != nil {
++		return false, fmt.Errorf("failed to get provider auth requests: %w", err)
++	}
++	completed := false
++	for _, action := range actions {
++		if action.ActionStatus != domain.ActionStatusPending || !action.IsHumanAction || !action.IsCallbackAction {
++			continue
++		}
++		requestKind, _ := action.ActionParams["requestKind"].(string)
++		if requestKind != string(flow_action.RequestKindProviderAuth) {
++			continue
++		}
++		provider, _ := action.ActionParams["provider"].(string)
++		profileId, _ := action.ActionParams["profileId"].(string)
++		if provider_auth.NormalizeProvider(provider) != provider_auth.NormalizeProvider(event.Provider) ||
++			!strings.EqualFold(common.NormalizeProfileId(profileId), common.NormalizeProfileId(event.ProfileId)) {
++			continue
++		}
++
++		response := flow_action.UserResponse{
++			TargetWorkflowId: flow.Id,
++			FlowActionId:     action.Id,
++			Choice:           string(event.Method),
++		}
++		if err := ctrl.completeFlowAction(ctx, &action, response); err != nil {
++			return completed, err
++		}
++		completed = true
++	}
++	return completed, nil
++}

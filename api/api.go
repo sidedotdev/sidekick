@@ -45,32 +45,22 @@ type Server struct {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.httpServer.Shutdown(ctx)
 	if s.shutdownTracer != nil {
 		if err := s.shutdownTracer(ctx); err != nil {
 			log.Error().Err(err).Msg("Error shutting down telemetry")
 		}
 	}
-	return s.httpServer.Shutdown(ctx)
+	return err
 }
 
 func RunServer() *Server {
 	gin.SetMode(gin.ReleaseMode)
 
-	shutdownTracer, err := telemetry.InitTracer("sidekick-api")
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize telemetry")
-	}
-
 	allowedOrigins, err := GetAllowedOrigins()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to parse SIDE_ALLOWED_ORIGINS")
 	}
-
-	ctrl, err := NewController()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize controller")
-	}
-	router := DefineRoutes(ctrl, allowedOrigins)
 
 	host := common.GetServerHost()
 	port := common.GetServerPort()
@@ -82,22 +72,13 @@ func RunServer() *Server {
 	}
 	log.Info().Str("addr", addr).Msg("Starting API server")
 
-	httpSrv := &http.Server{
-		Addr:    addr,
-		Handler: router.Handler(),
+	server, err := runServer(addr, allowedOrigins, initializeServerController, func() (func(context.Context) error, error) {
+		return telemetry.InitTracer("sidekick-api")
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to start API server")
 	}
-
-	// Start server in a goroutine
-	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal().Err(err).Msg("Failed to start API server")
-		}
-	}()
-
-	return &Server{
-		httpServer:     httpSrv,
-		shutdownTracer: shutdownTracer,
-	}
+	return server
 }
 
 type Controller struct {
@@ -120,6 +101,7 @@ type Controller struct {
 	loadLocalConfig  func() (common.LocalConfig, error)
 	taskStartTimeout time.Duration
 	allowedOrigins   *AllowedOrigins
+	initialization   *controllerInitialization
 }
 
 type ModelConfigUpdateRequest struct {
@@ -252,6 +234,15 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	ctrl.allowedOrigins = allowedOrigins
 	if ctrl.providerOAuth == nil {
 		ctrl.providerOAuth = newProviderOAuthSessions()
+	}
+
+	if ctrl.initialization != nil {
+		initialize := ctrl.initializationMiddleware()
+		r.Use(func(c *gin.Context) {
+			if strings.HasPrefix(c.Request.URL.Path, "/api/") || strings.HasPrefix(c.Request.URL.Path, "/ws/") {
+				initialize(c)
+			}
+		})
 	}
 
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
@@ -443,7 +434,7 @@ func (ctrl *Controller) resolveProviders(profileId string) ([]string, error) {
 	}
 
 	secretManager := ctrl.profileSecretManager(profileId)
-	for _, builtinProvider := range common.BuiltinProviders {
+	for _, builtinProvider := range common.BuiltinLLMProviders {
 		if seen[builtinProvider] {
 			continue
 		}
@@ -1834,6 +1825,15 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	if ctrl.service == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database accessor not initialized"})
+		return
+	}
+	page, paginated, err := historyPageRequest(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if paginated {
+		ctrl.getFlowActionsPage(c, workspaceId, flowId, page)
 		return
 	}
 	ctx := c.Request.Context()

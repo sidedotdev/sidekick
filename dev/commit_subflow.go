@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"errors"
 	"fmt"
 	"sidekick/coding/git"
 	"sidekick/common"
@@ -199,7 +200,11 @@ func commitPendingWork(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryCon
 	}
 
 	return RunSubflowWithoutResult(dCtx, "commit", "Commit Changes", func(_ domain.Subflow) error {
-		return commitPendingWorkSubflow(dCtx, chatHistory, state)
+		err := commitPendingWorkSubflow(dCtx, chatHistory, state)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 
@@ -213,12 +218,12 @@ func commitPendingWorkSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHis
 		return fmt.Errorf("failed to append commit instructions: %w", err)
 	}
 
-	initialModelConfig := dCtx.GetModelConfig(common.CommitKey, 0, common.CodingKey)
+	initialModelConfig := commitModelConfig(dCtx)
 	resolveModelConfig := func() common.ModelConfig {
 		if ModelConfigRevision(dCtx) == 0 {
 			return initialModelConfig
 		}
-		return dCtx.GetModelConfig(common.CommitKey, 0, common.CodingKey)
+		return commitModelConfig(dCtx)
 	}
 	resolveOptions := func() llm2.Options {
 		return llm2.Options{

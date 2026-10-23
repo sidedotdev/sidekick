@@ -34,6 +34,8 @@ export class Llm2StreamAccumulator {
           block.reasoning.text = (block.reasoning.text ?? '') + delta
         } else if (block.type === 'tool_use' && block.toolUse) {
           block.toolUse.arguments += delta
+        } else if (block.type === 'builtin_tool_use' && block.builtinToolUse) {
+          block.builtinToolUse.arguments += delta
         }
         break
       }
@@ -62,6 +64,9 @@ export class Llm2StreamAccumulator {
         const block = this.blocksByIndex.get(event.index)
         const done = event.contentBlock
         if (!block || !done) break
+        if (block.type === 'tool_use' && done.type === 'tool_use' && done.toolUse) {
+          block.toolUse = { ...done.toolUse }
+        }
         if (block.type === 'builtin_tool_use' && done.type === 'builtin_tool_use' && done.builtinToolUse) {
           block.builtinToolUse = { ...done.builtinToolUse }
         }

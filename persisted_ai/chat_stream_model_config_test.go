@@ -1,6 +1,7 @@
 package persisted_ai
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -21,9 +22,12 @@ import (
 )
 
 type streamModelConfigTestInput struct {
-	Legacy       bool
-	UpdateModels []string
-	Pause        bool
+	Legacy               bool
+	UpdateModels         []string
+	MaxTokens            map[string]int
+	Pause                bool
+	ModelConfigMaxTokens int
+	RequestMaxTokens     int
 }
 
 type streamModelConfigTestResult struct {
@@ -52,8 +56,14 @@ func streamModelConfigTestWorkflow(ctx workflow.Context, input streamModelConfig
 		GlobalState: globalState,
 		Secrets:     &secrets,
 	}
+	modelMaxTokens := func(model string) int {
+		if input.MaxTokens != nil {
+			return input.MaxTokens[model]
+		}
+		return input.ModelConfigMaxTokens
+	}
 	eCtx.SetLLMConfig(common.LLMConfig{
-		Defaults: []common.ModelConfig{{Provider: "test", Model: "initial"}},
+		Defaults: []common.ModelConfig{{Provider: "test", Model: "initial", MaxTokens: modelMaxTokens("initial")}},
 	})
 
 	nonStreamCancellations := 0
@@ -65,7 +75,7 @@ func streamModelConfigTestWorkflow(ctx workflow.Context, input streamModelConfig
 		for _, model := range input.UpdateModels {
 			_ = workflow.Sleep(ctx, 100*time.Millisecond)
 			eCtx.SetLLMConfig(common.LLMConfig{
-				Defaults: []common.ModelConfig{{Provider: "test", Model: model}},
+				Defaults: []common.ModelConfig{{Provider: "test", Model: model, MaxTokens: modelMaxTokens(model)}},
 			})
 			globalState.CancelNamed(flow_action.LLMStreamCancellationName)
 		}
@@ -101,6 +111,7 @@ func streamModelConfigTestWorkflow(ctx workflow.Context, input streamModelConfig
 		eCtx.NewActionContext("stream"),
 		StreamInput{
 			Options: llm2.Options{
+				MaxTokens:   input.RequestMaxTokens,
 				ModelConfig: resolveModelConfig(),
 			},
 			Secrets:     secrets,
@@ -228,11 +239,12 @@ func TestExecuteChatStreamUsesLatestRepeatedUpdate(t *testing.T) {
 	env.RegisterWorkflow(streamModelConfigTestWorkflow)
 	env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
+	limits := map[string]int{"initial": 123, "second": 456}
 	var activities *Llm2Activities
 	for _, model := range []string{"initial", "second"} {
 		model := model
 		env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input StreamInput) bool {
-			return input.Options.ModelConfig.Model == model
+			return input.Options.ModelConfig.Model == model && input.Options.MaxTokens == limits[model]
 		})).Return(&llm2.MessageResponse{
 			Id: model + "-partial",
 			Output: llm2.Message{
@@ -241,7 +253,7 @@ func TestExecuteChatStreamUsesLatestRepeatedUpdate(t *testing.T) {
 		}, nil).After(time.Second).Once()
 	}
 	env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input StreamInput) bool {
-		return input.Options.ModelConfig.Model == "third"
+		return input.Options.ModelConfig.Model == "third" && input.Options.MaxTokens == 0
 	})).Return(&llm2.MessageResponse{
 		Id: "latest",
 		Output: llm2.Message{
@@ -251,6 +263,7 @@ func TestExecuteChatStreamUsesLatestRepeatedUpdate(t *testing.T) {
 
 	env.ExecuteWorkflow(streamModelConfigTestWorkflow, streamModelConfigTestInput{
 		UpdateModels: []string{"second", "third"},
+		MaxTokens:    limits,
 	})
 
 	require.NoError(t, env.GetWorkflowError())
@@ -375,6 +388,60 @@ func TestShouldRetryStreamAfterGenerationChange(t *testing.T) {
 					test.err,
 				),
 			)
+		})
+	}
+}
+
+func TestExecuteChatStreamResolvesModelConfigMaxTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                 string
+		modelConfigMaxTokens int
+		requestMaxTokens     int
+		updateModels         []string
+		wantMaxTokens        int
+	}{
+		{name: "unset everywhere", wantMaxTokens: 0},
+		{name: "model config only", modelConfigMaxTokens: 5000, wantMaxTokens: 5000},
+		{name: "request only", requestMaxTokens: 1234, wantMaxTokens: 1234},
+		{name: "request overrides model config", modelConfigMaxTokens: 5000, requestMaxTokens: 1234, wantMaxTokens: 1234},
+		{name: "model config after model update", modelConfigMaxTokens: 5000, updateModels: []string{"updated"}, wantMaxTokens: 5000},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var suite testsuite.WorkflowTestSuite
+			env := suite.NewTestWorkflowEnvironment()
+			env.SetWorkerOptions(utils.TestWorkerOptions())
+			env.RegisterWorkflow(streamModelConfigTestWorkflow)
+
+			var activities *Llm2Activities
+			var receivedMaxTokens []int
+			env.OnActivity(activities.Stream, mock.Anything, mock.Anything).Return(
+				func(_ context.Context, input StreamInput) (*llm2.MessageResponse, error) {
+					receivedMaxTokens = append(receivedMaxTokens, input.Options.MaxTokens)
+					return &llm2.MessageResponse{
+						Id:     input.Options.ModelConfig.Model,
+						Output: llm2.Message{Role: llm2.RoleAssistant},
+					}, nil
+				},
+			).After(time.Second)
+
+			env.ExecuteWorkflow(streamModelConfigTestWorkflow, streamModelConfigTestInput{
+				UpdateModels:         tt.updateModels,
+				ModelConfigMaxTokens: tt.modelConfigMaxTokens,
+				RequestMaxTokens:     tt.requestMaxTokens,
+			})
+
+			requireWorkflowSuccess(t, env.GetWorkflowError())
+			require.Len(t, receivedMaxTokens, len(tt.updateModels)+1)
+			for _, got := range receivedMaxTokens {
+				require.Equal(t, tt.wantMaxTokens, got)
+			}
 		})
 	}
 }

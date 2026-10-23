@@ -570,3 +570,88 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestLoadModelsDev_PreservesExperimentalModes(t *testing.T) {
+	writeModelsDevFixture(t, `{
+		"openai": {"models": {
+			"gpt-5.2": {"id": "gpt-5.2", "experimental": {"modes": {
+				"flex": {"provider": {"body": {"service_tier": "flex"}}},
+				"fast": {"cost": {"input": 12.5, "output": 75}, "provider": {"body": {"service_tier": "priority"}}}
+			}}},
+			"gpt-4": {"id": "gpt-4"}
+		}}
+	}`)
+
+	data, err := LoadModelsDev()
+	if err != nil {
+		t.Fatalf("LoadModelsDev() error = %v", err)
+	}
+
+	type served struct {
+		Experimental *struct {
+			Modes map[string]struct {
+				Provider struct {
+					Body map[string]any `json:"body"`
+				} `json:"provider"`
+			} `json:"modes"`
+		} `json:"experimental"`
+	}
+	decode := func(model string) served {
+		t.Helper()
+		encoded, err := json.Marshal(data["openai"].Models[model])
+		if err != nil {
+			t.Fatalf("marshal %s: %v", model, err)
+		}
+		var out served
+		if err := json.Unmarshal(encoded, &out); err != nil {
+			t.Fatalf("unmarshal %s: %v", model, err)
+		}
+		return out
+	}
+
+	withModes := decode("gpt-5.2")
+	if withModes.Experimental == nil {
+		t.Fatalf("experimental modes dropped for gpt-5.2")
+	}
+	for mode, want := range map[string]string{"flex": "flex", "fast": "priority"} {
+		if got := withModes.Experimental.Modes[mode].Provider.Body["service_tier"]; got != want {
+			t.Errorf("mode %q service_tier = %v, want %q", mode, got, want)
+		}
+	}
+
+	if withoutModes := decode("gpt-4"); withoutModes.Experimental != nil {
+		t.Errorf("expected experimental to be omitted for gpt-4, got %+v", withoutModes.Experimental)
+	}
+}
+
+func TestModelInfoHasModeBodyValue(t *testing.T) {
+	t.Parallel()
+	modes := json.RawMessage(`{"modes": {
+		"fast": {"provider": {"body": {"speed": "fast"}}},
+		"ultrafast": {"provider": {"body": {"service_tier": "ultrafast"}}},
+		"pro": {"provider": {"body": {"reasoning": {"mode": "pro"}}}}
+	}}`)
+	tests := []struct {
+		name         string
+		experimental json.RawMessage
+		field        string
+		value        string
+		want         bool
+	}{
+		{name: "matching speed mode", experimental: modes, field: "speed", value: "fast", want: true},
+		{name: "matching service tier mode", experimental: modes, field: "service_tier", value: "ultrafast", want: true},
+		{name: "different value", experimental: modes, field: "service_tier", value: "flex", want: false},
+		{name: "non-string body value", experimental: modes, field: "reasoning", value: "pro", want: false},
+		{name: "no experimental data", field: "speed", value: "fast", want: false},
+		{name: "malformed experimental data", experimental: json.RawMessage(`{"modes": [`), field: "speed", value: "fast", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			info := ModelInfo{Experimental: tt.experimental}
+			if got := info.HasModeBodyValue(tt.field, tt.value); got != tt.want {
+				t.Errorf("HasModeBodyValue(%q, %q) = %v, want %v", tt.field, tt.value, got, tt.want)
+			}
+		})
+	}
+}

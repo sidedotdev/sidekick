@@ -51,7 +51,7 @@ func providerAuthStreamChildWorkflow(ctx workflow.Context) (int, error) {
 	})
 	newStreamInput := func() StreamInput {
 		return StreamInput{
-			Options:     llm2.Options{ModelConfig: common.ModelConfig{Provider: "anthropic", Model: "initial"}},
+			Options:     llm2.Options{ModelConfig: common.ModelConfig{Provider: "anthropic", Model: "initial", MaxTokens: 111}},
 			Secrets:     secrets,
 			ChatHistory: &ChatHistoryContainer{History: history},
 			WorkspaceId: "workspace",
@@ -66,7 +66,7 @@ func providerAuthStreamChildWorkflow(ctx workflow.Context) (int, error) {
 		if authType, ok := eCtx.ProviderAuthTypeOverride("anthropic"); ok && authType == common.ProviderAuthTypeAPI {
 			mapping = nil
 		}
-		options := llm2.Options{ModelConfig: common.ModelConfig{Provider: "anthropic", Model: fmt.Sprintf("resolved-%d", resolverCalls)}}
+		options := llm2.Options{ModelConfig: common.ModelConfig{Provider: "anthropic", Model: fmt.Sprintf("resolved-%d", resolverCalls), MaxTokens: resolverCalls * 222}}
 		return options, mapping, nil
 	}
 
@@ -192,6 +192,9 @@ func TestExecuteChatStream_ProviderAuthRecovery(t *testing.T) {
 			require.Len(t, streamInputs, 3)
 			failed, retried, followUp := streamInputs[0], streamInputs[1], streamInputs[2]
 
+			assert.Equal(t, 222, failed.Options.MaxTokens)
+			assert.Equal(t, 444, retried.Options.MaxTokens)
+			assert.Equal(t, 111, followUp.Options.MaxTokens)
 			assert.Equal(t, "resolved-1", failed.Options.ModelConfig.Model)
 			assert.Equal(t, common.ProviderAuthTypeAny, providerAuthType(t, failed.Providers, "anthropic"))
 			assert.NotNil(t, failed.ToolNameMapping)

@@ -45,6 +45,7 @@ func (w Workspace) MarshalJSON() ([]byte, error) {
 type WorkspaceConfig struct {
 	LLM                common.LLMConfig               `json:"llm"`
 	Embedding          common.EmbeddingConfig         `json:"embedding"`
+	Reranking          common.RerankingConfig         `json:"reranking"`
 	CommandPermissions common.CommandPermissionConfig `json:"commandPermissions,omitempty"`
 }
 

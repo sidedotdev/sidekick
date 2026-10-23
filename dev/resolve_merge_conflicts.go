@@ -7,6 +7,7 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 
+	"sidekick/coding"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
@@ -43,10 +44,9 @@ type ResolveMergeConflictsParams struct {
 	// when downstream checks rely on it.
 	LastReviewTreeHash string
 
-	// LastReviewDiff is the diff shown at the last review round, used by
-	// criteria-fulfillment checks to derive what changed since then without
-	// relying on a gc-prunable git object.
-	LastReviewDiff string
+	// LastReviewSnapshot preserves the coordinate system of LastReviewDiff.
+	LastReviewDiff     string
+	LastReviewSnapshot *coding.ReviewDiffSnapshot `json:"lastReviewSnapshot,omitempty"`
 
 	// BaseBranch is the merge target (used purely to enrich the
 	// criteria-fulfillment prompt context).
@@ -68,7 +68,11 @@ const maxConflictResolutionAttempts = 8
 // with feedback feeding back into authoring on failure.
 func resolveMergeConflictsSubflow(dCtx DevContext, params ResolveMergeConflictsParams) error {
 	return RunSubflowWithoutResult(dCtx, "resolve_merge_conflicts", "Resolve Merge Conflicts", func(_ domain.Subflow) error {
-		return resolveMergeConflictsLoop(dCtx, params)
+		err := resolveMergeConflictsLoop(dCtx, params)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 
@@ -223,6 +227,7 @@ func checkConflictResolutionFulfillment(dCtx DevContext, params ResolveMergeConf
 		BaseBranch:              params.BaseBranch,
 		LastReviewTreeHash:      params.LastReviewTreeHash,
 		LastReviewDiff:          params.LastReviewDiff,
+		LastReviewSnapshot:      params.LastReviewSnapshot,
 	})
 }
 

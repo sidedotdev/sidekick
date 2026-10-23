@@ -702,13 +702,16 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 
 	// Add custom providers from local config
 	for _, provider := range localConfig.Providers {
+		if provider.Type == "cohere" {
+			continue
+		}
 		options = append(options, provider.Name)
 	}
 
 	// If no providers configured at all, go directly to auth flow
 	if len(options) == 0 {
 		fmt.Println("No LLM providers configured. Let's set one up.")
-		if err := handleAuthCommand(); err != nil {
+		if err := handleLLMAuthCommand(); err != nil {
 			return "", err
 		}
 		// After auth, determine which provider was added
@@ -728,7 +731,7 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	}
 
 	if selected == "Add new provider" {
-		if err := handleAuthCommand(); err != nil {
+		if err := handleLLMAuthCommand(); err != nil {
 			return "", err
 		}
 		// After auth, determine which provider was added

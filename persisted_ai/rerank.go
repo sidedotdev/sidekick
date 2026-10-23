@@ -7,10 +7,12 @@ import (
 	"strconv"
 	"strings"
 
+	"sidekick/common"
 	"sidekick/secret_manager"
 
 	cohere "github.com/cohere-ai/cohere-go/v2"
 	cohereclient "github.com/cohere-ai/cohere-go/v2/client"
+	"github.com/cohere-ai/cohere-go/v2/option"
 )
 
 const (
@@ -34,11 +36,12 @@ type cohereRerankClient interface {
 
 type cohereSDKRerankClient struct {
 	client *cohereclient.Client
+	model  string
 }
 
 func (c cohereSDKRerankClient) TokenCount(ctx context.Context, text string) (int, error) {
 	response, err := c.client.Tokenize(ctx, &cohere.TokenizeRequest{
-		Model: cohereRerankModel,
+		Model: c.model,
 		Text:  text,
 	})
 	if err != nil {
@@ -55,7 +58,7 @@ func (c cohereSDKRerankClient) Rerank(ctx context.Context, query string, documen
 
 	topN := len(documents)
 	response, err := c.client.Rerank(ctx, &cohere.RerankRequest{
-		Model:     cohere.String(cohereRerankModel),
+		Model:     cohere.String(c.model),
 		Query:     query,
 		Documents: requestDocuments,
 		TopN:      &topN,
@@ -73,40 +76,60 @@ func (c cohereSDKRerankClient) Rerank(ctx context.Context, query string, documen
 
 type CohereReranker struct {
 	client cohereRerankClient
+	model  string
 }
 
 // NewCohereReranker creates a reranker using the provided Cohere API key.
 func NewCohereReranker(apiKey string) *CohereReranker {
-	return &CohereReranker{
-		client: cohereSDKRerankClient{
-			client: cohereclient.NewClient(cohereclient.WithToken(apiKey)),
-		},
-	}
+	return newCohereReranker(apiKey, common.DefaultCohereRerankingModel, "")
 }
 
-// GetReranker returns nil when reranking is not configured.
-func GetReranker(secretManager secret_manager.SecretManager) (Reranker, error) {
-	if secretManager == nil {
+// GetReranker returns nil when the selection or its credentials are unavailable.
+func GetReranker(modelConfig common.ModelConfig, providers []common.ModelProviderPublicConfig, secretManager secret_manager.SecretManager) (Reranker, error) {
+	if secretManager == nil || modelConfig.Provider == "" {
 		return nil, nil
 	}
 
-	apiKey, err := secretManager.GetSecret(cohereAPIKeyEnvironmentVariable)
+	provider := common.ModelProviderPublicConfig{Type: modelConfig.Provider}
+	found := false
+	for _, candidate := range providers {
+		name := candidate.Name
+		if name == "" {
+			name = candidate.Type
+		}
+		if name != modelConfig.Provider {
+			continue
+		}
+		if found {
+			return nil, fmt.Errorf("multiple providers found with name %s", name)
+		}
+		provider = candidate
+		found = true
+	}
+	if provider.Type != "cohere" {
+		return nil, fmt.Errorf("unsupported reranking provider: %s", provider.Type)
+	}
+
+	apiKey, err := secretManager.GetSecret(modelConfig.NormalizedProviderName() + "_API_KEY")
 	if err != nil {
 		if errors.Is(err, secret_manager.ErrSecretNotFound) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to get Cohere API key: %w", err)
+		return nil, fmt.Errorf("failed to get API key for %s: %w", modelConfig.Provider, err)
 	}
-
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return nil, nil
 	}
-	return NewCohereReranker(apiKey), nil
+	model := modelConfig.Model
+	if model == "" {
+		model = common.DefaultCohereRerankingModel
+	}
+	return newCohereReranker(apiKey, model, provider.BaseURL), nil
 }
 
 func newCohereRerankerWithClient(client cohereRerankClient) *CohereReranker {
-	return &CohereReranker{client: client}
+	return &CohereReranker{client: client, model: common.DefaultCohereRerankingModel}
 }
 
 // Rerank reranks at most the first rerankCandidateLimit documents. Documents
@@ -118,7 +141,7 @@ func (r *CohereReranker) Rerank(ctx context.Context, query string, documents []s
 
 	candidateCount := min(len(documents), rerankCandidateLimit)
 	candidates := documents[:candidateCount]
-	queryChunks, err := splitRerankQuery(ctx, r.client, query)
+	queryChunks, err := splitRerankQuery(ctx, r.client, query, r.model)
 	if err != nil {
 		return nil, fmt.Errorf("failed to split rerank query: %w", err)
 	}
@@ -181,9 +204,9 @@ func cohereRerankMaxQueryTokens(model string) int {
 	return cohereRerankDefaultMaxTokens
 }
 
-func splitRerankQuery(ctx context.Context, client cohereRerankClient, query string) ([]string, error) {
+func splitRerankQuery(ctx context.Context, client cohereRerankClient, query, model string) ([]string, error) {
 	runes := []rune(query)
-	maxTokens := cohereRerankMaxQueryTokens(cohereRerankModel)
+	maxTokens := cohereRerankMaxQueryTokens(model)
 	chunks := make([]string, 0, len(runes)/maxTokens+1)
 
 	for start := 0; start < len(runes); {
@@ -215,4 +238,18 @@ func splitRerankQuery(ctx context.Context, client cohereRerankClient, query stri
 	}
 
 	return chunks, nil
+}
+
+func newCohereReranker(apiKey, model, baseURL string) *CohereReranker {
+	options := []option.RequestOption{cohereclient.WithToken(apiKey)}
+	if baseURL != "" {
+		options = append(options, cohereclient.WithBaseURL(baseURL))
+	}
+	return &CohereReranker{
+		model: model,
+		client: cohereSDKRerankClient{
+			client: cohereclient.NewClient(options...),
+			model:  model,
+		},
+	}
 }

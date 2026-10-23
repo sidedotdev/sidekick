@@ -20,6 +20,6 @@ func NewTemporalClientOptions(storage KeyValueStorage, hostPort string) (client.
 	return client.Options{
 		HostPort:      hostPort,
 		Interceptors:  []interceptor.ClientInterceptor{tracingInterceptor},
-		DataConverter: converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), codec),
+		DataConverter: NewReplayAwareDataConverter(converter.GetDefaultDataConverter(), codec),
 	}, nil
 }

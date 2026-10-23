@@ -30,14 +30,17 @@ type GenerateReviewDiffsParams struct {
 	// empty during the first review round.
 	PriorReviewDiff string
 
+	PriorReviewSnapshot *ReviewDiffSnapshot `json:"priorReviewSnapshot,omitempty"`
+
 	IgnoreWhitespace bool
 	ContextLines     *int
 	FilePaths        []string
 }
 
 type GenerateReviewDiffsResult struct {
-	FullDiff  string `json:"fullDiff"`
-	SinceDiff string `json:"sinceDiff"`
+	FullDiff       string              `json:"fullDiff"`
+	SinceDiff      string              `json:"sinceDiff"`
+	ReviewSnapshot *ReviewDiffSnapshot `json:"reviewSnapshot,omitempty"`
 
 	// SinceDiffError describes why the diff since the last review could not be
 	// computed, in which case SinceDiff falls back to the full diff. Callers
@@ -46,14 +49,10 @@ type GenerateReviewDiffsResult struct {
 	SinceDiffError string `json:"sinceDiffError,omitempty"`
 }
 
-// GenerateReviewDiffsActivity produces both diffs a review round needs: the full
-// diff of our changes since the start point, and the diff of what changed since
-// the last review. The latter is an in-process interdiff between the prior
-// review's diff and the current one, so it never depends on git objects that
-// garbage collection could prune.
-//
-// Only git failures are fatal here: interdiff trouble degrades to the full diff
-// so that review flows keep working.
+// GenerateReviewDiffsActivity produces the full review and the changes since
+// the prior review. A changed base is supplied as a read-only Git diff; patch
+// normalization and comparison run in process. An unavailable comparison falls
+// back explicitly to the full diff.
 func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, params GenerateReviewDiffsParams) (GenerateReviewDiffsResult, error) {
 	if params.StartPoint == "" {
 		return GenerateReviewDiffsResult{}, fmt.Errorf("start point is required to generate review diffs")
@@ -62,25 +61,35 @@ func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, par
 	// Git -w can emit modified whitespace as unchanged base context. Such
 	// patches cannot safely serve as the baseline of a later interdiff.
 	params.IgnoreWhitespace = false
-	fullDiff, err := fullReviewDiff(ctx, params)
+	result, baseChange, err := fullReviewDiff(ctx, params)
 	if err != nil {
 		return GenerateReviewDiffsResult{}, err
 	}
-
-	result := GenerateReviewDiffsResult{FullDiff: fullDiff}
-	if params.PriorReviewDiff == "" {
+	if params.PriorReviewDiff == "" && params.PriorReviewSnapshot == nil {
+		return result, nil
+	}
+	if result.SinceDiffError != "" {
+		result.SinceDiff = result.FullDiff
 		return result, nil
 	}
 
-	sinceDiff, err := diffanalysis.Interdiff(params.PriorReviewDiff, fullDiff)
+	prior, current := params.PriorReviewDiff, result.FullDiff
+	if params.PriorReviewSnapshot != nil {
+		prior, err = diffanalysis.RebaseReviewDiff(params.PriorReviewSnapshot.TotalDiff, baseChange)
+		current = result.ReviewSnapshot.TotalDiff
+	}
+	if err == nil {
+		if strings.TrimSpace(prior) == "" {
+			result.SinceDiff = current
+		} else {
+			result.SinceDiff, err = diffanalysis.Interdiff(prior, current)
+		}
+	}
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to compute diff since last review, falling back to the full diff")
-		result.SinceDiff = fullDiff
+		result.SinceDiff = result.FullDiff
 		result.SinceDiffError = err.Error()
-		return result, nil
 	}
-	result.SinceDiff = sinceDiff
-
 	return result, nil
 }
 
@@ -92,51 +101,82 @@ func (ca *CodingActivities) GenerateReviewDiffsActivity(ctx context.Context, par
 // has no such property - it stays an ancestor of HEAD - so the changes that
 // already existed at that start point are subtracted from the base branch diff
 // instead.
-func fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (string, error) {
+func fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (GenerateReviewDiffsResult, string, error) {
+	var result GenerateReviewDiffsResult
+	baseBranch := params.BaseBranch
+	if baseBranch == "" {
+		baseBranch = params.StartPoint
+	}
+	headMergeBase, err := git.MergeBase(ctx, params.EnvContainer, baseBranch, "HEAD")
+	if err != nil {
+		return result, "", fmt.Errorf("failed to find merge base of %s and HEAD: %w", baseBranch, err)
+	}
+	currentDiff, err := currentDiffVersus(ctx, params, headMergeBase, false)
+	if err != nil {
+		return result, "", err
+	}
+	result.FullDiff = currentDiff
+	snapshot := &ReviewDiffSnapshot{
+		BaseCommit: headMergeBase,
+		StartPoint: params.StartPoint,
+		TotalDiff:  currentDiff,
+	}
+	result.ReviewSnapshot = snapshot
+
+	transitions := map[string]string{headMergeBase: ""}
+	baseTransition := func(from string) (string, error) {
+		if patch, exists := transitions[from]; exists {
+			return patch, nil
+		}
+		patch, err := reviewBaseTransition(ctx, params, from, headMergeBase)
+		if err == nil {
+			transitions[from] = patch
+		}
+		return patch, err
+	}
+	var baseChange string
+	if params.PriorReviewSnapshot != nil {
+		baseChange, err = baseTransition(params.PriorReviewSnapshot.BaseCommit)
+		if err != nil {
+			result.SinceDiffError = fmt.Sprintf("failed to compare review bases: %v", err)
+		}
+	}
 	pinnedStartPoint := params.BaseBranch != "" && params.BaseBranch != params.StartPoint
 	if !pinnedStartPoint {
-		return currentDiffVersus(ctx, params, params.StartPoint, true)
+		return result, baseChange, nil
 	}
 
-	startMergeBase, err := git.MergeBase(ctx, params.EnvContainer, params.BaseBranch, params.StartPoint)
+	var excluded string
+	if previous := params.PriorReviewSnapshot; previous != nil &&
+		previous.StartPoint == params.StartPoint && result.SinceDiffError == "" {
+		excluded, err = diffanalysis.RebaseReviewDiff(previous.ExcludedDiff, baseChange)
+	} else {
+		startMergeBase, baseErr := git.MergeBase(ctx, params.EnvContainer, params.BaseBranch, params.StartPoint)
+		if baseErr != nil {
+			return result, "", fmt.Errorf("failed to find start-point merge base: %w", baseErr)
+		}
+		startDiff, diffErr := diffAtStartPoint(ctx, params, startMergeBase)
+		if diffErr != nil {
+			return result, "", diffErr
+		}
+		startBaseChange, transitionErr := baseTransition(startMergeBase)
+		if transitionErr != nil {
+			return result, "", transitionErr
+		}
+		excluded, err = diffanalysis.RebaseReviewDiff(startDiff, startBaseChange)
+	}
+	if err == nil && strings.TrimSpace(excluded) != "" {
+		result.FullDiff, err = diffanalysis.Interdiff(excluded, currentDiff)
+	}
 	if err != nil {
-		return "", fmt.Errorf("failed to find merge base of %s and %s: %w", params.BaseBranch, params.StartPoint, err)
+		log.Warn().Err(err).Msg("failed to exclude work preceding the pinned review start")
+		result.SinceDiffError = fmt.Sprintf("failed to normalize pinned review baseline: %v", err)
+		result.ReviewSnapshot = nil
+		result.FullDiff, err = currentDiffVersus(ctx, params, params.StartPoint, false)
+		return result, baseChange, err
 	}
-	headMergeBase, err := git.MergeBase(ctx, params.EnvContainer, params.BaseBranch, "HEAD")
-	if err != nil {
-		return "", fmt.Errorf("failed to find merge base of %s and HEAD: %w", params.BaseBranch, err)
-	}
-
-	// Without any base branch changes merged in since the start point,
-	// everything past it is our own work, and git can render that exactly.
-	// Subtracting earlier work from the base branch diff is only needed
-	// otherwise, and is more fragile: interdiffs can't represent everything
-	// git can (binary or mode-only changes, empty files).
-	if startMergeBase == headMergeBase {
-		return currentDiffVersus(ctx, params, params.StartPoint, false)
-	}
-
-	currentDiff, err := currentDiffVersus(ctx, params, params.BaseBranch, true)
-	if err != nil {
-		return "", err
-	}
-	startPointDiff, err := diffAtStartPoint(ctx, params, startMergeBase)
-	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(startPointDiff) == "" {
-		return currentDiff, nil
-	}
-
-	sinceStartPoint, err := diffanalysis.Interdiff(startPointDiff, currentDiff)
-	if err != nil {
-		// Mis-attributing merged-in base branch changes to the step is a far
-		// smaller distortion than reviewing every earlier step's work again.
-		log.Warn().Err(err).Msg("failed to exclude changes made before the start point, falling back to the diff since the start point, which includes changes merged in from the base branch")
-		return currentDiffVersus(ctx, params, params.StartPoint, false)
-	}
-
-	return sinceStartPoint, nil
+	snapshot.ExcludedDiff = excluded
+	return result, baseChange, nil
 }
 
 // currentDiffVersus renders the working tree, including staged changes,
@@ -145,12 +185,13 @@ func fullReviewDiff(ctx context.Context, params GenerateReviewDiffsParams) (stri
 // commit that is an ancestor of HEAD has no such side.
 func currentDiffVersus(ctx context.Context, params GenerateReviewDiffsParams, ref string, threeDot bool) (string, error) {
 	diff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
-		Staged:           true,
-		ThreeDotDiff:     threeDot,
-		BaseRef:          ref,
-		IgnoreWhitespace: params.IgnoreWhitespace,
-		ContextLines:     params.ContextLines,
-		FilePaths:        params.FilePaths,
+		Staged:               true,
+		ThreeDotDiff:         threeDot,
+		BaseRef:              ref,
+		IgnoreWhitespace:     params.IgnoreWhitespace,
+		ContextLines:         params.ContextLines,
+		FilePaths:            params.FilePaths,
+		DisableCopyDetection: true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to get diff vs %s: %w", ref, err)
@@ -163,11 +204,12 @@ func currentDiffVersus(ctx context.Context, params GenerateReviewDiffsParams, re
 // not be attributed to the work under review now.
 func diffAtStartPoint(ctx context.Context, params GenerateReviewDiffsParams, mergeBase string) (string, error) {
 	diff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
-		BaseRef:          mergeBase,
-		EndRef:           params.StartPoint,
-		IgnoreWhitespace: params.IgnoreWhitespace,
-		ContextLines:     params.ContextLines,
-		FilePaths:        params.FilePaths,
+		BaseRef:              mergeBase,
+		EndRef:               params.StartPoint,
+		IgnoreWhitespace:     params.IgnoreWhitespace,
+		ContextLines:         params.ContextLines,
+		FilePaths:            params.FilePaths,
+		DisableCopyDetection: true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to get diff at start point %s: %w", params.StartPoint, err)

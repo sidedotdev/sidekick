@@ -27,6 +27,9 @@ func makeOptionalPropertiesRequiredAndNullable(schema map[string]any) {
 	properties, hasProperties := schema["properties"].(map[string]any)
 	if hasProperties {
 		required, _ := schema["required"].([]any)
+		if required == nil {
+			required = []any{}
+		}
 		requiredNames := make(map[string]struct{}, len(required))
 		for _, name := range required {
 			if name, ok := name.(string); ok {

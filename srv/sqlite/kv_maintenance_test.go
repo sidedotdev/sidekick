@@ -32,6 +32,10 @@ func newFileBackedStorage(t *testing.T) *Storage {
 	require.NoError(t, err)
 	t.Cleanup(func() { kvDb.Close() })
 
+	for _, database := range []*sql.DB{db, kvDb} {
+		require.NoError(t, initializeDatabase(context.Background(), database))
+	}
+
 	tracker := newBusyTracker()
 	storage := &Storage{
 		db:                    &trackedDB{DB: db, name: "main", tracker: tracker},
@@ -67,8 +71,13 @@ func TestNewDatabasesUseIncrementalAutoVacuum(t *testing.T) {
 
 	storage := newFileBackedStorage(t)
 
-	assert.Equal(t, autoVacuumIncremental, autoVacuumMode(t, storage.db.DB))
-	assert.Equal(t, autoVacuumIncremental, autoVacuumMode(t, storage.kvDb.DB))
+	for _, db := range []*trackedDB{storage.db, storage.kvDb} {
+		db.SetMaxIdleConns(0)
+		assert.Equal(t, autoVacuumIncremental, autoVacuumMode(t, db.DB))
+		var journalMode string
+		require.NoError(t, db.QueryRow("PRAGMA journal_mode").Scan(&journalMode))
+		assert.Equal(t, "wal", journalMode)
+	}
 }
 
 func TestConvertKVAutoVacuum(t *testing.T) {
@@ -91,6 +100,7 @@ func TestConvertKVAutoVacuum(t *testing.T) {
 	kvDb, err := sql.Open("sqlite", sqliteUri(kvPath))
 	require.NoError(t, err)
 	defer kvDb.Close()
+	require.NoError(t, initializeDatabase(ctx, kvDb))
 	storage := &Storage{
 		kvDb:                  &trackedDB{DB: kvDb, name: "kv", tracker: newBusyTracker()},
 		deletePrefixBatchSize: defaultDeletePrefixBatchSize,

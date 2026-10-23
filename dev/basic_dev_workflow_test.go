@@ -93,7 +93,7 @@ func (s *AutoMergeApprovalTestSuite) approvalWorkflow(target string, autoMerge b
 			},
 			RepoConfig: common.RepoConfig{},
 		}
-		response, _, _, err := getMergeApproval(dCtx, target, true, "", "", autoMerge)
+		response, _, _, err := getMergeApproval(dCtx, target, true, "", coding.ReviewDiffBaseline{}, autoMerge)
 		return response, err
 	}
 }
@@ -250,7 +250,7 @@ func (s *AutoMergeApprovalTestSuite) mergeWorkflow(autoMerge bool, startBranch *
 			Requirements:   "Implement the thing",
 			StartBranch:    startBranch,
 			AutoMerge:      autoMerge,
-		}, "", "")
+		}, "", coding.ReviewDiffBaseline{})
 		return mergeInfo, err
 	}
 }

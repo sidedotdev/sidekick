@@ -160,7 +160,11 @@ func completeDevStep(dCtx DevContext, requirements string, planExecution DevPlan
 	}
 
 	return RunSubflow(dCtx, "step.dev", subflowName, func(subflow domain.Subflow) (DevStepResult, error) {
-		return completeDevStepSubflow(dCtx, requirements, planExecution, step)
+		result, err := completeDevStepSubflow(dCtx, requirements, planExecution, step)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return result, errors.Join(err, checkpointErr)
+		}
+		return result, err
 	})
 }
 
@@ -656,7 +660,11 @@ func performStep(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigRes
 	v := workflow.GetVersion(dCtx, "performStep", workflow.DefaultVersion, 1)
 	if v == workflow.DefaultVersion {
 		return RunSubflowWithoutResult(dCtx, "perform_step", "Perform Step", func(_ domain.Subflow) error {
-			return performStepSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExec, advisor)
+			err := performStepSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExec, advisor)
+			if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+				return errors.Join(err, checkpointErr)
+			}
+			return err
 		})
 	} else {
 		// remove the perform step subflow going forward, since we'll have

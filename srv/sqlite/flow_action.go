@@ -108,8 +108,12 @@ func scanFlowAction(row rowScanner) (domain.FlowAction, error) {
 // GetFlowActions retrieves multiple FlowActions from the SQLite database
 func (s *Storage) GetFlowActions(ctx context.Context, workspaceId, flowId string) ([]domain.FlowAction, error) {
 	query := `SELECT ` + flowActionColumns + ` FROM flow_actions WHERE workspace_id = ? AND flow_id = ?`
+	return s.queryFlowActions(ctx, query, workspaceId, flowId)
+}
 
-	rows, err := s.db.QueryContext(ctx, query, workspaceId, flowId)
+// queryFlowActions runs a query that selects flowActionColumns.
+func (s *Storage) queryFlowActions(ctx context.Context, query string, args ...interface{}) ([]domain.FlowAction, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query flow actions: %w", err)
 	}

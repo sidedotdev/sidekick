@@ -17,17 +17,8 @@ import (
 // default; disable with a falsy value (0, false, no, off).
 const autoStartDockerEnvVar = "SIDE_AUTO_START_DOCKER"
 
-// autoRestartDockerEnvVar controls whether sidekick attempts to restart a wedged
-// Docker engine (both pre-flight and via the in-operation watchdog). Enabled by
-// default; disable with a falsy value (0, false, no, off).
-const autoRestartDockerEnvVar = "SIDE_AUTO_RESTART_DOCKER"
-
 func dockerAutoStartEnabled() bool {
 	return envFlagEnabled(autoStartDockerEnvVar)
-}
-
-func dockerAutoRestartEnabled() bool {
-	return envFlagEnabled(autoRestartDockerEnvVar)
 }
 
 // envFlagEnabled reports whether a boolean-style environment variable is
@@ -65,33 +56,31 @@ var (
 // daemon process is present, so we never waste time "starting" an
 // already-running-but-hung daemon.
 func ensureDockerReady(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if dockerRunning(ctx) {
 		return nil
 	}
-
-	startEnabled := dockerAutoStartEnabled()
-	restartEnabled := dockerAutoRestartEnabled()
-	if !startEnabled && !restartEnabled {
-		return fmt.Errorf("docker daemon is not responsive (auto-start via %s and auto-restart via %s are both disabled)", autoStartDockerEnvVar, autoRestartDockerEnvVar)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	if dockerProcessRunning(ctx) {
-		log.Warn().Msg("docker daemon process is running but unresponsive; treating it as wedged")
-	} else if startEnabled {
+	var startErr error
+	if dockerAutoStartEnabled() && !dockerProcessRunning(ctx) {
 		log.Warn().Msg("docker daemon not running; attempting to start it")
-		if err := startDocker(ctx); err != nil {
-			log.Warn().Err(err).Msg("failed to start docker daemon")
+		startErr = startDocker(ctx)
+		if startErr != nil {
+			log.Warn().Err(startErr).Msg("failed to start docker daemon")
 		} else if waitForDockerEngine(ctx, dockerReadyPollTimeout) {
 			return nil
 		}
 	}
 
-	if restartEnabled {
-		log.Warn().Msg("attempting to restart the docker engine")
-		return restartDockerEngineFunc(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	return fmt.Errorf("docker daemon did not become responsive after auto-start (set %s to allow restarts)", autoRestartDockerEnvVar)
+	return dockerEngineUnavailable(startErr)
 }
 
 // dockerProcessRunningPlatform reports whether a Docker daemon process is

@@ -396,8 +396,11 @@ func initSearchContext(runner searchRunner, envContainer env.EnvContainer, input
 		sCtx.rgArgs += " --ignore-file " + escapeShellArg(sCtx.coreIgnorePath)
 	}
 
-	// Base gitGrepArgs
-	sCtx.gitGrepArgs = fmt.Sprintf("git grep --no-index --show-function --heading --line-number --context %d", input.ContextLines)
+	// Base gitGrepArgs. rg selects files using Rust regex syntax, so git grep
+	// must use extended regex (not its default basic regex, where "|", "+",
+	// "?", "{}" and "()" are literals) or it finds nothing in the files rg
+	// listed. A later --fixed-strings overrides --extended-regexp.
+	sCtx.gitGrepArgs = fmt.Sprintf("git grep --no-index --extended-regexp --show-function --heading --line-number --context %d", input.ContextLines)
 
 	if input.CaseInsensitive {
 		sCtx.rgArgs += " --ignore-case"

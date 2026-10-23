@@ -419,148 +419,55 @@ func TestInterdiffSuccessiveFullReviewBaselines(t *testing.T) {
 	assert.NotContains(t, sinceSecondReview, "+var second = 2")
 }
 
-func TestRestoreOmittedCommonLinesRequiresMatchingPostImages(t *testing.T) {
+func TestInterdiffRejectsInconsistentEvidence(t *testing.T) {
 	t.Parallel()
 
-	const priorDiff = `diff --git a/fields.txt b/fields.txt
---- a/fields.txt
-+++ b/fields.txt
-@@ -1,2 +1,3 @@
- first int
- second int
-+third int
-`
-	const currentDiff = `diff --git a/fields.txt b/fields.txt
---- a/fields.txt
-+++ b/fields.txt
-@@ -1,2 +1,3 @@
--first int
-+first  int
- second int
-+third int
-`
-	const incomplete = `diff --git a/fields.txt b/fields.txt
---- a/fields.txt
-+++ b/fields.txt
-@@ -1,3 +1,3 @@
--first int
-+first  int
- second int
-`
+	const header = "diff --git a/f b/f\n--- a/f\n+++ b/f\n"
+	const prior = header + "@@ -1,2 +1,2 @@\n a\n-b\n+reviewed\n"
 	for _, tc := range []struct {
-		name    string
-		current string
-		section string
-		want    string
+		name, current string
 	}{
-		{"common trailing context", currentDiff, incomplete, incomplete + " third int\n"},
-		{"different trailing content", strings.ReplaceAll(currentDiff, "third int", "other int"), incomplete, ""},
-		{"incorrect emitted content", currentDiff, strings.ReplaceAll(incomplete, "+first  int", "+wrong int"), ""},
-		{"missing post-image evidence", currentDiff, strings.ReplaceAll(incomplete, "-1,3 +1,3", "-1,4 +1,4"), ""},
-		{"unequal missing counts", currentDiff, strings.ReplaceAll(incomplete, "-1,3 +1,3", "-1,3 +1,2"), ""},
-		{"spurious no-newline marker", currentDiff, incomplete + `\ No newline at end of file` + "\n", ""},
+		{"conflicting base line", header + "@@ -1,2 +1,2 @@\n other\n-b\n+current\n"},
+		{"conflicting final newline", header + "@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+current\n"},
+		{"inconsistent new coordinates", header + "@@ -1,2 +8,2 @@\n a\n-b\n+current\n"},
+		{"overlapping hunks", header + "@@ -1,2 +1,2 @@\n a\n-b\n+current\n@@ -2 +2 @@\n-b\n+again\n"},
+		{"truncated hunk", header + "@@ -1,3 +1,3 @@\n a\n-b\n+current\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			prior, err := parseForInterdiff(priorDiff)
-			require.NoError(t, err)
-			current, err := parseForInterdiff(tc.current)
-			require.NoError(t, err)
-			got := restoreOmittedCommonLines(tc.section, prior[0], current[0])
-			if tc.want == "" {
-				require.Equal(t, tc.section, got)
-				return
-			}
-			require.Equal(t, tc.want, got)
-			_, err = parseForInterdiff(got)
-			require.NoError(t, err)
+			result, err := Interdiff(prior, tc.current)
+			require.Error(t, err)
+			require.Empty(t, result)
 		})
 	}
 }
 
-// The interdiff library omits a replacement shared by both reviews when it is
-// followed by a differing change in the same hunk, and drops the marker of a
-// final line without a trailing newline.
-func TestRestoreOmittedCommonLinesInteriorAndFinalNewline(t *testing.T) {
+func TestInterdiffCopyInformation(t *testing.T) {
 	t.Parallel()
 
-	const header = `diff --git a/f.txt b/f.txt
---- a/f.txt
-+++ b/f.txt
-`
-	const marker = `\ No newline at end of file` + "\n"
-	priorDiff := header + `@@ -1,3 +1,3 @@
--a
-+a2
- x
--b
-+b2
-`
-	currentDiff := header + `@@ -1,3 +1,4 @@
--a
-+a2
- x
--b
-+b3
-+b4
-`
-	omittedInterior := header + `@@ -1,3 +1,4 @@
- x
--b2
-+b3
-+b4
-`
-	repaired := header + `@@ -1,3 +1,4 @@
- a2
- x
--b2
-+b3
-+b4
-`
-	for _, tc := range []struct {
-		name    string
-		prior   string
-		current string
-		section string
-		want    string
-	}{
-		{"omitted interior shared line", priorDiff, currentDiff, omittedInterior, repaired},
-		{"omitted markers on final lines", priorDiff + marker, currentDiff + marker, omittedInterior,
-			header + "@@ -1,3 +1,4 @@\n a2\n x\n-b2\n" + marker + "+b3\n+b4\n" + marker},
-		{"marker only on prior final line", priorDiff + marker, currentDiff, omittedInterior,
-			header + "@@ -1,3 +1,4 @@\n a2\n x\n-b2\n" + marker + "+b3\n+b4\n"},
-		{"context line whose newline ending differs", priorDiff + marker,
-			header + "@@ -1,3 +1,3 @@\n-a\n+a2\n-x\n+x2\n-b\n+b2\n",
-			header + "@@ -1,3 +1,3 @@\n-x\n+x2\n b2\n", ""},
-		{"omitted line differs between reviews", strings.ReplaceAll(priorDiff, "+a2", "+a1"), currentDiff, omittedInterior, ""},
-		// The prior review never touched line 1, so its content is borrowed from
-		// the current review's pre-image, and emitted content must still match it.
-		{"borrowed base line disagrees with emitted content",
-			header + "@@ -2,2 +2,2 @@\n x\n-b\n+b2\n",
-			header + "@@ -1,3 +1,4 @@\n-a\n+a2\n x\n-b\n+b3\n+b4\n",
-			header + "@@ -1,3 +1,4 @@\n other\n x\n-b2\n+b3\n+b4\n", ""},
-		{"borrowed base line fills an omitted line",
-			header + "@@ -2,2 +2,2 @@\n x\n-b\n+b2\n",
-			header + "@@ -1,3 +1,3 @@\n a\n x\n-b\n+b3\n",
-			header + "@@ -1,3 +1,3 @@\n x\n-b2\n+b3\n",
-			header + "@@ -1,3 +1,3 @@\n a\n x\n-b2\n+b3\n"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			prior, err := parseForInterdiff(tc.prior)
-			require.NoError(t, err)
-			current, err := parseForInterdiff(tc.current)
-			require.NoError(t, err)
-			got := restoreOmittedCommonLines(tc.section, prior[0], current[0])
-			if tc.want == "" {
-				require.Equal(t, tc.section, got)
-				return
-			}
-			require.Equal(t, tc.want, got)
-			_, err = parseForInterdiff(got)
-			require.NoError(t, err)
-		})
-	}
+	repo := newInterdiffFuzzRepo(t)
+	file := interdiffFuzzFile{mode: "100644", content: "not present in a pure copy header\n"}
+	base := repo.tree(interdiffFuzzTree{"original": file})
+	reviewed := repo.tree(interdiffFuzzTree{"original": file, "copy": file})
+	empty := repo.tree(interdiffFuzzTree{})
+	prior := repo.git("", "diff-tree", "-r", "-p", "--no-commit-id", "--find-copies-harder", "-C", base, reviewed)
+	require.Contains(t, prior, "copy from original")
+	require.NotContains(t, prior, file.content)
+
+	unchanged, err := Interdiff(prior, prior)
+	require.NoError(t, err)
+	require.Empty(t, unchanged)
+
+	// Removing the copy requires bytes absent from both input patches.
+	unavailable, err := Interdiff(prior, "")
+	require.Error(t, err)
+	require.Empty(t, unavailable)
+
+	// A deletion in the other review reveals the complete base content.
+	current := repo.git("", "diff-tree", "-r", "-p", "--no-commit-id", base, empty)
+	result, err := Interdiff(prior, current)
+	require.NoError(t, err)
+	repo.assertApplies(reviewed, empty, result)
 }
 
 // Changes git cannot express as hunks (empty files, mode-only changes, binary
@@ -661,7 +568,7 @@ func TestInterdiffHunklessSections(t *testing.T) {
 			t.Parallel()
 			result, err := Interdiff(tt.prior, tt.current)
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, result)
+			assertEquivalentReviewPatch(t, tt.want, result)
 		})
 	}
 }

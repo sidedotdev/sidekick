@@ -2072,7 +2072,7 @@ func (s *IddWorkflowTestSuite) commitIntentWorkflow(disableHumanInTheLoop bool) 
 		dCtx.SetLLMConfig(common.LLMConfig{
 			Defaults: []common.ModelConfig{{Provider: "test", Model: "default-model"}},
 			UseCaseConfigs: map[string][]common.ModelConfig{
-				common.CodingKey: {{Provider: "test", Model: "coding-model"}},
+				common.CommitKey: {{Provider: "test", Model: "commit-model"}},
 			},
 		})
 		return commitIntent(dCtx, "My Intent", false)
@@ -2169,7 +2169,7 @@ func (s *IddWorkflowTestSuite) TestCommitIntentGeneratesIntentSubject() {
 	s.Require().Len(options, 1)
 	s.Equal(llm.ToolChoiceTypeTool, options[0].ToolChoice.Type)
 	s.Equal(commitMessageTool.Name, options[0].ToolChoice.Name)
-	s.Equal("coding-model", options[0].ModelConfig.Model)
+	s.Equal("commit-model", options[0].ModelConfig.Model)
 	s.Require().Len(prompts, 1)
 	s.Contains(prompts[0], stagedDiff)
 }

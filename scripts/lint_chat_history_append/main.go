@@ -134,10 +134,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to initialize LSP client: %v\n", err)
 		os.Exit(1)
 	}
+	defer client.Close()
 
 	violations, err := findViolations(ctx, client, cwd, appendTargets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: lint check could not complete: %v\n", err)
+		_ = client.Close()
 		os.Exit(1)
 	}
 	if len(violations) > 0 {
@@ -151,6 +153,7 @@ func main() {
 			"\n%d violation(s) found. Use persisted_ai.AppendChatHistory for appends and keep hydrated-only llm2 message reads inside activities.\n",
 			len(violations),
 		)
+		_ = client.Close()
 		os.Exit(1)
 	}
 

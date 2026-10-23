@@ -89,12 +89,12 @@ describe('SubflowContainer', () => {
     }
 
     const wrapper = mount(SubflowContainer, {
-      props: { subflowTree, defaultExpanded: true }
+      props: { subflowTree, defaultExpanded: true, latestActionId: flowAction.id }
     })
 
     // Verify initial rendered content shows "started" indicator
     expect(wrapper.text()).toContain('...')
-    // The FlowActionItem should be expanded (last child with defaultExpanded=true)
+    // The latest action should be expanded.
     expect(wrapper.findComponent(FlowActionItem).classes()).toContain('expanded-action')
     // Verify params are rendered in the DOM
     expect(wrapper.text()).toContain('param1')

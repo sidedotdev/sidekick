@@ -178,7 +178,7 @@ func RunWithSSHTransportRecovery(ctx context.Context, e Env, operation func() er
 		}
 		recovered, recoveryErr := recovery.recover(ctx, err)
 		if recoveryErr != nil {
-			return fmt.Errorf("%w; failed to recover SSH transport: %v", err, recoveryErr)
+			return wrapDockerOperationError("failed to recover SSH transport", fmt.Errorf("%w: %w", err, recoveryErr))
 		}
 		if !recovered {
 			return err
@@ -324,6 +324,7 @@ type EnvRunCommandInput struct {
 	// Must be set to true by the wake/hibernate implementations themselves to
 	// avoid infinite recursion.
 	SkipWaking bool `json:"skipWaking,omitempty"`
+	activity   *activityRequest
 }
 
 type EnvRunCommandOutput = unix.RunCommandActivityOutput
@@ -349,6 +350,7 @@ type DevPodEnv struct {
 	// PortForwards are host ports reverse-forwarded into the container over
 	// the SSH connection used to run commands.
 	PortForwards []common.PortForwardConfig `json:"portForwards,omitempty"`
+	EnvVars      map[string]string          `json:"envVars,omitempty"`
 	Hibernated   bool                       `json:"hibernated,omitempty"`
 }
 
@@ -760,11 +762,18 @@ func (e *DevPodEnv) GetWorkingDirectory() string {
 // exec request: argv, cwd and env cross the channel verbatim, so no shell
 // command line is ever assembled from user-controlled input.
 func agentExecRequest(workingDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) sideagent.ExecRequest {
-	return sideagent.ExecRequest{
-		Dir:  filepath.Join(workingDir, input.RelativeWorkingDir),
-		Argv: append([]string{input.Command}, input.Args...),
-		Env:  append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards)...),
+	req := sideagent.ExecRequest{
+		Dir:       filepath.Join(workingDir, input.RelativeWorkingDir),
+		Argv:      append([]string{input.Command}, input.Args...),
+		Env:       append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards)...),
+		TouchPath: remoteActivityMarker,
 	}
+	if input.activity != nil {
+		req.Argv = nil
+		req.ActivityLease = true
+		req.OnReady = input.activity.admit
+	}
+	return req
 }
 
 // withRemoteReadLock makes req run under the per-worktree shared hibernation
@@ -870,14 +879,14 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 }
 
 func (e *DevPodEnv) runCommandInner(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
-	req := agentExecRequest(e.WorkingDirectory, e.GetType(), e.PortForwards, input)
+	req := e.commandRequest(input)
 	if !input.SkipWaking {
 		req = withRemoteReadLock(req, e.WorkingDirectory)
 	}
 
 	// Commands run over SSH into the container ultimately depend on the docker
-	// engine; a hung engine makes them block forever. Guard so such a hang is
-	// detected and the engine restarted instead of stalling the activity.
+	// engine; a hung engine makes them block forever. Surface the failure
+	// rather than stalling the activity.
 	var output EnvRunCommandOutput
 	err := withDockerEngineWatchdog(ctx, func(ctx context.Context) error {
 		resp, execErr := runRemoteCommand(ctx, e.sftpConnKey(), e.PortForwards, e, req)
@@ -1232,7 +1241,8 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 	// Only SSH client diagnostics kept separate from remote output can prove
 	// the command never started, which is what makes re-running it safe.
 	transportFailed := func() bool {
-		return err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
+		return (input.activity == nil || !input.activity.admitted.Load()) &&
+			err == nil && output.ExitStatus == 255 && isModalSSHTransportFailure(diagnostics)
 	}
 	if !transportFailed() {
 		return output, "", err
@@ -1274,6 +1284,11 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 			if round < maxModalRecoveryRounds && !recovery.repaired && isModalSSHAuthFailure(diagnostics) {
 				continue
 			}
+		}
+
+		if input.activity != nil {
+			apiErr = fmt.Errorf("activity leases require an SSH agent channel: %s", diagnostics)
+			continue
 		}
 
 		// SSH is preferred for its multiplexed connection, but the tunnel
@@ -1857,6 +1872,19 @@ type EnvRunCommandActivityInput struct {
 	SkipWaking         bool     `json:"skipWaking,omitempty"`
 }
 
+// CommandObserver is told about every command run through Activities once the
+// command itself has finished, whatever its outcome. A command abandoned by a
+// canceled activity is reported when it eventually finishes, so ctx may
+// already be canceled. Implementations must return promptly.
+type CommandObserver interface {
+	CommandFinished(ctx context.Context, envContainer EnvContainer)
+}
+
+type Activities struct {
+	// CommandObserver may be nil, leaving commands unobserved.
+	CommandObserver CommandObserver
+}
+
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
 
 // maxActivityOutputBytes caps individual stdout/stderr fields to stay within
@@ -1896,8 +1924,16 @@ func GetEnvironmentInfoActivity(ctx context.Context, input GetEnvironmentInfoInp
 	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
 }
 
-// EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
-func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+// EnvRunCommandActivity is the registered Temporal activity for RunCommand.
+// Its name is the historical activity type name that workflows schedule and
+// existing histories record; Temporal's WorkflowReplayer cannot apply
+// registration aliases, so the scheduled method name must match it.
+func (a *Activities) EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
+	return a.RunCommand(ctx, input)
+}
+
+// RunCommand runs a command in the environment contained in the provided EnvContainer.
+func (a *Activities) RunCommand(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
 	type result struct {
 		output EnvRunCommandActivityOutput
 		err    error
@@ -1912,6 +1948,9 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 			EnvVars:            input.EnvVars,
 			SkipWaking:         input.SkipWaking,
 		})
+		if a.CommandObserver != nil {
+			a.CommandObserver.CommandFinished(ctx, input.EnvContainer)
+		}
 		resultCh <- result{output: out, err: err}
 	}()
 

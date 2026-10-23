@@ -71,7 +71,7 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 		if !opts.legacy && node.ChildCount() > 0 {
 			body := node.Child(0)
 			bodyType := body.Kind()
-			if bodyType == "list" || bodyType == "pipeline" {
+			if bodyType == "list" || bodyType == "pipeline" || bodyType == "negated_command" {
 				// Recurse into the compound structure to extract individual commands
 				extractCommandsFromNode(body, sourceCode, commands, opts)
 				// Also check for command substitutions in redirections
@@ -162,17 +162,8 @@ func appendBackgroundIfPresent(node *sitter.Node, sourceCode []byte, cmdText str
 	return cmdText
 }
 
-// addCommand records cmdText along with the commands it runs. An xargs
-// invocation is replaced by the command it runs, since xargs itself has no
-// permission-relevant effect. When that command can't be determined, the xargs
-// invocation itself is recorded so it can't be auto-approved.
+// addCommand records cmdText along with the commands it runs.
 func addCommand(cmdText string, commands *[]string, opts extractOpts) {
-	if !opts.legacy {
-		if innerCmd, ok := xargsWrappedCommand(parseCommandParts(cmdText)); ok {
-			addCommand(innerCmd, commands, opts)
-			return
-		}
-	}
 	*commands = append(*commands, cmdText)
 	handleSpecialCommands(cmdText, commands, opts)
 }
@@ -195,9 +186,10 @@ func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts)
 	case "exec", "lima":
 		handleExecCommand(parts, commands, opts)
 	case "xargs":
-		// Outside legacy mode, addCommand already unwrapped xargs if it could.
 		if opts.legacy {
 			handleXargsCommandLegacy(parts, commands)
+		} else if innerCmd, ok := xargsWrappedCommand(parts); ok {
+			addCommand(innerCmd, commands, opts)
 		}
 
 	// Privilege/user context wrappers
@@ -223,6 +215,10 @@ func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts)
 		handleWrapperWithPositionalArg(parts, commands, map[string]bool{"-k": true, "--kill-after": true, "-s": true, "--signal": true}, 1, opts)
 	case "stdbuf":
 		handleWrapperWithFlags(parts, commands, map[string]bool{"-i": true, "-o": true, "-e": true, "--input": true, "--output": true, "--error": true}, opts)
+	case "sandbox-exec", "/usr/bin/sandbox-exec":
+		if !opts.legacy {
+			handleWrapperWithFlags(parts, commands, map[string]bool{"-f": true, "-n": true, "-p": true, "-D": true}, opts)
+		}
 
 	// Remote/parallel execution
 	case "ssh":
@@ -236,7 +232,7 @@ func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts)
 
 	// Shell builtins
 	case "command":
-		handleSimpleWrapper(parts, commands, opts)
+		handleCommandBuiltin(parts, commands, opts)
 	case "builtin":
 		handleSimpleWrapper(parts, commands, opts)
 
@@ -569,8 +565,35 @@ func unquoteString(s string) string {
 	return s
 }
 
+// handleCommandBuiltin handles the `command` builtin, which runs its operand
+// unless -v or -V is given, in which case it only describes how the operand
+// would be resolved.
+func handleCommandBuiltin(parts []string, commands *[]string, opts extractOpts) {
+	if opts.legacy {
+		handleSimpleWrapper(parts, commands, opts)
+		return
+	}
+	i := 1
+	for ; i < len(parts); i++ {
+		arg := parts[i]
+		if arg == "--" {
+			i++
+			break
+		}
+		if len(arg) < 2 || arg[0] != '-' {
+			break
+		}
+		if strings.ContainsAny(arg[1:], "vV") {
+			return
+		}
+	}
+	if i < len(parts) {
+		*commands = append(*commands, strings.Join(parts[i:], " "))
+	}
+}
+
 // handleSimpleWrapper handles commands where everything after the command name
-// is the wrapped command (e.g., nohup, doas, command, builtin, time, ltrace)
+// is the wrapped command (e.g., nohup, doas, builtin, time, ltrace)
 func handleSimpleWrapper(parts []string, commands *[]string, opts extractOpts) {
 	if len(parts) < 2 {
 		return

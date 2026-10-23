@@ -72,7 +72,8 @@ func runCommitSubflowWorkflow(t *testing.T, statuses []string, limits *common.Ag
 		dCtx.SetLLMConfig(common.LLMConfig{
 			Defaults: []common.ModelConfig{{Provider: "test", Model: "default-model"}},
 			UseCaseConfigs: map[string][]common.ModelConfig{
-				common.CodingKey: {{Provider: "test", Model: "coding-model"}},
+				common.CodeLocalizationKey: {{Provider: "test", Model: "localization-model"}},
+				common.CodingKey:           {{Provider: "test", Model: "coding-model"}},
 			},
 		})
 		if err := SetupModelConfigHandlers(dCtx); err != nil {
@@ -195,7 +196,7 @@ func TestCommitPendingWorkLoopsUntilTreeIsClean(t *testing.T) {
 	for _, options := range run.streamOptions {
 		assert.Equal(t, []string{runCommandTool.Name, getHelpOrInputTool.Name, commitDoneTool.Name}, toolNames(options.Tools))
 		assert.Equal(t, llm.ToolChoiceTypeRequired, options.ToolChoice.Type)
-		assert.Equal(t, "coding-model", options.ModelConfig.Model, "commit model falls back to the coding model")
+		assert.Equal(t, "localization-model", options.ModelConfig.Model, "commit model falls back to the code localization model")
 	}
 
 	var prompt string
