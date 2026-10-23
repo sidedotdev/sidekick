@@ -1,6 +1,18 @@
 <template>
   <form ref="formRef" tabindex="-1" v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
-    <div v-if="flowAction.actionParams.requestContent && flowAction.actionParams.requestKind !== 'provider_auth'" class="markdown-container">
+    <div v-if="isRateLimited" class="rate-limit-notice">
+      <p>{{ rateLimitCopy }}</p>
+      <details v-if="flowAction.actionParams.requestContent" class="markdown-container">
+        <summary>Details</summary>
+        <vue-markdown
+          :source="flowAction.actionParams.requestContent"
+          :options="{ breaks: true }"
+          :plugins="markdownPlugins"
+          class="markdown"
+        />
+      </details>
+    </div>
+    <div v-else-if="flowAction.actionParams.requestContent && flowAction.actionParams.requestKind !== 'provider_auth'" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
       </button>
@@ -222,6 +234,8 @@ import PermissionEvaluationDetails from './PermissionEvaluationDetails.vue';
 import ProviderAuthRequest from './ProviderAuthRequest.vue';
 import { providerAuthMethodLabel, type ProviderAuthMethod } from '../lib/providerAuth';
 import { registerGlobalShortcut, unregisterGlobalShortcut } from '../lib/globalShortcutRegistry';
+import { isRateLimitRequest, rateLimitMessage } from '../lib/retryAttempts';
+import { useNow } from '@vueuse/core';
 
 interface UserResponse {
   content?: string;
@@ -251,6 +265,11 @@ const errorMessage = ref('');
 const textareaRef = ref<{ focus: () => void } | null>(null);
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const hasResponseText = computed(() => responseContent.value.trim() !== '');
+const isRateLimited = computed(() => isRateLimitRequest(props.flowAction));
+// Refreshes periodically so a "retry in about N minutes" message stays honest
+// while the request sits on screen.
+const now = useNow({ interval: 30_000 });
+const rateLimitCopy = computed(() => rateLimitMessage(props.flowAction, now.value));
 const devMode = computed(() => import.meta.env.MODE === 'development');
 const showPermissionEvaluation = computed(() =>
   devMode.value && !!props.flowAction.actionParams.permissionEvaluation && !!props.flowAction.actionParams.command
@@ -822,6 +841,17 @@ label[for="targetBranch"] {
 .markdown-container {
   position: relative;
   --level: v-bind(level);
+}
+
+.rate-limit-notice p {
+  margin: 0.5rem 0;
+  font-weight: 500;
+}
+
+.rate-limit-notice summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--color-text-2);
 }
 
 .copy-button {
