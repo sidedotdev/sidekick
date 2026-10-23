@@ -620,19 +620,31 @@ func MeasureLlm2Messages(provider string, messages []llm2.Message) int {
 	return total
 }
 
-func hasHumanContext(block llm2.ContentBlock) bool {
-	switch GetContextType(block) {
+// HumanContextType returns the context type of human-authored content in the
+// block, including content nested in tool results, or "" when there is none.
+func HumanContextType(block llm2.ContentBlock) string {
+	switch contextType := GetContextType(block); contextType {
 	case ContextTypeInitialInstructions, ContextTypeUserFeedback:
-		return true
+		return contextType
 	}
 	if block.ToolResult != nil {
 		for _, nested := range block.ToolResult.Content {
-			if hasHumanContext(nested) {
-				return true
+			if contextType := HumanContextType(nested); contextType != "" {
+				return contextType
 			}
 		}
 	}
-	return false
+	return ""
+}
+
+func hasHumanContext(block llm2.ContentBlock) bool {
+	return HumanContextType(block) != ""
+}
+
+// AlwaysRetainedBlocks reports, per message and content block, which blocks
+// history management keeps regardless of the length budget.
+func AlwaysRetainedBlocks(messages []llm2.Message) [][]bool {
+	return protectedHistoryBlocks(messages)
 }
 
 func protectedHistoryBlocks(messages []llm2.Message) [][]bool {
