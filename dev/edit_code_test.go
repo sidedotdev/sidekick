@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -13,6 +12,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
+	"sidekick/repotools"
 	"sidekick/secret_manager"
 	"sidekick/utils"
 	"strings"
@@ -118,13 +118,13 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 		&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "user"}, nil,
 	).Maybe()
 	s.env.OnActivity(cha.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).Return(
-		func(context.Context, *persisted_ai.ChatHistoryContainer) ([]tree_sitter.CodeBlock, error) {
+		func(context.Context, *persisted_ai.ChatHistoryContainer) ([]repotools.CodeBlock, error) {
 			s.extractVisibleCodeBlocksCalls++
 			if s.extractVisibleCodeBlocksFailures > 0 {
 				s.extractVisibleCodeBlocksFailures--
 				return nil, errors.New("transient extraction failure")
 			}
-			return []tree_sitter.CodeBlock{}, nil
+			return []repotools.CodeBlock{}, nil
 		},
 	).Maybe()
 

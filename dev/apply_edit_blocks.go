@@ -13,6 +13,7 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
+	"sidekick/repotools"
 	"slices"
 	"sort"
 	"strconv"
@@ -118,15 +119,13 @@ func (input ApplyEditBlockActivityInput) goBuildCheckEnabled() bool {
 // needed for backcompat, avoiding non-deterministic temporal workflow runs
 func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
 	da := DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: languageName,
 				}
 
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 	defer da.LSPActivities.Close()
 	return da.ApplyEditBlocks(ctx, input)
@@ -920,7 +919,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		// visible stuff is very verbose, so we leave it out of the flow events.
 		// they are very necessary in the activity though.
 		"editBlocks": utils.Map(editBlocks, func(block EditBlock) EditBlock {
-			block.VisibleCodeBlocks = []tree_sitter.CodeBlock{}
+			block.VisibleCodeBlocks = []repotools.CodeBlock{}
 			block.VisibleFileRanges = []FileRange{}
 			return block
 		}),
@@ -1022,7 +1021,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		fullReports = reports
 		trackedReports := utils.Map(reports, func(report ApplyEditBlockReport) ApplyEditBlockReport {
 			for i := range report.OriginalEditBlocks {
-				report.OriginalEditBlocks[i].VisibleCodeBlocks = []tree_sitter.CodeBlock{}
+				report.OriginalEditBlocks[i].VisibleCodeBlocks = []repotools.CodeBlock{}
 				report.OriginalEditBlocks[i].VisibleFileRanges = []FileRange{}
 			}
 			return report

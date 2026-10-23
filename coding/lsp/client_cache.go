@@ -1,84 +1,41 @@
 package lsp
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"time"
 
+	"sidekick/coding/lsp/core"
 	"sidekick/env"
 )
 
-const defaultClientIdleTimeout = time.Minute
-const defaultClientMaxAge = 5 * time.Minute
-
-func (la *LSPActivities) gate() chan struct{} {
-	la.cacheOnce.Do(func() {
-		la.clientGate = make(chan struct{}, 1)
-		la.clientGate <- struct{}{}
-		if la.idleTimeout == 0 {
-			la.idleTimeout = defaultClientIdleTimeout
-		}
-		if la.maxClientAge == 0 {
-			la.maxClientAge = defaultClientMaxAge
-		}
-	})
-	return la.clientGate
-}
-
-func clientCacheKey(baseDir, lang string, container *env.EnvContainer) (string, error) {
-	key := baseDir + ":" + lang
+// clientScope keeps remote environments sharing a directory path from
+// sharing a language server.
+func clientScope(baseDir string, container *env.EnvContainer) (core.ClientScope, error) {
+	scope := core.ClientScope{
+		BaseDir: baseDir,
+		Configure: func(client LSPClient) {
+			if client, ok := client.(interface{ SetEnvContainer(*env.EnvContainer) }); ok {
+				client.SetEnvContainer(container)
+			}
+		},
+	}
 	if _, remote := sshCapableEnv(container); !remote {
-		return key, nil
+		return scope, nil
 	}
 	encoded, err := json.Marshal(container)
 	if err != nil {
-		return "", fmt.Errorf("identify analysis environment: %w", err)
+		return core.ClientScope{}, fmt.Errorf("identify analysis environment: %w", err)
 	}
-	return fmt.Sprintf("%s:%x", key, sha256.Sum256(encoded)), nil
+	scope.Identity = fmt.Sprintf(":%x", sha256.Sum256(encoded))
+	return scope, nil
 }
 
-func closeClient(client LSPClient) error {
-	if closer, ok := client.(io.Closer); ok {
-		return closer.Close()
+func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string, lang string, envContainer *env.EnvContainer) (context.Context, LSPClient, func(), error) {
+	scope, err := clientScope(baseDir, envContainer)
+	if err != nil {
+		return ctx, nil, nil, err
 	}
-	return nil
-}
-
-// The gate is held for the entire operation, including compound document sync.
-// This bounds live workspace graphs without terminating an in-flight request.
-func (la *LSPActivities) closeClients() error {
-	var result error
-	for key, client := range la.InitializedClients {
-		result = errors.Join(result, closeClient(client))
-		delete(la.InitializedClients, key)
-	}
-	return result
-}
-
-func (la *LSPActivities) releaseClient() {
-	generation := la.idleGeneration
-	la.idleTimer = time.AfterFunc(la.idleTimeout, func() {
-		gate := la.gate()
-		<-gate
-		defer func() { gate <- struct{}{} }()
-		if generation == la.idleGeneration {
-			_ = la.closeClients()
-		}
-	})
-	la.clientGate <- struct{}{}
-}
-
-func (la *LSPActivities) Close() error {
-	gate := la.gate()
-	<-gate
-	defer func() { gate <- struct{}{} }()
-	la.closed = true
-	la.idleGeneration++
-	if la.idleTimer != nil {
-		la.idleTimer.Stop()
-	}
-	return la.closeClients()
+	return lspa.Acquire(ctx, scope, lang)
 }

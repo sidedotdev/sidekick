@@ -7,20 +7,12 @@ install *targets:
 
     (cd frontend && bun ci && bun run build)
 
-    cache_dir="${SIDE_CACHE_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/sidekick}"
-
-    # The file list must match common/agent_binary.go's agentSourceFiles.
-    agent_hash="$(cat cmd/side-agent/main.go sideagent/client.go sideagent/gc.go sideagent/protocol.go sideagent/server.go sideagent/sftp.go | shasum -a 256 | cut -c1-12)"
-    agent_dir="$cache_dir/agent-binaries"
-    mkdir -p "$agent_dir"
+    agent_hash="$(go run ./scripts/build_agent -identity)"
 
     for pair in "$(go env GOOS)-$(go env GOARCH)" {{targets}}; do
         target_os="${pair%%-*}"
         target_arch="${pair##*-}"
-        dest="$agent_dir/side-agent-${target_os}-${target_arch}-${agent_hash}"
-        if [[ ! -f "$dest" ]]; then
-            CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -ldflags="-s -w" -o "$dest" ./cmd/side-agent
-        fi
+        go run ./scripts/build_agent -os "$target_os" -arch "$target_arch"
     done
 
     version="$(git rev-parse --short HEAD)"

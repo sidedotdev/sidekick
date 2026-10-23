@@ -3,6 +3,7 @@ package dev
 import (
 	"context"
 	"errors"
+	"sidekick/repotools"
 	"strings"
 	"testing"
 
@@ -13,7 +14,6 @@ import (
 
 	"sidekick/coding"
 	"sidekick/coding/git"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -130,7 +130,7 @@ func (s *CriteriaFulfillmentDiffTestSuite) mockCriteriaReviewer() *[]string {
 			return &persisted_ai.ManageOutput{ChatHistory: input.ChatHistory}, nil
 		}).Maybe()
 	s.env.OnActivity(historyActivities.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).
-		Return([]tree_sitter.CodeBlock{}, nil).Maybe()
+		Return([]repotools.CodeBlock{}, nil).Maybe()
 
 	var llmActivities *persisted_ai.Llm2Activities
 	s.env.OnActivity(llmActivities.Stream, mock.Anything, mock.Anything).

@@ -9,11 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sidekick/coding/lsp"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
+	"sidekick/repotools"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -224,14 +224,12 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 
 	for _, tt := range tests {
 		devActivities := &DevActivities{
-			LSPActivities: &lsp.LSPActivities{
-				LSPClientProvider: func(languageName string) lsp.LSPClient {
+			LSPActivities: lsp.NewLSPActivities(
+				func(languageName string) lsp.LSPClient {
 					return &lsp.Jsonrpc2LSPClient{
 						LanguageName: languageName,
 					}
-				},
-				InitializedClients: map[string]lsp.LSPClient{},
-			},
+				}),
 		}
 
 		t.Run(tt.name, func(t *testing.T) {
@@ -492,14 +490,12 @@ func getValue() int {
 
 	for _, tt := range tests {
 		devActivities := &DevActivities{
-			LSPActivities: &lsp.LSPActivities{
-				LSPClientProvider: func(languageName string) lsp.LSPClient {
+			LSPActivities: lsp.NewLSPActivities(
+				func(languageName string) lsp.LSPClient {
 					return &lsp.Jsonrpc2LSPClient{
 						LanguageName: languageName,
 					}
-				},
-				InitializedClients: map[string]lsp.LSPClient{},
-			},
+				}),
 		}
 
 		t.Run(tt.name, func(t *testing.T) {
@@ -560,12 +556,10 @@ func TestApplyEditBlocks_StagesAppliedEdits(t *testing.T) {
 		Env: &env.LocalEnv{WorkingDirectory: tmpDir},
 	}
 	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	// one block per file, so each goes through the sequential (non-batch) path
@@ -650,12 +644,10 @@ func TestApplyEditBlocks_GitIgnoredPath(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(tmpDir, existingPath), []byte("first\nsecond\n"), 0644))
 
 			da := &DevActivities{
-				LSPActivities: &lsp.LSPActivities{
-					LSPClientProvider: func(languageName string) lsp.LSPClient {
+				LSPActivities: lsp.NewLSPActivities(
+					func(languageName string) lsp.LSPClient {
 						return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
-					},
-					InitializedClients: map[string]lsp.LSPClient{},
-				},
+					}),
 			}
 
 			reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
@@ -729,14 +721,12 @@ func TestApplyEditBlockActivity_deleteStagesDeletion(t *testing.T) {
 	}
 
 	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: languageName,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
@@ -1349,14 +1339,12 @@ func main() {
 	}
 
 	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: languageName,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	reports, err := devActivities.ApplyEditBlocks(
@@ -1441,14 +1429,12 @@ func getCommitHashes(t *testing.T, dir string, filePath string) []string {
 func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 	t.Parallel()
 	da := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: languageName,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	// Scenario A: New File
@@ -1732,14 +1718,12 @@ func TestApplyEditBlocks_checksGoEdits(t *testing.T) {
 			}
 
 			devActivities := &DevActivities{
-				LSPActivities: &lsp.LSPActivities{
-					LSPClientProvider: func(languageName string) lsp.LSPClient {
+				LSPActivities: lsp.NewLSPActivities(
+					func(languageName string) lsp.LSPClient {
 						return &lsp.Jsonrpc2LSPClient{
 							LanguageName: languageName,
 						}
-					},
-					InitializedClients: map[string]lsp.LSPClient{},
-				},
+					}),
 			}
 
 			reports, err := devActivities.ApplyEditBlocks(
@@ -1835,14 +1819,12 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 	}
 
 	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: languageName,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	reports, activityErr := devActivities.ApplyEditBlocks(context.Background(), input)
@@ -1914,14 +1896,12 @@ func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
 	}
 
 	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: languageName,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	reports, activityErr := devActivities.ApplyEditBlocks(context.Background(), input)
@@ -2102,7 +2082,7 @@ func TestFindAcceptableMatchWithMissingVisibleFileRangesButWeFigureItOut(t *test
 		EditType:          "update",
 		SequenceNumber:    2,
 		VisibleFileRanges: []FileRange{},
-		VisibleCodeBlocks: []tree_sitter.CodeBlock{
+		VisibleCodeBlocks: []repotools.CodeBlock{
 			{
 				FilePath: tmpFile.Name(),
 				Symbol:   "RST",
@@ -2183,14 +2163,12 @@ func DoSomething() {
 		EditBlocks: editBlocks,
 	}
 	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: languageName,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	// get LSP server to have bad state (text doc opened and never closed)
@@ -2308,12 +2286,10 @@ func TestApplyEditBlocks_BatchByFile_AllPass(t *testing.T) {
 	}
 
 	da := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
@@ -2414,12 +2390,10 @@ func TestApplyEditBlocks_BatchByFile_SomeFailCheck(t *testing.T) {
 	}
 
 	da := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	// Check command: reject any file containing "INVALID"
@@ -2524,12 +2498,10 @@ func TestApplyEditBlocks_BatchByFile_ParallelExecution(t *testing.T) {
 	}
 
 	da := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
@@ -2586,12 +2558,10 @@ func TestApplyEditBlocks_BatchByFile_SingleBlockPerFile_NoFallback(t *testing.T)
 	}
 
 	da := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	// With only a single block per file, batch mode is not attempted (len > 1 check).

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sidekick/coding"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
 	sidekick_env "sidekick/env"
@@ -12,6 +11,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
+	"sidekick/repotools"
 	"sidekick/secret_manager"
 	"sidekick/utils"
 	"strings"
@@ -352,7 +352,7 @@ func registerContextGatherCallSiteActivities(
 		}).
 		Maybe()
 	env.OnActivity(historyActivities.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).
-		Return([]tree_sitter.CodeBlock{}, nil).
+		Return([]repotools.CodeBlock{}, nil).
 		Maybe()
 
 	localizationCalls := 0

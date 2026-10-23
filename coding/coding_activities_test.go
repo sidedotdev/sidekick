@@ -821,14 +821,13 @@ func SecondFunc() {
 			}
 
 			ca := &CodingActivities{
-				LSPActivities: &lsp.LSPActivities{
-					LSPClientProvider: func(language string) lsp.LSPClient {
+				LSPActivities: lsp.NewLSPActivities(
+					func(language string) lsp.LSPClient {
 						return &lsp.Jsonrpc2LSPClient{
 							LanguageName: language,
 						}
-					},
-					InitializedClients: map[string]lsp.LSPClient{},
-				},
+					}),
+
 				TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 			}
 
@@ -868,12 +867,11 @@ func TestBulkGetSymbolDefinitionsRunActivityScriptRegression(t *testing.T) {
 	require.NoError(t, err)
 
 	ca := &CodingActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(language string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(language string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: language}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
+
 		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 	}
 
@@ -911,11 +909,10 @@ func unrelated() {
 	require.NoError(t, err)
 
 	ca := &CodingActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(language string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(language string) lsp.LSPClient {
 				return lsp.MockLSPClient{
-					// mimics a language server resolving a position to a
-					// package clause rather than the requested symbol
+
 					TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
 						return []lsp.Location{{
 							URI: "file://" + otherFilePath,
@@ -926,9 +923,8 @@ func unrelated() {
 						}}, nil
 					},
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
+
 		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 	}
 
@@ -1015,8 +1011,8 @@ func WontExistHere() {
 			require.NoError(t, err)
 
 			ca := &CodingActivities{
-				LSPActivities: &lsp.LSPActivities{
-					LSPClientProvider: func(language string) lsp.LSPClient {
+				LSPActivities: lsp.NewLSPActivities(
+					func(language string) lsp.LSPClient {
 						return lsp.MockLSPClient{
 							TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]lsp.Location, error) {
 								return []lsp.Location{{
@@ -1025,9 +1021,8 @@ func WontExistHere() {
 								}}, nil
 							},
 						}
-					},
-					InitializedClients: map[string]lsp.LSPClient{},
-				},
+					}),
+
 				TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 			}
 
@@ -1159,14 +1154,13 @@ func TestE2EBulkGetSymbolDefinitionsWithRelatedSymbols(t *testing.T) {
 	t.Parallel()
 
 	ca := &CodingActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(language string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(language string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: language,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
+
 		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 	}
 
@@ -1511,14 +1505,13 @@ func TestBulkGetSymbolDefinitionsNilNameRange(t *testing.T) {
 	t.Parallel()
 
 	ca := &CodingActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(language string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(language string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: language,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
+
 		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 	}
 
@@ -1554,14 +1547,13 @@ func TestBulkGetSymbolDefinitionsNoRequests(t *testing.T) {
 	t.Parallel()
 
 	ca := &CodingActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(language string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(language string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: language,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
+
 		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 	}
 

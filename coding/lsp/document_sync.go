@@ -31,7 +31,7 @@ func (la *LSPActivities) SyncDocumentActivity(ctx context.Context, input SyncDoc
 	defer release()
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, la.closeClients())
+			resultErr = errors.Join(resultErr, la.Discard())
 		}
 	}()
 

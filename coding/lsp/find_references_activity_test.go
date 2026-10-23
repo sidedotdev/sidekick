@@ -86,14 +86,12 @@ func main() {
 	require.NoError(t, err)
 
 	// Create LSPActivities with real Jsonrpc2LSPClient
-	lspa := &LSPActivities{
-		LSPClientProvider: func(language string) LSPClient {
+	lspa := NewLSPActivities(
+		func(language string) LSPClient {
 			return &Jsonrpc2LSPClient{
 				LanguageName: "golang",
 			}
-		},
-		InitializedClients: map[string]LSPClient{},
-	}
+		})
 
 	// Test cases
 	testCases := []struct {
@@ -292,14 +290,12 @@ func useStuff() {
 	}
 
 	// Create LSPActivities with real Jsonrpc2LSPClient
-	lspa := &LSPActivities{
-		LSPClientProvider: func(language string) LSPClient {
+	lspa := NewLSPActivities(
+		func(language string) LSPClient {
 			return &Jsonrpc2LSPClient{
 				LanguageName: "golang",
 			}
-		},
-		InitializedClients: map[string]LSPClient{},
-	}
+		})
 
 	ctx := context.Background()
 
@@ -358,14 +354,12 @@ type Foo struct {}
 	err := os.WriteFile(testFilePath, []byte(testFile), 0644)
 	require.NoError(t, err)
 
-	lspa := &LSPActivities{
-		LSPClientProvider: func(language string) LSPClient {
+	lspa := NewLSPActivities(
+		func(language string) LSPClient {
 			return &Jsonrpc2LSPClient{
 				LanguageName: "golang",
 			}
-		},
-		InitializedClients: map[string]LSPClient{},
-	}
+		})
 
 	input := FindReferencesActivityInput{
 		EnvContainer: env.EnvContainer{
@@ -395,14 +389,12 @@ hello()
 	err := os.WriteFile(testFilePath, []byte(testFile), 0644)
 	require.NoError(t, err)
 
-	lspa := &LSPActivities{
-		LSPClientProvider: func(language string) LSPClient {
+	lspa := NewLSPActivities(
+		func(language string) LSPClient {
 			return &Jsonrpc2LSPClient{
 				LanguageName: language,
 			}
-		},
-		InitializedClients: map[string]LSPClient{},
-	}
+		})
 
 	input := FindReferencesActivityInput{
 		EnvContainer: env.EnvContainer{

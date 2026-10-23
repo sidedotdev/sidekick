@@ -7,8 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sidekick/coding/tree_sitter"
 	"sidekick/env"
+	"sidekick/repotools"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -167,7 +167,7 @@ func (s *SearchRepositoryE2ETestSuite) TestTruncatedLongSearchOutputWithMultiple
 	s.Require().NoError(err)
 
 	// Verify content is present but truncated
-	searchBlocks, err := tree_sitter.ExtractSearchCodeBlocks(result)
+	searchBlocks, err := repotools.ExtractSearchCodeBlocks(result)
 	s.Require().NoError(err)
 	s.Assertions.Len(searchBlocks, 2)
 	s.Contains(result, "file1.txt")

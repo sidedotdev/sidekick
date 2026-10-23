@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sidekick/coding/lsp/core"
 	"sidekick/coding/tree_sitter"
 	"sidekick/env"
 	"sidekick/utils"
 	"strings"
-	"sync"
-	"time"
 	"unicode/utf8"
 )
 
@@ -20,17 +19,7 @@ import (
 // t.TempDir() to create a temporary directory, creating go files and then
 // directly calling the activity methods
 type LSPActivities struct {
-	LSPClientProvider  func(language string) LSPClient
-	InitializedClients map[string]LSPClient
-
-	cacheOnce      sync.Once
-	clientGate     chan struct{}
-	idleTimer      *time.Timer
-	idleGeneration uint64
-	clientBorn     time.Time
-	closed         bool
-	idleTimeout    time.Duration
-	maxClientAge   time.Duration
+	core.Sessions
 }
 
 type LSPDefinitionLocationsRequest struct {

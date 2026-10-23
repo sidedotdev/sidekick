@@ -2,9 +2,9 @@ package dev
 
 import (
 	"bufio"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/persisted_ai"
+	"sidekick/repotools"
 	"sidekick/utils"
 	"strconv"
 	"strings"
@@ -26,7 +26,7 @@ type EditBlock struct {
 	// file ranges that were visible when this edit block was created
 	VisibleFileRanges []FileRange `json:"visibleFileRanges"`
 	// code blocks that were visible when this edit block was created
-	VisibleCodeBlocks []tree_sitter.CodeBlock `json:"visibleCodeBlocks"`
+	VisibleCodeBlocks []repotools.CodeBlock `json:"visibleCodeBlocks"`
 }
 
 type FileRange struct {
@@ -37,19 +37,19 @@ type FileRange struct {
 
 // extractAllCodeBlocks scans chat messages for code blocks used in edit-block
 // visibility tracking. Requires a hydrated ChatHistoryContainer.
-func extractAllCodeBlocks(chatHistory persisted_ai.ChatHistoryContainer) []tree_sitter.CodeBlock {
-	codeBlocks := make([]tree_sitter.CodeBlock, 0)
+func extractAllCodeBlocks(chatHistory persisted_ai.ChatHistoryContainer) []repotools.CodeBlock {
+	codeBlocks := make([]repotools.CodeBlock, 0)
 	for _, chatMessage := range chatHistory.Messages() {
 		if chatMessage.GetRole() != string(common.ChatMessageRoleAssistant) {
-			symDefCodeBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.GetContentString())
+			symDefCodeBlocks, err := repotools.ExtractSymbolDefinitionBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract symbol definition blocks")
 			}
-			searchCodeBlocks, err := tree_sitter.ExtractSearchCodeBlocks(chatMessage.GetContentString())
+			searchCodeBlocks, err := repotools.ExtractSearchCodeBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract search code blocks")
 			}
-			gitDiffCodeBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.GetContentString())
+			gitDiffCodeBlocks, err := repotools.ExtractGitDiffCodeBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract git diff code blocks")
 			}
@@ -229,7 +229,7 @@ func ExtractEditBlocksWithVisibility(text string, chatHistory persisted_ai.ChatH
 
 // ExtractEditBlocksWithCodeBlocks extracts edit blocks from text and annotates
 // them with visibility information from pre-extracted code blocks.
-func ExtractEditBlocksWithCodeBlocks(text string, visibleCodeBlocks []tree_sitter.CodeBlock, tildeOnly bool) ([]EditBlock, error) {
+func ExtractEditBlocksWithCodeBlocks(text string, visibleCodeBlocks []repotools.CodeBlock, tildeOnly bool) ([]EditBlock, error) {
 	editBlocksWithoutVisibility, err := ExtractEditBlocks(text, tildeOnly)
 	if err != nil {
 		return nil, err
@@ -242,7 +242,7 @@ func ExtractEditBlocksWithCodeBlocks(text string, visibleCodeBlocks []tree_sitte
 		// the point the edit block is first authored. We also track it per
 		// Remove GetRepoConfig as it is already set
 		// visibility
-		block.VisibleCodeBlocks = utils.Filter(visibleCodeBlocks, func(cb tree_sitter.CodeBlock) bool {
+		block.VisibleCodeBlocks = utils.Filter(visibleCodeBlocks, func(cb repotools.CodeBlock) bool {
 			return cb.FilePath == block.FilePath
 		})
 		block.VisibleFileRanges = codeBlocksToMergedFileRanges(block.FilePath, visibleCodeBlocks)
@@ -257,7 +257,7 @@ func ExtractEditBlocksWithCodeBlocks(text string, visibleCodeBlocks []tree_sitte
 				}
 				block.VisibleFileRanges = append(block.VisibleFileRanges, fileRange)
 
-				codeBlock := tree_sitter.CodeBlock{
+				codeBlock := repotools.CodeBlock{
 					FilePath:  previousBlock.FilePath,
 					Code:      strings.Join(previousBlock.NewLines, "\n"),
 					StartLine: fileRange.StartLine,

@@ -170,13 +170,12 @@ func TestAutofixActivity(t *testing.T) {
 }
 
 func golangIntegrationTest(t *testing.T, code string, expectedCode string) {
-	lspa := &LSPActivities{
-		LSPClientProvider: func(language string) LSPClient {
+	lspa := NewLSPActivities(
+		func(language string) LSPClient {
 			return &Jsonrpc2LSPClient{
 				LanguageName: "golang",
 			}
-		},
-	}
+		})
 
 	// Create a temporary file for this test
 	dir := t.TempDir()
@@ -211,13 +210,12 @@ func golangIntegrationTest(t *testing.T, code string, expectedCode string) {
 }
 
 func vueIntegrationTest(t *testing.T, code string, expectedCode string) {
-	lspa := &LSPActivities{
-		LSPClientProvider: func(language string) LSPClient {
+	lspa := NewLSPActivities(
+		func(language string) LSPClient {
 			return &Jsonrpc2LSPClient{
 				LanguageName: "golang",
 			}
-		},
-	}
+		})
 
 	// Create a temporary file for this test
 	dir := t.TempDir()

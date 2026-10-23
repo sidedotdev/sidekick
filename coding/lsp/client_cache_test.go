@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"sidekick/coding/lsp/core"
 	"sidekick/env"
 
 	"github.com/stretchr/testify/require"
@@ -103,9 +104,9 @@ func TestClientCacheHonorsSeededClients(t *testing.T) {
 			return nil, nil
 		},
 	}}
-	activities := &LSPActivities{
+	activities := &LSPActivities{Sessions: core.Sessions{
 		InitializedClients: map[string]LSPClient{"/workspace:golang": client},
-	}
+	}}
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
 	_, err := activities.GetSingleFileDefinitions(context.Background(), definitionRequest("/workspace"))
 	require.NoError(t, err)
@@ -116,7 +117,7 @@ func TestClientCacheExpiresWhileIdle(t *testing.T) {
 	t.Parallel()
 	client := &ownedTestClient{}
 	activities := NewLSPActivities(func(string) LSPClient { return client })
-	activities.idleTimeout = 10 * time.Millisecond
+	activities.IdleTimeout = 10 * time.Millisecond
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
 	_, _, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
 	require.NoError(t, err)
@@ -132,8 +133,8 @@ func TestClientCacheRecyclesDuringContinuousUse(t *testing.T) {
 		clients = append(clients, client)
 		return client
 	})
-	activities.idleTimeout = time.Hour
-	activities.maxClientAge = 30 * time.Millisecond
+	activities.IdleTimeout = time.Hour
+	activities.MaxClientAge = 30 * time.Millisecond
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
 	_, _, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
 	require.NoError(t, err)
@@ -158,7 +159,7 @@ func TestClientCacheFailedAcquisitionRetainsIdleCleanup(t *testing.T) {
 	t.Parallel()
 	client := &ownedTestClient{}
 	activities := NewLSPActivities(func(string) LSPClient { return client })
-	activities.idleTimeout = 10 * time.Millisecond
+	activities.IdleTimeout = 10 * time.Millisecond
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
 	_, _, release, err := activities.findOrInitClient(context.Background(), "/workspace", "golang", nil)
 	require.NoError(t, err)
@@ -221,8 +222,8 @@ func TestDocumentSyncRetainsRemoteEnvironmentAndLease(t *testing.T) {
 		clients = append(clients, client)
 		return client
 	})
-	activities.idleTimeout = time.Hour
-	activities.maxClientAge = time.Hour
+	activities.IdleTimeout = time.Hour
+	activities.MaxClientAge = time.Hour
 	t.Cleanup(func() { require.NoError(t, activities.Close()) })
 	input := SyncDocumentActivityInput{
 		EnvContainer: remote, FilePath: "main.go", Content: "package fixture\n",

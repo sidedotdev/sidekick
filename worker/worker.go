@@ -141,15 +141,14 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		Storage: service,
 	}
 
-	lspActivities := &lsp.LSPActivities{
-		LSPClientProvider: func(languageName string) lsp.LSPClient {
+	lspActivities := lsp.NewLSPActivities(
+		func(languageName string) lsp.LSPClient {
 			return &lsp.Jsonrpc2LSPClient{
 				LanguageName: languageName,
 			}
 
-		},
-		InitializedClients: map[string]lsp.LSPClient{},
-	}
+		})
+
 	envActivities := &env.Activities{CommandObserver: git.RemoteSyncObserver{}}
 
 	treeSitterActivities := &tree_sitter.TreeSitterActivities{

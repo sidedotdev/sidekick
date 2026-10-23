@@ -3,6 +3,7 @@ package dev
 import (
 	"context"
 	"fmt"
+	"sidekick/repotools"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,6 @@ import (
 	"sidekick/coding"
 	"sidekick/coding/git"
 	"sidekick/coding/lsp"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -140,12 +140,10 @@ func newReviewDiffsFlowHarness(t *testing.T) *reviewDiffsFlowHarness {
 // diffs under test come from git itself rather than canned mock output.
 func (h *reviewDiffsFlowHarness) registerGitActivities() {
 	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 	h.env.RegisterActivity(devActivities.ApplyEditBlocks)
 	h.env.RegisterActivity(git.GitDiffActivity)
@@ -231,7 +229,7 @@ func (h *reviewDiffsFlowHarness) registerMocks() {
 			return &persisted_ai.ManageOutput{ChatHistory: input.ChatHistory}, nil
 		}).Maybe()
 	h.env.OnActivity(historyActivities.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).
-		Return([]tree_sitter.CodeBlock{}, nil).Maybe()
+		Return([]repotools.CodeBlock{}, nil).Maybe()
 
 	var llmActivities *persisted_ai.Llm2Activities
 	h.env.OnActivity(llmActivities.Stream, mock.Anything, mock.Anything).

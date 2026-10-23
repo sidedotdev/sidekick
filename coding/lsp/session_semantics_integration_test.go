@@ -59,8 +59,8 @@ func TestGoSemanticsAcrossSessionRecycling(t *testing.T) {
 				clients = append(clients, client)
 				return client
 			})
-			activities.idleTimeout = time.Hour
-			activities.maxClientAge = time.Hour
+			activities.IdleTimeout = time.Hour
+			activities.MaxClientAge = time.Hour
 			t.Cleanup(func() { require.NoError(t, activities.Close()) })
 			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 			defer cancel()
@@ -148,19 +148,14 @@ func TestGoSemanticsAcrossSessionRecycling(t *testing.T) {
 				case "idle":
 					_, _, release, err := activities.findOrInitClient(ctx, dir, "golang", &container)
 					require.NoError(t, err)
-					activities.idleTimeout = 10 * time.Millisecond
+					activities.IdleTimeout = 10 * time.Millisecond
 					release()
 					require.Eventually(t, func() bool { return first.closed.Load() == 1 }, 5*time.Second, time.Millisecond)
-					gate := activities.gate()
-					<-gate
-					activities.idleTimeout = time.Hour
-					gate <- struct{}{}
+					activities.IdleTimeout = time.Hour
 				case "age":
-					gate := activities.gate()
-					<-gate
-					activities.clientBorn = time.Now().Add(-2 * activities.maxClientAge)
-					gate <- struct{}{}
+					activities.MaxClientAge = time.Nanosecond
 					checkDefinition(symbol, "model.go")
+					activities.MaxClientAge = time.Hour
 				}
 				require.EqualValues(t, 1, first.closed.Load())
 			}

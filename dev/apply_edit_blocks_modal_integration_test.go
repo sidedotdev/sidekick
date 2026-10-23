@@ -46,12 +46,10 @@ func TestModalApplyEditBlocksIntegration(t *testing.T) {
 	envContainer := env.EnvContainer{Env: repoEnv}
 
 	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(languageName string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
 	}
 
 	apply := func(t *testing.T, block EditBlock) ApplyEditBlockReport {

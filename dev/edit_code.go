@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"runtime"
 	"sidekick/coding/git"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -16,6 +15,7 @@ import (
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
+	"sidekick/repotools"
 	"sidekick/srv"
 	"sidekick/utils"
 	"sort"
@@ -477,7 +477,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		var currentExtractedBlocks []EditBlock
 		if _, isLlm2 := visibleChatHistory.History.(*persisted_ai.Llm2ChatHistory); isLlm2 {
 			var cha *persisted_ai.ChatHistoryActivities
-			var visibleCodeBlocks []tree_sitter.CodeBlock
+			var visibleCodeBlocks []repotools.CodeBlock
 			extractCtx := dCtx.ExecContext
 			extractCtx.Context = utils.WithStorageActivityOptions(dCtx)
 			err = flow_action.PerformActivityWithUserRetry(
@@ -1008,8 +1008,8 @@ func formatSequenceNumbers(nums []int) string {
 	return strings.Join(parts, ",")
 }
 
-func codeBlocksToMergedFileRanges(filePath string, visibleCodeBlocks []tree_sitter.CodeBlock) []FileRange {
-	visibleFileRanges := utils.Map(visibleCodeBlocks, func(cb tree_sitter.CodeBlock) FileRange {
+func codeBlocksToMergedFileRanges(filePath string, visibleCodeBlocks []repotools.CodeBlock) []FileRange {
+	visibleFileRanges := utils.Map(visibleCodeBlocks, func(cb repotools.CodeBlock) FileRange {
 		return FileRange{FilePath: cb.FilePath, StartLine: cb.StartLine, EndLine: cb.EndLine}
 	})
 

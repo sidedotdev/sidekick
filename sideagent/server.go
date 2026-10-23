@@ -177,7 +177,7 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 		s.mu.Unlock()
 	}()
 	resp := ExecResponse{ID: req.ID}
-	if len(req.Argv) == 0 && !req.ActivityLease {
+	if len(req.Argv) == 0 && !req.ActivityLease && req.Search == nil {
 		resp.ExitStatus = -1
 		resp.Error = "empty argv"
 		return resp
@@ -251,6 +251,9 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 		}
 	}
 
+	if req.Search != nil {
+		return s.executeSearch(req)
+	}
 	return s.executeCommand(req)
 }
 

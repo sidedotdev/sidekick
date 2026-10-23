@@ -1,4 +1,4 @@
-package tree_sitter
+package repotools
 
 import (
 	"bufio"

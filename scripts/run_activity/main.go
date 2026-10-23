@@ -115,14 +115,13 @@ func buildActivityRegistry() map[string]interface{} {
 		Streamer: service,
 		Storage:  service,
 	}
-	lspActivities := &lsp.LSPActivities{
-		LSPClientProvider: func(languageName string) lsp.LSPClient {
+	lspActivities := lsp.NewLSPActivities(
+		func(languageName string) lsp.LSPClient {
 			return &lsp.Jsonrpc2LSPClient{
 				LanguageName: languageName,
 			}
-		},
-		InitializedClients: map[string]lsp.LSPClient{},
-	}
+		})
+
 	treeSitterActivities := &tree_sitter.TreeSitterActivities{
 		DatabaseAccessor: service,
 	}

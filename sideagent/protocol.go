@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"sidekick/repotools"
 )
 
 // maxFrameSize bounds a single frame's payload, protecting both sides from
@@ -51,7 +53,8 @@ type ExecRequest struct {
 	// without spawning a command. It protects work on a separate channel.
 	ActivityLease bool `json:"activityLease,omitempty"`
 	// OnReady runs locally once the remote has admitted the activity lease.
-	OnReady func() `json:"-"`
+	OnReady func()                                `json:"-"`
+	Search  *repotools.BulkSearchRepositoryParams `json:"search,omitempty"`
 }
 
 // ExecResponse carries the buffered result of one ExecRequest.

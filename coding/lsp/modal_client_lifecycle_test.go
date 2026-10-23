@@ -362,7 +362,7 @@ func TestManagedAnalysisSSHSessionActivity(t *testing.T) {
 				clients = append(clients, client)
 				return client
 			})
-			activities.idleTimeout = time.Hour
+			activities.IdleTimeout = time.Hour
 			t.Cleanup(func() { require.NoError(t, activities.Close()) })
 
 			switch operation {
@@ -460,7 +460,7 @@ func TestClientCacheReusesClientsAcrossEnvironmentTypes(t *testing.T) {
 				created++
 				return client
 			})
-			activities.idleTimeout = time.Hour
+			activities.IdleTimeout = time.Hour
 			t.Cleanup(func() { require.NoError(t, activities.Close()) })
 			container := &env.EnvContainer{Env: &fakeEnv{envType: envType, workDir: "/workspace"}}
 			for range 2 {

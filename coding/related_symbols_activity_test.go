@@ -31,14 +31,13 @@ func TestE2eRelatedSymbolsActivity(t *testing.T) {
 	// Create RagActivities with NON-mock LSP and TreeSitter activities (we want to
 	// test the real thing)
 	ca := &CodingActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(language string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(language string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: language,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
+
 		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 	}
 	t.Cleanup(func() { require.NoError(t, ca.LSPActivities.Close()) })
@@ -227,14 +226,13 @@ hello()
 	writeFile(t, filepath.Join(tempDir, "test.py"), testFile)
 
 	ca := &CodingActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(language string) lsp.LSPClient {
+		LSPActivities: lsp.NewLSPActivities(
+			func(language string) lsp.LSPClient {
 				return &lsp.Jsonrpc2LSPClient{
 					LanguageName: language,
 				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+			}),
+
 		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
 	}
 

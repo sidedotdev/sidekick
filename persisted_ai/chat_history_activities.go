@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sidekick/repotools"
 
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/llm2"
 
@@ -232,26 +232,26 @@ func (ca *ChatHistoryActivities) AppendMessage(
 func (ca *ChatHistoryActivities) ExtractVisibleCodeBlocks(
 	ctx context.Context,
 	chatHistory *ChatHistoryContainer,
-) ([]tree_sitter.CodeBlock, error) {
+) ([]repotools.CodeBlock, error) {
 	if err := chatHistory.Hydrate(ctx, ca.Storage); err != nil {
 		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
 	}
 
-	var codeBlocks []tree_sitter.CodeBlock
+	var codeBlocks []repotools.CodeBlock
 	for _, msg := range chatHistory.Messages() {
 		if msg.GetRole() == string(common.ChatMessageRoleAssistant) {
 			continue
 		}
 		content := msg.GetContentString()
-		symDefBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(content)
+		symDefBlocks, err := repotools.ExtractSymbolDefinitionBlocks(content)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to extract symbol definition blocks")
 		}
-		searchBlocks, err := tree_sitter.ExtractSearchCodeBlocks(content)
+		searchBlocks, err := repotools.ExtractSearchCodeBlocks(content)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to extract search code blocks")
 		}
-		gitDiffBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(content)
+		gitDiffBlocks, err := repotools.ExtractGitDiffCodeBlocks(content)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to extract git diff code blocks")
 		}

@@ -135,8 +135,8 @@ func TestGetSingleFileDefinitionsOnlyResolvesWholeGoTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	var requestedPositions []Position
-	lspa := &LSPActivities{
-		LSPClientProvider: func(language string) LSPClient {
+	lspa := NewLSPActivities(
+		func(language string) LSPClient {
 			return MockLSPClient{
 				TextDocumentDefinitionFunc: func(ctx context.Context, uri string, line, character int) ([]Location, error) {
 					requestedPositions = append(requestedPositions, Position{Line: line, Character: character})
@@ -146,9 +146,7 @@ func TestGetSingleFileDefinitionsOnlyResolvesWholeGoTokens(t *testing.T) {
 					}}, nil
 				},
 			}
-		},
-		InitializedClients: map[string]LSPClient{},
-	}
+		})
 
 	envContainer := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: testDir}}
 	definitions, err := lspa.GetSingleFileDefinitions(context.Background(), LSPDefinitionLocationsRequest{

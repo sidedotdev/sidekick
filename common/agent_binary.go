@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -31,17 +32,15 @@ const agentReleaseBaseURL = "https://github.com/org-sidedev/sidekick/releases/do
 // this hash: the remote upload path embeds it, so a rebuilt agent is always
 // re-uploaded and the protocol is compatible by construction.
 var agentSourceFiles = []string{
-	"cmd/side-agent/main.go",
-	"repotools/glob.go",
-	"repotools/types.go",
-	"sideagent/background.go",
-	"sideagent/client.go",
-	"sideagent/gc.go",
-	"sideagent/managed_session.go",
-	"sideagent/protocol.go",
-	"sideagent/seal.go",
-	"sideagent/server.go",
-	"sideagent/sftp.go",
+	"go.mod",
+	"go.sum",
+	"cmd/side-agent",
+	"repotools",
+	"sideagent",
+	"env/localio",
+	"utils",
+	"coding/tree_sitter/parser",
+	"coding/tree_sitter/language_bindings",
 }
 
 func findModuleRoot() (string, error) {
@@ -84,15 +83,28 @@ func agentSourceHash() (string, error) {
 	}
 	h := sha256.New()
 	for _, relPath := range agentSourceFiles {
-		f, err := os.Open(filepath.Join(moduleRoot, relPath))
+		err := filepath.WalkDir(filepath.Join(moduleRoot, relPath), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			name, err := filepath.Rel(moduleRoot, path)
+			if err != nil {
+				return err
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "%s\x00%d\x00", filepath.ToSlash(name), len(content))
+			_, err = h.Write(content)
+			return err
+		})
 		if err != nil {
-			return "", fmt.Errorf("open %s: %w", relPath, err)
+			return "", fmt.Errorf("hash %s: %w", relPath, err)
 		}
-		if _, err := io.Copy(h, f); err != nil {
-			f.Close()
-			return "", err
-		}
-		f.Close()
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))[:12], nil
 }
@@ -112,8 +124,22 @@ func buildAgentBinary(targetOS, targetArch, outputPath string) error {
 	cmd.Env = append(os.Environ(),
 		"GOOS="+targetOS,
 		"GOARCH="+targetArch,
-		"CGO_ENABLED=0",
+		"CGO_ENABLED=1",
 	)
+	if (targetOS != runtime.GOOS || targetArch != runtime.GOARCH) && os.Getenv("CC") == "" {
+		targets := map[string]string{
+			"linux/amd64": "x86_64-linux-musl",
+			"linux/arm64": "aarch64-linux-musl",
+		}
+		target, ok := targets[targetOS+"/"+targetArch]
+		if !ok {
+			return fmt.Errorf("cross-compiling the agent for %s/%s requires CC and CXX for that target", targetOS, targetArch)
+		}
+		if _, err := exec.LookPath("zig"); err != nil {
+			return fmt.Errorf("cross-compiling the agent requires zig or an explicit CC and CXX: %w", err)
+		}
+		cmd.Env = append(cmd.Env, "CC=zig cc -target "+target, "CXX=zig c++ -target "+target)
+	}
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("build agent binary: %w\n%s", err, out)

@@ -3,11 +3,11 @@ package dev
 import (
 	"context"
 	"fmt"
+	"sidekick/repotools"
 	"testing"
 
 	"sidekick/coding"
 	"sidekick/coding/git"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/fflag"
@@ -73,7 +73,7 @@ func testCodingSubflowVerifier(t *testing.T, reuse bool) {
 		func(_ context.Context, input persisted_ai.ManageInput) (*persisted_ai.ManageOutput, error) {
 			return &persisted_ai.ManageOutput{ChatHistory: input.ChatHistory}, nil
 		})
-	testEnv.OnActivity(historyActivities.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).Return([]tree_sitter.CodeBlock{}, nil).Maybe()
+	testEnv.OnActivity(historyActivities.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).Return([]repotools.CodeBlock{}, nil).Maybe()
 
 	var preparation *VerifierHistoryActivities
 	reviews := 0
