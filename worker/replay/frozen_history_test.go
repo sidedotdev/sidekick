@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -58,12 +57,7 @@ func TestFrozenWorkflowHistory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		hostPort := common.GetTemporalServerHostPort()
-		if common.IsActiveEnvNonLocal() {
-			if port, ok := common.LookupForwardedPort(common.GetTemporalReadOnlyServerPort()); ok {
-				hostPort = fmt.Sprintf("127.0.0.1:%d", port)
-			}
-		}
+		hostPort := common.GetTemporalDiagnosticHostPort()
 		options, err := common.NewTemporalClientOptions(storage, hostPort)
 		if err != nil {
 			t.Fatal(err)
