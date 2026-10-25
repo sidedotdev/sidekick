@@ -766,6 +766,23 @@ func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, er
 	}
 
 	flushCurrent()
+
+	// Persisted histories may contain more markers than Anthropic accepts.
+	// Preserve the stable prefix and the most recent cache boundaries.
+	// Tools and system prompts currently carry no cache markers.
+	const maxCacheControlBlocks = 4
+	var cacheControls []*anthropic.CacheControlEphemeralParam
+	for _, message := range result {
+		for _, block := range message.Content {
+			if cacheControl := block.GetCacheControl(); cacheControl != nil && cacheControl.Type != "" {
+				cacheControls = append(cacheControls, cacheControl)
+			}
+		}
+	}
+	for i := 1; i <= len(cacheControls)-maxCacheControlBlocks; i++ {
+		*cacheControls[i] = anthropic.CacheControlEphemeralParam{}
+	}
+
 	return result, nil
 }
 

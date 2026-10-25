@@ -262,31 +262,23 @@ func (ca *ChatHistoryActivities) ExtractVisibleCodeBlocks(
 	return codeBlocks, nil
 }
 
-// applyCacheControlBreakpointsLlm2 sets CacheControl on llm2 messages.
-// It clears all existing CacheControl values and sets "ephemeral" on the
-// first and last messages (mirroring the current legacy behavior).
+// applyCacheControlBreakpointsLlm2 replaces existing markers with breakpoints
+// at the ends of the first and last messages. Each breakpoint caches the
+// entire preceding prefix, so earlier blocks need no additional markers.
 func applyCacheControlBreakpointsLlm2(messages []llm2.Message) {
 	if len(messages) == 0 {
 		return
 	}
 
-	// Clear all existing CacheControl values
 	for i := range messages {
 		for j := range messages[i].Content {
 			messages[i].Content[j].CacheControl = ""
 		}
 	}
 
-	// Set ephemeral on all blocks of the first message
-	for j := range messages[0].Content {
-		messages[0].Content[j].CacheControl = "ephemeral"
-	}
-
-	// Set ephemeral on all blocks of the last message (if different from first)
-	lastIdx := len(messages) - 1
-	if lastIdx > 0 {
-		for j := range messages[lastIdx].Content {
-			messages[lastIdx].Content[j].CacheControl = "ephemeral"
+	for _, i := range []int{0, len(messages) - 1} {
+		if blocks := messages[i].Content; len(blocks) > 0 {
+			blocks[len(blocks)-1].CacheControl = "ephemeral"
 		}
 	}
 }
