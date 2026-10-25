@@ -37,6 +37,9 @@ type AuthorEditBlocksTestSuite struct {
 	extractVisibleCodeBlocksCalls    int
 	extractVisibleCodeBlocksFailures int
 	appendedMessages                 []llm2.Message
+	// flagOverrides replaces the production-default feature flag values
+	// mocked by SetupTest; set before calling SetupTest.
+	flagOverrides map[string]bool
 
 	// a wrapper is required to set the ctx1 value, so that we can a method that
 	// isn't a real workflow. otherwise we get errors about not having
@@ -149,6 +152,9 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 		fflag.InitialRepoSummary:                true,
 		fflag.ManageHistoryWithContextMarkers:   true,
 	}
+	for flagName, value := range s.flagOverrides {
+		knownFlags[flagName] = value
+	}
 	for flagName, value := range knownFlags {
 		flagName := flagName
 		value := value
@@ -210,6 +216,8 @@ func (s *AuthorEditBlocksTestSuite) TestExtractVisibleCodeBlocksAutomaticallyRet
 
 	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 	s.env.OnGetVersion("storage-activity-options", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+	// eager visibility extraction only exists on the legacy path
+	s.env.OnGetVersion("lazy-edit-block-visibility", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 
 	var la *persisted_ai.Llm2Activities
 	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(&llm2.MessageResponse{
