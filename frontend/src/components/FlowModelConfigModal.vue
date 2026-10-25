@@ -27,16 +27,6 @@
         <button type="button" @click="loadConfiguration">Retry loading</button>
       </div>
 
-      <template v-else-if="switchActionId">
-        <p role="status">
-          Environment switch started. Progress and any errors are tracked in the
-          “Switch environment” flow action.
-        </p>
-        <footer>
-          <button type="button" @click="cancel">Close</button>
-        </footer>
-      </template>
-
       <template v-else-if="editor">
         <fieldset class="model-editor" :disabled="isApplying" :inert="isApplying || undefined">
           <ModelConfigPresetEditor
@@ -287,7 +277,6 @@ const portForwardRows = ref<PortForwardRow[] | null>(null)
 const appliedPortForwards = ref('')
 const envType = ref('')
 const initialEnvType = ref('')
-const switchActionId = ref('')
 const isLoading = ref(true)
 const isApplying = ref(false)
 const loadError = ref('')
@@ -413,7 +402,7 @@ const pollUntilApplied = async (submittedConfig: LLMConfig): Promise<boolean> =>
 }
 
 const applyConfiguration = async () => {
-  if (!editor.value || isApplying.value || switchActionId.value) return
+  if (!editor.value || isApplying.value) return
 
   const submittedConfig: LLMConfig = JSON.parse(JSON.stringify(editor.value.llmConfig.value))
   applyError.value = ''
@@ -480,8 +469,8 @@ const applyConfiguration = async () => {
       }
       const result: { flowActionId?: string; settings: EnvSettings } = await response.json()
       if (result.flowActionId) {
-        switchActionId.value = result.flowActionId
         emit('applied')
+        emit('close')
         return
       }
       const applied = result.settings

@@ -74,13 +74,9 @@ describe('FlowModelConfigModal environment type', () => {
       method: 'PUT',
       body: JSON.stringify({ envType: to, portForwards, modal }),
     }))
-    expect(wrapper.get('[role="status"]').text()).toContain('flow action')
     expect(wrapper.emitted('applied')).toHaveLength(1)
-    expect(wrapper.emitted('close')).toBeFalsy()
-    expect(wrapper.find('.apply-button').exists()).toBe(false)
-
-    await wrapper.get('footer button').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
