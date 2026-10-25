@@ -21,59 +21,23 @@ type GitDiffParams struct {
 	IgnoreWhitespace bool
 	Staged           bool
 	ContextLines     *int
+
+	// DisableCopyDetection preserves new-file contents even when Git configuration enables copies.
+	DisableCopyDetection bool
 }
 
 // GitDiff returns the diff of the current, staged changes in the working tree.
+// Edits are staged as they are applied, so staged changes cover all of them.
 func GitDiff(eCtx flow_action.ExecContext) (string, error) {
+	fflag.EvalRetiredCheckEditsFlag(eCtx)
 	var diff string
-	var err error
-	if fflag.IsEnabled(eCtx, fflag.CheckEdits) {
-		err = workflow.ExecuteActivity(eCtx, GitDiffActivity, *eCtx.EnvContainer, GitDiffParams{
-			Staged: true, // when check_edits is enabled, changes are staged as they are applied, so the diff must look at staged changes
-		}).Get(eCtx, &diff)
-		if err != nil {
-			return "", fmt.Errorf("error getting git diff: %w", err)
-		}
-	} else {
-		diff, err = GitDiffLegacy(eCtx)
-		if err != nil {
-			return "", fmt.Errorf("error getting git diff: %w", err)
-		}
+	err := workflow.ExecuteActivity(eCtx, GitDiffActivity, *eCtx.EnvContainer, GitDiffParams{
+		Staged: true,
+	}).Get(eCtx, &diff)
+	if err != nil {
+		return "", fmt.Errorf("error getting git diff: %w", err)
 	}
 	return diff, nil
-}
-
-/* This vesion of git diff is used when CheckEdits flag is disabled and works
- * when we don't git add after each and every edit application. We expect to
- * sunset this eventually, so this function shouldn't be used directly. */
-func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
-	envContainer := *eCtx.EnvContainer
-	var gitDiffOutput env.EnvRunCommandActivityOutput
-	err := workflow.ExecuteActivity(eCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-		EnvContainer:       envContainer,
-		RelativeWorkingDir: "./",
-		Command:            "git",
-		Args:               []string{"diff", "--no-ext-diff"},
-	}).Get(eCtx, &gitDiffOutput)
-	if err != nil {
-		return "", fmt.Errorf("failed to git diff: %v", err)
-	}
-
-	if gitDiffOutput.ExitStatus != 0 {
-		return "", fmt.Errorf("git diff failed: %v", gitDiffOutput.Stderr)
-	}
-
-	// Get diff of untracked files using temp index approach (respects .gitattributes)
-	var untrackedDiff string
-	err = workflow.ExecuteActivity(eCtx, DiffUntrackedFilesActivity, envContainer, []string(nil)).Get(eCtx, &untrackedDiff)
-	if err != nil {
-		return "", fmt.Errorf("failed to get untracked files diff: %v", err)
-	}
-
-	if untrackedDiff != "" {
-		return gitDiffOutput.Stdout + "\n" + untrackedDiff, nil
-	}
-	return gitDiffOutput.Stdout, nil
 }
 
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
@@ -95,6 +59,9 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 
 	var cmdParts []string
 	cmdParts = append(cmdParts, "git", "diff", "--no-ext-diff")
+	if params.DisableCopyDetection {
+		cmdParts = append(cmdParts, "--find-renames")
+	}
 
 	// stagedInMainCmd records whether the primary diff command below already
 	// includes `--staged`. An explicit two-ref range can't take `--staged`, so
@@ -197,6 +164,9 @@ func appendDiffSection(diff, section string) string {
 // callers append unmergedFilesDiff for those.
 func stagedIndexDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	args := []string{"diff", "--no-ext-diff", "--staged"}
+	if params.DisableCopyDetection {
+		args = append(args, "--find-renames")
+	}
 	if params.ContextLines != nil {
 		args = append(args, fmt.Sprintf("-U%d", *params.ContextLines))
 	}
@@ -259,6 +229,9 @@ func unmergedFilesDiff(ctx context.Context, envContainer env.EnvContainer, param
 	}
 
 	diffArgs := []string{"diff", "--no-ext-diff", "HEAD"}
+	if params.DisableCopyDetection {
+		diffArgs = append(diffArgs, "--find-renames")
+	}
 	if params.ContextLines != nil {
 		diffArgs = append(diffArgs, fmt.Sprintf("-U%d", *params.ContextLines))
 	}
@@ -463,6 +436,9 @@ func workingTreeAndUntrackedDiff(ctx context.Context, envContainer env.EnvContai
 
 	// Part 2: Tracked files diff (Modified in Working Tree vs. Index)
 	trackedArgs := []string{"diff", "--no-ext-diff"}
+	if params.DisableCopyDetection {
+		trackedArgs = append(trackedArgs, "--find-renames")
+	}
 	if params.IgnoreWhitespace {
 		trackedArgs = append(trackedArgs, "-w")
 	}

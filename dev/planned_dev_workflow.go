@@ -91,7 +91,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return DevPlanExecution{}, err
 	}
-	if err = SetupModalConfigHandlers(dCtx); err != nil {
+	if err = SetupEnvSettingsHandlers(dCtx); err != nil {
 		return DevPlanExecution{}, err
 	}
 	SetupProfileChangeHandler(dCtx)
@@ -157,6 +157,7 @@ Here is the plan for meeting the requirements, along with updates per step:
 			Title:       input.Title,
 			StartBranch: input.StartBranch,
 			AutoMerge:   input.AutoMerge,
+			WorkSummary: planExecutionSummary(planExec),
 		})
 		if err != nil {
 			return DevPlanExecution{}, err
@@ -174,7 +175,11 @@ Here is the plan for meeting the requirements, along with updates per step:
 
 func EnsureTestsPassAfterDevPlanExecuted(dCtx DevContext, input PlannedDevInput, planExec DevPlanExecution) error {
 	return RunSubflowWithoutResult(dCtx, "pass_tests", "Finalize", func(_ domain.Subflow) error {
-		return ensureTestsPassAfterDevPlanExecutedSubflow(dCtx, input, planExec)
+		err := ensureTestsPassAfterDevPlanExecutedSubflow(dCtx, input, planExec)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 

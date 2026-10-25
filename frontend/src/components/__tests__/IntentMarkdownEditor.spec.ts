@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mount, flushPromises, VueWrapper } from '@vue/test-utils'
 import { foldedRanges } from '@codemirror/language'
 import type { EditorView } from 'codemirror'
@@ -100,6 +100,30 @@ describe('IntentMarkdownEditor', () => {
     const view = getView(wrapper)
     expect(view).not.toBeNull()
     expect(collectFoldedRanges(view!)).toHaveLength(0)
+  })
+
+  it('folds frontmatter even when the machine is too slow for incremental parsing', async () => {
+    // Every clock read jumps far ahead, so any time-budgeted parse work
+    // expires immediately, as on a heavily loaded machine.
+    let fakeNow = Date.now()
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => (fakeNow += 10_000))
+    try {
+      wrapper = mount(IntentMarkdownEditor, {
+        props: { modelValue: sampleWithFrontmatter, committedContent: '' },
+        attachTo: document.body,
+      })
+      await flushPromises()
+    } finally {
+      nowSpy.mockRestore()
+    }
+
+    const view = getView(wrapper)
+    expect(view).not.toBeNull()
+    const ranges = collectFoldedRanges(view!)
+    expect(ranges).toHaveLength(1)
+    const folded = view!.state.doc.sliceString(ranges[0].from, ranges[0].to)
+    expect(folded).toContain('intent_links')
+    expect(folded).toContain('---')
   })
 
   const pressTab = (view: EditorView, shift: boolean) => {

@@ -566,6 +566,54 @@ func (s *SearchRepositoryE2ETestSuite) TestSearchWithSpecialCharacters() {
 	s.Contains(result, "--verbose")
 }
 
+// rg lists files using Rust regex syntax, so the per-line search must interpret
+// the same pattern with matching semantics (e.g. alternation, quantifiers).
+func (s *SearchRepositoryE2ETestSuite) TestExtendedRegexSyntax() {
+	s.createTestFile("regex_syntax.go", "func alpha() {}\nconst beta = \"speed\"\nvar unrelated = 1\nx := 42\n")
+
+	testCases := []struct {
+		name       string
+		pathGlob   string
+		searchTerm string
+		expected   []string
+	}{
+		{
+			name:       "alternation with specific file glob",
+			pathGlob:   "regex_syntax.go",
+			searchTerm: `alpha|beta|"speed"`,
+			expected:   []string{"func alpha() {}", `const beta = "speed"`},
+		},
+		{
+			name:       "alternation with match-all glob",
+			pathGlob:   "*",
+			searchTerm: "alpha|beta",
+			expected:   []string{"func alpha() {}", `const beta = "speed"`},
+		},
+		{
+			name:       "quantifier",
+			pathGlob:   "regex_syntax.go",
+			searchTerm: "x := [0-9]+",
+			expected:   []string{"x := 42"},
+		},
+	}
+
+	for _, tc := range testCases {
+		s.Run(tc.name, func() {
+			s.ResetWorkflowEnvironment()
+			result, err := s.executeSearchRepository(SearchRepositoryInput{
+				PathGlob:     tc.pathGlob,
+				SearchTerm:   tc.searchTerm,
+				ContextLines: 0,
+			})
+			s.Require().NoError(err)
+			s.NotContains(result, "No results found")
+			for _, expected := range tc.expected {
+				s.Contains(result, expected)
+			}
+		})
+	}
+}
+
 func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectGitignore() {
 	// Create .gitignore file
 	s.createTestFile(".gitignore", "ignored_dir/\n*.ignored")

@@ -48,7 +48,7 @@ func (h updateOutcomeHandle) Get(_ context.Context, valuePtr interface{}) error 
 	return dc.FromPayload(payload, valuePtr)
 }
 
-func newPortForwardsTestController(t *testing.T) (Controller, *mocks.Client, string, string) {
+func newEnvSettingsTestController(t *testing.T) (Controller, *mocks.Client, string, string) {
 	t.Helper()
 	ctrl := NewMockController(t)
 	mockTemporalClient := ctrl.temporalClient.(*mocks.Client)
@@ -61,11 +61,11 @@ func newPortForwardsTestController(t *testing.T) (Controller, *mocks.Client, str
 	return ctrl, mockTemporalClient, workspaceId, flowId
 }
 
-func putPortForwards(t *testing.T, ctrl Controller, workspaceId, flowId, payload string) *httptest.ResponseRecorder {
+func putEnvSettings(t *testing.T, ctrl Controller, workspaceId, flowId, payload string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(
 		http.MethodPut,
-		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/port_forwards", workspaceId, flowId),
+		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/env", workspaceId, flowId),
 		bytes.NewReader([]byte(payload)),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -74,10 +74,10 @@ func putPortForwards(t *testing.T, ctrl Controller, workspaceId, flowId, payload
 	return rr
 }
 
-func TestUpdateFlowPortForwardsHandler_ReturnsEffectiveMappings(t *testing.T) {
+func TestUpdateFlowEnvHandler_ReturnsEffectiveMappings(t *testing.T) {
 	t.Parallel()
 
-	ctrl, mockTemporalClient, workspaceId, flowId := newPortForwardsTestController(t)
+	ctrl, mockTemporalClient, workspaceId, flowId := newEnvSettingsTestController(t)
 
 	requested := []common.PortForwardConfig{
 		{HostPort: 3000},
@@ -95,60 +95,65 @@ func TestUpdateFlowPortForwardsHandler_ReturnsEffectiveMappings(t *testing.T) {
 		mock.MatchedBy(func(options client.UpdateWorkflowOptions) bool {
 			return options.WorkflowID == flowId &&
 				options.RunID == "" &&
-				options.UpdateName == dev.UpdateNamePortForwards &&
+				options.UpdateName == dev.UpdateNameEnv &&
 				options.WaitForStage == client.WorkflowUpdateStageCompleted &&
 				len(options.Args) == 1 &&
-				assert.ObjectsAreEqual(dev.PortForwardsConfig{PortForwards: requested}, options.Args[0])
+				assert.ObjectsAreEqual(dev.EnvSettings{EnvType: "modal", PortForwards: requested}, options.Args[0])
 		}),
-	).Return(updateOutcomeHandle{result: dev.PortForwardsConfig{PortForwards: effective}}, nil).Once()
+	).Return(updateOutcomeHandle{result: dev.EnvUpdateResult{Settings: dev.EnvSettings{EnvType: "modal", PortForwards: effective}}}, nil).Once()
 
-	payload, err := json.Marshal(PortForwardsUpdateRequest{PortForwards: requested})
+	payload, err := json.Marshal(dev.EnvSettings{EnvType: "modal", PortForwards: requested})
 	require.NoError(t, err)
-	rr := putPortForwards(t, ctrl, workspaceId, flowId, string(payload))
+	rr := putEnvSettings(t, ctrl, workspaceId, flowId, string(payload))
 
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-	assert.JSONEq(t, `{"portForwards":[{"hostPort":3000,"containerPort":3000},{"hostPort":5432,"containerPort":15432}]}`, rr.Body.String())
+	var response dev.EnvUpdateResult
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+	assert.Equal(t, dev.EnvSettings{EnvType: "modal", PortForwards: effective}, response.Settings)
 	mockTemporalClient.AssertExpectations(t)
 }
 
-func TestUpdateFlowPortForwardsHandler_ClearsMappings(t *testing.T) {
+func TestUpdateFlowEnvHandler_ClearsMappings(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name    string
 		payload string
 	}{
-		{name: "empty list", payload: `{"portForwards":[]}`},
-		{name: "omitted list", payload: `{}`},
+		{name: "empty list", payload: `{"envType":"modal","portForwards":[]}`},
+		{name: "omitted list", payload: `{"envType":"modal"}`},
 	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			ctrl, mockTemporalClient, workspaceId, flowId := newPortForwardsTestController(t)
+			ctrl, mockTemporalClient, workspaceId, flowId := newEnvSettingsTestController(t)
 			mockTemporalClient.On(
 				"UpdateWorkflow",
 				mock.Anything,
 				mock.MatchedBy(func(options client.UpdateWorkflowOptions) bool {
-					if options.UpdateName != dev.UpdateNamePortForwards || len(options.Args) != 1 {
+					if options.UpdateName != dev.UpdateNameEnv || len(options.Args) != 1 {
 						return false
 					}
-					config, ok := options.Args[0].(dev.PortForwardsConfig)
+					config, ok := options.Args[0].(dev.EnvSettings)
 					return ok && len(config.PortForwards) == 0
 				}),
-			).Return(updateOutcomeHandle{result: dev.PortForwardsConfig{}}, nil).Once()
+			).Return(updateOutcomeHandle{result: dev.EnvUpdateResult{Settings: dev.EnvSettings{EnvType: "modal"}}}, nil).Once()
 
-			rr := putPortForwards(t, ctrl, workspaceId, flowId, test.payload)
+			rr := putEnvSettings(t, ctrl, workspaceId, flowId, test.payload)
 
 			require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-			assert.JSONEq(t, `{"portForwards":[]}`, rr.Body.String())
+			var response dev.EnvUpdateResult
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+			assert.Equal(t, "modal", response.Settings.EnvType)
+			assert.Empty(t, response.Settings.PortForwards)
 			mockTemporalClient.AssertExpectations(t)
 		})
 	}
 }
 
-func TestUpdateFlowPortForwardsHandler_RejectsInvalidRequestsBeforeUpdatingWorkflow(t *testing.T) {
+func TestUpdateFlowEnvHandler_RejectsInvalidRequestsBeforeUpdatingWorkflow(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -158,22 +163,22 @@ func TestUpdateFlowPortForwardsHandler_RejectsInvalidRequestsBeforeUpdatingWorkf
 	}{
 		{
 			name:    "malformed json",
-			payload: `{"portForwards":[`,
+			payload: `{"envType":"modal","portForwards":[`,
 			error:   "Invalid request payload",
 		},
 		{
 			name:    "host port out of range",
-			payload: `{"portForwards":[{"hostPort":70000}]}`,
+			payload: `{"envType":"modal","portForwards":[{"hostPort":70000}]}`,
 			error:   "host_port must be between 1 and 65535",
 		},
 		{
 			name:    "container port out of range",
-			payload: `{"portForwards":[{"hostPort":3000,"containerPort":-1}]}`,
+			payload: `{"envType":"modal","portForwards":[{"hostPort":3000,"containerPort":-1}]}`,
 			error:   "container_port must be between 1 and 65535",
 		},
 		{
 			name:    "duplicate effective container ports",
-			payload: `{"portForwards":[{"hostPort":3000},{"hostPort":4000,"containerPort":3000}]}`,
+			payload: `{"envType":"modal","portForwards":[{"hostPort":3000},{"hostPort":4000,"containerPort":3000}]}`,
 			error:   "container_port 3000 is used by both host_port 3000 and host_port 4000",
 		},
 	}
@@ -182,9 +187,9 @@ func TestUpdateFlowPortForwardsHandler_RejectsInvalidRequestsBeforeUpdatingWorkf
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			ctrl, mockTemporalClient, workspaceId, flowId := newPortForwardsTestController(t)
+			ctrl, mockTemporalClient, workspaceId, flowId := newEnvSettingsTestController(t)
 
-			rr := putPortForwards(t, ctrl, workspaceId, flowId, test.payload)
+			rr := putEnvSettings(t, ctrl, workspaceId, flowId, test.payload)
 
 			require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
 			var response map[string]string
@@ -195,62 +200,62 @@ func TestUpdateFlowPortForwardsHandler_RejectsInvalidRequestsBeforeUpdatingWorkf
 	}
 }
 
-func TestUpdateFlowPortForwardsHandler_FlowNotFound(t *testing.T) {
+func TestUpdateFlowEnvHandler_FlowNotFound(t *testing.T) {
 	t.Parallel()
 
-	ctrl, mockTemporalClient, workspaceId, _ := newPortForwardsTestController(t)
+	ctrl, mockTemporalClient, workspaceId, _ := newEnvSettingsTestController(t)
 
-	rr := putPortForwards(t, ctrl, workspaceId, "flow-missing-"+ksuid.New().String(), `{"portForwards":[{"hostPort":3000}]}`)
+	rr := putEnvSettings(t, ctrl, workspaceId, "flow-missing-"+ksuid.New().String(), `{"envType":"modal","portForwards":[{"hostPort":3000}]}`)
 
 	require.Equal(t, http.StatusNotFound, rr.Code)
 	assert.JSONEq(t, `{"error":"Flow not found"}`, rr.Body.String())
 	mockTemporalClient.AssertNotCalled(t, "UpdateWorkflow", mock.Anything, mock.Anything)
 }
 
-func TestUpdateFlowPortForwardsHandler_WorkflowMissingInTemporal(t *testing.T) {
+func TestUpdateFlowEnvHandler_WorkflowMissingInTemporal(t *testing.T) {
 	t.Parallel()
 
-	ctrl, mockTemporalClient, workspaceId, flowId := newPortForwardsTestController(t)
+	ctrl, mockTemporalClient, workspaceId, flowId := newEnvSettingsTestController(t)
 	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).
 		Return(nil, serviceerror.NewNotFound("workflow execution not found")).Once()
 
-	rr := putPortForwards(t, ctrl, workspaceId, flowId, `{"portForwards":[{"hostPort":3000}]}`)
+	rr := putEnvSettings(t, ctrl, workspaceId, flowId, `{"envType":"modal","portForwards":[{"hostPort":3000}]}`)
 
 	require.Equal(t, http.StatusNotFound, rr.Code)
 	assert.JSONEq(t, fmt.Sprintf(`{"error":"Flow with ID %s not found"}`, flowId), rr.Body.String())
 	mockTemporalClient.AssertExpectations(t)
 }
 
-func TestUpdateFlowPortForwardsHandler_SurfacesUpdateOutcomeFailure(t *testing.T) {
+func TestUpdateFlowEnvHandler_SurfacesUpdateOutcomeFailure(t *testing.T) {
 	t.Parallel()
 
-	ctrl, mockTemporalClient, workspaceId, flowId := newPortForwardsTestController(t)
+	ctrl, mockTemporalClient, workspaceId, flowId := newEnvSettingsTestController(t)
 	// The update request itself succeeds; the failure only shows up when the
 	// handle's outcome is inspected.
 	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).
 		Return(updateOutcomeHandle{err: errors.New("failed to bind container port 3000")}, nil).Once()
 
-	rr := putPortForwards(t, ctrl, workspaceId, flowId, `{"portForwards":[{"hostPort":3000}]}`)
+	rr := putEnvSettings(t, ctrl, workspaceId, flowId, `{"envType":"modal","portForwards":[{"hostPort":3000}]}`)
 
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 	var response map[string]string
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
-	assert.Contains(t, response["error"], "Failed to update port forwards")
+	assert.Contains(t, response["error"], "Failed to update workflow environment")
 	assert.Contains(t, response["error"], "failed to bind container port 3000")
 	mockTemporalClient.AssertExpectations(t)
 }
 
-func TestUpdateFlowModalConfigHandler_SurfacesUpdateOutcomeFailure(t *testing.T) {
+func TestUpdateFlowEnvHandler_ModalSurfacesUpdateOutcomeFailure(t *testing.T) {
 	t.Parallel()
 
-	ctrl, mockTemporalClient, workspaceId, flowId := newPortForwardsTestController(t)
+	ctrl, mockTemporalClient, workspaceId, flowId := newEnvSettingsTestController(t)
 	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).
 		Return(updateOutcomeHandle{err: errors.New("sandbox recreation failed")}, nil).Once()
 
 	req := httptest.NewRequest(
 		http.MethodPut,
-		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/modal_config", workspaceId, flowId),
-		bytes.NewReader([]byte(`{"config":{"memory":2048}}`)),
+		fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/env", workspaceId, flowId),
+		bytes.NewReader([]byte(`{"envType":"modal","modal":{"memory":2048}}`)),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -259,7 +264,7 @@ func TestUpdateFlowModalConfigHandler_SurfacesUpdateOutcomeFailure(t *testing.T)
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 	var response map[string]string
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
-	assert.Contains(t, response["error"], "Failed to update workflow Modal configuration")
+	assert.Contains(t, response["error"], "Failed to update workflow environment")
 	assert.Contains(t, response["error"], "sandbox recreation failed")
 	mockTemporalClient.AssertExpectations(t)
 }

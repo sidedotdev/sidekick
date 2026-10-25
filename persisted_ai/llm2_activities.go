@@ -121,8 +121,24 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, event)
 			}
-			if event.Type == llm2.EventHeartbeat || input.FlowActionId == "" {
+			if event.Type == llm2.EventHeartbeat || event.Type == llm2.EventUpstreamActivity || input.FlowActionId == "" {
 				continue
+			}
+
+			if isContentRelevantLlm2Event(event.Type) {
+				streamEvent := domain.Llm2StreamEvent{
+					EventType:    domain.Llm2StreamEventType,
+					FlowActionId: input.FlowActionId,
+					Event:        event,
+				}
+				err := la.Streamer.AddFlowEvent(context.Background(), input.WorkspaceId, input.FlowId, streamEvent)
+				if err != nil {
+					log.Error().Err(err).
+						Str("workspaceId", input.WorkspaceId).
+						Str("flowId", input.FlowId).
+						Str("flowActionId", input.FlowActionId).
+						Msg("failed to add llm2 stream event to flow event stream")
+				}
 			}
 
 			flowEvent := convertLlm2EventToFlowEvent(event, input.FlowActionId, streamedBlocks)
@@ -155,6 +171,11 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	}
 
 	options := input.Options
+	if options.PromptCacheKey == "" {
+		// Requests within a flow share long prompt prefixes, so routing them
+		// together maximizes provider-side prompt cache hits.
+		options.PromptCacheKey = input.FlowId
+	}
 	messages := llm2History.Llm2Messages()
 	if input.ToolNameMapping != nil {
 		options = mapOptionsToolNames(options, input.ToolNameMapping)
@@ -190,6 +211,18 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	}
 
 	return response, err
+}
+
+// isContentRelevantLlm2Event reports whether an llm2 event carries content the
+// UI needs to render blocks live. Signature deltas are opaque replay bytes and
+// heartbeats carry nothing, so neither is forwarded.
+func isContentRelevantLlm2Event(eventType llm2.EventType) bool {
+	switch eventType {
+	case llm2.EventBlockStarted, llm2.EventTextDelta, llm2.EventSummaryTextDelta, llm2.EventBlockDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // convertLlm2EventToFlowEvent converts an llm2.Event to a domain.FlowEvent for streaming.

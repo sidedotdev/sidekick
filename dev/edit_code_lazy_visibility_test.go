@@ -360,7 +360,6 @@ func TestVisibilityForRetry_RebasesPastFirstPassEditsInSameFile(t *testing.T) {
 	firstPass, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 		EditBlocks:   blocks,
 		EnvContainer: envContainer,
-		EnabledFlags: []string{fflag.CheckEdits},
 	})
 	require.NoError(t, err)
 	require.Len(t, firstPass, 2)
@@ -380,7 +379,6 @@ func TestVisibilityForRetry_RebasesPastFirstPassEditsInSameFile(t *testing.T) {
 	retryReports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 		EditBlocks:   []EditBlock{retryBlock},
 		EnvContainer: envContainer,
-		EnabledFlags: []string{fflag.CheckEdits},
 	})
 	require.NoError(t, err)
 	require.Len(t, retryReports, 1)
@@ -440,7 +438,6 @@ func TestLazyRetries_RebaseAcrossEarlierRetriesInSameFile(t *testing.T) {
 		reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 			EditBlocks:   blocks,
 			EnvContainer: envContainer,
-			EnabledFlags: []string{fflag.CheckEdits},
 		})
 		require.NoError(t, err)
 		return reports

@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { config, mount, flushPromises } from '@vue/test-utils'
+import { config, mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
 import PrimeVue from 'primevue/config'
 import IntentCanvasView from '../IntentCanvasView.vue'
 
 config.global.plugins.push(PrimeVue)
+config.global.stubs.RouterLink = RouterLinkStub
 
 const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }))
 
@@ -15,33 +16,6 @@ vi.mock('vue-router', () => ({
 vi.mock('../../lib/store', () => ({
   store: { workspaceId: 'ws-1' },
 }))
-
-vi.mock('codemirror', () => {
-  class EditorView {
-    state = { doc: { length: 0, toString: () => '' } }
-    dispatch() {}
-    destroy() {}
-    static theme() {
-      return {}
-    }
-    static lineWrapping = {}
-    static updateListener = { of: () => ({}) }
-  }
-  return { EditorView, basicSetup: {} }
-})
-
-vi.mock('@codemirror/state', () => ({
-  EditorState: { create: () => ({}) },
-  Compartment: class {
-    of() {
-      return {}
-    }
-    reconfigure() {
-      return {}
-    }
-  },
-}))
-vi.mock('@codemirror/lang-markdown', () => ({ markdown: () => ({}) }))
 
 vi.mock('../FlowView.vue', () => ({
   default: {
@@ -55,7 +29,7 @@ vi.mock('../FlowView.vue', () => ({
 }))
 
 vi.mock('../../lib/intent_diff_editor', () => ({
-  uncommittedHighlightExtension: () => ({}),
+  uncommittedHighlightExtension: () => [],
   applyUncommittedHighlight: () => {},
 }))
 
@@ -206,7 +180,7 @@ describe('IntentCanvasView', () => {
   })
 
   it('renders ongoing sub-tasks and clarifications from persisted flows', async () => {
-    installFetch((url, opts) => {
+    installFetch((url) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
         return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
@@ -256,7 +230,7 @@ describe('IntentCanvasView', () => {
   it('groups sub-tasks by status and orders them newest-first within a group', async () => {
     const now = Date.now()
     const iso = (msAgo: number) => new Date(now - msAgo).toISOString()
-    installFetch((url, opts) => {
+    installFetch((url) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
         return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
@@ -305,7 +279,7 @@ describe('IntentCanvasView', () => {
       { id: 'active', title: 'active0', status: 'in_progress', updated: recent },
       ...makeSubtasks(2),
     ]
-    installFetch((url, opts) => {
+    installFetch((url) => {
       const u = url.toString()
       if (u.endsWith('/intent/files')) {
         return Promise.resolve(jsonResponse({ files: [{ path: 'intent/overview.md', isDir: false }] }))
@@ -655,4 +629,47 @@ describe('IDD merge approval panel', () => {
       vi.useRealTimers()
     }
   })
+})
+it('switches the side panel to the next sub-task needing attention once its requests are cleared', async () => {
+  const now = Date.now()
+  const iso = (msAgo: number) => new Date(now - msAgo).toISOString()
+  const statuses: Record<string, string> = { 'sub-1': 'blocked', 'sub-2': 'in_progress', 'sub-3': 'blocked' }
+  installFetch(async (url) => {
+    if (url === flowBase) return jsonResponse({ flow: { id: 'flow-1', parentId: 'task-1' } })
+    if (url === taskFlowsUrl) return jsonResponse({
+      flows: [
+        { id: 'flow-1' },
+        { id: 'sub-1', title: 'Newest blocked', status: statuses['sub-1'], updated: iso(1000) },
+        { id: 'sub-2', title: 'Active', status: statuses['sub-2'], updated: iso(500) },
+        { id: 'sub-3', title: 'Older blocked', status: statuses['sub-3'], updated: iso(5000) },
+      ],
+    })
+    if (url === `${flowBase}/actions`) return jsonResponse({ flowActions: [{
+      actionType: 'user_request', actionStatus: 'pending', isHumanAction: true,
+      actionParams: { requestContent: 'Canvas-level question' },
+    }] })
+    if (url.endsWith('/actions')) return jsonResponse({ flowActions: [] })
+    return jsonResponse({})
+  })
+  const wrapper = mount(IntentCanvasView)
+  try {
+    await flushPromises()
+    const panelFlowId = () => wrapper.find('.side-panel-flow').attributes('data-flow-id')
+
+    await wrapper.findAll('.subtask-row')[0].trigger('click')
+    expect(panelFlowId()).toBe('sub-1')
+
+    // The just-submitted sub-task may still report blocked until its flow resumes
+    wrapper.findComponent({ name: 'FlowView' }).vm.$emit('userRequestsCleared')
+    await flushPromises()
+    expect(panelFlowId()).toBe('sub-3')
+
+    statuses['sub-1'] = 'in_progress'
+    statuses['sub-3'] = 'in_progress'
+    wrapper.findComponent({ name: 'FlowView' }).vm.$emit('userRequestsCleared')
+    await flushPromises()
+    expect(wrapper.find('.side-panel').exists()).toBe(false)
+  } finally {
+    wrapper.unmount()
+  }
 })

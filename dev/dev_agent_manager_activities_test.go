@@ -58,6 +58,53 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 	assert.False(t, updatedTask.Updated.IsZero(), "Updated time should be set")
 }
 
+func TestGetFlowTaskTitle(t *testing.T) {
+	t.Parallel()
+	ima := newDevAgentManagerActivities(t)
+	ctx := context.Background()
+	workspaceId := "ws_flowTaskTitle"
+
+	tasks := []domain.Task{
+		{WorkspaceId: workspaceId, Id: "task_titled", Title: "Rename npm package", Description: "bgx is taken in npm"},
+		{WorkspaceId: workspaceId, Id: "task_copied", Title: "bgx is taken in npm", Description: "bgx is taken in npm"},
+	}
+	for _, task := range tasks {
+		require.NoError(t, ima.Storage.PersistTask(ctx, task))
+	}
+	flows := []domain.Flow{
+		{WorkspaceId: workspaceId, Id: "flow_titled", ParentId: "task_titled"},
+		{WorkspaceId: workspaceId, Id: "flow_copied", ParentId: "task_copied"},
+		{WorkspaceId: workspaceId, Id: "flow_noTask", ParentId: "workflow_other"},
+	}
+	for _, flow := range flows {
+		require.NoError(t, ima.Storage.PersistFlow(ctx, flow))
+	}
+
+	cases := []struct {
+		name     string
+		flowId   string
+		expected string
+		wantErr  bool
+	}{
+		{name: "distinct task title", flowId: "flow_titled", expected: "Rename npm package"},
+		{name: "title copied from description", flowId: "flow_copied", expected: ""},
+		{name: "flow without parent task", flowId: "flow_noTask", expected: ""},
+		{name: "missing flow", flowId: "flow_missing", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := ima.GetFlowTaskTitle(ctx, GetFlowTaskTitleInput{WorkspaceId: workspaceId, FlowId: tc.flowId})
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, output.Title)
+		})
+	}
+}
+
 func TestUpdateTask(t *testing.T) {
 	ima := newDevAgentManagerActivities(t)
 	storage := ima.Storage
@@ -299,4 +346,49 @@ func TestFindHibernationCandidates_SkipsAlreadyHibernated(t *testing.T) {
 	require.Len(t, output.Candidates, 1)
 	assert.Equal(t, "flow_active", output.Candidates[0].FlowId)
 	assert.Equal(t, activeDir, output.Candidates[0].WorktreePath)
+}
+
+func TestFindHibernationCandidates_SkipsEnvTypesWithoutHibernation(t *testing.T) {
+	t.Parallel()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
+	ctx := context.Background()
+	workspaceId := "ws_hibcandidates_envtype"
+
+	persistTaskFlowWorktree := func(suffix string, envType env.EnvType) {
+		taskId := "task_" + suffix
+		flowId := "flow_" + suffix
+		require.NoError(t, storage.PersistTask(ctx, domain.Task{
+			WorkspaceId: workspaceId,
+			Id:          taskId,
+			Status:      domain.TaskStatusBlocked,
+			FlowOptions: map[string]interface{}{"envType": string(envType)},
+		}))
+		require.NoError(t, storage.PersistFlow(ctx, domain.Flow{
+			WorkspaceId: workspaceId,
+			Id:          flowId,
+			ParentId:    taskId,
+			Status:      "paused",
+		}))
+		// Remote worktree paths live inside the sandbox/container, so they
+		// never exist on the worker's filesystem.
+		require.NoError(t, storage.PersistWorktree(ctx, domain.Worktree{
+			Id:               "wt_" + suffix,
+			FlowId:           flowId,
+			Name:             "side/" + suffix,
+			WorkspaceId:      workspaceId,
+			WorkingDirectory: "/root/remote/worktrees/" + suffix,
+		}))
+	}
+
+	persistTaskFlowWorktree("modal", env.EnvTypeModal)
+	persistTaskFlowWorktree("devpod", env.EnvTypeDevPod)
+
+	output, err := ima.FindHibernationCandidates(ctx, HibernationCandidatesInput{
+		WorkspaceId:       workspaceId,
+		InactivityTimeout: 0,
+	})
+	require.NoError(t, err)
+	require.Len(t, output.Candidates, 1)
+	assert.Equal(t, "flow_devpod", output.Candidates[0].FlowId)
 }

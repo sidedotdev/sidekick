@@ -829,23 +829,17 @@ type iddChildMergeFixture struct {
 func setupIddChildMergeFixture(t *testing.T) iddChildMergeFixture {
 	t.Helper()
 
-	hostRepoDir := setupTestGitRepo(t)
-	createCommitWithFile(t, hostRepoDir, "Initial commit", "intent.md", "base intent\n")
+	root := t.TempDir()
+	require.NoError(t, iddRepositoriesFixture.CopyTo(root))
+	hostRepoDir := filepath.Join(root, "host")
+	childRepoDir := filepath.Join(root, "child")
 
 	hostWorktreeDir := filepath.Join(t.TempDir(), "idd-worktree")
-	runGitCommandInTestRepo(t, hostRepoDir, "worktree", "add", "-b", iddBranch, hostWorktreeDir, "main")
-	createCommitWithFile(t, hostWorktreeDir, "Authored intent", "intent.md", "authored intent\n")
-
-	childRepoDir := filepath.Join(t.TempDir(), "child")
-	runGitCommandInTestRepo(t, hostRepoDir, "clone", hostRepoDir, childRepoDir)
-	runGitCommandInTestRepo(t, childRepoDir, "checkout", "-b", iddChildBranch, "origin/"+iddBranch)
-	createCommitWithFile(t, childRepoDir, "Child work", "child.txt", "child work\n")
+	runGitCommandInTestRepo(t, hostRepoDir, "worktree", "add", hostWorktreeDir, iddBranch)
 
 	// The local IDD branch advances after the child branched off, so the child
 	// must merge against the refreshed branch for the host branch to
 	// fast-forward afterwards.
-	createCommitWithFile(t, hostWorktreeDir, "Later intent edit", "intent.md", "updated intent\n")
-
 	return iddChildMergeFixture{
 		hostRepoDir:      hostRepoDir,
 		hostWorktreeDir:  hostWorktreeDir,
@@ -998,16 +992,85 @@ func (e *hostTargetMergeEnv) SSHConnConfig(context.Context) (env.SSHConnConfig, 
 	return env.SSHConnConfig{}, errors.New("native SSH is not used by this fixture")
 }
 
+// installMergeTestSSH routes merge-test-host through a local shell and
+// forwards other SSH invocations unchanged using the original PATH.
+func installMergeTestSSH(dir, path string) (string, error) {
+	sshDir := filepath.Join(dir, "merge-test-ssh")
+	if err := os.MkdirAll(sshDir, 0755); err != nil {
+		return "", err
+	}
+	script := `#!/bin/sh
+run_fixture() {
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			-o|-p|-i)
+				[ "$#" -ge 2 ] || return 1
+				shift 2
+				;;
+			merge-test-host)
+				shift
+				exec sh -c "$*"
+				;;
+			*) return 1 ;;
+		esac
+	done
+	return 1
+}
+run_fixture "$@"
+PATH=` + shellQuote(path) + ` exec ssh "$@"
+`
+	if err := os.WriteFile(filepath.Join(sshDir, "ssh"), []byte(script), 0755); err != nil {
+		return "", err
+	}
+	return sshDir + string(os.PathListSeparator) + path, nil
+}
+
+// A remote env's own copy of the target branch lags the host. After resolving
+// a host conflict recreated remotely, review diffs taken against the target
+// branch name must show only the flow's work, not base changes merged in.
+func TestGitMergeActivityHostConflictReviewDiffExcludesBaseChanges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	fixture := setupIddChildMergeFixture(t)
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "branch", iddBranch, "origin/"+iddBranch)
+	createCommitWithFile(t, fixture.childRepoDir, "Conflicting intent", "intent.md", "child intent\n")
+	createCommitWithFile(t, fixture.hostWorktreeDir, "Base only", "base-only.txt", "base only\n")
+	childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
+	require.NoError(t, err)
+	container := env.EnvContainer{Env: &hostTargetMergeEnv{mergeResultSyncerEnv: &mergeResultSyncerEnv{
+		Env: childEnv, t: t, childRepoDir: fixture.childRepoDir, hostRepoDir: fixture.hostRepoDir,
+	}}}
+
+	result, err := GitMergeActivity(ctx, container, GitMergeParams{
+		SourceBranch: iddChildBranch, TargetBranch: iddBranch,
+	})
+	require.NoError(t, err)
+	require.True(t, result.HasConflicts)
+	require.Equal(t, evalSymlinks(t, fixture.childRepoDir), evalSymlinks(t, result.ConflictDirPath))
+
+	require.NoError(t, os.WriteFile(filepath.Join(fixture.childRepoDir, "intent.md"), []byte("resolved intent\n"), 0644))
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "add", "intent.md")
+	runGitCommandInTestRepo(t, fixture.childRepoDir, "commit", "--no-edit")
+
+	diff, err := GitDiffActivity(ctx, container, GitDiffParams{
+		BaseRef: iddBranch, ThreeDotDiff: true, Staged: true,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, diff, "base-only.txt")
+	assert.Contains(t, diff, "+child work")
+	assert.Contains(t, diff, "-updated intent")
+	assert.Contains(t, diff, "+resolved intent")
+}
+
 func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
-	sshDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "ssh"), []byte("#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -o|-p|-i) shift 2 ;;\n    merge-test-host) shift; exec sh -c \"$*\" ;;\n    *) exit 2 ;;\n  esac\ndone\nexit 2\n"), 0755))
-	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GIT_SSH_VARIANT", "ssh")
+	t.Parallel()
 	ctx := context.Background()
 
 	for _, strategy := range []MergeStrategy{MergeStrategyMerge, MergeStrategySquash} {
 		for _, scenario := range []string{"clean", "dirty", "stash conflict", "ordinary conflict", "no host worktree", "backup failure"} {
 			t.Run(string(strategy)+"/"+scenario, func(t *testing.T) {
+				t.Parallel()
 				fixture := setupIddChildMergeFixture(t)
 				childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
 				require.NoError(t, err)

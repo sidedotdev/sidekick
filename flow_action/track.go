@@ -243,6 +243,7 @@ func trackFlowAction[T any](actionCtx ActionContext, isHumanAction bool, f func(
 		propagationEnabled = true
 		enrichedActionCtx.Context = workflow.WithValue(eCtx.Context, flowActionIdCtxKey, flowAction.Id)
 	}
+	enrichedActionCtx.Context = withTrackedFlowAction(enrichedActionCtx.Context, flowAction)
 
 	// perform the actual action being tracked
 	val, err := f(enrichedActionCtx, flowAction)
@@ -334,6 +335,7 @@ func trackFlowActionFailureOnly[T any](actionCtx ActionContext, f func(actionCtx
 		flowAction.Id = "fa_" + utils.KsuidSideEffect(eCtx)
 		enrichedActionCtx.Context = workflow.WithValue(eCtx.Context, flowActionIdCtxKey, flowAction.Id)
 	}
+	enrichedActionCtx.Context = withTrackedFlowAction(enrichedActionCtx.Context, flowAction)
 
 	// perform the actual action being tracked
 	val, err := f(enrichedActionCtx, flowAction)
@@ -356,7 +358,28 @@ func trackFlowActionFailureOnly[T any](actionCtx ActionContext, f func(actionCtx
 		return defaultT, err
 	}
 
-	// if no err, we don't persist a flow action, just return early
+	// Without failures the flow action was never persisted, so there is
+	// nothing to finalize. Recorded retry attempts mean it was persisted
+	// mid-retry and must not be left started forever.
+	if len(flowAction.Attempts) == 0 {
+		return val, nil
+	}
+	flowAction.ActionStatus = domain.ActionStatusComplete
+	jsonVal, err := json.Marshal(val)
+	if err != nil {
+		return defaultT, fmt.Errorf("failed to convert val to json: %v", err)
+	}
+	flowAction.ActionResult = string(jsonVal)
+	updateECtx := eCtx
+	if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
+		disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+		updateECtx.Context = disconnectedWorkflowCtx
+	}
+	persisted, err := putFlowAction(updateECtx, *flowAction)
+	if err != nil {
+		return val, fmt.Errorf("failed to mark flow action as completed: %v", err)
+	}
+	*flowAction = persisted
 	return val, nil
 }
 

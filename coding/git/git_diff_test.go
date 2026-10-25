@@ -53,13 +53,10 @@ func (s *GitDiffWorkflowTestSuite) SetupTest() {
 			Context:      ctx1,
 			EnvContainer: &envContainer,
 		}
-		// TODO /gen switch to testing GitDiff instead of GitDiffLegacy, with the fflag
-		// activity mocked with OnActivity
-		return GitDiffLegacy(eCtx)
+		return GitDiff(eCtx)
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
-	s.env.RegisterActivity(env.EnvRunCommandActivity)
-	s.env.RegisterActivity(DiffUntrackedFilesActivity)
+	s.env.RegisterActivity(GitDiffActivity)
 
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
@@ -117,9 +114,12 @@ func (s *GitDiffWorkflowTestSuite) TestGitDiffExistingFile() {
 	err = cmd.Run()
 	s.NoError(err)
 
-	// after changes to the existing file, should show the diff
+	// after staged changes to the existing file, should show the diff
 	err = os.WriteFile(filePath, []byte("changed file content"), fs.FileMode(0644))
 	s.NoError(err)
+	cmd = exec.Command("git", "add", "existing_file.txt")
+	cmd.Dir = s.dir
+	s.NoError(cmd.Run())
 
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer)
 	s.True(s.env.IsWorkflowCompleted())
@@ -132,16 +132,13 @@ func (s *GitDiffWorkflowTestSuite) TestGitDiffExistingFile() {
 }
 
 func (s *GitDiffWorkflowTestSuite) TestGitDiffNewFile() {
-	// Create a new untracked file in the git repository
 	filePath := filepath.Join(s.dir, "new_file.txt")
-	file, err := os.Create(filePath)
+	err := os.WriteFile(filePath, []byte("new file content"), fs.FileMode(0644))
 	s.NoError(err)
-	defer file.Close()
+	cmd := exec.Command("git", "add", "new_file.txt")
+	cmd.Dir = s.dir
+	s.NoError(cmd.Run())
 
-	_, err = file.WriteString("new file content")
-	s.NoError(err)
-
-	// Test GitDiff with the new file
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
@@ -149,6 +146,25 @@ func (s *GitDiffWorkflowTestSuite) TestGitDiffNewFile() {
 	s.NoError(s.env.GetWorkflowResult(&result))
 	s.Contains(result, "new_file.txt")
 	s.Contains(result, "new file content")
+}
+
+func (s *GitDiffWorkflowTestSuite) TestGitDiffExcludesUnstagedChanges() {
+	err := os.WriteFile(filepath.Join(s.dir, "staged.txt"), []byte("staged content"), fs.FileMode(0644))
+	s.NoError(err)
+	cmd := exec.Command("git", "add", "staged.txt")
+	cmd.Dir = s.dir
+	s.NoError(cmd.Run())
+
+	err = os.WriteFile(filepath.Join(s.dir, "untracked.txt"), []byte("untracked content"), fs.FileMode(0644))
+	s.NoError(err)
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+	var result string
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.Contains(result, "staged content")
+	s.NotContains(result, "untracked content")
 }
 
 func TestGitDiffActivity(t *testing.T) {
@@ -745,31 +761,8 @@ func TestGitDiffActivity_StagedIncludesUnmergedFilesDuringConflict(t *testing.T)
 // unmerged (no stage-0 index entry). It returns the repo directory.
 func setupMergeConflictRepo(t *testing.T) string {
 	t.Helper()
-
-	repoDir := setupTestGitRepo(t)
-
-	createFileAndCommit(t, repoDir, "conflict.txt", "base\n", "initial commit")
-
-	runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "conflict.txt"), []byte("feature change\n"), fs.FileMode(0644)))
-	runGitCommandInTestRepo(t, repoDir, "commit", "-am", "feature change")
-
-	runGitCommandInTestRepo(t, repoDir, "checkout", "main")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "conflict.txt"), []byte("main change\n"), fs.FileMode(0644)))
-	runGitCommandInTestRepo(t, repoDir, "commit", "-am", "main change")
-
-	// The merge conflicts on purpose, leaving conflict.txt unmerged; a non-zero
-	// exit is expected here so we don't use the require.NoError helper.
-	mergeCmd := exec.Command("git", "merge", "feature")
-	mergeCmd.Dir = repoDir
-	mergeCmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=Test User",
-		"GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test User",
-		"GIT_COMMITTER_EMAIL=test@example.com",
-	)
-	_ = mergeCmd.Run()
-
+	repoDir := t.TempDir()
+	require.NoError(t, mergeConflictFixture.CopyTo(repoDir))
 	return repoDir
 }
 

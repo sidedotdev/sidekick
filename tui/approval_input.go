@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -22,6 +23,7 @@ const (
 	approvalInputModeApproval
 	approvalInputModeRejectionFeedback
 	approvalInputModeContinue
+	approvalInputModeProviderAuth
 )
 
 // ApprovalInputModel is a bubbles component for handling user approval input
@@ -35,6 +37,9 @@ type ApprovalInputModel struct {
 
 	// Merge approval specific state
 	mergeStrategy string // "squash" or "merge"
+
+	providerAuth providerAuthState
+	apiKeyInput  textinput.Model
 }
 
 // MergeStrategyPrefs holds persisted merge strategy preferences
@@ -71,6 +76,7 @@ func NewApprovalInputModel() ApprovalInputModel {
 		textarea:      ta,
 		mode:          approvalInputModeNone,
 		mergeStrategy: mergeStrategy,
+		apiKeyInput:   newAPIKeyInput(),
 	}
 }
 
@@ -123,14 +129,27 @@ func saveMergeStrategyPref(strategy string) {
 
 // SetAction sets the pending action and determines the input mode
 func (m *ApprovalInputModel) SetAction(action *client.FlowAction) tea.Cmd {
+	sameAction := m.action != nil && action != nil && m.action.Id == action.Id
 	m.action = action
 	if action == nil {
 		m.mode = approvalInputModeNone
 		m.textarea.Reset()
 		m.textarea.Blur()
+		m.resetProviderAuth(nil)
 		return nil
 	}
 	m.mode = getApprovalInputMode(*action)
+
+	// Pending actions are re-delivered while they wait; keep an in-progress
+	// login rather than restarting it.
+	if m.mode == approvalInputModeProviderAuth {
+		if !sameAction {
+			m.textarea.Reset()
+			m.textarea.Blur()
+			m.resetProviderAuth(action)
+		}
+		return nil
+	}
 
 	// For merge approval, initialize merge strategy from action params or persisted pref
 	if requestKind, ok := action.ActionParams["requestKind"].(string); ok && requestKind == "merge_approval" {
@@ -201,12 +220,16 @@ func (m *ApprovalInputModel) Clear() {
 	m.mode = approvalInputModeNone
 	m.textarea.Reset()
 	m.textarea.Blur()
+	m.resetProviderAuth(nil)
 }
 
 // Update handles messages for the approval input component
 func (m ApprovalInputModel) Update(msg tea.Msg) (ApprovalInputModel, tea.Cmd) {
 	if m.action == nil {
 		return m, nil
+	}
+	if updated, cmd, handled := m.handleProviderAuthMsg(msg); handled {
+		return updated, cmd
 	}
 
 	switch msg := msg.(type) {
@@ -220,10 +243,17 @@ func (m ApprovalInputModel) Update(msg tea.Msg) (ApprovalInputModel, tea.Cmd) {
 			return m.handleContinueInput(msg)
 		case approvalInputModeFreeForm:
 			return m.handleFreeFormInput(msg)
+		case approvalInputModeProviderAuth:
+			return m.handleProviderAuthInput(msg)
 		}
 	default:
 		var cmd tea.Cmd
 		m.textarea, cmd = m.textarea.Update(msg)
+		if m.mode == approvalInputModeProviderAuth && m.providerAuth.step == providerAuthStepAPIKey {
+			var inputCmd tea.Cmd
+			m.apiKeyInput, inputCmd = m.apiKeyInput.Update(msg)
+			cmd = tea.Batch(cmd, inputCmd)
+		}
 		return m, cmd
 	}
 	return m, nil
@@ -281,6 +311,9 @@ func (m ApprovalInputModel) handleApprovalInput(msg tea.KeyMsg) (ApprovalInputMo
 	case "y", "Y":
 		return m, m.submitApproval(true, "")
 	case "n", "N":
+		if required, ok := m.action.ActionParams["rejectReasonRequired"].(bool); ok && !required {
+			return m, m.submitApproval(false, "")
+		}
 		m.mode = approvalInputModeRejectionFeedback
 		m.textarea.Focus()
 		return m, textarea.Blink
@@ -392,11 +425,13 @@ func (m ApprovalInputModel) submitContinue() tea.Cmd {
 
 // Tag to label mappings for approval buttons
 var approvalApproveTagLabels = map[string]string{
-	"approve_plan": "Approve",
+	"approve_plan":   "Approve",
+	"restart_docker": "Restart Docker",
 }
 
 var approvalRejectTagLabels = map[string]string{
-	"reject_plan": "Revise",
+	"reject_plan":           "Revise",
+	"retry_without_restart": "Retry Without Restart",
 }
 
 var approvalContinueTagLabels = map[string]string{
@@ -435,6 +470,8 @@ func getApprovalInputMode(action client.FlowAction) approvalInputMode {
 		return approvalInputModeApproval
 	case "continue":
 		return approvalInputModeContinue
+	case "provider_auth":
+		return approvalInputModeProviderAuth
 	default:
 		return approvalInputModeFreeForm
 	}
@@ -513,6 +550,9 @@ func (m ApprovalInputModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Press Enter to submit, Shift+Enter for newline, Esc to clear"))
 		b.WriteString("\n")
+
+	case approvalInputModeProviderAuth:
+		b.WriteString(m.providerAuthView())
 	}
 
 	return b.String()

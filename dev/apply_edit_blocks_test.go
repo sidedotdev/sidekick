@@ -12,7 +12,6 @@ import (
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
-	"sidekick/fflag"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
@@ -237,8 +236,6 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			// note: since CheckEdits isn't enabled in this test, we don't need
-			// a git repo
 			tmpDir := t.TempDir()
 
 			if tt.isExistingFile {
@@ -246,6 +243,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 				err := os.WriteFile(filePath, []byte(tt.existingContent), 0644)
 				require.NoError(t, err)
 			}
+			initCommittedGitRepo(t, tmpDir)
 
 			envContainer := env.EnvContainer{
 				Env: &env.LocalEnv{
@@ -258,7 +256,6 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
-					EnabledFlags: []string{}, // explicitly skips check-edits flag for now (TODO: remove that flag and make it the default)
 				},
 			)
 
@@ -512,6 +509,7 @@ func getValue() int {
 			filePath := filepath.Join(tmpDir, tt.filePath)
 			err := os.WriteFile(filePath, []byte(tt.initialContent), 0644)
 			require.NoError(t, err)
+			initCommittedGitRepo(t, tmpDir)
 
 			envContainer := env.EnvContainer{
 				Env: &env.LocalEnv{
@@ -524,7 +522,6 @@ func getValue() int {
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
-					EnabledFlags: []string{},
 				},
 			)
 
@@ -539,10 +536,10 @@ func getValue() int {
 	}
 }
 
-// TestApplyEditBlocks_StagesAppliedEditsWithoutChecks guards the review diffs,
-// which are computed from staged changes: every applied edit must be staged
-// even when edit checks are disabled, whether or not the file already existed.
-func TestApplyEditBlocks_StagesAppliedEditsWithoutChecks(t *testing.T) {
+// TestApplyEditBlocks_StagesAppliedEdits guards the review diffs, which are
+// computed from staged changes: every applied edit must be staged, whether or
+// not the file already existed.
+func TestApplyEditBlocks_StagesAppliedEdits(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
 
@@ -589,7 +586,6 @@ func TestApplyEditBlocks_StagesAppliedEditsWithoutChecks(t *testing.T) {
 	reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 		EnvContainer: envContainer,
 		EditBlocks:   editBlocks,
-		EnabledFlags: []string{},
 	})
 	require.NoError(t, err)
 	require.Len(t, reports, 2)
@@ -605,28 +601,96 @@ func TestApplyEditBlocks_StagesAppliedEditsWithoutChecks(t *testing.T) {
 	staged := strings.Fields(string(stagedOut))
 	assert.Contains(t, staged, "created.txt")
 	assert.Contains(t, staged, "existing.txt")
-
-	t.Run("outside a git repository", func(t *testing.T) {
-		t.Parallel()
-		nonRepoDir := t.TempDir()
-
-		reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
-			EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: nonRepoDir}},
-			EditBlocks: []EditBlock{{
-				EditType: "create",
-				FilePath: "created.txt",
-				NewLines: []string{"created content\n"},
-			}},
-			EnabledFlags: []string{},
-		})
-		require.NoError(t, err)
-		require.Len(t, reports, 1)
-		assert.Empty(t, reports[0].Error, "editing outside a git repository must still work")
-		assert.True(t, reports[0].DidApply)
-	})
 }
 
-func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
+// TestApplyEditBlocks_GitIgnoredPath covers edits to Sidekick's git-ignored
+// scratch directory, which cannot be staged but must still count as applied.
+func TestApplyEditBlocks_GitIgnoredPath(t *testing.T) {
+	t.Parallel()
+
+	const createdPath = ".side/tmp/created.txt"
+	const existingPath = ".side/tmp/existing.txt"
+
+	testCases := []struct {
+		name       string
+		editBlocks []EditBlock
+	}{
+		{
+			name: "sequential",
+			editBlocks: []EditBlock{
+				{EditType: "create", FilePath: createdPath, NewLines: []string{"created content"}},
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"first"}, NewLines: []string{"first updated"}},
+			},
+		},
+		{
+			name: "batch",
+			editBlocks: []EditBlock{
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"first"}, NewLines: []string{"first updated"}},
+				{EditType: "update", FilePath: existingPath, OldLines: []string{"second"}, NewLines: []string{"second updated"}},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmpDir := t.TempDir()
+
+			runGitCommand(t, tmpDir, "init")
+			runGitCommand(t, tmpDir, "config", "user.email", "test@example.com")
+			runGitCommand(t, tmpDir, "config", "user.name", "Test User")
+			require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "tracked.txt"), []byte("tracked\n"), 0644))
+			runGitCommand(t, tmpDir, "add", ".")
+			runGitCommand(t, tmpDir, "commit", "-m", "Initial commit")
+
+			excludePath := filepath.Join(tmpDir, ".git", "info", "exclude")
+			require.NoError(t, os.MkdirAll(filepath.Dir(excludePath), 0755))
+			require.NoError(t, os.WriteFile(excludePath, []byte("/.side/tmp/\n"), 0644))
+			require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".side", "tmp"), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(tmpDir, existingPath), []byte("first\nsecond\n"), 0644))
+
+			da := &DevActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(languageName string) lsp.LSPClient {
+						return &lsp.Jsonrpc2LSPClient{LanguageName: languageName}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+			}
+
+			reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+				EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tmpDir}},
+				EditBlocks:   tc.editBlocks,
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, reports)
+
+			for _, report := range reports {
+				assert.True(t, report.DidApply, "report for %s should be applied", report.FilePath())
+				assert.Empty(t, report.Error, "report for %s should have no error", report.FilePath())
+				assert.True(t, report.CheckResult.Success, "report for %s should have a successful check result", report.FilePath())
+				for _, diff := range []string{report.InitialDiff, report.FinalDiff} {
+					assert.NotContains(t, diff, "ignored by one of your .gitignore files")
+					assert.NotContains(t, diff, "hint:")
+					if diff != "" {
+						assert.NotEmpty(t, getLineEditsFromDiff(diff), "diff should be a parseable unified diff: %q", diff)
+					}
+				}
+			}
+
+			feedback := feedbackFromApplyEditBlockReports(reports)
+			assert.Contains(t, feedback, "application succeeded")
+			assert.NotContains(t, feedback, "git add")
+			assert.NotContains(t, feedback, "gitignore")
+
+			existingContent, err := os.ReadFile(filepath.Join(tmpDir, existingPath))
+			require.NoError(t, err)
+			assert.Contains(t, string(existingContent), "first updated")
+		})
+	}
+}
+
+func TestApplyEditBlockActivity_deleteStagesDeletion(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
 
@@ -675,17 +739,15 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 		},
 	}
 
-	// Test with CheckEdits flag enabled
 	reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 		EnvContainer: envContainer,
 		EditBlocks:   []EditBlock{editBlock},
-		EnabledFlags: []string{fflag.CheckEdits}, // Enable CheckEdits flag
 	})
 
 	// Verify the operation succeeded
 	assert.Nil(t, err)
 	assert.Len(t, reports, 1)
-	assert.Equal(t, "", reports[0].Error, "DELETE_FILE operation should not report errors when CheckEdits is enabled")
+	assert.Equal(t, "", reports[0].Error, "DELETE_FILE operation should not report errors")
 	assert.True(t, reports[0].DidApply, "DELETE_FILE operation should be marked as applied")
 	assert.NotEmpty(t, reports[0].FinalDiff, "DELETE_FILE operation should generate git diff output")
 	assert.True(t, reports[0].CheckResult.Success, "DELETE_FILE operation check result should be success")
@@ -1302,7 +1364,6 @@ func main() {
 		ApplyEditBlockActivityInput{
 			EnvContainer: envContainer,
 			EditBlocks:   editBlocks,
-			EnabledFlags: []string{fflag.CheckEdits},
 		},
 	)
 
@@ -1314,6 +1375,22 @@ func main() {
 
 	content, _ := os.ReadFile(filepath.Join(tmpDir, "temp.go"))
 	assert.Equal(t, expectedContent, string(content))
+}
+
+// initCommittedGitRepo makes dir a git repository with its current contents
+// committed, since applied edits are checked and staged via git.
+func initCommittedGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init"},
+		{"add", "."},
+		{"-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "--allow-empty", "-m", "initial commit"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
 }
 
 // Helper function to run git commands in a specific directory
@@ -1400,7 +1477,6 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 			EnvContainer: env.EnvContainer{
 				Env: &env.LocalEnv{WorkingDirectory: tmpDirA},
 			},
-			EnabledFlags: []string{fflag.CheckEdits},
 		}
 		reportsA1, err := da.ApplyEditBlocks(context.Background(), inputA1)
 		require.NoError(t, err)
@@ -1438,7 +1514,6 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 			EnvContainer: env.EnvContainer{
 				Env: &env.LocalEnv{WorkingDirectory: tmpDirA},
 			},
-			EnabledFlags: []string{fflag.CheckEdits},
 		}
 		reportsA2, err := da.ApplyEditBlocks(context.Background(), inputA2)
 		require.NoError(t, err)
@@ -1502,7 +1577,6 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 			EnvContainer: env.EnvContainer{
 				Env: &env.LocalEnv{WorkingDirectory: tmpDirB},
 			},
-			EnabledFlags: []string{fflag.CheckEdits},
 		}
 		reportsB1, err := da.ApplyEditBlocks(context.Background(), inputB1)
 		require.NoError(t, err)
@@ -1542,7 +1616,6 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 			EnvContainer: env.EnvContainer{
 				Env: &env.LocalEnv{WorkingDirectory: tmpDirB},
 			},
-			EnabledFlags: []string{fflag.CheckEdits},
 		}
 		reportsB2, err := da.ApplyEditBlocks(context.Background(), inputB2)
 		require.NoError(t, err)
@@ -1572,7 +1645,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 	})
 }
 
-func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
+func TestApplyEditBlocks_checksGoEdits(t *testing.T) {
 	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "editBlocksTest")
 	require.Nil(t, err)
@@ -1674,7 +1747,6 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
-					EnabledFlags: []string{fflag.CheckEdits},
 				},
 			)
 
@@ -1759,7 +1831,6 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 	input := ApplyEditBlockActivityInput{
 		EnvContainer:  envContainer,
 		EditBlocks:    []EditBlock{editBlock},
-		EnabledFlags:  []string{fflag.CheckEdits},
 		CheckCommands: []common.CommandConfig{{Command: "false"}}, // Ensure check fails
 	}
 
@@ -1839,7 +1910,6 @@ func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
 	input := ApplyEditBlockActivityInput{
 		EnvContainer:  envContainer,
 		EditBlocks:    []EditBlock{editBlock},
-		EnabledFlags:  []string{fflag.CheckEdits},
 		CheckCommands: []common.CommandConfig{{Command: "true"}}, // Ensure check passes
 	}
 
@@ -2110,8 +2180,7 @@ func DoSomething() {
 				WorkingDirectory: tmpDir,
 			},
 		},
-		EditBlocks:   editBlocks,
-		EnabledFlags: []string{fflag.CheckEdits},
+		EditBlocks: editBlocks,
 	}
 	devActivities := &DevActivities{
 		LSPActivities: &lsp.LSPActivities{
@@ -2250,7 +2319,6 @@ func TestApplyEditBlocks_BatchByFile_AllPass(t *testing.T) {
 	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 		EnvContainer: envContainer,
 		EditBlocks:   editBlocks,
-		EnabledFlags: []string{fflag.CheckEdits},
 	})
 
 	require.NoError(t, err)
@@ -2362,7 +2430,6 @@ func TestApplyEditBlocks_BatchByFile_SomeFailCheck(t *testing.T) {
 	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 		EnvContainer:  envContainer,
 		EditBlocks:    editBlocks,
-		EnabledFlags:  []string{fflag.CheckEdits},
 		CheckCommands: []common.CommandConfig{checkCmd},
 	})
 
@@ -2468,7 +2535,6 @@ func TestApplyEditBlocks_BatchByFile_ParallelExecution(t *testing.T) {
 	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 		EnvContainer: envContainer,
 		EditBlocks:   editBlocks,
-		EnabledFlags: []string{fflag.CheckEdits},
 	})
 
 	require.NoError(t, err)
@@ -2533,7 +2599,6 @@ func TestApplyEditBlocks_BatchByFile_SingleBlockPerFile_NoFallback(t *testing.T)
 	reports, err := da.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
 		EnvContainer: envContainer,
 		EditBlocks:   editBlocks,
-		EnabledFlags: []string{fflag.CheckEdits},
 	})
 
 	require.NoError(t, err)

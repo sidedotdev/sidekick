@@ -17,14 +17,11 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	"go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/converter"
 	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -150,7 +147,6 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	// Defaults match flags.yml production defaults.
 	var ffa *fflag.FFlagActivities
 	knownFlags := map[string]bool{
-		fflag.CheckEdits:                        true,
 		fflag.InfoNeeds:                         false,
 		fflag.DisableContextCodeVisibilityCheck: true,
 		fflag.InitialRepoSummary:                true,
@@ -266,17 +262,20 @@ func (s *AuthorEditBlocksTestSuite) testModelUpdateRebuildsAuthoringTools(prompt
 		Return(ResolveToolNameMappingResult{UseMapping: true}, nil).
 		Maybe()
 
+	callbacks := &modelConfigUpdateCallbacks{}
 	var activities *persisted_ai.Llm2Activities
 	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
 		return input.Options.ModelConfig.Model == "initial-coding" &&
 			len(input.Options.Tools) > 0 &&
 			!streamInputHasTool(input, readImageTool.Name)
-	})).Return(&llm2.MessageResponse{
-		StopReason: "stop",
-		Output: llm2.Message{
-			Role: llm2.RoleAssistant,
-		},
-	}, nil).After(time.Second).Once()
+	})).Return(func(ctx context.Context, _ persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+		// The update must cancel a running stream, not race its mock invocation.
+		s.env.RegisterDelayedCallback(func() {
+			s.env.UpdateWorkflow(UpdateNameModelConfig, "authoring-model-update", callbacks, updatedConfig)
+		}, 0)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}).Once()
 	s.env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
 		return input.Options.ModelConfig.Model == "updated" &&
 			streamInputHasTool(input, readImageTool.Name) &&
@@ -292,21 +291,6 @@ func (s *AuthorEditBlocksTestSuite) testModelUpdateRebuildsAuthoringTools(prompt
 			}},
 		},
 	}, nil).Once()
-
-	callbacks := &modelConfigUpdateCallbacks{}
-	s.env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, args converter.EncodedValues) {
-		if info.ActivityType.Name != "Stream" {
-			return
-		}
-		var input persisted_ai.StreamInput
-		s.Require().NoError(args.Get(&input))
-		if input.Options.ModelConfig.Model != "initial-coding" {
-			return
-		}
-		s.env.RegisterDelayedCallback(func() {
-			s.env.UpdateWorkflow(UpdateNameModelConfig, "authoring-model-update", callbacks, updatedConfig)
-		}, 0)
-	})
 
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{PromptInfo: promptInfo})
 
@@ -662,7 +646,7 @@ func (s *BuildCodingInputTestSuite) TestResolveCodingOptionsKeepsWebSearchTool()
 	s.Greater(functionToolCount, 0, "function tools should remain available alongside web search")
 }
 
-func (s *BuildCodingInputTestSuite) TestWebSearchToolUsableOnlyInNonLocalEnv() {
+func (s *BuildCodingInputTestSuite) TestWebSearchToolUsableInLocalAndRemoteEnvs() {
 	wrapperWorkflow := func(ctx workflow.Context, useDevPodEnv bool) (llm2.Options, error) {
 		envContainer := &env.EnvContainer{Env: &env.LocalEnv{}}
 		if useDevPodEnv {
@@ -684,39 +668,31 @@ func (s *BuildCodingInputTestSuite) TestWebSearchToolUsableOnlyInNonLocalEnv() {
 	}
 
 	var ffa *fflag.FFlagActivities
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	for _, useDevPodEnv := range []bool{true, false} {
+		s.SetupTest()
+		s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
 
-	s.env.ExecuteWorkflow(wrapperWorkflow, true)
-	s.True(s.env.IsWorkflowCompleted())
-	s.NoError(s.env.GetWorkflowError())
+		s.env.ExecuteWorkflow(wrapperWorkflow, useDevPodEnv)
+		s.True(s.env.IsWorkflowCompleted())
+		s.NoError(s.env.GetWorkflowError())
 
-	var options llm2.Options
-	s.NoError(s.env.GetWorkflowResult(&options))
+		var options llm2.Options
+		s.NoError(s.env.GetWorkflowResult(&options))
 
-	webSearchCount := 0
-	functionToolCount := 0
-	for _, tool := range options.Tools {
-		if tool.Type == common.ToolTypeWebSearch {
-			webSearchCount++
-		} else {
-			functionToolCount++
+		webSearchCount := 0
+		functionToolCount := 0
+		for _, tool := range options.Tools {
+			if tool.Type == common.ToolTypeWebSearch {
+				webSearchCount++
+			} else {
+				functionToolCount++
+			}
 		}
-	}
-	s.Equal(1, webSearchCount, "non-local env should enable the web search tool")
-	s.Greater(functionToolCount, 0, "function tools should remain available alongside web search")
-	// Auto tool choice keeps the web search tool usable: providers only
-	// filter the tool list down when a specific tool is forced.
-	s.Equal(common.ToolChoiceTypeAuto, options.ToolChoice.Type)
-
-	// Local envs must not get web search by default.
-	s.SetupTest()
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
-	s.env.ExecuteWorkflow(wrapperWorkflow, false)
-	s.True(s.env.IsWorkflowCompleted())
-	s.NoError(s.env.GetWorkflowError())
-	s.NoError(s.env.GetWorkflowResult(&options))
-	for _, tool := range options.Tools {
-		s.NotEqual(common.ToolTypeWebSearch, tool.Type)
+		s.Equal(1, webSearchCount, "web search tool should be enabled (devpod env: %v)", useDevPodEnv)
+		s.Greater(functionToolCount, 0, "function tools should remain available alongside web search")
+		// Auto tool choice keeps the web search tool usable: providers only
+		// filter the tool list down when a specific tool is forced.
+		s.Equal(common.ToolChoiceTypeAuto, options.ToolChoice.Type)
 	}
 }
 
@@ -1061,4 +1037,65 @@ func (s *AuthorEditBlocksTestSuite) TestPausedConflictInstructionsEditCodeLegacy
 
 func (s *AuthorEditBlocksTestSuite) TestPausedConflictInstructionsAuthoringLegacy() {
 	s.testPausedConflictInstructions(false, workflow.DefaultVersion)
+}
+
+func TestRenderCodingPromptSandboxPermissions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		envContainer *env.EnvContainer
+		wantSandbox  bool
+	}{
+		{name: "missing environment"},
+		{name: "empty environment", envContainer: &env.EnvContainer{}},
+		{name: "local", envContainer: &env.EnvContainer{Env: &env.LocalEnv{}}},
+		{name: "local worktree", envContainer: &env.EnvContainer{Env: &env.LocalGitWorktreeEnv{}}},
+		{name: "devpod", envContainer: &env.EnvContainer{Env: &env.DevPodEnv{}}, wantSandbox: true},
+		{name: "openshell", envContainer: &env.EnvContainer{Env: &env.OpenShellEnv{}}, wantSandbox: true},
+		{name: "modal", envContainer: &env.EnvContainer{Env: &env.ModalEnv{}}, wantSandbox: true},
+	}
+	renderers := []struct {
+		name   string
+		render func(DevContext) string
+	}{
+		{
+			name: "initial",
+			render: func(dCtx DevContext) string {
+				return renderAuthorEditBlockInitialPrompt(dCtx, "code", "requirements", false, true, "OS: Linux, Arch: x86_64", false)
+			},
+		},
+		{
+			name: "planned step",
+			render: func(dCtx DevContext) string {
+				return renderAuthorEditBlockInitialDevStepPrompt(dCtx, "code", "requirements", "plan", "step", false, true, "OS: Linux, Arch: x86_64", false)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, renderer := range renderers {
+				t.Run(renderer.name, func(t *testing.T) {
+					t.Parallel()
+					dCtx := DevContext{
+						ExecContext: flow_action.ExecContext{EnvContainer: tt.envContainer},
+					}
+					prompt := strings.Join(strings.Fields(renderer.render(dCtx)), " ")
+					const sandboxGuidance = "You are in a disposable, isolated sandbox; commands are auto-approved by default. " +
+						"Install any dependencies or tools and start local services needed to complete the task without asking for permission. " +
+						"Reserve user questions for decisions affecting their requirements or desired outcome, not sandbox setup."
+					const localGuidance = "Any command may be executed, but prefer the ones auto-approved in the repo's"
+					if tt.wantSandbox {
+						assert.Contains(t, prompt, sandboxGuidance)
+						assert.NotContains(t, prompt, localGuidance)
+					} else {
+						assert.NotContains(t, prompt, "disposable, isolated sandbox")
+						assert.Contains(t, prompt, localGuidance)
+					}
+				})
+			}
+		})
+	}
 }

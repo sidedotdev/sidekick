@@ -323,7 +323,7 @@ func sshFetchCommitDefault(ctx context.Context, sshEnv SSHCapableEnv, localRepo,
 		if err != nil {
 			return fmt.Errorf("ssh args: %w", err)
 		}
-		dest, opts := splitSSHDestination(sshArgs)
+		dest, opts := SplitSSHDestination(sshArgs)
 		if dest == "" {
 			return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 		}
@@ -342,9 +342,9 @@ func sshFetchCommitDefault(ctx context.Context, sshEnv SSHCapableEnv, localRepo,
 	})
 }
 
-// splitSSHDestination returns the trailing destination token and the
+// SplitSSHDestination returns the trailing destination token and the
 // preceding option args, ignoring a final "--" separator if present.
-func splitSSHDestination(args []string) (string, []string) {
+func SplitSSHDestination(args []string) (string, []string) {
 	n := len(args)
 	if n == 0 {
 		return "", nil

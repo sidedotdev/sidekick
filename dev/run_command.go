@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/logger"
 
@@ -73,6 +75,11 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		}
 	}
 
+	// Preserve recorded permission activities and approvals when replaying older workflows.
+	if sandboxMode && workflow.GetVersion(dCtx, "sandbox-command-permissions-bypass", workflow.DefaultVersion, 1) >= 1 {
+		return true, "", "", nil
+	}
+
 	var permEvaluation *common.ScriptPermissionEvaluation
 	if enableCommandPermissions {
 		var permResult common.PermissionResult
@@ -81,7 +88,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		if usePermissionActivity {
 			var output CheckCommandPermissionOutput
 			err := workflow.ExecuteActivity(dCtx.Context, CheckCommandPermissionActivity, CheckCommandPermissionInput{
-				CommandPermissions:                dCtx.RepoConfig.CommandPermissions,
+				CommandPermissions:                effectiveCommandPermissions(dCtx),
 				Command:                           command,
 				StripEnvVarPrefix:                 stripEnvVarPrefix,
 				DefaultAutoApprove:                sandboxMode,
@@ -102,7 +109,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 				SkipAbsolutePathEscalation:        sandboxMode,
 				HeredocFileWriteWarnInsteadOfDeny: sandboxMode,
 			}
-			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(dCtx.RepoConfig.CommandPermissions, command, opts)
+			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(effectiveCommandPermissions(dCtx), command, opts)
 		}
 
 		workflow.GetLogger(dCtx).Debug("Command permission evaluation result", "command", command, "result", permResult, "message", permMessage)
@@ -158,16 +165,35 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		relWorkDir = filepath.Clean(params.WorkingDir)
 	}
 
+	// Agent-invoked git operations get the same author/committer identity as
+	// automated Sidekick commits. Missing committer values are omitted so git
+	// falls back to the environment's own config.
+	var committerName, committerEmail string
+	if dCtx.GlobalState != nil {
+		committerName = dCtx.GlobalState.GetStringValue("committerName")
+		committerEmail = dCtx.GlobalState.GetStringValue("committerEmail")
+	}
+
 	// Execute command through sh
 	var output env.EnvRunCommandActivityOutput
-	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	input := env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		Command:            "sh",
 		Args:               []string{"-c", params.Command},
 		RelativeWorkingDir: relWorkDir,
-	}).Get(dCtx.Context, &output)
+		EnvVars:            git.BuildGitEnvVars(committerName, committerEmail),
+	}
+	if workflow.GetVersion(dCtx, "docker-command-recovery", workflow.DefaultVersion, 1) >= 1 {
+		err = flow_action.PerformWithUserRetryOptions(
+			flow_action.ActionContext{ExecContext: dCtx.ExecContext, ActionType: "run_command"},
+			flow_action.UserRetryOptions{OnFailure: DockerFailureHandler{}},
+			env.EnvRunCommandActivity, &output, input,
+		)
+	} else {
+		err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
+	}
 	if err != nil {
-		return "", fmt.Errorf("failed to execute command: %v", err)
+		return "", fmt.Errorf("failed to execute command: %w", err)
 	}
 
 	response := fmt.Sprintf("Command executed with exit status %d\n\nStdout:\n%s\n\nStderr:\n%s",

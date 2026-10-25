@@ -42,6 +42,32 @@ func TestRunGitIndexCommandWithRetry_RemovesStaleLock(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr), "stale index.lock should have been removed")
 }
 
+func TestRunGitIndexCommandWithRetry_WaitsForLiveLock(t *testing.T) {
+	t.Parallel()
+
+	repoDir := setupTestGitRepo(t)
+	createFileAndCommit(t, repoDir, "seed.txt", "seed\n", "initial commit")
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "app.txt"), []byte("hello\n"), 0644))
+
+	// A concurrent git process holds the lock briefly, then releases it.
+	lockPath := writeIndexLock(t, repoDir, time.Now())
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		time.Sleep(300 * time.Millisecond)
+		_ = os.Remove(lockPath)
+	}()
+	t.Cleanup(func() { <-released })
+
+	ctx := context.Background()
+	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+	envContainer := env.EnvContainer{Env: devEnv}
+
+	require.NoError(t, GitAddActivity(ctx, GitAddActivityInput{EnvContainer: envContainer, Path: "app.txt"}))
+	require.True(t, stagedFiles(t, repoDir)["app.txt"], "file should be staged once the live lock is released")
+}
+
 func TestCleanupStaleIndexLock_LeavesFreshLock(t *testing.T) {
 	t.Parallel()
 

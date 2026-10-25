@@ -50,6 +50,7 @@ type WorkspaceRequest struct {
 	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
+	RerankingConfig common.RerankingConfig `json:"rerankingConfig,omitempty"`
 }
 
 type WorkspaceResponse struct {
@@ -62,6 +63,7 @@ type WorkspaceResponse struct {
 	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
+	RerankingConfig common.RerankingConfig `json:"rerankingConfig,omitempty"`
 }
 
 func (w WorkspaceResponse) MarshalJSON() ([]byte, error) {
@@ -289,6 +291,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		Embedding: common.EmbeddingConfig{
 			Defaults: workspaceReq.EmbeddingConfig.Defaults,
 		},
+		Reranking: workspaceReq.RerankingConfig,
 	}
 
 	// TODO /gen call SchedulePollFailuresWorkflow here, after fixing the TODO there
@@ -308,6 +311,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		ProfileId:       workspace.ProfileId,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
+		RerankingConfig: workspaceConfig.Reranking,
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})
@@ -388,6 +392,7 @@ func (ctrl *Controller) GetWorkspaceHandler(c *gin.Context) {
 	} else {
 		response.LLMConfig = config.LLM
 		response.EmbeddingConfig = config.Embedding
+		response.RerankingConfig = config.Reranking
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})
@@ -448,6 +453,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	workspace.ProfileId = workspaceReq.ProfileId
 	workspaceConfig.LLM = workspaceReq.LLMConfig
 	workspaceConfig.Embedding = workspaceReq.EmbeddingConfig
+	workspaceConfig.Reranking = workspaceReq.RerankingConfig
 	workspace.Updated = time.Now().UTC()
 
 	if err := ctrl.service.PersistWorkspace(c, workspace); err != nil {
@@ -474,16 +480,22 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		ProfileId:       workspace.ProfileId,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
+		RerankingConfig: workspaceConfig.Reranking,
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})
 }
 
 // notifyFlowsOfProfileChange signals every in-progress flow in the workspace so
-// mid-flow profile resolution picks up the new workspace profile. Flows whose
-// workflows are already closed or not found are skipped, and failures never
-// fail the workspace update itself.
+// mid-flow profile resolution picks up the new workspace profile.
 func (ctrl *Controller) notifyFlowsOfProfileChange(ctx context.Context, workspaceId, profileId string) {
+	ctrl.signalActiveFlows(ctx, workspaceId, dev.SignalNameProfileChange, dev.ProfileChangeSignal{ProfileId: profileId})
+}
+
+// signalActiveFlows signals every in-progress or paused flow in the workspace.
+// Flows whose workflows are already closed or not found are skipped, and
+// failures are only logged, so notifications never fail the caller.
+func (ctrl *Controller) signalActiveFlows(ctx context.Context, workspaceId, signalName string, signal any) {
 	unfinishedStatuses := []domain.TaskStatus{
 		domain.TaskStatusToDo,
 		domain.TaskStatusInProgress,
@@ -492,28 +504,27 @@ func (ctrl *Controller) notifyFlowsOfProfileChange(ctx context.Context, workspac
 	}
 	tasks, err := ctrl.service.GetTasks(ctx, workspaceId, unfinishedStatuses)
 	if err != nil {
-		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to list tasks for profile change notification")
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("signal", signalName).Msg("Failed to list tasks for flow notification")
 		return
 	}
 
-	signal := dev.ProfileChangeSignal{ProfileId: profileId}
 	for _, task := range tasks {
 		flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
 		if err != nil {
-			log.Error().Err(err).Str("workspaceId", workspaceId).Str("taskId", task.Id).Msg("Failed to list flows for profile change notification")
+			log.Error().Err(err).Str("workspaceId", workspaceId).Str("taskId", task.Id).Str("signal", signalName).Msg("Failed to list flows for flow notification")
 			continue
 		}
 		for _, flow := range flows {
 			if flow.Status != "in_progress" && flow.Status != domain.FlowStatusPaused {
 				continue
 			}
-			err := ctrl.temporalClient.SignalWorkflow(ctx, flow.Id, "", dev.SignalNameProfileChange, signal)
+			err := ctrl.temporalClient.SignalWorkflow(ctx, flow.Id, "", signalName, signal)
 			if err != nil {
 				var notFoundErr *serviceerror.NotFound
 				if errors.As(err, &notFoundErr) || strings.Contains(err.Error(), "workflow execution already completed") {
 					continue
 				}
-				log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flow.Id).Msg("Failed to signal flow about profile change")
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flow.Id).Str("signal", signalName).Msg("Failed to signal flow")
 			}
 		}
 	}

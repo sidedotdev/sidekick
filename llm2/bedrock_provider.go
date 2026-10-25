@@ -108,7 +108,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 	start := time.Now()
 	streamOut, err := client.ConverseStream(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: ConverseStream: %w", err)
+		return nil, classifyBedrockError(fmt.Errorf("bedrock: ConverseStream: %w", err))
 	}
 	stream := streamOut.GetStream()
 	defer stream.Close()
@@ -138,7 +138,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("bedrock: stream: %w", err)
+		return nil, classifyBedrockError(fmt.Errorf("bedrock: stream: %w", err))
 	}
 
 	log.Debug().
@@ -148,14 +148,10 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		Msg("bedrock stream complete")
 
 	output := accumulateBedrockEventsToMessage(collected)
-
-	// Report the resolved effort. When "lowest" resolved to "" (thinking off),
-	// report "none" so consumers know thinking was intentionally skipped.
-	reportedEffort := resolvedEffort
-	if strings.Contains(strings.ToLower(model), "claude") &&
-		request.Options.ReasoningEffort == "lowest" && resolvedEffort == "" {
-		reportedEffort = "none"
-	}
+	stampCoreBlockMetadata(&output, CoreBlockMetadata{
+		Provider:     bedrockProviderName,
+		ProviderType: string(common.BedrockToolChatProviderType),
+	})
 
 	return &MessageResponse{
 		Model:           model,
@@ -164,7 +160,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		StopReason:      stopReason,
 		Usage:           usage,
 		AuthType:        common.ProviderAuthTypeAPI,
-		ReasoningEffort: reportedEffort,
+		ReasoningEffort: resolvedEffort,
 	}, nil
 }
 
@@ -210,7 +206,7 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 		return nil, maxTokens, ""
 	}
 
-	resolvedEffort = resolveAnthropicReasoningEffort(options.ReasoningEffort, model)
+	resolvedEffort = resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 
 	// Anthropic does not allow thinking when tool_choice forces tool use
 	forcesTool := options.ToolChoice.Type == common.ToolChoiceTypeRequired || options.ToolChoice.Type == common.ToolChoiceTypeTool
@@ -240,7 +236,6 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 		return map[string]any{"thinking": adaptiveThinking}, maxTokens, resolvedEffort
 	}
 	if resolvedEffort == "" {
-		// "lowest" resolved to "": thinking is intentionally skipped.
 		return nil, maxTokens, resolvedEffort
 	}
 
@@ -257,13 +252,13 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 	case "max":
 		return map[string]any{"thinking": adaptiveThinking}, maxTokens, resolvedEffort
 	}
-	// max_tokens must be greater than thinking.budget_tokens; the Converse
-	// default max tokens can be lower than typical budgets, so always set it
-	// when budget-based thinking is enabled.
 	if maxTokens <= 0 {
-		maxTokens = anthropicDefaultMaxTokens
+		if modelInfo, _ := common.GetModel(options.Provider, model); modelInfo != nil && modelInfo.Limit.Output > 0 {
+			maxTokens = modelInfo.Limit.Output
+		}
 	}
-	if maxTokens <= budgetTokens {
+	// A supplied max_tokens must be greater than thinking.budget_tokens.
+	if maxTokens > 0 && maxTokens <= budgetTokens {
 		maxTokens = budgetTokens + 1000
 	}
 	return map[string]any{

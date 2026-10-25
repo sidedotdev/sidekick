@@ -5,6 +5,7 @@ import (
 	"sidekick/domain"
 	"sidekick/srv"
 	"sidekick/utils"
+	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -17,6 +18,7 @@ const (
 	RequestKindApproval       RequestKind = "approval"
 	RequestKindMergeApproval  RequestKind = "merge_approval"
 	RequestKindContinue       RequestKind = "continue"
+	RequestKindProviderAuth   RequestKind = "provider_auth"
 )
 
 const (
@@ -106,16 +108,34 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 		return nil, fmt.Errorf("can't get user response as human-in-the-loop process is disabled")
 	}
 
-	// Signal the workflow
+	if err := announceUserRequest(ctx, &req); err != nil {
+		return nil, err
+	}
+
+	userResponse, err := ReceiveUserResponse(ctx.Context, req.FlowActionId)
+	if err != nil {
+		return nil, err
+	}
+
+	signalSubtaskUnblocked(ctx)
+
+	// NOTE: unpausing of the flow is always done via the complete flow action
+	// handler, so it is omitted here
+
+	return &userResponse, nil
+}
+
+// announceUserRequest notifies the parent workflow of the request and marks
+// the flow as paused while it awaits the user.
+func announceUserRequest(ctx ExecContext, req *RequestForUser) error {
 	workflowInfo := workflow.GetInfo(ctx.Context)
-	parentWorkflow := workflowInfo.ParentWorkflowExecution
-	if parentWorkflow == nil {
-		return nil, fmt.Errorf("failed to signal external workflow: no parent workflow found")
+	if workflowInfo.ParentWorkflowExecution == nil {
+		return fmt.Errorf("failed to signal external workflow: no parent workflow found")
 	}
 	req.OriginWorkflowId = workflowInfo.WorkflowExecution.ID
 	if !req.SkipParentSignal {
-		if err := SignalParentRequestForUser(ctx, req); err != nil {
-			return nil, err
+		if err := SignalParentRequestForUser(ctx, *req); err != nil {
+			return err
 		}
 	}
 
@@ -130,28 +150,31 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 		var flow domain.Flow
 		err := workflow.ExecuteActivity(storageCtx, srv.Activities.GetFlow, ctx.WorkspaceId, req.OriginWorkflowId).Get(storageCtx, &flow)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get flow: %v", err)
+			return fmt.Errorf("failed to get flow: %v", err)
 		}
 		if flow.Status != domain.FlowStatusPaused {
 			flow.Status = domain.FlowStatusPaused
 			err := workflow.ExecuteActivity(storageCtx, srv.Activities.PersistFlow, flow).Get(storageCtx, nil)
 			if err != nil {
-				return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
+				return fmt.Errorf("failed to set flow status to paused: %v", err)
 			}
 		}
 	}
+	return nil
+}
 
-	userResponse, err := ReceiveUserResponse(ctx.Context, req.FlowActionId)
-	if err != nil {
-		return nil, err
+// signalSubtaskUnblocked notifies the parent that this workflow has been
+// unblocked so e.g. the IDD workflow can return a sub-task's displayed status
+// from "blocked" back to in-progress. Unhandled by other parent workflow types
+// and harmless there. A failure here is non-fatal (the user response was
+// already received), so we log and continue; the canvas will reconcile the
+// status when the sub-task ultimately completes.
+func signalSubtaskUnblocked(ctx ExecContext) {
+	workflowInfo := workflow.GetInfo(ctx.Context)
+	parentWorkflow := workflowInfo.ParentWorkflowExecution
+	if parentWorkflow == nil {
+		return
 	}
-
-	// Notify the parent that this workflow has been unblocked so e.g. the IDD
-	// workflow can return a sub-task's displayed status from "blocked" back to
-	// in-progress. Unhandled by other parent workflow types and harmless there.
-	// A failure here is non-fatal (the user response was already received), so
-	// we log and continue rather than failing the activity; the canvas will
-	// reconcile the status when the sub-task ultimately completes.
 	unblockedVersion := workflow.GetVersion(ctx.Context, "subtask-unblocked-signal", workflow.DefaultVersion, 1)
 	if unblockedVersion >= 1 {
 		unblockSig := SubtaskUnblocked{FlowId: workflowInfo.WorkflowExecution.ID}
@@ -162,11 +185,6 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 				"error", sigErr)
 		}
 	}
-
-	// NOTE: unpausing of the flow is always done via the complete flow action
-	// handler, so it is omitted here
-
-	return &userResponse, nil
 }
 
 // UserResponseSignalName returns the signal name a workflow should listen on
@@ -199,13 +217,99 @@ func ReceiveUserResponse(ctx workflow.Context, expectedFlowActionId string) (Use
 		}
 	}
 
+	// Select doesn't return on cancellation by itself; without a ctx.Done case
+	// a canceled workflow stays blocked here forever, never reaching its
+	// cleanup, and anything waiting for it to close hangs with it. Histories
+	// that entered this wait before the case existed recorded no commands when
+	// canceled, so they must keep the signal-only wait to replay.
+	exitOnCancel := workflow.GetVersion(ctx, "user-response-exit-on-cancel", workflow.DefaultVersion, 1) >= 1
+
 	var userResponse UserResponse
 	selector := workflow.NewNamedSelector(ctx, "userResponseSelector")
 	selector.AddReceive(workflow.GetSignalChannel(ctx, signalName), func(c workflow.ReceiveChannel, more bool) {
 		c.Receive(ctx, &userResponse)
 	})
+	if exitOnCancel {
+		selector.AddReceive(ctx.Done(), func(c workflow.ReceiveChannel, more bool) {})
+	}
 	selector.Select(ctx)
+	if exitOnCancel && ctx.Err() != nil {
+		return UserResponse{}, ctx.Err()
+	}
 	return userResponse, nil
+}
+
+// continueTimeoutResult is the persisted result of a continue request that
+// may be resolved by a timer rather than the user.
+type continueTimeoutResult struct {
+	UserResponse *UserResponse `json:"userResponse,omitempty"`
+	TimedOut     bool          `json:"timedOut"`
+}
+
+// GetUserContinueOrTimeout issues a continue request like GetUserContinue but
+// also resolves it on its own once timeout elapses, reporting whether the user
+// answered. Callers use it to race user intervention against a scheduled
+// automatic retry.
+func GetUserContinueOrTimeout(eCtx ExecContext, prompt string, requestParams map[string]any, timeout time.Duration) (bool, error) {
+	if eCtx.DisableHumanInTheLoop {
+		if err := workflow.Sleep(eCtx, timeout); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	req := RequestForUser{
+		OriginWorkflowId: workflow.GetInfo(eCtx).WorkflowExecution.ID,
+		Content:          prompt,
+		Subflow:          eCtx.FlowScope.SubflowName,
+		RequestParams:    requestParams,
+		RequestKind:      RequestKindContinue,
+	}
+	actionCtx := eCtx.NewActionContext("user_request.continue")
+	actionCtx.ActionParams = req.ActionParams()
+
+	result, err := TrackHuman(actionCtx, func(trackedActionCtx ActionContext, flowAction *domain.FlowAction) (continueTimeoutResult, error) {
+		req.FlowActionId = flowAction.Id
+		return getUserResponseOrTimeout(trackedActionCtx.ExecContext, req, timeout)
+	})
+	if err != nil {
+		return false, err
+	}
+	return !result.TimedOut, nil
+}
+
+func getUserResponseOrTimeout(ctx ExecContext, req RequestForUser, timeout time.Duration) (continueTimeoutResult, error) {
+	if err := announceUserRequest(ctx, &req); err != nil {
+		return continueTimeoutResult{}, err
+	}
+
+	var userResponse UserResponse
+	timedOut := false
+	selector := workflow.NewNamedSelector(ctx, "userResponseOrTimeoutSelector")
+	selector.AddReceive(workflow.GetSignalChannel(ctx, UserResponseSignalName(req.FlowActionId)), func(c workflow.ReceiveChannel, more bool) {
+		c.Receive(ctx, &userResponse)
+	})
+	timerCtx, cancelTimer := workflow.WithCancel(ctx.Context)
+	selector.AddFuture(workflow.NewTimer(timerCtx, timeout), func(f workflow.Future) {
+		timedOut = f.Get(timerCtx, nil) == nil
+	})
+	selector.AddReceive(ctx.Done(), func(c workflow.ReceiveChannel, more bool) {})
+	selector.Select(ctx)
+	cancelTimer()
+	if ctx.Err() != nil {
+		return continueTimeoutResult{}, ctx.Err()
+	}
+
+	signalSubtaskUnblocked(ctx)
+	if !timedOut {
+		// Unpausing after a user response is done by the complete flow action
+		// handler, matching GetUserResponse.
+		return continueTimeoutResult{UserResponse: &userResponse}, nil
+	}
+	// Nothing else reverses the pause applied by announceUserRequest when the
+	// timer resolves the request.
+	resumePausedFlow(ctx, req.OriginWorkflowId)
+	return continueTimeoutResult{TimedOut: true}, nil
 }
 
 func GetUserContinue(eCtx ExecContext, prompt string, requestParams map[string]any) error {

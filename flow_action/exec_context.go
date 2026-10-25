@@ -5,6 +5,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/secret_manager"
 	"strings"
 	"time"
@@ -50,6 +51,7 @@ type ExecContext struct {
 	FlowScope             *FlowScope
 	Providers             []common.ModelProviderPublicConfig
 	EmbeddingConfig       common.EmbeddingConfig
+	RerankingConfig       common.RerankingConfig
 	GlobalState           *GlobalState
 	DisableHumanInTheLoop bool
 }
@@ -60,6 +62,15 @@ type ActionContext struct {
 	ExecContext
 	ActionType   string
 	ActionParams map[string]interface{}
+}
+
+// FlowCache lets flags be evaluated once per flow. It has a value receiver so
+// contexts embedding ExecContext by value provide it too.
+func (eCtx ExecContext) FlowCache() fflag.FlowCache {
+	if eCtx.GlobalState == nil {
+		return nil
+	}
+	return eCtx.GlobalState
 }
 
 func (eCtx *ExecContext) NewActionContext(actionType string) ActionContext {
@@ -246,4 +257,26 @@ func (eCtx *ExecContext) useHistoricalOpenAISmallModel() bool {
 	}
 	eCtx.GlobalState.SetValue(stateKey, -1)
 	return false
+}
+
+const GlobalStateKeyRerankingConfig = "rerankingConfig"
+
+func (eCtx *ExecContext) SetRerankingConfig(config common.RerankingConfig) {
+	if eCtx.GlobalState == nil {
+		eCtx.GlobalState = &GlobalState{}
+	}
+	eCtx.GlobalState.SetValue(GlobalStateKeyRerankingConfig, config)
+}
+
+func (eCtx *ExecContext) GetRerankingConfig() common.RerankingConfig {
+	if eCtx.GlobalState != nil {
+		if config, ok := eCtx.GlobalState.GetValue(GlobalStateKeyRerankingConfig).(common.RerankingConfig); ok {
+			return config
+		}
+	}
+	return eCtx.RerankingConfig
+}
+
+func (eCtx *ExecContext) GetRerankingModelConfig(key string) common.ModelConfig {
+	return eCtx.GetRerankingConfig().GetModelConfig(key)
 }

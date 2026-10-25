@@ -11,7 +11,7 @@ func runPrompt(field huh.Field) error {
 }
 
 // selectOption prompts for a single choice among the given options.
-func selectOption(title string, options []string) (string, error) {
+var selectOption = func(title string, options []string) (string, error) {
 	var selected string
 	err := runPrompt(huh.NewSelect[string]().
 		Title(title).

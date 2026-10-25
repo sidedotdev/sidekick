@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"sidekick/coding"
 	"sidekick/coding/git"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
@@ -45,7 +46,7 @@ func testCodingSubflowVerifier(t *testing.T, reuse bool) {
 
 	var flags *fflag.FFlagActivities
 	for name, enabled := range map[string]bool{
-		fflag.CheckEdits: true, fflag.InfoNeeds: false,
+		fflag.InfoNeeds:          false,
 		fflag.InitialRepoSummary: false, fflag.DisableDoneCoding: false,
 		fflag.DisableContextCodeVisibilityCheck: true,
 		fflag.ManageHistoryWithContextMarkers:   true,
@@ -128,7 +129,7 @@ func testCodingSubflowVerifier(t *testing.T, reuse bool) {
 	testEnv.ExecuteWorkflow(func(ctx workflow.Context) (string, error) {
 		dCtx := verifierWorkflowContext(ctx)
 		dCtx.EnvContainer = &container
-		return codingSubflow(dCtx, "Fix implementation.", nil, "", "")
+		return codingSubflow(dCtx, "Fix implementation.", nil, "", coding.ReviewDiffBaseline{})
 	})
 	require.NoError(t, testEnv.GetWorkflowError())
 	require.Equal(t, 2, codingAttempts)

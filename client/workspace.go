@@ -23,6 +23,7 @@ type workspaceResponse struct {
 	ProfileId       string                 `json:"profileId,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
+	RerankingConfig common.RerankingConfig `json:"rerankingConfig,omitempty"`
 }
 
 // CreateWorkspaceRequest defines the structure for the workspace creation request.

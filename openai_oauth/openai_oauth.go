@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sidekick/common"
@@ -229,6 +230,15 @@ func ExchangeRefreshToken(ctx context.Context, refreshToken string) (*Credential
 	}, nil
 }
 
+func invalidOAuthError(profileId string, cause error) error {
+	return common.NewProviderAuthError(common.ProviderAuthErrorDetails{
+		Provider:  "openai",
+		ProfileId: profileId,
+		AuthType:  common.ProviderAuthTypeSubscription,
+		Reason:    common.ProviderAuthErrorReasonInvalidOAuth,
+	}, cause)
+}
+
 // GetAndMaybeRefresh loads OPENAI_OAUTH credentials and refreshes them if
 // expired or expiring within 5 minutes. Returns (nil, false, nil) only when
 // no OAuth credentials are configured.
@@ -240,20 +250,27 @@ func GetAndMaybeRefresh(ctx context.Context, secretManager interface{ GetSecret(
 		}
 		return nil, false, fmt.Errorf("failed to get OpenAI OAuth secret: %w", err)
 	}
+	profileId := secret_manager.ProfileIdOf(secretManager)
 	if raw == "" {
-		return nil, false, fmt.Errorf("OpenAI OAuth secret is empty")
+		return nil, false, invalidOAuthError(profileId, fmt.Errorf("OpenAI OAuth secret is empty"))
 	}
 
 	creds, err := ParseCredentials(raw)
 	if err != nil {
-		return nil, false, err
+		return nil, false, invalidOAuthError(profileId, err)
 	}
 
 	if time.Now().Unix() > creds.ExpiresAt-300 {
 		log.Info().Msg("OpenAI OAuth token expiring soon, refreshing proactively")
 		newCreds, refreshErr := ExchangeRefreshToken(ctx, creds.RefreshToken)
 		if refreshErr != nil {
-			return nil, false, fmt.Errorf("failed to refresh OpenAI OAuth token: %w", refreshErr)
+			refreshErr = fmt.Errorf("failed to refresh OpenAI OAuth token: %w", refreshErr)
+			var netErr net.Error
+			if errors.Is(refreshErr, context.DeadlineExceeded) || errors.Is(refreshErr, context.Canceled) ||
+				(errors.As(refreshErr, &netErr) && netErr.Timeout()) {
+				return nil, false, refreshErr
+			}
+			return nil, false, invalidOAuthError(profileId, refreshErr)
 		}
 		if storeErr := StoreForProfileFn(secret_manager.ProfileIdOf(secretManager), newCreds); storeErr != nil {
 			return nil, false, fmt.Errorf("failed to store refreshed OpenAI OAuth credentials: %w", storeErr)

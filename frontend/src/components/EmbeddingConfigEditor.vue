@@ -1,10 +1,5 @@
 <template>
   <div class="embedding-config-editor">
-    <!-- Error state for providers fetch -->
-    <div v-if="providersError" class="providers-error">
-      Failed to load providers. Please refresh the page.
-    </div>
-
     <!-- Default Model -->
     <div class="model-row">
       <span class="model-label">Default</span>
@@ -24,6 +19,9 @@
         @input="emitUpdate"
       />
     </div>
+    <div v-if="providersError" class="providers-error" role="alert">
+      {{ providersError }}
+    </div>
   </div>
 </template>
 
@@ -32,6 +30,7 @@ import { ref, reactive, watch, onMounted } from 'vue'
 import AutoComplete from 'primevue/autocomplete'
 import type { ModelConfig, EmbeddingConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
+import { searchModels as searchModelIds } from '../lib/modelSuggestions'
 
 const props = defineProps<{
   modelValue?: EmbeddingConfig | null
@@ -52,7 +51,7 @@ const getProviderLabel = (provider: string): string => {
 }
 
 const providerOptions = ref<string[]>([])
-const providersError = ref(false)
+const providersError = ref('')
 
 const providersUrl = (): string => (
   props.profileId
@@ -66,20 +65,25 @@ let latestProvidersRequestId = 0
 
 const fetchProviders = async () => {
   const requestId = ++latestProvidersRequestId
+  const fallbackError = 'Failed to load providers. Please check your local configuration and refresh the page.'
   try {
     const response = await fetch(providersUrl())
     if (requestId !== latestProvidersRequestId) return
+    const data = await response.json()
+    if (requestId !== latestProvidersRequestId) return
     if (response.ok) {
-      const data = await response.json()
-      if (requestId !== latestProvidersRequestId) return
       providerOptions.value = data.providers || []
-      providersError.value = false
+      providersError.value = ''
     } else {
-      providersError.value = true
+      providerOptions.value = []
+      providersError.value = typeof data?.error === 'string' && data.error
+        ? data.error
+        : fallbackError
     }
   } catch {
     if (requestId !== latestProvidersRequestId) return
-    providersError.value = true
+    providerOptions.value = []
+    providersError.value = fallbackError
   }
 }
 
@@ -91,22 +95,7 @@ const modelsData = ref<ModelsData>({})
 const filteredModels = ref<string[]>([])
 
 const searchModels = (event: { query: string } | undefined, provider: string) => {
-  const query = (event?.query || '').toLowerCase()
-
-  let candidates: string[] = []
-  if (modelsData.value[provider]) {
-    candidates = Object.keys(modelsData.value[provider].models || {})
-  } else {
-    const allModels = new Set<string>()
-    for (const p of Object.values(modelsData.value)) {
-      if (p.models) {
-        Object.keys(p.models).forEach((m) => allModels.add(m))
-      }
-    }
-    candidates = Array.from(allModels)
-  }
-
-  filteredModels.value = candidates.filter((m) => m.toLowerCase().includes(query))
+  filteredModels.value = searchModelIds(modelsData.value, provider, event?.query || '')
 }
 
 const fetchModelsData = async () => {
@@ -215,10 +204,10 @@ watch(() => props.modelValue, (newValue) => {
 .providers-error {
   padding: 0.5rem;
   margin-bottom: 0.75rem;
-  border: 1px solid var(--color-error, #dc3545);
+  border: 0.0625rem solid var(--color-error-border);
   border-radius: 0.25rem;
-  background-color: var(--color-error-bg, rgba(220, 53, 69, 0.1));
-  color: var(--color-error, #dc3545);
+  background-color: var(--color-error-background);
+  color: var(--color-error-text);
   font-size: 0.875rem;
 }
 </style>

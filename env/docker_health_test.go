@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -61,31 +62,35 @@ func withDockerHealthHooks(t *testing.T, check func(context.Context, time.Durati
 
 func TestWaitForDockerEngine_UsesIndirectedHook(t *testing.T) {
 	t.Run("returns true once the hook reports responsive", func(t *testing.T) {
-		withFastDockerReadyTiming(t)
-		var probes atomic.Int32
-		origCheck := checkDockerEngineResponsive
-		checkDockerEngineResponsive = func(context.Context, time.Duration) bool {
-			// Become responsive only after a few polls to prove we loop on the hook.
-			return probes.Add(1) >= 3
-		}
-		t.Cleanup(func() { checkDockerEngineResponsive = origCheck })
+		synctest.Test(t, func(t *testing.T) {
+			withFastDockerReadyTiming(t)
+			var probes atomic.Int32
+			origCheck := checkDockerEngineResponsive
+			checkDockerEngineResponsive = func(context.Context, time.Duration) bool {
+				// Become responsive only after a few polls to prove we loop on the hook.
+				return probes.Add(1) >= 3
+			}
+			t.Cleanup(func() { checkDockerEngineResponsive = origCheck })
 
-		assert.True(t, waitForDockerEngine(context.Background(), dockerReadyPollTimeout))
-		assert.GreaterOrEqual(t, probes.Load(), int32(3))
+			assert.True(t, waitForDockerEngine(context.Background(), dockerReadyPollTimeout))
+			assert.GreaterOrEqual(t, probes.Load(), int32(3))
+		})
 	})
 
 	t.Run("returns false when the hook never reports responsive", func(t *testing.T) {
-		withFastDockerReadyTiming(t)
-		var probes atomic.Int32
-		origCheck := checkDockerEngineResponsive
-		checkDockerEngineResponsive = func(context.Context, time.Duration) bool {
-			probes.Add(1)
-			return false
-		}
-		t.Cleanup(func() { checkDockerEngineResponsive = origCheck })
+		synctest.Test(t, func(t *testing.T) {
+			withFastDockerReadyTiming(t)
+			var probes atomic.Int32
+			origCheck := checkDockerEngineResponsive
+			checkDockerEngineResponsive = func(context.Context, time.Duration) bool {
+				probes.Add(1)
+				return false
+			}
+			t.Cleanup(func() { checkDockerEngineResponsive = origCheck })
 
-		assert.False(t, waitForDockerEngine(context.Background(), dockerReadyPollTimeout))
-		assert.Positive(t, probes.Load(), "the readiness hook must be polled")
+			assert.False(t, waitForDockerEngine(context.Background(), dockerReadyPollTimeout))
+			assert.Positive(t, probes.Load(), "the readiness hook must be polled")
+		})
 	})
 }
 
@@ -152,7 +157,7 @@ func TestWithDockerEngineWatchdog_ResponsiveReturnsResult(t *testing.T) {
 	assert.Equal(t, int32(0), restarts.Load(), "engine should not be restarted while responsive")
 }
 
-func TestWithDockerEngineWatchdog_UnresponsiveRestartsAndCancels(t *testing.T) {
+func TestWithDockerEngineWatchdog_UnresponsiveCancelsWithoutRestart(t *testing.T) {
 	withFastDockerHealthTiming(t)
 	var restarts atomic.Int32
 	withDockerHealthHooks(t,
@@ -166,30 +171,36 @@ func TestWithDockerEngineWatchdog_UnresponsiveRestartsAndCancels(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must be retried")
-	assert.Equal(t, int32(1), restarts.Load())
+	assert.ErrorIs(t, err, context.Canceled)
+	details, ok := AsDockerEngineFailure(err)
+	require.True(t, ok)
+	assert.NotEmpty(t, details.Host)
+	assert.Zero(t, restarts.Load())
 }
 
-func TestWithDockerEngineWatchdog_RestartFailureSurfaced(t *testing.T) {
+func TestWithDockerEngineWatchdog_PropagatesCancellation(t *testing.T) {
 	withFastDockerHealthTiming(t)
-	restartErr := errors.New("no restart strategy worked")
+	var restarts atomic.Int32
 	withDockerHealthHooks(t,
 		func(context.Context, time.Duration) bool { return false },
-		func(context.Context) error { return restartErr },
+		func(context.Context) error { restarts.Add(1); return nil },
 	)
 
-	err := withDockerEngineWatchdog(context.Background(), func(ctx context.Context) error {
-		<-ctx.Done()
-		return ctx.Err()
+	ctx, cancel := context.WithCancel(context.Background())
+	err := withDockerEngineWatchdog(ctx, func(operationCtx context.Context) error {
+		cancel()
+		<-operationCtx.Done()
+		return operationCtx.Err()
 	})
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, restartErr)
+	assert.ErrorIs(t, err, context.Canceled)
+	_, dockerFailure := AsDockerEngineFailure(err)
+	assert.False(t, dockerFailure)
+	assert.Zero(t, restarts.Load())
 }
 
-func TestWithDockerEngineWatchdog_DisabledRunsWithoutMonitoring(t *testing.T) {
+func TestWithDockerEngineWatchdog_PreservesImmediateResult(t *testing.T) {
 	withFastDockerHealthTiming(t)
-	t.Setenv(autoRestartDockerEnvVar, "false")
 	var restarts atomic.Int32
 	withDockerHealthHooks(t,
 		func(context.Context, time.Duration) bool { return false },
@@ -202,5 +213,5 @@ func TestWithDockerEngineWatchdog_DisabledRunsWithoutMonitoring(t *testing.T) {
 	})
 
 	assert.ErrorIs(t, err, sentinel)
-	assert.Equal(t, int32(0), restarts.Load(), "watchdog must not restart when auto-restart is disabled")
+	assert.Zero(t, restarts.Load())
 }

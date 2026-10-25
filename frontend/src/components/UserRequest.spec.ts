@@ -41,6 +41,49 @@ describe('UserRequest', () => {
     vi.unstubAllGlobals()
   })
 
+  describe('markdown positioning', () => {
+    it.each(['pending', 'complete'] as const)(
+      'updates the nesting level for a %s request across remounts',
+      async (actionStatus) => {
+        const flowAction: FlowAction = {
+          ...createMergeApprovalFlowAction(),
+          actionStatus,
+          actionParams: {
+            requestKind: 'approval',
+            requestContent: 'Review these changes',
+            rejectReasonRequired: false,
+          },
+          actionResult: actionStatus === 'complete' ? '{"Approved":true}' : '',
+        }
+
+        for (const initialLevel of [0, 3]) {
+          const wrapper = mount(UserRequest, {
+            props: { flowAction, expand: true, level: initialLevel },
+          })
+
+          try {
+            const markdown = wrapper.get<HTMLElement>('.markdown-container')
+            expect(markdown.text()).toContain('Review these changes')
+            expect(markdown.element.style.getPropertyValue('--level')).toBe(String(initialLevel))
+
+            await wrapper.setProps({ level: initialLevel + 1 })
+            expect(markdown.element.style.getPropertyValue('--level')).toBe(String(initialLevel + 1))
+
+            await wrapper.setProps({ expand: false })
+            expect(wrapper.find('.markdown-container').exists()).toBe(actionStatus === 'pending')
+
+            await wrapper.setProps({ expand: true })
+            expect(
+              wrapper.get<HTMLElement>('.markdown-container').element.style.getPropertyValue('--level'),
+            ).toBe(String(initialLevel + 1))
+          } finally {
+            wrapper.unmount()
+          }
+        }
+      },
+    )
+  })
+
   describe('focus behavior with diff viewer', () => {
     it('form has tabindex=-1 to allow focus restoration', () => {
       const wrapper = mount(UserRequest, {

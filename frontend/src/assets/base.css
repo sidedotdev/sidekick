@@ -6,6 +6,9 @@
   --task-pad: 1.2rem;
   --section-gap: 160px;
   --font-size: 15px;
+  /* tooltips must stay visible over every other layer, including modals,
+     side panels and full-screen overlays */
+  --z-index-tooltip: 2147483647;
 }
 
 /* color palette from <https://github.com/vuejs/theme> */

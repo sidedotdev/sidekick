@@ -45,7 +45,11 @@ func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSize
 
 func EditCodeWithModelConfigResolver(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
-		return editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		err := editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 
@@ -636,7 +640,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 // The done protocol is enabled by default for new workflow versions unless explicitly disabled.
 func IsDoneRequiredProtocol(ctx workflow.Context) bool {
 	doneRequiredVersion := workflow.GetVersion(ctx, "done-required-protocol", workflow.DefaultVersion, 1)
-	return doneRequiredVersion >= 1 && !fflag.IsEnabled(ctx, fflag.DisableDoneCoding)
+	return doneRequiredVersion >= 1 && !fflag.IsEnabledWithoutVersioning(ctx, fflag.DisableDoneCoding)
 }
 
 // appendEditFeedback renders feedback and appends it directly to chat history.
@@ -680,7 +684,7 @@ func codingTools(dCtx DevContext, codingModelConfig common.ModelConfig, doneRequ
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	return appendWebSearchToolIfNonLocal(dCtx, tools, codingModelConfig)
+	return appendWebSearchTool(dCtx, tools, codingModelConfig)
 }
 
 // resolveCodingOptions rebuilds the LLM options for a single stream
@@ -864,6 +868,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"doneRequired":                    doneRequired,
 		"doneFunctionName":                doneTool.Name,
 		"environmentContext":              environmentContext,
+		"isolatedSandbox":                 isIsolatedSandboxEnvironment(dCtx),
 		"idd":                             idd,
 	}
 	if doneRequired {
@@ -898,6 +903,7 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"doneRequired":                    doneRequired,
 		"hasPlan":                         true,
 		"environmentContext":              environmentContext,
+		"isolatedSandbox":                 isIsolatedSandboxEnvironment(dCtx),
 		"idd":                             idd,
 	}
 	if doneRequired {
@@ -1080,4 +1086,11 @@ func feedbackContextType(feedbackType string, disableHumanInTheLoop bool) string
 		}
 	}
 	return ""
+}
+
+func isIsolatedSandboxEnvironment(dCtx DevContext) bool {
+	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
+		return false
+	}
+	return common.IsolatedSandboxEnvTypes[string(dCtx.EnvContainer.Env.GetType())]
 }

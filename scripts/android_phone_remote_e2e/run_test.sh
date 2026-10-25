@@ -67,6 +67,7 @@ write_results_xml() {
 <?xml version='1.0' encoding='UTF-8' ?>
 <testsuite name="stub" tests="$tests" failures="$failures_count" errors="0" skipped="0">
 <testcase name="workspacesLoadOverIroh" classname="com.example.app.RemoteWorkspaceIrohInstrumentedTest">$extra</testcase>
+<testcase name="flowsSyncOverIrohWebsockets" classname="com.example.app.RemoteFlowSyncIrohInstrumentedTest">$extra</testcase>
 </testsuite>
 XML
 }
@@ -117,6 +118,14 @@ assert_output_contains() {
   fi
 }
 
+assert_output_lacks() {
+  local name="$1" needle="$2"
+  if grep -qF "$needle" "$WORK/$name/output.txt"; then
+    fail "$name: output unexpectedly contains '$needle'"
+    sed 's/^/    /' "$WORK/$name/output.txt" >&2
+  fi
+}
+
 assert_no_credentials() {
   local name="$1"
   if grep -qF "$TICKET" "$WORK/$name/output.txt" || grep -qF "$TOKEN" "$WORK/$name/output.txt"; then
@@ -138,11 +147,39 @@ chmod +x "$WORK/gradlew-pass"
 declare -f write_results_xml >"$WORK/write_results.sh"
 run_case pass "$WORK/gradlew-pass" >/dev/null
 assert_status pass 0
-assert_output_contains pass "PASS: workspaces loaded over iroh"
+assert_output_contains pass "PASS: instrumentation passed over iroh"
+assert_output_contains pass "class=com.example.app.RemoteWorkspaceIrohInstrumentedTest,com.example.app.RemoteFlowSyncIrohInstrumentedTest"
+assert_output_lacks pass "sidekickWorkspaceId"
 assert_no_credentials pass
 assert_output_contains pass "<redacted-ticket>"
 assert_output_contains pass "<redacted-token>"
 assert_pairing_revoked pass
+
+echo "case: an explicit workspace id is forwarded to the instrumentation"
+run_case workspace_flag "$WORK/gradlew-pass" -w ws-under-test >/dev/null
+assert_status workspace_flag 0
+assert_output_contains workspace_flag "sidekickWorkspaceId=ws-under-test"
+SIDEKICK_WORKSPACE_ID=ws-from-env run_case workspace_env "$WORK/gradlew-pass" >/dev/null
+assert_status workspace_env 0
+assert_output_contains workspace_env "sidekickWorkspaceId=ws-from-env"
+
+echo "case: results covering only one of the test classes are not a pass"
+cat >"$WORK/gradlew-partial" <<'STUB'
+#!/usr/bin/env bash
+dir="$ANDROID_PROJECT/app/build/outputs/androidTest-results/connected"
+mkdir -p "$dir"
+cat >"$dir/TEST-stub.xml" <<XML
+<testsuite name="stub" tests="1" failures="0" errors="0" skipped="0">
+<testcase name="workspacesLoadOverIroh" classname="com.example.app.RemoteWorkspaceIrohInstrumentedTest"></testcase>
+</testsuite>
+XML
+exit 0
+STUB
+chmod +x "$WORK/gradlew-partial"
+run_case partial "$WORK/gradlew-partial" >/dev/null
+assert_status partial 1
+assert_output_contains partial "RemoteFlowSyncIrohInstrumentedTest is absent from the instrumentation results"
+assert_pairing_revoked partial
 
 echo "case: failing instrumentation run propagates failure and revokes pairing"
 cat >"$WORK/gradlew-fail" <<'STUB'

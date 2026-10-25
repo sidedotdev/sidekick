@@ -83,6 +83,10 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 		}
 	}
 
+	if err := config.ValidateTestCommandLimits(); err != nil {
+		return common.RepoConfig{}, fmt.Errorf("invalid repo config %q: %w", discovery.ChosenPath, err)
+	}
+
 	// If hints are not provided inline, try loading from HintsPath
 	if config.EditCode.Hints == "" && config.EditCode.HintsPath != "" {
 		hintsData, err := envContainer.Env.ReadFile(context.Background(), config.EditCode.HintsPath)
@@ -164,6 +168,10 @@ func GetRepoConfigActivityV2(envContainer env.EnvContainer) (GetRepoConfigActivi
 		if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
 			return GetRepoConfigActivityResult{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
 		}
+	}
+
+	if err := config.ValidateTestCommandLimits(); err != nil {
+		return GetRepoConfigActivityResult{}, fmt.Errorf("invalid repo config %q: %w", discovery.ChosenPath, err)
 	}
 
 	// If hints are not provided inline, try loading from HintsPath

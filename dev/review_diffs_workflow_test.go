@@ -68,7 +68,7 @@ func (s *AutoMergeApprovalTestSuite) reviewDiffsApprovalWorkflow(target, priorRe
 			},
 			RepoConfig: common.RepoConfig{},
 		}
-		response, gitDiff, treeHash, err := getMergeApproval(dCtx, target, true, "", priorReviewDiff, true)
+		response, gitDiff, treeHash, err := getMergeApproval(dCtx, target, true, "", coding.ReviewDiffBaseline{Diff: priorReviewDiff}, true)
 		return mergeApprovalOutcome{Response: response, GitDiff: gitDiff, TreeHash: treeHash}, err
 	}
 }
@@ -274,7 +274,7 @@ func (s *MergeStrategyRoundTripTestSuite) humanMergeApprovalWorkflow(priorReview
 			},
 			RepoConfig: common.RepoConfig{},
 		}
-		response, gitDiff, treeHash, err := getMergeApproval(dCtx, "main", true, "", priorReviewDiff, false)
+		response, gitDiff, treeHash, err := getMergeApproval(dCtx, "main", true, "", coding.ReviewDiffBaseline{Diff: priorReviewDiff}, false)
 		return mergeApprovalOutcome{Response: response, GitDiff: gitDiff, TreeHash: treeHash}, err
 	}
 }

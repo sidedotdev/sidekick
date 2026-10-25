@@ -27,30 +27,6 @@ type OpenAIProvider struct {
 	CustomHeaders map[string]string
 }
 
-func resolveOpenAIReasoningEffort(effort, model string) string {
-	if effort != "lowest" && effort != "highest" {
-		return effort
-	}
-
-	if resolvedEffort, ok := resolveGPTReasoningEffort(effort, model); ok {
-		return resolvedEffort
-	}
-
-	modelLower := strings.ToLower(model)
-
-	if strings.HasPrefix(modelLower, "o1") || strings.HasPrefix(modelLower, "o3") || strings.HasPrefix(modelLower, "o4-mini") {
-		if effort == "lowest" {
-			return "low"
-		}
-		return "high"
-	}
-
-	if effort == "lowest" {
-		return "none"
-	}
-	return "high"
-}
-
 func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options
@@ -63,15 +39,15 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		authType = common.ProviderAuthTypeAPI
 	}
 
-	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
-	credentials, err := openAICredentialsForRequest(request.SecretManager, providerNameNormalized, authType)
+	credentials, err := openAICredentialsForRequest(request.SecretManager, options.ModelConfig.Provider, authType)
 	if err != nil {
 		return nil, err
 	}
+	requestAuth := newProviderRequestAuth(request.SecretManager, options.ModelConfig.Provider, authType, credentials.useOAuth)
 
-	httpClient := &http.Client{
+	httpClient := withResponseDump(&http.Client{
 		Timeout: 45 * time.Minute,
-	}
+	})
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(credentials.token),
 		option.WithHTTPClient(httpClient),
@@ -122,7 +98,12 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		params.ParallelToolCalls = param.NewOpt(*options.ParallelToolCalls)
 	}
 
-	actualReasoningEffort := resolveOpenAIReasoningEffort(options.ReasoningEffort, model)
+	// Compatible proxies may reject unknown OpenAI-specific fields.
+	if p.BaseURL == "" && options.PromptCacheKey != "" {
+		params.PromptCacheKey = param.NewOpt(options.PromptCacheKey)
+	}
+
+	actualReasoningEffort := resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 	if actualReasoningEffort != "" {
 		params.ReasoningEffort = shared.ReasoningEffort(actualReasoningEffort)
 	}
@@ -266,7 +247,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, wrapOpenAIError(err)
+		return nil, requestAuth.classifyHTTPError(err, wrapOpenAIError(err))
 	}
 
 	// Emit block_done events for all blocks
@@ -295,6 +276,11 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	if stopReason == "stop" || stopReason == "" {
 		stopReason = "stop"
 	}
+
+	stampCoreBlockMetadata(&outputMessage, CoreBlockMetadata{
+		Provider:     options.Provider,
+		ProviderType: string(common.OpenaiCompatibleToolChatProviderType),
+	})
 
 	return &MessageResponse{
 		Model:           responseModel,
@@ -672,6 +658,10 @@ func wrapOpenAIError(err error) error {
 	return err
 }
 func openAICacheWriteTokens(usage openai.CompletionUsage) (int, bool) {
+	if usage.PromptTokensDetails.JSON.CacheWriteTokens.Valid() {
+		return int(usage.PromptTokensDetails.CacheWriteTokens), true
+	}
+
 	fields := []map[string]openaiRespJSON.Field{
 		usage.PromptTokensDetails.JSON.ExtraFields,
 		usage.JSON.ExtraFields,

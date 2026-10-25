@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -333,7 +334,7 @@ type codingModelConfigWorkflowResult struct {
 	NonStreamResult string
 }
 
-func modelConfigNonStreamActivity() (string, error) {
+func modelConfigNonStreamActivity(context.Context) (string, error) {
 	return "completed", nil
 }
 
@@ -429,32 +430,47 @@ func TestCodingStreamRestartsWithoutCancelingConcurrentActivity(t *testing.T) {
 		},
 	}
 
+	callbacks := &modelConfigUpdateCallbacks{}
+	nonStreamStarted := make(chan struct{})
+	streamRestarted := make(chan struct{})
+
 	var activities *persisted_ai.Llm2Activities
 	env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
 		return input.Options.ModelConfig.Model == "initial-coding"
-	})).Return(&llm2.MessageResponse{
-		Id: "partial",
-		Output: llm2.Message{
-			Role: llm2.RoleAssistant,
-		},
-	}, nil).After(time.Second).Once()
+	})).Return(func(ctx context.Context, _ persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+		select {
+		case <-nonStreamStarted:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		env.RegisterDelayedCallback(func() {
+			env.UpdateWorkflow(UpdateNameModelConfig, "coding-model-config-update", callbacks, updated)
+		}, 0)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}).Once()
 	env.OnActivity(activities.Stream, mock.Anything, mock.MatchedBy(func(input persisted_ai.StreamInput) bool {
 		return input.Options.ModelConfig.Model == "updated-coding"
-	})).Return(&llm2.MessageResponse{
-		Id: "complete",
-		Output: llm2.Message{
-			Role: llm2.RoleAssistant,
-		},
-	}, nil).Once()
+	})).Return(func(_ context.Context, _ persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+		close(streamRestarted)
+		return &llm2.MessageResponse{
+			Id: "complete",
+			Output: llm2.Message{
+				Role: llm2.RoleAssistant,
+			},
+		}, nil
+	}).Once()
 	env.OnActivity(modelConfigNonStreamActivity, mock.Anything).
-		Return("completed", nil).
-		After(500 * time.Millisecond).
+		Return(func(ctx context.Context) (string, error) {
+			close(nonStreamStarted)
+			select {
+			case <-streamRestarted:
+				return "completed", ctx.Err()
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}).
 		Once()
-
-	callbacks := &modelConfigUpdateCallbacks{}
-	env.RegisterDelayedCallback(func() {
-		env.UpdateWorkflow(UpdateNameModelConfig, "coding-model-config-update", callbacks, updated)
-	}, 100*time.Millisecond)
 
 	env.ExecuteWorkflow(codingModelConfigTestWorkflow, initial)
 

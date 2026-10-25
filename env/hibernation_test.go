@@ -18,27 +18,11 @@ import (
 func setupHibernationTestRepo(t *testing.T) (repoDir, worktreeDir, branchName string) {
 	t.Helper()
 	repoDir = t.TempDir()
-
-	runGit := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %v failed: %s", args, out)
-	}
-
-	runGit(repoDir, "init")
-	runGit(repoDir, "config", "user.name", "Test")
-	runGit(repoDir, "config", "user.email", "test@test.com")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Test"), 0644))
-	runGit(repoDir, "add", ".")
-	runGit(repoDir, "commit", "-m", "initial commit")
+	require.NoError(t, hibernationRepoFixture.CopyTo(repoDir))
 
 	branchName = "side/test-branch"
 	worktreeDir = filepath.Join(t.TempDir(), "worktree")
-	runGit(repoDir, "worktree", "add", "-b", branchName, worktreeDir, "HEAD")
+	runGitIn(t, repoDir, "worktree", "add", "-b", branchName, worktreeDir, "HEAD")
 	return repoDir, worktreeDir, branchName
 }
 
@@ -96,6 +80,35 @@ func TestHibernateEnvAndWake_Basic(t *testing.T) {
 	content, err = os.ReadFile(filepath.Join(worktreeDir, "new_file.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "new content", string(content))
+}
+
+func TestHibernateEnvAndWake_RetainsSideTmp(t *testing.T) {
+	t.Parallel()
+	_, worktreeDir, branchName := setupHibernationTestRepo(t)
+
+	e := &LocalEnv{WorkingDirectory: worktreeDir}
+	require.NoError(t, ensureSideTmp(context.Background(), e))
+	sideTmp := filepath.Join(worktreeDir, ".side", "tmp")
+	require.NoError(t, os.MkdirAll(filepath.Join(sideTmp, "nested"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(sideTmp, "notes.txt"), []byte("scratch notes"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(sideTmp, "nested", "blob.bin"), []byte{0x00, 0x01, 0xff, 0x00}, 0644))
+	require.Empty(t, strings.TrimSpace(runGitIn(t, worktreeDir, "status", "--porcelain")),
+		".side/tmp must be git-ignored for this test to be meaningful")
+
+	_, err := HibernateEnv(context.Background(), e, branchName)
+	require.NoError(t, err)
+	assert.NoDirExists(t, sideTmp)
+
+	_, err = WakeHibernatedEnv(context.Background(), e)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(sideTmp, "notes.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "scratch notes", string(content))
+	content, err = os.ReadFile(filepath.Join(sideTmp, "nested", "blob.bin"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0x00, 0x01, 0xff, 0x00}, content)
+	assert.Empty(t, strings.TrimSpace(runGitIn(t, worktreeDir, "status", "--porcelain")))
 }
 
 // TestHibernateEnvAndWake_LegacyUnlinkedGit covers worktrees hibernated by an
@@ -307,4 +320,81 @@ func TestHibernateEnvAndWake_TracksBinaryModifications(t *testing.T) {
 	assert.Contains(t, stagedDiff, "asset.bin", "staged binary modification should remain staged")
 
 	assert.NoFileExists(t, filepath.Join(worktreeDir, "untracked.bin"), "untracked binary should be dropped")
+}
+
+func TestHibernateEnvAndWake_PreservesMergeState(t *testing.T) {
+	t.Parallel()
+
+	for _, splitIndex := range []bool{false, true} {
+		name := "regular index"
+		if splitIndex {
+			name = "split index"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, finish := range []string{"commit", "abort"} {
+				t.Run(finish, func(t *testing.T) {
+					t.Parallel()
+
+					repoDir, worktreeDir, branchName := setupHibernationTestRepo(t)
+					require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("theirs\n"), 0644))
+					runGitIn(t, repoDir, "commit", "-am", "upstream change")
+					incoming := strings.TrimSpace(runGitIn(t, repoDir, "rev-parse", "HEAD"))
+
+					require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "README.md"), []byte("ours\n"), 0644))
+					runGitIn(t, worktreeDir, "commit", "-am", "our change")
+					ours := strings.TrimSpace(runGitIn(t, worktreeDir, "rev-parse", "HEAD"))
+					cmd := exec.Command("git", "merge", "--no-commit", "--no-ff", incoming)
+					cmd.Dir = worktreeDir
+					output, err := cmd.CombinedOutput()
+					require.Error(t, err)
+					require.Contains(t, string(output), "CONFLICT")
+
+					if splitIndex {
+						runGitIn(t, worktreeDir, "update-index", "--split-index")
+					}
+					indexBefore := runGitIn(t, worktreeDir, "ls-files", "--stage")
+					contentBefore, err := os.ReadFile(filepath.Join(worktreeDir, "README.md"))
+					require.NoError(t, err)
+					stateBefore := map[string][]byte{}
+					for _, name := range []string{"MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "ORIG_HEAD"} {
+						path := strings.TrimSpace(runGitIn(t, worktreeDir, "rev-parse", "--git-path", name))
+						stateBefore[name], err = os.ReadFile(path)
+						require.NoError(t, err)
+					}
+
+					e := &LocalEnv{WorkingDirectory: worktreeDir}
+					_, err = HibernateEnv(context.Background(), e, branchName)
+					require.NoError(t, err)
+					_, err = WakeHibernatedEnv(context.Background(), e)
+					require.NoError(t, err)
+
+					assert.Equal(t, indexBefore, runGitIn(t, worktreeDir, "ls-files", "--stage"))
+					contentAfter, err := os.ReadFile(filepath.Join(worktreeDir, "README.md"))
+					require.NoError(t, err)
+					assert.Equal(t, contentBefore, contentAfter)
+					for name, want := range stateBefore {
+						path := strings.TrimSpace(runGitIn(t, worktreeDir, "rev-parse", "--git-path", name))
+						got, err := os.ReadFile(path)
+						assert.NoError(t, err, name)
+						assert.Equal(t, want, got, name)
+					}
+
+					if finish == "abort" {
+						runGitIn(t, worktreeDir, "merge", "--abort")
+						assert.Equal(t, ours, strings.TrimSpace(runGitIn(t, worktreeDir, "rev-parse", "HEAD")))
+						content, err := os.ReadFile(filepath.Join(worktreeDir, "README.md"))
+						require.NoError(t, err)
+						assert.Equal(t, "ours\n", string(content))
+					} else {
+						require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "README.md"), []byte("ours and theirs\n"), 0644))
+						runGitIn(t, worktreeDir, "add", "README.md")
+						runGitIn(t, worktreeDir, "commit", "--no-edit")
+						assert.Equal(t, ours+" "+incoming, strings.TrimSpace(runGitIn(t, worktreeDir, "show", "-s", "--format=%P", "HEAD")))
+					}
+				})
+			}
+		})
+	}
 }

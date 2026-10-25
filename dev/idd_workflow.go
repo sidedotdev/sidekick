@@ -240,7 +240,7 @@ func IddWorkflow(ctx workflow.Context, input IddWorkflowInput) (err error) {
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return err
 	}
-	if err = SetupModalConfigHandlers(dCtx); err != nil {
+	if err = SetupEnvSettingsHandlers(dCtx); err != nil {
 		return err
 	}
 	SetupProfileChangeHandler(dCtx)
@@ -894,11 +894,20 @@ func commitIntent(dCtx DevContext, title string, update bool) (IntentRequirement
 		}
 	}
 
-	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitActivity, nil, *dCtx.EnvContainer, git.GitCommitParams{
+	commitParams := git.GitCommitParams{
 		CommitMessage:         commitMessage,
 		CommitAll:             true,
 		IgnoreNothingToCommit: true,
-	})
+	}
+	if llmCommitMessagesEnabled(dCtx) {
+		var err error
+		commitParams, err = intentCommitParams(dCtx)
+		if err != nil {
+			return IntentRequirementsInfo{}, err
+		}
+	}
+
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitActivity, nil, *dCtx.EnvContainer, commitParams)
 	if err != nil {
 		return IntentRequirementsInfo{}, fmt.Errorf("failed to commit intent: %w", err)
 	}

@@ -1,5 +1,5 @@
 <template>
-  <div class="subflow-container" :class="{ 'odd': level % 2 === 1, 'container-expanded': accordionState.expanded }" ref="container">
+  <div class="subflow-container" :class="{ 'odd': level % 2 === 1, 'container-expanded': accordionState.expanded }" :style="{ '--subflow-level': level }" ref="container">
     <div class="subflow-name-container" tabindex="-1" @click="toggleAccordion" ref="heading">
       <h2 class="subflow-name" :class="{'name-expanded': accordionState.expanded}">
           <span class="caret" :class="{ 'caret-expanded': accordionState.expanded }"></span>
@@ -9,13 +9,13 @@
     </div>
     <p v-if="accordionState.expanded && subflowTree.description">{{subflowTree.description}}</p>
     <template v-if="accordionState.expanded">
-      <template v-for="(child, index) in subflowTree.children" :key="childKey(child, index)">
+      <template v-for="child in subflowTree.children" :key="childKey(child)">
         <template v-if="isFlowAction(child)">
           <FlowActionErrorBoundary v-if="!isStartFlowAction(child)" :action-id="child.id">
-            <FlowActionItem :flowAction="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1"/>
+            <FlowActionItem :flowAction="child" :defaultExpanded="defaultExpanded && child.id === latestActionId" :level="level + 1"/>
           </FlowActionErrorBoundary>
         </template>
-        <SubflowContainer v-else :subflowTree="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1" :subflowsById="subflowsById" />
+        <SubflowContainer v-else :subflowTree="child" :defaultExpanded="defaultExpanded && containsFlowAction(child, latestActionId)" :latestActionId="latestActionId" :level="level + 1" :subflowsById="subflowsById" />
       </template>
       <div v-if="subflowStatus === 'failed' && subflowResult" class="error-message">
         {{ subflowResult }}
@@ -29,6 +29,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import FlowActionItem from './FlowActionItem.vue'
 import FlowActionErrorBoundary from './FlowActionErrorBoundary.vue'
 import type { FlowAction, SubflowTree, Subflow } from '../lib/models'
+import { containsFlowAction } from '../lib/subflow'
 import { useEventBus } from '@vueuse/core';
 
 const props = defineProps({
@@ -39,6 +40,10 @@ const props = defineProps({
   defaultExpanded: {
     type: Boolean,
     default: false,
+  },
+  latestActionId: {
+    type: String,
+    default: undefined,
   },
   level: {
     type: Number,
@@ -68,8 +73,8 @@ let wasToggled = false;
 const autoExpandThreshold = 2;
 const accordionState = ref({ expanded: props.defaultExpanded || props.subflowTree.children.length <= autoExpandThreshold });
 watch(() => props.defaultExpanded, (newVal: boolean) => {
-  if (!wasToggled) {
-    accordionState.value.expanded = newVal || props.subflowTree.children.length <= autoExpandThreshold
+  if (!wasToggled && newVal) {
+    accordionState.value.expanded = true
   }
 })
 
@@ -88,7 +93,6 @@ function toggleAccordion() {
   nextTick(() => {
     if (accordionState.value.expanded && container.value) {
       const scrollTo = container.value.scrollHeight > window.innerHeight - 100 ? 'start' : 'nearest';
-      console.log({scrollTo})
       container.value.scrollIntoView({ behavior: 'instant', block: scrollTo })
     } else if (!accordionState.value.expanded) {
       useEventBus('flow-view-collapse').emit()
@@ -96,12 +100,8 @@ function toggleAccordion() {
   })
 }
 
-function childKey(child: FlowAction | SubflowTree, index: number): string {
-  if (isFlowAction(child)) {
-    return child.id
-  } else {
-    return child.name + index
-  }
+function childKey(child: FlowAction | SubflowTree): string {
+  return child.id ?? (child as SubflowTree).name
 }
 </script>
 
@@ -111,7 +111,6 @@ function childKey(child: FlowAction | SubflowTree, index: number): string {
   background-color: var(--color-background);
   max-width: 100vw;
   border-bottom: 1px solid var(--color-border);
-  --subflow-level: v-bind(level);
   --name-height: 2.5rem;
 }
 

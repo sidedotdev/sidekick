@@ -1,0 +1,295 @@
+diff --git a/frontend/src/components/ApplyEditBlocksFlowAction.spec.ts b/frontend/src/components/ApplyEditBlocksFlowAction.spec.ts
+new file mode 100644
+index 0000000..9170f6a
+--- /dev/null
++++ b/frontend/src/components/ApplyEditBlocksFlowAction.spec.ts
+@@ -0,0 +1,143 @@
++import { defineComponent, h, nextTick, ref } from 'vue'
++import { mount } from '@vue/test-utils'
++import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
++import ApplyEditBlocksFlowAction from './ApplyEditBlocksFlowAction.vue'
++import FlowActionErrorBoundary from './FlowActionErrorBoundary.vue'
++import type { FlowAction } from '../lib/models'
++
++// jsdom has no canvas; @git-diff-view measures text widths with one. Stub only
++// that so the real diff renderer still runs.
++let getContextSpy: ReturnType<typeof vi.spyOn>
++beforeAll(() => {
++  getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
++    font: '',
++    measureText: (text: string) => ({ width: text.length * 7 }),
++  }) as unknown as CanvasRenderingContext2D)
++})
++afterAll(() => {
++  getContextSpy.mockRestore()
++})
++
++// Recovered from a real flow: git emits a combined diff (`diff --cc`, `@@@`
++// hunk header, two prefix columns) when the edited file is unmerged during
++// conflict resolution. The diff renderer library rejects this hunk format.
++const combinedDiff = [
++  'diff --cc Justfile',
++  'index 07a3b20,2a11cd1..0000000',
++  '--- a/Justfile',
++  '+++ b/Justfile',
++  '@@@ -7,5 -7,6 +7,9 @@@ install',
++  '  release *args:',
++  '  \t./scripts/release.sh {{args}}',
++  '  ',
++  ' +publish-web *args:',
++  '- \t./scripts/publish-web.sh {{args}}',
++  '++\t./scripts/publish-web.sh {{args}}',
++  '++',
++  '+ # Publish the empty npm package that reserves the `bgx` name; pass --dry-run to preview.',
++  '+ publish-node-placeholder *args:',
++  ' -\tcd node && npm publish {{args}}',
++  '++\tcd node && npm publish {{args}}',
++  '',
++].join('\n')
++
++const malformedDiff = [
++  'diff --git a/foo.txt b/foo.txt',
++  '--- a/foo.txt',
++  '+++ b/foo.txt',
++  '@@ not a real hunk header @@',
++  '-old line',
++  '+new line',
++  '',
++].join('\n')
++
++const unifiedDiff = [
++  'diff --git a/foo.txt b/foo.txt',
++  '--- a/foo.txt',
++  '+++ b/foo.txt',
++  '@@ -1,2 +1,2 @@',
++  ' unchanged',
++  '-old line',
++  '+new line',
++  '',
++].join('\n')
++
++function flowActionWithDiff(finalDiff: string): FlowAction {
++  return {
++    id: 'fa_test',
++    flowId: 'flow_test',
++    workspaceId: 'ws_test',
++    created: new Date(),
++    updated: new Date(),
++    subflow: 'Edit Code',
++    actionType: 'apply_edit_blocks',
++    actionStatus: 'complete',
++    isHumanAction: false,
++    actionParams: {},
++    actionResult: JSON.stringify([{
++      originalEditBlocks: [{ filePath: 'Justfile', oldLines: ['a'], newLines: ['b'], sequenceNumber: 1 }],
++      didApply: true,
++      error: '',
++      checkResult: { success: true, message: '' },
++      finalDiff,
++    }]),
++  } as FlowAction
++}
++
++async function settle() {
++  await nextTick()
++  await nextTick()
++}
++
++async function mountInBoundary(initialFlowAction: FlowAction) {
++  const flowAction = ref(initialFlowAction)
++  const Host = defineComponent({
++    setup: () => () => h(FlowActionErrorBoundary, { actionId: flowAction.value.id }, {
++      default: () => h(ApplyEditBlocksFlowAction, { flowAction: flowAction.value, expand: true }),
++    }),
++  })
++  const wrapper = mount(Host, { attachTo: document.body })
++  await settle()
++  return { wrapper, flowAction }
++}
++
++describe('ApplyEditBlocksFlowAction diff rendering', () => {
++  it.each([
++    ['combined merge-conflict diff', combinedDiff],
++    ['diff the renderer rejects', malformedDiff],
++  ])('shows the %s as the raw patch instead of failing the whole action', async (_name, diff) => {
++    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
++    try {
++      const { wrapper } = await mountInBoundary(flowActionWithDiff(diff))
++      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
++      expect(wrapper.text()).toContain('Applied')
++      expect(wrapper.get('.raw-diff').element.textContent).toBe(diff)
++    } finally {
++      consoleError.mockRestore()
++    }
++  })
++
++  it('renders an ordinary unified diff with the rich diff viewer', async () => {
++    const { wrapper } = await mountInBoundary(flowActionWithDiff(unifiedDiff))
++    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
++    expect(wrapper.find('.raw-diff').exists()).toBe(false)
++    expect(wrapper.get('.diff-content').text()).toContain('new line')
++  })
++
++  it('returns to the rich viewer once a rejected diff is replaced by a valid one', async () => {
++    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
++    try {
++      const { wrapper, flowAction } = await mountInBoundary(flowActionWithDiff(malformedDiff))
++      expect(wrapper.get('.raw-diff').element.textContent).toBe(malformedDiff)
++
++      flowAction.value = flowActionWithDiff(unifiedDiff)
++      await settle()
++
++      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
++      expect(wrapper.find('.raw-diff').exists()).toBe(false)
++      expect(wrapper.get('.diff-content').text()).toContain('new line')
++    } finally {
++      consoleError.mockRestore()
++    }
++  })
++})
+\ No newline at end of file
+diff --git a/frontend/src/components/DiffFile.vue b/frontend/src/components/DiffFile.vue
+index 49a9dcb..930ec5e 100644
+--- a/frontend/src/components/DiffFile.vue
++++ b/frontend/src/components/DiffFile.vue
+@@ -34,7 +34,9 @@
+       </div>
+     </div>
+     <div v-if="isExpanded" class="diff-content" tabindex="-1">
++      <pre v-if="showRawPatch" class="raw-diff">{{ rawPatch }}</pre>
+       <DiffView
++        v-else
+         :data="fileData"
+         :diff-view-font-size="14"
+         :diff-view-mode="viewMode"
+@@ -48,10 +50,10 @@
+ </template>
+ 
+ <script setup lang="ts">
+-import { computed, ref, inject } from 'vue'
++import { computed, ref, inject, onErrorCaptured, watch } from 'vue'
+ import CopyIcon from './icons/CopyIcon.vue'
+ import OpenIcon from './icons/OpenIcon.vue'
+-import type { ParsedDiff } from '../lib/diffUtils'
++import { isCombinedDiff, type ParsedDiff } from '../lib/diffUtils'
+ import "@git-diff-view/vue/styles/diff-view.css"
+ import { DiffView, DiffModeEnum } from "@git-diff-view/vue"
+ import { IDE_OPENER_KEY } from '../composables/useIdeOpener'
+@@ -86,6 +88,26 @@ const viewMode = computed(() => {
+   return props.diffMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified
+ })
+ 
++// The rich viewer only understands two-way unified diffs. Anything else (git
++// combined diffs, or a patch its parser rejects at render time) is shown as the
++// original patch text so the diff is never hidden behind an error.
++const rawPatch = computed(() => props.fileData.hunks.join('\n'))
++const renderFailed = ref(false)
++const showRawPatch = computed(() => renderFailed.value || isCombinedDiff(props.fileData.hunks))
++
++watch(() => props.fileData, () => {
++  renderFailed.value = false
++})
++
++onErrorCaptured((error) => {
++  if (renderFailed.value) {
++    return false
++  }
++  renderFailed.value = true
++  console.warn(`Falling back to raw patch for ${filePath.value}:`, error)
++  return false
++})
++
+ const toggleExpanded = () => {
+   isExpanded.value = !isExpanded.value
+ }
+@@ -277,4 +299,17 @@ const getTheme = () => {
+ .diff-content {
+   padding: 0;
+ }
++
++.raw-diff {
++  margin: 0;
++  padding: 0.75rem 1rem;
++  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
++  font-size: 0.875rem;
++  line-height: 1.4;
++  color: var(--color-text);
++  background: var(--color-background);
++  white-space: pre-wrap;
++  overflow-wrap: anywhere;
++  tab-size: 4;
++}
+ </style>
+\ No newline at end of file
+diff --git a/frontend/src/components/__tests__/UnifiedDiffViewer.spec.ts b/frontend/src/components/__tests__/UnifiedDiffViewer.spec.ts
+index a7fa661..b706cf1 100644
+--- a/frontend/src/components/__tests__/UnifiedDiffViewer.spec.ts
++++ b/frontend/src/components/__tests__/UnifiedDiffViewer.spec.ts
+@@ -37,10 +37,14 @@ Object.defineProperty(window, 'matchMedia', {
+   })),
+ })
+ 
+-// Mock the parseDiff function
+-vi.mock('../../lib/diffUtils', () => ({
+-  parseDiff: vi.fn()
+-}))
++// Mock only parseDiff; DiffFile still relies on the real helpers.
++vi.mock('../../lib/diffUtils', async (importOriginal) => {
++  const actual: Record<string, unknown> = await importOriginal()
++  return {
++    ...actual,
++    parseDiff: vi.fn()
++  }
++})
+ 
+ import { parseDiff } from '../../lib/diffUtils'
+ const mockParseDiff = vi.mocked(parseDiff)
+diff --git a/frontend/src/lib/__tests__/diffUtils.test.ts b/frontend/src/lib/__tests__/diffUtils.test.ts
+index 645351a..b2181f2 100644
+--- a/frontend/src/lib/__tests__/diffUtils.test.ts
++++ b/frontend/src/lib/__tests__/diffUtils.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, it, expect } from 'vitest';
+-import { parseDiff, getFileLanguage } from '../diffUtils';
++import { parseDiff, getFileLanguage, isCombinedDiff } from '../diffUtils';
+ 
+ describe('getFileLanguage', () => {
+   it('should return correct language for common file extensions', () => {
+@@ -271,6 +271,19 @@ without proper headers`;
+     expect(result[0].linesUnchanged).toBe(0);
+   });
+ 
++  describe('isCombinedDiff', () => {
++    it('detects hunks with combined (multi-parent) headers', () => {
++      expect(isCombinedDiff(['diff --cc a.txt\n@@@ -1,2 -1,2 +1,3 @@@\n +ours\n+ theirs\n  shared'])).toBe(true);
++      expect(isCombinedDiff(['diff --combined a.txt\n@@@@ -1 -1 -1 +1,2 @@@@\n+++x'])).toBe(true);
++    });
++
++    it('does not flag two-way hunks, even in a diff --cc file or with @@@ inside content', () => {
++      expect(isCombinedDiff(['diff --cc a.txt\n@@ -1,2 +1,3 @@\n ours\n+theirs'])).toBe(false);
++      expect(isCombinedDiff(['diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-x\n+@@@ not a header'])).toBe(false);
++      expect(isCombinedDiff([])).toBe(false);
++    });
++  });
++
+   it('should handle combined diff format (diff --cc)', () => {
+     const combinedDiff = `diff --cc scripts/lint_chat_history_append/main.go
+ index 32293236,12d21e3c..00000000
+diff --git a/frontend/src/lib/diffUtils.ts b/frontend/src/lib/diffUtils.ts
+index 1b6d875..a304571 100644
+--- a/frontend/src/lib/diffUtils.ts
++++ b/frontend/src/lib/diffUtils.ts
+@@ -70,6 +70,13 @@ export const getFileLanguage = (fileName: string | undefined): string | null =>
+   return languageMap[extension?.toLowerCase() ?? ''] || null;
+ };
+ 
++// Git emits combined diffs (`@@@ -a,b -c,d +e,f @@@`, one prefix column per
++// parent) for unmerged paths during a merge. They carry more information than
++// a two-way diff but unified-diff renderers can't display them.
++export const isCombinedDiff = (hunks: string[]): boolean => {
++  return hunks.some(hunk => /^@@@+ /m.test(hunk));
++};
++
+ const parseHunkHeader = (line: string): { oldStart: number; oldCount: number; newStart: number; newCount: number } | null => {
+   const match = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+   if (!match) return null;

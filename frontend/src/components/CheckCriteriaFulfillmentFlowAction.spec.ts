@@ -142,3 +142,25 @@ describe('criteria tool response selection', () => {
     }
   })
 })
+
+describe('criteria analysis markdown', () => {
+  it('wraps analysis tables in a scroll container', () => {
+    const wrapper = mount(CheckCriteriaFulfillmentFlowAction, {
+      props: {
+        flowAction: action({
+          whatWasActuallyDone: 'Implemented the requested change',
+          analysis: '| check | result |\n| - | - |\n| tests | pass |',
+          isFulfilled: true,
+          confidence: 5,
+        }),
+        expand: true,
+      },
+      global: { stubs: { ChatCompletionFlowAction: true, UnifiedDiffViewer: true } },
+    })
+    try {
+      expect(wrapper.find('.analysis .markdown .markdown-table-scroll > table').exists()).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})

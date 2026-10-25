@@ -54,6 +54,17 @@ func TestRankedSubkeys(t *testing.T) {
 		t.Skip("Skipping integration test; API keys are unavailable in non-local sidekick environments")
 	}
 
+	secrets := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		secret_manager.EnvSecretManager{},
+		secret_manager.KeyringSecretManager{},
+		secret_manager.LocalConfigSecretManager{},
+	})
+	apiKey, err := secrets.GetSecret("OPENAI_API_KEY")
+	if errors.Is(err, secret_manager.ErrSecretNotFound) || (err == nil && apiKey == "") {
+		t.Skip("Skipping integration test; OPENAI_API_KEY is not configured")
+	}
+	require.NoError(t, err, "Failed to retrieve OPENAI_API_KEY")
+
 	dbAccessor := sqlite.NewTestSqliteStorage(t, "test-ranked-subkeys")
 	ra := RagActivities{DatabaseAccessor: dbAccessor}
 
@@ -72,7 +83,7 @@ func TestRankedSubkeys(t *testing.T) {
 		contentKey := fmt.Sprintf("code:%s", subkey)
 		kvs[contentKey] = subkey
 	}
-	err := dbAccessor.MSet(ctx, "test", kvs)
+	err = dbAccessor.MSet(ctx, "test", kvs)
 	require.NoError(t, err, "Failed to store content keys")
 
 	modelConfig := common.ModelConfig{
@@ -112,11 +123,7 @@ func TestRankedSubkeys(t *testing.T) {
 					RankQuery:    tt.query,
 					EnvContainer: env.EnvContainer{},
 					Secrets: secret_manager.SecretManagerContainer{
-						SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-							secret_manager.EnvSecretManager{},
-							secret_manager.KeyringSecretManager{},
-							secret_manager.LocalConfigSecretManager{},
-						}),
+						SecretManager: secrets,
 					},
 				},
 				ContentType: "code",

@@ -219,32 +219,28 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		Id:          "end",
 	}
 
-	// Publish concurrently on purpose (see the test's doc comment). Sleeps
-	// stagger the publishes so the expected ordering usually holds.
-	var wg sync.WaitGroup
-	wg.Add(3)
+	// Publish the data actions concurrently on purpose (see the test's doc
+	// comment). Their relative order is therefore not guaranteed. The end
+	// marker stops the consumer, so it is only published once both data
+	// publishes have completed; otherwise a delayed publish would be dropped.
+	var dataWg sync.WaitGroup
+	dataWg.Add(2)
 	go func() {
-		defer wg.Done()
+		defer dataWg.Done()
 		if err := s.streamer.AddFlowActionChange(context.Background(), flowAction); err != nil {
 			s.T().Errorf("Failed to add flow action change: %v", err)
 		}
 	}()
 
 	go func() {
-		defer wg.Done()
-		time.Sleep(50 * time.Millisecond)
+		defer dataWg.Done()
 		if err := s.streamer.AddFlowActionChange(context.Background(), newAction); err != nil {
 			s.T().Errorf("Failed to add new flow action change: %v", err)
 		}
 	}()
 
-	go func() {
-		defer wg.Done()
-		time.Sleep(100 * time.Millisecond)
-		if err := s.streamer.AddFlowActionChange(context.Background(), endAction); err != nil {
-			s.T().Errorf("Failed to add end flow action change: %v", err)
-		}
-	}()
+	dataWg.Wait()
+	s.Require().NoError(s.streamer.AddFlowActionChange(context.Background(), endAction))
 
 	select {
 	case <-done:
@@ -252,27 +248,31 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		s.T().Fatal("Test timed out")
 	}
 
-	wg.Wait()
-
 	s.Require().Len(receivedActions, 3)
-	// Verify first action with timestamp checks
-	s.Equal(flowAction.Id, receivedActions[0].Id)
-	s.Equal(flowAction.SubflowName, receivedActions[0].SubflowName)
-	s.Equal(flowAction.ActionType, receivedActions[0].ActionType)
-	s.Equal(time.UTC, receivedActions[0].Created.Location())
-	s.Equal(time.UTC, receivedActions[0].Updated.Location())
-	s.True(receivedActions[0].Created.Equal(flowAction.Created))
-	s.True(receivedActions[0].Updated.Equal(flowAction.Updated))
-	s.Equal(flowAction.Created.Nanosecond(), receivedActions[0].Created.Nanosecond())
-	s.Equal(flowAction.Updated.Nanosecond(), receivedActions[0].Updated.Nanosecond())
-	// Verify second action with timestamp checks
-	s.Equal(newAction.Id, receivedActions[1].Id)
-	s.Equal(time.UTC, receivedActions[1].Created.Location())
-	s.Equal(time.UTC, receivedActions[1].Updated.Location())
-	s.True(receivedActions[1].Created.Equal(newAction.Created))
-	s.True(receivedActions[1].Updated.Equal(newAction.Updated))
-	// Verify end action
 	s.Equal(endAction.Id, receivedActions[2].Id)
+
+	receivedById := map[string]domain.FlowAction{}
+	for _, action := range receivedActions[:2] {
+		receivedById[action.Id] = action
+	}
+	s.Require().Contains(receivedById, flowAction.Id)
+	s.Require().Contains(receivedById, newAction.Id)
+
+	first := receivedById[flowAction.Id]
+	s.Equal(flowAction.SubflowName, first.SubflowName)
+	s.Equal(flowAction.ActionType, first.ActionType)
+	s.Equal(time.UTC, first.Created.Location())
+	s.Equal(time.UTC, first.Updated.Location())
+	s.True(first.Created.Equal(flowAction.Created))
+	s.True(first.Updated.Equal(flowAction.Updated))
+	s.Equal(flowAction.Created.Nanosecond(), first.Created.Nanosecond())
+	s.Equal(flowAction.Updated.Nanosecond(), first.Updated.Nanosecond())
+
+	second := receivedById[newAction.Id]
+	s.Equal(time.UTC, second.Created.Location())
+	s.Equal(time.UTC, second.Updated.Location())
+	s.True(second.Created.Equal(newAction.Created))
+	s.True(second.Updated.Equal(newAction.Updated))
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming() {

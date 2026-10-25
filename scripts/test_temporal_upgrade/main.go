@@ -18,6 +18,7 @@ import (
 	"time"
 
 	enums "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -97,6 +98,11 @@ func main() {
 		start(ctx, c, workflowID)
 	case "describe":
 		describe(ctx, c, workflowID)
+	case "listed":
+		if len(os.Args) != 4 {
+			fatal("listed requires workflowID and runID")
+		}
+		verifyListed(ctx, c, workflowID, os.Args[3])
 	case "start-blocking":
 		startBlocking(ctx, c, workflowID)
 	case "signal-complete":
@@ -201,15 +207,40 @@ func describe(ctx context.Context, c client.Client, workflowID string) {
 		fatal("describe workflow: %v", err)
 	}
 	info := resp.GetWorkflowExecutionInfo()
-	fmt.Printf("DESCRIBE workflowID=%s runID=%s status=%s type=%s\n",
+	fmt.Printf("DESCRIBE workflowID=%s runID=%s status=%s type=%s historyLength=%d\n",
 		info.GetExecution().GetWorkflowId(),
 		info.GetExecution().GetRunId(),
 		info.GetStatus().String(),
 		info.GetType().GetName(),
+		info.GetHistoryLength(),
 	)
 }
 
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "ERROR: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+func verifyListed(ctx context.Context, c client.Client, workflowID, runID string) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	for {
+		response, err := c.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
+			Query: fmt.Sprintf("RunId = '%s'", runID),
+		})
+		if err != nil {
+			fatal("list workflow: %v", err)
+		}
+		for _, info := range response.GetExecutions() {
+			if info.GetExecution().GetWorkflowId() == workflowID && info.GetExecution().GetRunId() == runID {
+				fmt.Printf("LISTED workflowID=%s runID=%s status=%s\n", workflowID, runID, info.GetStatus())
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			fatal("workflow %s/%s not visible: %v", workflowID, runID, ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }

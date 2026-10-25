@@ -631,3 +631,162 @@ func TestExtractCommands(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractCommands_Xargs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		script   string
+		expected []string
+	}{
+		{
+			name:     "attached short option values",
+			script:   "ls | xargs -n1 -P4 wc -l",
+			expected: []string{"ls", "xargs -n1 -P4 wc -l", "wc -l"},
+		},
+		{
+			name:     "attached replace string",
+			script:   "ls | xargs -I{} cp -n {} dest",
+			expected: []string{"ls", "xargs -I{} cp -n {} dest", "cp -n {} dest"},
+		},
+		{
+			name:     "clustered flags without values",
+			script:   "ls | xargs -0rt grep foo",
+			expected: []string{"ls", "xargs -0rt grep foo", "grep foo"},
+		},
+		{
+			name:     "cluster ending in flag with separate value",
+			script:   "ls | xargs -0n 2 grep foo",
+			expected: []string{"ls", "xargs -0n 2 grep foo", "grep foo"},
+		},
+		{
+			name:     "long options with and without values",
+			script:   "ls | xargs --null --no-run-if-empty --max-args=1 --max-procs 4 grep foo",
+			expected: []string{"ls", "xargs --null --no-run-if-empty --max-args=1 --max-procs 4 grep foo", "grep foo"},
+		},
+		{
+			name:     "long option with optional value",
+			script:   "ls | xargs --replace cat {}",
+			expected: []string{"ls", "xargs --replace cat {}", "cat {}"},
+		},
+		{
+			name:     "deprecated -i with attached replace string",
+			script:   "ls | xargs -i% cat %",
+			expected: []string{"ls", "xargs -i% cat %", "cat %"},
+		},
+		{
+			name:     "quoted delimiter value",
+			script:   `ls | xargs -d '\n' grep foo`,
+			expected: []string{"ls", `xargs -d '\n' grep foo`, "grep foo"},
+		},
+		{
+			name:     "end of options marker",
+			script:   "ls | xargs -0 -- grep foo",
+			expected: []string{"ls", "xargs -0 -- grep foo", "grep foo"},
+		},
+		{
+			name:     "no command defaults to echo",
+			script:   "ls | xargs -0",
+			expected: []string{"ls", "xargs -0", "echo"},
+		},
+		{
+			name:     "redirect stays with wrapped command",
+			script:   "xargs grep foo > out.txt",
+			expected: []string{"xargs grep foo > out.txt", "grep foo > out.txt"},
+		},
+		{
+			name:     "nested wrapper is unwrapped",
+			script:   "ls | xargs sudo rm",
+			expected: []string{"ls", "xargs sudo rm", "sudo rm", "rm"},
+		},
+		{
+			name:     "shell -c is unwrapped",
+			script:   `ls | xargs -I{} sh -c 'curl {}'`,
+			expected: []string{"ls", `xargs -I{} sh -c 'curl {}'`, `sh -c 'curl {}'`, "curl {}"},
+		},
+		{
+			name:     "nested xargs is unwrapped",
+			script:   "ls | xargs -n1 xargs grep foo",
+			expected: []string{"ls", "xargs -n1 xargs grep foo", "xargs grep foo", "grep foo"},
+		},
+		{
+			name:     "xargs behind wrapper is unwrapped",
+			script:   "ls | nice -n 5 xargs grep foo",
+			expected: []string{"ls", "nice -n 5 xargs grep foo", "xargs grep foo", "grep foo"},
+		},
+		{
+			name:     "xargs inside find -exec is not unwrapped",
+			script:   `find . -exec xargs rm \;`,
+			expected: []string{`find . -exec xargs rm \;`, "xargs rm"},
+		},
+		{
+			name:     "nested recursive wrapper is unwrapped",
+			script:   "ls | xargs nice -n 5 grep foo",
+			expected: []string{"ls", "xargs nice -n 5 grep foo", "nice -n 5 grep foo", "grep foo"},
+		},
+		{
+			name:     "unknown short flag extracts nothing",
+			script:   "ls | xargs -Z grep foo",
+			expected: []string{"ls", "xargs -Z grep foo"},
+		},
+		{
+			name:     "unknown long flag extracts nothing",
+			script:   "ls | xargs --frobnicate grep foo",
+			expected: []string{"ls", "xargs --frobnicate grep foo"},
+		},
+		{
+			name:     "value given to long flag without value extracts nothing",
+			script:   "ls | xargs --null=x grep foo",
+			expected: []string{"ls", "xargs --null=x grep foo"},
+		},
+		{
+			name:     "missing flag value extracts nothing",
+			script:   "ls | xargs -n",
+			expected: []string{"ls", "xargs -n"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, ExtractCommands(tt.script))
+		})
+	}
+}
+
+func TestExtractCommandsLegacy_XargsUnchanged(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{"ls", "xargs -n1 sudo rm", "sudo rm"}, ExtractCommandsLegacy("ls | xargs -n1 sudo rm"))
+}
+
+func TestExtractCommands_CommandBuiltin(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		script   string
+		expected []string
+	}{
+		{name: "runs operand", script: "command cmd arg", expected: []string{"command cmd arg", "cmd arg"}},
+		{name: "-p runs operand", script: "command -p rm -rf /", expected: []string{"command -p rm -rf /", "rm -rf /"}},
+		{name: "-- ends options", script: "command -- -v", expected: []string{"command -- -v", "-v"}},
+		{name: "-v only looks up", script: "command -v go", expected: []string{"command -v go"}},
+		{name: "-V only looks up", script: "command -V go", expected: []string{"command -V go"}},
+		{name: "-p -v only looks up", script: "command -p -v rm", expected: []string{"command -p -v rm"}},
+		{name: "clustered -pv only looks up", script: "command -pv rm", expected: []string{"command -pv rm"}},
+		{name: "-v after operand is an operand arg", script: "command cmd -v", expected: []string{"command cmd -v", "cmd -v"}},
+		{name: "lookup with substitution", script: "command -v $(rm x)", expected: []string{"command -v $(rm x)", "rm x"}},
+		{name: "lookup in negated condition", script: "if ! command -v go >/dev/null; then exit 1; fi", expected: []string{"command -v go", "exit 1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, ExtractCommands(tt.script))
+		})
+	}
+}
+
+func TestExtractCommandsLegacy_CommandBuiltinUnchanged(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{"command -v go", "-v go"}, ExtractCommandsLegacy("command -v go"))
+}

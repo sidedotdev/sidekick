@@ -24,7 +24,7 @@ const providersForUrl = (url: string) => {
 };
 
 const createMockFetch = (workspaceResponse: object) => {
-  return vi.fn((url: string, options?: RequestInit) => {
+  return vi.fn((url: string, _options?: RequestInit) => {
     if (url.startsWith('/api/v1/providers')) {
       return Promise.resolve({
         ok: true,
@@ -118,7 +118,7 @@ describe('WorkspaceForm.vue', () => {
         name: 'New Workspace',
         localRepoDir: '/local/repo/dir',
         configMode: 'merge',
-        llmConfig: { defaults: [{ provider: 'openai', model: '', reasoningEffort: '', speed: '' }], useCaseConfigs: {} },
+        llmConfig: { defaults: [{ provider: 'openai', model: '', reasoningEffort: '', serviceTier: '', speed: '' }], useCaseConfigs: {} },
         embeddingConfig: { defaults: [{ provider: 'openai', model: '' }], useCaseConfigs: {} }
       }),
     });
@@ -181,7 +181,7 @@ describe('WorkspaceForm.vue', () => {
         localRepoDir: '/updated/repo/dir',
         configMode: 'merge',
         llmConfig: {
-          defaults: [{ provider: 'openai', model: '', reasoningEffort: '', speed: '' }],
+          defaults: [{ provider: 'openai', model: '', reasoningEffort: '', serviceTier: '', speed: '' }],
           useCaseConfigs: {}
         },
         embeddingConfig: {

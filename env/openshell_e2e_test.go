@@ -60,6 +60,7 @@ func TestOpenShellIntegration(t *testing.T) {
 	if _, err := exec.LookPath("openshell"); err != nil {
 		t.Skip("openshell command not found in PATH")
 	}
+	t.Parallel()
 
 	ctx := context.Background()
 	if deadline, ok := t.Deadline(); ok {

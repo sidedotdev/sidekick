@@ -419,60 +419,156 @@ func TestInterdiffSuccessiveFullReviewBaselines(t *testing.T) {
 	assert.NotContains(t, sinceSecondReview, "+var second = 2")
 }
 
-func TestRestoreInterdiffTrailingContextRequiresMatchingPostImages(t *testing.T) {
+func TestInterdiffRejectsInconsistentEvidence(t *testing.T) {
 	t.Parallel()
 
-	const priorDiff = `diff --git a/fields.txt b/fields.txt
---- a/fields.txt
-+++ b/fields.txt
-@@ -1,2 +1,3 @@
- first int
- second int
-+third int
-`
-	const currentDiff = `diff --git a/fields.txt b/fields.txt
---- a/fields.txt
-+++ b/fields.txt
-@@ -1,2 +1,3 @@
--first int
-+first  int
- second int
-+third int
-`
-	const incomplete = `diff --git a/fields.txt b/fields.txt
---- a/fields.txt
-+++ b/fields.txt
-@@ -1,3 +1,3 @@
--first int
-+first  int
- second int
-`
+	const header = "diff --git a/f b/f\n--- a/f\n+++ b/f\n"
+	const prior = header + "@@ -1,2 +1,2 @@\n a\n-b\n+reviewed\n"
 	for _, tc := range []struct {
-		name    string
-		current string
-		section string
-		recover bool
+		name, current string
 	}{
-		{"common trailing context", currentDiff, incomplete, true},
-		{"different trailing content", strings.ReplaceAll(currentDiff, "third int", "other int"), incomplete, false},
-		{"incorrect emitted content", currentDiff, strings.ReplaceAll(incomplete, "+first  int", "+wrong int"), false},
-		{"missing post-image evidence", currentDiff, strings.ReplaceAll(incomplete, "-1,3 +1,3", "-1,4 +1,4"), false},
-		{"unequal missing counts", currentDiff, strings.ReplaceAll(incomplete, "-1,3 +1,3", "-1,3 +1,2"), false},
+		{"conflicting base line", header + "@@ -1,2 +1,2 @@\n other\n-b\n+current\n"},
+		{"conflicting final newline", header + "@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+current\n"},
+		{"inconsistent new coordinates", header + "@@ -1,2 +8,2 @@\n a\n-b\n+current\n"},
+		{"overlapping hunks", header + "@@ -1,2 +1,2 @@\n a\n-b\n+current\n@@ -2 +2 @@\n-b\n+again\n"},
+		{"truncated hunk", header + "@@ -1,3 +1,3 @@\n a\n-b\n+current\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			prior, err := parseForInterdiff(priorDiff)
+			result, err := Interdiff(prior, tc.current)
+			require.Error(t, err)
+			require.Empty(t, result)
+		})
+	}
+}
+
+func TestInterdiffCopyInformation(t *testing.T) {
+	t.Parallel()
+
+	repo := newInterdiffFuzzRepo(t)
+	file := interdiffFuzzFile{mode: "100644", content: "not present in a pure copy header\n"}
+	base := repo.tree(interdiffFuzzTree{"original": file})
+	reviewed := repo.tree(interdiffFuzzTree{"original": file, "copy": file})
+	empty := repo.tree(interdiffFuzzTree{})
+	prior := repo.git("", "diff-tree", "-r", "-p", "--no-commit-id", "--find-copies-harder", "-C", base, reviewed)
+	require.Contains(t, prior, "copy from original")
+	require.NotContains(t, prior, file.content)
+
+	unchanged, err := Interdiff(prior, prior)
+	require.NoError(t, err)
+	require.Empty(t, unchanged)
+
+	// Removing the copy requires bytes absent from both input patches.
+	unavailable, err := Interdiff(prior, "")
+	require.Error(t, err)
+	require.Empty(t, unavailable)
+
+	// A deletion in the other review reveals the complete base content.
+	current := repo.git("", "diff-tree", "-r", "-p", "--no-commit-id", base, empty)
+	result, err := Interdiff(prior, current)
+	require.NoError(t, err)
+	repo.assertApplies(reviewed, empty, result)
+}
+
+// Changes git cannot express as hunks (empty files, mode-only changes, binary
+// files, renames) must neither fail the comparison nor be reported when both
+// reviews contain them unchanged.
+func TestInterdiffHunklessSections(t *testing.T) {
+	t.Parallel()
+
+	const emptyFile = "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n"
+	const modeOnly = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n"
+	const binary = "diff --git a/img.png b/img.png\nnew file mode 100644\nindex 0000000..1234567\nBinary files /dev/null and b/img.png differ\n"
+	const rename = "diff --git a/old.go b/new.go\nsimilarity index 100%\nrename from old.go\nrename to new.go\n"
+	const textChange = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-base\n+reviewed\n"
+	const textChangeMore = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n-base\n+reviewed\n+more\n"
+	const emptyFileFilled = "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n--- /dev/null\n+++ b/empty.txt\n@@ -0,0 +1 @@\n+filled\n"
+
+	tests := []struct {
+		name    string
+		prior   string
+		current string
+		want    string
+	}{
+		{
+			name:    "unchanged hunkless sections are omitted",
+			prior:   emptyFile + modeOnly + binary + rename + textChange,
+			current: emptyFile + modeOnly + binary + rename + textChangeMore,
+			want:    "diff --git a/f b/f\n--- b/f\n+++ b/f\n@@ -1,1 +1,2 @@\n reviewed\n+more\n",
+		},
+		{
+			name:    "hunkless section only in current is reported as is",
+			prior:   textChange,
+			current: textChange + emptyFile,
+			want:    emptyFile,
+		},
+		{
+			name:    "empty file only in prior is reported as deleted",
+			prior:   textChange + emptyFile,
+			current: textChange,
+			want:    "diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\nindex e69de29..0000000\n",
+		},
+		{
+			name:    "mode change only in prior is reverted",
+			prior:   modeOnly,
+			current: textChange,
+			want:    textChange + "diff --git a/run.sh b/run.sh\nold mode 100755\nnew mode 100644\n",
+		},
+		{
+			name:    "rename only in prior is reverted",
+			prior:   rename,
+			current: textChange,
+			want:    textChange + "diff --git a/new.go b/old.go\nsimilarity index 100%\nrename from new.go\nrename to old.go\n",
+		},
+		{
+			name:    "empty file filled since prior reports the added lines",
+			prior:   emptyFile,
+			current: emptyFileFilled,
+			want:    "diff --git a/empty.txt b/empty.txt\n--- a/empty.txt\n+++ b/empty.txt\n@@ -0,0 +1 @@\n+filled\n",
+		},
+		{
+			name:    "filled file emptied since prior reports the removed lines",
+			prior:   emptyFileFilled,
+			current: emptyFile,
+			want:    "diff --git a/empty.txt b/empty.txt\n--- a/empty.txt\n+++ b/empty.txt\n@@ -1 +0,0 @@\n-filled\n",
+		},
+		{
+			name:    "filled file deleted since prior reports the removed lines",
+			prior:   "diff --git a/empty.txt b/empty.txt\n--- a/empty.txt\n+++ b/empty.txt\n@@ -0,0 +1 @@\n+filled\n",
+			current: "diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\nindex e69de29..0000000\n",
+			want:    "diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\n--- a/empty.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-filled\n",
+		},
+		{
+			name:    "text edits reverted while mode change remains reports the reversion",
+			prior:   textChange,
+			current: "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n",
+			want:    "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-reviewed\n+base\n",
+		},
+		{
+			name:    "text edited after a reviewed mode change reports only the edit",
+			prior:   "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n",
+			current: "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-base\n+edited\n",
+			want:    "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-base\n+edited\n",
+		},
+		{
+			name:    "reviewed mode change reverted while editing reports the mode reversion",
+			prior:   "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n",
+			current: textChange,
+			want:    "diff --git a/f b/f\nold mode 100755\nnew mode 100644\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-base\n+reviewed\n",
+		},
+		{
+			name:    "text file turned binary reports the current section",
+			prior:   textChange,
+			current: "diff --git a/f b/f\nBinary files a/f and b/f differ\n",
+			want:    "diff --git a/f b/f\nBinary files a/f and b/f differ\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := Interdiff(tt.prior, tt.current)
 			require.NoError(t, err)
-			current, err := parseForInterdiff(tc.current)
-			require.NoError(t, err)
-			got := restoreInterdiffTrailingContext(tc.section, prior[0], current[0])
-			if !tc.recover {
-				require.Equal(t, tc.section, got)
-				return
-			}
-			require.Equal(t, incomplete+" third int\n", got)
-			_, err = parseForInterdiff(got)
-			require.NoError(t, err)
+			assertEquivalentReviewPatch(t, tt.want, result)
 		})
 	}
 }

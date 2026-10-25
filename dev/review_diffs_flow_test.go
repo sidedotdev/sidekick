@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,16 @@ type reviewDiffsFlowHarness struct {
 	// after its edits apply cleanly.
 	codingResponse     string
 	codingResponseSent bool
+
+	// commitSubflowRuns counts the commit subflow rounds that committed work.
+	commitSubflowRuns int
+
+	// enabledFlags are the feature flags that evaluate as enabled; all others
+	// are disabled.
+	enabledFlags map[string]bool
+
+	// events orders commit subflow runs relative to merge approval requests.
+	events []string
 
 	// unfulfilledRounds is how many auto-review rounds report the work as not
 	// yet meeting its criteria, which is what drives a flow into another coding
@@ -181,7 +192,10 @@ func (h *reviewDiffsFlowHarness) registerMocks() {
 		Return([]domain.TemporalActivityRef{}, nil).Maybe()
 
 	var flags *fflag.FFlagActivities
-	h.env.OnActivity(flags.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	h.env.OnActivity(flags.EvalBoolFlag, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, params fflag.EvaluateFeatureFlagParams) (bool, error) {
+			return h.enabledFlags[params.FlagName], nil
+		}).Maybe()
 	settings := DefaultVerifierSettings()
 	settings.Enabled = false
 	h.env.OnActivity(flags.EvaluateFlags, mock.Anything, mock.Anything).
@@ -260,6 +274,11 @@ func (h *reviewDiffsFlowHarness) streamResponse(input persisted_ai.StreamInput) 
 	}
 
 	switch {
+	case offersCommitDone(input.Options.Tools):
+		h.commitPendingWork()
+		return toolUse(commitDoneTool.Name, `{"summary":"committed the work"}`)
+	case forced == commitMessageTool.Name:
+		return toolUse(commitMessageTool.Name, `{"subject":"feat: review round work"}`)
 	case forced == determineCriteriaFulfillmentTool.Name || (forced == "" && offered[determineCriteriaFulfillmentTool.Name]):
 		return toolUse(determineCriteriaFulfillmentTool.Name, h.fulfillmentArguments())
 	case forced == generateBranchNamesTool.Name || offered[generateBranchNamesTool.Name]:
@@ -289,6 +308,37 @@ func (h *reviewDiffsFlowHarness) streamResponse(input persisted_ai.StreamInput) 
 			Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "ok"}},
 		},
 	}
+}
+
+// offersCommitDone reports whether the commit subflow's done tool is offered,
+// which shares its name with the coding done tool.
+func offersCommitDone(tools []*common.Tool) bool {
+	for _, tool := range tools {
+		if tool != nil && tool.Name == commitDoneTool.Name && tool.Description == commitDoneTool.Description {
+			return true
+		}
+	}
+	return false
+}
+
+// commitPendingWork stands in for the commits a real model makes in the
+// commit subflow.
+func (h *reviewDiffsFlowHarness) commitPendingWork() {
+	h.commitSubflowRuns++
+	h.events = append(h.events, "commit")
+	runCmd(h.t, h.dir, "git", "add", "-A")
+	runCmd(h.t, h.dir, "git", "commit", "-m", fmt.Sprintf("feat: commit round %d", h.commitSubflowRuns))
+}
+
+// branchCommitSubjects lists, oldest first, the subjects of the commits the
+// flow's branch has on top of its base branch.
+func (h *reviewDiffsFlowHarness) branchCommitSubjects() []string {
+	h.t.Helper()
+	log := strings.TrimSpace(runCmd(h.t, h.dir, "git", "log", "--reverse", "--format=%s", h.repos.baseBranch+"..side/task"))
+	if log == "" {
+		return nil
+	}
+	return strings.Split(log, "\n")
 }
 
 // fulfillmentArguments stands in for the auto-reviewer's judgement, rejecting
@@ -326,6 +376,9 @@ func (h *reviewDiffsFlowHarness) recordFlowAction(action domain.FlowAction) {
 	}
 	info, err := decodeMergeApprovalInfo(raw)
 	require.NoError(h.t, err)
+	if _, seen := h.mergeIndexes[action.Id]; !seen {
+		h.events = append(h.events, "merge_approval")
+	}
 	h.mergeApprovals = upsertByAction(h.mergeApprovals, h.mergeIndexes, action.Id, info)
 }
 
@@ -598,7 +651,12 @@ const reportedReviewVersionCheck = `workflow.GetVersion(dCtx, "human-feedback-pr
 func (h *reviewDiffsFlowHarness) fulfillmentPromptContaining(work string) string {
 	h.t.Helper()
 	require.NotEmpty(h.t, strings.TrimSpace(work))
+	// the commit subflow follows the fulfillment check and also shows the work
+	commitPromptHeading, _, _ := strings.Cut(renderCommitPrompt(gitWorkingState{}), "\n")
 	for i := len(h.promptTexts) - 1; i >= 0; i-- {
+		if strings.HasPrefix(h.promptTexts[i], commitPromptHeading) {
+			continue
+		}
 		if strings.Contains(h.promptTexts[i], strings.TrimSpace(work)) {
 			return h.promptTexts[i]
 		}

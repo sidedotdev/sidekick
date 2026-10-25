@@ -162,3 +162,61 @@ func TestFlowActionStorage(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestFlowActionStorage_RetryAttempts(t *testing.T) {
+	t.Parallel()
+	storage := NewTestSqliteStorage(t, "flow_action_retry_attempts_test")
+	ctx := context.Background()
+	workspaceId := "test-workspace"
+	flowId := "retrying-flow"
+
+	nextRetryAt := time.Date(2025, 6, 15, 12, 0, 0, 500000000, time.FixedZone("EST", -5*3600))
+	fa := domain.FlowAction{
+		Id:           "test-action-retrying",
+		FlowId:       flowId,
+		WorkspaceId:  workspaceId,
+		Created:      time.Now().UTC(),
+		Updated:      time.Now().UTC(),
+		ActionType:   "test-type",
+		ActionParams: map[string]interface{}{},
+		ActionStatus: domain.ActionStatusStarted,
+		Attempts: []domain.FlowActionAttempt{
+			{At: time.Date(2025, 6, 15, 11, 0, 0, 0, time.UTC), Error: "429 Too Many Requests"},
+			{At: time.Date(2025, 6, 15, 11, 1, 0, 0, time.UTC), Error: "429 Too Many Requests again"},
+		},
+		NextRetryAt: &nextRetryAt,
+	}
+	assert.NoError(t, storage.PersistFlowAction(ctx, fa))
+
+	// getBoth fetches the action via both getters, failing if the list
+	// doesn't contain exactly it.
+	getBoth := func(t *testing.T) (domain.FlowAction, domain.FlowAction) {
+		single, err := storage.GetFlowAction(ctx, workspaceId, fa.Id)
+		assert.NoError(t, err)
+		listed, err := storage.GetFlowActions(ctx, workspaceId, flowId)
+		assert.NoError(t, err)
+		if !assert.Len(t, listed, 1) {
+			t.FailNow()
+		}
+		return single, listed[0]
+	}
+
+	single, listed := getBoth(t)
+	for _, retrieved := range []domain.FlowAction{single, listed} {
+		assert.Equal(t, fa.Attempts, retrieved.Attempts)
+		if assert.NotNil(t, retrieved.NextRetryAt) {
+			assert.True(t, nextRetryAt.Equal(*retrieved.NextRetryAt))
+			assert.Equal(t, time.UTC, retrieved.NextRetryAt.Location())
+		}
+	}
+
+	// Finishing the retries clears the scheduled retry but keeps the history.
+	fa.NextRetryAt = nil
+	fa.ActionStatus = domain.ActionStatusComplete
+	assert.NoError(t, storage.PersistFlowAction(ctx, fa))
+	single, listed = getBoth(t)
+	for _, retrieved := range []domain.FlowAction{single, listed} {
+		assert.Nil(t, retrieved.NextRetryAt)
+		assert.Equal(t, fa.Attempts, retrieved.Attempts)
+	}
+}

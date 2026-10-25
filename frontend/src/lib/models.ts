@@ -1,8 +1,12 @@
 export interface ModelConfig {
   provider: string
   model: string
-  reasoningEffort?: '' | 'lowest' | 'minimal' | 'low' | 'medium' | 'high' | 'highest'
-  speed?: '' | 'fast'
+  // Model-specific effort level; 'lowest'/'highest' are legacy aliases for the bottom/top of the model's ladder
+  reasoningEffort?: string
+  // Sent as the provider's service_tier, e.g. OpenAI's 'flex', 'priority' or 'ultrafast'; empty means standard
+  serviceTier?: string
+  // Anthropic fast mode ('fast'); empty means standard
+  speed?: string
 }
 
 export interface LLMConfig {
@@ -39,6 +43,11 @@ export interface EmbeddingConfig {
   useCaseConfigs: { [key: string]: ModelConfig[] }
 }
 
+export interface RerankingConfig {
+  defaults: ModelConfig[] | null
+  useCaseConfigs: { [key: string]: ModelConfig[] } | null
+}
+
 export interface Profile {
   id: string
   name: string
@@ -52,6 +61,7 @@ export interface Workspace {
   profileId?: string
   llmConfig?: LLMConfig | null
   embeddingConfig?: EmbeddingConfig | null
+  rerankingConfig?: RerankingConfig | null
 }
 
 // TODO /gen remove this and the components/views where it is used
@@ -129,6 +139,12 @@ export interface Worktree {
   workspaceId: string
 }
 
+/** One failed attempt of an action that is being retried. */
+export interface FlowActionAttempt {
+  at: string
+  error: string
+}
+
 export interface FlowAction {
   id: string
   flowId: string
@@ -145,6 +161,10 @@ export interface FlowAction {
   isHumanAction: boolean
   isCallbackAction?: boolean
   streamingData?: StreamingData
+  /** Failed attempts so far of an action being retried, in chronological order. */
+  attempts?: FlowActionAttempt[]
+  /** When the action will automatically be retried; absent means retrying is up to the user. */
+  nextRetryAt?: string
 }
 
 export interface SubflowTree {
@@ -205,6 +225,32 @@ export interface ChatMessageDelta {
 export interface StreamingData {
   content: string;
   toolCalls: ToolCall[];
+  // Ordered llm2 content blocks accumulated from llm2_stream_event flow
+  // events. Present only for actions streamed through the llm2 pipeline.
+  blocks?: Llm2ContentBlock[];
+  // Incrementally parsed tool_use arguments keyed by position in `blocks`.
+  toolArguments?: Record<number, object>;
+}
+
+// Mirrors llm2.EventType from the Go llm2 package.
+export type Llm2StreamEventType =
+  | 'heartbeat'
+  | 'block_started'
+  | 'block_done'
+  | 'text_delta'
+  | 'summary_text_delta'
+  | 'signature_delta'
+
+// Mirrors domain.Llm2StreamEvent: a flow event envelope around an llm2.Event
+// whose fields are flattened alongside eventType and flowActionId.
+export interface Llm2StreamEvent {
+  eventType: 'llm2_stream_event'
+  flowActionId: string
+  type: Llm2StreamEventType
+  index: number
+  contentBlock?: Llm2ContentBlock
+  delta?: string
+  signature?: string
 }
 
 // --- From Go definition ---
@@ -224,6 +270,7 @@ export interface Subflow {
   parentSubflowId?: string; // ID of the parent subflow, if any
   flowId: string; // ID of the flow this subflow belongs to
   result?: string; // Result of the subflow, if any
+  updated?: Date;
 }
 // --- End From Go definition ---
 
@@ -287,6 +334,24 @@ export type Llm2RefusalBlock = Llm2ContentBlockBase & {
   }
 }
 
+export type Llm2WebSearchResult = {
+  url: string
+  title: string
+  pageAge?: string
+  encryptedContent?: string
+}
+
+export type Llm2BuiltinToolResultBlock = Llm2ContentBlockBase & {
+  type: 'builtin_tool_result'
+  builtinToolResult: {
+    toolCallId: string
+    name: string
+    isError?: boolean
+    content?: string
+    searchResults?: Llm2WebSearchResult[]
+  }
+}
+
 export type Llm2ContentBlock =
   | Llm2TextBlock
   | Llm2ImageBlock
@@ -295,6 +360,7 @@ export type Llm2ContentBlock =
   | Llm2ReasoningBlock
   | Llm2RefusalBlock
   | Llm2BuiltinToolUseBlock
+  | Llm2BuiltinToolResultBlock
 
 export type Llm2Message = {
   role: string
@@ -393,4 +459,10 @@ export type Llm2BuiltinToolUseBlock = Llm2ContentBlockBase & {
     arguments: string
     status?: string
   }
+}
+
+export interface EnvSettings {
+  envType: string
+  portForwards: PortForwardConfig[]
+  modal: ModalEnvConfig
 }

@@ -1,13 +1,36 @@
+// Kotlin compilation is built into AGP 9; the KGP version is pinned at the root project.
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
 
+// JVM unit tests get zstd-kmp's Android AAR, whose natives only target Android ABIs. Its JVM
+// variant ships host builds of the same JNI library, so those go on the test library path.
+val zstdHostRuntime: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    attributes {
+        attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME))
+        attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
+        attribute(
+            TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE,
+            objects.named(TargetJvmEnvironment.STANDARD_JVM),
+        )
+    }
+}
+val zstdHostNativesDir: File = layout.buildDirectory.dir("zstdHostNatives").get().asFile
+val extractZstdHostNatives by tasks.registering(Sync::class) {
+    val hostArch = providers.systemProperty("os.arch").get()
+    from({ zstdHostRuntime.filter { it.name.startsWith("zstd-kmp-jvm") }.map { zipTree(it) } })
+    include("jni/$hostArch/*")
+    eachFile { path = name }
+    includeEmptyDirs = false
+    into(zstdHostNativesDir)
+}
+
 android {
     namespace = "com.example.app"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.example.app"
@@ -35,6 +58,8 @@ android {
 
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG gates the design-variant switcher.
+        buildConfig = true
     }
 
     packaging {
@@ -55,6 +80,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
+        // java.time is used below API 26 (minSdk 24).
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlin {
@@ -64,6 +91,7 @@ android {
     sourceSets {
         getByName("main").java.srcDirs("src/main/kotlin")
         getByName("test").java.srcDirs("src/test/kotlin")
+        getByName("test").jniLibs.srcDir(zstdHostNativesDir)
         getByName("androidTest").java.srcDirs("src/androidTest/kotlin")
     }
 
@@ -74,6 +102,7 @@ android {
 
             all {
                 it.systemProperty("robolectric.conscryptMode", "OFF")
+                it.dependsOn(extractZstdHostNatives)
             }
         }
     }
@@ -92,20 +121,24 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
 
     implementation(libs.iroh.android)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.kotlinx.serialization)
     implementation(libs.okhttp.core)
+    implementation(libs.okhttp.zstd)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.zxing.android.embedded)
+    coreLibraryDesugaring(libs.android.desugar.jdk.libs)
 
     testImplementation(libs.junit)
     testImplementation(libs.turbine)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.robolectric)
     testImplementation(libs.okhttp.mockwebserver)
+    zstdHostRuntime(libs.okhttp.zstd)
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.compose.ui.test.junit4)
 

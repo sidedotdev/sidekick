@@ -11,6 +11,7 @@ const (
 	SummarizationKey         = "summarization"
 	QueryExpansionKey        = "query_expansion"
 	AdvisingKey              = "advising"
+	CommitKey                = "commit"
 )
 
 type LLMConfig struct {

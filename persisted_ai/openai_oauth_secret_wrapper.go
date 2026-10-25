@@ -46,3 +46,7 @@ func (w *openAIOAuthSecretWrapper) GetSecret(secretName string) (string, error) 
 func (w *openAIOAuthSecretWrapper) GetType() secret_manager.SecretManagerType {
 	return w.inner.GetType()
 }
+
+func (w *openAIOAuthSecretWrapper) GetProfileId() string {
+	return secret_manager.ProfileIdOf(w.inner)
+}

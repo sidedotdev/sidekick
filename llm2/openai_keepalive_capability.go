@@ -7,11 +7,43 @@ import (
 	"strings"
 )
 
-// ExpectsKeepalives assumes support for the direct-API GPT-5.6 family and GPT-6+.
-// Keepalives have only been observed with gpt-5.6-sol, NOT with GPT-6+;
-// extending support to those models is a policy assumption, not a measurement.
-// Subscription and proxy routes have independent behavior.
+// ExpectsKeepalives reports whether the route's upstream is known to keep
+// streams alive, so prolonged silence indicates a hung stream.
+//
+// The ChatGPT codex backend (subscription auth) sends ": keep-alive" SSE
+// comments every ~5-11s while reasoning, observed with gpt-5.5 and
+// gpt-5.6-sol via scripts/probe_openai_keepalive, so all models are assumed
+// to get them. Proxy routes have independent behavior.
 func (p OpenAIResponsesProvider) ExpectsKeepalives(request StreamRequest) bool {
+	providerName := request.Options.ModelConfig.NormalizedProviderName()
+	authType := common.NormalizeProviderAuthType(string(p.AuthType))
+	if authType == common.ProviderAuthTypeAny {
+		if providerName != "OPENAI" {
+			authType = common.ProviderAuthTypeAPI
+		} else {
+			credentials, err := openAICredentialsForRequest(request.SecretManager, providerName, authType)
+			if err != nil {
+				return false
+			}
+			authType = credentials.authType
+		}
+	}
+
+	switch authType {
+	case common.ProviderAuthTypeSubscription:
+		return p.BaseURL == "" || strings.TrimRight(p.BaseURL, "/") == openAIChatGPTResponsesBaseURL
+	case common.ProviderAuthTypeAPI:
+		return p.apiExpectsKeepalives(request)
+	default:
+		return false
+	}
+}
+
+// apiExpectsKeepalives assumes {"type":"keepalive"} events from the OpenAI API
+// for the GPT-5.6 family and GPT-6+. This is a policy assumption: a
+// gpt-5.6-sol probe has yet to capture one, though it never went silent long
+// enough to need one.
+func (p OpenAIResponsesProvider) apiExpectsKeepalives(request StreamRequest) bool {
 	model := request.Options.Model
 	if model == "" {
 		model = p.DefaultModel
@@ -32,20 +64,5 @@ func (p OpenAIResponsesProvider) ExpectsKeepalives(request StreamRequest) bool {
 	if baseURL == "" {
 		baseURL = os.Getenv("OPENAI_BASE_URL")
 	}
-	if baseURL != "" && strings.TrimRight(baseURL, "/") != "https://api.openai.com/v1" {
-		return false
-	}
-	authType := common.NormalizeProviderAuthType(string(p.AuthType))
-	if authType == common.ProviderAuthTypeSubscription {
-		return false
-	}
-	if authType == common.ProviderAuthTypeAPI {
-		return true
-	}
-	providerName := request.Options.ModelConfig.NormalizedProviderName()
-	if providerName != "OPENAI" {
-		return true
-	}
-	credentials, err := openAICredentialsForRequest(request.SecretManager, providerName, authType)
-	return err == nil && !credentials.useOAuth
+	return baseURL == "" || strings.TrimRight(baseURL, "/") == "https://api.openai.com/v1"
 }

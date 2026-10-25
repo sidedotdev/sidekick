@@ -19,49 +19,18 @@ import (
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 )
 
 // setupTestGitRepo creates a temporary Git repository with a main branch and initial commit.
 // It returns the repo directory path and sets up cleanup via t.Cleanup.
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()
-
-	// Check if git is available
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git command not found in PATH")
 	}
-
 	repoDir := t.TempDir()
-
-	// Initialize git repo
-	cmd := exec.Command("git", "init")
-	cmd.Dir = repoDir
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git init failed: %s", string(output))
-
-	// Create main branch
-	cmd = exec.Command("git", "checkout", "-b", "main")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git checkout -b main failed: %s", string(output))
-
-	// Configure local user for commits (avoid relying on global config)
-	cmd = exec.Command("git", "config", "user.name", "Test User")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git config user.name failed: %s", string(output))
-
-	cmd = exec.Command("git", "config", "user.email", "test@example.com")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git config user.email failed: %s", string(output))
-
-	// Create initial empty commit
-	cmd = exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
-	cmd.Dir = repoDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "git commit failed: %s", string(output))
-
+	require.NoError(t, initialRepoFixture.CopyTo(repoDir))
 	return repoDir
 }
 
@@ -419,18 +388,67 @@ func TestGetEnvironmentInfoActivity(t *testing.T) {
 	assert.Contains(t, formatted, "Arch:")
 }
 
+func TestEnvRunCommandActivity_MissingWorkingDir(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, "exists"), 0o755))
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: tempDir})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		relDir  string
+		wantErr string
+	}{
+		{name: "repo root", relDir: "."},
+		{name: "existing dir", relDir: "exists"},
+		{name: "missing dir", relDir: "null", wantErr: `working directory "null" does not exist`},
+		{name: "missing nested dir", relDir: "exists/missing", wantErr: `working directory "exists/missing" does not exist`},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := EnvRunCommandActivity(ctx, EnvRunCommandActivityInput{
+				EnvContainer:       EnvContainer{Env: localEnv},
+				Command:            "sh",
+				Args:               []string{"-c", "echo ok"},
+				RelativeWorkingDir: tt.relDir,
+			})
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, "ok\n", output.Stdout)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			var appErr *temporal.ApplicationError
+			require.ErrorAs(t, err, &appErr)
+			assert.True(t, appErr.NonRetryable())
+			assert.Equal(t, ErrTypeMissingWorkingDir, appErr.Type())
+		})
+	}
+}
+
 func TestCreateDevPodWorktreeActivity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	repoDir := setupTestGitRepo(t)
 
-	// Use a LocalEnv to simulate running commands inside a container
-	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
-	require.NoError(t, err)
-	envContainer := EnvContainer{Env: localEnv}
+	// Each subtest gets its own repo: concurrent `git worktree add` calls in a
+	// single repo race on .git/worktrees administrative entries.
+	// A LocalEnv simulates running commands inside a container.
+	setupRepo := func(t *testing.T) (string, EnvContainer) {
+		t.Helper()
+		repoDir := setupTestGitRepo(t)
+		localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		return repoDir, EnvContainer{Env: localEnv}
+	}
 
 	t.Run("creates worktree successfully", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -438,13 +456,22 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 			WorkspaceId:  "ws-" + ksuid.New().String(),
 		})
 		require.NoError(t, err)
-		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
-		// Worktrees must live beside the repo (inside the persistent workspace
-		// mount) rather than in a system temp path.
-		assert.Equal(t, filepath.Join(filepath.Dir(repoDir), "sidekick-worktrees"),
+		// Local-folder DevPods mount the repository, not its parent directory.
+		assert.Equal(t, filepath.Join(repoDir, ".side", "worktrees"),
 			filepath.Dir(filepath.Dir(output.WorktreePath)))
 		assert.DirExists(t, output.WorktreePath)
 		assertSideTmpReady(t, output.WorktreePath)
+
+		relativePath, err := filepath.Rel(repoDir, output.WorktreePath)
+		require.NoError(t, err)
+		ignored, err := exec.Command("git", "-C", repoDir, "check-ignore", relativePath).CombinedOutput()
+		require.NoError(t, err, "%s", ignored)
+
+		gitDirOutput, err := exec.Command("git", "-C", output.WorktreePath, "rev-parse", "--absolute-git-dir").Output()
+		require.NoError(t, err)
+		lock, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(gitDirOutput)), "locked"))
+		require.NoError(t, err)
+		assert.Equal(t, WorktreeLockReason, strings.TrimSpace(string(lock)))
 
 		// Verify the branch was created inside the worktree
 		cmd := exec.Command("git", "branch", "--show-current")
@@ -456,6 +483,7 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 
 	t.Run("creates worktree with start branch", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -469,6 +497,7 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 
 	t.Run("returns error for duplicate branch", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		wsId := "ws-" + ksuid.New().String()
 		input := CreateDevPodWorktreeInput{
 			EnvContainer: envContainer,
@@ -489,6 +518,7 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 
 	t.Run("strips side/ prefix for directory name", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -998,7 +1028,7 @@ func TestModalRecoverSSHTransport(t *testing.T) {
 				},
 			}
 
-			recovered, err := modalEnv.recoverSSHTransport(context.Background(), tt.cause)
+			recovered, err := modalEnv.newSSHTransportRecovery().recover(context.Background(), tt.cause)
 
 			assert.Equal(t, tt.wantRecovered, recovered)
 			assert.Equal(t, tt.wantRefreshes, refreshes)
@@ -1488,6 +1518,84 @@ func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 	}
 }
 
+// TestModalRunCommandRecoversWhenContainerIsGone covers a sandbox that still
+// polls as running after its container is gone: the runtime refuses the API
+// fallback before anything starts, so recovery must restore the sandbox from
+// its snapshot and rerun the command instead of reporting the refusal as the
+// command's result. Not parallel: it swaps the package-level refresh seam.
+func TestModalRunCommandRecoversWhenContainerIsGone(t *testing.T) {
+	const transportFailure = "ssh transport failure before agent channel established: ssh handshake with old.host:1 timed out after 10s"
+	refusal := EnvRunCommandOutput{ExitStatus: modalContainerGoneExitCode, Stderr: modalContainerGoneMessage + "\n"}
+	cases := []struct {
+		name            string
+		sandboxExecutes bool
+		wantExit        int
+		wantStdout      string
+		wantRefreshes   int
+		wantRestored    bool
+	}{
+		{
+			name:          "container gone restores and reruns the command",
+			wantExit:      0,
+			wantStdout:    "ok\n",
+			wantRefreshes: 2,
+			wantRestored:  true,
+		},
+		{
+			name:            "command that printed the refusal itself keeps its result",
+			sandboxExecutes: true,
+			wantExit:        modalContainerGoneExitCode,
+			wantRefreshes:   1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			refreshes := 0
+			prev := refreshModalEndpointDetailed
+			t.Cleanup(func() { refreshModalEndpointDetailed = prev })
+			refreshModalEndpointDetailed = func(context.Context, string) (modalEndpointRefresh, error) {
+				refreshes++
+				if refreshes == 1 {
+					return modalEndpointRefresh{SSHHost: "stale.host", SSHPort: 2}, nil
+				}
+				return modalEndpointRefresh{SSHHost: "restored.host", SSHPort: 3, Restored: true, SnapshotImageId: "im-restored"}, nil
+			}
+
+			apiAttempts := 0
+			e := &ModalEnv{SandboxName: "side--test", SSHHost: "old.host", SSHPort: 1}
+			e.runModalCommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+				if e.SSHHost == "restored.host" {
+					return EnvRunCommandOutput{Stdout: "ok\n"}, "", nil
+				}
+				return EnvRunCommandOutput{ExitStatus: 255}, transportFailure, nil
+			}
+			e.runModalAPICommand = func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+				apiAttempts++
+				sandboxExecutes := func() bool { return tc.sandboxExecutes }
+				if err := modalContainerGoneError(e.SandboxName, refusal.ExitStatus, refusal.Stdout, refusal.Stderr, sandboxExecutes); err != nil {
+					return EnvRunCommandOutput{}, err
+				}
+				return refusal, nil
+			}
+
+			output, err := e.RunCommand(context.Background(), EnvRunCommandInput{Command: "go test ./..."})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantExit, output.ExitStatus)
+			assert.Equal(t, tc.wantStdout, output.Stdout)
+			assert.Equal(t, tc.wantRefreshes, refreshes)
+			assert.Equal(t, 1, apiAttempts)
+			if tc.wantRestored {
+				assert.Contains(t, output.Stderr, "im-restored")
+				assert.Contains(t, output.Stderr, "lost")
+				assert.NotContains(t, output.Stderr, modalContainerGoneMessage)
+			} else {
+				assert.Equal(t, refusal.Stderr, output.Stderr)
+			}
+		})
+	}
+}
+
 // TestAgentExecOutput_SealedIsNeverSuccess: a sealed sandbox runs nothing, so
 // reporting success would let a caller build on state about to be discarded.
 func TestAgentExecOutput_SealedIsNeverSuccess(t *testing.T) {
@@ -1537,4 +1645,191 @@ func assertSideTmpReady(t *testing.T, worktreePath string) {
 	cmd.Dir = worktreePath
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected .side/tmp to be excluded from Git: %s", output)
+}
+
+// TestWorktreeProvisioningAllowReuse covers each flow worktree provisioner
+// when the flow branch or its worktree may already exist, as happens when an
+// env switch returns a flow to a previously used env type.
+func TestWorktreeProvisioningAllowReuse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	gitRun := func(t *testing.T, dir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+	branchExists := func(repoDir, branch string) bool {
+		return exec.Command("git", "-C", repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
+	}
+
+	// provision provisions the worktree of a fixed flow branch and returns
+	// its path; repeated calls target the same path.
+	type provision func(allowReuse bool) (string, error)
+	provisioners := []struct {
+		name string
+		bind func(t *testing.T, repoDir, branch string) provision
+	}{
+		{
+			name: "local",
+			bind: func(t *testing.T, repoDir, branch string) provision {
+				baseDir := t.TempDir()
+				return func(allowReuse bool) (string, error) {
+					worktreeEnv, err := NewLocalGitWorktreeEnv(ctx, LocalEnvParams{
+						RepoDir:         repoDir,
+						StartBranch:     utils.Ptr("main"),
+						WorktreeBaseDir: baseDir,
+						AllowReuse:      allowReuse,
+					}, domain.Worktree{Name: branch, WorkspaceId: "ws"})
+					if err != nil {
+						return "", err
+					}
+					return worktreeEnv.GetWorkingDirectory(), nil
+				}
+			},
+		},
+		{
+			name: "devpod",
+			bind: func(t *testing.T, repoDir, branch string) provision {
+				repoEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+				require.NoError(t, err)
+				return func(allowReuse bool) (string, error) {
+					output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
+						EnvContainer: EnvContainer{Env: repoEnv},
+						RepoDir:      repoDir,
+						BranchName:   branch,
+						StartBranch:  "main",
+						WorkspaceId:  "ws",
+						AllowReuse:   allowReuse,
+					})
+					return output.WorktreePath, err
+				}
+			},
+		},
+		{
+			name: "remote",
+			bind: func(t *testing.T, repoDir, branch string) provision {
+				repoEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+				require.NoError(t, err)
+				remoteEnv := &provisioningBoundaryEnv{Env: repoEnv, home: t.TempDir()}
+				// Every flow branch is reserved in the worker-local repo, so
+				// it holds any flow branch the remote repo already has.
+				localRepoDir := setupTestGitRepo(t)
+				if branchExists(repoDir, branch) {
+					gitRun(t, localRepoDir, "branch", branch, "main")
+				}
+				return func(allowReuse bool) (string, error) {
+					output, err := CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+						EnvContainer: EnvContainer{Env: remoteEnv},
+						RepoDir:      repoDir,
+						BranchName:   branch,
+						StartBranch:  "main",
+						WorkspaceId:  "ws",
+						LocalRepoDir: localRepoDir,
+						AllowReuse:   allowReuse,
+					})
+					return output.WorktreePath, err
+				}
+			},
+		},
+	}
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T, repoDir, branch string, bind func() provision)
+	}{
+		{
+			name: "creates missing branch",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				path, err := bind()(true)
+				require.NoError(t, err)
+				assert.Equal(t, branch, gitRun(t, path, "branch", "--show-current"))
+				assert.Equal(t, gitRun(t, repoDir, "rev-parse", "main"), gitRun(t, path, "rev-parse", "HEAD"))
+				assertSideTmpReady(t, path)
+			},
+		},
+		{
+			name: "reuses existing worktree as-is",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				provision := bind()
+				first, err := provision(false)
+				require.NoError(t, err)
+				file := filepath.Join(first, "wip.txt")
+				require.NoError(t, os.WriteFile(file, []byte("committed"), 0644))
+				gitRun(t, first, "add", "wip.txt")
+				gitRun(t, first, "commit", "-m", "flow progress")
+				require.NoError(t, os.WriteFile(file, []byte("uncommitted"), 0644))
+				head := gitRun(t, first, "rev-parse", "HEAD")
+
+				again, err := provision(true)
+				require.NoError(t, err)
+				assert.Equal(t, first, again)
+				assert.Equal(t, head, gitRun(t, again, "rev-parse", "HEAD"))
+				content, err := os.ReadFile(file)
+				require.NoError(t, err)
+				assert.Equal(t, "uncommitted", string(content))
+			},
+		},
+		{
+			name: "attaches branch checked out by another worktree",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				retiredDir := filepath.Join(t.TempDir(), "retired")
+				gitRun(t, repoDir, "worktree", "add", "-b", branch, retiredDir, "main")
+				gitRun(t, retiredDir, "commit", "--allow-empty", "-m", "flow progress")
+				head := gitRun(t, retiredDir, "rev-parse", "HEAD")
+
+				path, err := bind()(true)
+				require.NoError(t, err)
+				assert.NotEqual(t, retiredDir, path)
+				assert.Equal(t, branch, gitRun(t, path, "branch", "--show-current"))
+				assert.Equal(t, head, gitRun(t, path, "rev-parse", "HEAD"))
+				assert.Equal(t, head, gitRun(t, repoDir, "rev-parse", branch))
+				assertSideTmpReady(t, path)
+			},
+		},
+		{
+			name: "rejects existing branch without AllowReuse",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				gitRun(t, repoDir, "branch", branch, "main")
+				head := gitRun(t, repoDir, "rev-parse", branch)
+
+				_, err := bind()(false)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "already exists")
+				assert.Equal(t, head, gitRun(t, repoDir, "rev-parse", branch))
+			},
+		},
+		{
+			name: "failed attach keeps pre-existing branch",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				// A tracked .side file makes .side/tmp setup fail after the
+				// worktree has been added.
+				scratchDir := filepath.Join(t.TempDir(), "scratch")
+				gitRun(t, repoDir, "worktree", "add", "-b", branch, scratchDir, "main")
+				require.NoError(t, os.WriteFile(filepath.Join(scratchDir, ".side"), []byte("not a dir"), 0644))
+				gitRun(t, scratchDir, "add", ".side")
+				gitRun(t, scratchDir, "commit", "-m", "flow progress")
+				head := gitRun(t, scratchDir, "rev-parse", "HEAD")
+				gitRun(t, repoDir, "worktree", "remove", scratchDir)
+
+				_, err := bind()(true)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), ".side/tmp")
+				require.True(t, branchExists(repoDir, branch), "pre-existing flow branch must survive a failed attach")
+				assert.Equal(t, head, gitRun(t, repoDir, "rev-parse", branch))
+			},
+		},
+	}
+
+	for _, p := range provisioners {
+		for _, tc := range cases {
+			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				repoDir := setupTestGitRepo(t)
+				branch := "side/reuse-" + strings.ReplaceAll(tc.name, " ", "-")
+				tc.run(t, repoDir, branch, func() provision { return p.bind(t, repoDir, branch) })
+			})
+		}
+	}
 }

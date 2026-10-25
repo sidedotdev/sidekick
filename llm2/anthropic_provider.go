@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sidekick/common"
@@ -14,19 +15,19 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"github.com/rs/zerolog/log"
 )
 
 const anthropicDefaultModel = "claude-opus-4-5"
-const anthropicDefaultMaxTokens = 24000
 
 const (
 	anthropicAcceptHeaderValue                 = "application/json"
 	anthropicDangerousBrowserAccessHeaderValue = "true"
 	// matches interactive-mode, print mode sends "(external, sdk-cli)" instead
 	// NOTE: the API rejects newer models (e.g. claude-fable-5-1) for versions < 2.1.251
-	anthropicClaudeCLIUserAgent                 = "claude-cli/2.1.258 (external, cli)"
+	anthropicClaudeCLIUserAgent                 = "claude-cli/2.1.280 (external, cli)"
 	anthropicCLIAppHeaderValue                  = "cli"
 	anthropicClaudeCodeBetaHeader               = "claude-code-20250219"
 	anthropicOAuthBetaHeader                    = "oauth-2025-04-20"
@@ -38,6 +39,14 @@ const (
 // anthropicSpeedFast is the value of the Anthropic Messages API "speed" parameter
 // that enables fast mode. Empty means unset (fast mode off).
 const anthropicSpeedFast = "fast"
+
+// anthropicSupportsFastMode reports whether models.dev lists fast mode for a
+// first-party Anthropic model. Other models either reject the speed parameter
+// or silently ignore it, so it must not be sent for them.
+func anthropicSupportsFastMode(model string) bool {
+	info, ok := common.GetModel("anthropic", model)
+	return ok && info.HasModeBodyValue("speed", anthropicSpeedFast)
+}
 
 type AnthropicProvider struct {
 	BaseURL             string
@@ -128,17 +137,26 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 	assumeAnthropicModelNames := !p.AnthropicCompatible
 
+	authType := common.NormalizeProviderAuthType(string(p.AuthType))
+	if p.AnthropicCompatible {
+		if authType == common.ProviderAuthTypeSubscription {
+			return nil, fmt.Errorf("Anthropic subscription auth is only supported by anthropic provider types, not anthropic_compatible")
+		}
+		authType = common.ProviderAuthTypeAPI
+	}
+
 	oauthCreds, token, useOAuth, err := anthropicCredentialsForRequest(
 		request.SecretManager,
-		options.ModelConfig.NormalizedProviderName(),
-		p.AuthType,
+		options.ModelConfig.Provider,
+		authType,
 	)
 	if err != nil {
 		return nil, err
 	}
+	requestAuth := newProviderRequestAuth(request.SecretManager, options.ModelConfig.Provider, authType, useOAuth)
 
 	var client anthropic.Client
-	httpClient := &http.Client{Timeout: 45 * time.Minute}
+	httpClient := withResponseDump(&http.Client{Timeout: 45 * time.Minute})
 	clientOptions := []option.RequestOption{
 		option.WithHTTPClient(httpClient),
 		// Callers own request retries. SDK retries can honor a provider's
@@ -151,7 +169,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	for k, v := range p.CustomHeaders {
 		clientOptions = append(clientOptions, option.WithHeader(k, v))
 	}
-	fastMode := options.Speed == anthropicSpeedFast
+	fastMode := options.Speed == anthropicSpeedFast && anthropicSupportsFastMode(model)
 
 	if useOAuth {
 		headers := anthropicRequestHeaders(model, true, oauthCreds.AccessToken, options.Tools, assumeAnthropicModelNames, fastMode)
@@ -177,12 +195,9 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		client = newAnthropicClient(clientOptions...)
 	}
 
-	effectiveMaxTokens := anthropicDefaultMaxTokens
-	if options.MaxTokens > 0 {
-		effectiveMaxTokens = options.MaxTokens
-	}
-	if modelInfo, ok := common.GetModel(options.Provider, model); ok && modelInfo.Limit.Output > 0 {
-		if effectiveMaxTokens == 0 || effectiveMaxTokens > modelInfo.Limit.Output {
+	effectiveMaxTokens := options.MaxTokens
+	if modelInfo, _ := common.GetModel(options.Provider, model); modelInfo != nil && modelInfo.Limit.Output > 0 {
+		if effectiveMaxTokens <= 0 || effectiveMaxTokens > modelInfo.Limit.Output {
 			effectiveMaxTokens = modelInfo.Limit.Output
 		}
 	}
@@ -200,7 +215,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		params.ServiceTier = anthropic.MessageNewParamsServiceTier(options.ServiceTier)
 	}
 
-	messages = convertForeignBuiltinToolBlocks(messages, isAnthropicNativeBuiltinToolBlock)
+	messages = convertForeignBuiltinToolBlocks(messages, nativeBuiltinToolBlockPredicate(options.Provider, p.providerType(), hasAnthropicBuiltinToolId))
 	anthropicMessages, err := messagesToAnthropicParams(messages)
 	if err != nil {
 		return nil, err
@@ -225,7 +240,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		params.System = systemMessages
 	}
 
-	resolvedEffort := resolveAnthropicReasoningEffort(options.ReasoningEffort, model)
+	resolvedEffort := resolveReasoningEffort(options.Provider, model, options.ReasoningEffort)
 
 	// Anthropic does not allow thinking when tool_choice forces tool use
 	forcesTool := options.ToolChoice.Type == common.ToolChoiceTypeRequired || options.ToolChoice.Type == common.ToolChoiceTypeTool
@@ -275,7 +290,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 		} else {
 			// max_tokens must be greater than thinking.budget_tokens
-			if int64(effectiveMaxTokens) <= budgetTokens {
+			if effectiveMaxTokens > 0 && int64(effectiveMaxTokens) <= budgetTokens {
 				effectiveMaxTokens = int(budgetTokens) + 1000
 				params.MaxTokens = int64(effectiveMaxTokens)
 			}
@@ -286,18 +301,117 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			params.Thinking = anthropic.ThinkingConfigParamUnion{OfEnabled: &enabled}
 		}
 	}
-	// When resolvedEffort is "" and ReasoningEffort was "lowest", thinking is
-	// intentionally skipped (no params.Thinking set).
 
 	var streamOpts []option.RequestOption
-	if fastMode && strings.Contains(model, "opus-4-8") {
+	if effectiveMaxTokens <= 0 {
+		// The SDK always serializes this required field, even when it is zero.
+		streamOpts = append(streamOpts, option.WithJSONDel("max_tokens"))
+	}
+	if fastMode {
 		// The non-beta MessageNewParams struct does not yet expose a Speed field
 		// in the SDK; inject it into the request body directly so we stay on
 		// client.Messages.NewStreaming.
 		streamOpts = append(streamOpts, option.WithJSONSet("speed", anthropicSpeedFast))
 	}
-	stream := client.Messages.NewStreaming(ctx, params, streamOpts...)
+	var httpResponse *http.Response
+	streamOpts = append(streamOpts, option.WithResponseInto(&httpResponse))
 
+	finalMessage, events, err := streamAnthropicEvents(client.Messages.NewStreaming(ctx, params, streamOpts...), eventChan)
+	// TODO: Remove this auto-retry once the organization is tracked per profile/auth method and persisted.
+	// Until then, the current credential's organization is unknown before the request. When Anthropic
+	// rejects replayed search results, we take the organization id reported on that error response and
+	// retry with every builtin tool block not stamped with that same organization (including untagged
+	// legacy blocks) converted to text, dropping encrypted content just as foreign builtin tool blocks
+	// are converted for cross-provider replay.
+	if organizationId, ok := anthropicRejectedSearchResultsOrganization(err); ok {
+		log.Info().
+			Str("organizationId", organizationId).
+			Msg("retrying with web search results from other organizations converted to text")
+		params.Messages, err = messagesToAnthropicParams(convertForeignBuiltinToolBlocks(messages, func(block ContentBlock) bool {
+			return blockOrganizationId(block) == organizationId
+		}))
+		if err != nil {
+			return nil, err
+		}
+		finalMessage, events, err = streamAnthropicEvents(client.Messages.NewStreaming(ctx, params, streamOpts...), eventChan)
+	}
+	if err != nil {
+		return nil, requestAuth.classifyHTTPError(err, err)
+	}
+
+	output := accumulateAnthropicEventsToMessage(events)
+	stampCoreBlockMetadata(&output, CoreBlockMetadata{
+		Provider:     options.Provider,
+		ProviderType: p.providerType(),
+		Headers:      provenanceHeaders(httpResponse),
+	})
+
+	responseModel := string(finalMessage.Model)
+	if responseModel == "" {
+		responseModel = model
+	}
+
+	// Anthropic returns non-cached tokens as InputTokens; the total prompt
+	// token count is the sum of all three fields.
+	usage := Usage{
+		InputTokens:           int(finalMessage.Usage.InputTokens) + int(finalMessage.Usage.CacheReadInputTokens) + int(finalMessage.Usage.CacheCreationInputTokens),
+		OutputTokens:          int(finalMessage.Usage.OutputTokens),
+		CacheReadInputTokens:  int(finalMessage.Usage.CacheReadInputTokens),
+		CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
+	}
+
+	authType = common.ProviderAuthTypeAPI
+	if useOAuth {
+		authType = common.ProviderAuthTypeSubscription
+	}
+
+	response := &MessageResponse{
+		Id:              finalMessage.ID,
+		Model:           responseModel,
+		Provider:        options.Provider,
+		Output:          output,
+		StopReason:      string(finalMessage.StopReason),
+		StopSequence:    finalMessage.StopSequence,
+		Usage:           usage,
+		AuthType:        authType,
+		ReasoningEffort: resolvedEffort,
+		ServiceTier:     options.ServiceTier,
+	}
+	if fastMode {
+		response.Speed = anthropicSpeedFast
+	}
+
+	return response, nil
+}
+
+const anthropicCompatibleProviderType = "anthropic_compatible"
+
+func (p AnthropicProvider) providerType() string {
+	if p.AnthropicCompatible {
+		return anthropicCompatibleProviderType
+	}
+	return string(common.AnthropicToolChatProviderType)
+}
+
+// anthropicRejectedSearchResultsOrganization detects Anthropic rejecting
+// replayed web search results, which happens when they were produced under a
+// different organization than the current credential's, and returns the
+// current organization id reported on the error response.
+func anthropicRejectedSearchResultsOrganization(err error) (string, bool) {
+	var apiErr *anthropic.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest || apiErr.Response == nil {
+		return "", false
+	}
+	if !strings.Contains(apiErr.Error(), "Invalid `encrypted_content` in `search_result` block") {
+		return "", false
+	}
+	organizationId := apiErr.Response.Header.Get(anthropicOrganizationIdHeader)
+	return organizationId, organizationId != ""
+}
+
+// streamAnthropicEvents forwards normalized events from an Anthropic stream to
+// eventChan and returns them along with the accumulated message metadata.
+func streamAnthropicEvents(stream *ssestream.Stream[anthropic.MessageStreamEventUnion], eventChan chan<- Event) (anthropic.Message, []Event, error) {
 	var finalMessage anthropic.Message
 	var events []Event
 	nextBlockIndex := 0
@@ -309,7 +423,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		event := stream.Current()
 
 		if err := accumulateAnthropicMessageMetadata(&finalMessage, event); err != nil {
-			return nil, err
+			return finalMessage, nil, err
 		}
 
 		switch evt := event.AsAny().(type) {
@@ -356,7 +470,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 					BuiltinToolResult: anthropicWebSearchResultToBlock(resultBlock),
 				}
 			default:
-				return nil, fmt.Errorf("unsupported content block type in start event: %s", evt.ContentBlock.Type)
+				return finalMessage, nil, fmt.Errorf("unsupported content block type in start event: %s", evt.ContentBlock.Type)
 			}
 
 			ev := Event{
@@ -372,7 +486,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		case anthropic.ContentBlockDeltaEvent:
 			blockIndex, ok := blockIndexMap[evt.Index]
 			if !ok {
-				return nil, fmt.Errorf("received delta for unknown block index %d", evt.Index)
+				return finalMessage, nil, fmt.Errorf("received delta for unknown block index %d", evt.Index)
 			}
 
 			switch delta := evt.Delta.AsAny().(type) {
@@ -416,7 +530,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		case anthropic.ContentBlockStopEvent:
 			blockIndex, ok := blockIndexMap[evt.Index]
 			if !ok {
-				return nil, fmt.Errorf("received stop for unknown block index %d", evt.Index)
+				return finalMessage, nil, fmt.Errorf("received stop for unknown block index %d", evt.Index)
 			}
 
 			ev := Event{
@@ -429,85 +543,15 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		}
 	}
 
-	if stream.Err() != nil {
-		return nil, stream.Err()
+	if err := stream.Err(); err != nil {
+		return finalMessage, nil, err
 	}
 
 	if startedBlocks != stoppedBlocks {
-		return nil, fmt.Errorf("stream truncated: started %d blocks but stopped %d", startedBlocks, stoppedBlocks)
+		return finalMessage, nil, fmt.Errorf("stream truncated: started %d blocks but stopped %d", startedBlocks, stoppedBlocks)
 	}
 
-	output := accumulateAnthropicEventsToMessage(events)
-
-	responseModel := string(finalMessage.Model)
-	if responseModel == "" {
-		responseModel = model
-	}
-
-	// Anthropic returns non-cached tokens as InputTokens; the total prompt
-	// token count is the sum of all three fields.
-	usage := Usage{
-		InputTokens:           int(finalMessage.Usage.InputTokens) + int(finalMessage.Usage.CacheReadInputTokens) + int(finalMessage.Usage.CacheCreationInputTokens),
-		OutputTokens:          int(finalMessage.Usage.OutputTokens),
-		CacheReadInputTokens:  int(finalMessage.Usage.CacheReadInputTokens),
-		CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
-	}
-
-	// Report the resolved effort. When "lowest" resolved to "" (thinking off),
-	// report "none" so consumers know thinking was intentionally skipped.
-	reportedEffort := resolvedEffort
-	if options.ReasoningEffort == "lowest" && resolvedEffort == "" {
-		reportedEffort = "none"
-	}
-
-	authType := common.ProviderAuthTypeAPI
-	if useOAuth {
-		authType = common.ProviderAuthTypeSubscription
-	}
-
-	response := &MessageResponse{
-		Id:              finalMessage.ID,
-		Model:           responseModel,
-		Provider:        options.Provider,
-		Output:          output,
-		StopReason:      string(finalMessage.StopReason),
-		StopSequence:    finalMessage.StopSequence,
-		Usage:           usage,
-		AuthType:        authType,
-		ReasoningEffort: reportedEffort,
-	}
-
-	return response, nil
-}
-
-func resolveAnthropicReasoningEffort(effort, model string) string {
-	if effort != "lowest" && effort != "highest" {
-		return effort
-	}
-
-	// Anthropic-compatible endpoints can proxy GPT models, such as LiteLLM routing OpenAI models through its Anthropic API.
-	if resolvedEffort, ok := resolveGPTReasoningEffort(effort, model); ok {
-		return resolvedEffort
-	}
-
-	modelLower := strings.ToLower(model)
-	if !strings.Contains(modelLower, "claude") {
-		if effort == "lowest" {
-			// Anthropic doesn't have a "none" effort; thinking is controlled separately from effort.
-			// Returning "" is a reliable way to map "lowest" to "default effort + no thinking".
-			return ""
-		}
-		return "high"
-	}
-
-	if effort == "lowest" {
-		return ""
-	}
-	// highest
-	if anthropicSupportsAdaptiveThinking(model) {
-		return "max"
-	}
-	return "high"
+	return finalMessage, events, nil
 }
 
 // anthropicSupportsAdaptiveThinking returns true for models where adaptive
@@ -722,6 +766,23 @@ func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, er
 	}
 
 	flushCurrent()
+
+	// Persisted histories may contain more markers than Anthropic accepts.
+	// Preserve the stable prefix and the most recent cache boundaries.
+	// Tools and system prompts currently carry no cache markers.
+	const maxCacheControlBlocks = 4
+	var cacheControls []*anthropic.CacheControlEphemeralParam
+	for _, message := range result {
+		for _, block := range message.Content {
+			if cacheControl := block.GetCacheControl(); cacheControl != nil && cacheControl.Type != "" {
+				cacheControls = append(cacheControls, cacheControl)
+			}
+		}
+	}
+	for i := 1; i <= len(cacheControls)-maxCacheControlBlocks; i++ {
+		*cacheControls[i] = anthropic.CacheControlEphemeralParam{}
+	}
+
 	return result, nil
 }
 

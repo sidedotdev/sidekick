@@ -130,7 +130,7 @@ func PrepareRepoSummary(dCtx DevContext, requirements string, weightedRankQuerie
 		return "", "", err
 	}
 
-	if !fflag.IsEnabled(dCtx, fflag.InfoNeeds) {
+	if !fflag.IsEnabledWithoutVersioning(dCtx, fflag.InfoNeeds) {
 		return repoSummary, "", nil
 	}
 	// Call IdentifyInformationNeeds to get additional information needs
@@ -159,6 +159,8 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string, charLimit int, weig
 			WeightedRankQueries: weightedRankQueries,
 			Secrets:             *dCtx.Secrets,
 			ModelConfig:         dCtx.GetEmbeddingModelConfig(common.DefaultKey),
+			RerankingConfig:     dCtx.GetRerankingConfig(),
+			Providers:           dCtx.GetProviders(),
 		},
 		CharLimit: charLimit,
 	}

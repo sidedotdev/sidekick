@@ -275,3 +275,48 @@ func TestGitCommitMergeActivityFlowBranchBackup(t *testing.T) {
 		assert.Equal(t, "Merge feature", runGitCommandInTestRepo(t, repoDir, "log", "-1", "--pretty=%s"))
 	})
 }
+
+func TestGitMergeIntoWorktreeActivityFlowBranchBackup(t *testing.T) {
+	t.Parallel()
+
+	for _, failFirst := range []bool{false, true} {
+		name := "successful backup"
+		if failFirst {
+			name = "retry failed backup"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			repoDir, _ := setupConflictingBranches(t, ctx)
+			require.NoError(t, os.WriteFile(filepath.Join(repoDir, "pending.txt"), []byte("pending work\n"), 0644))
+			devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+			require.NoError(t, err)
+			backupEnv := &flowBranchBackupEnv{Env: devEnv}
+			if failFirst {
+				backupEnv.remainingFailures = 1
+			}
+			container := env.EnvContainer{Env: backupEnv}
+			params := GitMergeIntoWorktreeParams{
+				WorktreePath:   repoDir,
+				SourceBranch:   "feature",
+				CommitterName:  "Test User",
+				CommitterEmail: "test@example.com",
+			}
+			result, err := GitMergeIntoWorktreeActivity(ctx, container, params)
+			expectedBranches := []string{"main"}
+			if failFirst {
+				require.ErrorContains(t, err, "failed to sync flow branch to local repo")
+				assert.False(t, mergeHeadExists(t, repoDir))
+				checkpoint := runGitCommandInTestRepo(t, repoDir, "rev-parse", "HEAD")
+				result, err = GitMergeIntoWorktreeActivity(ctx, container, params)
+				assert.Equal(t, checkpoint, runGitCommandInTestRepo(t, repoDir, "rev-parse", "HEAD"))
+				expectedBranches = append(expectedBranches, "main")
+			}
+			require.NoError(t, err)
+			assert.True(t, result.HasConflicts)
+			assert.True(t, mergeHeadExists(t, repoDir))
+			assert.Equal(t, expectedBranches, backupEnv.syncedBranches)
+			assert.Equal(t, "pending work", runGitCommandInTestRepo(t, repoDir, "show", "HEAD:pending.txt"))
+		})
+	}
+}
