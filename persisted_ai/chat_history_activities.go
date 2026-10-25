@@ -345,3 +345,58 @@ func preserveRefsForUnchangedMessages(
 func messagesEqual(a, b llm2.Message) bool {
 	return reflect.DeepEqual(a, b)
 }
+
+type ExtractVisibleCodeBlocksInput struct {
+	ChatHistory *ChatHistoryContainer `json:"chatHistory"`
+	// Only code blocks for these files are returned, which keeps the result
+	// (and thus workflow history) proportional to the edits being retried.
+	FilePaths []string `json:"filePaths"`
+}
+
+type ExtractVisibleCodeBlocksOutput struct {
+	CodeBlocks []tree_sitter.CodeBlock `json:"codeBlocks"`
+}
+
+// ExtractVisibleCodeBlocksForFiles returns visibility metadata (file ranges
+// and symbols, without code content) for the given files, based on what the
+// non-assistant messages of the chat history exposed.
+func (ca *ChatHistoryActivities) ExtractVisibleCodeBlocksForFiles(ctx context.Context, input ExtractVisibleCodeBlocksInput) (ExtractVisibleCodeBlocksOutput, error) {
+	if input.ChatHistory == nil {
+		return ExtractVisibleCodeBlocksOutput{}, fmt.Errorf("chat history is required")
+	}
+	codeBlocks, err := ca.ExtractVisibleCodeBlocks(ctx, input.ChatHistory)
+	if err != nil {
+		return ExtractVisibleCodeBlocksOutput{}, err
+	}
+	return ExtractVisibleCodeBlocksOutput{CodeBlocks: filterVisibleCodeBlocksForFiles(codeBlocks, input.FilePaths)}, nil
+}
+
+// filterVisibleCodeBlocksForFiles keeps only blocks for the given files and
+// strips their code content, since visibility filtering during edit block
+// application needs only file paths, line ranges and symbol names.
+func filterVisibleCodeBlocksForFiles(codeBlocks []tree_sitter.CodeBlock, filePaths []string) []tree_sitter.CodeBlock {
+	wanted := make(map[string]bool, len(filePaths))
+	for _, filePath := range filePaths {
+		wanted[filePath] = true
+	}
+
+	var filtered []tree_sitter.CodeBlock
+	seen := make(map[tree_sitter.CodeBlock]bool)
+	for _, codeBlock := range codeBlocks {
+		if !wanted[codeBlock.FilePath] {
+			continue
+		}
+		metadataOnly := tree_sitter.CodeBlock{
+			FilePath:  codeBlock.FilePath,
+			Symbol:    codeBlock.Symbol,
+			StartLine: codeBlock.StartLine,
+			EndLine:   codeBlock.EndLine,
+		}
+		if seen[metadataOnly] {
+			continue
+		}
+		seen[metadataOnly] = true
+		filtered = append(filtered, metadataOnly)
+	}
+	return filtered
+}
