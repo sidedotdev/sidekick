@@ -2,6 +2,7 @@ package env
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -202,10 +203,18 @@ func exportForSwitch(ctx context.Context, e Env, branch, localRepoDir string) (S
 
 	if snapshotter, ok := e.(SnapshottingEnv); ok {
 		out, err := snapshotter.Snapshot(ctx)
-		if err != nil {
+		if errors.Is(err, errModalSandboxNotRunning) {
+			if ctx.Err() != nil {
+				return SwitchBundle{}, ctx.Err()
+			}
+			// There is no live state to checkpoint. Reading the flow state
+			// below restores the last snapshot through command recovery,
+			// which fails if no snapshot is available.
+			log.Info().Str("envType", string(e.GetType())).
+				Msg("skipping pre-switch snapshot of stopped Modal sandbox")
+		} else if err != nil {
 			return SwitchBundle{}, fmt.Errorf("failed to snapshot env before switch: %w", err)
-		}
-		if out.ExitStatus != 0 {
+		} else if out.ExitStatus != 0 {
 			return SwitchBundle{}, fmt.Errorf("failed to snapshot env before switch (exit %d): %s", out.ExitStatus, strings.TrimSpace(out.Stderr))
 		}
 	}

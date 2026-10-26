@@ -204,14 +204,24 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 		var hist *history.History
 		var resumedFromCache bool
+		var skipReason string
 		err := retryTransient(3, 2*time.Second, func() error {
 			var fetchErr error
+			skipReason, fetchErr = replayHistoryPreflight(
+				ctx, c.WorkflowService(), client.DefaultNamespace, wf.id, wf.runID, currentSha)
+			if fetchErr != nil || skipReason != "" {
+				return fetchErr
+			}
 			hist, resumedFromCache, fetchErr = fetchWorkflowHistoryCached(
 				ctx, c.WorkflowService(), client.DefaultNamespace, historyCacheDir, wf.id, wf.runID)
 			return fetchErr
 		})
 		if err != nil {
 			result.err = fmt.Errorf("history fetch: %w", err)
+			return
+		}
+		if skipReason != "" {
+			result.skipReason = "history preflight: " + skipReason
 			return
 		}
 		if resumedFromCache {
