@@ -260,9 +260,9 @@ type GitRefSyncer interface {
 // a flow branch's commits to the host repository, which is the durable home
 // for work in progress even while the environment is alive.
 type FlowBranchBackupSyncer interface {
-	// SyncFlowBranchToLocal force-updates the same-name branch ref in the host
-	// repository from the environment's branch. The branch is never checked
-	// out locally, so no host working tree is touched.
+	// SyncFlowBranchToLocal updates the same-name branch in the host repository.
+	// Checked-out branches are fast-forwarded without overwriting conflicting
+	// local work; branches not checked out are force-updated.
 	SyncFlowBranchToLocal(ctx context.Context, branch string) error
 }
 

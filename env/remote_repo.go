@@ -463,13 +463,11 @@ func syncGitRefToLocalOverSSH(ctx context.Context, sshArgs []string, workingDire
 }
 
 // syncFlowBranchToLocalOverSSH backs up a flow branch's commits from a remote
-// environment's clone into the local repo, force-updating the same-name local
-// branch. Forcing is safe because the local branch is reserved for the flow
-// and never checked out, so no working tree can be affected; the fetch is
-// negotiated, so only commits missing locally are transferred.
+// environment's clone into the local repo. A previous local env may still
+// have the branch checked out, so it must be fast-forwarded with its worktree
+// rather than force-updated. Unchecked-out branches can be force-updated.
 func syncFlowBranchToLocalOverSSH(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, branch string) error {
-	refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
-	return FetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, refspec)
+	return syncMergeResultToLocalOverSSH(ctx, sshArgs, workingDirectory, localRepoDir, branch)
 }
 
 // FetchRemoteRefToLocal fetches the given refspec from a remote

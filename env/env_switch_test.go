@@ -185,3 +185,81 @@ func TestExportForSwitchRequiresLocalRepoDirForRemoteEnvs(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "local repo dir")
 }
+
+func TestRestoreFromSwitchBacksUpLocalWIP(t *testing.T) {
+	t.Parallel()
+
+	for _, dirty := range []bool{false, true} {
+		name := "clean"
+		if dirty {
+			name = "dirty"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			repoDir, targetDir, branch := setupSwitchTestRepo(t)
+			sourceDir := filepath.Join(t.TempDir(), "source")
+			runGitIn(t, repoDir, "worktree", "add", "--detach", sourceDir, branch)
+			writeTestFile(t, filepath.Join(sourceDir, "tracked.txt"), "modal tracked edit")
+			writeTestFile(t, filepath.Join(sourceDir, "shared-untracked.txt"), "modal untracked edit")
+			source := &LocalGitWorktreeEnv{WorkingDirectory: sourceDir}
+			archive, err := captureWIPToLocalFile(ctx, source)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = os.Remove(archive) })
+			bundle := SwitchBundle{
+				Branch:         branch,
+				HeadCommit:     strings.TrimSpace(runGitIn(t, sourceDir, "rev-parse", "HEAD")),
+				LocalRepoDir:   repoDir,
+				WIPArchivePath: archive,
+			}
+			files := []string{"tracked.txt", "shared-untracked.txt", "local-only.bin"}
+			want := captureWorktreeState(t, sourceDir, files)
+			want.Branch = branch
+
+			if dirty {
+				writeTestFile(t, filepath.Join(targetDir, "tracked.txt"), "local staged edit")
+				runGitIn(t, targetDir, "add", "tracked.txt")
+				writeTestFile(t, filepath.Join(targetDir, "tracked.txt"), "local unstaged edit")
+				writeTestFile(t, filepath.Join(targetDir, "shared-untracked.txt"), "local untracked edit")
+				writeTestFile(t, filepath.Join(targetDir, "local-only.bin"), "\x00\x01\xff")
+			}
+			before := captureWorktreeState(t, targetDir, files)
+			target := &LocalGitWorktreeEnv{WorkingDirectory: targetDir}
+			require.NoError(t, target.RestoreFromSwitch(ctx, bundle))
+			assert.Equal(t, want, captureWorktreeState(t, targetDir, files))
+
+			if !dirty {
+				assert.Empty(t, runGitIn(t, targetDir, "stash", "list"))
+				return
+			}
+			message := runGitIn(t, repoDir, "log", "-1", "--format=%s", "refs/stash")
+			assert.Contains(t, message, "sidekick: local backup before environment switch")
+			assert.Contains(t, message, branch)
+			assert.Contains(t, message, bundle.HeadCommit)
+
+			recoveryDir := filepath.Join(t.TempDir(), "recover")
+			runGitIn(t, repoDir, "worktree", "add", "--detach", recoveryDir, before.Head)
+			runGitIn(t, recoveryDir, "stash", "apply", "--index", "refs/stash")
+			recovered := captureWorktreeState(t, recoveryDir, files)
+			recovered.Branch = before.Branch
+			assert.Equal(t, before, recovered)
+		})
+	}
+}
+
+func TestRestoreFromSwitchAbortsWhenLocalBackupFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoDir, dir, branch := setupSwitchTestRepo(t)
+	writeTestFile(t, filepath.Join(dir, "tracked.txt"), "local work")
+	writeTestFile(t, filepath.Join(dir, "untracked.txt"), "local untracked")
+	before := captureWorktreeState(t, dir, []string{"tracked.txt", "untracked.txt"})
+	lock := strings.TrimSpace(runGitIn(t, repoDir, "rev-parse", "--path-format=absolute", "--git-path", "refs/stash.lock"))
+	require.NoError(t, os.WriteFile(lock, nil, 0600))
+
+	target := &LocalGitWorktreeEnv{WorkingDirectory: dir}
+	err := target.RestoreFromSwitch(ctx, SwitchBundle{Branch: branch, HeadCommit: before.Head})
+	require.Error(t, err)
+	assert.Equal(t, before, captureWorktreeState(t, dir, []string{"tracked.txt", "untracked.txt"}))
+}

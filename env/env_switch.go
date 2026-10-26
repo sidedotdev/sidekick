@@ -258,7 +258,12 @@ func captureWIPToLocalFile(ctx context.Context, e Env) (string, error) {
 	script := "set -e\nwipdir=$(mktemp -d)\n" +
 		captureWIPFragment(`"$wipdir/`+switchWIPArchiveName+`"`) +
 		`if [ "$wip_dirty" = 1 ]; then printf '%s\n' "$wipdir/` + switchWIPArchiveName + `"; else rm -rf "$wipdir"; fi` + "\n"
-	out, err := e.RunCommand(ctx, EnvRunCommandInput{Command: "sh", Args: []string{"-c", script}})
+	out, err := e.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", script},
+		// BSD tar's AppleDouble entries become untracked files on Linux.
+		EnvVars: []string{"COPYFILE_DISABLE=1"},
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to capture uncommitted changes: %w", err)
 	}
@@ -305,6 +310,12 @@ func restoreFromSwitch(ctx context.Context, e Env, bundle SwitchBundle) error {
 	if bundle.HeadCommit == "" {
 		return fmt.Errorf("switch bundle has no head commit")
 	}
+	switch e.GetType() {
+	case EnvTypeLocal, EnvTypeLocalGitWorktree:
+		if err := backupLocalSwitchWIP(ctx, e, bundle); err != nil {
+			return fmt.Errorf("failed to back up local work before environment switch: %w", err)
+		}
+	}
 	if _, err := gitOutputForSwitch(ctx, e, "reset", "--hard", bundle.HeadCommit); err != nil {
 		return err
 	}
@@ -340,6 +351,17 @@ func restoreFromSwitch(ctx context.Context, e Env, bundle SwitchBundle) error {
 
 func gitOutputForSwitch(ctx context.Context, e Env, args ...string) (string, error) {
 	out, err := e.RunCommand(ctx, EnvRunCommandInput{Command: "git", Args: args})
+	// A lost response leaves execution uncertain. Only read-only queries can
+	// safely be replayed after the transport invalidates the failed channel.
+	if len(args) > 0 && args[0] == "rev-parse" {
+		for attempt := 1; attempt < 3 && err != nil && ctx.Err() == nil; attempt++ {
+			var transportErr *agentExecTransportError
+			if !errors.As(err, &transportErr) {
+				break
+			}
+			out, err = e.RunCommand(ctx, EnvRunCommandInput{Command: "git", Args: args})
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
 	}
@@ -405,4 +427,32 @@ func RestoreFromSwitchActivity(ctx context.Context, input RestoreFromSwitchInput
 		return RestoreFromSwitchOutput{}, fmt.Errorf("switched env HEAD is %s, expected %s", head, input.Bundle.HeadCommit)
 	}
 	return RestoreFromSwitchOutput{}, nil
+}
+
+func backupLocalSwitchWIP(ctx context.Context, e Env, bundle SwitchBundle) error {
+	status, err := gitOutputForSwitch(ctx, e, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
+	if err != nil || status == "" {
+		return err
+	}
+
+	message := fmt.Sprintf("sidekick: local backup before environment switch to %s at %s", bundle.Branch, bundle.HeadCommit)
+	if _, err := gitOutputForSwitch(ctx, e, "stash", "push", "--include-untracked", "--message", message); err != nil {
+		return err
+	}
+	// Stash cannot preserve every kind of dirty state, such as edits inside
+	// submodules. Never proceed with a destructive restore in that case.
+	status, err = gitOutputForSwitch(ctx, e, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
+	if err != nil {
+		return err
+	}
+	if status != "" {
+		return fmt.Errorf("local worktree is still dirty after stashing; refusing to overwrite remaining changes")
+	}
+	stash, err := gitOutputForSwitch(ctx, e, "rev-parse", "refs/stash")
+	if err != nil {
+		return err
+	}
+	log.Info().Str("workDir", e.GetWorkingDirectory()).Str("stashCommit", stash).
+		Str("stashMessage", message).Msg("saved local work before environment switch; recover with git stash apply --index <stashCommit>")
+	return nil
 }

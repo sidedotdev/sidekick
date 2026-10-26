@@ -998,3 +998,76 @@ func TestSSHScriptFailureClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestSyncFlowBranchToLocalOverSSHCheckedOut(t *testing.T) {
+	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
+exec sh -c "$cmd"
+`)
+
+	for _, checkout := range []string{"main worktree", "linked worktree"} {
+		for _, state := range []string{"clean", "nonconflicting edits", "conflicting edits", "diverged"} {
+			t.Run(checkout+"/"+state, func(t *testing.T) {
+				ctx := context.Background()
+				localRepo := setupTestGitRepo(t)
+				branch := "side/checked-out-backup"
+				runGitIn(t, localRepo, "branch", branch)
+				worktree := localRepo
+				if checkout == "linked worktree" {
+					worktree = filepath.Join(t.TempDir(), "Application Support", "flow worktree")
+					require.NoError(t, os.MkdirAll(filepath.Dir(worktree), 0755))
+					runGitIn(t, localRepo, "worktree", "add", worktree, branch)
+				} else {
+					runGitIn(t, localRepo, "checkout", branch)
+				}
+
+				writeTestFile(t, filepath.Join(worktree, "shared.txt"), "initial\n")
+				writeTestFile(t, filepath.Join(worktree, "local-only.txt"), "initial\n")
+				runGitIn(t, worktree, "add", ".")
+				runGitIn(t, worktree, "commit", "-m", "shared base")
+
+				remoteRepo := filepath.Join(t.TempDir(), "remote")
+				runGitIn(t, localRepo, "clone", "--branch", branch, localRepo, remoteRepo)
+				writeTestFile(t, filepath.Join(remoteRepo, "shared.txt"), "remote\n")
+				runGitIn(t, remoteRepo, "add", ".")
+				runGitIn(t, remoteRepo, "commit", "-m", "remote change")
+				remoteTip := runGitIn(t, remoteRepo, "rev-parse", "HEAD")
+
+				switch state {
+				case "nonconflicting edits":
+					writeTestFile(t, filepath.Join(worktree, "local-only.txt"), "staged\n")
+					runGitIn(t, worktree, "add", "local-only.txt")
+					writeTestFile(t, filepath.Join(worktree, "local-only.txt"), "unstaged\n")
+				case "conflicting edits":
+					writeTestFile(t, filepath.Join(worktree, "shared.txt"), "local edit\n")
+				case "diverged":
+					writeTestFile(t, filepath.Join(worktree, "local-only.txt"), "local commit\n")
+					runGitIn(t, worktree, "add", ".")
+					runGitIn(t, worktree, "commit", "-m", "local divergence")
+				}
+
+				beforeHead := runGitIn(t, worktree, "rev-parse", "HEAD")
+				beforeStatus := runGitIn(t, worktree, "status", "--porcelain")
+				beforeDiff := runGitIn(t, worktree, "diff")
+				beforeIndex := runGitIn(t, worktree, "diff", "--cached")
+				err := syncFlowBranchToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepo, localRepo, branch)
+
+				if state == "conflicting edits" || state == "diverged" {
+					require.Error(t, err)
+					assert.Equal(t, beforeHead, runGitIn(t, worktree, "rev-parse", "HEAD"))
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, remoteTip, runGitIn(t, worktree, "rev-parse", "HEAD"))
+					content, err := os.ReadFile(filepath.Join(worktree, "shared.txt"))
+					require.NoError(t, err)
+					assert.Equal(t, "remote\n", string(content))
+
+					require.NoError(t, syncFlowBranchToLocalOverSSH(ctx, []string{"fake-host"}, remoteRepo, localRepo, branch))
+				}
+				assert.Equal(t, branch, strings.TrimSpace(runGitIn(t, worktree, "branch", "--show-current")))
+				assert.Equal(t, beforeStatus, runGitIn(t, worktree, "status", "--porcelain"))
+				assert.Equal(t, beforeDiff, runGitIn(t, worktree, "diff"))
+				assert.Equal(t, beforeIndex, runGitIn(t, worktree, "diff", "--cached"))
+			})
+		}
+	}
+}
