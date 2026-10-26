@@ -347,7 +347,7 @@ func main() {
 				continue
 			}
 
-			fmt.Printf("%d WorkflowExecutionStarted %s\n", eid, attrs.WorkflowType.GetName())
+			fmt.Printf("%d WorkflowExecutionStarted %s workflowTaskTimeout=%s\n", eid, attrs.WorkflowType.GetName(), attrs.GetWorkflowTaskTimeout().AsDuration())
 			if attrs.Input != nil {
 				for i, input := range clientOptions.DataConverter.ToStrings(attrs.Input) {
 					if *verbose {

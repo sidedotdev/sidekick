@@ -202,6 +202,12 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			replayed = result.replayed
 		}()
 
+		started := time.Now()
+		t.Logf("Workflow %s: fetching history", wf.id)
+		defer func() {
+			t.Logf("Workflow %s: finished after %s (replayed=%t, skip=%q, error=%v)",
+				wf.id, time.Since(started), result.replayed, result.skipReason, result.err)
+		}()
 		var hist *history.History
 		var resumedFromCache bool
 		var skipReason string
@@ -224,6 +230,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			result.skipReason = "history preflight: " + skipReason
 			return
 		}
+		t.Logf("Workflow %s: fetched %d events after %s", wf.id, len(hist.Events), time.Since(started))
 		if resumedFromCache {
 			t.Logf("Workflow %s: history fetch resumed from local cache", wf.id)
 		}
@@ -248,6 +255,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		// unresolvable references (e.g. histories read over the read-only
 		// proxy of a host that does not inline them) would otherwise
 		// derail replay with misleading non-determinism errors.
+		t.Logf("Workflow %s: decoding payloads", wf.id)
 		codec := common.NewPayloadCodec(storage, common.DefaultCodecThreshold)
 		err = proxy.VisitPayloads(ctx, hist, proxy.VisitPayloadsOptions{
 			SkipSearchAttributes: true,
@@ -271,8 +279,10 @@ func TestReplayRunningWorkflows(t *testing.T) {
 			return
 		}
 		sidekick_worker.RegisterWorkflows(replayer)
+		t.Logf("Workflow %s: replaying %d events after %s", wf.id, len(hist.Events), time.Since(started))
 		result.replayed = true
 		replayErr := replayer.ReplayWorkflowHistory(nil, hist)
+		t.Logf("Workflow %s: replay returned after %s (error=%v)", wf.id, time.Since(started), replayErr)
 		if replayErr == nil {
 			return
 		}

@@ -262,31 +262,23 @@ func (ca *ChatHistoryActivities) ExtractVisibleCodeBlocks(
 	return codeBlocks, nil
 }
 
-// applyCacheControlBreakpointsLlm2 sets CacheControl on llm2 messages.
-// It clears all existing CacheControl values and sets "ephemeral" on the
-// first and last messages (mirroring the current legacy behavior).
+// applyCacheControlBreakpointsLlm2 replaces existing markers with breakpoints
+// at the ends of the first and last messages. Each breakpoint caches the
+// entire preceding prefix, so earlier blocks need no additional markers.
 func applyCacheControlBreakpointsLlm2(messages []llm2.Message) {
 	if len(messages) == 0 {
 		return
 	}
 
-	// Clear all existing CacheControl values
 	for i := range messages {
 		for j := range messages[i].Content {
 			messages[i].Content[j].CacheControl = ""
 		}
 	}
 
-	// Set ephemeral on all blocks of the first message
-	for j := range messages[0].Content {
-		messages[0].Content[j].CacheControl = "ephemeral"
-	}
-
-	// Set ephemeral on all blocks of the last message (if different from first)
-	lastIdx := len(messages) - 1
-	if lastIdx > 0 {
-		for j := range messages[lastIdx].Content {
-			messages[lastIdx].Content[j].CacheControl = "ephemeral"
+	for _, i := range []int{0, len(messages) - 1} {
+		if blocks := messages[i].Content; len(blocks) > 0 {
+			blocks[len(blocks)-1].CacheControl = "ephemeral"
 		}
 	}
 }
@@ -344,4 +336,59 @@ func preserveRefsForUnchangedMessages(
 // messagesEqual performs deep equality comparison of two messages.
 func messagesEqual(a, b llm2.Message) bool {
 	return reflect.DeepEqual(a, b)
+}
+
+type ExtractVisibleCodeBlocksInput struct {
+	ChatHistory *ChatHistoryContainer `json:"chatHistory"`
+	// Only code blocks for these files are returned, which keeps the result
+	// (and thus workflow history) proportional to the edits being retried.
+	FilePaths []string `json:"filePaths"`
+}
+
+type ExtractVisibleCodeBlocksOutput struct {
+	CodeBlocks []tree_sitter.CodeBlock `json:"codeBlocks"`
+}
+
+// ExtractVisibleCodeBlocksForFiles returns visibility metadata (file ranges
+// and symbols, without code content) for the given files, based on what the
+// non-assistant messages of the chat history exposed.
+func (ca *ChatHistoryActivities) ExtractVisibleCodeBlocksForFiles(ctx context.Context, input ExtractVisibleCodeBlocksInput) (ExtractVisibleCodeBlocksOutput, error) {
+	if input.ChatHistory == nil {
+		return ExtractVisibleCodeBlocksOutput{}, fmt.Errorf("chat history is required")
+	}
+	codeBlocks, err := ca.ExtractVisibleCodeBlocks(ctx, input.ChatHistory)
+	if err != nil {
+		return ExtractVisibleCodeBlocksOutput{}, err
+	}
+	return ExtractVisibleCodeBlocksOutput{CodeBlocks: filterVisibleCodeBlocksForFiles(codeBlocks, input.FilePaths)}, nil
+}
+
+// filterVisibleCodeBlocksForFiles keeps only blocks for the given files and
+// strips their code content, since visibility filtering during edit block
+// application needs only file paths, line ranges and symbol names.
+func filterVisibleCodeBlocksForFiles(codeBlocks []tree_sitter.CodeBlock, filePaths []string) []tree_sitter.CodeBlock {
+	wanted := make(map[string]bool, len(filePaths))
+	for _, filePath := range filePaths {
+		wanted[filePath] = true
+	}
+
+	var filtered []tree_sitter.CodeBlock
+	seen := make(map[tree_sitter.CodeBlock]bool)
+	for _, codeBlock := range codeBlocks {
+		if !wanted[codeBlock.FilePath] {
+			continue
+		}
+		metadataOnly := tree_sitter.CodeBlock{
+			FilePath:  codeBlock.FilePath,
+			Symbol:    codeBlock.Symbol,
+			StartLine: codeBlock.StartLine,
+			EndLine:   codeBlock.EndLine,
+		}
+		if seen[metadataOnly] {
+			continue
+		}
+		seen[metadataOnly] = true
+		filtered = append(filtered, metadataOnly)
+	}
+	return filtered
 }

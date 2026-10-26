@@ -44,6 +44,9 @@ type ApplyEditBlockReport struct {
 
 	DidApply bool   `json:"didApply"`
 	Error    string `json:"error"`
+	// AmbiguousMatch marks an unapplied update whose old lines matched more
+	// than one location, which a retry with visibility filtering may resolve.
+	AmbiguousMatch bool `json:"ambiguousMatch,omitempty"`
 
 	// TODO /gen/req replace this with a slice of AutofixExecution struct
 	// values. each has a name, applied edits, failed edits, error and message.
@@ -873,6 +876,8 @@ func ApplyUpdateEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 
 	modifiedContents, err := getUpdatedContents(block, string(originalContents))
 	if err != nil {
+		var ambiguous ambiguousMatchError
+		report.AmbiguousMatch = errors.As(err, &ambiguous)
 		report.Error = fmt.Errorf("Failed to apply edit block for file %s: %v", block.FilePath, err).Error()
 		return report, err
 	}
@@ -914,8 +919,24 @@ func ApplyAppendEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 	return report, nil
 }
 
+type applyEditBlocksOptions struct {
+	// ContextVisibilityCheckDisabled carries the caller's already-evaluated
+	// decision on whether old lines must appear in code visible in the chat
+	// history. When nil, the decision is evaluated here. The check must be
+	// disabled when edit blocks carry no visibility data, as with
+	// lazily-resolved visibility.
+	ContextVisibilityCheckDisabled *bool
+}
+
+// contextVisibilityCheckDisabled evaluates the activity-backed feature flag,
+// so callers should evaluate it once and pass the result along.
+func contextVisibilityCheckDisabled(ctx workflow.Context) bool {
+	visibilityVersion := workflow.GetVersion(ctx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
+	return visibilityVersion >= 1 && fflag.IsEnabledWithoutVersioning(ctx, fflag.DisableContextCodeVisibilityCheck)
+}
+
 // TODO /gen write tests for this
-func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]ApplyEditBlockReport, error) {
+func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock, opts applyEditBlocksOptions) ([]ApplyEditBlockReport, error) {
 	actionParams := map[string]interface{}{
 		// visible stuff is very verbose, so we leave it out of the flow events.
 		// they are very necessary in the activity though.
@@ -944,8 +965,11 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		// by finding chunks that match and cover all lines and by incorporating
 		// code that isn't just in code blocks (e.g. raw excerpts and git
 		// diffs), then we may consider bringing back this validation.
-		visibilityVersion := workflow.GetVersion(trackedCtx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
-		if visibilityVersion >= 1 && fflag.IsEnabledWithoutVersioning(trackedCtx, fflag.DisableContextCodeVisibilityCheck) {
+		checkDisabled := opts.ContextVisibilityCheckDisabled != nil && *opts.ContextVisibilityCheckDisabled
+		if opts.ContextVisibilityCheckDisabled == nil {
+			checkDisabled = contextVisibilityCheckDisabled(trackedCtx)
+		}
+		if checkDisabled {
 			validEditBlocks = editBlocks
 		} else {
 			validEditBlocks, invalidReports = validateEditBlocks(editBlocks)
@@ -1115,6 +1139,16 @@ func firstLines(strs []string, n int) string {
 
 var multipleMatchesMessage = "Multiple matches found for the given edit block %s section, but expected only one match. Here are the matches with sufficient additional context from the current state of the file to disambiguate. Provide the edit block again with the specific full expanded context:\n\n%s"
 
+// ambiguousMatchError is returned when an edit block's old lines match several
+// locations, so callers can distinguish this from other match failures.
+type ambiguousMatchError struct {
+	message string
+}
+
+func (e ambiguousMatchError) Error() string {
+	return e.message
+}
+
 func getUpdatedContents(block EditBlock, originalContents string) (string, error) {
 	return getUpdatedContentsWithOptions(block, originalContents, DefaultMatchOptions)
 }
@@ -1151,7 +1185,7 @@ func getUpdatedContentsWithOptions(block EditBlock, originalContents string, opt
 			"\n\n",
 		)
 
-		return "", fmt.Errorf(multipleMatchesMessage, search, matchContents)
+		return "", ambiguousMatchError{message: fmt.Sprintf(multipleMatchesMessage, search, matchContents)}
 	}
 
 	if bestMatch.score == 0 {
