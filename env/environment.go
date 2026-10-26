@@ -1412,9 +1412,35 @@ func (e *ModalEnv) Snapshot(ctx context.Context) (EnvRunCommandOutput, error) {
 	if run == nil {
 		run = e.runAPICommandInner
 	}
-	return run(ctx, EnvRunCommandInput{
-		Command: "/usr/local/bin/sidekick-snapshot",
-	})
+	input := EnvRunCommandInput{Command: "/usr/local/bin/sidekick-snapshot"}
+	recovery := &modalSSHTransportRecovery{env: e}
+	var output EnvRunCommandOutput
+	var err error
+	var restoreNotice string
+	for round := 0; ; round++ {
+		output, err = run(ctx, input)
+		// A missing sandbox proves the request never ran. Other API errors
+		// may have occurred after the guard started taking the snapshot.
+		if !errors.Is(err, errModalSandboxNotRunning) || round >= maxModalRecoveryRounds {
+			break
+		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			break
+		}
+		refresh, refreshErr := recovery.restoreAccess(ctx, "")
+		if refresh.Restored {
+			restoreNotice = refresh.restoreNotice(e.SandboxName)
+		}
+		if refreshErr != nil {
+			err = fmt.Errorf("failed to restore modal sandbox %s before snapshot: %w", e.SandboxName, refreshErr)
+			break
+		}
+	}
+	if err != nil && restoreNotice != "" {
+		err = fmt.Errorf("%w; %s", err, restoreNotice)
+	}
+	return withRestoreNotice(output, restoreNotice), err
 }
 
 // endpointRefresher returns the endpoint refresh in effect for this env,

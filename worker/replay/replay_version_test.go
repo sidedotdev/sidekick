@@ -282,7 +282,7 @@ func TestIsReplayableVersionAncestry(t *testing.T) {
 	}
 }
 
-func TestSelectReplayCandidatesIgnoresVisibilityBuild(t *testing.T) {
+func TestReplayCandidateIgnoresVisibilityBuild(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -298,15 +298,16 @@ func TestSelectReplayCandidatesIgnoresVisibilityBuild(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			listed := []listedWorkflow{
+			blacklist := map[string]struct{}{"blacklisted": {}}
+			for _, wf := range []listedWorkflow{
 				{id: "closed", status: enums.WORKFLOW_EXECUTION_STATUS_COMPLETED},
 				{id: "blacklisted", status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING},
 				{id: "candidate", status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING, workerBuildID: tt.buildID},
-				{id: "past-limit", status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING},
-			}
-			selected := selectReplayCandidates(t, listed, map[string]struct{}{"blacklisted": {}}, 1)
-			if len(selected) != 1 || selected[0].id != "candidate" {
-				t.Fatalf("selected = %+v; want only candidate, regardless of visibility build", selected)
+			} {
+				reason := replayCandidateSkipReason(wf, blacklist)
+				if got, want := reason == "", wf.id == "candidate"; got != want {
+					t.Fatalf("workflow %s: eligible = %v, want %v (reason %q)", wf.id, got, want, reason)
+				}
 			}
 		})
 	}

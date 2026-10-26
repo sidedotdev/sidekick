@@ -72,38 +72,12 @@ type listedWorkflow struct {
 
 func listRecentRunningWorkflows(ctx context.Context, svc workflowservice.WorkflowServiceClient, namespace string, limit int) ([]listedWorkflow, error) {
 	var results []listedWorkflow
-	var nextPageToken []byte
-
-	for len(results) < limit {
-		// ListWorkflow caps RPCs at ten seconds even with a longer parent
-		// deadline. Reverse-forwarded visibility responses can exceed that.
-		pageCtx, cancel := context.WithTimeout(ctx, time.Minute)
-		resp, err := svc.ListWorkflowExecutions(pageCtx, &workflowservice.ListWorkflowExecutionsRequest{
-			Namespace: namespace,
-			// The server default can transfer hundreds of unneeded entries.
-			PageSize:      int32(min(limit-len(results), 100)),
-			Query:         "ExecutionStatus = 'Running'",
-			NextPageToken: nextPageToken,
-		})
-		cancel()
-		if err != nil {
-			return nil, err
-		}
-		for _, wfExec := range resp.Executions {
-			results = append(results, listedWorkflow{
-				id:            wfExec.Execution.WorkflowId,
-				runID:         wfExec.Execution.RunId,
-				status:        wfExec.Status,
-				workerBuildID: wfExec.GetMostRecentWorkerVersionStamp().GetBuildId(),
-			})
-			if len(results) >= limit {
-				return results, nil
-			}
-		}
-		if len(resp.NextPageToken) == 0 {
-			break
-		}
-		nextPageToken = resp.NextPageToken
+	err := visitRunningWorkflowCandidates(ctx, svc, namespace, limit, func(wf listedWorkflow) bool {
+		results = append(results, wf)
+		return true
+	})
+	if err != nil {
+		return nil, err
 	}
 	return results, nil
 }
@@ -172,36 +146,12 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 	blacklist := loadBlacklist()
 
-	// Fetch more than needed so we can fill up to maxWorkflowsToReplay after filtering
-	fetchLimit := maxWorkflowsToReplay + len(blacklist)
-	if fetchLimit < maxWorkflowsToReplay*2 {
-		fetchLimit = maxWorkflowsToReplay * 2
-	}
-	listed, err := listRecentRunningWorkflows(ctx, c.WorkflowService(), client.DefaultNamespace, fetchLimit)
-	if err != nil {
-		t.Fatalf("Failed to list running workflows: %v", err)
-	}
-
-	statusCounts := make(map[enums.WorkflowExecutionStatus]int)
-	for _, wf := range listed {
-		statusCounts[wf.status]++
-	}
-	t.Logf("Fetched %d workflows from visibility query; status breakdown: %v", len(listed), statusCounts)
-	if nonRunning := len(listed) - statusCounts[enums.WORKFLOW_EXECUTION_STATUS_RUNNING]; nonRunning > 0 {
-		t.Logf("WARNING: %d/%d workflows returned by Running query were not actually Running", nonRunning, len(listed))
-	}
-
 	head, err := exec.Command("git", "rev-parse", "--verify", "HEAD^{commit}").Output()
 	if err != nil {
 		t.Fatalf("Cannot resolve HEAD to establish replay ancestry: %v", err)
 	}
 	currentSha := strings.TrimSpace(string(head))
 	t.Logf("Current HEAD: %s", currentSha)
-
-	filtered := selectReplayCandidates(t, listed, blacklist, maxWorkflowsToReplay)
-	if len(filtered) == 0 {
-		t.Skip("No histories replayed: no running, non-blacklisted candidates")
-	}
 
 	// Store outcomes rather than histories to avoid retaining decoded payloads.
 	type historyResult struct {
@@ -220,17 +170,12 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		enums.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW: true,
 	}
 
-	var mu sync.Mutex
-	histories := make(map[string]*historyResult)
-	var wg sync.WaitGroup
+	var histories []*historyResult
+	statusCounts := make(map[enums.WorkflowExecutionStatus]int)
+	examined := 0
 
 	// HEAD is fixed for this invocation; only ancestry results are cached.
 	buildFilter := newLatestBuildFilter(currentSha)
-
-	// Histories and decoded payloads can occupy hundreds of MiB. Bound their
-	// entire lifetime, not just network fetching, so waiting replays cannot
-	// retain multiple large histories.
-	historySem := make(chan struct{}, 1)
 
 	// Running-workflow histories are append-only per run and a full replay
 	// set totals hundreds of MB, so fetched prefixes are persisted (on Modal
@@ -241,101 +186,110 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		historyCacheDir = filepath.Join(cacheHome, historyCacheDirName)
 	}
 
-	for _, wf := range filtered {
-		wg.Add(1)
-		go func(wf listedWorkflow) {
-			defer wg.Done()
+	// Histories and decoded payloads can occupy hundreds of MiB. Visiting
+	// synchronously bounds their entire lifetime, not just network fetching.
+	err = visitRunningWorkflowCandidates(ctx, c.WorkflowService(), client.DefaultNamespace, maxWorkflowsToReplay, func(wf listedWorkflow) (replayed bool) {
+		examined++
+		statusCounts[wf.status]++
+		if reason := replayCandidateSkipReason(wf, blacklist); reason != "" {
+			t.Logf("Skipping workflow %s: %s", wf.id, reason)
+			return
+		}
 
-			result := &historyResult{id: wf.id}
-			defer func() {
-				mu.Lock()
-				histories[wf.id] = result
-				mu.Unlock()
-			}()
+		result := &historyResult{id: wf.id}
+		defer func() {
+			histories = append(histories, result)
+			replayed = result.replayed
+		}()
 
-			historySem <- struct{}{}
-			defer func() { <-historySem }()
-			var hist *history.History
-			var resumedFromCache bool
-			err := retryTransient(3, 2*time.Second, func() error {
-				var fetchErr error
-				hist, resumedFromCache, fetchErr = fetchWorkflowHistoryCached(
-					ctx, c.WorkflowService(), client.DefaultNamespace, historyCacheDir, wf.id, wf.runID)
-				return fetchErr
-			})
-			if err != nil {
-				result.err = fmt.Errorf("history fetch: %w", err)
-				return
-			}
-			if resumedFromCache {
-				t.Logf("Workflow %s: history fetch resumed from local cache", wf.id)
-			}
-			if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
-				result.skipReason = "completed before replay"
-				return
-			}
-			// Drop any in-flight WorkflowTask tail to avoid the
-			// "extra replay command" false positive caused by reading
-			// history mid workflow-task on a running workflow.
-			hist.Events = dropInFlightWFTTail(hist.Events)
-			if len(hist.Events) == 0 {
-				result.skipReason = "no replayable events"
-				return
-			}
-			if reason := replayHistorySkipReason(currentSha, hist); reason != "" {
-				result.skipReason = "fetched history: " + reason
-				return
-			}
+		var hist *history.History
+		var resumedFromCache bool
+		err := retryTransient(3, 2*time.Second, func() error {
+			var fetchErr error
+			hist, resumedFromCache, fetchErr = fetchWorkflowHistoryCached(
+				ctx, c.WorkflowService(), client.DefaultNamespace, historyCacheDir, wf.id, wf.runID)
+			return fetchErr
+		})
+		if err != nil {
+			result.err = fmt.Errorf("history fetch: %w", err)
+			return
+		}
+		if resumedFromCache {
+			t.Logf("Workflow %s: history fetch resumed from local cache", wf.id)
+		}
+		if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
+			result.skipReason = "completed before replay"
+			return
+		}
+		// Drop any in-flight WorkflowTask tail to avoid the
+		// "extra replay command" false positive caused by reading
+		// history mid workflow-task on a running workflow.
+		hist.Events = dropInFlightWFTTail(hist.Events)
+		if len(hist.Events) == 0 {
+			result.skipReason = "no replayable events"
+			return
+		}
+		if reason := replayHistorySkipReason(currentSha, hist); reason != "" {
+			result.skipReason = "fetched history: " + reason
+			return
+		}
 
-			// Resolve payloads the codec offloaded to KV storage up front:
-			// unresolvable references (e.g. histories read over the read-only
-			// proxy of a host that does not inline them) would otherwise
-			// derail replay with misleading non-determinism errors.
-			codec := common.NewPayloadCodec(storage, common.DefaultCodecThreshold)
-			err = proxy.VisitPayloads(ctx, hist, proxy.VisitPayloadsOptions{
-				SkipSearchAttributes: true,
-				Visitor: func(_ *proxy.VisitPayloadsContext, payloads []*commonpb.Payload) ([]*commonpb.Payload, error) {
-					return codec.Decode(payloads)
-				},
-			})
-			if err != nil {
-				if errors.Is(err, common.ErrCodecPayloadMissing) {
-					result.skipReason = fmt.Sprintf("offloaded payloads unavailable in this environment: %v", err)
-					return
-				}
-				result.err = fmt.Errorf("payload decode: %w", err)
+		// Resolve payloads the codec offloaded to KV storage up front:
+		// unresolvable references (e.g. histories read over the read-only
+		// proxy of a host that does not inline them) would otherwise
+		// derail replay with misleading non-determinism errors.
+		codec := common.NewPayloadCodec(storage, common.DefaultCodecThreshold)
+		err = proxy.VisitPayloads(ctx, hist, proxy.VisitPayloadsOptions{
+			SkipSearchAttributes: true,
+			Visitor: func(_ *proxy.VisitPayloadsContext, payloads []*commonpb.Payload) ([]*commonpb.Payload, error) {
+				return codec.Decode(payloads)
+			},
+		})
+		if err != nil {
+			if errors.Is(err, common.ErrCodecPayloadMissing) {
+				result.skipReason = fmt.Sprintf("offloaded payloads unavailable in this environment: %v", err)
 				return
 			}
-			replayerOptions := utils.TestReplayerOptions()
-			replayerOptions.DataConverter = clientOptions.DataConverter
-			replayer, err := worker.NewWorkflowReplayerWithOptions(replayerOptions)
-			if err != nil {
-				result.err = fmt.Errorf("replayer setup: %w", err)
-				return
-			}
-			sidekick_worker.RegisterWorkflows(replayer)
-			result.replayed = true
-			replayErr := replayer.ReplayWorkflowHistory(nil, hist)
-			if replayErr == nil {
-				return
-			}
-			buildID, excuse := buildFilter.excuse(ctx, c.DescribeWorkflowExecution, wf.id, wf.runID)
-			if excuse != "" {
-				result.skipReason = fmt.Sprintf("replay failure excused (%s): %v", excuse, replayErr)
-				return
-			}
-			result.err = fmt.Errorf("replay (latest worker build %q): %w", buildID, replayErr)
-		}(wf)
+			result.err = fmt.Errorf("payload decode: %w", err)
+			return
+		}
+		replayerOptions := utils.TestReplayerOptions()
+		replayerOptions.DataConverter = clientOptions.DataConverter
+		replayer, err := worker.NewWorkflowReplayerWithOptions(replayerOptions)
+		if err != nil {
+			result.err = fmt.Errorf("replayer setup: %w", err)
+			return
+		}
+		sidekick_worker.RegisterWorkflows(replayer)
+		result.replayed = true
+		replayErr := replayer.ReplayWorkflowHistory(nil, hist)
+		if replayErr == nil {
+			return
+		}
+		buildID, excuse := buildFilter.excuse(ctx, c.DescribeWorkflowExecution, wf.id, wf.runID)
+		if excuse != "" {
+			result.skipReason = fmt.Sprintf("replay failure excused (%s): %v", excuse, replayErr)
+			return
+		}
+		result.err = fmt.Errorf("replay (latest worker build %q): %w", buildID, replayErr)
+		return
+	})
+	if err != nil {
+		t.Errorf("Failed to visit running workflows: %v", err)
 	}
-
-	wg.Wait()
+	t.Logf("Examined %d workflows from visibility query; status breakdown: %v", examined, statusCounts)
+	if nonRunning := examined - statusCounts[enums.WORKFLOW_EXECUTION_STATUS_RUNNING]; nonRunning > 0 {
+		t.Logf("WARNING: %d/%d workflows returned by Running query were not actually Running", nonRunning, examined)
+	}
 
 	pruneHistoryCache(historyCacheDir, historyCacheMaxBytes, historyCacheMaxAge)
 
+	if len(histories) == 0 && err == nil {
+		t.Skip("No histories replayed: no running, non-blacklisted candidates")
+	}
 	replayed, skipped, failedBeforeReplay := 0, 0, 0
 	conclusive := 0
-	for _, wf := range filtered {
-		result := histories[wf.id]
+	for _, result := range histories {
 		if result.replayed {
 			replayed++
 		}
@@ -347,7 +301,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				failedBeforeReplay++
 			}
 		}
-		t.Run(wf.id, func(t *testing.T) {
+		t.Run(result.id, func(t *testing.T) {
 			t.Parallel()
 			if result.skipReason != "" {
 				t.Skipf("Workflow %s: %s", result.id, result.skipReason)
@@ -361,7 +315,7 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		replayed, skipped, failedBeforeReplay)
 	// A run where every workflow is skipped verifies nothing and must not pass.
 	if conclusive == 0 {
-		t.Errorf("None of the %d running workflows were conclusively replayed; see subtest skip reasons", len(filtered))
+		t.Errorf("None of the %d running workflows were conclusively replayed; see subtest skip reasons", len(histories))
 	}
 }
 
@@ -536,30 +490,14 @@ func replayHistorySkipReason(currentRef string, hist *history.History) string {
 	return "history has no completed workflow task"
 }
 
-func selectReplayCandidates(t *testing.T, listed []listedWorkflow, blacklist map[string]struct{}, limit int) []listedWorkflow {
-	t.Helper()
-
-	var selected []listedWorkflow
-	excluded := 0
-	for _, wf := range listed {
-		if wf.status != enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
-			excluded++
-			continue
-		}
-		if _, ok := blacklist[wf.id]; ok {
-			t.Logf("Skipping blacklisted workflow: %s", wf.id)
-			excluded++
-			continue
-		}
-		t.Logf("Selected workflow %s: visibilityWorkerBuildID=%q", wf.id, wf.workerBuildID)
-		selected = append(selected, wf)
-		if len(selected) >= limit {
-			break
-		}
+func replayCandidateSkipReason(wf listedWorkflow, blacklist map[string]struct{}) string {
+	if wf.status != enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
+		return "not running"
 	}
-	t.Logf("Replay candidates: %d selected, %d excluded, %d not examined",
-		len(selected), excluded, len(listed)-len(selected)-excluded)
-	return selected
+	if _, ok := blacklist[wf.id]; ok {
+		return "blacklisted"
+	}
+	return ""
 }
 
 // latestBuildFilter excuses replay failures of workflows last run by a worker
@@ -598,4 +536,47 @@ func (f *latestBuildFilter) excuse(
 		return buildID, fmt.Sprintf("latest worker build %q is neither HEAD nor an ancestor of it", buildID)
 	}
 	return buildID, ""
+}
+
+func visitRunningWorkflowCandidates(ctx context.Context, svc workflowservice.WorkflowServiceClient, namespace string, limit int, visit func(listedWorkflow) bool) error {
+	var nextPageToken []byte
+	selected := 0
+	for selected < limit {
+		// ListWorkflow caps RPCs at ten seconds even with a longer parent
+		// deadline. Reverse-forwarded visibility responses can exceed that.
+		pageCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		resp, err := svc.ListWorkflowExecutions(pageCtx, &workflowservice.ListWorkflowExecutionsRequest{
+			Namespace: namespace,
+			// The server default can transfer hundreds of unneeded entries.
+			PageSize:      int32(min(limit-selected, 100)),
+			Query:         "ExecutionStatus = 'Running'",
+			NextPageToken: nextPageToken,
+		})
+		cancel()
+		if err != nil {
+			return err
+		}
+		for _, wfExec := range resp.Executions {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			wf := listedWorkflow{
+				id:            wfExec.Execution.WorkflowId,
+				runID:         wfExec.Execution.RunId,
+				status:        wfExec.Status,
+				workerBuildID: wfExec.GetMostRecentWorkerVersionStamp().GetBuildId(),
+			}
+			if visit(wf) {
+				selected++
+				if selected >= limit {
+					return nil
+				}
+			}
+		}
+		if len(resp.NextPageToken) == 0 {
+			break
+		}
+		nextPageToken = resp.NextPageToken
+	}
+	return nil
 }
