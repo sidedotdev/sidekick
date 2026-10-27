@@ -19,10 +19,9 @@ import (
 // ResolveMergeConflictsParams describes a single conflict-resolution
 // subflow execution.
 type ResolveMergeConflictsParams struct {
-	// WorktreePath is the directory that contains the conflict markers
-	// (i.e. where `MERGE_HEAD` is currently set). For the v3 flow this is
-	// always the flow's own worktree, since target-side conflicts get
-	// recreated there by the caller.
+	// WorktreePath preserves the original conflict location for legacy
+	// workflow replay. New executions resolve in the active environment's
+	// own worktree, where target-side conflicts are recreated by the caller.
 	WorktreePath string
 
 	// SourceBranchName is the branch being merged in (the "other side").
@@ -77,7 +76,7 @@ func resolveMergeConflictsSubflow(dCtx DevContext, params ResolveMergeConflictsP
 }
 
 func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsParams) error {
-	if params.WorktreePath == "" {
+	if conflictResolutionWorktreePath(dCtx, params.WorktreePath) == "" {
 		return fmt.Errorf("conflict resolution requires a worktree path")
 	}
 
@@ -191,7 +190,7 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 func captureConflictSnapshot(dCtx DevContext, worktreePath string) (git.ConflictMarkerSnapshot, error) {
 	var snapshot git.ConflictMarkerSnapshot
 	err := workflow.ExecuteActivity(dCtx, git.GitSnapshotConflictMarkersActivity, *dCtx.EnvContainer, git.GitSnapshotConflictMarkersParams{
-		WorktreePath: worktreePath,
+		WorktreePath: conflictResolutionWorktreePath(dCtx, worktreePath),
 	}).Get(dCtx, &snapshot)
 	return snapshot, err
 }
@@ -199,7 +198,7 @@ func captureConflictSnapshot(dCtx DevContext, worktreePath string) (git.Conflict
 func listUnmerged(dCtx DevContext, worktreePath string) ([]string, error) {
 	var paths []string
 	err := workflow.ExecuteActivity(dCtx, git.GitListUnmergedActivity, *dCtx.EnvContainer, git.GitListUnmergedParams{
-		WorktreePath: worktreePath,
+		WorktreePath: conflictResolutionWorktreePath(dCtx, worktreePath),
 	}).Get(dCtx, &paths)
 	return paths, err
 }
@@ -207,7 +206,7 @@ func listUnmerged(dCtx DevContext, worktreePath string) ([]string, error) {
 func computeConflictResolutionDiff(dCtx DevContext, worktreePath string, snapshot git.ConflictMarkerSnapshot) (string, error) {
 	var diff string
 	err := workflow.ExecuteActivity(dCtx, git.GitConflictResolutionDiffActivity, *dCtx.EnvContainer, git.GitConflictResolutionDiffParams{
-		WorktreePath: worktreePath,
+		WorktreePath: conflictResolutionWorktreePath(dCtx, worktreePath),
 		Snapshot:     snapshot,
 	}).Get(dCtx, &diff)
 	return diff, err
@@ -240,7 +239,7 @@ func checkConflictResolutionFulfillment(dCtx DevContext, params ResolveMergeConf
 func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) error {
 	var mergeInProgress bool
 	if err := workflow.ExecuteActivity(dCtx, git.GitMergeInProgressActivity, *dCtx.EnvContainer, git.GitMergeInProgressParams{
-		WorktreePath: params.WorktreePath,
+		WorktreePath: conflictResolutionWorktreePath(dCtx, params.WorktreePath),
 	}).Get(dCtx, &mergeInProgress); err != nil {
 		return fmt.Errorf("failed to check merge state before finalizing: %w", err)
 	}
@@ -256,7 +255,7 @@ func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) er
 	}
 
 	return flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitMergeActivity, nil, *dCtx.EnvContainer, git.GitCommitMergeParams{
-		WorktreePath:   params.WorktreePath,
+		WorktreePath:   conflictResolutionWorktreePath(dCtx, params.WorktreePath),
 		CommitMessage:  msg,
 		CommitterName:  params.CommitterName,
 		CommitterEmail: params.CommitterEmail,
@@ -304,4 +303,11 @@ func reviewMessagesToText(reviewMessages []string) string {
 		return ""
 	}
 	return strings.Join(reviewMessages, "\n\n---\n\n")
+}
+
+func conflictResolutionWorktreePath(dCtx DevContext, legacyPath string) string {
+	if workflow.GetVersion(dCtx, "conflict-resolution-env-path", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		return legacyPath
+	}
+	return dCtx.EnvContainer.Env.GetWorkingDirectory()
 }
