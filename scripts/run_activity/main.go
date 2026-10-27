@@ -76,7 +76,7 @@ func getFunctionName(fn interface{}) string {
 	return name
 }
 
-func buildActivityRegistry() map[string]interface{} {
+func buildActivityRegistry(temporalClient client.Client) map[string]interface{} {
 	registry := make(map[string]interface{})
 
 	service, err := sidekick.GetService()
@@ -89,16 +89,6 @@ func buildActivityRegistry() map[string]interface{} {
 		log.Warn().Err(err).Msg("Failed to create go-feature-flag instance, some activities may not work")
 	}
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
-
-	hostPort := common.GetTemporalClientHostPort()
-	tracingInterceptor, _ := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
-	temporalClient, err := client.Dial(client.Options{
-		HostPort:     hostPort,
-		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
-	})
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to create Temporal client, some activities may not work")
-	}
 
 	devManagerActivities := &dev.DevAgentManagerActivities{
 		Storage:        service,
@@ -265,9 +255,7 @@ func registerStructMethods(registry map[string]interface{}, structPtr interface{
 	}
 }
 
-func executeActivityDirect(activityName string, activityArgs []json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
-	registry := buildActivityRegistry()
-
+func executeActivityDirect(registry map[string]interface{}, activityName string, activityArgs []json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
 	activityFn, ok := registry[activityName]
 	if !ok {
 		return nil, fmt.Errorf("activity %q not found in registry", activityName)
@@ -456,25 +444,9 @@ func decodeActivityInvocation(
 	return invocation, nil
 }
 
-func loadActivityInvocation(ctx context.Context, flowID string, runID string, identifier string) (activityInvocation, error) {
-	service, err := sidekick.GetService()
-	if err != nil {
-		return activityInvocation{}, fmt.Errorf("error initializing storage: %w", err)
-	}
-
-	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalDiagnosticHostPort())
-	if err != nil {
-		return activityInvocation{}, fmt.Errorf("error creating Temporal client options: %w", err)
-	}
-
-	temporalClient, err := client.Dial(clientOptions)
-	if err != nil {
-		return activityInvocation{}, fmt.Errorf("error connecting to Temporal: %w", err)
-	}
-	defer temporalClient.Close()
-
+func loadActivityInvocation(ctx context.Context, temporalClient client.Client, dataConverter converter.DataConverter, registry map[string]interface{}, flowID string, runID string, identifier string) (activityInvocation, error) {
 	iter := temporalClient.GetWorkflowHistory(ctx, flowID, runID, false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
-	return findActivityInvocation(iter, clientOptions.DataConverter, buildActivityRegistry(), identifier)
+	return findActivityInvocation(iter, dataConverter, registry, identifier)
 }
 
 func loadJSONInvocation(activityName string, path string, readFile func(string) ([]byte, error)) (activityInvocation, error) {
@@ -559,8 +531,33 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	service, err := sidekick.GetService()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize storage")
+	}
+	hostPort := common.GetTemporalDiagnosticHostPort()
+	if !direct {
+		hostPort = common.GetTemporalClientHostPort()
+	}
+	clientOptions, err := common.NewTemporalClientOptions(service, hostPort)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create Temporal client options")
+	}
+	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create tracing interceptor")
+	}
+	clientOptions.Interceptors = append(clientOptions.Interceptors, interceptor.ClientInterceptor(tracingInterceptor))
+	log.Info().Str("hostPort", hostPort).Msg("Connecting to Temporal")
+	temporalClient, err := client.DialContext(ctx, clientOptions)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to connect to Temporal")
+	}
+	defer temporalClient.Close()
+	registry := buildActivityRegistry(temporalClient)
+
 	loadFromHistory := func(ctx context.Context, flowID string, identifier string) (activityInvocation, error) {
-		return loadActivityInvocation(ctx, flowID, runID, identifier)
+		return loadActivityInvocation(ctx, temporalClient, clientOptions.DataConverter, registry, flowID, runID, identifier)
 	}
 	invocation, err := resolveActivityInvocation(ctx, args, loadFromHistory, os.ReadFile, os.Stat)
 	if err != nil {
@@ -580,13 +577,13 @@ func main() {
 		}
 	} else if direct {
 		log.Info().Str("activity", activityName).Msg("Executing activity directly")
-		result, err = executeActivityDirect(activityName, activityArgs, timeout)
+		result, err = executeActivityDirect(registry, activityName, activityArgs, timeout)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error executing activity: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		result, err = executeActivityViaWorkflow(activityName, activityArgs, timeout)
+		result, err = executeActivityViaWorkflow(temporalClient, activityName, activityArgs, timeout)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error executing activity via workflow: %v\n", err)
 			os.Exit(1)
@@ -606,25 +603,10 @@ func main() {
 	}
 }
 
-func executeActivityViaWorkflow(activityName string, activityArgs []json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
-	hostPort := common.GetTemporalClientHostPort()
-	service, err := sidekick.GetService()
-	if err != nil {
-		return nil, fmt.Errorf("error initializing storage: %w", err)
-	}
-	clientOptions, err := common.NewTemporalClientOptions(service, hostPort)
-	if err != nil {
-		return nil, fmt.Errorf("error creating Temporal client options: %w", err)
-	}
-	temporalClient, err := client.Dial(clientOptions)
-	if err != nil {
-		return nil, fmt.Errorf("error connecting to Temporal: %w", err)
-	}
-	defer temporalClient.Close()
-
+func executeActivityViaWorkflow(temporalClient client.Client, activityName string, activityArgs []json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
 	w := worker.New(temporalClient, runActivityTaskQueue, worker.Options{})
 	w.RegisterWorkflow(RunActivityWorkflow)
-	err = w.Start()
+	err := w.Start()
 	if err != nil {
 		return nil, fmt.Errorf("error starting worker: %w", err)
 	}
