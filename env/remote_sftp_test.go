@@ -1,6 +1,8 @@
 package env
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -516,6 +518,24 @@ func TestBoundedSFTPOp(t *testing.T) {
 	})
 }
 
+// installHosts stand in for remotes with and without a working gzip; the
+// install must succeed on both, choosing the upload encoding to match.
+var installHosts = []struct {
+	name     string
+	encoding string
+	env      func(t *testing.T) []string
+}{
+	{name: "gzip", encoding: remoteInstallGzipUpload, env: func(*testing.T) []string { return os.Environ() }},
+	{name: "no gzip", encoding: remoteInstallRawUpload, env: gzipUnavailableEnv},
+}
+
+func gzipUnavailableEnv(t *testing.T) []string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gzip"), []byte("#!/bin/sh\nexit 127\n"), 0700))
+	return append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // TestRemoteAgentInstallCommand runs the install megacommand under a real
 // shell, standing in for the remote login shell: the streamed stdin must land
 // installed and executable at the final path, its gc mode must be invoked
@@ -524,39 +544,106 @@ func TestBoundedSFTPOp(t *testing.T) {
 func TestRemoteAgentInstallCommand(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	remotePath := filepath.Join(dir, "side-agent-currentidentity")
+	for _, host := range installHosts {
+		t.Run(host.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			remotePath := filepath.Join(dir, "side-agent-currentidentity")
 
-	// The streamed "binary" is a script that records how it was invoked,
-	// making the chain's gc step (run against the just-installed binary)
-	// observable.
-	invokedLog := filepath.Join(dir, "invoked")
-	content := "#!/bin/sh\necho \"$1\" > " + shellQuote(invokedLog) + "\n"
-	cmd := exec.Command("sh", "-c", remoteAgentInstallCommand(remotePath, "fixed"))
-	cmd.Stdin = strings.NewReader(content)
-	out, err := cmd.Output()
+			// The streamed "binary" is a script that records how it was
+			// invoked, making the chain's gc step (run against the
+			// just-installed binary) observable.
+			invokedLog := filepath.Join(dir, "invoked")
+			content := "#!/bin/sh\necho \"$1\" > " + shellQuote(invokedLog) + "\n"
+			cmd := exec.Command("sh", "-c", remoteAgentInstallCommand(remotePath, "fixed"))
+			cmd.Env = host.env(t)
+			cmd.Stdin = strings.NewReader(remoteAgentInstallStdin(t, content, remoteAgentInstallTempPath(remotePath, "fixed"), host.encoding))
+			out, err := cmd.Output()
+			require.NoError(t, err)
+
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			require.GreaterOrEqual(t, len(lines), 4, string(out))
+			assert.Len(t, strings.Fields(lines[0]), 2, "first output line must be uname -sm")
+			assert.Equal(t, host.encoding, lines[1], "second output line must name the upload encoding")
+			assert.Equal(t, remoteInstallCompleteMarker, lines[len(lines)-2])
+			checksumFields := strings.Fields(lines[len(lines)-1])
+			require.NotEmpty(t, checksumFields)
+			assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))), checksumFields[0])
+
+			data, err := os.ReadFile(remotePath)
+			require.NoError(t, err)
+			assert.Equal(t, content, string(data))
+			info, err := os.Stat(remotePath)
+			require.NoError(t, err)
+			assert.NotZero(t, info.Mode().Perm()&0111)
+			for _, staged := range []string{".tmp-fixed", ".tmp-fixed.sum", ".tmp-fixed.upload"} {
+				_, err = os.Stat(remotePath + staged)
+				assert.ErrorIs(t, err, os.ErrNotExist, staged)
+			}
+
+			invokedWith, err := os.ReadFile(invokedLog)
+			require.NoError(t, err, "install chain must invoke the installed binary's gc mode")
+			assert.Equal(t, "gc", strings.TrimSpace(string(invokedWith)))
+		})
+	}
+}
+
+// TestRemoteAgentInstallCommandRejectsTruncatedUpload covers an upload cut
+// short by the session going away mid-stream: without the checksum gate the
+// partial (or empty, hence "executable" as a script) file would be installed
+// and later mistaken for a working agent.
+func TestRemoteAgentInstallCommandRejectsTruncatedUpload(t *testing.T) {
+	t.Parallel()
+
+	content := "#!/bin/sh\nexit 0\n"
+	for _, host := range installHosts {
+		encoded := encodeInstallUpload(t, content, host.encoding)
+		for name, uploaded := range map[string]string{"empty": "", "partial": encoded[:len(encoded)/2]} {
+			t.Run(host.name+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				dir := t.TempDir()
+				remotePath := filepath.Join(dir, "side-agent-currentidentity")
+				tempPath := remoteAgentInstallTempPath(remotePath, "fixed")
+
+				cmd := exec.Command("sh", "-c", remoteAgentInstallCommand(remotePath, "fixed"))
+				cmd.Env = host.env(t)
+				cmd.Stdin = strings.NewReader(remoteAgentChecksumLine(sha256Hex(content), tempPath) + uploaded)
+				out, err := cmd.Output()
+				require.Error(t, err)
+				assert.NotContains(t, string(out), remoteInstallCompleteMarker)
+				_, err = os.Stat(remotePath)
+				assert.ErrorIs(t, err, os.ErrNotExist, "a truncated upload must never reach the final path")
+			})
+		}
+	}
+}
+
+// remoteAgentInstallStdin is what the client streams for an install of
+// content whose temp path is tempPath: the checksum line, then the binary in
+// the encoding the remote announced.
+func remoteAgentInstallStdin(t *testing.T, content, tempPath, encoding string) string {
+	return remoteAgentChecksumLine(sha256Hex(content), tempPath) + encodeInstallUpload(t, content, encoding)
+}
+
+func encodeInstallUpload(t *testing.T, content, encoding string) string {
+	if encoding == remoteInstallGzipUpload {
+		return gzipString(t, content)
+	}
+	return content
+}
+
+func gzipString(t *testing.T, content string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, err := zw.Write([]byte(content))
 	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	return buf.String()
+}
 
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	require.GreaterOrEqual(t, len(lines), 3, string(out))
-	assert.Len(t, strings.Fields(lines[0]), 2, "first output line must be uname -sm")
-	assert.Equal(t, remoteInstallCompleteMarker, lines[len(lines)-2])
-	checksumFields := strings.Fields(lines[len(lines)-1])
-	require.NotEmpty(t, checksumFields)
-	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))), checksumFields[0])
-
-	data, err := os.ReadFile(remotePath)
-	require.NoError(t, err)
-	assert.Equal(t, content, string(data))
-	info, err := os.Stat(remotePath)
-	require.NoError(t, err)
-	assert.NotZero(t, info.Mode().Perm()&0111)
-	_, err = os.Stat(remotePath + ".tmp-fixed")
-	assert.ErrorIs(t, err, os.ErrNotExist)
-
-	invokedWith, err := os.ReadFile(invokedLog)
-	require.NoError(t, err, "install chain must invoke the installed binary's gc mode")
-	assert.Equal(t, "gc", strings.TrimSpace(string(invokedWith)))
+func sha256Hex(content string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 }
 
 // installFakeSSH puts a fake ssh on PATH whose behavior is given by script
@@ -596,28 +683,56 @@ func stubAgentBinary(t *testing.T, content string) (gotPlatform *string) {
 	return &platform
 }
 
+// TestInstallRemoteAgentVerifiesChecksum also covers upload encoding: the
+// client must compress only when the remote announced it can decompress.
 func TestInstallRemoteAgentVerifiesChecksum(t *testing.T) {
 	// Deliberately not parallel: overrides PATH and a package hook.
-	uploadedPath := filepath.Join(t.TempDir(), "uploaded")
-	installFakeSSH(t, fmt.Sprintf(`echo "Linux x86_64"
-cat > %s
+	for encoding, receive := range map[string]string{remoteInstallGzipUpload: "gzip -dc", remoteInstallRawUpload: "cat"} {
+		t.Run(encoding, func(t *testing.T) {
+			uploadedPath := filepath.Join(t.TempDir(), "uploaded")
+			installFakeSSH(t, fmt.Sprintf(`echo "Linux x86_64"
+echo %s
+read -r checksum_line
+%s > %s
 echo side-agent-install-complete
 sha256sum %s 2>/dev/null || shasum -a 256 %s
-`, shellQuote(uploadedPath), shellQuote(uploadedPath), shellQuote(uploadedPath)))
-	platform := stubAgentBinary(t, "streamed agent bytes")
+`, encoding, receive, shellQuote(uploadedPath), shellQuote(uploadedPath), shellQuote(uploadedPath)))
+			platform := stubAgentBinary(t, "streamed agent bytes")
 
+			err := installRemoteAgent(context.Background(), []string{"remote-host"}, "/tmp/side-agent-testidentity")
+			require.NoError(t, err)
+			assert.Equal(t, "linux/amd64", *platform)
+
+			uploaded, err := os.ReadFile(uploadedPath)
+			require.NoError(t, err)
+			assert.Equal(t, "streamed agent bytes", string(uploaded))
+		})
+	}
+}
+
+// TestInstallRemoteAgentRejectsUnknownUploadEncoding also covers aborting a
+// session whose descendants outlive the killed ssh while holding its pipes,
+// as an orphaned ProxyCommand would: the abort must not wait on them.
+func TestInstallRemoteAgentRejectsUnknownUploadEncoding(t *testing.T) {
+	// Deliberately not parallel: overrides PATH and a package hook.
+	installFakeSSH(t, `echo "Linux x86_64"
+sleep 30 &
+echo zstd
+wait
+`)
+	stubAgentBinary(t, "streamed agent bytes")
+
+	started := time.Now()
 	err := installRemoteAgent(context.Background(), []string{"remote-host"}, "/tmp/side-agent-testidentity")
-	require.NoError(t, err)
-	assert.Equal(t, "linux/amd64", *platform)
-
-	uploaded, err := os.ReadFile(uploadedPath)
-	require.NoError(t, err)
-	assert.Equal(t, "streamed agent bytes", string(uploaded))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "upload encoding")
+	assert.Less(t, time.Since(started), 10*time.Second)
 }
 
 func TestInstallRemoteAgentChecksumMismatch(t *testing.T) {
 	// Deliberately not parallel: overrides PATH and a package hook.
 	installFakeSSH(t, `echo "Linux x86_64"
+echo raw
 cat > /dev/null
 echo side-agent-install-complete
 echo "deadbeef  /tmp/side-agent-testidentity"
@@ -637,7 +752,9 @@ func TestInstallRemoteAgentSessionExitFailure(t *testing.T) {
 	// Deliberately not parallel: overrides PATH and a package hook.
 	uploadedPath := filepath.Join(t.TempDir(), "uploaded")
 	installFakeSSH(t, fmt.Sprintf(`echo "Linux x86_64"
-cat > %s
+echo gzip
+read -r checksum_line
+gzip -dc > %s
 echo side-agent-install-complete
 sha256sum %s 2>/dev/null || shasum -a 256 %s
 exit 3
@@ -657,7 +774,9 @@ func TestInstallRemoteAgentRequiresCompletionMarker(t *testing.T) {
 	// Deliberately not parallel: overrides PATH and a package hook.
 	uploadedPath := filepath.Join(t.TempDir(), "uploaded")
 	installFakeSSH(t, fmt.Sprintf(`echo "Linux x86_64"
-cat > %s
+echo gzip
+read -r checksum_line
+gzip -dc > %s
 sha256sum %s 2>/dev/null || shasum -a 256 %s
 `, shellQuote(uploadedPath), shellQuote(uploadedPath), shellQuote(uploadedPath)))
 	stubAgentBinary(t, "streamed agent bytes")

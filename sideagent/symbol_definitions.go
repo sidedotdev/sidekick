@@ -35,21 +35,33 @@ func (c *Client) BulkGetSymbolDefinitions(ctx context.Context, directory string,
 // languageServers owns the sandbox-local language-server sessions, which
 // outlive individual requests so repeated lookups reuse a warm gopls.
 type languageServers struct {
-	once     sync.Once
+	mu       sync.Mutex
+	closed   bool
 	sessions *core.Sessions
 }
 
 func (l *languageServers) get(environ []string) *core.Sessions {
-	l.once.Do(func() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return nil
+	}
+	if l.sessions == nil {
 		l.sessions = &core.Sessions{
 			LSPClientProvider:  core.NewLocalServerProvider(environ),
 			InitializedClients: make(map[string]core.LSPClient),
 		}
-	})
+	}
 	return l.sessions
 }
 
 func (l *languageServers) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return
+	}
+	l.closed = true
 	if l.sessions != nil {
 		_ = l.sessions.Close()
 	}
@@ -58,12 +70,16 @@ func (l *languageServers) close() {
 func (s *server) executeSymbolDefinitions(req ExecRequest) ExecResponse {
 	ctx, cancel := s.toolContext(req.ID)
 	defer cancel()
+	sessions := s.languageServers.get(append(s.baseEnv(req.LoginEnv), req.Env...))
+	if sessions == nil {
+		return ExecResponse{ID: req.ID, ExitStatus: -1, Error: "language servers are closed"}
+	}
 	tool := repotools.SymbolDefinitions{
 		Repository: repotools.LocalRepository{
 			FileSystem:      localio.FileSystem{WorkingDirectory: req.Dir},
 			IgnoreFileNames: repotools.IgnoreFileNames,
 		},
-		Sessions: s.languageServers.get(append(s.baseEnv(req.LoginEnv), req.Env...)),
+		Sessions: sessions,
 		Scope:    core.ClientScope{BaseDir: req.Dir},
 	}
 	results, err := tool.BulkGetSymbolDefinitions(ctx, *req.SymbolDefinitions)

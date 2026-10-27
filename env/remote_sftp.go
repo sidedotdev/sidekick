@@ -3,6 +3,7 @@ package env
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,6 +68,17 @@ var sftpOpTimeout = 60 * time.Second
 // install the side-agent binary on a remote host before a persistent
 // protocol channel can be established.
 var remoteBinaryOpTimeout = 60 * time.Second
+
+// remoteBinaryMinThroughput is the slowest upload rate the install budget
+// assumes. CLI-proxied SSH links (devpod, openshell) have been measured well
+// under 1 MB/s, which a fixed budget cannot accommodate for a CGO agent.
+const remoteBinaryMinThroughput = 128 << 10
+
+// remoteBinaryInstallBudget is the total time allowed to stream and verify an
+// agent binary of the given size.
+func remoteBinaryInstallBudget(size int64) time.Duration {
+	return remoteBinaryOpTimeout + time.Duration(size/remoteBinaryMinThroughput)*time.Second
+}
 
 // sftpConn manages a persistent SFTP client connection over SSH.
 // It is safe for concurrent use; the underlying sftp.Client multiplexes requests.
@@ -844,26 +857,62 @@ func reapWithGrace(cmd *exec.Cmd) {
 // a var so tests can avoid building real agent binaries.
 var agentBinaryForPlatform = common.GetAgentBinaryPath
 
+// remoteAgentInstallTempPath is where an install stages the binary before
+// the atomic mv. It shares the final binary's name prefix so stale-sibling GC
+// reclaims it (and its .sum companion) if an install dies midway.
+func remoteAgentInstallTempPath(remotePath, tempSuffix string) string {
+	return remotePath + ".tmp-" + tempSuffix
+}
+
+// remoteAgentChecksumLine is the sha256sum -c input streamed ahead of the
+// binary. Its length depends only on tempPath, which lets the install command
+// split it from the binary with a byte-counted dd and no shell parsing.
+func remoteAgentChecksumLine(sha256Hex, tempPath string) string {
+	return sha256Hex + "  " + tempPath + "\n"
+}
+
 // remoteAgentInstallCommand builds the single shell command that installs the
 // side-agent binary streamed over the ssh session's stdin, following
 // deptool's design (https://ruuda.nl/2026/deptool). Only plain words chained
-// with && / || (plus one quoted find pattern) are used, so any remote login
-// shell behaves identically. uname runs before dd needs the binary on stdin,
-// letting the client pick the matching local binary; mv keeps concurrent
-// installs atomic. Precedence: the chain parses as
-// (steps && marker && sha256sum) || shasum, so a failed step falls through
-// to the checksum fallback (shasum covers hosts without coreutils, e.g.
-// macOS); the completion marker echoed between the steps and the checksum
-// lets the client distinguish that fallthrough from a genuine post-install
-// read-back. The gc step runs the freshly installed binary's own GC mode
+// with && / || plus redirections are used, so any remote login shell behaves
+// identically. Before anything reads stdin, the chain prints the platform
+// (letting the client pick the matching local binary) and the upload
+// encoding: gzip when a gzip round trip works on the remote, raw otherwise,
+// so compression is an optimization rather than a remote requirement. The
+// client then streams the binary's checksum line and the encoded binary. The
+// chain verifies the decoded binary against that line before chmod/mv, so a
+// session torn down mid-stream can never leave a truncated or empty
+// executable at the final path. mv keeps concurrent installs atomic.
+//
+// && and || have equal precedence and associate left, so each || also
+// catches every earlier failure:
+//   - "|| echo raw" covers a missing gzip; if uname failed instead, the
+//     client rejects the malformed platform line.
+//   - "|| mv" uses the upload as-is when it isn't gzip; any other failure
+//     reaching it leaves a binary that fails the checksum gate.
+//   - "|| shasum" covers hosts without coreutils (e.g. macOS). The completion
+//     marker echoed before the final checksum lets the client tell a genuine
+//     post-install read-back from a fallthrough.
+//
+// The gc step runs the freshly installed binary's own GC mode
 // (sideagent.CleanupStaleSiblings), so stale-binary cleanup happens only on
 // installs, portably in Go — and doubles as proof that the binary executes
 // on the remote platform before the marker is echoed.
 func remoteAgentInstallCommand(remotePath, tempSuffix string) string {
-	tempPath := remotePath + ".tmp-" + tempSuffix
+	tempPath := remoteAgentInstallTempPath(remotePath, tempSuffix)
+	sumPath := tempPath + ".sum"
+	uploadPath := tempPath + ".upload"
+	checksumLineLen := len(remoteAgentChecksumLine(strings.Repeat("0", hex.EncodedLen(sha256.Size)), tempPath))
 	return strings.Join([]string{
 		"uname -sm",
-		"dd of=" + tempPath,
+		"gzip -c </dev/null >" + uploadPath,
+		"gzip -dc <" + uploadPath + " >/dev/null",
+		"echo " + remoteInstallGzipUpload + " || echo " + remoteInstallRawUpload,
+		fmt.Sprintf("dd bs=1 count=%d of=%s", checksumLineLen, sumPath),
+		"cat >" + uploadPath,
+		"gzip -dc <" + uploadPath + " >" + tempPath + " || mv -f " + uploadPath + " " + tempPath,
+		"sha256sum -c " + sumPath + " >/dev/null || shasum -a 256 -c " + sumPath + " >/dev/null",
+		"rm -f " + sumPath + " " + uploadPath,
 		"chmod +x " + tempPath,
 		"mv -f " + tempPath + " " + remotePath,
 		remotePath + " gc",
@@ -871,6 +920,13 @@ func remoteAgentInstallCommand(remotePath, tempSuffix string) string {
 		"sha256sum " + remotePath + " || shasum -a 256 " + remotePath,
 	}, " && ")
 }
+
+// The install megacommand announces which upload encoding the remote can
+// decode, right after its platform line.
+const (
+	remoteInstallGzipUpload = "gzip"
+	remoteInstallRawUpload  = "raw"
+)
 
 // remoteInstallCompleteMarker proves every install step ran: without it, the
 // || checksum fallback would also run when an earlier step fails, and a
@@ -887,6 +943,9 @@ const remoteInstallCompleteMarker = "side-agent-install-complete"
 func installRemoteAgent(ctx context.Context, sshArgs []string, remotePath string) error {
 	return installRemoteAgentOverSession(ctx, remotePath, func(installCtx context.Context, command string) (remoteInstallSession, error) {
 		cmd := exec.CommandContext(installCtx, "ssh", append(independentSSHArgs(sshArgs), command)...)
+		// A killed ssh can leave descendants (e.g. a ProxyCommand) holding
+		// its pipes; without a delay Wait would block on them indefinitely.
+		cmd.WaitDelay = time.Second
 		stderr := &bytes.Buffer{}
 		cmd.Stderr = stderr
 		stdin, err := cmd.StdinPipe()
@@ -905,6 +964,7 @@ func installRemoteAgent(ctx context.Context, sshArgs []string, remotePath string
 			Stdout: stdout,
 			Wait:   cmd.Wait,
 			Abort: func() {
+				_ = stdin.Close()
 				_ = cmd.Process.Kill()
 				_ = cmd.Wait()
 			},
@@ -927,14 +987,24 @@ type remoteInstallSession struct {
 }
 
 // installRemoteAgentOverSession drives the install protocol over a session
-// opened by openSession: read the megacommand's uname output, stream the
-// matching local binary into dd, then compare the remote checksum read-back
-// against the sha256 of the bytes sent.
+// opened by openSession: read the megacommand's platform and upload-encoding
+// lines, stream the matching local binary in that encoding, then compare the
+// remote checksum read-back against the sha256 of the unencoded binary.
 func installRemoteAgentOverSession(ctx context.Context, remotePath string, openSession func(ctx context.Context, command string) (remoteInstallSession, error)) error {
-	installCtx, cancel := context.WithTimeout(ctx, remoteBinaryOpTimeout)
+	installCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// The handshake gets a fixed budget; once the binary size is known the
+	// budget is re-armed so large uploads over slow links can finish.
+	var timedOut atomic.Bool
+	budget := remoteBinaryOpTimeout
+	deadline := time.AfterFunc(budget, func() {
+		timedOut.Store(true)
+		cancel()
+	})
+	defer deadline.Stop()
 
-	command := remoteAgentInstallCommand(remotePath, randomTempSuffix())
+	tempSuffix := randomTempSuffix()
+	command := remoteAgentInstallCommand(remotePath, tempSuffix)
 	session, err := openSession(installCtx, command)
 	if err != nil {
 		return err
@@ -943,8 +1013,8 @@ func installRemoteAgentOverSession(ctx context.Context, remotePath string, openS
 
 	fail := func(err error) error {
 		session.Abort()
-		if errors.Is(installCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-			err = fmt.Errorf("install timed out after %s: %w", remoteBinaryOpTimeout, err)
+		if timedOut.Load() && ctx.Err() == nil {
+			err = fmt.Errorf("install timed out after %s: %w", budget, err)
 		}
 		if diagnostics := strings.TrimSpace(session.Diagnostics()); diagnostics != "" {
 			return fmt.Errorf("%w: ssh diagnostics: %s", err, diagnostics)
@@ -961,6 +1031,14 @@ func installRemoteAgentOverSession(ctx context.Context, remotePath string, openS
 	if len(parts) < 2 {
 		return fail(fmt.Errorf("unexpected uname output: %q", strings.TrimSpace(unameLine)))
 	}
+	encodingLine, err := br.ReadString('\n')
+	if err != nil {
+		return fail(fmt.Errorf("read upload encoding: %w", err))
+	}
+	encoding := strings.TrimSpace(encodingLine)
+	if encoding != remoteInstallGzipUpload && encoding != remoteInstallRawUpload {
+		return fail(fmt.Errorf("unexpected upload encoding %q", encoding))
+	}
 	localPath, err := agentBinaryForPlatform(common.NormalizeOS(parts[0]), common.NormalizeArch(parts[1]))
 	if err != nil {
 		return fail(fmt.Errorf("get agent binary: %w", err))
@@ -969,16 +1047,29 @@ func installRemoteAgentOverSession(ctx context.Context, remotePath string, openS
 	if err != nil {
 		return fail(fmt.Errorf("open local binary: %w", err))
 	}
+	defer localFile.Close()
 	hash := sha256.New()
-	_, copyErr := io.Copy(io.MultiWriter(stdin, hash), localFile)
-	localFile.Close()
+	size, err := io.Copy(hash, localFile)
+	if err != nil {
+		return fail(fmt.Errorf("hash local binary: %w", err))
+	}
+	if _, err := localFile.Seek(0, io.SeekStart); err != nil {
+		return fail(fmt.Errorf("rewind local binary: %w", err))
+	}
+	expectedHash := hex.EncodeToString(hash.Sum(nil))
+	budget = remoteBinaryInstallBudget(size)
+	deadline.Reset(budget)
+
+	_, copyErr := io.WriteString(stdin, remoteAgentChecksumLine(expectedHash, remoteAgentInstallTempPath(remotePath, tempSuffix)))
+	if copyErr == nil {
+		copyErr = writeAgentUpload(stdin, localFile, encoding)
+	}
 	if closeErr := stdin.Close(); copyErr == nil {
 		copyErr = closeErr
 	}
 	if copyErr != nil {
 		return fail(fmt.Errorf("stream agent binary: %w", copyErr))
 	}
-	expectedHash := fmt.Sprintf("%x", hash.Sum(nil))
 
 	markerLine, err := br.ReadString('\n')
 	if err != nil {
@@ -1008,6 +1099,18 @@ func installRemoteAgentOverSession(ctx context.Context, remotePath string, openS
 	}
 	log.Debug().Str("remotePath", remotePath).Msg("installed side-agent binary")
 	return nil
+}
+
+func writeAgentUpload(w io.Writer, binary io.Reader, encoding string) error {
+	if encoding == remoteInstallRawUpload {
+		_, err := io.Copy(w, binary)
+		return err
+	}
+	compressed := gzip.NewWriter(w)
+	if _, err := io.Copy(compressed, binary); err != nil {
+		return err
+	}
+	return compressed.Close()
 }
 
 // latencyReaderWriter wraps an io.Reader and io.WriteCloser, injecting a delay before each operation.

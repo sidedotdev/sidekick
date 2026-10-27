@@ -902,11 +902,21 @@ func startBootstrappingServer(t *testing.T) (*sshTestServer, string) {
 	server = startSSHTestServer(t, sshTestServerOptions{
 		AgentAbsent: true,
 		CommandHandler: func(t *testing.T, channel ssh.Channel, command string) uint32 {
-			if !strings.Contains(command, "dd of="+remotePath) {
+			if !isAgentInstallCommand(command, remotePath) {
 				return 0
 			}
 			fmt.Fprintln(channel, "Linux x86_64")
-			streamed, err := io.ReadAll(channel)
+			fmt.Fprintln(channel, remoteInstallRawUpload)
+			br := bufio.NewReader(channel)
+			checksumLine, err := br.ReadString('\n')
+			if !assert.NoError(t, err) {
+				return 1
+			}
+			expectedPrefix := fmt.Sprintf("%x  %s.tmp-", sha256.Sum256(binary), remotePath)
+			if !assert.True(t, strings.HasPrefix(checksumLine, expectedPrefix), "checksum line %q must name the temp path", checksumLine) {
+				return 1
+			}
+			streamed, err := io.ReadAll(br)
 			if !assert.NoError(t, err) {
 				return 1
 			}
@@ -922,11 +932,15 @@ func startBootstrappingServer(t *testing.T) (*sshTestServer, string) {
 	return server, remotePath
 }
 
+func isAgentInstallCommand(command, remotePath string) bool {
+	return strings.HasPrefix(command, "uname -sm") && strings.Contains(command, remotePath)
+}
+
 func assertAgentInstalled(t *testing.T, server *sshTestServer, remotePath string) {
 	t.Helper()
 	installs := 0
 	for _, command := range server.stats().ExecCommands {
-		if strings.Contains(command, "dd of="+remotePath) {
+		if isAgentInstallCommand(command, remotePath) {
 			installs++
 		}
 	}

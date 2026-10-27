@@ -30,10 +30,13 @@ const agentReleaseBaseURL = "https://github.com/org-sidedev/sidekick/releases/do
 // agentSourceFiles are hashed to determine when a dev-mode side-agent binary
 // needs to be rebuilt. Both ends of an agent channel are version-locked via
 // this hash: the remote upload path embeds it, so a rebuilt agent is always
-// re-uploaded and the protocol is compatible by construction.
+// re-uploaded and the protocol is compatible by construction. This file is
+// included because it holds the build recipe: changing flags must produce a
+// new identity rather than reuse binaries already installed under the old one.
 var agentSourceFiles = []string{
 	"go.mod",
 	"go.sum",
+	"common/agent_binary.go",
 	"cmd/side-agent",
 	"repotools",
 	"sideagent",
@@ -117,8 +120,10 @@ func buildAgentBinary(targetOS, targetArch, outputPath string) error {
 		return err
 	}
 
+	// -s -w only strips Go's own symbol tables; the C objects linked in for
+	// tree-sitter keep their debug info unless the external linker strips too.
 	cmd := exec.Command("go", "build",
-		"-ldflags", "-s -w",
+		"-ldflags", "-s -w -extldflags=-s",
 		"-o", outputPath,
 		"./cmd/side-agent",
 	)
