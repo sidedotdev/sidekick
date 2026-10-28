@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/sdk/workflow"
 )
 
 func TestEnvSwitchSavesSourceWIP(t *testing.T) {
@@ -19,12 +18,10 @@ func TestEnvSwitchSavesSourceWIP(t *testing.T) {
 		name         string
 		target       env.EnvType
 		restoreFails bool
-		legacy       bool
 	}{
 		{name: "remote target", target: env.EnvTypeModal},
 		{name: "shared host checkout", target: env.EnvTypeDevPod},
 		{name: "failed restore", target: env.EnvTypeModal, restoreFails: true},
-		{name: "legacy history", target: env.EnvTypeModal, legacy: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -46,10 +43,6 @@ func TestEnvSwitchSavesSourceWIP(t *testing.T) {
 				gate := make(chan struct{})
 				close(gate)
 				mockSwitchTransfer(wfEnv, recorder, source, target, gate, nil)
-			}
-			if tt.legacy {
-				wfEnv.OnGetVersion("env-switch-restore-source-wip", workflow.DefaultVersion, 1).
-					Return(workflow.DefaultVersion).Once()
 			}
 			callbacks := &envUpdateCallbacks{}
 			wfEnv.RegisterDelayedCallback(func() {
@@ -73,14 +66,10 @@ func TestEnvSwitchSavesSourceWIP(t *testing.T) {
 			if tt.target == env.EnvTypeModal {
 				require.Len(t, recorder.restoreInputs, 1)
 				input := recorder.restoreInputs[0]
-				if tt.legacy {
-					require.Nil(t, input.SourceEnvContainer)
-				} else {
-					require.NotNil(t, input.SourceEnvContainer)
-					require.Equal(t, env.IdentityOf(source), env.IdentityOf(*input.SourceEnvContainer))
-					require.Equal(t, switchTestBranch, input.Bundle.Branch)
-					require.Equal(t, switchTestHead, input.Bundle.HeadCommit)
-				}
+				require.NotNil(t, input.SourceEnvContainer)
+				require.Equal(t, env.IdentityOf(source), env.IdentityOf(*input.SourceEnvContainer))
+				require.Equal(t, switchTestBranch, input.Bundle.Branch)
+				require.Equal(t, switchTestHead, input.Bundle.HeadCommit)
 			}
 			wfEnv.AssertExpectations(t)
 		})

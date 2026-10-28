@@ -282,12 +282,10 @@ func transferEnv(ctx workflow.Context, dCtx *DevContext, state flowEnvState, des
 		EnvContainer: target.EnvContainer,
 		Bundle:       bundle,
 	}
-	if workflow.GetVersion(ctx, "env-switch-restore-source-wip", workflow.DefaultVersion, 1) >= 1 {
-		if desired.EnvType == string(env.EnvTypeModal) || desired.EnvType == string(env.EnvTypeOpenShell) {
-			switch source.Env.GetType() {
-			case env.EnvTypeLocal, env.EnvTypeLocalGitWorktree, env.EnvTypeDevPod:
-				restoreInput.SourceEnvContainer = &source
-			}
+	if desired.EnvType == string(env.EnvTypeModal) || desired.EnvType == string(env.EnvTypeOpenShell) {
+		switch source.Env.GetType() {
+		case env.EnvTypeLocal, env.EnvTypeLocalGitWorktree, env.EnvTypeDevPod:
+			restoreInput.SourceEnvContainer = &source
 		}
 	}
 	err = workflow.ExecuteActivity(ctx, env.RestoreFromSwitchActivity, restoreInput).Get(ctx, nil)
