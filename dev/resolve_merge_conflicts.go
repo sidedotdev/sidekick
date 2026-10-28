@@ -299,3 +299,10 @@ func reviewMessagesToText(reviewMessages []string) string {
 	}
 	return strings.Join(reviewMessages, "\n\n---\n\n")
 }
+
+func conflictResolutionWorktreePath(dCtx DevContext, legacyPath string) string {
+	if workflow.GetVersion(dCtx, "conflict-resolution-env-path", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		return legacyPath
+	}
+	return dCtx.EnvContainer.Env.GetWorkingDirectory()
+}

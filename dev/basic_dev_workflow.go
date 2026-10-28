@@ -1156,6 +1156,7 @@ func transferResolvedBaseChanges(dCtx DevContext, params git.GitTransferWorktree
 	}
 	return Track(actionCtx, func(trackedCtx DevActionContext, _ *domain.FlowAction) (git.GitTransferWorktreeChangesResult, error) {
 		var transfer git.GitTransferWorktreeChangesResult
+		params.SourceWorktreePath = conflictResolutionWorktreePath(trackedCtx.DevContext, params.SourceWorktreePath)
 		err := workflow.ExecuteActivity(trackedCtx, git.GitTransferWorktreeChangesActivity, *trackedCtx.EnvContainer, params).Get(trackedCtx, &transfer)
 		return transfer, err
 	})
