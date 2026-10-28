@@ -27,9 +27,19 @@ func contains(s, substr string) bool {
 }
 
 func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/v1/messages", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
+	}))
+	defer server.Close()
+
 	ctx := context.Background()
 	mockSecretManager := &secret_manager.MockSecretManager{}
-	provider := AnthropicProvider{}
+	provider := AnthropicProvider{BaseURL: server.URL, AuthType: common.ProviderAuthTypeAPI}
 
 	messages := []Message{
 		{
@@ -60,8 +70,9 @@ func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 	defer close(eventChan)
 
 	_, err := provider.Stream(ctx, request, eventChan)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "401")
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "401")
+	}
 }
 
 func TestAnthropicResponsesProvider_Integration(t *testing.T) {

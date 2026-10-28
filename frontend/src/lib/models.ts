@@ -449,6 +449,7 @@ export interface ScriptPermissionEvaluation {
   outcome: PermissionResult
   commands?: CommandPermissionEvaluation[]
   factors?: PermissionFactor[]
+  approved?: boolean
 }
 
 export type Llm2BuiltinToolUseBlock = Llm2ContentBlockBase & {
