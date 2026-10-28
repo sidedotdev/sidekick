@@ -311,7 +311,7 @@ func restoreFromSwitch(ctx context.Context, e Env, bundle SwitchBundle) error {
 		return fmt.Errorf("switch bundle has no head commit")
 	}
 	switch e.GetType() {
-	case EnvTypeLocal, EnvTypeLocalGitWorktree:
+	case EnvTypeLocal, EnvTypeLocalGitWorktree, EnvTypeDevPod:
 		if err := backupLocalSwitchWIP(ctx, e, bundle); err != nil {
 			return fmt.Errorf("failed to back up local work before environment switch: %w", err)
 		}
@@ -435,7 +435,7 @@ func backupLocalSwitchWIP(ctx context.Context, e Env, bundle SwitchBundle) error
 		return err
 	}
 
-	message := fmt.Sprintf("sidekick: local backup before environment switch to %s at %s", bundle.Branch, bundle.HeadCommit)
+	message := fmt.Sprintf("sidekick: WIP saved during environment switch for %s at %s", bundle.Branch, bundle.HeadCommit)
 	if _, err := gitOutputForSwitch(ctx, e, "stash", "push", "--include-untracked", "--message", message); err != nil {
 		return err
 	}
@@ -452,7 +452,25 @@ func backupLocalSwitchWIP(ctx context.Context, e Env, bundle SwitchBundle) error
 	if err != nil {
 		return err
 	}
-	log.Info().Str("workDir", e.GetWorkingDirectory()).Str("stashCommit", stash).
-		Str("stashMessage", message).Msg("saved local work before environment switch; recover with git stash apply --index <stashCommit>")
+	ref := "refs/side/env-switch-wip/" + stash
+	if _, err := gitOutputForSwitch(ctx, e, "update-ref", ref, stash); err != nil {
+		return err
+	}
+	log.Info().Str("workDir", e.GetWorkingDirectory()).Str("recoveryRef", ref).
+		Str("recoveryCommand", "git stash apply --index "+ref).
+		Msg("saved WIP during environment switch")
+
+	// Preserve the recovery ref before removing our entry from the user's list.
+	entries, err := gitOutputForSwitch(ctx, e, "stash", "list", "--format=%gd %H")
+	if err != nil {
+		return err
+	}
+	for _, entry := range strings.Split(entries, "\n") {
+		fields := strings.Fields(entry)
+		if len(fields) == 2 && fields[1] == stash {
+			_, err := gitOutputForSwitch(ctx, e, "stash", "drop", fields[0])
+			return err
+		}
+	}
 	return nil
 }

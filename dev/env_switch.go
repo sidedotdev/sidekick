@@ -287,6 +287,23 @@ func transferEnv(ctx workflow.Context, dCtx *DevContext, state flowEnvState, des
 	}
 
 	publishSwitchedEnv(dCtx, state, source, target, desired, permissions)
+	if workflow.GetVersion(ctx, "env-switch-save-source-wip", workflow.DefaultVersion, 1) >= 1 {
+		// Host checkouts remain active when switching between local and DevPod.
+		if desired.EnvType == string(env.EnvTypeModal) || desired.EnvType == string(env.EnvTypeOpenShell) {
+			switch source.Env.GetType() {
+			case env.EnvTypeLocal, env.EnvTypeLocalGitWorktree, env.EnvTypeDevPod:
+				err := workflow.ExecuteActivity(env.WithPinnedEnv(ctx), env.SaveEnvSwitchWIPActivity, env.SaveEnvSwitchWIPInput{
+					EnvContainer: source,
+					Branch:       branch,
+					HeadCommit:   bundle.HeadCommit,
+				}).Get(ctx, nil)
+				if err != nil {
+					workflow.GetLogger(ctx).Warn("environment switched, but source WIP cleanup failed",
+						"sourceEnvType", source.Env.GetType(), "error", err)
+				}
+			}
+		}
+	}
 	return envSwitchResult{EnvType: desired.EnvType, HeadCommit: bundle.HeadCommit}, nil
 }
 

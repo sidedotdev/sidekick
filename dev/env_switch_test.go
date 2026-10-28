@@ -310,7 +310,10 @@ func mockSwitchToModal(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envSw
 
 func newEnvSwitchTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
-	return newEnvGateTestEnv(t)
+	wfEnv := newEnvGateTestEnv(t)
+	wfEnv.OnActivity(env.SaveEnvSwitchWIPActivity, mock.Anything, mock.Anything).
+		Return(env.SaveEnvSwitchWIPOutput{}, nil).Maybe()
+	return wfEnv
 }
 
 func commandPatterns(config common.CommandPermissionConfig) []string {
