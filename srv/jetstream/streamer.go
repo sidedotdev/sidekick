@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -39,16 +40,31 @@ func (s *Streamer) Initialize(nc *nats.Conn) error {
 		return fmt.Errorf("failed to delete old stream: %w", err)
 	}
 
-	// Ensure the ephemeral stream exists (this is idempotent)
-	_, err = js.CreateOrUpdateStream(context.Background(), jetstream.StreamConfig{
-		Name:     EphemeralStreamName,
-		Subjects: []string{"tasks.changes.*", "flow_actions.changes.*.*", "flow_events.*.*"},
-		Storage:  jetstream.MemoryStorage,
-		Discard:  jetstream.DiscardOld,
-		MaxBytes: 100 * 1024 * 1024, // 100MB
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	stream, err := js.Stream(ctx, EphemeralStreamName)
+	if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
+		return fmt.Errorf("failed to inspect ephemeral stream: %w", err)
+	}
+	if err == nil && stream.CachedInfo().Config.Storage != jetstream.FileStorage {
+		return fmt.Errorf("%s requires explicit migration from MemoryStorage to FileStorage: "+
+			"stop all publishers and consumers, preserve any needed messages, then explicitly "+
+			"delete the legacy stream before restarting Sidekick; startup will not delete it "+
+			"(see srv/jetstream/README.md)", EphemeralStreamName)
+	}
+
+	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:        EphemeralStreamName,
+		Subjects:    []string{"tasks.changes.*", "flow_actions.changes.*.*", "flow_events.*.*"},
+		Storage:     jetstream.FileStorage,
+		Compression: jetstream.S2Compression,
+		Retention:   jetstream.LimitsPolicy,
+		Discard:     jetstream.DiscardOld,
+		MaxBytes:    100 * 1024 * 1024, // 100 MiB of logical message storage, not compressed disk usage.
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create ephemeral stream: %w", err)
+		return fmt.Errorf("failed to configure ephemeral stream: %w", err)
 	}
 
 	s.js = js
