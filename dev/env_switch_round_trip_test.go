@@ -160,7 +160,7 @@ func registerEnvSwitchRoundTripActivities(w worker.Worker, service *srv.Delegato
 		env.NewLocalGitWorktreeActivity, env.DevPodUpActivity, env.CreateDevPodWorktreeActivity,
 		env.CreateSandboxActivity, env.CheckSandboxActivity, env.StopSandboxActivity, env.DeleteSandboxActivity,
 		env.SyncRepoToRemoteActivity, env.DeepenRepoActivity, env.CreateRemoteWorktreeActivity,
-		env.RestoreFromSwitchActivity, env.SaveEnvSwitchWIPActivity, env.UpdateEnvConfigActivity,
+		env.RestoreFromSwitchActivity, env.UpdateEnvConfigActivity,
 		env.EnvRunCommandActivity, env.GetEnvironmentInfoActivity,
 		git.GetGitUserConfigActivity, git.WakeWorktreeActivity,
 		GetRepoConfigActivity, GetRepoConfigActivityV2, ResolveToolNameMappingActivity,

@@ -211,7 +211,6 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.CreateRemoteWorktreeActivity)
 	w.RegisterActivity(env.ExportForSwitchActivity)
 	w.RegisterActivity(env.RestoreFromSwitchActivity)
-	w.RegisterActivity(env.SaveEnvSwitchWIPActivity)
 	w.RegisterActivity(&srv.Activities{Service: service})
 	w.RegisterActivity(&provider_auth.Activities{})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)

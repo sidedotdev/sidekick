@@ -403,8 +403,9 @@ func ExportForSwitchActivity(ctx context.Context, input ExportForSwitchInput) (E
 }
 
 type RestoreFromSwitchInput struct {
-	EnvContainer EnvContainer `json:"envContainer"`
-	Bundle       SwitchBundle `json:"bundle"`
+	EnvContainer       EnvContainer  `json:"envContainer"`
+	Bundle             SwitchBundle  `json:"bundle"`
+	SourceEnvContainer *EnvContainer `json:"sourceEnvContainer,omitempty"`
 }
 
 type RestoreFromSwitchOutput struct{}
@@ -425,6 +426,22 @@ func RestoreFromSwitchActivity(ctx context.Context, input RestoreFromSwitchInput
 	}
 	if head != input.Bundle.HeadCommit {
 		return RestoreFromSwitchOutput{}, fmt.Errorf("switched env HEAD is %s, expected %s", head, input.Bundle.HeadCommit)
+	}
+
+	source := input.SourceEnvContainer
+	if source != nil && source.Env != nil &&
+		(switchable.GetType() == EnvTypeModal || switchable.GetType() == EnvTypeOpenShell) {
+		// Local and DevPod environments share a host checkout, which must
+		// remain intact until an independent destination has been restored.
+		switch source.Env.GetType() {
+		case EnvTypeLocal, EnvTypeLocalGitWorktree, EnvTypeDevPod:
+			if err := backupLocalSwitchWIP(ctx, source.Env, input.Bundle); err != nil {
+				// Stashing may already have cleaned the source. Do not roll
+				// back to it when the destination holds the restored work.
+				log.Warn().Err(err).Str("sourceEnvType", string(source.Env.GetType())).
+					Msg("environment restored, but source WIP cleanup failed")
+			}
+		}
 	}
 	return RestoreFromSwitchOutput{}, nil
 }

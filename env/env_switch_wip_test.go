@@ -21,7 +21,7 @@ func (e *switchWIPTestEnv) GetType() EnvType {
 	return e.envType
 }
 
-func TestSaveEnvSwitchWIP(t *testing.T) {
+func TestRestoreFromSwitchArchivesSourceWIP(t *testing.T) {
 	t.Parallel()
 	for _, envType := range []EnvType{EnvTypeLocal, EnvTypeLocalGitWorktree, EnvTypeDevPod} {
 		t.Run(string(envType), func(t *testing.T) {
@@ -40,16 +40,28 @@ func TestSaveEnvSwitchWIP(t *testing.T) {
 			require.NoError(t, os.Remove(filepath.Join(dir, "to_delete.txt")))
 			files := []string{"tracked.txt", "staged.txt", "to_delete.txt", "untracked.bin", "untracked-link"}
 			before := captureWorktreeState(t, dir, files)
-			input := SaveEnvSwitchWIPInput{
-				EnvContainer: EnvContainer{Env: &switchWIPTestEnv{
-					LocalEnv: &LocalEnv{WorkingDirectory: dir},
-					envType:  envType,
-				}},
-				Branch:     branch,
-				HeadCommit: before.Head,
+			source := &switchWIPTestEnv{
+				LocalEnv: &LocalEnv{WorkingDirectory: dir},
+				envType:  envType,
+			}
+			bundle, err := source.LocalEnv.ExportForSwitch(ctx, branch)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = os.Remove(bundle.WIPArchivePath) })
+			remoteDir := filepath.Join(t.TempDir(), "remote")
+			runGitIn(t, repoDir, "clone", "--branch", branch, repoDir, remoteDir)
+			remote := &switchWIPRestoreTestEnv{
+				switchWIPTestEnv: &switchWIPTestEnv{
+					LocalEnv: &LocalEnv{WorkingDirectory: remoteDir},
+					envType:  EnvTypeModal,
+				},
+			}
+			input := RestoreFromSwitchInput{
+				EnvContainer:       EnvContainer{Env: remote},
+				Bundle:             bundle,
+				SourceEnvContainer: &EnvContainer{Env: source},
 			}
 
-			_, err := SaveEnvSwitchWIPActivity(ctx, input)
+			_, err = RestoreFromSwitchActivity(ctx, input)
 			require.NoError(t, err)
 			assert.Empty(t, runGitIn(t, dir, "status", "--porcelain", "--untracked-files=all"))
 			assert.Equal(t, before.Head, strings.TrimSpace(runGitIn(t, dir, "rev-parse", "HEAD")))
@@ -61,7 +73,7 @@ func TestSaveEnvSwitchWIP(t *testing.T) {
 			assert.Contains(t, message, "environment switch")
 			assert.Contains(t, message, branch)
 
-			_, err = SaveEnvSwitchWIPActivity(ctx, input)
+			_, err = RestoreFromSwitchActivity(ctx, input)
 			require.NoError(t, err)
 			assert.Equal(t, refs, strings.Fields(runGitIn(t, repoDir, "for-each-ref", "--format=%(refname)", "refs/side/env-switch-wip/")))
 			assert.Equal(t, userStashes, runGitIn(t, dir, "stash", "list", "--format=%H %gs"))
@@ -77,24 +89,23 @@ func TestSaveEnvSwitchWIP(t *testing.T) {
 	}
 }
 
-func TestSaveEnvSwitchWIPRetainsStashIfPrivateRefFails(t *testing.T) {
+func TestBackupLocalSwitchWIPRetainsStashIfPrivateRefFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	repoDir, dir, branch := setupSwitchTestRepo(t)
 	runGitIn(t, repoDir, "update-ref", "refs/side/env-switch-wip", "HEAD")
 	writeTestFile(t, filepath.Join(dir, "tracked.txt"), "recoverable WIP\n")
 	before := captureWorktreeState(t, dir, []string{"tracked.txt"})
-	_, err := SaveEnvSwitchWIPActivity(ctx, SaveEnvSwitchWIPInput{
-		EnvContainer: EnvContainer{Env: &LocalGitWorktreeEnv{WorkingDirectory: dir}},
-		Branch:       branch,
-		HeadCommit:   before.Head,
+	err := backupLocalSwitchWIP(ctx, &LocalGitWorktreeEnv{WorkingDirectory: dir}, SwitchBundle{
+		Branch:     branch,
+		HeadCommit: before.Head,
 	})
 	require.Error(t, err)
 	runGitIn(t, dir, "stash", "apply", "--index", "refs/stash")
 	assert.Equal(t, before, captureWorktreeState(t, dir, []string{"tracked.txt"}))
 }
 
-func TestSaveEnvSwitchWIPAllowsNextRemoteExport(t *testing.T) {
+func TestRestoreFromSwitchAllowsNextRemoteExport(t *testing.T) {
 	installFakeSSH(t, `for a in "$@"; do cmd="$a"; done
 exec sh -c "$cmd"
 `)
@@ -114,11 +125,10 @@ exec sh -c "$cmd"
 		envType:      EnvTypeModal,
 		localRepoDir: repoDir,
 	}
-	require.NoError(t, restoreFromSwitch(ctx, remote, bundle))
-	_, err = SaveEnvSwitchWIPActivity(ctx, SaveEnvSwitchWIPInput{
-		EnvContainer: EnvContainer{Env: source},
-		Branch:       branch,
-		HeadCommit:   bundle.HeadCommit,
+	_, err = RestoreFromSwitchActivity(ctx, RestoreFromSwitchInput{
+		EnvContainer:       EnvContainer{Env: remote},
+		Bundle:             bundle,
+		SourceEnvContainer: &EnvContainer{Env: source},
 	})
 	require.NoError(t, err)
 	writeTestFile(t, filepath.Join(remoteDir, "tracked.txt"), "agent WIP plus remote work\n")
