@@ -131,7 +131,7 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 				require.NoError(t, err)
 			}
 			_, err = NewStreamer(nc)
-			require.ErrorContains(t, err, "requires explicit migration")
+			require.ErrorContains(t, err, "can not change storage type")
 			info, err := stream.Info(ctx)
 			require.NoError(t, err)
 			require.Equal(t, jsapi.MemoryStorage, info.Config.Storage)
