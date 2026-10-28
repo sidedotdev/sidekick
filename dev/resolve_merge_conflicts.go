@@ -19,11 +19,6 @@ import (
 // ResolveMergeConflictsParams describes a single conflict-resolution
 // subflow execution.
 type ResolveMergeConflictsParams struct {
-	// WorktreePath preserves the original conflict location for legacy
-	// workflow replay. New executions resolve in the active environment's
-	// own worktree, where target-side conflicts are recreated by the caller.
-	WorktreePath string
-
 	// SourceBranchName is the branch being merged in (the "other side").
 	// Used to label and refresh the conflict-recreation merge if the
 	// resolver loops back and the working tree gets cleaned.
@@ -76,11 +71,11 @@ func resolveMergeConflictsSubflow(dCtx DevContext, params ResolveMergeConflictsP
 }
 
 func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsParams) error {
-	if conflictResolutionWorktreePath(dCtx, params.WorktreePath) == "" {
+	if dCtx.EnvContainer.Env.GetWorkingDirectory() == "" {
 		return fmt.Errorf("conflict resolution requires a worktree path")
 	}
 
-	snapshot, err := captureConflictSnapshot(dCtx, params.WorktreePath)
+	snapshot, err := captureConflictSnapshot(dCtx)
 	if err != nil {
 		return fmt.Errorf("failed to snapshot conflict markers: %w", err)
 	}
@@ -105,7 +100,7 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 		advisor = newAdvisor(dCtx, dCtx.AdvisorEnabled, common.CodingKey)
 	}
 
-	conflictDiff, err := computeConflictResolutionDiff(dCtx, params.WorktreePath, snapshot)
+	conflictDiff, err := computeConflictResolutionDiff(dCtx, snapshot)
 	if err != nil {
 		return fmt.Errorf("failed to compute initial conflict diff: %w", err)
 	}
@@ -127,7 +122,7 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 
 		// 1. Confirm there are no remaining unmerged entries. If there
 		// are, push that back as feedback for another edit pass.
-		unmerged, err := listUnmerged(dCtx, params.WorktreePath)
+		unmerged, err := listUnmerged(dCtx)
 		if err != nil {
 			return fmt.Errorf("failed to inspect unmerged files: %w", err)
 		}
@@ -166,7 +161,7 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 		// `git diff` is empty post-resolution for the conflicted paths,
 		// so this specialized diff is what makes the resolver's choices
 		// reviewable.
-		resolutionDiff, err := computeConflictResolutionDiff(dCtx, params.WorktreePath, snapshot)
+		resolutionDiff, err := computeConflictResolutionDiff(dCtx, snapshot)
 		if err != nil {
 			return fmt.Errorf("failed to compute conflict resolution diff: %w", err)
 		}
@@ -187,26 +182,26 @@ func resolveMergeConflictsLoop(dCtx DevContext, params ResolveMergeConflictsPara
 	return fmt.Errorf("conflict resolution did not converge within %d attempts", maxConflictResolutionAttempts)
 }
 
-func captureConflictSnapshot(dCtx DevContext, worktreePath string) (git.ConflictMarkerSnapshot, error) {
+func captureConflictSnapshot(dCtx DevContext) (git.ConflictMarkerSnapshot, error) {
 	var snapshot git.ConflictMarkerSnapshot
 	err := workflow.ExecuteActivity(dCtx, git.GitSnapshotConflictMarkersActivity, *dCtx.EnvContainer, git.GitSnapshotConflictMarkersParams{
-		WorktreePath: conflictResolutionWorktreePath(dCtx, worktreePath),
+		WorktreePath: dCtx.EnvContainer.Env.GetWorkingDirectory(),
 	}).Get(dCtx, &snapshot)
 	return snapshot, err
 }
 
-func listUnmerged(dCtx DevContext, worktreePath string) ([]string, error) {
+func listUnmerged(dCtx DevContext) ([]string, error) {
 	var paths []string
 	err := workflow.ExecuteActivity(dCtx, git.GitListUnmergedActivity, *dCtx.EnvContainer, git.GitListUnmergedParams{
-		WorktreePath: conflictResolutionWorktreePath(dCtx, worktreePath),
+		WorktreePath: dCtx.EnvContainer.Env.GetWorkingDirectory(),
 	}).Get(dCtx, &paths)
 	return paths, err
 }
 
-func computeConflictResolutionDiff(dCtx DevContext, worktreePath string, snapshot git.ConflictMarkerSnapshot) (string, error) {
+func computeConflictResolutionDiff(dCtx DevContext, snapshot git.ConflictMarkerSnapshot) (string, error) {
 	var diff string
 	err := workflow.ExecuteActivity(dCtx, git.GitConflictResolutionDiffActivity, *dCtx.EnvContainer, git.GitConflictResolutionDiffParams{
-		WorktreePath: conflictResolutionWorktreePath(dCtx, worktreePath),
+		WorktreePath: dCtx.EnvContainer.Env.GetWorkingDirectory(),
 		Snapshot:     snapshot,
 	}).Get(dCtx, &diff)
 	return diff, err
@@ -239,7 +234,7 @@ func checkConflictResolutionFulfillment(dCtx DevContext, params ResolveMergeConf
 func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) error {
 	var mergeInProgress bool
 	if err := workflow.ExecuteActivity(dCtx, git.GitMergeInProgressActivity, *dCtx.EnvContainer, git.GitMergeInProgressParams{
-		WorktreePath: conflictResolutionWorktreePath(dCtx, params.WorktreePath),
+		WorktreePath: dCtx.EnvContainer.Env.GetWorkingDirectory(),
 	}).Get(dCtx, &mergeInProgress); err != nil {
 		return fmt.Errorf("failed to check merge state before finalizing: %w", err)
 	}
@@ -255,7 +250,7 @@ func finalizeMergeCommit(dCtx DevContext, params ResolveMergeConflictsParams) er
 	}
 
 	return flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "git_commit", git.GitCommitMergeActivity, nil, *dCtx.EnvContainer, git.GitCommitMergeParams{
-		WorktreePath:   conflictResolutionWorktreePath(dCtx, params.WorktreePath),
+		WorktreePath:   dCtx.EnvContainer.Env.GetWorkingDirectory(),
 		CommitMessage:  msg,
 		CommitterName:  params.CommitterName,
 		CommitterEmail: params.CommitterEmail,

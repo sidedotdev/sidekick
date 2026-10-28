@@ -86,7 +86,7 @@ func GitMergeAbortActivity(ctx context.Context, envContainer env.EnvContainer, p
 	if out.ExitStatus != 0 {
 		return fmt.Errorf("git merge --abort failed: %s", strings.TrimSpace(out.Stderr+out.Stdout))
 	}
-	return nil
+	return releaseConflictSnapshots(ctx, envContainer, dir)
 }
 
 // GitMergeInProgressParams targets the worktree to inspect.
@@ -254,6 +254,7 @@ func GitSnapshotConflictMarkersActivity(ctx context.Context, envContainer env.En
 		`GIT_INDEX_FILE="$tmpidx" git read-tree HEAD`,
 		fmt.Sprintf(`GIT_INDEX_FILE="$tmpidx" git %s`, strings.Join(addArgs, " ")),
 		`tree="$(GIT_INDEX_FILE="$tmpidx" git write-tree)"`,
+		fmt.Sprintf(`git update-ref %s"$tree" "$tree"`, shellQuote(env.ConflictSnapshotRefPrefix)),
 		`rm -f "$tmpidx"`,
 		`printf '%s\n' "$tree"`,
 	}
@@ -451,7 +452,7 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 			if err := syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
 				return fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
 			}
-			return nil
+			return releaseConflictSnapshots(ctx, envContainer, dir)
 		}
 	}
 
@@ -504,7 +505,7 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 		return fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
 	}
 
-	return nil
+	return releaseConflictSnapshots(ctx, envContainer, dir)
 }
 
 // GitMergeIntoWorktreeParams merges a branch into the working tree at
@@ -641,4 +642,23 @@ fi`, shellQuote(dir), shellQuote(sourceBranch+"^{commit}"))
 		return false, fmt.Errorf("failed to prepare worktree for conflict merge: %s", strings.TrimSpace(out.Stderr+out.Stdout))
 	}
 	return strings.TrimSpace(out.Stdout) == "in-progress", nil
+}
+
+func releaseConflictSnapshots(ctx context.Context, envContainer env.EnvContainer, dir string) error {
+	cmd := fmt.Sprintf(`cd %s &&
+refs="$(git for-each-ref --format='delete %%(refname)' %s)" &&
+if [ -n "$refs" ]; then printf '%%s\n' "$refs" | git update-ref --stdin; fi`,
+		shellQuote(dir), shellQuote(env.ConflictSnapshotRefPrefix))
+	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "sh",
+		Args:         []string{"-c", cmd},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to release conflict snapshots: %w", err)
+	}
+	if out.ExitStatus != 0 {
+		return fmt.Errorf("failed to release conflict snapshots: %s", strings.TrimSpace(out.Stderr+out.Stdout))
+	}
+	return nil
 }

@@ -1164,12 +1164,14 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 
 // HistoryEvent represents a workflow history event for the API response
 type HistoryEvent struct {
-	EventId            int64  `json:"eventId"`
-	EventType          string `json:"eventType"`
-	Timestamp          int64  `json:"timestamp"`
-	Name               string `json:"name,omitempty"`
-	ResetBeforeEventId *int64 `json:"resetBeforeEventId"`
-	ResetAfterEventId  *int64 `json:"resetAfterEventId"`
+	EventId            int64         `json:"eventId"`
+	EventType          string        `json:"eventType"`
+	Timestamp          int64         `json:"timestamp"`
+	Name               string        `json:"name,omitempty"`
+	GroupId            int64         `json:"groupId"`
+	Failure            *EventFailure `json:"failure,omitempty"`
+	ResetBeforeEventId *int64        `json:"resetBeforeEventId"`
+	ResetAfterEventId  *int64        `json:"resetAfterEventId"`
 }
 
 func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
@@ -1181,73 +1183,82 @@ func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	iter := ctrl.temporalClient.GetWorkflowHistory(c, flowId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
-
-	var events []HistoryEvent
-	var workflowTaskCompletedEventIds []int64
-
-	for iter.HasNext() {
-		event, err := iter.Next()
+	pageSize := 10000
+	if value, present := c.GetQuery("limit"); present {
+		var err error
+		pageSize, err = strconv.Atoi(value)
+		if err != nil || pageSize < 1 || pageSize > 10000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 10000"})
+			return
+		}
+	}
+	cursor, err := decodeResetHistoryCursor(c.Query("cursor"), flowId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid history cursor"})
+		return
+	}
+	if cursor.RunID == "" {
+		description, err := ctrl.temporalClient.DescribeWorkflowExecution(c, flowId, "")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		cursor.RunID = description.GetWorkflowExecutionInfo().GetExecution().GetRunId()
+	}
+	page, err := ctrl.reverseHistoryPage(c, flowId, cursor.RunID, cursor.Token, int32(pageSize))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
+	events := make([]HistoryEvent, 0, len(page.GetHistory().GetEvents()))
+	after := cursor.After
+	for _, event := range page.GetHistory().GetEvents() {
 		histEvent := HistoryEvent{
-			EventId:   event.EventId,
-			EventType: event.EventType.String(),
-			Timestamp: event.EventTime.AsTime().UnixMilli(),
+			EventId:           event.EventId,
+			EventType:         event.EventType.String(),
+			Timestamp:         event.EventTime.AsTime().UnixMilli(),
+			GroupId:           resetHistoryGroupID(event),
+			Failure:           resetHistoryFailure(event),
+			ResetAfterEventId: resetEventPointer(after),
 		}
-
-		// Extract activity type name or signal name where applicable
 		if attrs := event.GetActivityTaskScheduledEventAttributes(); attrs != nil {
-			histEvent.Name = attrs.ActivityType.Name
+			histEvent.Name = attrs.GetActivityType().GetName()
 		} else if attrs := event.GetWorkflowExecutionSignaledEventAttributes(); attrs != nil {
 			histEvent.Name = attrs.SignalName
+		} else if attrs := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); attrs != nil {
+			histEvent.Name = attrs.GetWorkflowType().GetName()
 		}
-
-		if event.EventType == enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED {
-			workflowTaskCompletedEventIds = append(workflowTaskCompletedEventIds, event.EventId)
-		}
-
 		events = append(events, histEvent)
-	}
-
-	// Populate reset event IDs for each event
-	for i := range events {
-		eventId := events[i].EventId
-
-		// Find the closest WorkflowTaskCompleted before this event
-		for j := len(workflowTaskCompletedEventIds) - 1; j >= 0; j-- {
-			if workflowTaskCompletedEventIds[j] < eventId {
-				events[i].ResetBeforeEventId = &workflowTaskCompletedEventIds[j]
-				break
-			}
-		}
-
-		// Find the closest WorkflowTaskCompleted after this event
-		for j := 0; j < len(workflowTaskCompletedEventIds); j++ {
-			if workflowTaskCompletedEventIds[j] > eventId {
-				events[i].ResetAfterEventId = &workflowTaskCompletedEventIds[j]
-				break
-			}
+		if event.EventType == enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED {
+			after = event.EventId
 		}
 	}
-
-	// Reverse to return in reverse chronological order
-	slices.Reverse(events)
-
-	c.JSON(http.StatusOK, gin.H{"events": events})
+	var before int64
+	for i := len(events) - 1; i >= 0; i-- {
+		events[i].ResetBeforeEventId = resetEventPointer(before)
+		if events[i].EventType == enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED.String() {
+			before = events[i].EventId
+		}
+	}
+	nextCursor := ""
+	if len(page.NextPageToken) > 0 {
+		nextCursor = encodeResetHistoryCursor(resetHistoryCursor{
+			FlowID: flowId, RunID: cursor.RunID, Token: page.NextPageToken, After: after,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"events": events, "nextCursor": nextCursor, "runId": cursor.RunID})
 }
 
 // EventDetail contains the decoded input and output payloads of a single
 // workflow history event, for inspection in the reset UI.
 type EventDetail struct {
-	EventId   int64         `json:"eventId"`
-	EventType string        `json:"eventType"`
-	Input     []interface{} `json:"input"`
-	Output    []interface{} `json:"output"`
-	Failure   *EventFailure `json:"failure,omitempty"`
+	EventId   int64           `json:"eventId"`
+	EventType string          `json:"eventType"`
+	Input     []interface{}   `json:"input"`
+	Output    []interface{}   `json:"output"`
+	Failure   *EventFailure   `json:"failure,omitempty"`
+	RawEvent  json.RawMessage `json:"rawEvent,omitempty"`
 }
 
 // eventInputPayloads returns the input payloads carried by an event, if any.
@@ -1352,22 +1363,30 @@ func (ctrl *Controller) GetFlowEventDetailHandler(c *gin.Context) {
 		return
 	}
 
-	iter := ctrl.temporalClient.GetWorkflowHistory(c, flowId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
-
-	var allEvents []*historypb.HistoryEvent
-	for iter.HasNext() {
-		event, err := iter.Next()
+	var target *historypb.HistoryEvent
+	var outputPayloads *commonpb.Payloads
+	var token []byte
+search:
+	for {
+		page, err := ctrl.reverseHistoryPage(c, flowId, c.Query("runId"), token, 256)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		allEvents = append(allEvents, event)
-	}
-
-	var target *historypb.HistoryEvent
-	for _, event := range allEvents {
-		if event.EventId == eventId {
-			target = event
+		for _, event := range page.GetHistory().GetEvents() {
+			if completionSourceEventId(event) == eventId {
+				outputPayloads = eventOutputPayloads(event)
+			}
+			if event.EventId == eventId {
+				target = event
+				break search
+			}
+			if event.EventId < eventId {
+				break search
+			}
+		}
+		token = page.NextPageToken
+		if len(token) == 0 {
 			break
 		}
 	}
@@ -1378,33 +1397,16 @@ func (ctrl *Controller) GetFlowEventDetailHandler(c *gin.Context) {
 
 	codec := common.NewPayloadCodec(ctrl.service, common.DefaultCodecThreshold)
 	dc := converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), codec)
-
-	inputPayloads := eventInputPayloads(target)
-	outputPayloads := eventOutputPayloads(target)
-
-	// For scheduling/initiating events the output lives in the matching
-	// completion event, so link it back here for convenience.
-	if outputPayloads == nil {
-		for _, event := range allEvents {
-			if completionSourceEventId(event) == eventId {
-				outputPayloads = eventOutputPayloads(event)
-				break
-			}
-		}
+	if payloads := eventOutputPayloads(target); payloads != nil {
+		outputPayloads = payloads
 	}
-
 	detail := EventDetail{
 		EventId:   target.EventId,
 		EventType: target.EventType.String(),
-		Input:     decodePayloads(dc, inputPayloads),
+		Input:     decodePayloads(dc, eventInputPayloads(target)),
 		Output:    decodePayloads(dc, outputPayloads),
-	}
-	if attrs := target.GetWorkflowTaskFailedEventAttributes(); attrs != nil {
-		detail.Failure = &EventFailure{
-			Cause:      attrs.GetCause().String(),
-			Message:    attrs.GetFailure().GetMessage(),
-			StackTrace: attrs.GetFailure().GetStackTrace(),
-		}
+		Failure:   resetHistoryFailure(target),
+		RawEvent:  resetHistoryRawEvent(target),
 	}
 
 	c.JSON(http.StatusOK, gin.H{"event": detail})

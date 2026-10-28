@@ -677,3 +677,43 @@ func (s *AutoMergeApprovalTestSuite) TestFinalMergeConflictIsResolvedBeforeCompl
 	s.env.AssertActivityNumberOfCalls(s.T(), "GitSnapshotConflictMarkersActivity", 2)
 	s.env.AssertActivityNumberOfCalls(s.T(), "CleanupWorktreeActivity", 1)
 }
+
+func TestStashConflictTransferUsesEnvironmentWorktree(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		version workflow.Version
+	}{
+		{name: "legacy", version: workflow.DefaultVersion},
+		{name: "current", version: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := &AutoMergeApprovalTestSuite{}
+			s.SetT(t)
+			s.SetupTest()
+			t.Cleanup(func() {
+				s.env.AssertExpectations(t)
+			})
+			s.setupStashConflictMocks()
+			s.env.OnGetVersion("conflict-resolution-env-path", workflow.DefaultVersion, 1).
+				Return(tc.version).Once()
+
+			var sourcePaths []string
+			s.env.OnActivity(git.GitTransferWorktreeChangesActivity, mock.Anything, mock.Anything, mock.Anything).
+				Return(func(_ context.Context, _ env.EnvContainer, params git.GitTransferWorktreeChangesParams) (git.GitTransferWorktreeChangesResult, error) {
+					sourcePaths = append(sourcePaths, params.SourceWorktreePath)
+					return git.GitTransferWorktreeChangesResult{}, nil
+				}).Once()
+
+			startBranch := "side/idd-worktree"
+			testWorkflow := s.mergeWorkflow(true, &startBranch)
+			s.env.RegisterWorkflow(testWorkflow)
+			s.env.ExecuteWorkflow(testWorkflow)
+
+			s.True(s.env.IsWorkflowCompleted())
+			s.NoError(s.env.GetWorkflowError())
+			s.Equal([]string{"/tmp/test-repo"}, sourcePaths)
+		})
+	}
+}
