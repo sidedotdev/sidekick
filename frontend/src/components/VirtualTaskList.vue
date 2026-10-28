@@ -36,6 +36,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import TaskCard from './TaskCard.vue'
 import type { FullTask } from '../lib/models'
 import { canMoveNavigationFocus } from '../lib/dom'
+import { useVirtualTaskLayout } from '../lib/useVirtualTaskLayout'
 import {
   BOARD_CARD_LISTS_KEY,
   BOARD_CARD_SELECTOR,
@@ -65,27 +66,10 @@ const onDragStart = (event: DragEvent, task: FullTask) => {
 defineOptions({ inheritAttrs: false })
 
 const containerRef = ref<HTMLElement | null>(null)
-const scrollElement = ref<HTMLElement | null>(null)
-const scrollMargin = ref(0)
-
-function findScrollParent(el: HTMLElement | null): HTMLElement | null {
-  while (el) {
-    const style = getComputedStyle(el)
-    if (/(auto|scroll)/.test(style.overflow + style.overflowY)) {
-      return el
-    }
-    el = el.parentElement
-  }
-  return null
-}
-
-function updateScrollMargin() {
-  if (containerRef.value && scrollElement.value) {
-    scrollMargin.value = containerRef.value.getBoundingClientRect().top
-      - scrollElement.value.getBoundingClientRect().top
-      + scrollElement.value.scrollTop
-  }
-}
+const { scrollElement, scrollMargin, overscan } = useVirtualTaskLayout(
+  containerRef,
+  () => props.estimateSize,
+)
 
 const virtualizer = useVirtualizer({
   get count() { return props.tasks.length },
@@ -93,7 +77,7 @@ const virtualizer = useVirtualizer({
   estimateSize: () => props.estimateSize,
   get scrollMargin() { return scrollMargin.value },
   get gap() { return props.gap },
-  overscan: 5,
+  get overscan() { return overscan.value },
 })
 
 watch(() => props.tasks.length, () => {
@@ -152,22 +136,11 @@ const cardList: BoardCardList = {
 }
 let unregisterCardList: (() => void) | null = null
 
-let resizeObserver: ResizeObserver | null = null
-
 onMounted(() => {
-  scrollElement.value = findScrollParent(containerRef.value)
-  updateScrollMargin()
-
-  resizeObserver = new ResizeObserver(updateScrollMargin)
-  if (containerRef.value) {
-    resizeObserver.observe(containerRef.value)
-  }
-
   unregisterCardList = boardCardLists?.register(cardList) ?? null
 })
 
 onUnmounted(() => {
-  resizeObserver?.disconnect()
   unregisterCardList?.()
 })
 </script>
