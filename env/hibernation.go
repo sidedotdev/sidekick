@@ -489,19 +489,28 @@ else
 fi
 git diff --cached --binary > "$tmpdir/staged.patch"
 if [ -s "$tmpdir/deleted.list" ] || [ -s "$tmpdir/changed.list" ] || [ -s "$tmpdir/staged.patch" ]; then wip_dirty=1; else wip_dirty=0; fi
-tar czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch
+%star czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch git-state
 rm -rf "$tmpdir"
-`, archiveShellWord)
+`, capturePortableGitStateFragment(), archiveShellWord)
 }
 
 func restoreFilesFragment() string {
 	return fmt.Sprintf(`if [ -f %s ]; then
   rtmp=$(mktemp -d)
   tar xzf %s -C "$rtmp"
+  if [ -s "$rtmp/git-state/objects.pack" ]; then git index-pack --stdin < "$rtmp/git-state/objects.pack" > /dev/null; fi
+  if [ -f "$rtmp/git-state/snapshot-refs" ]; then
+    while read -r object ref; do
+      case "$ref" in
+        %s*) git update-ref "$ref" "$object" ;;
+        *) echo "invalid conflict snapshot ref: $ref" >&2; exit 1 ;;
+      esac
+    done < "$rtmp/git-state/snapshot-refs"
+  fi
   if [ -s "$rtmp/sidetmp.tgz" ]; then tar xzf "$rtmp/sidetmp.tgz"; fi
   if [ -s "$rtmp/changed.tgz" ]; then tar xzf "$rtmp/changed.tgz"; fi
   if [ -s "$rtmp/deleted.list" ]; then tr '\000' '\012' < "$rtmp/deleted.list" | while IFS= read -r d; do if [ -n "$d" ]; then rm -f -- "$d"; fi; done; fi
-  if [ -s "$rtmp/staged.patch" ]; then git apply --cached --binary --allow-empty --whitespace=nowarn "$rtmp/staged.patch"; fi
+  if [ ! -f "$rtmp/git-state/index" ] && [ -s "$rtmp/staged.patch" ]; then git apply --cached --binary --allow-empty --whitespace=nowarn "$rtmp/staged.patch"; fi
   for name in index ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_AUTOSTASH MERGE_RR AUTO_MERGE; do
     if [ -f "$rtmp/git-state/$name" ]; then
       path=$(git rev-parse --git-path "$name")
@@ -509,7 +518,7 @@ func restoreFilesFragment() string {
     fi
   done
   rm -rf "$rtmp"
-fi`, shellQuote(HibernationPatchFile), shellQuote(HibernationPatchFile))
+fi`, shellQuote(HibernationPatchFile), shellQuote(HibernationPatchFile), shellQuote(ConflictSnapshotRefPrefix))
 }
 
 // HibernateEnv captures the current worktree state as a compressed archive and
@@ -625,16 +634,7 @@ else
   : > "$tmpdir/sidetmp.tgz"
 fi
 git diff --cached --binary > "$tmpdir/staged.patch"
-# Patches cannot encode conflict stages or pending merge parents.
-mkdir "$tmpdir/git-state"
-for name in index ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_AUTOSTASH MERGE_RR AUTO_MERGE; do
-  path=$(git rev-parse --git-path "$name")
-  if [ -f "$path" ]; then cp "$path" "$tmpdir/git-state/$name"; fi
-done
-if [ -f "$tmpdir/git-state/index" ]; then
-  GIT_INDEX_FILE="$tmpdir/git-state/index" git update-index --no-split-index
-fi
-tar czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch sidetmp.tgz git-state
+%star czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch sidetmp.tgz git-state
 rm -rf "$tmpdir"
 mv %s %s
 cat > %s <<'SIDEKICK_HIB_EOF'
@@ -645,6 +645,7 @@ remaining=$(find . -mindepth 1 ! -name .git ! -name %s ! -name %s | head -1)
 if [ -n "$remaining" ]; then echo "LEFTOVER"; else echo "CLEAN"; fi
 `,
 		shellQuote(sideTmpDir), shellQuote(sideTmpDir),
+		captureGitStateFragment(),
 		shellQuote(tmpPatch),
 		shellQuote(tmpPatch), shellQuote(HibernationPatchFile),
 		shellQuote(HibernationMetadataFile),
