@@ -42,6 +42,35 @@ type envSwitchGateOutbound struct {
 
 func (o *envSwitchGateOutbound) ExecuteActivity(ctx workflow.Context, activityType string, args ...interface{}) workflow.Future {
 	tracker := EnvTrackerFromContext(ctx)
+	if expected, ok := ctx.Value(expectedEnvKey{}).(expectedEnv); ok && argsCarryEnv(args) {
+		var validationErr error
+		if tracker != nil && tracker.SwitchInProgress() {
+			validationErr = ErrEnvChanged
+		}
+		resolved := make([]interface{}, len(args))
+		for i, arg := range args {
+			resolved[i], _ = rewriteEnvContainers(arg, func(container EnvContainer) EnvContainer {
+				if tracker != nil {
+					container = tracker.Resolve(container)
+				}
+				actual, err := snapshotExpectedEnv(container)
+				if err != nil {
+					validationErr = err
+				} else if actual != expected {
+					validationErr = ErrEnvChanged
+				}
+				return container
+			})
+		}
+		if validationErr != nil {
+			future, settable := workflow.NewFuture(ctx)
+			settable.SetError(validationErr)
+			return future
+		}
+		// Nothing may yield between validation and scheduling: a switch can
+		// start as soon as another workflow coroutine gets execution time.
+		return o.Next.ExecuteActivity(ctx, activityType, resolved...)
+	}
 	if tracker == nil || IsPinnedEnv(ctx) || IsSwitchBypass(ctx) || !argsCarryEnv(args) {
 		return o.Next.ExecuteActivity(ctx, activityType, args...)
 	}

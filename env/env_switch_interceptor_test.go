@@ -302,3 +302,81 @@ func TestEnvSwitchGateCancellationFailsWithoutScheduling(t *testing.T) {
 	require.True(t, canceled)
 	require.Zero(t, acts.calls.Load())
 }
+
+func TestExpectedEnvGuard(t *testing.T) {
+	t.Parallel()
+	for _, scenario := range []string{"unchanged", "switching", "directory", "replacement", "mutated configuration"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
+			acts := &gateTestActivities{}
+			wfEnv := newGateTestEnv(t, acts)
+			wfEnv.ExecuteWorkflow(func(ctx workflow.Context) (bool, error) {
+				ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: time.Minute})
+				current := EnvContainer{Env: &LocalEnv{WorkingDirectory: "/original"}}
+				if scenario == "replacement" {
+					current = EnvContainer{Env: &DevPodEnv{WorkingDirectory: "/workspace", WorkspaceName: "old"}}
+				}
+				tracker := &fakeEnvTracker{current: current, lineage: []EnvIdentity{IdentityOf(current)}}
+				ctx = WithEnvTracker(ctx, tracker)
+				guarded, err := WithExpectedEnv(ctx, current)
+				if err != nil {
+					return false, err
+				}
+				switch scenario {
+				case "switching":
+					tracker.switching = true
+				case "directory":
+					tracker.current = EnvContainer{Env: &LocalEnv{WorkingDirectory: "/other"}}
+				case "replacement":
+					tracker.current = EnvContainer{Env: &DevPodEnv{WorkingDirectory: "/workspace", WorkspaceName: "replacement"}}
+				case "mutated configuration":
+					current.Env.(*LocalEnv).Hibernated = true
+				}
+				future := workflow.ExecuteActivity(guarded, acts.EnvValue, current)
+				if scenario != "unchanged" && !future.IsReady() {
+					return false, errors.New("stale dispatch was not rejected synchronously")
+				}
+				err = future.Get(ctx, nil)
+				if scenario == "unchanged" {
+					return err == nil, err
+				}
+				return errors.Is(err, ErrEnvChanged), nil
+			})
+			require.NoError(t, wfEnv.GetWorkflowError())
+			var ok bool
+			require.NoError(t, wfEnv.GetWorkflowResult(&ok))
+			require.True(t, ok)
+			if scenario == "unchanged" {
+				require.EqualValues(t, 1, acts.calls.Load())
+			} else {
+				require.Zero(t, acts.calls.Load())
+			}
+		})
+	}
+}
+
+func TestExpectedEnvDispatchDoesNotYield(t *testing.T) {
+	t.Parallel()
+	acts := &gateTestActivities{}
+	wfEnv := newGateTestEnv(t, acts)
+	wfEnv.ExecuteWorkflow(func(ctx workflow.Context) (bool, error) {
+		ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: time.Minute})
+		tracker := &fakeEnvTracker{current: gateTestOldEnv, lineage: []EnvIdentity{IdentityOf(gateTestOldEnv)}}
+		ctx = WithEnvTracker(ctx, tracker)
+		guarded, err := WithExpectedEnv(ctx, gateTestOldEnv)
+		if err != nil {
+			return false, err
+		}
+		workflow.Go(ctx, func(workflow.Context) {
+			tracker.switching = true
+		})
+		future := workflow.ExecuteActivity(guarded, acts.EnvValue, gateTestOldEnv)
+		scheduledBeforeSwitch := !tracker.switching
+		return scheduledBeforeSwitch, future.Get(ctx, nil)
+	})
+	require.NoError(t, wfEnv.GetWorkflowError())
+	var scheduledBeforeSwitch bool
+	require.NoError(t, wfEnv.GetWorkflowResult(&scheduledBeforeSwitch))
+	require.True(t, scheduledBeforeSwitch)
+	require.EqualValues(t, 1, acts.calls.Load())
+}
