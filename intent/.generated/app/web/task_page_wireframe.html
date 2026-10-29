@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidekick · Task page explorations</title>
+<style>
+/* Color variables mirror frontend/src/assets/base.css so the mock matches the app in light and dark. */
+:root {
+  --vt-c-white: #fdfdfd; --vt-c-white-soft: #f8f8f8; --vt-c-white-mute: #f0f0f0;
+  --vt-c-black: #181818; --vt-c-black-soft: #1f1f1f; --vt-c-black-mute: #242424;
+  --vt-c-indigo: #2c3e50;
+  --vt-c-divider-light-1: rgba(60, 60, 60, 0.29); --vt-c-divider-light-2: rgba(60, 60, 60, 0.12);
+  --color-primary: rgb(131, 58, 180);
+  --color-text: var(--vt-c-white); --color-text-2: rgb(150, 150, 150);
+  --color-background: var(--vt-c-black); --color-background-soft: var(--vt-c-black-soft); --color-background-mute: var(--vt-c-black-mute);
+  --color-border: #2b2b2b; --color-border-contrast: #383838;
+  --color-link: rgb(85, 159, 255);
+  --color-cta-button-bg: rgba(131, 58, 180, 0.8); --color-cta-button-text: var(--vt-c-white);
+  --color-green: hsla(160, 100%, 37%, 1);
+  --color-modal-background: var(--vt-c-black-soft);
+  --color-error-text: #f87171;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-text: var(--vt-c-indigo); --color-text-2: rgba(60, 60, 60, 1);
+    --color-background: var(--vt-c-white-soft); --color-background-soft: var(--vt-c-white); --color-background-mute: var(--vt-c-white-mute);
+    --color-border: var(--vt-c-divider-light-2); --color-border-contrast: var(--vt-c-divider-light-1);
+    --color-link: rgb(0, 102, 204);
+    --color-modal-background: var(--vt-c-white);
+    --color-error-text: #b91c1c;
+  }
+}
+
+/* ---- page chrome ---- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; }
+[hidden] { display: none !important; }
+body { min-height: 100vh; padding: 1.25rem 1rem 3rem; color: var(--color-text); background: var(--color-background); font: 15px/1.5 Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+main { max-width: 72rem; margin: auto; display: grid; gap: 1rem; }
+h1 { font-size: 1.05rem; font-weight: 600; }
+.caption, .meta { color: var(--color-text-2); font-size: .78rem; }
+.bar { display: flex; gap: .75rem 1.25rem; flex-wrap: wrap; align-items: flex-end; }
+.group { display: grid; gap: .2rem; min-width: 0; max-width: 100%; }
+.group > span:first-child { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-2); font-weight: 600; }
+button { font: inherit; color: var(--color-text); cursor: pointer; background: none; border: 0; padding: 0; text-align: left; }
+button:disabled { opacity: .4; cursor: default; }
+button:focus-visible, summary:focus-visible { outline: .125rem solid var(--color-link); outline-offset: .125rem; }
+.seg { display: inline-flex; flex-wrap: wrap; border: .0625rem solid var(--color-border-contrast); border-radius: .4rem; overflow: hidden; background: var(--color-background-soft); }
+.seg button { padding: .35rem .7rem; border-right: .0625rem solid var(--color-border); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--color-background-mute); font-weight: 600; }
+.chk { display: inline-flex; align-items: center; gap: .35rem; padding: .35rem 0; }
+#restart { border: .0625rem solid var(--color-border-contrast); border-radius: .4rem; padding: .35rem .7rem; background: var(--color-background-soft); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+.spacer { flex: 1; }
+.iconbtn { padding: .2rem .5rem; border-radius: .4rem; font-size: 1.2rem; line-height: 1; color: var(--color-text-2); }
+.iconbtn:hover { color: var(--color-text); }
+.fail { color: var(--color-error-text); }
+
+/* ---- frame ---- */
+.frame { position: relative; display: flex; overflow: hidden; background: var(--color-background); height: min(46rem, 85vh); }
+.frame.mobile { width: 22.5rem; max-width: 100%; margin: 0 auto; border: .375rem solid var(--color-border-contrast); border-radius: 2.25rem; font-size: .9rem; }
+.frame.desktop { width: 100%; border: .0625rem solid var(--color-border-contrast); border-radius: .75rem; }
+.col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.desktop .head, .desktop .foot, .desktop .inner { width: 100%; max-width: 46rem; margin-left: auto; margin-right: auto; }
+.statusbar { display: flex; justify-content: space-between; padding: .5rem 1.25rem 0; font-size: .72rem; color: var(--color-text-2); }
+
+/* ---- header: the task title; step titles live in the thread's sticky bars ---- */
+.head { position: relative; padding: .25rem .85rem .45rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: .05rem; border-bottom: .0625rem solid var(--color-border); }
+.desktop .head { padding: .75rem 1.25rem .45rem; }
+.bars .head { border-bottom: 0; padding-bottom: .15rem; }
+.appbar { display: flex; align-items: center; min-width: 0; margin: 0 -.5rem .1rem; }
+.appbar .title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 1.05rem; font-weight: 700; }
+.dtitle { display: flex; align-items: center; gap: .15rem; min-width: 0; font-size: 1.1rem; font-weight: 700; padding-bottom: .35rem; }
+.dtitle .iconbtn { margin-left: -.5rem; }
+.dtitle .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.steprow { display: flex; align-items: baseline; gap: .4rem; min-width: 0; font-weight: 500; }
+.steprow .n { color: var(--color-text-2); font-weight: 400; font-size: .78rem; }
+.steprow .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steprow .state, .files { color: var(--color-text-2); font-weight: 400; font-size: .78rem; white-space: nowrap; }
+.files:hover { color: var(--color-link); }
+
+/* ---- thread ---- */
+.scrollwrap { position: relative; flex: 1; min-height: 0; display: flex; }
+.scroll { flex: 1; min-width: 0; overflow: auto; overscroll-behavior: contain; }
+.inner { padding: .6rem .85rem .9rem; display: grid; gap: .55rem; align-content: start; }
+.desktop .inner { padding: .5rem 1.25rem 1rem; }
+.bars .inner { padding-top: 0; }
+.inner > * { min-width: 0; }
+.step-section { display: grid; gap: .55rem; align-content: start; min-width: 0; }
+/* Step bars continue the fixed header and push each other out like chat date headers. */
+.divider.stepbar { position: sticky; top: 0; z-index: 5; margin: 0 -.85rem; padding: .3rem .85rem .35rem; background: var(--color-background); border-bottom: .0625rem solid var(--color-border); }
+.desktop .divider.stepbar { margin: 0 -1.25rem; padding: .3rem 1.25rem .35rem; }
+.note { line-height: 1.45; }
+.outcome { color: var(--color-text-2); font-size: .8rem; padding-bottom: .3rem; }
+.you { justify-self: end; max-width: 85%; padding: .4rem .75rem; border-radius: 1rem 1rem .25rem 1rem; background: var(--color-background-mute); }
+/* ---- outbox: messages the agent has not read yet; cancelled from the caption on desktop (hover) or by holding on mobile ---- */
+.outbox { display: grid; gap: .4rem; }
+.pending { display: grid; justify-items: end; gap: .1rem; width: 100%; }
+.mobile .pending { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.you.queued { background: transparent; border: .0625rem dashed var(--color-border-contrast); color: var(--color-text-2); }
+.pending-note { padding-right: .25rem; color: var(--color-text-2); font-size: .74rem; }
+/* The link keeps its space so the caption never shifts when it fades in. */
+.undo { opacity: 0; }
+.pending:hover .undo, .pending:focus-within .undo { opacity: 1; }
+.cancel { color: inherit; text-decoration: underline; }
+.cancel:hover { color: var(--color-text); }
+.mobile .undo { display: none; }
+.live { display: flex; gap: .5rem; align-items: center; color: var(--color-text-2); font-size: .82rem; }
+.live .elapsed { white-space: nowrap; }
+.dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--color-primary); flex: none; animation: pulse 1.4s ease-in-out infinite; }
+.dot.still { animation: none; background: var(--color-text-2); }
+@keyframes pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+.tobottom { position: absolute; right: .85rem; bottom: .6rem; width: 2rem; height: 2rem; border-radius: 50%; text-align: center; line-height: 1.85rem; background: var(--color-modal-background); border: .0625rem solid var(--color-border-contrast); box-shadow: 0 .25rem .75rem rgba(0, 0, 0, .2); }
+/* Keep the button with the content column rather than the frame edge. */
+.desktop .tobottom { right: max(.85rem, calc(50% - 23rem + 1.25rem)); }
+
+/* ---- action rows: a group row opens its short descriptions (sheet on mobile, in place on desktop); a description opens details ---- */
+.action-list, .action-items { display: grid; }
+.action-items { margin-left: 1.2rem; }
+details.action-group { display: block; }
+.row { display: flex; gap: .5rem; align-items: center; width: 100%; min-height: 1.75rem; font-size: .82rem; color: var(--color-text-2); }
+button.row:hover, summary.row:hover { color: var(--color-text); }
+summary.row { list-style: none; cursor: pointer; }
+summary.row::-webkit-details-marker { display: none; }
+.row .g { width: 1rem; flex: none; display: inline-flex; justify-content: center; font-size: .78rem; opacity: .85; }
+.row .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+.row .st { flex: none; font-size: .75rem; }
+.row .st.fail { font-weight: 600; }
+.row .chev { flex: none; font-size: .95rem; line-height: 1; opacity: .7; }
+summary.row .chev::before { content: '▾'; }
+details[open] > summary.row .chev::before { content: '▴'; }
+button.row .chev::before { content: '›'; }
+.row.grp { gap: .35rem; }
+.row.grp .label { flex: none; font-size: .8rem; }
+.row.grp .running { margin-left: auto; display: flex; align-items: center; gap: .4rem; font-size: .75rem; }
+pre.diff { margin: .35rem 0 .25rem; padding: .5rem .6rem; border-radius: .5rem; background: var(--color-background-soft); font-size: .72rem; line-height: 1.45; overflow: auto; color: var(--color-text-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre.diff .ln { display: block; white-space: pre; }
+pre.diff .a { color: var(--color-green); }
+pre.diff .d { color: var(--color-error-text); }
+
+/* ---- things that need you: soft fill, no outline ---- */
+.attn { padding: .7rem .85rem; border-radius: .75rem; background: var(--color-background-mute); display: grid; gap: .6rem; }
+.attn .q { font-weight: 600; line-height: 1.4; }
+.attn .ctx { color: var(--color-text-2); font-size: .82rem; }
+.attn .req { line-height: 1.45; }
+.attn code.command { display: block; padding: .3rem .5rem; border-radius: .35rem; background: var(--color-background-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.attn .scope-row { display: grid; gap: .35rem; align-items: baseline; }
+.desktop .attn .scope-row { grid-template-columns: 8.5rem minmax(0, 1fr); gap: .75rem; }
+.attn .scope-label { font-weight: 600; }
+.attn .paths { display: flex; flex-wrap: wrap; gap: .35rem; }
+.attn .paths code { padding: .1rem .35rem; border-radius: .25rem; background: var(--color-background-soft); }
+.attn label { font-weight: 500; }
+.attn textarea { min-height: 2.6rem; padding: .4rem .6rem; border: .0625rem solid var(--color-border-contrast); border-radius: .4rem; background: var(--color-background-soft); }
+.attn .opts { display: grid; gap: .35rem; }
+.attn .opts button { padding: .45rem .75rem; border-radius: .5rem; background: var(--color-background); border: .0625rem solid var(--color-border); }
+.attn .opts button:hover { border-color: var(--color-border-contrast); }
+/* Approval choices follow the approval prompt designs: full width on mobile, a row on desktop. */
+.attn.approval .opts { gap: .5rem; }
+.attn.approval .opts button { padding: .7rem .8rem; border-radius: .4rem; text-align: center; background: var(--color-background-soft); border-color: var(--color-border-contrast); }
+.attn.approval .opts button:hover { border-color: var(--color-link); }
+.attn.approval .opts button.primary { background: var(--color-cta-button-bg); color: var(--color-cta-button-text); border-color: transparent; }
+.desktop .attn.approval .opts { display: flex; flex-wrap: wrap; }
+.desktop .attn.approval .opts button { padding: .45rem .8rem; }
+.attn.tap { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .6rem; width: 100%; padding: .6rem .85rem; }
+.chev { color: var(--color-text-2); font-size: 1.1rem; }
+
+/* ---- summary: written for the reader, updated in place ---- */
+.summary { display: grid; gap: .9rem; padding-top: .3rem; }
+.summary h3 { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-2); font-weight: 600; margin-bottom: .3rem; }
+.summary ul { list-style: none; padding: 0; display: grid; gap: .25rem; }
+.summary li { display: flex; gap: .45rem; align-items: baseline; line-height: 1.4; }
+.summary li .m { width: 1rem; flex: none; text-align: center; color: var(--color-text-2); font-size: .8rem; }
+.summary li.next { color: var(--color-text-2); }
+
+/* ---- status + composer: the composer box itself is the divider ---- */
+.foot { padding: .3rem .85rem .85rem; display: grid; gap: .45rem; }
+.mobile .foot { padding-bottom: 1.3rem; }
+.desktop .foot { padding: .3rem 1.25rem 1rem; }
+#status:empty { display: none; }
+.status { display: flex; gap: .55rem; align-items: center; width: 100%; padding: .6rem .85rem; border-radius: .75rem; background: var(--color-background-mute); font-size: .82rem; }
+.status .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status .elapsed { white-space: nowrap; }
+.composer { display: grid; gap: .15rem; padding: .45rem .5rem .35rem .8rem; border: .0625rem solid var(--color-border-contrast); border-radius: .9rem; background: var(--color-background-soft); }
+.composer:focus-within { border-color: var(--color-text-2); }
+textarea { width: 100%; font: inherit; resize: none; min-height: 1.7rem; max-height: 6rem; padding: .15rem 0; border: 0; outline: none; background: transparent; color: var(--color-text); }
+.cbar { display: flex; align-items: center; gap: .1rem; }
+.ctls { display: flex; }
+.ctl { padding: .3rem .4rem; border-radius: .4rem; font-size: 1rem; line-height: 1; color: var(--color-text-2); }
+.ctl:hover { color: var(--color-text); background: var(--color-background-mute); }
+.send { margin-left: auto; width: 1.9rem; height: 1.9rem; border-radius: 50%; background: var(--color-cta-button-bg); color: var(--color-cta-button-text); text-align: center; font-size: 1rem; line-height: 1; }
+
+/* ---- panels: review full screen or a sheet on mobile, right rail on desktop ---- */
+.rail { width: 23rem; flex: none; border-left: .0625rem solid var(--color-border); display: flex; flex-direction: column; min-height: 0; }
+.mobile .over { position: absolute; inset: 0; z-index: 10; background: var(--color-background); display: flex; flex-direction: column; }
+.scrim { position: absolute; inset: 0; z-index: 9; background: rgba(0, 0, 0, .35); }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 10; max-height: 80%; display: flex; flex-direction: column; background: var(--color-modal-background); border-radius: 1.25rem 1.25rem 0 0; }
+.handle { width: 2.5rem; height: .25rem; margin: .5rem auto 0; border-radius: .125rem; background: var(--color-border-contrast); flex: none; }
+.ph { display: flex; gap: .5rem; align-items: center; min-width: 0; padding: .5rem .85rem; border-bottom: .0625rem solid var(--color-border); }
+.mobile .over .ph { padding-top: 2.4rem; }
+.ph b { white-space: nowrap; }
+.ph .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph .g { color: var(--color-text-2); font-size: .85rem; }
+.scopebar { display: flex; gap: .6rem; align-items: center; padding: .4rem .85rem; border-bottom: .0625rem solid var(--color-border); font-size: .8rem; }
+.scope { font: inherit; font-size: .8rem; color: var(--color-text); background: var(--color-background-mute); border: .0625rem solid var(--color-border-contrast); border-radius: .4rem; padding: .2rem .35rem; }
+.pb { flex: 1; min-height: 0; overflow: auto; padding: .5rem .85rem 1rem; display: grid; gap: .45rem; align-content: start; }
+.pb > * { min-width: 0; }
+.srcline { display: flex; gap: .5rem; align-items: baseline; font-size: .8rem; color: var(--color-text-2); }
+.srcline code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filerow { display: flex; gap: .5rem; align-items: baseline; width: 100%; padding: .25rem 0; font-size: .82rem; color: var(--color-text-2); }
+.filerow.cur { color: var(--color-text); }
+.filerow code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filerow .st { font-variant-numeric: tabular-nums; font-size: .78rem; color: var(--color-text-2); }
+.filerow .chev { font-size: 1rem; }
+.pb pre.diff .ln { cursor: pointer; }
+.pb pre.diff .ln:hover, .pb pre.diff .ln.c { background: var(--color-background-mute); }
+.comment { display: block; margin: .25rem 0 .5rem; }
+.comment textarea { min-height: 2.2rem; font-size: .78rem; border: .0625rem solid var(--color-border-contrast); border-radius: .5rem; padding: .35rem .6rem; background: var(--color-background); }
+.actions { display: flex; gap: .5rem; padding-top: .5rem; }
+.btn { padding: .4rem .9rem; border-radius: .5rem; border: .0625rem solid var(--color-border-contrast); }
+.btn.primary { background: var(--color-cta-button-bg); color: var(--color-cta-button-text); border-color: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .dot { animation: none; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Task page · explorations</h1>
+    <span class="caption">Same task everywhere: step 4 of 5, mid-way, animating in a loop. Everything is tappable: a step’s files, action groups (a sheet on mobile, in place on desktop), the status line, Pause / Next inside the composer, and sending a message (end it with “?” for a reply). A message sent while Sidekick is busy waits as pending until it finishes its current action; hover it on desktop or hold it on mobile to cancel.</span>
+  </div>
+  <div class="bar">
+    <div class="group"><span>Design</span><span class="seg" data-ui="design"></span></div>
+    <div class="group"><span>View</span><span class="seg" data-ui="view"><button data-v="mobile">Mobile</button><button data-v="desktop">Desktop</button></span></div>
+    <div class="group"><span>Scenario</span><span class="seg" data-ui="scenario"><button data-v="working">Working</button><button data-v="question">Needs an answer</button><button data-v="approval">Command approval</button><button data-v="review">Ready for review</button></span></div>
+    <label class="chk"><input type="checkbox" id="animate" checked> Animate</label>
+    <button id="restart">Restart</button>
+  </div>
+  <p id="note" class="caption"></p>
+  <div id="mock"></div>
+</main>
+<script>
+  const DESIGNS = {
+    sticky: { label: 'Sticky thread', note: 'One chronological thread for the whole task, latest at the bottom: narration, your messages and a row per run of actions. Step titles stick to the top as you scroll. Anything that needs you appears at the end of the thread.' },
+    chat: { label: 'Chat + status', note: 'Only the conversation. Tool activity sits behind a status line above the composer; an approval or review takes its place. Tap the status for the full history.' },
+    summary: { label: 'Summary + status', note: 'A summary written for you — what’s done, decisions, what’s next — updated in place rather than appended. The status says what’s happening now and opens the full history; sending a message opens that history too, where the conversation lives.' }
+  };
+  const TASK = 'Add archived-task filter to the kanban board';
+  const DIFFS = {
+    store: `@@ -12,6 +12,8 @@ export const useKanbanStore = defineStore('kanban', {
+   state: () => ({
+     statusFilter: 'all',
++    includeArchived: false,
+   }),
++  persist: { paths: ['statusFilter', 'includeArchived'] },`,
+    board: `@@ -41,6 +41,11 @@
+       <StatusFilter v-model="store.statusFilter" />
++      <label class="toggle">
++        <input type="checkbox" v-model="store.includeArchived" />
++        Include archived
++      </label>`,
+    types: `@@ -4,5 +4,6 @@ export interface KanbanState {
+   statusFilter: StatusFilter
++  includeArchived: boolean
+ }`,
+    api: `@@ -88,7 +88,8 @@ func (h *TaskHandler) List(c *gin.Context) {
+-	tasks, err := h.store.ListTasks(ctx, workspaceID)
++	includeArchived := c.Query("includeArchived") == "true"
++	tasks, err := h.store.ListTasks(ctx, workspaceID, includeArchived)`,
+    apiTs: `@@ -30,6 +30,8 @@ export async function fetchTasks(workspaceId: string, opts: ListOpts) {
+   const params = new URLSearchParams({ status: opts.status })
++  if (opts.includeArchived) params.set('includeArchived', 'true')
+   return get(\`/workspaces/\${workspaceId}/tasks?\${params}\`)`
+  };
+  const TYPE_ERROR = 'vue-tsc --noEmit\nsrc/components/KanbanBoard.vue:44:38 - error TS2339: Property \'includeArchived\' does not exist on type \'KanbanState\'.\n✗ 1 error (12s)';
+  const note = (text) => ({ t: 'note', text });
+  const read = (file) => ({ t: 'read', file });
+  const edit = (file, add, del, diff) => ({ t: 'edit', file, add, del, diff, done: true });
+  const run = (cmd, out, ok = true) => ({ t: 'run', cmd, out, ok, done: true });
+  const ask = (q, ctx, options) => ({ t: 'ask', q, ctx, options });
+  const you = (text) => ({ t: 'you', text });
+  const STEPS = [
+    { title: 'Gather context', dur: '2m', outcome: 'Found the kanban store, the task list endpoint, and that archived tasks are dropped server-side.',
+      entries: [read('frontend/src/stores/kanban.ts'), read('srv/task_handlers.go'), note('Archived tasks never reach the frontend today, so the filter needs an API change before any UI work.')] },
+    { title: 'Requirements & plan', dur: '6m', outcome: 'Plan approved by you: API param → kanban toggle → docs.',
+      entries: [note('Drafted requirements and a three-step plan.'), { ...ask('Should archived tasks be hidden by default?'), answer: 'Yes, hidden by default', decision: 'Archived tasks stay hidden by default' }] },
+    { title: 'API: archived filter param', dur: '11m', outcome: 'includeArchived query param on the task list endpoint, covered by tests.',
+      entries: [edit('srv/task_handlers.go', 41, 9, DIFFS.api), edit('srv/task_handlers_test.go', 39, 3), edit('srv/routes.go', 4, 0), run('go test ./srv/...', 'ok  sidekick/srv  8.1s')] },
+    { title: 'Kanban UI: archived toggle', outcome: 'Archived toggle in the kanban UI, wired through store, board and request.',
+      entries: [note('Adding includeArchived to the kanban store so the choice persists per workspace.'), edit('frontend/src/stores/kanban.ts', 18, 2, DIFFS.store), edit('frontend/src/components/KanbanBoard.vue', 41, 6, DIFFS.board),
+        run('bun run type-check', TYPE_ERROR, false), { ...edit('frontend/src/types/kanban.ts', 1, 0, DIFFS.types), summary: ['Adding includeArchived to the store type', 'Added includeArchived to the store type'] },
+        run('bun run type-check', 'vue-tsc --noEmit\n✓ no errors (12s)'), note('The toggle sits beside the status filter. Now passing it through to the task list request.')] },
+    { title: 'Docs & changelog', outcome: 'Docs and changelog updated.', entries: [] }
+  ];
+  // What arrives while "working": an edit, some narration, a command run — twice, then the loop restarts.
+  const SCRIPT = [
+    edit('frontend/src/lib/api.ts', 12, 3, DIFFS.apiTs),
+    note('fetchTasks forwards includeArchived; the server already accepts it.'),
+    run('bun run type-check', 'vue-tsc --noEmit\n✓ no errors (11s)'),
+    edit('frontend/src/components/KanbanBoard.spec.ts', 37, 0),
+    note('Covering both toggle states and the persisted default.'),
+    run('bun run test:unit', '38 passed (14s)')
+  ];
+  const REVISE = [
+    edit('frontend/src/components/KanbanBoard.vue', 6, 2),
+    note('Moved the toggle into the filter bar as requested.'),
+    { ...run('bun run test:unit', '38 passed (13s)'), thenReview: true }
+  ];
+  const TESTS = () => ({ ...run('bun run test:unit', '38 passed (14s)'), done: false, thenReview: true });
+  const QUESTION = { ...ask('Should archived tasks show in their original column, or in a separate “Archived” column?', 'Decides how KanbanBoard.vue groups them once the toggle is on.', ['Original column, greyed out', 'Separate “Archived” column']),
+    decisions: { 'Original column, greyed out': 'Archived tasks stay in their original column, greyed out', 'Separate “Archived” column': 'Archived tasks get their own column at the end of the board' } };
+  const APPROVAL = { description: 'Run the unit tests to verify the toggle end to end.', command: 'bun run test:unit', pattern: 'bun run' };
+
+  const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const fmt = (sec) => `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, '0')}s`;
+  const base = (f) => f.split('/').pop();
+  const copy = (e) => ({ ...e });
+  const el = (id) => document.getElementById(id);
+
+  const ui = { design: 'sticky', view: 'mobile', scenario: 'working', animate: true };
+  let s, anim, clock, seq = 0;
+
+  function reset() {
+    clearTimeout(anim); clearInterval(clock);
+    // Earlier steps were reviewed before this one started, so "since last review" begins at the current step.
+    s = { steps: JSON.parse(JSON.stringify(STEPS)), cur: 3, paused: false, complete: false, screen: 'main', stack: [], over: null, scope: 'step', scopeStep: 3, checkpoint: { step: 3, n: 0 }, comments: {}, open: new Set(),
+      elapsed: 252, pending: null, attention: null, denying: false, denyNote: '', outbox: [], stick: true, requesting: false, queue: SCRIPT.map(copy), looping: true };
+    const st = s.steps[s.cur];
+    s.baseLen = st.entries.length;
+    if (ui.scenario === 'question') { s.attention = 'question'; st.entries.push({ ...QUESTION, keep: true }); }
+    if (ui.scenario === 'approval') {
+      s.attention = 'approval'; s.queue = []; s.looping = false;
+      st.entries.push({ ...edit('frontend/src/lib/api.ts', 12, 3, DIFFS.apiTs), keep: true }, { ...edit('frontend/src/components/KanbanBoard.spec.ts', 37, 0), keep: true }, { ...note('All four parts are in. Running the unit tests next.'), keep: true });
+    }
+    if (ui.scenario === 'review') {
+      s.attention = 'review'; s.queue = []; s.looping = false;
+      st.entries.push({ ...edit('frontend/src/lib/api.ts', 12, 3, DIFFS.apiTs), keep: true }, { ...edit('frontend/src/components/KanbanBoard.spec.ts', 37, 0), keep: true }, { ...run('bun run test:unit', '38 passed (14s)'), keep: true });
+    }
+    renderAll();
+    clock = setInterval(() => {
+      if (waiting() || !ui.animate) return;
+      s.elapsed++;
+      document.querySelectorAll('#mock .elapsed').forEach((n) => { n.textContent = fmt(s.elapsed); });
+    }, 1000);
+    loop(1500);
+  }
+  const waiting = () => s.paused || !!s.attention || s.complete;
+  // Thinking, running a tool or paused: the agent only reads messages at its next turn boundary.
+  const busy = () => !s.attention && !s.complete && !s.requesting;
+  // Whatever arrived while the agent was busy is read at the next turn boundary, in the order sent.
+  function readOutbox() {
+    if (!s.outbox.length) return false;
+    deliver(s.outbox.splice(0).map((m) => m.text));
+    return true;
+  }
+  // Simulated replies must not land in a simulation that was reset while they were in flight.
+  function later(fn, delay) { const state = s; setTimeout(() => { if (s === state) fn(); }, delay); }
+  // What the main area shows: the design's own view, or a screen the user navigated to.
+  const mode = () => s.screen !== 'main' ? s.screen : ui.design === 'sticky' ? 'thread' : ui.design;
+  const threadMode = () => ['thread', 'history'].includes(mode());
+
+  /* ---- simulation ---- */
+  function loop(delay) {
+    clearTimeout(anim);
+    if (waiting()) return;
+    anim = setTimeout(() => {
+      const st = s.steps[s.cur];
+      if (s.pending) {
+        const p = s.pending; p.done = true; s.pending = null;
+        if (p.thenReview) s.attention = 'review';
+        if (readOutbox()) return;
+        renderDynamic(); loop(s.queue.length ? 1800 : 3500); return;
+      }
+      if (!ui.animate) return;
+      if (readOutbox()) return;
+      if (!s.queue.length) {
+        if (!s.looping) return;
+        st.entries = st.entries.slice(0, s.baseLen).concat(st.entries.slice(s.baseLen).filter((e) => e.keep));
+        s.elapsed = 252; s.queue = SCRIPT.map(copy);
+        renderDynamic(); loop(1500); return;
+      }
+      const e = s.queue.shift();
+      if (e.t !== 'note') { e.done = false; s.pending = e; }
+      st.entries.push(e); renderDynamic(); loop(e.t === 'note' ? 2200 : 1500);
+    }, delay);
+  }
+  function pause() { s.paused = !s.paused; if (s.paused) clearTimeout(anim); else loop(800); renderDynamic(); }
+  const nextLabel = () => s.attention === 'review' ? (s.cur + 1 < s.steps.length ? 'Next step' : 'Finish') : s.pending && s.pending.thenReview ? 'Skip to review' : 'Skip to tests';
+  function next() {
+    if (s.complete || (s.attention && s.attention !== 'review')) return;
+    if (s.attention === 'review') { advance(); return; }
+    clearTimeout(anim);
+    if (s.pending && s.pending.thenReview) { s.pending.done = true; s.pending = null; s.attention = 'review'; if (!readOutbox()) renderDynamic(); return; }
+    if (s.pending) s.pending.done = true;
+    s.queue = []; s.looping = false;
+    const e = TESTS(); s.pending = e; s.steps[s.cur].entries.push(e); s.stick = true; renderDynamic(); loop(1800);
+  }
+  function advance() {
+    markReviewed();
+    s.attention = null; s.over = null; s.pending = null; s.requesting = false; s.queue = []; s.looping = false;
+    const st = s.steps[s.cur];
+    if (s.cur + 1 >= s.steps.length) { s.complete = true; st.entries.push(note('All done — 9 files changed across 5 steps.')); }
+    else { st.dur = '9m'; s.cur++; s.elapsed = 0; s.steps[s.cur].entries.push(note('Updating the kanban docs to mention the archived toggle.')); }
+    s.stick = true; renderAll();
+  }
+  function send() {
+    const ta = el('ta'), text = ta.value.trim();
+    if (!text) return;
+    ta.value = '';
+    const fromSummary = mode() === 'summary';
+    if (s.attention === 'question') answer(text); else message(text);
+    // The summary has no conversation to show the message in, so sending opens the full history.
+    if (fromSummary) go('history');
+  }
+  function message(text) {
+    if (busy() || s.outbox.length) { s.outbox.push({ id: ++seq, text }); s.stick = true; renderDynamic(); return; }
+    deliver([text]);
+  }
+  // Delivered messages join the thread in the order sent and get one reply.
+  function deliver(texts) {
+    const st = s.steps[s.cur], revising = s.requesting, last = texts[texts.length - 1];
+    texts.forEach((t) => st.entries.push({ ...you(t), keep: true }));
+    const reply = revising ? 'On it — I’ll make that change and re-run the tests.'
+      : last.endsWith('?') ? 'The toggle is per workspace and off by default, as decided in step 2. Want it per user instead?'
+      : texts.length > 1 ? 'Got them — folding those in before the tests.' : 'Got it — folding that in before the tests.';
+    s.requesting = false; s.stick = true; renderDynamic();
+    later(() => { st.entries.push({ ...note(reply), keep: true }); if (revising) s.queue = REVISE.map(copy); renderDynamic(); loop(1800); }, 1100);
+  }
+  // Taking a pending message back puts its text ahead of whatever is already being drafted.
+  // Looked up by id: the message may have been delivered or the simulation reset since the gesture began.
+  function unsend(id) {
+    const i = s.outbox.findIndex((m) => m.id === id);
+    if (i < 0) return;
+    const [{ text }] = s.outbox.splice(i, 1), ta = el('ta'), draft = ta.value;
+    ta.value = draft ? `${text}\n${draft}` : text;
+    renderDynamic(); ta.focus(); ta.setSelectionRange(text.length, text.length);
+  }
+  function answer(text) {
+    const st = s.steps[s.cur], q = pendingQuestion();
+    if (q) { q.answer = text; q.decision = (q.decisions || {})[text]; }
+    s.attention = null; s.stick = true; renderDynamic();
+    later(() => {
+      st.entries.push({ ...note(text.startsWith('Separate') ? 'Adding an “Archived” column at the end of the board.' : 'Keeping archived tasks in their original column, greyed out.'), keep: true });
+      renderDynamic(); loop(1800);
+    }, 1000);
+  }
+  function allow() {
+    const st = s.steps[s.cur];
+    s.attention = null; s.stick = true;
+    const e = TESTS(); s.pending = e; st.entries.push(e); renderDynamic(); loop(1800);
+  }
+  // Deny asks for a reason first; once submitted the agent sends its work for review without the tests.
+  function deny(stage) {
+    if (stage === 'ask' || stage === 'cancel') { s.denying = stage === 'ask'; s.denyNote = ''; renderDynamic(); return; }
+    const st = s.steps[s.cur], reason = s.denyNote.trim();
+    s.denying = false; s.attention = null; s.stick = true; s.queue = []; s.looping = false;
+    if (reason) st.entries.push({ ...you(reason), keep: true });
+    st.entries.push({ ...note(reason ? 'Understood — skipping the tests and sending this for your review as is.' : 'Understood — I won’t run the tests. Sending this for your review as is.'), keep: true });
+    renderDynamic();
+    later(() => { s.attention = 'review'; s.stick = true; renderDynamic(); }, 1500);
+  }
+  function requestChanges() {
+    const n = Object.values(s.comments).filter(Boolean).length, st = s.steps[s.cur];
+    markReviewed();
+    s.over = null; s.attention = null; s.stick = true; renderOver();
+    if (!n) { s.requesting = true; renderDynamic(); el('ta').focus(); return; }
+    st.entries.push({ ...you(`${n} review comment${n > 1 ? 's' : ''}`), keep: true }); s.comments = {}; renderDynamic();
+    later(() => { st.entries.push({ ...note('Addressing your comments, then re-running the tests.'), keep: true }); s.queue = REVISE.map(copy); renderDynamic(); loop(1800); }, 1100);
+  }
+  function go(screen) { s.stack.push(s.screen); s.screen = screen; arrive(); }
+  function back() { if (s.stack.length) { s.screen = s.stack.pop(); arrive(); } }
+  function arrive() {
+    s.over = null; s.stick = true; renderOver(); renderDynamic();
+    const sc = el('scroll');
+    sc.scrollTop = mode() === 'summary' ? 0 : sc.scrollHeight;
+    onScroll();
+  }
+
+  /* ---- derived ---- */
+  const sum = (files) => files.reduce((a, f) => ({ files: a.files + 1, add: a.add + f.add, del: a.del + f.del }), { files: 0, add: 0, del: 0 });
+  const reviewed = (step, i) => step < s.checkpoint.step || (step === s.checkpoint.step && i < s.checkpoint.n);
+  const markReviewed = () => { s.checkpoint = { step: s.cur, n: s.steps[s.cur].entries.length }; };
+  // Finished edits merged per file: 'all' changes, one 'step', or everything 'since' the last review checkpoint.
+  function edits(scope, step = s.cur) {
+    const from = scope === 'step' ? step : 0, to = scope === 'step' ? step : s.cur, byFile = new Map();
+    s.steps.slice(from, to + 1).forEach((st, k) => st.entries.forEach((e, i) => {
+      if (e.t !== 'edit' || !e.done || (scope === 'since' && reviewed(from + k, i))) return;
+      const f = byFile.get(e.file);
+      if (f) { f.add += e.add; f.del += e.del; f.step = from + k; f.diff = e.diff || f.diff; }
+      else byFile.set(e.file, { ...e, step: from + k });
+    }));
+    return [...byFile.values()];
+  }
+  const changes = (scope, step) => sum(edits(scope, step));
+  const filesLabel = (c) => `${c.files} ${c.files === 1 ? 'file' : 'files'}`;
+  const pendingQuestion = () => s.steps[s.cur].entries.find((e) => e.t === 'ask' && !e.answer);
+  function liveText() {
+    if (s.complete) return 'Task complete';
+    if (s.paused) return 'Paused';
+    if (s.requesting) return 'Waiting for your message';
+    if (s.pending) return s.pending.t === 'run' ? `Running ${s.pending.cmd}` : `Editing ${base(s.pending.file)}`;
+    return 'Thinking…';
+  }
+  const placeholder = () => s.attention === 'question' ? 'Type an answer…' : s.requesting || s.attention === 'review' ? 'What should change?' : 'Message Sidekick…';
+  const isTool = (e) => ['read', 'edit', 'run'].includes(e.t);
+  const glyph = (e) => e.t === 'edit' ? '✎' : e.t === 'run' ? '>' : '◎';
+  function actionDescription(e) {
+    if (e.summary) return Array.isArray(e.summary) ? e.summary[e.done ? 1 : 0] : e.summary;
+    if (e.t === 'run') {
+      const what = e.cmd.includes('type-check') ? 'Type check' : e.cmd.includes('test') ? 'Tests' : 'Command';
+      if (!e.done) return what === 'Type check' ? 'Checking types' : what === 'Tests' ? 'Running tests' : 'Running command';
+      return `${what} ${e.ok === false ? 'failed' : what === 'Command' ? 'finished' : 'passed'}`;
+    }
+    if (e.t === 'read') return `Read ${base(e.file)}`;
+    const outcomes = {
+      'kanban.ts': ['Saving the filter preference', 'Saved the filter preference'],
+      'KanbanBoard.vue': ['Adding the archived toggle', 'Added the archived toggle'],
+      'api.ts': ['Connecting the filter to the API', 'Connected the filter to the API'],
+      'KanbanBoard.spec.ts': ['Adding toggle coverage', 'Added tests for both toggle states'],
+      'task_handlers.go': ['Adding archived-task support', 'Added archived-task support'],
+      'task_handlers_test.go': ['Adding API coverage', 'Added API regression tests'],
+      'routes.go': ['Wiring the API route', 'Wired the API route']
+    };
+    return outcomes[base(e.file)]?.[e.done ? 1 : 0] || `${e.done ? 'Updated' : 'Updating'} ${base(e.file)}`;
+  }
+  // The run of consecutive actions starting at an index, which is what a group row stands for.
+  function actionRun(step, start) {
+    const list = s.steps[step].entries;
+    let end = start;
+    while (end < list.length && isTool(list[end])) end++;
+    return list.slice(start, end);
+  }
+
+  /* ---- pieces ---- */
+  const dot = () => `<i class="dot${waiting() ? ' still' : ''}"></i>`;
+  const diffHtml = (d) => d.split('\n').map((l) => `<span class="ln ${l[0] === '+' ? 'a' : l[0] === '-' ? 'd' : ''}">${esc(l)}</span>`).join('');
+  const questionHtml = (e) => `<div class="attn"><div class="q">${e.q}</div>${e.ctx ? `<div class="ctx">${e.ctx}</div>` : ''}<div class="opts">${(e.options || []).map((o) => `<button data-act="answer" data-v="${esc(o)}">${o}</button>`).join('')}</div></div>`;
+  // Follows the command approval prompt designs: what, the exact command, the pattern a rule would cover, then the choices.
+  function approvalHtml() {
+    if (s.denying) {
+      return `<div class="attn approval"><label for="deny-reason">Why shouldn’t Sidekick proceed?</label><textarea id="deny-reason" placeholder="Tell Sidekick what to do differently (optional).">${esc(s.denyNote)}</textarea>
+        <div class="opts"><button class="primary" data-act="deny-send">Submit</button><button data-act="deny-cancel">Cancel</button></div></div>`;
+    }
+    return `<div class="attn approval"><div class="req">${APPROVAL.description}</div><code class="command">${esc(APPROVAL.command)}</code>
+      <div class="scope-row"><span class="scope-label">Command Pattern</span><span class="paths"><code>${esc(APPROVAL.pattern)}</code></span></div>
+      <div class="opts"><button class="primary" data-act="allow" data-v="always">Always allow</button><button data-act="allow" data-v="task">Allow for this task</button><button data-act="allow" data-v="once">Allow once</button><button data-act="deny">Deny</button></div></div>`;
+  }
+  const reviewRow = () => `<button class="attn tap" data-act="review" data-v="all"><i class="dot still"></i><span class="q">Ready for your review</span><span class="chev">›</span></button>`;
+  const attnHtml = () => s.attention === 'approval' ? approvalHtml() : s.attention === 'review' ? reviewRow() : '';
+  const liveLine = () => `<div class="live">${dot()}<span>${liveText()}</span><span class="spacer"></span><span class="elapsed">${fmt(s.elapsed)}</span></div>`;
+  function outboxHtml() {
+    if (!s.outbox.length) return '';
+    const caption = s.paused ? 'Pending until resumed' : 'Pending';
+    return `<div class="outbox">${s.outbox.map((m) => `<div class="pending" data-pending="${m.id}"><div class="you queued">${esc(m.text)}</div>
+      <div class="pending-note"><span class="undo"><button class="cancel" data-act="unsend" data-v="${m.id}">Cancel</button> · </span>${caption}</div></div>`).join('')}</div>`;
+  }
+  function entryHtml(e) {
+    switch (e.t) {
+      case 'note': return `<div class="note">${e.text}</div>`;
+      case 'you': return `<div class="you">${esc(e.text)}</div>`;
+      case 'ask': return e.answer ? `<div class="note">${e.q}</div><div class="you">${esc(e.answer)}</div>` : questionHtml(e);
+    }
+    return '';
+  }
+  function rowHtml(e, si, i) {
+    const status = e.done === false ? dot() : e.ok === false ? '<span class="st fail" role="img" aria-label="failed">✕</span>' : '';
+    return `<button class="row desc" data-act="action" data-v="${si}:${i}"><span class="g">${glyph(e)}</span><span class="label">${esc(actionDescription(e))}</span>${status}<span class="chev"></span></button>`;
+  }
+  const actionRows = (actions, si, start) => actions.map((e, k) => rowHtml(e, si, start + k)).join('');
+  // Consecutive actions form one run, shown as a single "N actions" row unless the view wants every description.
+  function entriesHtml(list, si, tools, ungrouped) {
+    const out = [];
+    for (let i = 0; i < list.length;) {
+      const start = i;
+      if (!isTool(list[i])) { out.push(entryHtml(list[i])); i++; continue; }
+      while (i < list.length && isTool(list[i])) i++;
+      if (!tools) continue;
+      const actions = list.slice(start, i);
+      if (ungrouped) { out.push(`<div class="action-list">${actionRows(actions, si, start)}</div>`); continue; }
+      const n = actions.length, running = actions.find((e) => e.done === false), failed = actions.filter((e) => e.ok === false).length;
+      const summary = `<span class="label">${n} ${n === 1 ? 'action' : 'actions'}</span>${failed ? `<span class="st fail">✕ ${failed} failed</span>` : ''}<span class="chev"></span>${running ? `<span class="running">${dot()}${running.t === 'run' ? 'Running' : 'Editing'}</span>` : ''}`;
+      // Desktop has room to expand in place; on mobile the group opens as a sheet.
+      if (ui.view === 'desktop') {
+        const key = `g${si}-${start}`;
+        out.push(`<details class="action-group" data-key="${key}"${s.open.has(key) ? ' open' : ''}><summary class="row grp">${summary}</summary><div class="action-items">${actionRows(actions, si, start)}</div></details>`);
+      } else out.push(`<button class="row grp" data-act="group" data-v="${si}:${start}">${summary}</button>`);
+    }
+    return out.join('');
+  }
+  function stepLine(i, cls, attrs = '') {
+    const st = s.steps[i], atCur = i === s.cur, c = changes('step', i);
+    const files = c.files ? `<button class="files" data-act="review" data-v="${atCur && s.attention === 'review' ? 'all' : 'step'}" data-step="${i}">${filesLabel(c)}</button>` : '';
+    const state = atCur && s.paused && !s.complete ? '<span class="state">· paused</span>' : '';
+    return `<div class="${cls}"${attrs}><span class="n">${i + 1}</span><span class="t">${s.complete && atCur ? 'All steps complete' : st.title}</span>${state}${files}</div>`;
+  }
+  function threadHtml(kind) {
+    const tools = kind !== 'chat', out = [];
+    s.steps.slice(0, s.cur + 1).forEach((st, i) => {
+      out.push(`<section class="step-section">${stepLine(i, 'divider stepbar steprow', ` data-step="${i}" id="div-${i}"`)}`);
+      out.push(entriesHtml(st.entries, i, tools, kind === 'history'));
+      if (i < s.cur) out.push(`<div class="outcome">✓ ${st.outcome} · ${st.dur}</div>`);
+      out.push('</section>');
+    });
+    if (threadMode()) { out.push(attnHtml()); if (!s.complete && !s.attention) out.push(liveLine()); }
+    out.push(outboxHtml());
+    return out.join('');
+  }
+  function summaryHtml() {
+    const st = s.steps[s.cur], done = s.steps.slice(0, s.cur).map((p) => p.outcome), byFile = new Map();
+    st.entries.forEach((e) => { if (e.t === 'edit' && e.done) byFile.set(e.file, actionDescription(e)); });
+    done.push(...byFile.values());
+    const verified = [...st.entries].reverse().find((e) => e.t === 'run' && e.done && e.ok);
+    if (verified) done.push(actionDescription(verified));
+    const decisions = s.steps.flatMap((p) => p.entries.filter((e) => e.t === 'ask' && e.answer).map((e) => e.decision || e.answer));
+    const next = s.steps.slice(s.cur + 1).map((p, k) => `${p.title} (step ${s.cur + k + 2})`);
+    const list = (items, m, cls = '') => `<ul>${items.map((t) => `<li class="${cls}"><span class="m">${m}</span><span>${esc(t)}</span></li>`).join('')}</ul>`;
+    // The status line below already says what is happening right now.
+    return `<div class="summary"><section><h3>Done so far</h3>${list(done, '✓')}</section>
+      ${decisions.length ? `<section><h3>Decisions</h3>${list(decisions, '•')}</section>` : ''}
+      ${next.length ? `<section><h3>Up next</h3>${list(next, '›', 'next')}</section>` : ''}</div>`;
+  }
+
+  /* ---- rendering: the skeleton is built once; regions update independently so typing is never interrupted ---- */
+  function renderAll() {
+    const mobile = ui.view === 'mobile';
+    el('mock').innerHTML = `<div class="frame ${ui.view}"><div class="col">
+      ${mobile ? '<div class="statusbar"><span>9:41</span><span>Sidekick</span></div>' : ''}
+      <div class="head" id="head"></div>
+      <div class="scrollwrap"><div class="scroll" id="scroll"><div class="inner" id="inner"></div></div><button class="tobottom" id="tobottom" data-act="bottom" hidden>↓</button></div>
+      <div class="foot"><div id="status"></div><div class="composer"><textarea id="ta" rows="1"></textarea><div class="cbar"><span class="ctls" id="ctls"></span><button class="send" aria-label="Send" data-act="send">↑</button></div></div></div>
+    </div><div id="over" style="display: contents"></div></div>`;
+    el('scroll').addEventListener('scroll', onScroll);
+    el('ta').addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); send(); } });
+    renderDynamic(); renderOver();
+  }
+  function renderDynamic() {
+    const sc = el('scroll'), stick = s.stick, top = sc.scrollTop, m = mode();
+    document.querySelector('#mock .frame').classList.toggle('bars', m !== 'summary');
+    renderHead(); renderBody(); renderStatus(); renderControls();
+    el('ta').placeholder = placeholder();
+    sc.scrollTop = m !== 'summary' && stick ? sc.scrollHeight : top;
+    onScroll();
+    if (s.over && s.over.kind !== 'review') renderOver();
+  }
+  function renderHead() {
+    const back = s.screen === 'main' ? '<button class="iconbtn" aria-label="Back to tasks">‹</button>' : '<button class="iconbtn" aria-label="Back" data-act="back">‹</button>';
+    const title = ui.view === 'mobile' ? `<div class="appbar">${back}<span class="title">${TASK}</span><button class="iconbtn" aria-label="More">⋮</button></div>`
+      : `<div class="dtitle">${s.screen === 'main' ? '' : back}<span class="t">${TASK}</span></div>`;
+    // Threads carry their own sticky step bars; only the summary needs the step named up here.
+    el('head').innerHTML = `${title}${mode() === 'summary' ? stepLine(s.cur, 'steprow') : ''}`;
+  }
+  function renderBody() {
+    rememberExpansion(el('inner'));
+    const m = mode();
+    el('inner').innerHTML = m === 'summary' ? summaryHtml() : threadHtml(m);
+  }
+  // Chat and summary views keep tool activity behind a status line; whatever needs you takes its place.
+  function renderStatus() {
+    const box = el('status'), m = mode();
+    if (threadMode() || s.complete) { box.innerHTML = ''; return; }
+    if (s.attention === 'approval') { box.innerHTML = approvalHtml(); return; }
+    if (s.attention === 'review') { box.innerHTML = reviewRow(); return; }
+    // A pending question already sits in the conversation; only the summary needs it surfaced here.
+    if (s.attention === 'question') { box.innerHTML = m === 'summary' ? questionHtml(pendingQuestion()) : ''; return; }
+    box.innerHTML = `<button class="status" data-act="history">${dot()}<span class="txt">${liveText()}</span><span class="elapsed meta">${fmt(s.elapsed)}</span><span class="chev">›</span></button>`;
+  }
+  function renderControls() {
+    const ctls = el('ctls');
+    if (s.complete) { ctls.innerHTML = ''; return; }
+    const pauseLabel = s.paused ? 'Resume' : 'Pause', next = nextLabel(), blocked = s.attention && s.attention !== 'review';
+    ctls.innerHTML = `<button class="ctl" data-act="pause" aria-label="${pauseLabel}" title="${pauseLabel}">${s.paused ? '▶' : '⏸'}</button><button class="ctl" data-act="next" aria-label="${next}" title="${next}"${blocked ? ' disabled' : ''}>⏭</button>`;
+  }
+  function onScroll() {
+    const sc = el('scroll');
+    s.stick = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 12;
+    el('tobottom').hidden = s.stick || mode() === 'summary';
+  }
+
+  /* ---- panels: review / changes, an action group, action details ---- */
+  function renderOver() {
+    const o = el('over');
+    if (!s.over) { o.innerHTML = ''; return; }
+    const body = s.over.kind === 'review' ? reviewHtml() : s.over.kind === 'group' ? groupHtml() : actionHtml();
+    if (ui.view === 'desktop') o.innerHTML = `<aside class="rail">${body}</aside>`;
+    else if (s.over.kind === 'review') o.innerHTML = `<div class="over">${body}</div>`;
+    else o.innerHTML = `<div class="scrim" data-act="close"></div><div class="sheet"><div class="handle"></div>${body}</div>`;
+  }
+  const closeBtn = (glyph = '×') => `<button class="iconbtn" aria-label="Close" data-act="close">${glyph}</button>`;
+  function reviewHtml() {
+    const reviewing = s.attention === 'review', stepLabel = s.scopeStep === s.cur ? 'Current step' : `Step ${s.scopeStep + 1}`;
+    const scopes = reviewing ? [['all', 'All changes'], ['since', 'Since last review']] : [['step', stepLabel], ['all', 'All changes']];
+    if (!scopes.some(([v]) => v === s.scope)) s.scope = scopes[0][0];
+    const files = edits(s.scope, s.scopeStep);
+    if (s.over.file != null) {
+      const f = files[s.over.file];
+      return `<div class="ph"><button class="iconbtn" aria-label="Back" data-act="rback">‹</button><code class="t">${f.file}</code><span class="meta">+${f.add} −${f.del}</span></div>
+        <div class="pb">${f.diff ? `<pre class="diff">${diffLines(f)}</pre><div class="meta">Tap a line to comment.</div>` : '<div class="meta">diff elided in this mock</div>'}</div>`;
+    }
+    const c = sum(files), n = Object.values(s.comments).filter(Boolean).length;
+    return `<div class="ph">${closeBtn(ui.view === 'mobile' ? '‹' : '×')}<b class="t">${reviewing ? 'Review' : 'Changes'}</b></div>
+      <div class="scopebar"><select class="scope" aria-label="Changes to show">${scopes.map(([v, l]) => `<option value="${v}"${s.scope === v ? ' selected' : ''}>${l}</option>`).join('')}</select><span class="meta">${filesLabel(c)} · +${c.add} −${c.del}</span></div>
+      <div class="pb">${files.map((f, i) => `<button class="filerow${f.step === s.cur ? ' cur' : ''}" data-act="file" data-v="${i}"><code>${f.file}</code><span class="st">+${f.add} −${f.del}</span><span class="chev">›</span></button>`).join('')}
+        ${files.length ? '' : '<div class="meta">Nothing new since your last review.</div>'}
+        ${reviewing ? `<div class="actions"><button class="btn primary" data-act="approve">Approve</button><button class="btn" data-act="changes">${n ? `Send ${n} comment${n > 1 ? 's' : ''}` : 'Request changes'}</button></div>` : ''}</div>`;
+  }
+  function diffLines(f) {
+    return f.diff.split('\n').map((l, i) => {
+      const k = `${f.file}:${i}`, c = s.comments[k], cls = l[0] === '+' ? 'a' : l[0] === '-' ? 'd' : '';
+      return `<span class="ln ${cls}${c !== undefined ? ' c' : ''}" data-act="line" data-v="${k}">${esc(l)}</span>${c !== undefined ? `<span class="comment"><textarea data-k="${k}" placeholder="Comment…">${esc(c)}</textarea></span>` : ''}`;
+    }).join('');
+  }
+  function groupHtml() {
+    const { step, start } = s.over, actions = actionRun(step, start), n = actions.length;
+    return `<div class="ph"><b class="t">${n} ${n === 1 ? 'action' : 'actions'}</b>${closeBtn()}</div><div class="pb"><div class="action-list">${actionRows(actions, step, start)}</div></div>`;
+  }
+  function actionHtml() {
+    const e = s.over.entry, failed = e.ok === false;
+    const stats = e.t === 'edit' ? (e.done ? `+${e.add} −${e.del}` : '…') : e.t === 'run' ? (!e.done ? 'running' : failed ? '✕ failed' : '✓ passed') : '';
+    const body = e.t === 'read' ? '<div class="meta">File contents omitted in this mock.</div>'
+      : e.t === 'run' ? `<pre class="diff">${esc(e.done ? e.out : 'Running…')}</pre>`
+      : e.diff ? `<pre class="diff">${diffHtml(e.diff)}</pre>` : '<div class="meta">diff elided in this mock</div>';
+    const back = s.over.group ? '<button class="iconbtn" aria-label="Back to actions" data-act="gback">‹</button>' : '';
+    return `<div class="ph">${back}<span class="g">${glyph(e)}</span><b class="t">${esc(actionDescription(e))}</b>${closeBtn()}</div>
+      <div class="pb"><div class="srcline"><code>${esc(e.t === 'run' ? e.cmd : e.file)}</code><span class="meta${failed ? ' fail' : ''}">${stats}</span></div>${body}</div>`;
+  }
+
+  /* ---- wiring ---- */
+  el('mock').addEventListener('click', (ev) => {
+    if (hold.fired) { hold.fired = false; return; }
+    const b = ev.target.closest('[data-act]');
+    if (!b || b.disabled) return;
+    const v = b.dataset.v;
+    switch (b.dataset.act) {
+      case 'unsend': unsend(+v); break;
+      case 'back': back(); break;
+      case 'history': go('history'); break;
+      case 'bottom': s.stick = true; el('scroll').scrollTop = el('scroll').scrollHeight; break;
+      case 'pause': pause(); break;
+      case 'next': next(); break;
+      case 'send': send(); break;
+      case 'answer': answer(v); break;
+      case 'allow': allow(); break;
+      case 'deny': deny('ask'); break;
+      case 'deny-cancel': deny('cancel'); break;
+      case 'deny-send': deny('send'); break;
+      case 'review': s.scope = v; s.scopeStep = b.dataset.step ? +b.dataset.step : s.cur; s.over = { kind: 'review', file: null }; renderOver(); break;
+      case 'group': {
+        const [step, start] = v.split(':').map(Number);
+        s.over = { kind: 'group', step, start };
+        renderOver();
+        break;
+      }
+      case 'action': {
+        const [step, index] = v.split(':').map(Number);
+        const group = s.over && s.over.kind === 'group' ? { step: s.over.step, start: s.over.start } : null;
+        s.over = { kind: 'action', entry: s.steps[step].entries[index], group };
+        renderOver();
+        break;
+      }
+      case 'gback': s.over = { kind: 'group', ...s.over.group }; renderOver(); break;
+      case 'file': s.over.file = +v; renderOver(); break;
+      case 'rback': s.over.file = null; renderOver(); break;
+      case 'line': if (s.comments[v] === undefined) s.comments[v] = ''; else if (s.comments[v] === '') delete s.comments[v]; renderOver(); break;
+      case 'close': s.over = null; renderOver(); break;
+      case 'approve': advance(); break;
+      case 'changes': requestChanges(); break;
+    }
+  });
+  el('mock').addEventListener('input', (ev) => {
+    if (ev.target.dataset.k !== undefined) s.comments[ev.target.dataset.k] = ev.target.value;
+    if (ev.target.id === 'deny-reason') s.denyNote = ev.target.value;
+  });
+  el('mock').addEventListener('change', (ev) => { if (ev.target.classList.contains('scope')) { s.scope = ev.target.value; renderOver(); } });
+  // On mobile a pending message is taken back by holding it; lifting early or moving (scrolling) keeps it queued.
+  const hold = { timer: null, x: 0, y: 0, fired: false };
+  const release = () => { clearTimeout(hold.timer); hold.timer = null; };
+  el('mock').addEventListener('pointerdown', (ev) => {
+    const row = ui.view === 'mobile' ? ev.target.closest('.pending') : null;
+    if (!row) return;
+    release();
+    hold.x = ev.clientX; hold.y = ev.clientY; hold.fired = false;
+    hold.timer = setTimeout(() => { hold.timer = null; hold.fired = true; unsend(+row.dataset.pending); }, 500);
+  });
+  el('mock').addEventListener('pointermove', (ev) => { if (hold.timer && Math.hypot(ev.clientX - hold.x, ev.clientY - hold.y) > 8) release(); });
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) el('mock').addEventListener(type, release);
+  el('mock').addEventListener('contextmenu', (ev) => { if (ui.view === 'mobile' && ev.target.closest('.pending')) ev.preventDefault(); });
+  function rememberExpansion(region) {
+    region.querySelectorAll('details[data-key]').forEach((d) => {
+      if (d.open) s.open.add(d.dataset.key);
+      else s.open.delete(d.dataset.key);
+    });
+  }
+  document.querySelectorAll('[data-ui]').forEach((seg) => {
+    const key = seg.dataset.ui;
+    if (key === 'design') seg.innerHTML = Object.entries(DESIGNS).map(([k, d]) => `<button data-v="${k}">${d.label}</button>`).join('');
+    seg.addEventListener('click', (ev) => {
+      const b = ev.target.closest('button');
+      if (!b) return;
+      ui[key] = b.dataset.v; syncBar(); reset();
+    });
+  });
+  function syncBar() {
+    document.querySelectorAll('[data-ui]').forEach((seg) => seg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(ui[seg.dataset.ui] === b.dataset.v))));
+    el('note').textContent = DESIGNS[ui.design].note;
+  }
+  el('animate').addEventListener('change', (ev) => { ui.animate = ev.target.checked; if (ui.animate) loop(800); });
+  el('restart').addEventListener('click', reset);
+  syncBar(); reset();
+</script>
+</body>
+</html>
