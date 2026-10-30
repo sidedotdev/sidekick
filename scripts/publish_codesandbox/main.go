@@ -1,4 +1,8 @@
-// Publish a self-contained HTML page: go run ./scripts/publish_codesandbox path/to/page.html
+// Publishes a single self-contained HTML file as a static CodeSandbox sandbox
+// via the Define API, printing the preview and editor URLs. Handy for sharing
+// UX wireframes such as the ones under intent/.generated/app.
+//
+// Usage: go run ./scripts/publish_codesandbox path/to/page.html [more.html ...]
 package main
 
 import (
@@ -8,64 +12,84 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+const defineURL = "https://codesandbox.io/api/v1/sandboxes/define?json=1"
+
+type defineRequest struct {
+	Template string                 `json:"template"`
+	Files    map[string]defineEntry `json:"files"`
 }
 
-func run() error {
-	if len(os.Args) != 2 {
-		return fmt.Errorf("usage: publish_codesandbox <self-contained.html> (inline local assets first)")
+type defineEntry struct {
+	Content string `json:"content"`
+}
+
+type defineResponse struct {
+	SandboxID string `json:"sandbox_id"`
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: publish_codesandbox <index.html> [extra files...]")
+		os.Exit(2)
 	}
-	page, err := os.ReadFile(os.Args[1])
+	id, err := publish(os.Args[1:])
 	if err != nil {
-		return err
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
 	}
-	type file struct {
-		Content string `json:"content"`
-	}
-	payload := struct {
-		Template string          `json:"template"`
-		Files    map[string]file `json:"files"`
-	}{
+	fmt.Printf("preview: https://%s.csb.app/\n", id)
+	fmt.Printf("editor:  https://codesandbox.io/s/%s\n", id)
+}
+
+// publish uploads the given files, using the first as index.html so the
+// static template serves it at the sandbox root.
+func publish(paths []string) (string, error) {
+	req := defineRequest{
 		Template: "static",
-		Files: map[string]file{
-			"index.html":          {Content: string(page)},
+		Files: map[string]defineEntry{
 			"package.json":        {Content: `{"name":"static-preview","main":"index.html"}`},
 			"sandbox.config.json": {Content: `{"template":"static"}`},
 		},
 	}
-	body, err := json.Marshal(payload)
+	for i, p := range paths {
+		content, err := os.ReadFile(p)
+		if err != nil {
+			return "", err
+		}
+		name := filepath.Base(p)
+		if i == 0 {
+			name = "index.html"
+		}
+		req.Files[name] = defineEntry{Content: string(content)}
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	client := &http.Client{Timeout: 60 * time.Second}
-	response, err := client.Post("https://codesandbox.io/api/v1/sandboxes/define?json=1", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(defineURL, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("publish: %w", err)
+		return "", fmt.Errorf("publish: %w", err)
 	}
-	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("read publish response: %w", err)
+		return "", fmt.Errorf("read publish response: %w", err)
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("publish: %s: %s", response.Status, data)
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("define API returned %s: %s", resp.Status, raw)
 	}
-	var result map[string]json.RawMessage
-	if err := json.Unmarshal(data, &result); err != nil {
-		return fmt.Errorf("decode publish response: %w", err)
+	var out defineResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", fmt.Errorf("decode publish response: %w", err)
 	}
-	var id string
-	if err := json.Unmarshal(result["sandbox_id"], &id); err != nil || id == "" || strings.Trim(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != "" {
-		return fmt.Errorf("publish returned no valid sandbox ID: %s", data)
+	if out.SandboxID == "" || strings.Trim(out.SandboxID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != "" {
+		return "", fmt.Errorf("publish returned no valid sandbox ID: %s", raw)
 	}
-	fmt.Printf("https://%s.csb.app/\n", id)
-	return nil
+	return out.SandboxID, nil
 }
