@@ -71,7 +71,7 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, requestedKeepLength int, modelConfig common.ModelConfig) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, requestedKeepLength int, modelConfig common.ModelConfig) error {
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
@@ -95,17 +95,13 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 				ModelConfig:         modelConfig,
 			}).Get(ctx, &manageOutput)
 			if err != nil {
-				wrapErr := fmt.Errorf("ManageChatHistory ManageV4 activity returned an error: %w", err)
-				workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
-				panic(wrapErr)
+				return fmt.Errorf("ManageChatHistory ManageV4 activity returned an error: %w", err)
 			}
 			managedChatHistory = manageOutput.ChatHistory
 		} else {
 			err := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, requestedKeepLength).Get(ctx, &managedChatHistory)
 			if err != nil {
-				wrapErr := fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
-				workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
-				panic(wrapErr)
+				return fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
 			}
 		}
 
@@ -117,7 +113,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 			panic(wrapErr)
 		}
 		llm2History.SetRefs(managedLlm2History.Refs())
-		return
+		return nil
 	}
 
 	// Convert Messages() to []llm.ChatMessage for activity input
@@ -136,20 +132,12 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatMessages, requestedKeepLength)
 	}
 	err := activityFuture.Get(ctx, &newChatHistory)
-
-	// NOTE: ManageChatHistory was never supposed to be fallible. But then we
-	// made it an activity for better observability. Even though the activity
-	// never returns an err. We'll panic to make such an unexpected error visible.
-	// TODO: in the future, we'll likely add fallible logic, eg calling an LLM
-	// to summarize. At that point, adjust ManageChatHistory to return the err
-	// instead.
 	if err != nil {
-		wrapErr := fmt.Errorf("ManageChatHistory activity returned an error: %w", err)
-		workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
-		panic(wrapErr)
+		return fmt.Errorf("ManageChatHistory activity returned an error: %w", err)
 	}
 
 	chatHistory.History = persisted_ai.NewLegacyChatHistoryFromChatMessages(newChatHistory)
+	return nil
 }
 
 func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {

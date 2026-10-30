@@ -13,6 +13,8 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	jsapi "github.com/nats-io/nats.go/jetstream"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,6 +24,8 @@ func startStorageTestServer(t *testing.T, dir string) (*server.Server, *nats.Con
 		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dir,
 	})
 	require.NoError(t, err)
+	logger := zerolog.New(zerolog.TestWriter{T: t}).With().Str("storeDir", dir).Logger()
+	s.SetLogger(storageTestLogger{log: logger}, false, false)
 	s.Start()
 	require.True(t, s.ReadyForConnections(5*time.Second))
 	t.Cleanup(func() {
@@ -117,7 +121,8 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_, nc := startStorageTestServer(t, t.TempDir())
+			dir := t.TempDir()
+			_, nc := startStorageTestServer(t, dir)
 			js, err := jsapi.New(nc)
 			require.NoError(t, err)
 			stream, err := js.CreateStream(ctx, jsapi.StreamConfig{
@@ -146,8 +151,14 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 
 			// Explicit deletion is safe here because the test has no other publishers.
 			require.NoError(t, js.DeleteStream(ctx, EphemeralStreamName))
-			s, err := NewStreamer(nc)
-			require.NoError(t, err)
+			// NATS removes empty account directories asynchronously, which can race
+			// with creating the replacement stream's storage directories.
+			var s *Streamer
+			require.EventuallyWithT(t, func(c *assert.CollectT) {
+				var err error
+				s, err = NewStreamer(nc)
+				assert.NoError(c, err)
+			}, 5*time.Second, 10*time.Millisecond)
 			require.Zero(t, requireFileConfig(t, ctx, s).State.Msgs)
 		})
 	}

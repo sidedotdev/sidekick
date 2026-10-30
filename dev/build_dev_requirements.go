@@ -327,7 +327,9 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 		modelConfig = iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	}
 	maxLength := min(defaultRequestedKeepLength+state.contextSizeExtension, extendedRequestedKeepLength)
-	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig)
+	if err := ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig); err != nil {
+		return nil, err
+	}
 
 	hasExistingRequirements := len(state.devRequirements.AcceptanceCriteria) > 0 || state.devRequirements.Overview != ""
 	var recordedReqs *DevRequirements

@@ -288,7 +288,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		if v := workflow.GetVersion(actionCtx, "chat-history-manage-v4", workflow.DefaultVersion, 1); v == 1 {
 			modelConfig = actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 		}
-		ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultRequestedKeepLength, modelConfig)
+		if err := ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultRequestedKeepLength, modelConfig); err != nil {
+			return nil, "", err
+		}
 
 		attempts++
 		iterationsSinceLastFeedback++
