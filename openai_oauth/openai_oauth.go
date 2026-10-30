@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"sidekick/common"
@@ -195,7 +194,7 @@ func ExchangeRefreshToken(ctx context.Context, refreshToken string) (*Credential
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, &common.OAuthRefreshError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var tokenResp struct {
@@ -265,12 +264,11 @@ func GetAndMaybeRefresh(ctx context.Context, secretManager interface{ GetSecret(
 		newCreds, refreshErr := ExchangeRefreshToken(ctx, creds.RefreshToken)
 		if refreshErr != nil {
 			refreshErr = fmt.Errorf("failed to refresh OpenAI OAuth token: %w", refreshErr)
-			var netErr net.Error
-			if errors.Is(refreshErr, context.DeadlineExceeded) || errors.Is(refreshErr, context.Canceled) ||
-				(errors.As(refreshErr, &netErr) && netErr.Timeout()) {
-				return nil, false, refreshErr
+			var responseErr *common.OAuthRefreshError
+			if errors.As(refreshErr, &responseErr) && responseErr.InvalidCredentials() {
+				return nil, false, invalidOAuthError(profileId, refreshErr)
 			}
-			return nil, false, invalidOAuthError(profileId, refreshErr)
+			return nil, false, refreshErr
 		}
 		if storeErr := StoreForProfileFn(secret_manager.ProfileIdOf(secretManager), newCreds); storeErr != nil {
 			return nil, false, fmt.Errorf("failed to store refreshed OpenAI OAuth credentials: %w", storeErr)
