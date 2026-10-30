@@ -74,6 +74,13 @@ const (
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
 func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, requestedKeepLength int, modelConfig common.ModelConfig) {
+	if workflow.GetVersion(ctx, "chat-history-manage-ignore-pause", workflow.DefaultVersion, 1) == 1 {
+		// History maintenance must finish even when a pause cancels the caller.
+		var cancel workflow.CancelFunc
+		ctx, cancel = workflow.NewDisconnectedContext(ctx)
+		defer cancel()
+	}
+
 	ctx = workflow.WithRetryPolicy(ctx, temporal.RetryPolicy{
 		InitialInterval:    time.Second,
 		BackoffCoefficient: 2,
