@@ -881,7 +881,10 @@ type mergeResultSyncerEnv struct {
 }
 
 func (e *mergeResultSyncerEnv) SyncBranchToRemote(ctx context.Context, branch string) error {
-	runGitCommandInTestRepo(e.t, e.childRepoDir, "fetch", e.hostRepoDir, "+refs/heads/"+branch+":refs/heads/"+branch)
+	runGitCommandInTestRepo(e.t, e.childRepoDir, "fetch", "--update-head-ok", e.hostRepoDir, "+refs/heads/"+branch+":refs/heads/"+branch)
+	if worktreePath := hostWorktreePathForBranch(e.t, e.childRepoDir, branch); worktreePath != "" {
+		runGitCommandInTestRepo(e.t, worktreePath, "reset", "--hard", "refs/heads/"+branch)
+	}
 	return nil
 }
 
@@ -1219,4 +1222,116 @@ func TestGitMergeActivityAuthoritativeHostTarget(t *testing.T) {
 func transferWorktreeChanges(ctx context.Context, container env.EnvContainer, params GitTransferWorktreeChangesParams) error {
 	_, err := GitTransferWorktreeChangesActivity(ctx, container, params)
 	return err
+}
+
+func TestGitMergeActivityRemoteTrackingTarget(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		target     string
+		hostTarget bool
+	}{
+		{name: "local branch", target: iddBranch},
+		{name: "remote tracking branch", target: "origin/" + iddBranch},
+		{name: "fully qualified remote tracking branch", target: "refs/remotes/origin/" + iddBranch},
+		{name: "fully qualified local branch", target: "refs/heads/" + iddBranch},
+		{name: "authoritative host worktree", target: "origin/" + iddBranch, hostTarget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixture := setupIddChildMergeFixture(t)
+			childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
+			require.NoError(t, err)
+			syncer := &mergeResultSyncerEnv{
+				Env:          childEnv,
+				t:            t,
+				childRepoDir: fixture.childRepoDir,
+				hostRepoDir:  fixture.hostRepoDir,
+			}
+			var mergeEnv env.Env = syncer
+			if tc.hostTarget {
+				mergeEnv = &hostTargetMergeEnv{mergeResultSyncerEnv: syncer}
+			}
+			trackingTip := strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "refs/remotes/origin/"+iddBranch))
+			sourceTip := strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", iddChildBranch))
+
+			for attempt := 0; attempt < 2; attempt++ {
+				result, err := GitMergeActivity(ctx, env.EnvContainer{Env: mergeEnv}, GitMergeParams{
+					SourceBranch: iddChildBranch,
+					TargetBranch: tc.target,
+				})
+				require.NoError(t, err)
+				require.False(t, result.HasConflicts)
+
+				runGitCommandInTestRepo(t, fixture.hostRepoDir, "merge-base", "--is-ancestor", sourceTip, "refs/heads/"+iddBranch)
+				content, err := os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "child.txt"))
+				require.NoError(t, err)
+				assert.Equal(t, "child work\n", string(content))
+				content, err = os.ReadFile(filepath.Join(fixture.hostWorktreeDir, "intent.md"))
+				require.NoError(t, err)
+				assert.Equal(t, "updated intent\n", string(content))
+			}
+
+			if tc.hostTarget {
+				assert.Empty(t, syncer.syncedBranches)
+			} else {
+				assert.Equal(t, []string{iddBranch, iddBranch}, syncer.syncedBranches)
+				assert.Equal(t, iddBranch, strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "symbolic-ref", "--short", "HEAD")))
+			}
+			assert.Equal(t, trackingTip, strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", "refs/remotes/origin/"+iddBranch)))
+			assert.Empty(t, strings.TrimSpace(runGitCommandInTestRepo(t, fixture.hostRepoDir, "for-each-ref", "--format=%(refname)", "refs/heads/origin/")))
+		})
+	}
+}
+
+func TestGitMergeActivityKeepsTargetOnLocalBranch(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		remote      string
+		localTarget bool
+	}{
+		{name: "remote tracking target", remote: "origin"},
+		{name: "custom remote", remote: "upstream"},
+		{name: "remote containing slash", remote: "team/upstream"},
+		{name: "literal local branch with remote prefix", remote: "origin", localTarget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixture := setupIddChildMergeFixture(t)
+			if tc.remote != "origin" {
+				runGitCommandInTestRepo(t, fixture.childRepoDir, "remote", "rename", "origin", tc.remote)
+			}
+			target := tc.remote + "/" + iddBranch
+			wantBranch := iddBranch
+			trackingRef := "refs/remotes/" + target
+			trackingTip := strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", trackingRef))
+			if tc.localTarget {
+				runGitCommandInTestRepo(t, fixture.childRepoDir, "branch", target, trackingRef)
+				wantBranch = target
+			}
+			childEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: fixture.childRepoDir})
+			require.NoError(t, err)
+			sourceTip := strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", iddChildBranch))
+
+			for attempt := 0; attempt < 2; attempt++ {
+				result, err := GitMergeActivity(ctx, env.EnvContainer{Env: childEnv}, GitMergeParams{
+					SourceBranch: iddChildBranch,
+					TargetBranch: target,
+				})
+				require.NoError(t, err)
+				require.False(t, result.HasConflicts)
+				assert.Equal(t, wantBranch, strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "symbolic-ref", "--short", "HEAD")))
+				runGitCommandInTestRepo(t, fixture.childRepoDir, "merge-base", "--is-ancestor", sourceTip, "refs/heads/"+wantBranch)
+				content, err := os.ReadFile(filepath.Join(fixture.childRepoDir, "child.txt"))
+				require.NoError(t, err)
+				assert.Equal(t, "child work\n", string(content))
+			}
+			assert.Equal(t, trackingTip, strings.TrimSpace(runGitCommandInTestRepo(t, fixture.childRepoDir, "rev-parse", trackingRef)))
+		})
+	}
 }
