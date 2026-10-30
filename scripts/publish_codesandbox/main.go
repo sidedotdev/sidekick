@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -48,7 +49,13 @@ func main() {
 // publish uploads the given files, using the first as index.html so the
 // static template serves it at the sandbox root.
 func publish(paths []string) (string, error) {
-	req := defineRequest{Template: "static", Files: map[string]defineEntry{}}
+	req := defineRequest{
+		Template: "static",
+		Files: map[string]defineEntry{
+			"package.json":        {Content: `{"name":"static-preview","main":"index.html"}`},
+			"sandbox.config.json": {Content: `{"template":"static"}`},
+		},
+	}
 	for i, p := range paths {
 		content, err := os.ReadFile(p)
 		if err != nil {
@@ -67,19 +74,22 @@ func publish(paths []string) (string, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Post(defineURL, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("publish: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read publish response: %w", err)
 	}
 	if resp.StatusCode/100 != 2 {
 		return "", fmt.Errorf("define API returned %s: %s", resp.Status, raw)
 	}
 	var out defineResponse
-	if err := json.Unmarshal(raw, &out); err != nil || out.SandboxID == "" {
-		return "", fmt.Errorf("unexpected define API response: %s", raw)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", fmt.Errorf("decode publish response: %w", err)
+	}
+	if out.SandboxID == "" || strings.Trim(out.SandboxID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != "" {
+		return "", fmt.Errorf("publish returned no valid sandbox ID: %s", raw)
 	}
 	return out.SandboxID, nil
 }

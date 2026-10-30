@@ -108,7 +108,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 	start := time.Now()
 	streamOut, err := client.ConverseStream(ctx, input)
 	if err != nil {
-		return nil, classifyBadRequestError(err, fmt.Errorf("bedrock: ConverseStream: %w", err))
+		return nil, classifyBedrockError(fmt.Errorf("bedrock: ConverseStream: %w", err))
 	}
 	stream := streamOut.GetStream()
 	defer stream.Close()
@@ -138,7 +138,7 @@ func (p BedrockProvider) Stream(ctx context.Context, request StreamRequest, even
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("bedrock: stream: %w", err)
+		return nil, classifyBedrockError(fmt.Errorf("bedrock: stream: %w", err))
 	}
 
 	log.Debug().
@@ -252,13 +252,13 @@ func bedrockAnthropicRequestFields(options Options, model string) (fields map[st
 	case "max":
 		return map[string]any{"thinking": adaptiveThinking}, maxTokens, resolvedEffort
 	}
-	// max_tokens must be greater than thinking.budget_tokens; the Converse
-	// default max tokens can be lower than typical budgets, so always set it
-	// when budget-based thinking is enabled.
 	if maxTokens <= 0 {
-		maxTokens = anthropicDefaultMaxTokens
+		if modelInfo, _ := common.GetModel(options.Provider, model); modelInfo != nil && modelInfo.Limit.Output > 0 {
+			maxTokens = modelInfo.Limit.Output
+		}
 	}
-	if maxTokens <= budgetTokens {
+	// A supplied max_tokens must be greater than thinking.budget_tokens.
+	if maxTokens > 0 && maxTokens <= budgetTokens {
 		maxTokens = budgetTokens + 1000
 	}
 	return map[string]any{

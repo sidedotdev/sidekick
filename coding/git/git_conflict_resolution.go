@@ -86,7 +86,7 @@ func GitMergeAbortActivity(ctx context.Context, envContainer env.EnvContainer, p
 	if out.ExitStatus != 0 {
 		return fmt.Errorf("git merge --abort failed: %s", strings.TrimSpace(out.Stderr+out.Stdout))
 	}
-	return nil
+	return releaseConflictSnapshots(ctx, envContainer, dir)
 }
 
 // GitMergeInProgressParams targets the worktree to inspect.
@@ -254,6 +254,7 @@ func GitSnapshotConflictMarkersActivity(ctx context.Context, envContainer env.En
 		`GIT_INDEX_FILE="$tmpidx" git read-tree HEAD`,
 		fmt.Sprintf(`GIT_INDEX_FILE="$tmpidx" git %s`, strings.Join(addArgs, " ")),
 		`tree="$(GIT_INDEX_FILE="$tmpidx" git write-tree)"`,
+		fmt.Sprintf(`git update-ref %s"$tree" "$tree"`, shellQuote(env.ConflictSnapshotRefPrefix)),
 		`rm -f "$tmpidx"`,
 		`printf '%s\n' "$tree"`,
 	}
@@ -451,7 +452,7 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 			if err := syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
 				return fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
 			}
-			return nil
+			return releaseConflictSnapshots(ctx, envContainer, dir)
 		}
 	}
 
@@ -504,7 +505,7 @@ func GitCommitMergeActivity(ctx context.Context, envContainer env.EnvContainer, 
 		return fmt.Errorf("commit succeeded but failed to sync flow branch to local repo: %w", err)
 	}
 
-	return nil
+	return releaseConflictSnapshots(ctx, envContainer, dir)
 }
 
 // GitMergeIntoWorktreeParams merges a branch into the working tree at
@@ -525,10 +526,10 @@ type GitMergeIntoWorktreeResult struct {
 	WorktreePath string `json:"worktreePath"`
 }
 
-// GitMergeIntoWorktreeActivity runs `git merge --no-commit --no-ff
-// <sourceBranch>` in the given worktree directory. The merge is left
-// un-finalized either way so the caller can run further steps before
-// committing.
+// GitMergeIntoWorktreeActivity checkpoints pending work in the flow's own
+// worktree, then runs `git merge --no-commit --no-ff <sourceBranch>` there.
+// The merge is left un-finalized so the caller can review and resolve it
+// before committing.
 func GitMergeIntoWorktreeActivity(ctx context.Context, envContainer env.EnvContainer, params GitMergeIntoWorktreeParams) (GitMergeIntoWorktreeResult, error) {
 	var result GitMergeIntoWorktreeResult
 	if params.SourceBranch == "" {
@@ -560,6 +561,22 @@ func GitMergeIntoWorktreeActivity(ctx context.Context, envContainer env.EnvConta
 	}
 	envVars := BuildGitEnvVars(committerName, committerEmail)
 
+	inProgress, err := prepareWorktreeForConflictMerge(ctx, envContainer, dir, params.SourceBranch, envVars)
+	if err != nil {
+		return result, err
+	}
+	if err := syncFlowBranchBackup(ctx, envContainer, dir); err != nil {
+		return result, fmt.Errorf("worktree prepared but failed to sync flow branch to local repo: %w", err)
+	}
+	if inProgress {
+		unmerged, err := GitListUnmergedActivity(ctx, envContainer, GitListUnmergedParams{WorktreePath: dir})
+		if err != nil {
+			return result, err
+		}
+		result.HasConflicts = len(unmerged) > 0
+		return result, nil
+	}
+
 	cmd := fmt.Sprintf(
 		"cd %s && git merge --no-commit --no-ff %s",
 		shellQuote(dir), shellQuote(params.SourceBranch),
@@ -574,11 +591,74 @@ func GitMergeIntoWorktreeActivity(ctx context.Context, envContainer env.EnvConta
 		return result, fmt.Errorf("failed to execute merge into worktree: %w", err)
 	}
 	if out.ExitStatus != 0 {
-		if strings.Contains(out.Stdout, "CONFLICT") || strings.Contains(out.Stderr, "conflict") {
+		if gitMergeConflicted(out) {
 			result.HasConflicts = true
 			return result, nil
 		}
 		return result, fmt.Errorf("merge into worktree failed: %s", strings.TrimSpace(out.Stderr+out.Stdout))
 	}
 	return result, nil
+}
+
+// Pending source work belongs in the merge ancestry: stashing it would leave
+// it unavailable to the resolver while the merge has an unmerged index.
+func prepareWorktreeForConflictMerge(ctx context.Context, envContainer env.EnvContainer, dir, sourceBranch string, envVars []string) (bool, error) {
+	script := fmt.Sprintf(`cd %s || exit
+target=$(git rev-parse --verify --end-of-options %s) || exit
+merge_head=$(git rev-parse --verify -q MERGE_HEAD)
+if [ -n "$merge_head" ]; then
+	if [ "$merge_head" != "$target" ]; then
+		echo "a merge with a different target is already in progress" >&2
+		exit 1
+	fi
+	printf 'in-progress'
+	exit 0
+fi
+unmerged=$(git ls-files --unmerged) || exit
+if [ -n "$unmerged" ]; then
+	echo "cannot prepare worktree with unresolved index entries" >&2
+	exit 1
+fi
+status=$(git status --porcelain) || exit
+if [ -n "$status" ]; then
+	git add --all || exit
+	git diff --cached --quiet
+	case $? in
+		0) ;;
+		1) git commit -m 'Preserve pending work before conflict resolution' >&2 || exit ;;
+		*) exit 1 ;;
+	esac
+fi`, shellQuote(dir), shellQuote(sourceBranch+"^{commit}"))
+	out, err := runGitIndexCommandWithRetry(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "sh",
+		Args:         []string{"-c", script},
+		EnvVars:      envVars,
+	}, dir)
+	if err != nil {
+		return false, fmt.Errorf("failed to prepare worktree for conflict merge: %w", err)
+	}
+	if out.ExitStatus != 0 {
+		return false, fmt.Errorf("failed to prepare worktree for conflict merge: %s", strings.TrimSpace(out.Stderr+out.Stdout))
+	}
+	return strings.TrimSpace(out.Stdout) == "in-progress", nil
+}
+
+func releaseConflictSnapshots(ctx context.Context, envContainer env.EnvContainer, dir string) error {
+	cmd := fmt.Sprintf(`cd %s &&
+refs="$(git for-each-ref --format='delete %%(refname)' %s)" &&
+if [ -n "$refs" ]; then printf '%%s\n' "$refs" | git update-ref --stdin; fi`,
+		shellQuote(dir), shellQuote(env.ConflictSnapshotRefPrefix))
+	out, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "sh",
+		Args:         []string{"-c", cmd},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to release conflict snapshots: %w", err)
+	}
+	if out.ExitStatus != 0 {
+		return fmt.Errorf("failed to release conflict snapshots: %s", strings.TrimSpace(out.Stderr+out.Stdout))
+	}
+	return nil
 }

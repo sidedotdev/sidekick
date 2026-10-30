@@ -17,10 +17,24 @@ const ProviderAuthScopeNote = "Applies to this flow only. To change the default,
 
 // ProviderAuthFailureHandler asks the user to fix broken provider credentials
 // when an activity fails with a provider auth error, then retries with the
-// chosen auth type. Other failures get the generic continue prompt.
-type ProviderAuthFailureHandler struct{}
+// chosen auth type. Provider rate limits race an automatic backoff retry
+// against the user. Other failures get the generic continue prompt. Rate limit
+// backoff is tracked per handler instance, so use one per retry loop.
+type ProviderAuthFailureHandler struct {
+	rateLimit flow_action.RateLimitFailureHandler
+}
 
-func (ProviderAuthFailureHandler) HandleActivityFailure(eCtx flow_action.ExecContext, actionName string, activityErr error) (flow_action.RetryDecision, error) {
+func NewProviderAuthFailureHandler() *ProviderAuthFailureHandler {
+	return &ProviderAuthFailureHandler{}
+}
+
+func (h *ProviderAuthFailureHandler) HandleActivityFailure(eCtx flow_action.ExecContext, actionName string, activityErr error) (flow_action.RetryDecision, error) {
+	if _, isRateLimit := common.AsProviderRateLimitError(activityErr); isRateLimit {
+		return h.rateLimit.HandleActivityFailure(eCtx, actionName, activityErr)
+	}
+	// Any other failure ends a run of consecutive rate limits.
+	h.rateLimit = flow_action.RateLimitFailureHandler{}
+
 	details, ok := common.AsProviderAuthError(activityErr)
 	if !ok {
 		return flow_action.ContinuePromptFailureHandler{}.HandleActivityFailure(eCtx, actionName, activityErr)

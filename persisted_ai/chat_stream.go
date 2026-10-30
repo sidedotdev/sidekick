@@ -246,7 +246,7 @@ func executeChatStreamV1(
 		initialProviders := streamInput.Providers
 		attempt := 0
 		err = flow_action.PerformWithUserRetryOptions(actionCtx, flow_action.UserRetryOptions{
-			OnFailure:             ProviderAuthFailureHandler{},
+			OnFailure:             NewProviderAuthFailureHandler(),
 			PropagateCancellation: propagateCancellation,
 			ResolveArgs: func() ([]interface{}, error) {
 				attempt++
@@ -300,8 +300,11 @@ func executeChatStreamV1(
 // serialized as activity input: the embedded ModelConfig.MaxTokens shares the
 // "maxTokens" JSON key with Options.MaxTokens, so encoding/json drops it.
 func resolveMaxTokens(options llm2.Options) llm2.Options {
-	if options.MaxTokens <= 0 && options.ModelConfig.MaxTokens > 0 {
-		options.MaxTokens = options.ModelConfig.MaxTokens
+	if options.MaxTokens <= 0 {
+		options.MaxTokens = 0
+		if options.ModelConfig.MaxTokens > 0 {
+			options.MaxTokens = options.ModelConfig.MaxTokens
+		}
 	}
 	return options
 }

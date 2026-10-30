@@ -10,26 +10,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	historypb "go.temporal.io/api/history/v1"
+	"go.temporal.io/api/workflowservice/v1"
 )
-
-type failureDetailHistoryIterator struct {
-	event *historypb.HistoryEvent
-}
-
-func (i *failureDetailHistoryIterator) HasNext() bool {
-	return i.event != nil
-}
-
-func (i *failureDetailHistoryIterator) Next() (*historypb.HistoryEvent, error) {
-	event := i.event
-	i.event = nil
-	return event, nil
-}
 
 func TestGetFlowEventDetailHandlerFailure(t *testing.T) {
 	t.Parallel()
@@ -94,9 +80,11 @@ func TestGetFlowEventDetailHandlerFailure(t *testing.T) {
 			t.Parallel()
 			ctrl := NewMockController(t)
 			tt.event.EventId = 7
+			service := &resetHistoryService{pages: []*workflowservice.GetWorkflowExecutionHistoryReverseResponse{
+				{History: &historypb.History{Events: []*historypb.HistoryEvent{tt.event}}},
+			}}
 			ctrl.temporalClient.(*mocks.Client).
-				On("GetWorkflowHistory", mock.Anything, "flow-1", "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT).
-				Return(&failureDetailHistoryIterator{event: tt.event}).Once()
+				On("WorkflowService").Return(service).Once()
 
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)

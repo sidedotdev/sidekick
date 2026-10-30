@@ -51,6 +51,24 @@ func TestInterdiffAppliesToReviewedContent(t *testing.T) {
 		{"shared replacement before a differing change without final newline", "s\nA\nx\ny\nB\ne", "s\nA2\nx\ny\nB2\ne", "s\nA2\nx\ny\nB3\nB4\ne"},
 		{"shared replacement then differing final line without newline", "s\nA\nx\nB", "s\nA2\nx\nB2", "s\nA2\nx\nB3"},
 		{"differing change then shared final replacement without newline", "s\nA\nx\nB", "s\nA2\nx\nB2", "s\nA3\nx\nB2"},
+		{
+			"reverted trailing addition after changed earlier hunk",
+			numbered(50, nil, true),
+			numbered(50, map[int]string{10: "line 10\nprior", 40: "line 40\nreverted"}, true),
+			numbered(50, map[int]string{10: "line 10\ncurrent\nextra"}, true),
+		},
+		{
+			"reverted trailing deletion after changed earlier hunk",
+			numbered(50, nil, true),
+			strings.ReplaceAll(numbered(50, map[int]string{10: "line 10\nprior"}, true), "line 40\n", ""),
+			numbered(50, map[int]string{10: "line 10\ncurrent\nextra"}, true),
+		},
+		{
+			"reverted trailing replacement after changed earlier hunk",
+			numbered(50, nil, true),
+			numbered(50, map[int]string{10: "line 10\nprior", 40: "replacement"}, true),
+			numbered(50, map[int]string{10: "line 10\ncurrent\nextra"}, true),
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -303,12 +321,12 @@ func TestInterdiffReversesFileCreationAndDeletion(t *testing.T) {
 		{
 			"creation",
 			"diff --git a/f b/f\n--- /dev/null\n+++ b/f\n@@ -0,0 +1,2 @@\n+one\n+two\n",
-			"diff --git a/f b/f\n--- a/f\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two\n",
+			"diff --git a/f b/f\ndeleted file mode 100644\n--- a/f\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two\n",
 		},
 		{
 			"deletion",
 			"diff --git a/f b/f\n--- a/f\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two\n",
-			"diff --git a/f b/f\n--- /dev/null\n+++ b/f\n@@ -0,0 +1,2 @@\n+one\n+two\n",
+			"diff --git a/f b/f\nnew file mode 100644\n--- /dev/null\n+++ b/f\n@@ -0,0 +1,2 @@\n+one\n+two\n",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

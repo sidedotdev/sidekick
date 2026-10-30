@@ -1,17 +1,31 @@
 <template>
-  <div class="flow-action" :class="{ 'expanded-action': expand }" ref="container">
+  <div class="flow-action" :class="{ 'expanded-action': expand }" :style="{ '--level': level }" ref="container">
     <div class="flow-action-header" :class="{ 'expanded-header': expand }">
       <a @click="toggle()" :class="{'disable-toggle': disableToggle}">
         <h3 :title="`Updated: ${formatActionTimestamp(flowAction.updated)}`">
           {{ actionHeading }}
-          <span v-if="flowAction?.actionStatus == 'started'">...</span>
-          <span v-if="flowAction?.actionStatus == 'failed'">Failed</span>
-          <span v-else-if="summary != null" class="action-summary">
-            {{ summary.emoji }} {{ summary.text }}
+          <span v-if="flowAction.actionType === 'env_switch'" class="env-switch-status">
+            {{ flowAction.actionStatus }}
           </span>
+          <template v-else>
+            <span v-if="flowAction?.actionStatus == 'started'">...</span>
+            <span v-if="flowAction?.actionStatus == 'failed'">Failed</span>
+            <span v-else-if="summary != null" class="action-summary">
+              {{ summary.emoji }} {{ summary.text }}
+            </span>
+          </template>
+          <span v-if="failedAttempts" class="action-attempts" @click.stop="showAttempts">{{ failedAttempts }}</span>
         </h3>
       </a>
       <hr>
+    </div>
+    <p
+      v-if="flowAction.actionType === 'env_switch' && flowAction.actionStatus === 'failed'"
+      class="env-switch-error"
+      role="alert"
+    >{{ flowAction.actionResult }}</p>
+    <div v-if="expand && flowAction.attempts?.length" :class="{ 'expanded': expand, 'odd': level % 2 === 1 }">
+      <FlowActionAttempts :attempts="flowAction.attempts" v-model:open="attemptsOpen" />
     </div>
     <div v-if="actionSpecificComponent" :class="{ 'expanded': expand, 'odd': level % 2 === 1 }">
       <component ref="actionComponentRef" :is="actionSpecificComponent" :flowAction="flowAction" :expand="expand" :level="level + 1"/>
@@ -43,6 +57,8 @@ import RetrieveCodeContextFlowAction from './RetrieveCodeContextFlowAction.vue';
 import BulkSearchRepositoryFlowAction from './BulkSearchRepositoryFlowAction.vue';
 import ReadFileLinesFlowAction from './ReadFileLinesFlowAction.vue';
 import RunCommandFlowAction from './RunCommandFlowAction.vue';
+import FlowActionAttempts from './FlowActionAttempts.vue';
+import { failedAttemptsSummary } from '@/lib/retryAttempts';
 import { useEventBus } from '@vueuse/core';
 
 const props = defineProps({
@@ -114,10 +130,23 @@ const formatActionTimestamp = (timestamp: Date): string => {
   return new Date(timestamp).toLocaleString();
 };
 
+const failedAttempts = computed(() => failedAttemptsSummary(props.flowAction));
+const attemptsOpen = ref(false);
+
+function showAttempts() {
+  expand.value = true;
+  attemptsOpen.value = true;
+}
+
 const actionHeading = computed(() => {
   const actionType = props.flowAction.actionType;
   
   switch (actionType) {
+    case 'env_switch':
+      if (props.flowAction.actionParams.from === props.flowAction.actionParams.to) {
+        return `Reconfigure environment: ${props.flowAction.actionParams.to}`;
+      }
+      return `Switch environment: ${props.flowAction.actionParams.from} → ${props.flowAction.actionParams.to}`;
     case 'user_request':
       if (props.flowAction.actionStatus === 'complete') {
         return 'Human Input';
@@ -370,6 +399,36 @@ const summary = computed<Summary | null>(() => {
 </script>
 
 <style scoped>
+.env-switch-status {
+  margin-left: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  border: 0.0625rem solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-background-soft);
+  color: var(--color-text);
+  font-size: 0.85em;
+  text-transform: capitalize;
+}
+
+.env-switch-error {
+  padding: 0.75rem;
+  border: 0.0625rem solid var(--color-error-border);
+  border-radius: 0.25rem;
+  background: var(--color-error-background);
+  color: var(--color-error-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.action-attempts {
+  margin-left: 0.5em;
+  font-size: 0.8em;
+  font-weight: normal;
+  color: var(--color-text-2);
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
 .action-summary {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -390,7 +449,6 @@ const summary = computed<Summary | null>(() => {
   --name-height: 2.5rem;
   --expanded-left-margin: 0;
   --pad: 1rem;
-  --level: v-bind(level);
   scroll-margin-top: calc(var(--level) * var(--name-height));
   background-color: inherit;
 }
@@ -399,7 +457,7 @@ const summary = computed<Summary | null>(() => {
   position: sticky;
   z-index: calc(50 - var(--level, 0));
   background-color: inherit;
-  top: calc(v-bind(level) * var(--name-height) - 1px);
+  top: calc(var(--level) * var(--name-height) - 0.0625rem);
   min-height: var(--name-height);
   display: flex;
   flex-direction: column;

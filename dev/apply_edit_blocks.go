@@ -44,6 +44,9 @@ type ApplyEditBlockReport struct {
 
 	DidApply bool   `json:"didApply"`
 	Error    string `json:"error"`
+	// AmbiguousMatch marks an unapplied update whose old lines matched more
+	// than one location, which a retry with visibility filtering may resolve.
+	AmbiguousMatch bool `json:"ambiguousMatch,omitempty"`
 
 	// TODO /gen/req replace this with a slice of AutofixExecution struct
 	// values. each has a name, applied edits, failed edits, error and message.
@@ -128,6 +131,7 @@ func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityIn
 			InitializedClients: map[string]lsp.LSPClient{},
 		},
 	}
+	defer da.LSPActivities.Close()
 	return da.ApplyEditBlocks(ctx, input)
 }
 
@@ -634,71 +638,19 @@ func (da *DevActivities) notifyDidOpenChangeSaveAndClose(ctx context.Context, en
 	defer span.End()
 	span.SetAttributes(attribute.String("filePath", filePath))
 
-	baseDir := envContainer.Env.GetWorkingDirectory()
 	language := utils.InferLanguageNameFromFilePath(filePath)
-	if language == "" {
-		span.SetAttributes(attribute.Bool("skipped", true), attribute.String("reason", "unrecognized language"))
-		return nil // Skip LSP notifications for files without recognized language
+	if !lsp.IsSupportedLanguage(language) {
+		span.SetAttributes(attribute.Bool("skipped", true), attribute.String("reason", "unsupported language"))
+		return nil
 	}
-	span.SetAttributes(attribute.String("language", language))
-
-	var didOpenCalled bool
-
-	// Step 1: didOpen (if openClose supported)
-	_, didOpenSpan := applyEditBlocksTracer.Start(ctx, "LSP.didOpen")
-	didOpenInput := lsp.TextDocumentDidOpenActivityInput{
-		RepoDir:  baseDir,
-		FilePath: filePath,
+	content, err := envContainer.Env.ReadFile(ctx, filePath)
+	if err != nil {
+		return err
 	}
-	err := da.LSPActivities.TextDocumentDidOpenActivity(ctx, didOpenInput)
-	if err == nil {
-		didOpenCalled = true
-	}
-	didOpenSpan.SetAttributes(attribute.Bool("success", err == nil))
-	didOpenSpan.End()
-
-	// Step 2: didChange (if didOpen was called and change is supported)
-	if didOpenCalled {
-		_, didChangeSpan := applyEditBlocksTracer.Start(ctx, "LSP.didChange")
-		// Read current file content for change notification
-		content, err := envContainer.Env.ReadFile(ctx, filePath)
-		if err == nil {
-			didChangeInput := lsp.TextDocumentDidChangeActivityInput{
-				RepoDir:  baseDir,
-				FilePath: filePath,
-				Version:  2, // Version after the edit
-				ContentChanges: []lsp.TextDocumentContentChangeEvent{
-					{
-						Text: string(content), // Full document sync
-					},
-				},
-			}
-			_ = da.LSPActivities.TextDocumentDidChangeActivity(ctx, didChangeInput) // Ignore errors
-		}
-		didChangeSpan.End()
-	}
-
-	// Step 3: didSave (if supported)
-	_, didSaveSpan := applyEditBlocksTracer.Start(ctx, "LSP.didSave")
-	didSaveInput := lsp.TextDocumentDidSaveActivityInput{
-		RepoDir:  baseDir,
-		FilePath: filePath,
-	}
-	_ = da.LSPActivities.TextDocumentDidSaveActivity(ctx, didSaveInput) // Ignore errors
-	didSaveSpan.End()
-
-	// Step 4: didClose (if didOpen was called)
-	if didOpenCalled {
-		_, didCloseSpan := applyEditBlocksTracer.Start(ctx, "LSP.didClose")
-		didCloseInput := lsp.TextDocumentDidCloseActivityInput{
-			RepoDir:  baseDir,
-			FilePath: filePath,
-		}
-		_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
-		didCloseSpan.End()
-	}
-
-	return nil
+	_, err = da.LSPActivities.SyncDocumentActivity(ctx, lsp.SyncDocumentActivityInput{
+		EnvContainer: envContainer, FilePath: filePath, Content: string(content),
+	})
+	return err
 }
 
 type lineEdit struct {
@@ -924,6 +876,8 @@ func ApplyUpdateEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 
 	modifiedContents, err := getUpdatedContents(block, string(originalContents))
 	if err != nil {
+		var ambiguous ambiguousMatchError
+		report.AmbiguousMatch = errors.As(err, &ambiguous)
 		report.Error = fmt.Errorf("Failed to apply edit block for file %s: %v", block.FilePath, err).Error()
 		return report, err
 	}
@@ -965,8 +919,24 @@ func ApplyAppendEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 	return report, nil
 }
 
+type applyEditBlocksOptions struct {
+	// ContextVisibilityCheckDisabled carries the caller's already-evaluated
+	// decision on whether old lines must appear in code visible in the chat
+	// history. When nil, the decision is evaluated here. The check must be
+	// disabled when edit blocks carry no visibility data, as with
+	// lazily-resolved visibility.
+	ContextVisibilityCheckDisabled *bool
+}
+
+// contextVisibilityCheckDisabled evaluates the activity-backed feature flag,
+// so callers should evaluate it once and pass the result along.
+func contextVisibilityCheckDisabled(ctx workflow.Context) bool {
+	visibilityVersion := workflow.GetVersion(ctx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
+	return visibilityVersion >= 1 && fflag.IsEnabledWithoutVersioning(ctx, fflag.DisableContextCodeVisibilityCheck)
+}
+
 // TODO /gen write tests for this
-func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]ApplyEditBlockReport, error) {
+func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock, opts applyEditBlocksOptions) ([]ApplyEditBlockReport, error) {
 	actionParams := map[string]interface{}{
 		// visible stuff is very verbose, so we leave it out of the flow events.
 		// they are very necessary in the activity though.
@@ -995,8 +965,11 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		// by finding chunks that match and cover all lines and by incorporating
 		// code that isn't just in code blocks (e.g. raw excerpts and git
 		// diffs), then we may consider bringing back this validation.
-		visibilityVersion := workflow.GetVersion(trackedCtx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
-		if visibilityVersion >= 1 && fflag.IsEnabledWithoutVersioning(trackedCtx, fflag.DisableContextCodeVisibilityCheck) {
+		checkDisabled := opts.ContextVisibilityCheckDisabled != nil && *opts.ContextVisibilityCheckDisabled
+		if opts.ContextVisibilityCheckDisabled == nil {
+			checkDisabled = contextVisibilityCheckDisabled(trackedCtx)
+		}
+		if checkDisabled {
 			validEditBlocks = editBlocks
 		} else {
 			validEditBlocks, invalidReports = validateEditBlocks(editBlocks)
@@ -1166,6 +1139,16 @@ func firstLines(strs []string, n int) string {
 
 var multipleMatchesMessage = "Multiple matches found for the given edit block %s section, but expected only one match. Here are the matches with sufficient additional context from the current state of the file to disambiguate. Provide the edit block again with the specific full expanded context:\n\n%s"
 
+// ambiguousMatchError is returned when an edit block's old lines match several
+// locations, so callers can distinguish this from other match failures.
+type ambiguousMatchError struct {
+	message string
+}
+
+func (e ambiguousMatchError) Error() string {
+	return e.message
+}
+
 func getUpdatedContents(block EditBlock, originalContents string) (string, error) {
 	return getUpdatedContentsWithOptions(block, originalContents, DefaultMatchOptions)
 }
@@ -1202,7 +1185,7 @@ func getUpdatedContentsWithOptions(block EditBlock, originalContents string, opt
 			"\n\n",
 		)
 
-		return "", fmt.Errorf(multipleMatchesMessage, search, matchContents)
+		return "", ambiguousMatchError{message: fmt.Sprintf(multipleMatchesMessage, search, matchContents)}
 	}
 
 	if bestMatch.score == 0 {

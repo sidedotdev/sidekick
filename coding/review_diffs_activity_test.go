@@ -168,6 +168,7 @@ func TestGenerateReviewDiffsActivity_StagedChangesAlwaysIncluded(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Contains(t, reviewed.FullDiff, "StagedBeforeReview")
+			require.NotContains(t, reviewed.FullDiff, preStartPointMarker, "changes before the start point are not ours to review")
 
 			writeAndStage(t, repoDir, "staged_after.go", "package feature\n\nfunc StagedAfterReview() {}\n")
 			result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
@@ -563,6 +564,119 @@ func TestGenerateReviewDiffsActivity_PinnedStartPointExcludesNonTextPriorWork(t 
 			assert.NotContains(t, result.FullDiff, "image.bin")
 			assert.NotContains(t, result.FullDiff, "shared.go")
 			assert.NotContains(t, result.FullDiff, "UpstreamWork", "changes merged in from the base branch are not this step's")
+		})
+	}
+}
+
+func TestGenerateReviewDiffsActivity_ConfiguredCopiesCanBeReverted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoDir, envContainer := setupReviewDiffsRepo(t, ctx)
+	runGit(t, repoDir, "config", "diff.renames", "copies")
+	original, err := os.ReadFile(filepath.Join(repoDir, "shared.go"))
+	require.NoError(t, err)
+
+	writeAndStage(t, repoDir, "copy.go", string(original))
+	writeAndStage(t, repoDir, "shared.go", string(original)+"// Changed at the first review.\n")
+	require.Contains(t, runGit(t, repoDir, "diff", "--staged", "main"), "copy from shared.go",
+		"the control must reproduce copy detection using the production command's defaults")
+	priorTree := strings.TrimSpace(runGit(t, repoDir, "write-tree"))
+
+	ca := &CodingActivities{}
+	params := GenerateReviewDiffsParams{
+		EnvContainer: envContainer,
+		StartPoint:   "main",
+	}
+	reviewed, err := ca.GenerateReviewDiffsActivity(ctx, params)
+	require.NoError(t, err)
+	require.NotEmpty(t, reviewed.FullDiff)
+
+	runGit(t, repoDir, "rm", "--force", "copy.go")
+	writeAndStage(t, repoDir, "shared.go", string(original))
+	currentTree := strings.TrimSpace(runGit(t, repoDir, "write-tree"))
+	params.PriorReviewDiff = reviewed.FullDiff
+	result, err := ca.GenerateReviewDiffsActivity(ctx, params)
+	require.NoError(t, err)
+	require.Empty(t, result.SinceDiffError)
+	require.Empty(t, result.FullDiff)
+	require.NotEmpty(t, result.SinceDiff)
+
+	patchPath := filepath.Join(t.TempDir(), "since-review.diff")
+	require.NoError(t, os.WriteFile(patchPath, []byte(result.SinceDiff), 0600))
+	runGit(t, repoDir, "read-tree", priorTree)
+	runGit(t, repoDir, "apply", "--cached", "--unidiff-zero", "--whitespace=nowarn", patchPath)
+	require.Equal(t, currentTree, strings.TrimSpace(runGit(t, repoDir, "write-tree")))
+}
+
+func TestGenerateReviewDiffsActivity_HibernatedConflictResolution(t *testing.T) {
+	t.Parallel()
+
+	for _, scenario := range reviewDiffsScenarios() {
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, resolveBeforeHibernate := range []bool{false, true} {
+				name := "unresolved"
+				if resolveBeforeHibernate {
+					name = "resolved"
+				}
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+
+					ctx := context.Background()
+					mainDir, _ := setupReviewDiffsRepo(t, ctx)
+					runGit(t, mainDir, "checkout", "main")
+					repoDir := filepath.Join(t.TempDir(), "worktree")
+					runGit(t, mainDir, "worktree", "add", repoDir, "feature")
+					envContainer := newReviewDiffsTestEnv(t, ctx, repoDir)
+					startPoint, baseBranch, preStartPointMarker := scenario.prepare(t, repoDir)
+					ca := &CodingActivities{}
+
+					createFileAndCommit(t, repoDir, "contended.go", "package shared\n\nfunc Contended() { ours() }\n", "our change")
+					reviewed, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
+						EnvContainer: envContainer,
+						StartPoint:   startPoint,
+						BaseBranch:   baseBranch,
+					})
+					require.NoError(t, err)
+
+					createFileAndCommit(t, mainDir, "contended.go", "package shared\n\nfunc Contended() { theirs() }\n", "their change")
+					createFileAndCommit(t, mainDir, "upstream.go", "package shared\n\nfunc UpstreamWork() {}\n", "upstream work")
+					require.Contains(t, runGitAllowFailure(t, repoDir, "merge", "main"), "CONFLICT")
+
+					resolution := "package shared\n\nfunc Contended() { ours(); theirs() }\n"
+					if resolveBeforeHibernate {
+						writeAndStage(t, repoDir, "contended.go", resolution)
+					}
+					indexBefore := runGit(t, repoDir, "ls-files", "--stage")
+					_, err = env.HibernateEnv(ctx, envContainer.Env, "feature")
+					require.NoError(t, err)
+					_, err = env.WakeHibernatedEnv(ctx, envContainer.Env)
+					require.NoError(t, err)
+					assert.Equal(t, indexBefore, runGit(t, repoDir, "ls-files", "--stage"))
+
+					if !resolveBeforeHibernate {
+						writeAndStage(t, repoDir, "contended.go", resolution)
+					}
+					runGit(t, repoDir, "commit", "-m", "resolve merge conflict")
+					parents := strings.Fields(runGit(t, repoDir, "rev-list", "--parents", "-n", "1", "HEAD"))
+					assert.Len(t, parents, 3, "the resolution must retain both merge parents")
+
+					result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{
+						EnvContainer:    envContainer,
+						StartPoint:      startPoint,
+						BaseBranch:      baseBranch,
+						PriorReviewDiff: reviewed.FullDiff,
+					})
+					require.NoError(t, err)
+					assert.Contains(t, result.FullDiff, "ours(); theirs()")
+					assert.NotContains(t, result.FullDiff, "UpstreamWork")
+					assert.NotContains(t, result.FullDiff, preStartPointMarker)
+					assert.Contains(t, result.SinceDiff, "ours(); theirs()")
+					assert.NotContains(t, result.SinceDiff, "UpstreamWork")
+				})
+			}
 		})
 	}
 }

@@ -461,16 +461,64 @@ fi`, shellQuote(repoDir), shellQuote(branch), shellQuote(head), shellQuote(branc
 // normalizes NUL separators so lists written by an earlier build (which used
 // git's -z output) still apply. Paths containing literal newlines are not
 // supported, a documented best-effort caveat.
+// captureWIPFragment returns shell that archives the current directory's
+// uncommitted state relative to HEAD (changed and untracked text files, the
+// deleted paths, and the staged index as a binary patch) in the layout
+// restoreFilesFragment expects. It only reads the worktree. Untracked binary
+// files are treated as regenerable and skipped to keep the archive small;
+// staged binary changes survive via the --binary patch. archiveShellWord is
+// interpolated verbatim so it may reference shell variables; callers quote it.
+// Afterwards $wip_dirty is 1 if anything was captured and 0 otherwise.
+func captureWIPFragment(archiveShellWord string) string {
+	return fmt.Sprintf(`tmpdir=$(mktemp -d)
+# Newline-delimited file lists (busybox tar has no --null); core.quotePath=false
+# keeps unicode paths literal so tar -T can open them.
+git -c core.quotePath=false diff --name-only --diff-filter=D HEAD > "$tmpdir/deleted.list"
+git -c core.quotePath=false diff --name-only --diff-filter=d HEAD > "$tmpdir/changed.list"
+git -c core.quotePath=false ls-files --others --exclude-standard | while IFS= read -r f; do
+  ns=$(git diff --no-index --numstat -- /dev/null "$f" 2>/dev/null | head -n1)
+  case "$ns" in
+    -*) ;;
+    *) printf '%%s\n' "$f" ;;
+  esac
+done >> "$tmpdir/changed.list"
+if [ -s "$tmpdir/changed.list" ]; then
+  tar czf "$tmpdir/changed.tgz" -T "$tmpdir/changed.list"
+else
+  : > "$tmpdir/changed.tgz"
+fi
+git diff --cached --binary > "$tmpdir/staged.patch"
+if [ -s "$tmpdir/deleted.list" ] || [ -s "$tmpdir/changed.list" ] || [ -s "$tmpdir/staged.patch" ]; then wip_dirty=1; else wip_dirty=0; fi
+%star czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch git-state
+rm -rf "$tmpdir"
+`, capturePortableGitStateFragment(), archiveShellWord)
+}
+
 func restoreFilesFragment() string {
 	return fmt.Sprintf(`if [ -f %s ]; then
   rtmp=$(mktemp -d)
   tar xzf %s -C "$rtmp"
+  if [ -s "$rtmp/git-state/objects.pack" ]; then git index-pack --stdin < "$rtmp/git-state/objects.pack" > /dev/null; fi
+  if [ -f "$rtmp/git-state/snapshot-refs" ]; then
+    while read -r object ref; do
+      case "$ref" in
+        %s*) git update-ref "$ref" "$object" ;;
+        *) echo "invalid conflict snapshot ref: $ref" >&2; exit 1 ;;
+      esac
+    done < "$rtmp/git-state/snapshot-refs"
+  fi
   if [ -s "$rtmp/sidetmp.tgz" ]; then tar xzf "$rtmp/sidetmp.tgz"; fi
   if [ -s "$rtmp/changed.tgz" ]; then tar xzf "$rtmp/changed.tgz"; fi
   if [ -s "$rtmp/deleted.list" ]; then tr '\000' '\012' < "$rtmp/deleted.list" | while IFS= read -r d; do if [ -n "$d" ]; then rm -f -- "$d"; fi; done; fi
-  if [ -s "$rtmp/staged.patch" ]; then git apply --cached --binary --allow-empty --whitespace=nowarn "$rtmp/staged.patch"; fi
+  if [ ! -f "$rtmp/git-state/index" ] && [ -s "$rtmp/staged.patch" ]; then git apply --cached --binary --allow-empty --whitespace=nowarn "$rtmp/staged.patch"; fi
+  for name in index ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_AUTOSTASH MERGE_RR AUTO_MERGE; do
+    if [ -f "$rtmp/git-state/$name" ]; then
+      path=$(git rev-parse --git-path "$name")
+      cp "$rtmp/git-state/$name" "$path"
+    fi
+  done
   rm -rf "$rtmp"
-fi`, shellQuote(HibernationPatchFile), shellQuote(HibernationPatchFile))
+fi`, shellQuote(HibernationPatchFile), shellQuote(HibernationPatchFile), shellQuote(ConflictSnapshotRefPrefix))
 }
 
 // HibernateEnv captures the current worktree state as a compressed archive and
@@ -586,7 +634,7 @@ else
   : > "$tmpdir/sidetmp.tgz"
 fi
 git diff --cached --binary > "$tmpdir/staged.patch"
-tar czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch sidetmp.tgz
+%star czf %s -C "$tmpdir" changed.tgz deleted.list staged.patch sidetmp.tgz git-state
 rm -rf "$tmpdir"
 mv %s %s
 cat > %s <<'SIDEKICK_HIB_EOF'
@@ -597,6 +645,7 @@ remaining=$(find . -mindepth 1 ! -name .git ! -name %s ! -name %s | head -1)
 if [ -n "$remaining" ]; then echo "LEFTOVER"; else echo "CLEAN"; fi
 `,
 		shellQuote(sideTmpDir), shellQuote(sideTmpDir),
+		captureGitStateFragment(),
 		shellQuote(tmpPatch),
 		shellQuote(tmpPatch), shellQuote(HibernationPatchFile),
 		shellQuote(HibernationMetadataFile),

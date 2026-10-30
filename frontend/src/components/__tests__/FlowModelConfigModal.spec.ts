@@ -22,9 +22,8 @@ const EditorStub = {
   data: () => ({ config: updatedConfig }),
 }
 
-// The preset editor resolves the workspace profile on its own and port
-// mappings are covered by their own suite, so both are answered outside the
-// flow config sequence these tests set up.
+// Environment settings have their own suites and do not participate in the
+// model configuration polling sequence.
 const withProfileRequests = (
   fetchMock: (url: string, options?: RequestInit) => unknown,
 ) => (url: string, options?: RequestInit) => {
@@ -34,8 +33,11 @@ const withProfileRequests = (
   if (url.startsWith('/api/v1/providers')) {
     return Promise.resolve({ ok: true, json: async () => ({ providers: ['anthropic', 'openai'] }) })
   }
-  if (typeof options?.body === 'string' && options.body.includes('port_forwards')) {
-    return Promise.resolve({ ok: false })
+  if (typeof options?.body === 'string' && JSON.parse(options.body).query === 'env') {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ result: { envType: 'local', modal: {}, portForwards: [] } }),
+    })
   }
   return fetchMock(url, options)
 }
@@ -70,9 +72,6 @@ describe('FlowModelConfigModal', () => {
         ok: true,
         json: async () => ({ result: initialConfig }),
       })
-      .mockResolvedValueOnce({
-        ok: false,
-      })
     vi.stubGlobal('fetch', withProfileRequests(fetchMock))
 
     const wrapper = mountModal()
@@ -90,9 +89,6 @@ describe('FlowModelConfigModal', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ result: initialConfig }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -141,9 +137,6 @@ describe('FlowModelConfigModal', () => {
         json: async () => ({ result: initialConfig }),
       })
       .mockResolvedValueOnce({
-        ok: false,
-      })
-      .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ message: 'accepted' }),
       })
@@ -174,9 +167,6 @@ describe('FlowModelConfigModal', () => {
       })
       .mockResolvedValueOnce({
         ok: false,
-      })
-      .mockResolvedValueOnce({
-        ok: false,
         statusText: 'Conflict',
         json: async () => ({ error: 'update rejected' }),
       })
@@ -193,7 +183,7 @@ describe('FlowModelConfigModal', () => {
     expect(wrapper.findComponent({ name: 'ModelConfigPresetEditor' }).exists()).toBe(true)
     expect(wrapper.get('.apply-button').attributes('disabled')).toBeUndefined()
     expect(wrapper.emitted('close')).toBeFalsy()
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('ignores close controls until the accepted update is observed', async () => {
@@ -205,9 +195,6 @@ describe('FlowModelConfigModal', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ result: initialConfig }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -242,9 +229,6 @@ describe('FlowModelConfigModal', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ result: initialConfig }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
       })
       .mockResolvedValueOnce({
         ok: true,

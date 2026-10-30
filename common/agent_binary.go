@@ -32,9 +32,15 @@ const agentReleaseBaseURL = "https://github.com/org-sidedev/sidekick/releases/do
 // re-uploaded and the protocol is compatible by construction.
 var agentSourceFiles = []string{
 	"cmd/side-agent/main.go",
+	"sideagent/background.go",
 	"sideagent/client.go",
 	"sideagent/gc.go",
+	"sideagent/managed_session.go",
+	"sideagent/orphan_reaper.go",
+	"sideagent/orphan_reaper_linux.go",
+	"sideagent/orphan_reaper_other.go",
 	"sideagent/protocol.go",
+	"sideagent/seal.go",
 	"sideagent/server.go",
 	"sideagent/sftp.go",
 }

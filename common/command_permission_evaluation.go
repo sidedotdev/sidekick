@@ -107,6 +107,8 @@ type ScriptPermissionEvaluation struct {
 	Outcome  PermissionResult    `json:"outcome"`
 	Commands []CommandEvaluation `json:"commands,omitempty"`
 	Factors  []PermissionFactor  `json:"factors,omitempty"`
+	// Approved records subsequent approval without changing the policy outcome.
+	Approved bool `json:"approved,omitempty"`
 }
 
 // EvaluateCommandPermissionDetailed evaluates a single command against all
@@ -321,3 +323,7 @@ func detectedAbsolutePaths(command string) []string {
 	}
 	return paths
 }
+
+// PermissionFactorSandboxBypass identifies authorization that is valid only
+// while sandbox command-permission bypass applies.
+const PermissionFactorSandboxBypass PermissionFactorKind = "sandbox_bypass"

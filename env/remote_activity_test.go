@@ -55,9 +55,14 @@ func TestSFTPMutationsRenewActivity(t *testing.T) {
 			ctx := context.Background()
 			for attempt := 0; attempt < 2; attempt++ {
 				require.NoError(t, doSFTPWrite(client, remoteActivityMarker, []byte("old"), 0o600))
+				// Inode timestamps can lag time.Now at second boundaries, and
+				// SFTP discards subsecond precision. Compare filesystem timestamps.
+				fresh, err := client.Stat(remoteActivityMarker)
+				require.NoError(t, err)
+				start := fresh.ModTime()
 				old := time.Unix(100, 0)
+				require.True(t, start.After(old), "fixture must start with a fresh activity marker")
 				require.NoError(t, client.Chtimes(remoteActivityMarker, old, old))
-				start := time.Now().Truncate(time.Second)
 				switch operation {
 				case "write":
 					require.NoError(t, sftpWriteFile(ctx, transport, "/value", []byte("B"), 0o600))
@@ -72,10 +77,12 @@ func TestSFTPMutationsRenewActivity(t *testing.T) {
 				}
 				info, err := client.Stat(remoteActivityMarker)
 				require.NoError(t, err)
-				require.False(t, info.ModTime().Before(start), "mutation did not renew activity")
-				require.LessOrEqual(t, info.ModTime().Unix(), time.Now().Unix())
 				data, err := doSFTPRead(client, remoteActivityMarker)
 				require.NoError(t, err)
+				require.False(t, info.ModTime().Before(start),
+					"mutation did not renew activity: mtime=%s start=%s now=%s marker=%q",
+					info.ModTime(), start, time.Now(), data)
+				require.LessOrEqual(t, info.ModTime().Unix(), time.Now().Unix())
 				require.Empty(t, data, "renewal must use the server clock, not leave the old marker untouched")
 			}
 		})

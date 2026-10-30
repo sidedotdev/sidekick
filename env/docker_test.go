@@ -131,36 +131,7 @@ func TestEnsureDockerReady(t *testing.T) {
 		assert.Equal(t, int32(0), restarts.Load(), "a stopped daemon must not be restarted")
 	})
 
-	t.Run("wedged daemon is restarted, not started", func(t *testing.T) {
-		var starts, restarts atomic.Int32
-		withDockerReadyHooks(t,
-			func(context.Context, time.Duration) bool { return false },
-			func(context.Context) bool { return true },
-			func(context.Context) error { starts.Add(1); return nil },
-			func(context.Context) error { restarts.Add(1); return nil },
-		)
-		assert.NoError(t, ensureDockerReady(context.Background()))
-		assert.Equal(t, int32(0), starts.Load(), "a wedged daemon must not be 'started'")
-		assert.Equal(t, int32(1), restarts.Load())
-	})
-
-	t.Run("start disabled falls back to restart", func(t *testing.T) {
-		t.Setenv(autoStartDockerEnvVar, "false")
-		var starts, restarts atomic.Int32
-		withDockerReadyHooks(t,
-			func(context.Context, time.Duration) bool { return false },
-			func(context.Context) bool { return false },
-			func(context.Context) error { starts.Add(1); return nil },
-			func(context.Context) error { restarts.Add(1); return nil },
-		)
-		assert.NoError(t, ensureDockerReady(context.Background()))
-		assert.Equal(t, int32(0), starts.Load())
-		assert.Equal(t, int32(1), restarts.Load())
-	})
-
-	t.Run("both disabled returns error", func(t *testing.T) {
-		t.Setenv(autoStartDockerEnvVar, "false")
-		t.Setenv(autoRestartDockerEnvVar, "false")
+	t.Run("wedged daemon requires approval", func(t *testing.T) {
 		var starts, restarts atomic.Int32
 		withDockerReadyHooks(t,
 			func(context.Context, time.Duration) bool { return false },
@@ -170,18 +141,36 @@ func TestEnsureDockerReady(t *testing.T) {
 		)
 		err := ensureDockerReady(context.Background())
 		assert.Error(t, err)
-		assert.Equal(t, int32(0), starts.Load())
-		assert.Equal(t, int32(0), restarts.Load())
+		_, dockerFailure := AsDockerEngineFailure(err)
+		assert.True(t, dockerFailure)
+		assert.Zero(t, starts.Load(), "a wedged daemon must not be 'started'")
+		assert.Zero(t, restarts.Load())
 	})
 
-	t.Run("restart failure surfaced", func(t *testing.T) {
-		restartErr := errors.New("no restart strategy worked")
+	t.Run("start disabled does not fall back to restart", func(t *testing.T) {
+		t.Setenv(autoStartDockerEnvVar, "false")
+		var starts, restarts atomic.Int32
 		withDockerReadyHooks(t,
 			func(context.Context, time.Duration) bool { return false },
-			func(context.Context) bool { return true },
-			func(context.Context) error { return nil },
-			func(context.Context) error { return restartErr },
+			func(context.Context) bool { return false },
+			func(context.Context) error { starts.Add(1); return nil },
+			func(context.Context) error { restarts.Add(1); return nil },
 		)
-		assert.ErrorIs(t, ensureDockerReady(context.Background()), restartErr)
+		assert.Error(t, ensureDockerReady(context.Background()))
+		assert.Zero(t, starts.Load())
+		assert.Zero(t, restarts.Load())
+	})
+
+	t.Run("start failure surfaced", func(t *testing.T) {
+		startErr := errors.New("could not start Docker")
+		var restarts atomic.Int32
+		withDockerReadyHooks(t,
+			func(context.Context, time.Duration) bool { return false },
+			func(context.Context) bool { return false },
+			func(context.Context) error { return startErr },
+			func(context.Context) error { restarts.Add(1); return nil },
+		)
+		assert.ErrorIs(t, ensureDockerReady(context.Background()), startErr)
+		assert.Zero(t, restarts.Load())
 	})
 }

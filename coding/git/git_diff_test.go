@@ -761,31 +761,8 @@ func TestGitDiffActivity_StagedIncludesUnmergedFilesDuringConflict(t *testing.T)
 // unmerged (no stage-0 index entry). It returns the repo directory.
 func setupMergeConflictRepo(t *testing.T) string {
 	t.Helper()
-
-	repoDir := setupTestGitRepo(t)
-
-	createFileAndCommit(t, repoDir, "conflict.txt", "base\n", "initial commit")
-
-	runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "conflict.txt"), []byte("feature change\n"), fs.FileMode(0644)))
-	runGitCommandInTestRepo(t, repoDir, "commit", "-am", "feature change")
-
-	runGitCommandInTestRepo(t, repoDir, "checkout", "main")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "conflict.txt"), []byte("main change\n"), fs.FileMode(0644)))
-	runGitCommandInTestRepo(t, repoDir, "commit", "-am", "main change")
-
-	// The merge conflicts on purpose, leaving conflict.txt unmerged; a non-zero
-	// exit is expected here so we don't use the require.NoError helper.
-	mergeCmd := exec.Command("git", "merge", "feature")
-	mergeCmd.Dir = repoDir
-	mergeCmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=Test User",
-		"GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test User",
-		"GIT_COMMITTER_EMAIL=test@example.com",
-	)
-	_ = mergeCmd.Run()
-
+	repoDir := t.TempDir()
+	require.NoError(t, mergeConflictFixture.CopyTo(repoDir))
 	return repoDir
 }
 

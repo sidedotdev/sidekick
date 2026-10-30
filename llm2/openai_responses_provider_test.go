@@ -375,7 +375,7 @@ func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 
 		followUpOptions := options
 		followUpOptions.ModelConfig.ReasoningEffort = ""
-		followUpOptions.ModelConfig.MaxTokens = 32
+		followUpOptions.MaxTokens = 32
 
 		eventChan := make(chan Event, 1000)
 		var wg sync.WaitGroup
@@ -406,21 +406,13 @@ func TestOpenAIResponsesProvider_ReasoningContinuation(t *testing.T) {
 		t.Logf("Response output content blocks (multi-turn): %d", len(response.Output.Content))
 		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 
-		var hasTextContent bool
-		for _, block := range response.Output.Content {
-			if block.Type == ContentBlockTypeText && block.Text != "" {
-				hasTextContent = true
-				break
-			}
-		}
-
-		if !hasTextContent {
-			t.Error("Response content is empty after providing reasoning continuation")
-		}
-
 		assert.NotNil(t, response.Usage, "Usage field should not be nil on multi-turn")
 		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 on multi-turn")
 		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
+		if response.AuthType != common.ProviderAuthTypeSubscription {
+			// The budget can be consumed by reasoning before any text is emitted.
+			assert.LessOrEqual(t, response.Usage.OutputTokens, 32)
+		}
 	})
 }
 
@@ -753,6 +745,111 @@ func TestOpenAIResponsesProvider_SubscriptionRequest(t *testing.T) {
 	assert.Equal(t, "account-id", accountID)
 	assert.NotContains(t, requestBody, "max_output_tokens")
 	assert.Equal(t, []string{"OPENAI_OAUTH"}, manager.calls)
+}
+
+// capturingTransport records the outbound request and short-circuits with 401
+// so Stream returns right after request construction.
+type capturingTransport struct {
+	host    string
+	headers http.Header
+	body    map[string]any
+}
+
+func (c *capturingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.host = r.URL.Host
+	c.headers = r.Header.Clone()
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&c.body)
+	}
+	return &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Header:     http.Header{"Content-Type": []string{"text/plain"}},
+		Body:       http.NoBody,
+		Request:    r,
+	}, nil
+}
+
+// The ChatGPT/Codex backend derives prompt-cache affinity from the session-id
+// header, so the native OAuth route sends it alongside the body key; the
+// metered API and compatible proxies must not get it.
+func TestOpenAIResponsesProvider_PromptCacheKeySessionHeader(t *testing.T) {
+	oauthSecret := `{"accessToken":"oauth-token","refreshToken":"refresh-token","expiresAt":9999999999,"accountId":"account-id"}`
+	tests := []struct {
+		name              string
+		authType          common.ProviderAuthType
+		baseURL           string
+		promptCacheKey    string
+		secrets           map[string]string
+		wantHost          string
+		wantSessionHeader string
+		wantBodyKey       bool
+	}{
+		{
+			name:              "native subscription",
+			authType:          common.ProviderAuthTypeSubscription,
+			promptCacheKey:    "flow-123",
+			secrets:           map[string]string{"OPENAI_OAUTH": oauthSecret},
+			wantHost:          "chatgpt.com",
+			wantSessionHeader: "flow-123",
+			wantBodyKey:       true,
+		},
+		{
+			name:              "native any resolving to oauth",
+			authType:          common.ProviderAuthTypeAny,
+			promptCacheKey:    "flow-123",
+			secrets:           map[string]string{"OPENAI_OAUTH": oauthSecret},
+			wantHost:          "chatgpt.com",
+			wantSessionHeader: "flow-123",
+			wantBodyKey:       true,
+		},
+		{
+			name:           "native api key",
+			authType:       common.ProviderAuthTypeAPI,
+			promptCacheKey: "flow-123",
+			secrets:        map[string]string{"OPENAI_API_KEY": "api-key"},
+			wantHost:       "api.openai.com",
+			wantBodyKey:    true,
+		},
+		{
+			name:           "custom base url with oauth",
+			authType:       common.ProviderAuthTypeSubscription,
+			baseURL:        "http://proxy.test/v1",
+			promptCacheKey: "flow-123",
+			secrets:        map[string]string{"OPENAI_OAUTH": oauthSecret},
+			wantHost:       "proxy.test",
+		},
+		{
+			name:     "native subscription without key",
+			authType: common.ProviderAuthTypeSubscription,
+			secrets:  map[string]string{"OPENAI_OAUTH": oauthSecret},
+			wantHost: "chatgpt.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transport := &capturingTransport{}
+			provider := OpenAIResponsesProvider{BaseURL: tt.baseURL, AuthType: tt.authType, httpTransport: transport}
+			request := StreamRequest{
+				Messages: []Message{{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}}},
+				Options: Options{
+					ModelConfig:    common.ModelConfig{Provider: "openai", Model: "gpt-5-codex"},
+					PromptCacheKey: tt.promptCacheKey,
+				},
+				SecretManager: &openAIAuthTestSecretManager{secrets: tt.secrets},
+			}
+
+			_, err := provider.Stream(context.Background(), request, make(chan Event, 1))
+
+			assert.Error(t, err)
+			assert.Equal(t, tt.wantHost, transport.host)
+			assert.Equal(t, tt.wantSessionHeader, transport.headers.Get("session-id"))
+			bodyKey, hasBodyKey := transport.body["prompt_cache_key"]
+			assert.Equal(t, tt.wantBodyKey, hasBodyKey)
+			if tt.wantBodyKey {
+				assert.Equal(t, tt.promptCacheKey, bodyKey)
+			}
+		})
+	}
 }
 
 func TestOpenAIResponsesProvider_AnyFallsBackToAPIKey(t *testing.T) {

@@ -45,7 +45,11 @@ func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSize
 
 func EditCodeWithModelConfigResolver(dCtx DevContext, resolveModelConfig persisted_ai.ModelConfigResolver, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, advisor *Advisor) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
-		return editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		err := editCodeSubflow(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		if checkpointErr := checkpointSubflowGit(dCtx); checkpointErr != nil {
+			return errors.Join(err, checkpointErr)
+		}
+		return err
 	})
 }
 
@@ -56,11 +60,18 @@ type applyEditBlocksResult struct {
 }
 
 func applyEditBlocksAndReport(dCtx DevContext, editBlocks []EditBlock) (applyEditBlocksResult, error) {
-	reports, err := validateAndApplyEditBlocks(dCtx, editBlocks)
+	return applyEditBlocksAndReportWithOptions(dCtx, editBlocks, applyEditBlocksOptions{})
+}
+
+func applyEditBlocksAndReportWithOptions(dCtx DevContext, editBlocks []EditBlock, opts applyEditBlocksOptions) (applyEditBlocksResult, error) {
+	reports, err := validateAndApplyEditBlocks(dCtx, editBlocks, opts)
 	if err != nil {
 		return applyEditBlocksResult{}, err
 	}
+	return summarizeApplyEditBlocks(dCtx, reports)
+}
 
+func summarizeApplyEditBlocks(dCtx DevContext, reports []ApplyEditBlockReport) (applyEditBlocksResult, error) {
 	v := workflow.GetVersion(dCtx, "edit_code_diff", workflow.DefaultVersion, 1)
 	diffEnabled := false // TODO remove this later
 	if v == 1 && diffEnabled {
@@ -470,8 +481,27 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		}
 		tildeOnly := workflow.GetVersion(dCtx, "tilde-edit-block-fence", workflow.DefaultVersion, 1) >= 1
 
+		// Deferred application (edit blocks accumulated across turns) keeps
+		// eager visibility, since the chat history each turn saw is not
+		// retained for a later retry.
+		// Lazy visibility skips the context visibility check, so it is only
+		// used when that check is disabled anyway; the decision is evaluated
+		// once here and reused when applying.
+		_, isLlm2 := visibleChatHistory.History.(*persisted_ai.Llm2ChatHistory)
+		lazyVisibility := false
+		applyOpts := applyEditBlocksOptions{}
+		if isLlm2 && applyImmediately && lazyEditBlockVisibilityEnabled(dCtx) {
+			checkDisabled := contextVisibilityCheckDisabled(dCtx)
+			applyOpts.ContextVisibilityCheckDisabled = &checkDisabled
+			lazyVisibility = checkDisabled
+		}
+
 		var currentExtractedBlocks []EditBlock
-		if _, isLlm2 := visibleChatHistory.History.(*persisted_ai.Llm2ChatHistory); isLlm2 {
+		if lazyVisibility {
+			var blocks []*EditBlock
+			blocks, err = ExtractEditBlocks(chatResponse.GetMessage().GetContentString(), tildeOnly)
+			currentExtractedBlocks = utils.Map(blocks, func(block *EditBlock) EditBlock { return *block })
+		} else if isLlm2 {
 			var cha *persisted_ai.ChatHistoryActivities
 			var visibleCodeBlocks []tree_sitter.CodeBlock
 			extractCtx := dCtx.ExecContext
@@ -499,8 +529,10 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		var applyEditBlocksResult applyEditBlocksResult
 		if len(currentExtractedBlocks) > 0 {
 			attemptsSinceLastEditBlockOrFeedback = 0
-			if applyImmediately {
-				applyEditBlocksResult, applyEditBlocksError = applyEditBlocksAndReport(dCtx, currentExtractedBlocks)
+			if lazyVisibility {
+				applyEditBlocksResult, applyEditBlocksError = applyEditBlocksWithLazyVisibility(dCtx, &visibleChatHistory, currentExtractedBlocks)
+			} else if applyImmediately {
+				applyEditBlocksResult, applyEditBlocksError = applyEditBlocksAndReportWithOptions(dCtx, currentExtractedBlocks, applyOpts)
 			} else {
 				extractedEditBlocks = append(extractedEditBlocks, currentExtractedBlocks...)
 			}
@@ -836,6 +868,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"doneRequired":                    doneRequired,
 		"doneFunctionName":                doneTool.Name,
 		"environmentContext":              environmentContext,
+		"isolatedSandbox":                 isIsolatedSandboxEnvironment(dCtx),
 		"idd":                             idd,
 	}
 	if doneRequired {
@@ -870,6 +903,7 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"doneRequired":                    doneRequired,
 		"hasPlan":                         true,
 		"environmentContext":              environmentContext,
+		"isolatedSandbox":                 isIsolatedSandboxEnvironment(dCtx),
 		"idd":                             idd,
 	}
 	if doneRequired {
@@ -1052,4 +1086,11 @@ func feedbackContextType(feedbackType string, disableHumanInTheLoop bool) string
 		}
 	}
 	return ""
+}
+
+func isIsolatedSandboxEnvironment(dCtx DevContext) bool {
+	if dCtx.EnvContainer == nil || dCtx.EnvContainer.Env == nil {
+		return false
+	}
+	return common.IsolatedSandboxEnvTypes[string(dCtx.EnvContainer.Env.GetType())]
 }

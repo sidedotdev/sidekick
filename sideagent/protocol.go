@@ -47,6 +47,11 @@ type ExecRequest struct {
 	// (with Hibernated set on the response) if the file exists. The check
 	// happens after ReadLockFile is acquired.
 	HibernationSentinel string `json:"hibernationSentinel,omitempty"`
+	// ActivityLease holds admission and the heartbeat until cancellation,
+	// without spawning a command. It protects work on a separate channel.
+	ActivityLease bool `json:"activityLease,omitempty"`
+	// OnReady runs locally once the remote has admitted the activity lease.
+	OnReady func() `json:"-"`
 }
 
 // ExecResponse carries the buffered result of one ExecRequest.
@@ -55,6 +60,8 @@ type ExecResponse struct {
 	Stdout     []byte `json:"stdout,omitempty"`
 	Stderr     []byte `json:"stderr,omitempty"`
 	ExitStatus int    `json:"exitStatus"`
+	// Ready acknowledges admission; the final response follows cancellation.
+	Ready bool `json:"ready,omitempty"`
 	// Error is set when the command could not be run at all (e.g. executable
 	// not found), as opposed to running and exiting non-zero.
 	Error string `json:"error,omitempty"`

@@ -74,6 +74,11 @@ func main() {
 	flag.StringVar(&orphanFile, "orphan-file", defaultOrphanFile, "File to store/resume orphan keys")
 	flag.Parse()
 
+	if !dryRun {
+		log.Fatal().Msg("Legacy saved-key deletion is disabled; use go run ./scripts/codec_scan -apply -maintenance-window for a fresh reference scan")
+	}
+	log.Warn().Msg("Legacy diagnostic only; use go run ./scripts/codec_scan for a complete reference scan")
+
 	if batchSize <= 0 {
 		log.Fatal().Int("batchSize", batchSize).Msg("batch-size must be > 0")
 	}

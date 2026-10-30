@@ -2,7 +2,6 @@ package lsp
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"sidekick/env"
@@ -76,9 +75,10 @@ func TestLSPServerCommand_SSHCapableEnvRunsGoplsOverSSH(t *testing.T) {
 	assert.Equal(t, []string{"-F", "/dev/null", "myhost.devpod"}, cmd.Args[1:len(cmd.Args)-1])
 
 	remoteCmd := cmd.Args[len(cmd.Args)-1]
-	assert.True(t, strings.HasPrefix(remoteCmd, "'gopls'"),
-		"remote command should launch gopls, got %q", remoteCmd)
-	assert.Contains(t, remoteCmd, "-remote=auto")
+	expected, err := env.ManagedBackgroundCommand("'gopls'")
+	require.NoError(t, err)
+	assert.Equal(t, expected, remoteCmd)
+	assert.NotContains(t, remoteCmd, "-remote")
 
 	assert.Equal(t, 1, sshEnv.ensuredForwards,
 		"this invocation carries no -R, so the env's forwards must be held by the transport")
@@ -92,7 +92,7 @@ func TestLSPServerCommand_LocalEnvRunsGoplsDirectly(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "gopls", cmd.Args[0])
-	assert.Contains(t, cmd.Args, "-remote=auto")
+	assert.Equal(t, []string{"gopls"}, cmd.Args)
 }
 
 func TestFindOrInstallGopls_InstallsWhenMissing(t *testing.T) {
@@ -142,8 +142,9 @@ func TestLSPServerCommand_SSHCapableEnvUsesAbsoluteGoplsPath(t *testing.T) {
 	require.NoError(t, err)
 
 	remoteCmd := cmd.Args[len(cmd.Args)-1]
-	assert.True(t, strings.HasPrefix(remoteCmd, "'/root/go/bin/gopls'"),
-		"remote command should launch gopls via its absolute path, got %q", remoteCmd)
+	expected, err := env.ManagedBackgroundCommand("'/root/go/bin/gopls'")
+	require.NoError(t, err)
+	assert.Equal(t, expected, remoteCmd)
 }
 
 // TestLSPServerCommand_ModalEnvLaunchesGoplsUnderLoginShell verifies the Modal
@@ -161,8 +162,8 @@ func TestLSPServerCommand_ModalEnvLaunchesGoplsUnderLoginShell(t *testing.T) {
 	require.NoError(t, err)
 
 	remoteCmd := cmd.Args[len(cmd.Args)-1]
-	assert.True(t, strings.HasPrefix(remoteCmd, "bash -lc "),
-		"modal remote command should launch gopls under a login shell, got %q", remoteCmd)
-	assert.Contains(t, remoteCmd, "gopls")
-	assert.Contains(t, remoteCmd, "-remote=auto")
+	expected, err := env.ManagedBackgroundCommand("bash -lc " + lspShellQuote("'gopls'"))
+	require.NoError(t, err)
+	assert.Equal(t, expected, remoteCmd)
+	assert.NotContains(t, remoteCmd, "-remote")
 }

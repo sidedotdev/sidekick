@@ -41,10 +41,10 @@ func (e *sshScriptTransportError) Error() string {
 	return msg
 }
 
-// runSSHScript runs script in the remote environment over a one-off ssh
+// RunSSHScript runs script in the remote environment over a one-off ssh
 // session. A non-zero exit from the script itself is returned in the output
 // for the caller to interpret; an ssh-level failure is returned as an error.
-func runSSHScript(ctx context.Context, sshArgs []string, script string) (unix.RunCommandActivityOutput, error) {
+func RunSSHScript(ctx context.Context, sshArgs []string, script string) (unix.RunCommandActivityOutput, error) {
 	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: os.TempDir(),
 		Command:    "ssh",
@@ -68,7 +68,7 @@ func runSSHScript(ctx context.Context, sshArgs []string, script string) (unix.Ru
 // remote $HOME; the resolved directory is returned.
 func syncRepoOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir string, extraBranches []string) (string, error) {
 	if containerRepoDir == "" {
-		homeOutput, err := runSSHScript(ctx, sshArgs, "echo $HOME")
+		homeOutput, err := RunSSHScript(ctx, sshArgs, "echo $HOME")
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve $HOME in sandbox: %w", err)
 		}
@@ -177,7 +177,7 @@ func remoteUnpackFailed(err error) bool {
 // with some other cause.
 func remoteRepoCorrupted(ctx context.Context, sshArgs []string, containerRepoDir string) (bool, error) {
 	script := fmt.Sprintf("git -C %s fsck --full --no-progress", shellQuote(containerRepoDir))
-	output, err := runSSHScript(ctx, sshArgs, script)
+	output, err := RunSSHScript(ctx, sshArgs, script)
 	if err != nil {
 		return false, fmt.Errorf("failed to fsck remote repo: %w", err)
 	}
@@ -195,7 +195,7 @@ func remoteRepoCorrupted(ctx context.Context, sshArgs []string, containerRepoDir
 func quarantineRemoteRepo(ctx context.Context, sshArgs []string, containerRepoDir string) error {
 	quarantineDir := containerRepoDir + ".corrupt." + time.Now().UTC().Format("20060102T150405Z")
 	script := fmt.Sprintf("mv %s %s", shellQuote(containerRepoDir), shellQuote(quarantineDir))
-	output, err := runSSHScript(ctx, sshArgs, script)
+	output, err := RunSSHScript(ctx, sshArgs, script)
 	if err != nil {
 		return fmt.Errorf("failed to quarantine remote repo: %w", err)
 	}
@@ -231,7 +231,7 @@ func syncRefspecs(headRef string, extraBranches []string) []string {
 // containerRepoDir in the remote environment.
 func remoteRepoExists(ctx context.Context, sshArgs []string, containerRepoDir string) (bool, error) {
 	script := fmt.Sprintf("if [ -d %s/.git ]; then echo EXISTS; else echo MISSING; fi", shellQuote(containerRepoDir))
-	output, err := runSSHScript(ctx, sshArgs, script)
+	output, err := RunSSHScript(ctx, sshArgs, script)
 	if err != nil {
 		return false, fmt.Errorf("failed to check for remote repo: %w", err)
 	}
@@ -289,7 +289,7 @@ func tunneledRepoScriptOverSSH(ctx context.Context, sshArgs []string, localRepoD
 	}
 	defer stop()
 
-	dest, opts := splitSSHDestination(sshArgs)
+	dest, opts := SplitSSHDestination(sshArgs)
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
@@ -326,7 +326,7 @@ func tunneledRepoScriptOverSSH(ctx context.Context, sshArgs []string, localRepoD
 // transfer size for independence from delta bases the remote may not be able
 // to resolve.
 func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, containerRepoDir, headRef string, refspecs []string, noThin bool) error {
-	dest, opts := splitSSHDestination(sshArgs)
+	dest, opts := SplitSSHDestination(sshArgs)
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
@@ -343,7 +343,7 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 		quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo, quotedRepo,
 	)
 	prepStart := time.Now()
-	prepOutput, err := runSSHScript(ctx, sshArgs, prepScript)
+	prepOutput, err := RunSSHScript(ctx, sshArgs, prepScript)
 	if err != nil {
 		return fmt.Errorf("failed to prepare remote repo for push: %w", err)
 	}
@@ -368,7 +368,7 @@ func pushRepoSyncOverSSH(ctx context.Context, sshArgs []string, localRepoDir, co
 		" && git symbolic-ref HEAD " + shellQuote(headRef) +
 		" && git reset --hard"
 	applyStart := time.Now()
-	applyOutput, err := runSSHScript(ctx, sshArgs, applyScript)
+	applyOutput, err := RunSSHScript(ctx, sshArgs, applyScript)
 	if err != nil {
 		return fmt.Errorf("failed to realign remote repo after push: %w", err)
 	}
@@ -417,7 +417,7 @@ func localHeadRef(ctx context.Context, localRepoDir string) (string, error) {
 func syncMergeResultToLocalOverSSH(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, branch string) error {
 	tempRef := "refs/sidekick-sync/" + branch
 	refspec := fmt.Sprintf("+refs/heads/%s:%s", branch, tempRef)
-	if err := fetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, refspec); err != nil {
+	if err := FetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, refspec); err != nil {
 		return err
 	}
 
@@ -455,7 +455,7 @@ git update-ref -d "$tempref"`
 // into the local repo. Unlike branch syncing there is no local working tree
 // to update, so a plain fetch of the ref suffices.
 func syncGitRefToLocalOverSSH(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, ref string) error {
-	err := fetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, fmt.Sprintf("%s:%s", ref, ref))
+	err := FetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, fmt.Sprintf("%s:%s", ref, ref))
 	if err != nil && strings.HasPrefix(ref, "refs/tags/") && strings.Contains(err.Error(), "(would clobber existing tag)") {
 		return fmt.Errorf("%w: %w", ErrGitTagConflict, err)
 	}
@@ -463,22 +463,20 @@ func syncGitRefToLocalOverSSH(ctx context.Context, sshArgs []string, workingDire
 }
 
 // syncFlowBranchToLocalOverSSH backs up a flow branch's commits from a remote
-// environment's clone into the local repo, force-updating the same-name local
-// branch. Forcing is safe because the local branch is reserved for the flow
-// and never checked out, so no working tree can be affected; the fetch is
-// negotiated, so only commits missing locally are transferred.
+// environment's clone into the local repo. A previous local env may still
+// have the branch checked out, so it must be fast-forwarded with its worktree
+// rather than force-updated. Unchecked-out branches can be force-updated.
 func syncFlowBranchToLocalOverSSH(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, branch string) error {
-	refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
-	return fetchRemoteRefToLocal(ctx, sshArgs, workingDirectory, localRepoDir, refspec)
+	return syncMergeResultToLocalOverSSH(ctx, sshArgs, workingDirectory, localRepoDir, branch)
 }
 
-// fetchRemoteRefToLocal fetches the given refspec from a remote
+// FetchRemoteRefToLocal fetches the given refspec from a remote
 // environment's repo into the local one via git's negotiated transfer over
 // the same ssh transport (git execs git-upload-pack through sshd; no daemon
 // is needed). workingDirectory may be a worktree: it shares the object
 // store, so any repo-level ref is reachable from there.
-func fetchRemoteRefToLocal(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, refspec string) error {
-	dest, opts := splitSSHDestination(sshArgs)
+func FetchRemoteRefToLocal(ctx context.Context, sshArgs []string, workingDirectory, localRepoDir, refspec string) error {
+	dest, opts := SplitSSHDestination(sshArgs)
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
@@ -619,7 +617,7 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 		return nil
 	}
 
-	dest, opts := splitSSHDestination(sshArgs)
+	dest, opts := SplitSSHDestination(sshArgs)
 	if dest == "" {
 		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
 	}
@@ -627,7 +625,7 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 	// Allow updating the branch even while it is checked out remotely; the
 	// affected worktree is realigned right after the push.
 	prepScript := fmt.Sprintf("git -C %s config receive.denyCurrentBranch ignore", shellQuote(workingDirectory))
-	prepOutput, err := runSSHScript(ctx, sshArgs, prepScript)
+	prepOutput, err := RunSSHScript(ctx, sshArgs, prepScript)
 	if err != nil {
 		return fmt.Errorf("failed to prepare remote repo for branch sync: %w", err)
 	}
@@ -648,7 +646,7 @@ func syncBranchToRemoteOverSSH(ctx context.Context, sshArgs []string, workingDir
 			`if [ -n "$wt" ]; then git -C "$wt" reset --hard refs/heads/%s; fi`,
 		shellQuote(workingDirectory), shellQuote(branch), shellQuote(branch),
 	)
-	applyOutput, err := runSSHScript(ctx, sshArgs, applyScript)
+	applyOutput, err := RunSSHScript(ctx, sshArgs, applyScript)
 	if err != nil {
 		return fmt.Errorf("failed to realign remote worktree after branch sync: %w", err)
 	}
@@ -688,11 +686,11 @@ func reserveLocalBranch(ctx context.Context, localRepoDir, branchName, startBran
 	return reserveErr
 }
 
-// remoteWorktreeMatches reports whether worktreePath already holds a git
-// worktree checked out on branchName, meaning provisioning is re-running for
-// an existing flow (activity retry, sandbox restore, repeated env setup) and
-// must reuse the worktree rather than recreate it.
-func remoteWorktreeMatches(ctx context.Context, envContainer EnvContainer, branchName, worktreePath string) (bool, error) {
+// worktreeOnBranch reports whether worktreePath already holds a git worktree
+// checked out on branchName, meaning provisioning is re-running for an
+// existing flow (activity retry, sandbox restore, repeated env setup, env
+// switch back) and must reuse the worktree rather than recreate it.
+func worktreeOnBranch(ctx context.Context, envContainer EnvContainer, branchName, worktreePath string) (bool, error) {
 	quotedPath := shellQuote(worktreePath)
 	script := fmt.Sprintf(
 		`[ -e %s/.git ] || exit 1; `+
@@ -704,7 +702,7 @@ func remoteWorktreeMatches(ctx context.Context, envContainer EnvContainer, branc
 		Args:    []string{"-c", script},
 	})
 	if err != nil {
-		return false, fmt.Errorf("failed to check for existing worktree in sandbox: %w", err)
+		return false, fmt.Errorf("failed to check for existing worktree: %w", err)
 	}
 	return output.ExitStatus == 0 && strings.Contains(output.Stdout, "MATCH"), nil
 }
@@ -723,7 +721,7 @@ func isBranchAlreadyExists(err error) bool {
 // Conflicting sandbox state is left intact. Provisioning is idempotent: an
 // existing worktree already on the flow branch at the expected path is reused
 // as-is, so re-runs never destroy in-progress work.
-func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, startBranch, workspaceId, localRepoDir string) (string, error) {
+func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDir, branchName, startBranch, workspaceId, localRepoDir string, allowReuse bool) (string, error) {
 	repoName := filepath.Base(repoDir)
 	branchSuffix := strings.TrimPrefix(branchName, "side/")
 	dirName := repoName + "-" + branchSuffix
@@ -741,7 +739,7 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 	}
 	worktreePath := filepath.Join(baseDir, "sidekick-worktrees", workspaceId, dirName)
 
-	matches, err := remoteWorktreeMatches(ctx, envContainer, branchName, worktreePath)
+	matches, err := worktreeOnBranch(ctx, envContainer, branchName, worktreePath)
 	if err != nil {
 		return "", err
 	}
@@ -756,7 +754,15 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 		return worktreePath, nil
 	}
 	if localRepoDir != "" {
-		if err := reserveLocalBranch(ctx, localRepoDir, branchName, startBranch); err != nil {
+		if err := reserveLocalBranch(ctx, localRepoDir, branchName, startBranch); err != nil && !(allowReuse && isBranchAlreadyExists(err)) {
+			return "", err
+		}
+	}
+
+	attach := false
+	if allowReuse {
+		attach, err = gitBranchExists(ctx, envContainer.Env, branchName)
+		if err != nil {
 			return "", err
 		}
 	}
@@ -767,14 +773,14 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 	}
 	addOutput, err := envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "git",
-		Args:    []string{"worktree", "add", "-b", branchName, worktreePath, baseRef},
+		Args:    worktreeAddArgs(nil, branchName, worktreePath, baseRef, attach),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to run git worktree add in sandbox: %w", err)
 	}
 	if addOutput.ExitStatus != 0 {
 		err := fmt.Errorf("git worktree add failed in sandbox (exit %d): %s", addOutput.ExitStatus, addOutput.Stderr)
-		if localRepoDir == "" && strings.Contains(addOutput.Stderr, "already exists") {
+		if !attach && localRepoDir == "" && strings.Contains(addOutput.Stderr, "already exists") {
 			return "", temporal.NewNonRetryableApplicationError(
 				err.Error(),
 				ErrTypeBranchAlreadyExists,
@@ -789,10 +795,13 @@ func createRemoteWorktree(ctx context.Context, envContainer EnvContainer, repoDi
 			Command: "git",
 			Args:    []string{"worktree", "remove", "--force", worktreePath},
 		})
-		_, _ = envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-			Command: "git",
-			Args:    []string{"branch", "-D", branchName},
-		})
+		// An attached branch predates this call and carries flow commits.
+		if !attach {
+			_, _ = envContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+				Command: "git",
+				Args:    []string{"branch", "-D", branchName},
+			})
+		}
 		return "", err
 	}
 
@@ -852,6 +861,9 @@ type CreateRemoteWorktreeInput struct {
 	// LocalRepoDir is the worker-local repository in which the flow branch is
 	// reserved. When set, it is the sole authority on branch name availability.
 	LocalRepoDir string `json:"localRepoDir,omitempty"`
+	// AllowReuse attaches an already existing flow branch (in both the local
+	// and remote repos) instead of failing.
+	AllowReuse bool `json:"allowReuse,omitempty"`
 }
 
 type CreateRemoteWorktreeOutput struct {
@@ -862,7 +874,7 @@ type CreateRemoteWorktreeOutput struct {
 // environment via its RunCommand, so that the worktree's .git references
 // resolve within the remote filesystem.
 func CreateRemoteWorktreeActivity(ctx context.Context, input CreateRemoteWorktreeInput) (CreateRemoteWorktreeOutput, error) {
-	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId, input.LocalRepoDir)
+	worktreePath, err := createRemoteWorktree(ctx, input.EnvContainer, input.RepoDir, input.BranchName, input.StartBranch, input.WorkspaceId, input.LocalRepoDir, input.AllowReuse)
 	if err != nil {
 		return CreateRemoteWorktreeOutput{}, err
 	}
@@ -920,7 +932,7 @@ func DeepenRepoActivity(ctx context.Context, input DeepenRepoInput) (DeepenRepoO
 		}
 
 		quotedRepo := shellQuote(input.RemoteRepoDir)
-		checkOutput, err := runSSHScript(ctx, sshArgs,
+		checkOutput, err := RunSSHScript(ctx, sshArgs,
 			fmt.Sprintf("if [ -f %s/.git/shallow ]; then echo SHALLOW; else echo COMPLETE; fi", quotedRepo))
 		if err != nil {
 			return false, fmt.Errorf("failed to check for shallow remote repo: %w", err)

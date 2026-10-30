@@ -173,7 +173,7 @@ func killProcessGroup(p *os.Process) {
 
 func (s *server) execute(req ExecRequest) ExecResponse {
 	resp := ExecResponse{ID: req.ID}
-	if len(req.Argv) == 0 {
+	if len(req.Argv) == 0 && !req.ActivityLease {
 		resp.ExitStatus = -1
 		resp.Error = "empty argv"
 		return resp
@@ -216,6 +216,37 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 	default:
 	}
 
+	if req.ActivityLease {
+		defer s.untrack(req.ID)
+		s.respond(ExecResponse{ID: req.ID, Ready: true})
+		ticker := time.NewTicker(readLockPollInterval)
+		defer ticker.Stop()
+		for !s.isCanceled(req.ID) {
+			select {
+			case <-s.done:
+				return resp
+			case <-ticker.C:
+			}
+		}
+		return resp
+	}
+
+	// exec reports a failed chdir as "fork/exec <executable>", which hides
+	// a lost worktree behind what looks like a missing system binary.
+	if req.Dir != "" {
+		info, err := os.Stat(req.Dir)
+		if err != nil {
+			resp.ExitStatus = -1
+			resp.Error = fmt.Sprintf("working directory %q is unavailable: %v", req.Dir, err)
+			return resp
+		}
+		if !info.IsDir() {
+			resp.ExitStatus = -1
+			resp.Error = fmt.Sprintf("working directory %q is not a directory", req.Dir)
+			return resp
+		}
+	}
+
 	commandEnv := append(s.baseEnv(req.LoginEnv), req.Env...)
 	commandPath, err := resolveExecutable(req.Argv[0], req.Dir, commandEnv)
 	if err != nil {
@@ -240,13 +271,13 @@ func (s *server) execute(req ExecRequest) ExecResponse {
 	// background children (& / nohup) inherit the pipes.
 	cmd.WaitDelay = 100 * time.Millisecond
 
-	if err := cmd.Start(); err != nil {
+	if err := startedChildren.start(cmd); err != nil {
 		resp.ExitStatus = -1
 		resp.Error = err.Error()
 		return resp
 	}
 	s.track(req.ID, cmd.Process)
-	err = cmd.Wait()
+	err = startedChildren.wait(cmd)
 	s.untrack(req.ID)
 
 	resp.Stdout = stdout.contents()
@@ -372,11 +403,16 @@ func (s *server) baseEnv(login bool) []string {
 		s.loginEnvOnce.Do(func() {
 			// A fixed internal command: no user input crosses into a shell.
 			// env -0 NUL-separates entries so values with newlines survive.
-			out, err := exec.Command("bash", "-lc", "env -0").Output()
-			if err != nil {
+			cmd := exec.Command("bash", "-lc", "env -0")
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			if err := startedChildren.start(cmd); err != nil {
 				return
 			}
-			for _, entry := range strings.Split(string(out), "\x00") {
+			if err := startedChildren.wait(cmd); err != nil {
+				return
+			}
+			for _, entry := range strings.Split(out.String(), "\x00") {
 				if entry != "" && strings.Contains(entry, "=") {
 					s.loginEnv = append(s.loginEnv, entry)
 				}

@@ -24,6 +24,12 @@ type TemporalActivityRef struct {
 	CloseEventType   string `json:"closeEventType,omitempty"`
 }
 
+// FlowActionAttempt is one failed attempt of an action that is being retried.
+type FlowActionAttempt struct {
+	At    time.Time `json:"at"`
+	Error string    `json:"error"`
+}
+
 type FlowAction struct {
 	Id                 string                 `json:"id"`
 	SubflowName        string                 `json:"subflow"`            // TODO: remove in favor of SubflowId
@@ -40,6 +46,12 @@ type FlowAction struct {
 	IsHumanAction      bool                   `json:"isHumanAction"`
 	IsCallbackAction   bool                   `json:"isCallbackAction"`
 	TemporalActivities []TemporalActivityRef  `json:"temporalActivities,omitempty"`
+	// Attempts are the failed attempts so far of an action being retried, in
+	// chronological order.
+	Attempts []FlowActionAttempt `json:"attempts,omitempty"`
+	// NextRetryAt is when the action will automatically be retried. Absent
+	// means retrying is up to the user.
+	NextRetryAt *time.Time `json:"nextRetryAt,omitempty"`
 }
 
 func (fa FlowAction) MarshalJSON() ([]byte, error) {

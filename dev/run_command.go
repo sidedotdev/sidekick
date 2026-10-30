@@ -7,6 +7,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/logger"
 
@@ -62,6 +63,11 @@ func CheckCommandPermissionActivity(ctx context.Context, input CheckCommandPermi
 // commands), advisory contains informational guidance to append to the command output for
 // auto-approved commands (e.g. heredoc warnings, cd guidance), and error for failures.
 func checkCommandPermission(dCtx DevContext, command string, workingDir string) (proceed bool, denyMessage string, advisory string, err error) {
+	proceed, denyMessage, advisory, _, err = checkCommandPermissionWithEvaluation(dCtx, command, workingDir, false)
+	return
+}
+
+func checkCommandPermissionWithEvaluation(dCtx DevContext, command string, workingDir string, approved bool) (proceed bool, denyMessage string, advisory string, evaluation *common.ScriptPermissionEvaluation, err error) {
 	enableCommandPermissions := workflow.GetVersion(dCtx, "command-permissions", workflow.DefaultVersion, 1) >= 1
 	stripEnvVarPrefix := workflow.GetVersion(dCtx, "command-permissions-strip-env-var", workflow.DefaultVersion, 1) >= 1
 	usePermissionActivity := workflow.GetVersion(dCtx, "command-permissions-activity", workflow.DefaultVersion, 1) >= 1
@@ -74,6 +80,17 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		}
 	}
 
+	// Preserve recorded permission activities and approvals when replaying older workflows.
+	if sandboxMode && workflow.GetVersion(dCtx, "sandbox-command-permissions-bypass", workflow.DefaultVersion, 1) >= 1 {
+		evaluation = &common.ScriptPermissionEvaluation{
+			Outcome: common.PermissionAutoApprove,
+			Factors: []common.PermissionFactor{{
+				Kind: common.PermissionFactorSandboxBypass, Outcome: common.PermissionAutoApprove,
+			}},
+		}
+		return true, "", "", evaluation, nil
+	}
+
 	var permEvaluation *common.ScriptPermissionEvaluation
 	if enableCommandPermissions {
 		var permResult common.PermissionResult
@@ -82,7 +99,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		if usePermissionActivity {
 			var output CheckCommandPermissionOutput
 			err := workflow.ExecuteActivity(dCtx.Context, CheckCommandPermissionActivity, CheckCommandPermissionInput{
-				CommandPermissions:                dCtx.RepoConfig.CommandPermissions,
+				CommandPermissions:                effectiveCommandPermissions(dCtx),
 				Command:                           command,
 				StripEnvVarPrefix:                 stripEnvVarPrefix,
 				DefaultAutoApprove:                sandboxMode,
@@ -90,7 +107,7 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 				HeredocFileWriteWarnInsteadOfDeny: sandboxMode,
 			}).Get(dCtx.Context, &output)
 			if err != nil {
-				return false, "", "", fmt.Errorf("failed to check command permission: %v", err)
+				return false, "", "", nil, fmt.Errorf("failed to check command permission: %w", err)
 			}
 			permResult = output.Result
 			permMessage = output.Message
@@ -103,21 +120,32 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 				SkipAbsolutePathEscalation:        sandboxMode,
 				HeredocFileWriteWarnInsteadOfDeny: sandboxMode,
 			}
-			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(dCtx.RepoConfig.CommandPermissions, command, opts)
+			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(effectiveCommandPermissions(dCtx), command, opts)
+		}
+		evaluation = permEvaluation
+		if evaluation == nil {
+			evaluation = &common.ScriptPermissionEvaluation{Outcome: permResult}
 		}
 
 		workflow.GetLogger(dCtx).Debug("Command permission evaluation result", "command", command, "result", permResult, "message", permMessage)
 
 		switch permResult {
 		case common.PermissionDeny:
-			return false, fmt.Sprintf("Command denied: %s", permMessage), "", nil
+			return false, fmt.Sprintf("Command denied: %s", permMessage), "", evaluation, nil
 		case common.PermissionAutoApprove:
-			return true, "", permMessage, nil
+			return true, "", permMessage, evaluation, nil
 		case common.PermissionRequireApproval:
 			// Fall through to request approval
 		}
 	} else {
 		workflow.GetLogger(dCtx).Warn("Command permissions are not enabled")
+		evaluation = &common.ScriptPermissionEvaluation{Outcome: common.PermissionRequireApproval}
+	}
+
+	if approved {
+		approvedEvaluation := *evaluation
+		approvedEvaluation.Approved = true
+		return true, "", "", &approvedEvaluation, nil
 	}
 
 	l := logger.Get()
@@ -134,17 +162,26 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 	}
 	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, approvalParams)
 	if err != nil {
-		return false, "", "", fmt.Errorf("failed to get user approval: %v", err)
+		return false, "", "", evaluation, fmt.Errorf("failed to get user approval: %w", err)
 	}
 	if userResponse == nil || userResponse.Approved == nil || !*userResponse.Approved {
-		return false, "Command execution was not approved by user. They said:\n\n" + userResponse.Content, "", nil
+		content := ""
+		if userResponse != nil {
+			content = userResponse.Content
+		}
+		return false, "Command execution was not approved by user. They said:\n\n" + content, "", evaluation, nil
 	}
 
-	return true, "", "", nil
+	approvedEvaluation := *evaluation
+	approvedEvaluation.Approved = true
+	return true, "", "", &approvedEvaluation, nil
 }
 
 // RunCommand handles the execution of shell commands with user approval
 func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
+	if workflow.GetVersion(dCtx, "run-command-expected-env", workflow.DefaultVersion, 1) >= 1 {
+		return runCommandWithExpectedEnv(dCtx, params)
+	}
 	proceed, denyMessage, advisory, err := checkCommandPermission(dCtx, params.Command, params.WorkingDir)
 	if err != nil {
 		return "", err
@@ -170,15 +207,24 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 
 	// Execute command through sh
 	var output env.EnvRunCommandActivityOutput
-	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	input := env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		Command:            "sh",
 		Args:               []string{"-c", params.Command},
 		RelativeWorkingDir: relWorkDir,
 		EnvVars:            git.BuildGitEnvVars(committerName, committerEmail),
-	}).Get(dCtx.Context, &output)
+	}
+	if workflow.GetVersion(dCtx, "docker-command-recovery", workflow.DefaultVersion, 1) >= 1 {
+		err = flow_action.PerformWithUserRetryOptions(
+			flow_action.ActionContext{ExecContext: dCtx.ExecContext, ActionType: "run_command"},
+			flow_action.UserRetryOptions{OnFailure: DockerFailureHandler{}},
+			env.EnvRunCommandActivity, &output, input,
+		)
+	} else {
+		err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, input).Get(dCtx.Context, &output)
+	}
 	if err != nil {
-		return "", fmt.Errorf("failed to execute command: %v", err)
+		return "", fmt.Errorf("failed to execute command: %w", err)
 	}
 
 	response := fmt.Sprintf("Command executed with exit status %d\n\nStdout:\n%s\n\nStderr:\n%s",

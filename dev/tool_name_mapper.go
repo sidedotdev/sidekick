@@ -80,7 +80,7 @@ func resolveStreamToolNameMapping(eCtx flow_action.ExecContext, modelConfig comm
 			err = flow_action.PerformWithUserRetryOptions(
 				flow_action.ActionContext{ExecContext: retryECtx, ActionType: "Resolve tool name mapping"},
 				flow_action.UserRetryOptions{
-					OnFailure: persisted_ai.ProviderAuthFailureHandler{},
+					OnFailure: persisted_ai.NewProviderAuthFailureHandler(),
 					ResolveArgs: func() ([]interface{}, error) {
 						authType, _ := retryECtx.ProviderAuthTypeOverride(modelConfig.Provider)
 						return []interface{}{ResolveToolNameMappingInput{Secrets: secrets, AuthType: authType}}, nil

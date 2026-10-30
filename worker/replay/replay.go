@@ -11,9 +11,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime/pprof"
 	"sidekick"
+	"sort"
+	"strings"
+	"sync"
+	"time"
 
 	"sidekick/common"
+	"sidekick/temporal"
 	"sidekick/utils"
 	sidekick_worker "sidekick/worker"
 
@@ -23,11 +30,13 @@ import (
 	zerologadapter "logur.dev/adapter/zerolog"
 	"logur.dev/logur"
 
+	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/history/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
+	"google.golang.org/protobuf/proto"
 )
 
 func main() {
@@ -48,9 +57,12 @@ func main() {
 	storeCmd.StringVar(&storeSidekickVersion, "sidekick-version", "", "Sidekick version (mandatory for store command)")
 
 	// Default command flags
-	var defaultHostPort, defaultWorkflowId string
+	var defaultHostPort, defaultWorkflowId, historyCache, cpuProfile string
 	flag.StringVar(&defaultHostPort, "hostPort", common.GetTemporalDiagnosticHostPort(), "Host and port for the Temporal server, eg localhost:18855 (default command)")
 	flag.StringVar(&defaultWorkflowId, "id", "", "Workflow ID to replay (default command, mandatory if no subcommand)")
+	flag.StringVar(&historyCache, "history-cache", "", "path to a protobuf history snapshot; loaded if present, otherwise written after fetching, so repeated replays measure the same history")
+	flag.StringVar(&cpuProfile, "cpuprofile", "", "write a CPU profile of the replay phase (excluding history fetch) to this path")
+	noConverterTiming := flag.Bool("no-converter-timing", false, "skip data converter timing instrumentation (control for measuring its overhead)")
 
 	// Custom usage messages
 	storeCmd.Usage = func() {
@@ -146,7 +158,11 @@ func main() {
 		}
 		defer c.Close()
 
-		if err := ReplayWorkflowLatest(context.Background(), c, defaultWorkflowId, clientOptions.DataConverter); err != nil {
+		if err := ReplayWorkflowLatest(context.Background(), c, defaultWorkflowId, clientOptions.DataConverter, ReplayTimingOptions{
+			HistoryCachePath:       historyCache,
+			CPUProfilePath:         cpuProfile,
+			DisableConverterTiming: *noConverterTiming,
+		}); err != nil {
 			log.Fatal().Err(err).Msg("Default replay failed.")
 		}
 		log.Info().Msgf("Replay finished successfully for workflow %s.", defaultWorkflowId)
@@ -375,18 +391,230 @@ func ReplayWorkflow(ctx context.Context, client client.Client, id, runID string)
 	return replayer.ReplayWorkflowHistory(nil, hist)
 }
 
-func ReplayWorkflowLatest(ctx context.Context, client client.Client, id string, dc converter.DataConverter) error {
-	hist, err := GetWorkflowHistory(ctx, client, id, "")
+// ReplayTimingOptions controls how ReplayWorkflowLatest captures performance
+// diagnostics.
+type ReplayTimingOptions struct {
+	// HistoryCachePath, when set, is a protobuf snapshot of the history that
+	// is loaded instead of fetching (if it exists) or written after fetching.
+	HistoryCachePath string
+	// CPUProfilePath, when set, receives a CPU profile covering only the
+	// replay phase.
+	CPUProfilePath string
+	// DisableConverterTiming runs the replay with the raw data converter so
+	// the instrumentation's own overhead can be measured.
+	DisableConverterTiming bool
+}
+
+// ReplayWorkflowLatest replays the latest run of a workflow, logging how long
+// history fetch and replay (workflow code plus payload codec decode) each take
+// so workflow task timeouts can be attributed to the right phase.
+func ReplayWorkflowLatest(ctx context.Context, client client.Client, id string, dc converter.DataConverter, opts ReplayTimingOptions) error {
+	hist, err := loadOrFetchHistory(ctx, client, id, opts.HistoryCachePath)
 	if err != nil {
 		return err
 	}
 
+	var timed *timingDataConverter
+	replayDc := dc
+	if !opts.DisableConverterTiming {
+		timed = newTimingDataConverter(dc)
+		replayDc = timed
+	}
 	replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
-		DataConverter: dc,
+		DataConverter: replayDc,
 	})
 	if err != nil {
 		return err
 	}
 	sidekick_worker.RegisterWorkflows(replayer)
-	return replayer.ReplayWorkflowHistory(nil, hist)
+
+	if opts.CPUProfilePath != "" {
+		f, err := os.Create(opts.CPUProfilePath)
+		if err != nil {
+			return fmt.Errorf("failed to create cpu profile file: %w", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return fmt.Errorf("failed to start cpu profile: %w", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
+	replayStart := time.Now()
+	err = replayer.ReplayWorkflowHistory(nil, hist)
+	log.Info().Dur("replayDuration", time.Since(replayStart)).Msg("Replayed workflow history")
+	if timed != nil {
+		timed.log()
+	}
+	return err
+}
+
+// conversionStats accumulates call count, wall time and bytes for one
+// direction of payload conversion, optionally keyed by the Go type involved.
+type conversionStats struct {
+	calls, nanos, bytes, errors int64
+}
+
+// timingDataConverter counts calls and accumulates wall time spent in payload
+// conversion, so blocking work inside the converter (e.g. codec storage reads)
+// is measured rather than inferred from CPU samples. Costs are also attributed
+// to the Go type being converted, which maps closely to activity input/result
+// types and therefore to individual activities.
+type timingDataConverter struct {
+	converter.DataConverter
+	mu         sync.Mutex
+	to, from   conversionStats
+	toByType   map[string]*conversionStats
+	fromByType map[string]*conversionStats
+}
+
+func newTimingDataConverter(dc converter.DataConverter) *timingDataConverter {
+	return &timingDataConverter{
+		DataConverter: dc,
+		toByType:      map[string]*conversionStats{},
+		fromByType:    map[string]*conversionStats{},
+	}
+}
+
+// Elapsed time is captured immediately after the wrapped converter returns so
+// the bookkeeping below (type naming, proto sizing) is excluded from it.
+
+func (t *timingDataConverter) ToPayload(value interface{}) (*commonpb.Payload, error) {
+	start := time.Now()
+	p, err := t.DataConverter.ToPayload(value)
+	elapsed := time.Since(start)
+	t.record(&t.to, t.toByType, typeKey(value), elapsed, proto.Size(p), err)
+	return p, err
+}
+
+func (t *timingDataConverter) ToPayloads(values ...interface{}) (*commonpb.Payloads, error) {
+	start := time.Now()
+	p, err := t.DataConverter.ToPayloads(values...)
+	elapsed := time.Since(start)
+	t.record(&t.to, t.toByType, typeKey(values...), elapsed, proto.Size(p), err)
+	return p, err
+}
+
+func (t *timingDataConverter) FromPayload(payload *commonpb.Payload, valuePtr interface{}) error {
+	start := time.Now()
+	err := t.DataConverter.FromPayload(payload, valuePtr)
+	elapsed := time.Since(start)
+	t.record(&t.from, t.fromByType, typeKey(valuePtr), elapsed, proto.Size(payload), err)
+	return err
+}
+
+func (t *timingDataConverter) FromPayloads(payloads *commonpb.Payloads, valuePtrs ...interface{}) error {
+	start := time.Now()
+	err := t.DataConverter.FromPayloads(payloads, valuePtrs...)
+	elapsed := time.Since(start)
+	t.record(&t.from, t.fromByType, typeKey(valuePtrs...), elapsed, proto.Size(payloads), err)
+	return err
+}
+
+// typeKey names the converted values by their (dereferenced) Go types so that
+// input and result payloads of the same activity land in the same bucket.
+func typeKey(values ...interface{}) string {
+	names := make([]string, 0, len(values))
+	for _, v := range values {
+		if v == nil {
+			names = append(names, "nil")
+			continue
+		}
+		rt := reflect.TypeOf(v)
+		for rt.Kind() == reflect.Pointer {
+			rt = rt.Elem()
+		}
+		names = append(names, rt.String())
+	}
+	return strings.Join(names, ",")
+}
+
+func (t *timingDataConverter) record(total *conversionStats, byType map[string]*conversionStats, key string, elapsed time.Duration, size int, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, s := range []*conversionStats{total, statsFor(byType, key)} {
+		s.calls++
+		s.nanos += int64(elapsed)
+		s.bytes += int64(size)
+		if err != nil {
+			s.errors++
+		}
+	}
+}
+
+func statsFor(m map[string]*conversionStats, key string) *conversionStats {
+	s := m[key]
+	if s == nil {
+		s = &conversionStats{}
+		m[key] = s
+	}
+	return s
+}
+
+func (t *timingDataConverter) log() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	log.Info().
+		Int64("fromCalls", t.from.calls).
+		Dur("fromWall", time.Duration(t.from.nanos)).
+		Int64("fromBytes", t.from.bytes).
+		Int64("fromErrors", t.from.errors).
+		Int64("toCalls", t.to.calls).
+		Dur("toWall", time.Duration(t.to.nanos)).
+		Int64("toBytes", t.to.bytes).
+		Int64("toErrors", t.to.errors).
+		Msg("Data converter timing during replay")
+	logTopTypes("FromPayloads wall time by Go type", t.fromByType)
+	logTopTypes("ToPayloads wall time by Go type", t.toByType)
+}
+
+func logTopTypes(msg string, byType map[string]*conversionStats) {
+	type row struct {
+		key string
+		*conversionStats
+	}
+	rows := make([]row, 0, len(byType))
+	for k, s := range byType {
+		rows = append(rows, row{k, s})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].nanos > rows[j].nanos })
+	for i, r := range rows {
+		if i >= 12 {
+			break
+		}
+		log.Info().Str("type", r.key).Int64("calls", r.calls).Dur("wall", time.Duration(r.nanos)).Int64("bytes", r.bytes).Msg(msg)
+	}
+}
+
+func loadOrFetchHistory(ctx context.Context, client client.Client, id, cachePath string) (*history.History, error) {
+	if cachePath != "" {
+		if data, err := os.ReadFile(cachePath); err == nil {
+			hist, err := temporal.DecodeHistorySnapshotFor(id, data)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", cachePath, err)
+			}
+			log.Info().Int("events", len(hist.Events)).Str("path", cachePath).Msg("Loaded workflow history from cache")
+			return hist, nil
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to read history cache %s: %w", cachePath, err)
+		}
+	}
+
+	fetchStart := time.Now()
+	hist, err := GetWorkflowHistory(ctx, client, id, "")
+	if err != nil {
+		return nil, err
+	}
+	log.Info().Int("events", len(hist.Events)).Dur("fetchDuration", time.Since(fetchStart)).Msg("Fetched workflow history")
+
+	if cachePath != "" {
+		data, err := temporal.EncodeHistorySnapshot(id, hist)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(cachePath, data, 0644); err != nil {
+			return nil, fmt.Errorf("failed to write history cache %s: %w", cachePath, err)
+		}
+	}
+	return hist, nil
 }

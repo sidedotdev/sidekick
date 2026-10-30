@@ -45,32 +45,22 @@ type Server struct {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.httpServer.Shutdown(ctx)
 	if s.shutdownTracer != nil {
 		if err := s.shutdownTracer(ctx); err != nil {
 			log.Error().Err(err).Msg("Error shutting down telemetry")
 		}
 	}
-	return s.httpServer.Shutdown(ctx)
+	return err
 }
 
 func RunServer() *Server {
 	gin.SetMode(gin.ReleaseMode)
 
-	shutdownTracer, err := telemetry.InitTracer("sidekick-api")
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize telemetry")
-	}
-
 	allowedOrigins, err := GetAllowedOrigins()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to parse SIDE_ALLOWED_ORIGINS")
 	}
-
-	ctrl, err := NewController()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize controller")
-	}
-	router := DefineRoutes(ctrl, allowedOrigins)
 
 	host := common.GetServerHost()
 	port := common.GetServerPort()
@@ -82,22 +72,13 @@ func RunServer() *Server {
 	}
 	log.Info().Str("addr", addr).Msg("Starting API server")
 
-	httpSrv := &http.Server{
-		Addr:    addr,
-		Handler: router.Handler(),
+	server, err := runServer(addr, allowedOrigins, initializeServerController, func() (func(context.Context) error, error) {
+		return telemetry.InitTracer("sidekick-api")
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to start API server")
 	}
-
-	// Start server in a goroutine
-	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal().Err(err).Msg("Failed to start API server")
-		}
-	}()
-
-	return &Server{
-		httpServer:     httpSrv,
-		shutdownTracer: shutdownTracer,
-	}
+	return server
 }
 
 type Controller struct {
@@ -120,26 +101,11 @@ type Controller struct {
 	loadLocalConfig  func() (common.LocalConfig, error)
 	taskStartTimeout time.Duration
 	allowedOrigins   *AllowedOrigins
+	initialization   *controllerInitialization
 }
 
 type ModelConfigUpdateRequest struct {
 	Config common.LLMConfig `json:"config"`
-}
-
-type ModalConfigUpdateRequest struct {
-	Config common.ModalEnvConfig `json:"config"`
-}
-
-// PortForwardsUpdateRequest replaces the full list of host→container port
-// mappings of a flow's environment; an empty list clears all forwards.
-type PortForwardsUpdateRequest struct {
-	PortForwards []common.PortForwardConfig `json:"portForwards"`
-}
-
-// PortForwardsResponse reports the mappings actually in effect after an
-// update, e.g. with container ports the environment defaulted.
-type PortForwardsResponse struct {
-	PortForwards []common.PortForwardConfig `json:"portForwards"`
 }
 
 // UserActionRequest defines the expected request body for user actions.
@@ -254,6 +220,15 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 		ctrl.providerOAuth = newProviderOAuthSessions()
 	}
 
+	if ctrl.initialization != nil {
+		initialize := ctrl.initializationMiddleware()
+		r.Use(func(c *gin.Context) {
+			if strings.HasPrefix(c.Request.URL.Path, "/api/") || strings.HasPrefix(c.Request.URL.Path, "/ws/") {
+				initialize(c)
+			}
+		})
+	}
+
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
 	r.GET("/api/v1/profiles", ctrl.GetProfilesHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
@@ -300,8 +275,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
 	flowRoutes.PUT("/:id/model_config", ctrl.UpdateFlowModelConfigHandler)
-	flowRoutes.PUT("/:id/modal_config", ctrl.UpdateFlowModalConfigHandler)
-	flowRoutes.PUT("/:id/port_forwards", ctrl.UpdateFlowPortForwardsHandler)
+	flowRoutes.PUT("/:id/env", ctrl.UpdateFlowEnvHandler)
 	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
 	flowRoutes.GET("/:id/history/:eventId", ctrl.GetFlowEventDetailHandler)
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
@@ -443,7 +417,7 @@ func (ctrl *Controller) resolveProviders(profileId string) ([]string, error) {
 	}
 
 	secretManager := ctrl.profileSecretManager(profileId)
-	for _, builtinProvider := range common.BuiltinProviders {
+	for _, builtinProvider := range common.BuiltinLLMProviders {
 		if seen[builtinProvider] {
 			continue
 		}
@@ -797,7 +771,7 @@ func (ctrl *Controller) UpdateFlowModelConfigHandler(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"message": "Model configuration update accepted"})
 }
 
-func (ctrl *Controller) UpdateFlowModalConfigHandler(c *gin.Context) {
+func (ctrl *Controller) UpdateFlowEnvHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	flowId := c.Param("id")
 
@@ -810,77 +784,33 @@ func (ctrl *Controller) UpdateFlowModalConfigHandler(c *gin.Context) {
 		return
 	}
 
-	var req ModalConfigUpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var settings dev.EnvSettings
+	if err := c.ShouldBindJSON(&settings); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
 		return
 	}
-	if err := req.Config.Validate(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Modal configuration: " + err.Error()})
+	if err := settings.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid environment settings: " + err.Error()})
 		return
 	}
 
-	err := ctrl.awaitFlowUpdate(c.Request.Context(), flowId, dev.UpdateNameModalConfig, req.Config, nil)
-	if err != nil {
+	var result dev.EnvUpdateResult
+	if err := ctrl.awaitFlowUpdate(c.Request.Context(), flowId, dev.UpdateNameEnv, settings, &result); err != nil {
 		var serviceErrNotFound *serviceerror.NotFound
 		if errors.As(err, &serviceErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
 			return
 		}
-		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to update workflow Modal configuration")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update workflow Modal configuration: " + err.Error()})
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to update workflow environment")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update workflow environment: " + err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Modal environment recreated"})
-}
-
-func (ctrl *Controller) UpdateFlowPortForwardsHandler(c *gin.Context) {
-	workspaceId := c.Param("workspaceId")
-	flowId := c.Param("id")
-
-	if _, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId); err != nil {
-		if errors.Is(err, srv.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		}
-		return
+	status := http.StatusOK
+	if result.FlowActionId != "" {
+		status = http.StatusAccepted
 	}
-
-	var req PortForwardsUpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
-		return
-	}
-	if err := common.ValidatePortForwards(req.PortForwards); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid port forwards: " + err.Error()})
-		return
-	}
-
-	var applied dev.PortForwardsConfig
-	err := ctrl.awaitFlowUpdate(
-		c.Request.Context(),
-		flowId,
-		dev.UpdateNamePortForwards,
-		dev.PortForwardsConfig{PortForwards: req.PortForwards},
-		&applied,
-	)
-	if err != nil {
-		var serviceErrNotFound *serviceerror.NotFound
-		if errors.As(err, &serviceErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
-			return
-		}
-		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to update workflow port forwards")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update port forwards: " + err.Error()})
-		return
-	}
-
-	if applied.PortForwards == nil {
-		applied.PortForwards = []common.PortForwardConfig{}
-	}
-	c.JSON(http.StatusOK, PortForwardsResponse{PortForwards: applied.PortForwards})
+	c.JSON(status, result)
 }
 
 // awaitFlowUpdate runs a workflow update to completion and decodes its
@@ -1234,12 +1164,14 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 
 // HistoryEvent represents a workflow history event for the API response
 type HistoryEvent struct {
-	EventId            int64  `json:"eventId"`
-	EventType          string `json:"eventType"`
-	Timestamp          int64  `json:"timestamp"`
-	Name               string `json:"name,omitempty"`
-	ResetBeforeEventId *int64 `json:"resetBeforeEventId"`
-	ResetAfterEventId  *int64 `json:"resetAfterEventId"`
+	EventId            int64         `json:"eventId"`
+	EventType          string        `json:"eventType"`
+	Timestamp          int64         `json:"timestamp"`
+	Name               string        `json:"name,omitempty"`
+	GroupId            int64         `json:"groupId"`
+	Failure            *EventFailure `json:"failure,omitempty"`
+	ResetBeforeEventId *int64        `json:"resetBeforeEventId"`
+	ResetAfterEventId  *int64        `json:"resetAfterEventId"`
 }
 
 func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
@@ -1251,73 +1183,82 @@ func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	iter := ctrl.temporalClient.GetWorkflowHistory(c, flowId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
-
-	var events []HistoryEvent
-	var workflowTaskCompletedEventIds []int64
-
-	for iter.HasNext() {
-		event, err := iter.Next()
+	pageSize := 10000
+	if value, present := c.GetQuery("limit"); present {
+		var err error
+		pageSize, err = strconv.Atoi(value)
+		if err != nil || pageSize < 1 || pageSize > 10000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 10000"})
+			return
+		}
+	}
+	cursor, err := decodeResetHistoryCursor(c.Query("cursor"), flowId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid history cursor"})
+		return
+	}
+	if cursor.RunID == "" {
+		description, err := ctrl.temporalClient.DescribeWorkflowExecution(c, flowId, "")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		cursor.RunID = description.GetWorkflowExecutionInfo().GetExecution().GetRunId()
+	}
+	page, err := ctrl.reverseHistoryPage(c, flowId, cursor.RunID, cursor.Token, int32(pageSize))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
+	events := make([]HistoryEvent, 0, len(page.GetHistory().GetEvents()))
+	after := cursor.After
+	for _, event := range page.GetHistory().GetEvents() {
 		histEvent := HistoryEvent{
-			EventId:   event.EventId,
-			EventType: event.EventType.String(),
-			Timestamp: event.EventTime.AsTime().UnixMilli(),
+			EventId:           event.EventId,
+			EventType:         event.EventType.String(),
+			Timestamp:         event.EventTime.AsTime().UnixMilli(),
+			GroupId:           resetHistoryGroupID(event),
+			Failure:           resetHistoryFailure(event),
+			ResetAfterEventId: resetEventPointer(after),
 		}
-
-		// Extract activity type name or signal name where applicable
 		if attrs := event.GetActivityTaskScheduledEventAttributes(); attrs != nil {
-			histEvent.Name = attrs.ActivityType.Name
+			histEvent.Name = attrs.GetActivityType().GetName()
 		} else if attrs := event.GetWorkflowExecutionSignaledEventAttributes(); attrs != nil {
 			histEvent.Name = attrs.SignalName
+		} else if attrs := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); attrs != nil {
+			histEvent.Name = attrs.GetWorkflowType().GetName()
 		}
-
-		if event.EventType == enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED {
-			workflowTaskCompletedEventIds = append(workflowTaskCompletedEventIds, event.EventId)
-		}
-
 		events = append(events, histEvent)
-	}
-
-	// Populate reset event IDs for each event
-	for i := range events {
-		eventId := events[i].EventId
-
-		// Find the closest WorkflowTaskCompleted before this event
-		for j := len(workflowTaskCompletedEventIds) - 1; j >= 0; j-- {
-			if workflowTaskCompletedEventIds[j] < eventId {
-				events[i].ResetBeforeEventId = &workflowTaskCompletedEventIds[j]
-				break
-			}
-		}
-
-		// Find the closest WorkflowTaskCompleted after this event
-		for j := 0; j < len(workflowTaskCompletedEventIds); j++ {
-			if workflowTaskCompletedEventIds[j] > eventId {
-				events[i].ResetAfterEventId = &workflowTaskCompletedEventIds[j]
-				break
-			}
+		if event.EventType == enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED {
+			after = event.EventId
 		}
 	}
-
-	// Reverse to return in reverse chronological order
-	slices.Reverse(events)
-
-	c.JSON(http.StatusOK, gin.H{"events": events})
+	var before int64
+	for i := len(events) - 1; i >= 0; i-- {
+		events[i].ResetBeforeEventId = resetEventPointer(before)
+		if events[i].EventType == enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED.String() {
+			before = events[i].EventId
+		}
+	}
+	nextCursor := ""
+	if len(page.NextPageToken) > 0 {
+		nextCursor = encodeResetHistoryCursor(resetHistoryCursor{
+			FlowID: flowId, RunID: cursor.RunID, Token: page.NextPageToken, After: after,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"events": events, "nextCursor": nextCursor, "runId": cursor.RunID})
 }
 
 // EventDetail contains the decoded input and output payloads of a single
 // workflow history event, for inspection in the reset UI.
 type EventDetail struct {
-	EventId   int64         `json:"eventId"`
-	EventType string        `json:"eventType"`
-	Input     []interface{} `json:"input"`
-	Output    []interface{} `json:"output"`
-	Failure   *EventFailure `json:"failure,omitempty"`
+	EventId   int64           `json:"eventId"`
+	EventType string          `json:"eventType"`
+	Input     []interface{}   `json:"input"`
+	Output    []interface{}   `json:"output"`
+	Failure   *EventFailure   `json:"failure,omitempty"`
+	RawEvent  json.RawMessage `json:"rawEvent,omitempty"`
 }
 
 // eventInputPayloads returns the input payloads carried by an event, if any.
@@ -1422,22 +1363,30 @@ func (ctrl *Controller) GetFlowEventDetailHandler(c *gin.Context) {
 		return
 	}
 
-	iter := ctrl.temporalClient.GetWorkflowHistory(c, flowId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
-
-	var allEvents []*historypb.HistoryEvent
-	for iter.HasNext() {
-		event, err := iter.Next()
+	var target *historypb.HistoryEvent
+	var outputPayloads *commonpb.Payloads
+	var token []byte
+search:
+	for {
+		page, err := ctrl.reverseHistoryPage(c, flowId, c.Query("runId"), token, 256)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		allEvents = append(allEvents, event)
-	}
-
-	var target *historypb.HistoryEvent
-	for _, event := range allEvents {
-		if event.EventId == eventId {
-			target = event
+		for _, event := range page.GetHistory().GetEvents() {
+			if completionSourceEventId(event) == eventId {
+				outputPayloads = eventOutputPayloads(event)
+			}
+			if event.EventId == eventId {
+				target = event
+				break search
+			}
+			if event.EventId < eventId {
+				break search
+			}
+		}
+		token = page.NextPageToken
+		if len(token) == 0 {
 			break
 		}
 	}
@@ -1448,33 +1397,16 @@ func (ctrl *Controller) GetFlowEventDetailHandler(c *gin.Context) {
 
 	codec := common.NewPayloadCodec(ctrl.service, common.DefaultCodecThreshold)
 	dc := converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), codec)
-
-	inputPayloads := eventInputPayloads(target)
-	outputPayloads := eventOutputPayloads(target)
-
-	// For scheduling/initiating events the output lives in the matching
-	// completion event, so link it back here for convenience.
-	if outputPayloads == nil {
-		for _, event := range allEvents {
-			if completionSourceEventId(event) == eventId {
-				outputPayloads = eventOutputPayloads(event)
-				break
-			}
-		}
+	if payloads := eventOutputPayloads(target); payloads != nil {
+		outputPayloads = payloads
 	}
-
 	detail := EventDetail{
 		EventId:   target.EventId,
 		EventType: target.EventType.String(),
-		Input:     decodePayloads(dc, inputPayloads),
+		Input:     decodePayloads(dc, eventInputPayloads(target)),
 		Output:    decodePayloads(dc, outputPayloads),
-	}
-	if attrs := target.GetWorkflowTaskFailedEventAttributes(); attrs != nil {
-		detail.Failure = &EventFailure{
-			Cause:      attrs.GetCause().String(),
-			Message:    attrs.GetFailure().GetMessage(),
-			StackTrace: attrs.GetFailure().GetStackTrace(),
-		}
+		Failure:   resetHistoryFailure(target),
+		RawEvent:  resetHistoryRawEvent(target),
 	}
 
 	c.JSON(http.StatusOK, gin.H{"event": detail})
@@ -1834,6 +1766,15 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	if ctrl.service == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database accessor not initialized"})
+		return
+	}
+	page, paginated, err := historyPageRequest(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if paginated {
+		ctrl.getFlowActionsPage(c, workspaceId, flowId, page)
 		return
 	}
 	ctx := c.Request.Context()

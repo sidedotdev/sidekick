@@ -5,6 +5,7 @@ import (
 	"sidekick/domain"
 	"sidekick/srv"
 	"sidekick/utils"
+	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -236,6 +237,79 @@ func ReceiveUserResponse(ctx workflow.Context, expectedFlowActionId string) (Use
 		return UserResponse{}, ctx.Err()
 	}
 	return userResponse, nil
+}
+
+// continueTimeoutResult is the persisted result of a continue request that
+// may be resolved by a timer rather than the user.
+type continueTimeoutResult struct {
+	UserResponse *UserResponse `json:"userResponse,omitempty"`
+	TimedOut     bool          `json:"timedOut"`
+}
+
+// GetUserContinueOrTimeout issues a continue request like GetUserContinue but
+// also resolves it on its own once timeout elapses, reporting whether the user
+// answered. Callers use it to race user intervention against a scheduled
+// automatic retry.
+func GetUserContinueOrTimeout(eCtx ExecContext, prompt string, requestParams map[string]any, timeout time.Duration) (bool, error) {
+	if eCtx.DisableHumanInTheLoop {
+		if err := workflow.Sleep(eCtx, timeout); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	req := RequestForUser{
+		OriginWorkflowId: workflow.GetInfo(eCtx).WorkflowExecution.ID,
+		Content:          prompt,
+		Subflow:          eCtx.FlowScope.SubflowName,
+		RequestParams:    requestParams,
+		RequestKind:      RequestKindContinue,
+	}
+	actionCtx := eCtx.NewActionContext("user_request.continue")
+	actionCtx.ActionParams = req.ActionParams()
+
+	result, err := TrackHuman(actionCtx, func(trackedActionCtx ActionContext, flowAction *domain.FlowAction) (continueTimeoutResult, error) {
+		req.FlowActionId = flowAction.Id
+		return getUserResponseOrTimeout(trackedActionCtx.ExecContext, req, timeout)
+	})
+	if err != nil {
+		return false, err
+	}
+	return !result.TimedOut, nil
+}
+
+func getUserResponseOrTimeout(ctx ExecContext, req RequestForUser, timeout time.Duration) (continueTimeoutResult, error) {
+	if err := announceUserRequest(ctx, &req); err != nil {
+		return continueTimeoutResult{}, err
+	}
+
+	var userResponse UserResponse
+	timedOut := false
+	selector := workflow.NewNamedSelector(ctx, "userResponseOrTimeoutSelector")
+	selector.AddReceive(workflow.GetSignalChannel(ctx, UserResponseSignalName(req.FlowActionId)), func(c workflow.ReceiveChannel, more bool) {
+		c.Receive(ctx, &userResponse)
+	})
+	timerCtx, cancelTimer := workflow.WithCancel(ctx.Context)
+	selector.AddFuture(workflow.NewTimer(timerCtx, timeout), func(f workflow.Future) {
+		timedOut = f.Get(timerCtx, nil) == nil
+	})
+	selector.AddReceive(ctx.Done(), func(c workflow.ReceiveChannel, more bool) {})
+	selector.Select(ctx)
+	cancelTimer()
+	if ctx.Err() != nil {
+		return continueTimeoutResult{}, ctx.Err()
+	}
+
+	signalSubtaskUnblocked(ctx)
+	if !timedOut {
+		// Unpausing after a user response is done by the complete flow action
+		// handler, matching GetUserResponse.
+		return continueTimeoutResult{UserResponse: &userResponse}, nil
+	}
+	// Nothing else reverses the pause applied by announceUserRequest when the
+	// timer resolves the request.
+	resumePausedFlow(ctx, req.OriginWorkflowId)
+	return continueTimeoutResult{TimedOut: true}, nil
 }
 
 func GetUserContinue(eCtx ExecContext, prompt string, requestParams map[string]any) error {

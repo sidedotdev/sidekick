@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -99,33 +98,45 @@ func TestMaintenanceRefreshesActionStatisticsAtStartup(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 }
 
-func TestConnectionOptimizationUsesBoundedAnalysis(t *testing.T) {
+func TestMaintenanceOptimizationUsesBoundedAnalysis(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "stats.db")
-	db, err := sql.Open("sqlite", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(`
-		CREATE TABLE stats_probe (value INTEGER);
-		CREATE INDEX stats_probe_value ON stats_probe(value);
-		WITH RECURSIVE numbers(n) AS (
-			SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000
-		)
-		INSERT INTO stats_probe SELECT n % 20 FROM numbers`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
+	storage := newFileBackedStorage(t)
+	ctx := context.Background()
 
-	reopened, err := sql.Open("sqlite", sqliteUri(path))
-	require.NoError(t, err)
-	t.Cleanup(func() { reopened.Close() })
+	for _, db := range []*trackedDB{storage.db, storage.kvDb} {
+		_, err := db.ExecContext(ctx, `
+			CREATE TABLE stats_probe (value INTEGER);
+			CREATE INDEX stats_probe_value ON stats_probe(value);
+			WITH RECURSIVE numbers(n) AS (
+				SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000
+			)
+			INSERT INTO stats_probe SELECT n % 20 FROM numbers`)
+		require.NoError(t, err)
 
-	var count int
-	require.NoError(t, reopened.QueryRow(
-		"SELECT count(*) FROM sqlite_stat1 WHERE tbl = 'stats_probe'").Scan(&count))
-	require.Positive(t, count, "opening the connection must analyze previously unanalyzed indexes")
-	require.NoError(t, reopened.QueryRow(
-		"SELECT count(*) FROM sqlite_stat4 WHERE tbl = 'stats_probe'").Scan(&count))
-	require.Zero(t, count, "connection-time optimization must not perform full histogram analysis")
+		// Maintenance cannot rely on planner hints left by schema creation.
+		var path string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&path))
+		require.NoError(t, db.Close())
+		reopened, err := sql.Open("sqlite", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { reopened.Close() })
+		db.DB = reopened
+	}
+
+	storage.optimize(ctx)
+
+	for _, db := range []*trackedDB{storage.db, storage.kvDb} {
+		t.Run(db.name, func(t *testing.T) {
+			var count int
+			require.NoError(t, db.QueryRowContext(ctx,
+				"SELECT count(*) FROM sqlite_stat1 WHERE tbl = 'stats_probe'").Scan(&count))
+			require.Positive(t, count, "maintenance must analyze previously unanalyzed indexes")
+			require.NoError(t, db.QueryRowContext(ctx,
+				"SELECT count(*) FROM sqlite_stat4 WHERE tbl = 'stats_probe'").Scan(&count))
+			require.Zero(t, count, "maintenance must not perform full histogram analysis")
+		})
+	}
 }
 
 func TestMaintenanceRecyclesPlannerConnections(t *testing.T) {

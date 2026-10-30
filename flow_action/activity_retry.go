@@ -58,6 +58,9 @@ func (ContinuePromptFailureHandler) HandleActivityFailure(eCtx ExecContext, acti
 
 // UserRetryOptions configures PerformWithUserRetryOptions.
 type UserRetryOptions struct {
+	// Dispatch replaces activity scheduling when an attempt needs preparation
+	// or scoped context. Preparation errors terminate without failure handling.
+	Dispatch func() (workflow.Future, error)
 	// ResolveArgs, when set, rebuilds the activity arguments before every
 	// attempt so a retry picks up state changed by OnFailure.
 	ResolveArgs func() ([]interface{}, error)
@@ -107,6 +110,8 @@ func performWithUserRetry(eCtx ExecContext, actionName string, opts UserRetryOpt
 	if onFailure == nil {
 		onFailure = ContinuePromptFailureHandler{}
 	}
+	// However the loop exits, no automatic retry is pending anymore.
+	defer clearScheduledRetry(eCtx)
 
 	for {
 		attemptArgs := args
@@ -117,8 +122,16 @@ func performWithUserRetry(eCtx ExecContext, actionName string, opts UserRetryOpt
 			}
 			attemptArgs = resolvedArgs
 		}
-		// Execute the activity
-		activityFuture := workflow.ExecuteActivity(eCtx, activity, attemptArgs...)
+		var activityFuture workflow.Future
+		if opts.Dispatch != nil {
+			var err error
+			activityFuture, err = opts.Dispatch()
+			if err != nil {
+				return err
+			}
+		} else {
+			activityFuture = workflow.ExecuteActivity(eCtx, activity, attemptArgs...)
+		}
 		err := activityFuture.Get(eCtx, valuePtr)
 		if err == nil {
 			return nil
@@ -146,6 +159,12 @@ func performWithUserRetry(eCtx ExecContext, actionName string, opts UserRetryOpt
 			action := eCtx.GlobalState.GetPendingUserAction()
 			if action != nil {
 				return PendingActionError
+			}
+		}
+
+		if v := workflow.GetVersion(eCtx, retryAttemptsChangeId, workflow.DefaultVersion, 1); v == 1 {
+			if recordErr := recordRetryAttempt(eCtx, err); recordErr != nil {
+				return recordErr
 			}
 		}
 

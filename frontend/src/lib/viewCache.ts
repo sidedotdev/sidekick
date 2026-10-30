@@ -1,10 +1,7 @@
-import type { FullTask, Flow, FlowAction, Project, Subflow, SubflowTree, Workspace } from './models'
+import type { FullTask, Flow, Project, Workspace } from './models'
 
 export interface FlowViewCacheEntry {
   flow: Flow
-  flowActions: FlowAction[]
-  subflowsById: Record<string, Subflow>
-  subflowTrees: SubflowTree[]
   workspace: Workspace | null
 }
 
@@ -39,9 +36,6 @@ class ViewCache {
     this.flowViews.delete(flowId)
     this.flowViews.set(flowId, {
       flow: entry.flow,
-      flowActions: [...entry.flowActions],
-      subflowsById: { ...entry.subflowsById },
-      subflowTrees: [...entry.subflowTrees],
       workspace: entry.workspace,
     })
 

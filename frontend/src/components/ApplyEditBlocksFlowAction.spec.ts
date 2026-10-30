@@ -1,14 +1,18 @@
 import { defineComponent, h, nextTick, ref } from 'vue'
 import { mount } from '@vue/test-utils'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { highlighter } from '@git-diff-view/core'
 import ApplyEditBlocksFlowAction from './ApplyEditBlocksFlowAction.vue'
 import FlowActionErrorBoundary from './FlowActionErrorBoundary.vue'
 import type { FlowAction } from '../lib/models'
 
-// jsdom has no canvas; @git-diff-view measures text widths with one. Stub only
-// that so the real diff renderer still runs.
+// Canvas layout and syntax-language detection are unrelated to diff projection
+// and error recovery; keep the real parser and renderer without those costs.
 let getContextSpy: ReturnType<typeof vi.spyOn>
+let originalIgnoredFiles: (string | RegExp)[]
 beforeAll(() => {
+  originalIgnoredFiles = [...highlighter.ignoreSyntaxHighlightList]
+  highlighter.setIgnoreSyntaxHighlightList([/.*/])
   getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
     font: '',
     measureText: (text: string) => ({ width: text.length * 7 }),
@@ -16,6 +20,7 @@ beforeAll(() => {
 })
 afterAll(() => {
   getContextSpy.mockRestore()
+  highlighter.setIgnoreSyntaxHighlightList(originalIgnoredFiles)
 })
 
 // Recovered from a real flow: git emits a combined diff (`diff --cc`, `@@@`

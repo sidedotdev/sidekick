@@ -233,11 +233,7 @@ func RunRemoteServer(ctx context.Context) (*RemoteServer, error) {
 		return nil, fmt.Errorf("failed to parse allowed origins: %w", err)
 	}
 
-	ctrl, err := NewController()
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize controller: %w", err)
-	}
-
+	ctrl := newLazyController(initializeServerController)
 	server, err := serveRemote(ctx, ctrl, allowedOrigins)
 	if err != nil {
 		return nil, err
@@ -265,7 +261,10 @@ func serveRemote(ctx context.Context, ctrl Controller, allowedOrigins *AllowedOr
 	// re-registering handlers. Pairing management is a local-only capability, so
 	// it is blocked here to prevent remote devices from minting new tokens.
 	authRouter := gin.New()
-	authRouter.Use(DeviceAuthMiddleware(ctrl.service))
+	authRouter.Use(ctrl.initializationMiddleware())
+	authRouter.Use(func(c *gin.Context) {
+		DeviceAuthMiddleware(ctrl.service)(c)
+	})
 	authRouter.Use(blockRemotePairingMiddleware())
 	authRouter.NoRoute(gin.WrapH(apiRouter.Handler()))
 
@@ -278,6 +277,9 @@ func serveRemote(ctx context.Context, ctrl Controller, allowedOrigins *AllowedOr
 	httpServer := &http.Server{Handler: authRouter.Handler()}
 	listener := endpoint.Listener()
 
+	if ctrl.initialization != nil {
+		ctrl.initialization.start()
+	}
 	go func() {
 		if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("iroh remote server stopped")

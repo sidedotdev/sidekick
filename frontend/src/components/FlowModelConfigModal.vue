@@ -36,9 +36,21 @@
           />
         </fieldset>
 
-        <fieldset v-if="modalConfig" class="modal-environment">
+        <fieldset class="environment-settings" :disabled="isApplying">
+          <legend>Environment</legend>
+          <label for="environment-type">Environment type</label>
+          <select id="environment-type" v-model="envType" :disabled="isApplying">
+            <option value="local">Local</option>
+            <option value="devpod">DevPod</option>
+            <option value="openshell">OpenShell</option>
+            <option value="modal">Modal</option>
+          </select>
+          <p>Switching environments transfers the flow branch and uncommitted work.</p>
+        </fieldset>
+
+        <fieldset v-if="envType === 'modal' && modalConfig" class="modal-environment">
           <legend>Modal environment</legend>
-          <p>Applying these settings snapshots and recreates the current sandbox.</p>
+          <p>Applying these settings may snapshot and recreate the sandbox.</p>
           <label>
             <input v-model="modalConfig.vm" type="checkbox" :disabled="isApplying" />
             VM runtime
@@ -163,7 +175,7 @@ import {
   type ModelConfigPresetEditorState,
 } from '../composables/useModelConfigPresets'
 import { llmConfigsEqual } from '../lib/llmPresetStorage'
-import type { LLMConfig, ModalEnvConfig, PortForwardConfig } from '../lib/models'
+import type { EnvSettings, LLMConfig, ModalEnvConfig, PortForwardConfig } from '../lib/models'
 
 const props = defineProps<{
   workspaceId: string
@@ -263,6 +275,8 @@ const modalConfig = ref<ModalEnvConfig | null>(null)
 const initialModalConfig = ref<ModalEnvConfig | null>(null)
 const portForwardRows = ref<PortForwardRow[] | null>(null)
 const appliedPortForwards = ref('')
+const envType = ref('')
+const initialEnvType = ref('')
 const isLoading = ref(true)
 const isApplying = ref(false)
 const loadError = ref('')
@@ -302,22 +316,27 @@ const queryConfiguration = async (): Promise<LLMConfig> => {
   } as LLMConfig
 }
 
-// A failed query means the environment cannot report mappings at all, which
-// is not the same as it reporting that no ports are forwarded.
-const queryPortForwards = async (): Promise<PortForwardConfig[] | null> => {
+const queryEnvironment = async (): Promise<EnvSettings> => {
   const response = await fetch(
     `/api/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/query`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: 'port_forwards' }),
+      body: JSON.stringify({ query: 'env' }),
     },
   )
   if (!response.ok) {
-    return null
+    throw new Error(await getErrorMessage(response))
   }
   const body = await response.json()
-  return body?.result?.portForwards ?? []
+  if (!body?.result?.envType) {
+    throw new Error('The workflow did not return environment settings.')
+  }
+  return {
+    envType: body.result.envType,
+    portForwards: body.result.portForwards ?? [],
+    modal: body.result.modal ?? {},
+  }
 }
 
 const addPortForward = () => {
@@ -339,20 +358,7 @@ const loadConfiguration = async () => {
 
   try {
     const config = await queryConfiguration()
-    let loadedModalConfig: ModalEnvConfig | null = null
-    const modalResponse = await fetch(
-      `/api/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/query`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: 'modal_config' }),
-      },
-    )
-    if (modalResponse.ok) {
-      const body = await modalResponse.json()
-      loadedModalConfig = body.result ?? null
-    }
-    const loadedPortForwards = await queryPortForwards()
+    const settings = await queryEnvironment()
     if (!disposed) {
       editor.value = useModelConfigPresets(config, {
         initiallyCustom: true,
@@ -360,20 +366,16 @@ const loadConfiguration = async () => {
         workspaceId: props.workspaceId,
       })
       appliedLlmConfig.value = JSON.parse(JSON.stringify(editor.value.llmConfig.value))
-      modalConfig.value = loadedModalConfig
-      initialModalConfig.value = loadedModalConfig
-        ? JSON.parse(JSON.stringify(loadedModalConfig))
-        : null
-      portForwardRows.value = loadedPortForwards
-        ? loadedPortForwards.map((forward) => newPortForwardRow(forward))
-        : null
-      appliedPortForwards.value = loadedPortForwards
-        ? canonicalizePortForwards(loadedPortForwards)
-        : ''
+      envType.value = settings.envType
+      initialEnvType.value = settings.envType
+      modalConfig.value = settings.modal
+      initialModalConfig.value = JSON.parse(JSON.stringify(settings.modal))
+      portForwardRows.value = settings.portForwards.map((forward) => newPortForwardRow(forward))
+      appliedPortForwards.value = canonicalizePortForwards(settings.portForwards)
     }
   } catch (error) {
     if (!disposed) {
-      loadError.value = `Unable to load the flow model configuration. ${error instanceof Error ? error.message : ''}`.trim()
+      loadError.value = `Unable to load the flow configuration. ${error instanceof Error ? error.message : ''}`.trim()
     }
   } finally {
     if (!disposed) {
@@ -412,20 +414,20 @@ const applyConfiguration = async () => {
     return
   }
 
-  let desiredPortForwards: PortForwardConfig[] | null = null
-  if (portForwardRows.value) {
-    const built = buildPortForwards(portForwardRows.value)
-    if (built.error) {
-      applyError.value = built.error
-      return
-    }
-    if (canonicalizePortForwards(built.forwards) !== appliedPortForwards.value) {
-      desiredPortForwards = built.forwards
-    }
+  const built = buildPortForwards(portForwardRows.value ?? [])
+  if (built.error) {
+    applyError.value = built.error
+    return
   }
 
-  const modalConfigChanged = !!modalConfig.value
-    && JSON.stringify(modalConfig.value) !== JSON.stringify(initialModalConfig.value)
+  const desiredSettings: EnvSettings = {
+    envType: envType.value,
+    portForwards: built.forwards,
+    modal: JSON.parse(JSON.stringify(modalConfig.value ?? {})),
+  }
+  const environmentChanged = desiredSettings.envType !== initialEnvType.value
+    || canonicalizePortForwards(desiredSettings.portForwards) !== appliedPortForwards.value
+    || JSON.stringify(desiredSettings.modal) !== JSON.stringify(initialModalConfig.value)
 
   isApplying.value = true
   try {
@@ -441,43 +443,9 @@ const applyConfiguration = async () => {
       if (!response.ok) {
         throw new Error(await getErrorMessage(response))
       }
-    }
 
-    // Each section that lands records what the environment now reflects, so
-    // a retry after a later failure does not resubmit it, which would mean
-    // recreating the sandbox again.
-    if (desiredPortForwards) {
-      const portForwardsResponse = await fetch(
-        `/api/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/port_forwards`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ portForwards: desiredPortForwards }),
-        },
-      )
-      if (!portForwardsResponse.ok) {
-        throw new Error(await getErrorMessage(portForwardsResponse))
-      }
-      const body = await portForwardsResponse.json()
-      appliedPortForwards.value = canonicalizePortForwards(body?.portForwards ?? desiredPortForwards)
-    }
-
-    if (modalConfigChanged) {
-      const modalResponse = await fetch(
-        `/api/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/modal_config`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ config: modalConfig.value }),
-        },
-      )
-      if (!modalResponse.ok) {
-        throw new Error(await getErrorMessage(modalResponse))
-      }
-      initialModalConfig.value = JSON.parse(JSON.stringify(modalConfig.value))
-    }
-
-    if (modelConfigChanged) {
+      // Confirm model changes before starting a switch so a polling failure
+      // cannot cause a retry to submit the same switch twice.
       const applied = await pollUntilApplied(submittedConfig)
       if (!applied) {
         applyError.value = 'The workflow accepted the update but did not apply it in time. Retry to check or submit again.'
@@ -485,6 +453,33 @@ const applyConfiguration = async () => {
       }
       appliedLlmConfig.value = submittedConfig
       editor.value.saveOrUpdatePreset()
+    }
+
+    if (environmentChanged) {
+      const response = await fetch(
+        `/api/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/env`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(desiredSettings),
+        },
+      )
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response))
+      }
+      const result: { flowActionId?: string; settings: EnvSettings } = await response.json()
+      if (result.flowActionId) {
+        emit('applied')
+        emit('close')
+        return
+      }
+      const applied = result.settings
+      envType.value = applied.envType
+      initialEnvType.value = applied.envType
+      modalConfig.value = applied.modal ?? {}
+      initialModalConfig.value = JSON.parse(JSON.stringify(modalConfig.value))
+      portForwardRows.value = (applied.portForwards ?? []).map((forward) => newPortForwardRow(forward))
+      appliedPortForwards.value = canonicalizePortForwards(applied.portForwards ?? [])
     }
 
     emit('applied')
@@ -526,6 +521,20 @@ onBeforeUnmount(() => {
 
 .model-editor:disabled {
   opacity: 0.6;
+}
+
+.environment-settings {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.environment-settings select {
+  padding: 0.5rem;
+  border: 0.0625rem solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-background-soft);
+  color: var(--color-text);
 }
 
 .modal-environment {

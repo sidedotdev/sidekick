@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
@@ -38,12 +39,18 @@ import (
 type Worker struct {
 	worker.Worker
 	shutdownTracer func(context.Context) error
+	lspActivities  *lsp.LSPActivities
 }
 
 // Stop stops the worker, closes shared remote-env connections and shuts down
 // the tracer
 func (w *Worker) Stop() {
 	w.Worker.Stop()
+	if w.lspActivities != nil {
+		if err := w.lspActivities.Close(); err != nil {
+			log.Error().Err(err).Msg("Failed to close analysis clients")
+		}
+	}
 	env.CloseAllSharedSFTPConns()
 	env.CloseAllSharedAgentExecConns()
 	env.CloseAllReverseForwardHolders()
@@ -143,6 +150,8 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 		},
 		InitializedClients: map[string]lsp.LSPClient{},
 	}
+	envActivities := &env.Activities{CommandObserver: git.RemoteSyncObserver{}}
+
 	treeSitterActivities := &tree_sitter.TreeSitterActivities{
 		DatabaseAccessor: service,
 	}
@@ -177,7 +186,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w := worker.New(temporalClient, taskQueue, worker.Options{
 		BuildID:                  common.GetWorkerBuildID(),
 		DeadlockDetectionTimeout: 5 * time.Second,
-		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor()},
+		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor(), env.NewEnvSwitchGateInterceptor()},
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
 		},
@@ -187,26 +196,31 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.NewLocalGitWorktreeActivity)
 	w.RegisterActivity(env.CreateDevPodWorktreeActivity)
 	w.RegisterActivity(env.DevPodUpActivity)
+	w.RegisterActivity(env.RestartDockerEngineActivity)
 	w.RegisterActivity(env.CreateSandboxActivity)
 	w.RegisterActivity(env.CheckSandboxActivity)
 	w.RegisterActivity(env.StopSandboxActivity)
+	w.RegisterActivity(env.ModalReplaceSandboxActivity)
 	w.RegisterActivity(env.DeleteSandboxActivity)
 	w.RegisterActivity(env.ModalRecreateSandboxActivity)
 	w.RegisterActivity(env.UpdateEnvConfigActivity)
 	w.RegisterActivity(env.SyncRepoToRemoteActivity)
+	w.RegisterActivity(git.SyncGitActivity)
 	w.RegisterActivity(env.DeepenRepoActivity)
 	w.RegisterActivity(env.SnapshotEnvironmentActivity)
 	w.RegisterActivity(env.CreateRemoteWorktreeActivity)
+	w.RegisterActivity(env.ExportForSwitchActivity)
+	w.RegisterActivity(env.RestoreFromSwitchActivity)
 	w.RegisterActivity(&srv.Activities{Service: service})
 	w.RegisterActivity(&provider_auth.Activities{})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)
 	w.RegisterActivity(llmActivities)
 	w.RegisterActivity(pollFailuresActivities)
-	w.RegisterActivity(lspActivities)
+	registerLSPActivities(w, lspActivities)
 	w.RegisterActivity(treeSitterActivities)
 	w.RegisterActivity(codingActivities)
 	w.RegisterActivity(ragActivities)
-	w.RegisterActivity(env.EnvRunCommandActivity)
+	w.RegisterActivity(envActivities)
 	w.RegisterActivity(env.GetEnvironmentInfoActivity)
 	w.RegisterActivity(git.GitDiffActivity)
 	w.RegisterActivity(git.DiffUntrackedFilesActivity)
@@ -292,6 +306,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	return &Worker{
 		Worker:         w,
 		shutdownTracer: shutdownTracer,
+		lspActivities:  lspActivities,
 	}, nil
 }
 
@@ -306,4 +321,23 @@ func RegisterWorkflows(w worker.WorkflowRegistry) {
 	w.RegisterWorkflow(srv.CascadeDeleteTaskWorkflow)
 	w.RegisterWorkflow(dev.CleanupWorktreesWorkflow)
 	w.RegisterWorkflow(common.CodecPayloadCleanupWorkflow)
+}
+
+func registerLSPActivities(registry worker.ActivityRegistry, activities *lsp.LSPActivities) {
+	for _, registration := range []struct {
+		name string
+		fn   interface{}
+	}{
+		{"AutofixActivity", activities.AutofixActivity},
+		{"FindReferencesActivity", activities.FindReferencesActivity},
+		{"GetSymbolDefinitionLocations", activities.GetSymbolDefinitionLocations},
+		{"GetSingleFileDefinitions", activities.GetSingleFileDefinitions},
+		{"TextDocumentDidOpenActivity", activities.TextDocumentDidOpenActivity},
+		{"TextDocumentDidChangeActivity", activities.TextDocumentDidChangeActivity},
+		{"TextDocumentDidSaveActivity", activities.TextDocumentDidSaveActivity},
+		{"TextDocumentDidCloseActivity", activities.TextDocumentDidCloseActivity},
+		{"SyncDocumentActivity", activities.SyncDocumentActivity},
+	} {
+		registry.RegisterActivityWithOptions(registration.fn, activity.RegisterOptions{Name: registration.name})
+	}
 }

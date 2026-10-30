@@ -21,7 +21,6 @@ import (
 )
 
 const anthropicDefaultModel = "claude-opus-4-5"
-const anthropicDefaultMaxTokens = 24000
 
 const (
 	anthropicAcceptHeaderValue                 = "application/json"
@@ -196,12 +195,9 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		client = newAnthropicClient(clientOptions...)
 	}
 
-	effectiveMaxTokens := anthropicDefaultMaxTokens
-	if options.MaxTokens > 0 {
-		effectiveMaxTokens = options.MaxTokens
-	}
-	if modelInfo, ok := common.GetModel(options.Provider, model); ok && modelInfo.Limit.Output > 0 {
-		if effectiveMaxTokens == 0 || effectiveMaxTokens > modelInfo.Limit.Output {
+	effectiveMaxTokens := options.MaxTokens
+	if modelInfo, _ := common.GetModel(options.Provider, model); modelInfo != nil && modelInfo.Limit.Output > 0 {
+		if effectiveMaxTokens <= 0 || effectiveMaxTokens > modelInfo.Limit.Output {
 			effectiveMaxTokens = modelInfo.Limit.Output
 		}
 	}
@@ -294,7 +290,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 		} else {
 			// max_tokens must be greater than thinking.budget_tokens
-			if int64(effectiveMaxTokens) <= budgetTokens {
+			if effectiveMaxTokens > 0 && int64(effectiveMaxTokens) <= budgetTokens {
 				effectiveMaxTokens = int(budgetTokens) + 1000
 				params.MaxTokens = int64(effectiveMaxTokens)
 			}
@@ -307,6 +303,10 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 
 	var streamOpts []option.RequestOption
+	if effectiveMaxTokens <= 0 {
+		// The SDK always serializes this required field, even when it is zero.
+		streamOpts = append(streamOpts, option.WithJSONDel("max_tokens"))
+	}
 	if fastMode {
 		// The non-beta MessageNewParams struct does not yet expose a Speed field
 		// in the SDK; inject it into the request body directly so we stay on
@@ -766,6 +766,23 @@ func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, er
 	}
 
 	flushCurrent()
+
+	// Persisted histories may contain more markers than Anthropic accepts.
+	// Preserve the stable prefix and the most recent cache boundaries.
+	// Tools and system prompts currently carry no cache markers.
+	const maxCacheControlBlocks = 4
+	var cacheControls []*anthropic.CacheControlEphemeralParam
+	for _, message := range result {
+		for _, block := range message.Content {
+			if cacheControl := block.GetCacheControl(); cacheControl != nil && cacheControl.Type != "" {
+				cacheControls = append(cacheControls, cacheControl)
+			}
+		}
+	}
+	for i := 1; i <= len(cacheControls)-maxCacheControlBlocks; i++ {
+		*cacheControls[i] = anthropic.CacheControlEphemeralParam{}
+	}
+
 	return result, nil
 }
 

@@ -89,13 +89,9 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		temperature = *options.Params.Temperature
 	}
 
-	maxTokensToUse := int64(24000)
-	if options.Params.MaxTokens > 0 {
-		maxTokensToUse = int64(options.Params.MaxTokens)
-	}
-
-	if modelInfo, ok := common.GetModel(options.Params.Provider, model); ok {
-		if modelInfo.Limit.Output > 0 && maxTokensToUse > int64(modelInfo.Limit.Output) {
+	maxTokensToUse := int64(options.Params.MaxTokens)
+	if modelInfo, _ := common.GetModel(options.Params.Provider, model); modelInfo != nil {
+		if modelInfo.Limit.Output > 0 && (maxTokensToUse <= 0 || maxTokensToUse > int64(modelInfo.Limit.Output)) {
 			maxTokensToUse = int64(modelInfo.Limit.Output)
 		}
 	}
@@ -137,7 +133,12 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		messageParams.System = systemMessages
 	}
 
-	stream := client.Messages.NewStreaming(ctx, messageParams)
+	var streamOpts []option.RequestOption
+	if maxTokensToUse <= 0 {
+		// The SDK always serializes this required field, even when it is zero.
+		streamOpts = append(streamOpts, option.WithJSONDel("max_tokens"))
+	}
+	stream := client.Messages.NewStreaming(ctx, messageParams, streamOpts...)
 
 	var finalMessage anthropic.Message
 	startedBlocks := 0
