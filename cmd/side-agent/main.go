@@ -45,6 +45,9 @@ func run(args []string) error {
 	}
 	switch mode {
 	case "exec":
+		if err := sideagent.EnableOrphanReaping(); err != nil {
+			fmt.Fprintln(os.Stderr, "side-agent: orphaned processes will not be reaped:", err)
+		}
 		return sideagent.Serve(os.Stdin, os.Stdout)
 	case "sftp":
 		return sideagent.ServeSFTP(&stdioReadWriteCloser{os.Stdin, os.Stdout})

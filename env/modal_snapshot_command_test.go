@@ -65,3 +65,63 @@ func TestModalSnapshotUsesSandboxProcessEnvironment(t *testing.T) {
 		})
 	}
 }
+
+func TestModalSnapshotDoesNotRestoreStoppedSandbox(t *testing.T) {
+	t.Parallel()
+
+	calls, refreshes := 0, 0
+	e := &ModalEnv{
+		SandboxName: "snapshot-sandbox",
+		SSHHost:     "old-host",
+		SSHPort:     1234,
+		runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+			calls++
+			return EnvRunCommandOutput{}, errors.Join(errors.New("snapshot sandbox"), errModalSandboxNotRunning)
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			return "restored-host", 5678, nil
+		},
+	}
+
+	_, err := e.Snapshot(context.Background())
+	require.ErrorIs(t, err, errModalSandboxNotRunning)
+	assert.Equal(t, 1, calls)
+	assert.Zero(t, refreshes)
+	assert.Equal(t, "old-host", e.SSHHost)
+	assert.Equal(t, 1234, e.SSHPort)
+}
+
+func TestExportForSwitchRecoversStoppedModalBeforeReadingState(t *testing.T) {
+	t.Parallel()
+
+	readErr := errors.New("stop after reaching restored sandbox")
+	snapshotCalls, commandCalls, refreshes := 0, 0, 0
+	e := &ModalEnv{
+		SandboxName: "snapshot-sandbox",
+		runModalAPICommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error) {
+			snapshotCalls++
+			return EnvRunCommandOutput{}, errors.Join(errors.New("snapshot sandbox"), errModalSandboxNotRunning)
+		},
+		runModalCommand: func(_ context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
+			commandCalls++
+			assert.Equal(t, "git", input.Command)
+			assert.Equal(t, []string{"rev-parse", "--abbrev-ref", "HEAD"}, input.Args)
+			if refreshes == 0 {
+				return EnvRunCommandOutput{ExitStatus: 255}, "ssh: connect to host old-host port 22: Connection refused", nil
+			}
+			return EnvRunCommandOutput{}, "", readErr
+		},
+		refreshModalEndpoint: func(context.Context, string) (string, int, error) {
+			refreshes++
+			assert.Equal(t, 1, commandCalls, "restoration must be triggered by reading state, not snapshotting")
+			return "restored-host", 5678, nil
+		},
+	}
+
+	_, err := exportForSwitch(context.Background(), e, "side/branch", t.TempDir())
+	require.ErrorIs(t, err, readErr)
+	assert.Equal(t, 1, snapshotCalls)
+	assert.Equal(t, 2, commandCalls)
+	assert.Equal(t, 1, refreshes)
+}

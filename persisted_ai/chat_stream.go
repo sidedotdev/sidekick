@@ -246,7 +246,7 @@ func executeChatStreamV1(
 		initialProviders := streamInput.Providers
 		attempt := 0
 		err = flow_action.PerformWithUserRetryOptions(actionCtx, flow_action.UserRetryOptions{
-			OnFailure:             ProviderAuthFailureHandler{},
+			OnFailure:             NewProviderAuthFailureHandler(),
 			PropagateCancellation: propagateCancellation,
 			ResolveArgs: func() ([]interface{}, error) {
 				attempt++

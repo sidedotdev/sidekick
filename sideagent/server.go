@@ -289,13 +289,13 @@ func (s *server) executeCommand(req ExecRequest) ExecResponse {
 	// background children (& / nohup) inherit the pipes.
 	cmd.WaitDelay = 100 * time.Millisecond
 
-	if err := cmd.Start(); err != nil {
+	if err := startedChildren.start(cmd); err != nil {
 		resp.ExitStatus = -1
 		resp.Error = err.Error()
 		return resp
 	}
 	s.track(req.ID, cmd.Process)
-	err = cmd.Wait()
+	err = startedChildren.wait(cmd)
 	s.untrack(req.ID)
 
 	resp.Stdout = stdout.contents()
@@ -421,11 +421,16 @@ func (s *server) baseEnv(login bool) []string {
 		s.loginEnvOnce.Do(func() {
 			// A fixed internal command: no user input crosses into a shell.
 			// env -0 NUL-separates entries so values with newlines survive.
-			out, err := exec.Command("bash", "-lc", "env -0").Output()
-			if err != nil {
+			cmd := exec.Command("bash", "-lc", "env -0")
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			if err := startedChildren.start(cmd); err != nil {
 				return
 			}
-			for _, entry := range strings.Split(string(out), "\x00") {
+			if err := startedChildren.wait(cmd); err != nil {
+				return
+			}
+			for _, entry := range strings.Split(out.String(), "\x00") {
 				if entry != "" && strings.Contains(entry, "=") {
 					s.loginEnv = append(s.loginEnv, entry)
 				}

@@ -284,3 +284,67 @@ func TestWorkspaceRerankingMigration(t *testing.T) {
 	assert.JSONEq(t, llmJSON, actualLLM)
 	assert.JSONEq(t, embeddingJSON, actualEmbedding)
 }
+
+// retryAttemptsMigrationVersion adds flow_actions.attempts and next_retry_at.
+const retryAttemptsMigrationVersion = 21
+
+func TestRetryAttemptsMigrationUpgradesExistingDatabase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", testMemoryDsn)
+	require.NoError(t, err)
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	driver, err := sqlite.WithInstance(db, &sqlite.Config{})
+	require.NoError(t, err)
+	source, err := iofs.New(migrationsFs, "migrations")
+	require.NoError(t, err)
+	m, err := migrate.NewWithInstance("iofs", source, "test_retry_attempts", driver)
+	require.NoError(t, err)
+
+	flowActionColumnNames := func() []string {
+		rows, err := db.QueryContext(ctx, `PRAGMA table_info(flow_actions)`)
+		require.NoError(t, err)
+		defer rows.Close()
+		var names []string
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, colType string
+			var dflt sql.NullString
+			require.NoError(t, rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk))
+			names = append(names, name)
+		}
+		require.NoError(t, rows.Err())
+		return names
+	}
+
+	require.NoError(t, m.Migrate(retryAttemptsMigrationVersion-1))
+	now := time.Now().UTC()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO flow_actions (id, subflow_name, subflow_description, subflow_id, flow_id, workspace_id, created, updated,
+			action_type, action_params, action_status, action_result, is_human_action, is_callback_action)
+		VALUES (?, '', '', '', 'flow-1', 'ws-1', ?, ?, 'test', '{}', 'complete', '', 0, 0)
+	`, "fa-existing", now, now)
+	require.NoError(t, err)
+	assert.NotContains(t, flowActionColumnNames(), "attempts")
+
+	require.NoError(t, m.Migrate(retryAttemptsMigrationVersion))
+	version, dirty, err := m.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.EqualValues(t, retryAttemptsMigrationVersion, version)
+	columns := flowActionColumnNames()
+	assert.Contains(t, columns, "attempts")
+	assert.Contains(t, columns, "next_retry_at")
+
+	storage := &Storage{db: &trackedDB{DB: db, name: "main", tracker: newBusyTracker()}}
+	existing, err := storage.GetFlowAction(ctx, "ws-1", "fa-existing")
+	require.NoError(t, err)
+	assert.Equal(t, "fa-existing", existing.Id)
+	assert.Nil(t, existing.Attempts)
+	assert.Nil(t, existing.NextRetryAt)
+
+	require.NoError(t, m.Steps(-1))
+	assert.NotContains(t, flowActionColumnNames(), "attempts")
+}

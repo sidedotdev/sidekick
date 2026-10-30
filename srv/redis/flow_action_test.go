@@ -281,3 +281,64 @@ func TestDeleteFlowActionsForFlow(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestFlowActionChanges_RetryAttempts(t *testing.T) {
+	ctx := context.Background()
+	streamer := newTestRedisStreamer(t)
+	defer streamer.Client.Close()
+
+	workspaceId := "test-workspace"
+	flowId := "retry-attempts-flow-" + ksuid.New().String()
+
+	nextRetryAt := time.Date(2025, 6, 15, 12, 0, 0, 500000000, time.FixedZone("EST", -5*3600))
+	retrying := domain.FlowAction{
+		Id:           "fa_retrying",
+		WorkspaceId:  workspaceId,
+		FlowId:       flowId,
+		ActionType:   "type1",
+		ActionParams: map[string]interface{}{},
+		ActionStatus: domain.ActionStatusStarted,
+		Created:      time.Now(),
+		Updated:      time.Now(),
+		Attempts: []domain.FlowActionAttempt{
+			{At: time.Date(2025, 6, 15, 11, 0, 0, 0, time.UTC), Error: "429 Too Many Requests"},
+			{At: time.Date(2025, 6, 15, 11, 1, 0, 0, time.UTC), Error: "429 Too Many Requests again"},
+		},
+		NextRetryAt: &nextRetryAt,
+	}
+	assert.NoError(t, streamer.AddFlowActionChange(ctx, retrying))
+
+	finished := retrying
+	finished.ActionStatus = domain.ActionStatusComplete
+	finished.NextRetryAt = nil
+	assert.NoError(t, streamer.AddFlowActionChange(ctx, finished))
+
+	neverRetried := domain.FlowAction{
+		Id:           "fa_plain",
+		WorkspaceId:  workspaceId,
+		FlowId:       flowId,
+		ActionType:   "type2",
+		ActionParams: map[string]interface{}{},
+		ActionStatus: domain.ActionStatusComplete,
+		Created:      time.Now(),
+		Updated:      time.Now(),
+	}
+	assert.NoError(t, streamer.AddFlowActionChange(ctx, neverRetried))
+
+	changes, _, err := streamer.GetFlowActionChanges(ctx, workspaceId, flowId, "0", 10, 0)
+	assert.NoError(t, err)
+	if !assert.Len(t, changes, 3) {
+		t.FailNow()
+	}
+
+	assert.Equal(t, retrying.Attempts, changes[0].Attempts)
+	if assert.NotNil(t, changes[0].NextRetryAt) {
+		assert.True(t, nextRetryAt.Equal(*changes[0].NextRetryAt))
+	}
+
+	assert.Equal(t, retrying.Attempts, changes[1].Attempts)
+	assert.Nil(t, changes[1].NextRetryAt)
+
+	assert.Empty(t, changes[2].Attempts)
+	assert.Nil(t, changes[2].NextRetryAt)
+}

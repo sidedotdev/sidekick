@@ -434,15 +434,21 @@ func TestEnvRunCommandActivity_MissingWorkingDir(t *testing.T) {
 func TestCreateDevPodWorktreeActivity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	repoDir := setupTestGitRepo(t)
 
-	// Use a LocalEnv to simulate running commands inside a container
-	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
-	require.NoError(t, err)
-	envContainer := EnvContainer{Env: localEnv}
+	// Each subtest gets its own repo: concurrent `git worktree add` calls in a
+	// single repo race on .git/worktrees administrative entries.
+	// A LocalEnv simulates running commands inside a container.
+	setupRepo := func(t *testing.T) (string, EnvContainer) {
+		t.Helper()
+		repoDir := setupTestGitRepo(t)
+		localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		return repoDir, EnvContainer{Env: localEnv}
+	}
 
 	t.Run("creates worktree successfully", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -477,6 +483,7 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 
 	t.Run("creates worktree with start branch", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -490,6 +497,7 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 
 	t.Run("returns error for duplicate branch", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		wsId := "ws-" + ksuid.New().String()
 		input := CreateDevPodWorktreeInput{
 			EnvContainer: envContainer,
@@ -510,6 +518,7 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 
 	t.Run("strips side/ prefix for directory name", func(t *testing.T) {
 		t.Parallel()
+		repoDir, envContainer := setupRepo(t)
 		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -1636,4 +1645,191 @@ func assertSideTmpReady(t *testing.T, worktreePath string) {
 	cmd.Dir = worktreePath
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "expected .side/tmp to be excluded from Git: %s", output)
+}
+
+// TestWorktreeProvisioningAllowReuse covers each flow worktree provisioner
+// when the flow branch or its worktree may already exist, as happens when an
+// env switch returns a flow to a previously used env type.
+func TestWorktreeProvisioningAllowReuse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	gitRun := func(t *testing.T, dir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+	branchExists := func(repoDir, branch string) bool {
+		return exec.Command("git", "-C", repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
+	}
+
+	// provision provisions the worktree of a fixed flow branch and returns
+	// its path; repeated calls target the same path.
+	type provision func(allowReuse bool) (string, error)
+	provisioners := []struct {
+		name string
+		bind func(t *testing.T, repoDir, branch string) provision
+	}{
+		{
+			name: "local",
+			bind: func(t *testing.T, repoDir, branch string) provision {
+				baseDir := t.TempDir()
+				return func(allowReuse bool) (string, error) {
+					worktreeEnv, err := NewLocalGitWorktreeEnv(ctx, LocalEnvParams{
+						RepoDir:         repoDir,
+						StartBranch:     utils.Ptr("main"),
+						WorktreeBaseDir: baseDir,
+						AllowReuse:      allowReuse,
+					}, domain.Worktree{Name: branch, WorkspaceId: "ws"})
+					if err != nil {
+						return "", err
+					}
+					return worktreeEnv.GetWorkingDirectory(), nil
+				}
+			},
+		},
+		{
+			name: "devpod",
+			bind: func(t *testing.T, repoDir, branch string) provision {
+				repoEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+				require.NoError(t, err)
+				return func(allowReuse bool) (string, error) {
+					output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
+						EnvContainer: EnvContainer{Env: repoEnv},
+						RepoDir:      repoDir,
+						BranchName:   branch,
+						StartBranch:  "main",
+						WorkspaceId:  "ws",
+						AllowReuse:   allowReuse,
+					})
+					return output.WorktreePath, err
+				}
+			},
+		},
+		{
+			name: "remote",
+			bind: func(t *testing.T, repoDir, branch string) provision {
+				repoEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+				require.NoError(t, err)
+				remoteEnv := &provisioningBoundaryEnv{Env: repoEnv, home: t.TempDir()}
+				// Every flow branch is reserved in the worker-local repo, so
+				// it holds any flow branch the remote repo already has.
+				localRepoDir := setupTestGitRepo(t)
+				if branchExists(repoDir, branch) {
+					gitRun(t, localRepoDir, "branch", branch, "main")
+				}
+				return func(allowReuse bool) (string, error) {
+					output, err := CreateRemoteWorktreeActivity(ctx, CreateRemoteWorktreeInput{
+						EnvContainer: EnvContainer{Env: remoteEnv},
+						RepoDir:      repoDir,
+						BranchName:   branch,
+						StartBranch:  "main",
+						WorkspaceId:  "ws",
+						LocalRepoDir: localRepoDir,
+						AllowReuse:   allowReuse,
+					})
+					return output.WorktreePath, err
+				}
+			},
+		},
+	}
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T, repoDir, branch string, bind func() provision)
+	}{
+		{
+			name: "creates missing branch",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				path, err := bind()(true)
+				require.NoError(t, err)
+				assert.Equal(t, branch, gitRun(t, path, "branch", "--show-current"))
+				assert.Equal(t, gitRun(t, repoDir, "rev-parse", "main"), gitRun(t, path, "rev-parse", "HEAD"))
+				assertSideTmpReady(t, path)
+			},
+		},
+		{
+			name: "reuses existing worktree as-is",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				provision := bind()
+				first, err := provision(false)
+				require.NoError(t, err)
+				file := filepath.Join(first, "wip.txt")
+				require.NoError(t, os.WriteFile(file, []byte("committed"), 0644))
+				gitRun(t, first, "add", "wip.txt")
+				gitRun(t, first, "commit", "-m", "flow progress")
+				require.NoError(t, os.WriteFile(file, []byte("uncommitted"), 0644))
+				head := gitRun(t, first, "rev-parse", "HEAD")
+
+				again, err := provision(true)
+				require.NoError(t, err)
+				assert.Equal(t, first, again)
+				assert.Equal(t, head, gitRun(t, again, "rev-parse", "HEAD"))
+				content, err := os.ReadFile(file)
+				require.NoError(t, err)
+				assert.Equal(t, "uncommitted", string(content))
+			},
+		},
+		{
+			name: "attaches branch checked out by another worktree",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				retiredDir := filepath.Join(t.TempDir(), "retired")
+				gitRun(t, repoDir, "worktree", "add", "-b", branch, retiredDir, "main")
+				gitRun(t, retiredDir, "commit", "--allow-empty", "-m", "flow progress")
+				head := gitRun(t, retiredDir, "rev-parse", "HEAD")
+
+				path, err := bind()(true)
+				require.NoError(t, err)
+				assert.NotEqual(t, retiredDir, path)
+				assert.Equal(t, branch, gitRun(t, path, "branch", "--show-current"))
+				assert.Equal(t, head, gitRun(t, path, "rev-parse", "HEAD"))
+				assert.Equal(t, head, gitRun(t, repoDir, "rev-parse", branch))
+				assertSideTmpReady(t, path)
+			},
+		},
+		{
+			name: "rejects existing branch without AllowReuse",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				gitRun(t, repoDir, "branch", branch, "main")
+				head := gitRun(t, repoDir, "rev-parse", branch)
+
+				_, err := bind()(false)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "already exists")
+				assert.Equal(t, head, gitRun(t, repoDir, "rev-parse", branch))
+			},
+		},
+		{
+			name: "failed attach keeps pre-existing branch",
+			run: func(t *testing.T, repoDir, branch string, bind func() provision) {
+				// A tracked .side file makes .side/tmp setup fail after the
+				// worktree has been added.
+				scratchDir := filepath.Join(t.TempDir(), "scratch")
+				gitRun(t, repoDir, "worktree", "add", "-b", branch, scratchDir, "main")
+				require.NoError(t, os.WriteFile(filepath.Join(scratchDir, ".side"), []byte("not a dir"), 0644))
+				gitRun(t, scratchDir, "add", ".side")
+				gitRun(t, scratchDir, "commit", "-m", "flow progress")
+				head := gitRun(t, scratchDir, "rev-parse", "HEAD")
+				gitRun(t, repoDir, "worktree", "remove", scratchDir)
+
+				_, err := bind()(true)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), ".side/tmp")
+				require.True(t, branchExists(repoDir, branch), "pre-existing flow branch must survive a failed attach")
+				assert.Equal(t, head, gitRun(t, repoDir, "rev-parse", branch))
+			},
+		},
+	}
+
+	for _, p := range provisioners {
+		for _, tc := range cases {
+			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				repoDir := setupTestGitRepo(t)
+				branch := "side/reuse-" + strings.ReplaceAll(tc.name, " ", "-")
+				tc.run(t, repoDir, branch, func() provision { return p.bind(t, repoDir, branch) })
+			})
+		}
+	}
 }

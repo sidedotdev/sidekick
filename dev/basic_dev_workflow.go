@@ -320,7 +320,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	if err = SetupModelConfigHandlers(dCtx); err != nil {
 		return "", err
 	}
-	if err = SetupModalConfigHandlers(dCtx); err != nil {
+	if err = SetupEnvSettingsHandlers(dCtx); err != nil {
 		return "", err
 	}
 	SetupProfileChangeHandler(dCtx)
@@ -1586,6 +1586,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				}
 			}
 		}
+		cleanupRetiredEnvs(dCtx, dCtx, "Sidekick task completed and merged")
 	}
 
 	return gitDiff, mergeInfo, currentTreeHash, err

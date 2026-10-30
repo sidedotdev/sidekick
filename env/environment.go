@@ -33,8 +33,9 @@ import (
 // detect which kind of Sidekick environment they run inside, and
 // common.PortForwardsEnvVar (set only when forwards are configured) tells them
 // the container-local ports at which reverse-forwarded host ports are
-// reachable.
-func envVarsToInject(envType EnvType, portForwards []common.PortForwardConfig) []string {
+// reachable. requested holds the caller's own env vars, which the injected
+// ones are appended after and so take precedence over.
+func envVarsToInject(envType EnvType, portForwards []common.PortForwardConfig, requested []string) []string {
 	envVars := []string{
 		"GIT_EDITOR=true",
 		common.ActiveEnvTypeEnvVar + "=" + string(envType),
@@ -42,7 +43,43 @@ func envVarsToInject(envType EnvType, portForwards []common.PortForwardConfig) [
 	if len(portForwards) > 0 {
 		envVars = append(envVars, common.PortForwardsEnvVar+"="+common.FormatPortForwards(portForwards))
 	}
+	switch envType {
+	case EnvTypeDevPod, EnvTypeOpenShell, EnvTypeModal:
+		envVars = append(envVars, sandboxGitConfigEnvVars(requested)...)
+	}
 	return envVars
+}
+
+// sandboxGitConfigEnvVars keeps git's auto-maintenance in the foreground.
+// Detached maintenance is orphaned to the sandbox's PID 1, which may never
+// reap it (Modal VMs), so each commit would otherwise leak a zombie process.
+// Unlike global git config, this also reaches commands that override
+// GIT_CONFIG_GLOBAL. Entries are numbered after any GIT_CONFIG_COUNT the
+// caller requested, so its own entries keep applying.
+func sandboxGitConfigEnvVars(requested []string) []string {
+	offset := 0
+	for _, entry := range requested {
+		if value, ok := strings.CutPrefix(entry, "GIT_CONFIG_COUNT="); ok {
+			count, err := strconv.Atoi(value)
+			if err != nil || count < 0 {
+				// git rejects the requested count anyway; leave its error intact.
+				return nil
+			}
+			offset = count
+		}
+	}
+	settings := [][2]string{
+		{"maintenance.autoDetach", "false"},
+		{"gc.autoDetach", "false"},
+	}
+	envVars := make([]string, 0, 2*len(settings)+1)
+	for i, setting := range settings {
+		envVars = append(envVars,
+			fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", offset+i, setting[0]),
+			fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", offset+i, setting[1]),
+		)
+	}
+	return append(envVars, fmt.Sprintf("GIT_CONFIG_COUNT=%d", offset+len(settings)))
 }
 
 // ErrBranchAlreadyExists is returned when attempting to create a worktree
@@ -224,9 +261,9 @@ type GitRefSyncer interface {
 // a flow branch's commits to the host repository, which is the durable home
 // for work in progress even while the environment is alive.
 type FlowBranchBackupSyncer interface {
-	// SyncFlowBranchToLocal force-updates the same-name branch ref in the host
-	// repository from the environment's branch. The branch is never checked
-	// out locally, so no host working tree is touched.
+	// SyncFlowBranchToLocal updates the same-name branch in the host repository.
+	// Checked-out branches are fast-forwarded without overwriting conflicting
+	// local work; branches not checked out are force-updated.
 	SyncFlowBranchToLocal(ctx context.Context, branch string) error
 }
 
@@ -405,6 +442,9 @@ type LocalEnvParams struct {
 	// WorktreeBaseDir overrides GetSidekickDataHome() for worktree placement.
 	// Used in tests to avoid setting SIDE_DATA_HOME globally.
 	WorktreeBaseDir string
+	// AllowReuse reuses an existing worktree of the flow branch at the
+	// target path, or attaches the existing branch, instead of failing.
+	AllowReuse bool `json:"allowReuse,omitempty"`
 }
 
 func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
@@ -458,13 +498,31 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 	if params.StartBranch != nil && *params.StartBranch != "" {
 		worktreeBaseRef = *params.StartBranch
 	}
-	// Add the worktree, creating a new branch based on the target branch. The
-	// worktree is created locked so that "git worktree prune" won't remove it
-	// from an environment that can't see its working tree.
+
+	worktreeEnv := &LocalGitWorktreeEnv{WorkingDirectory: workingDir}
+	attach := false
+	if params.AllowReuse {
+		reuse, branchExists, err := inspectReusableWorktree(ctx, &LocalEnv{WorkingDirectory: params.RepoDir}, newBranchName, workingDir)
+		if err != nil {
+			return nil, err
+		}
+		if reuse {
+			if err := ensureSideTmp(ctx, worktreeEnv); err != nil {
+				return nil, err
+			}
+			return worktreeEnv, nil
+		}
+		attach = branchExists
+	}
+
+	// Add the worktree, creating a new branch based on the target branch
+	// unless attaching an existing one. The worktree is created locked so that
+	// "git worktree prune" won't remove it from an environment that can't see
+	// its working tree.
 	addWorktreeInput := unix.RunCommandActivityInput{
 		WorkingDir: params.RepoDir,
 		Command:    "git",
-		Args:       []string{"worktree", "add", "--lock", "--reason", WorktreeLockReason, "-b", newBranchName, workingDir, worktreeBaseRef},
+		Args:       worktreeAddArgs([]string{"--lock", "--reason", WorktreeLockReason}, newBranchName, workingDir, worktreeBaseRef, attach),
 	}
 	addWorktreeOutput, err := unix.RunCommandActivity(ctx, addWorktreeInput)
 	if err != nil {
@@ -473,13 +531,12 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 
 	if addWorktreeOutput.ExitStatus != 0 {
 		err := fmt.Errorf("git worktree add command failed with exit status %d: %s", addWorktreeOutput.ExitStatus, addWorktreeOutput.Stderr)
-		if strings.Contains(addWorktreeOutput.Stderr, "already exists") {
+		if !attach && strings.Contains(addWorktreeOutput.Stderr, "already exists") {
 			return nil, fmt.Errorf("%w: %v", ErrBranchAlreadyExists, err)
 		}
 		return nil, err
 	}
 
-	worktreeEnv := &LocalGitWorktreeEnv{WorkingDirectory: workingDir}
 	if err := ensureSideTmp(ctx, worktreeEnv); err != nil {
 		removeInput := unix.RunCommandActivityInput{
 			WorkingDir: params.RepoDir,
@@ -487,12 +544,15 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 			Args:       []string{"worktree", "remove", "--force", "--force", workingDir},
 		}
 		_, _ = unix.RunCommandActivity(ctx, removeInput)
-		deleteBranchInput := unix.RunCommandActivityInput{
-			WorkingDir: params.RepoDir,
-			Command:    "git",
-			Args:       []string{"branch", "-D", newBranchName},
+		// An attached branch predates this call and carries flow commits.
+		if !attach {
+			deleteBranchInput := unix.RunCommandActivityInput{
+				WorkingDir: params.RepoDir,
+				Command:    "git",
+				Args:       []string{"branch", "-D", newBranchName},
+			}
+			_, _ = unix.RunCommandActivity(ctx, deleteBranchInput)
 		}
-		_, _ = unix.RunCommandActivity(ctx, deleteBranchInput)
 		return nil, err
 	}
 
@@ -528,7 +588,7 @@ func (e *LocalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		WorkingDir: filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir),
 		Command:    input.Command,
 		Args:       input.Args,
-		EnvVars:    append(input.EnvVars, envVarsToInject(e.GetType(), nil)...),
+		EnvVars:    append(input.EnvVars, envVarsToInject(e.GetType(), nil, input.EnvVars)...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
@@ -625,7 +685,7 @@ func (e *LocalGitWorktreeEnv) RunCommand(ctx context.Context, input EnvRunComman
 		WorkingDir: filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir),
 		Command:    input.Command,
 		Args:       input.Args,
-		EnvVars:    append(input.EnvVars, envVarsToInject(e.GetType(), nil)...),
+		EnvVars:    append(input.EnvVars, envVarsToInject(e.GetType(), nil, input.EnvVars)...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
@@ -712,7 +772,7 @@ func agentExecRequest(workingDir string, envType EnvType, portForwards []common.
 	req := sideagent.ExecRequest{
 		Dir:       filepath.Join(workingDir, input.RelativeWorkingDir),
 		Argv:      append([]string{input.Command}, input.Args...),
-		Env:       append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards)...),
+		Env:       append(append([]string{}, input.EnvVars...), envVarsToInject(envType, portForwards, input.EnvVars)...),
 		TouchPath: remoteActivityMarker,
 	}
 	if input.activity != nil {
@@ -1487,7 +1547,7 @@ func isModalSSHTransportFailure(diagnostics string) bool {
 // serialization; SSH-reachable environments run commands as verbatim argv over
 // the side-agent exec channel instead.
 func buildRemoteShellCommand(workDir string, envType EnvType, portForwards []common.PortForwardConfig, input EnvRunCommandInput) string {
-	allEnvVars := append(input.EnvVars, envVarsToInject(envType, portForwards)...)
+	allEnvVars := append(input.EnvVars, envVarsToInject(envType, portForwards, input.EnvVars)...)
 	shellParts := make([]string, 0, len(allEnvVars)+3)
 
 	// Detach stdin so remote commands behave like local ones, which get

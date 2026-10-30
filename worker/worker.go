@@ -185,7 +185,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w := worker.New(temporalClient, taskQueue, worker.Options{
 		BuildID:                  common.GetWorkerBuildID(),
 		DeadlockDetectionTimeout: 5 * time.Second,
-		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor()},
+		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor(), env.NewEnvSwitchGateInterceptor()},
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
 		},
@@ -199,6 +199,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.CreateSandboxActivity)
 	w.RegisterActivity(env.CheckSandboxActivity)
 	w.RegisterActivity(env.StopSandboxActivity)
+	w.RegisterActivity(env.ModalReplaceSandboxActivity)
 	w.RegisterActivity(env.DeleteSandboxActivity)
 	w.RegisterActivity(env.ModalRecreateSandboxActivity)
 	w.RegisterActivity(env.UpdateEnvConfigActivity)
@@ -207,6 +208,8 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w.RegisterActivity(env.DeepenRepoActivity)
 	w.RegisterActivity(env.SnapshotEnvironmentActivity)
 	w.RegisterActivity(env.CreateRemoteWorktreeActivity)
+	w.RegisterActivity(env.ExportForSwitchActivity)
+	w.RegisterActivity(env.RestoreFromSwitchActivity)
 	w.RegisterActivity(&srv.Activities{Service: service})
 	w.RegisterActivity(&provider_auth.Activities{})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)

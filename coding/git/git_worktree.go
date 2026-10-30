@@ -141,18 +141,40 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 		}
 	}
 
-	// Delete the branch before removing the worktree
-	// Use -D to force delete even if not fully merged
-	deleteBranchResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+	// Active and retired environments may share Git metadata. Leave the branch
+	// for the last worktree using it, without blocking removal of this one.
+	worktrees, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
-		Args:         []string{"branch", "-D", branchName},
+		Args:         []string{"worktree", "list", "--porcelain", "-z"},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to execute branch delete command: %v", err)
+		return fmt.Errorf("failed to list worktrees: %w", err)
 	}
-	if deleteBranchResult.ExitStatus != 0 {
-		return fmt.Errorf("failed to delete branch %s: %s", branchName, deleteBranchResult.Stderr)
+	if worktrees.ExitStatus != 0 {
+		return fmt.Errorf("failed to list worktrees: %s", worktrees.Stderr)
+	}
+	branchInUse := false
+	for _, field := range strings.Split(worktrees.Stdout, "\x00") {
+		if field == "branch refs/heads/"+branchName {
+			branchInUse = true
+			break
+		}
+	}
+	if !branchInUse {
+		// Delete the branch before removing the worktree
+		// Use -D to force delete even if not fully merged
+		deleteBranchResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			EnvContainer: envContainer,
+			Command:      "git",
+			Args:         []string{"branch", "-D", branchName},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to execute branch delete command: %v", err)
+		}
+		if deleteBranchResult.ExitStatus != 0 {
+			return fmt.Errorf("failed to delete branch %s: %s", branchName, deleteBranchResult.Stderr)
+		}
 	}
 
 	// Untracked binaries are usually build artifacts but would otherwise block

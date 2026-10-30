@@ -62,6 +62,9 @@ type CreateDevPodWorktreeInput struct {
 	BranchName   string       `json:"branchName"`
 	StartBranch  string       `json:"startBranch,omitempty"`
 	WorkspaceId  string       `json:"workspaceId"`
+	// AllowReuse reuses an existing worktree of the flow branch at the
+	// target path, or attaches the existing branch, instead of failing.
+	AllowReuse bool `json:"allowReuse,omitempty"`
 }
 
 type CreateDevPodWorktreeOutput struct {
@@ -90,20 +93,35 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 		return CreateDevPodWorktreeOutput{}, fmt.Errorf("worktree directory setup failed in container (exit %d): %s", setupOutput.ExitStatus, setupOutput.Stderr)
 	}
 
+	attach := false
+	if input.AllowReuse {
+		reuse, branchExists, err := inspectReusableWorktree(ctx, input.EnvContainer.Env, input.BranchName, worktreePath)
+		if err != nil {
+			return CreateDevPodWorktreeOutput{}, err
+		}
+		if reuse {
+			if err := ensureSideTmp(ctx, EnvWithDir(input.EnvContainer.Env, worktreePath)); err != nil {
+				return CreateDevPodWorktreeOutput{}, err
+			}
+			return CreateDevPodWorktreeOutput{WorktreePath: worktreePath}, nil
+		}
+		attach = branchExists
+	}
+
 	baseRef := "HEAD"
 	if input.StartBranch != "" {
 		baseRef = input.StartBranch
 	}
 	addOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "git",
-		Args:    []string{"worktree", "add", "--lock", "--reason", WorktreeLockReason, "-b", input.BranchName, worktreePath, baseRef},
+		Args:    worktreeAddArgs([]string{"--lock", "--reason", WorktreeLockReason}, input.BranchName, worktreePath, baseRef, attach),
 	})
 	if err != nil {
 		return CreateDevPodWorktreeOutput{}, wrapDockerOperationError("failed to run git worktree add in container", err)
 	}
 	if addOutput.ExitStatus != 0 {
 		err := fmt.Errorf("git worktree add failed in container (exit %d): %s", addOutput.ExitStatus, addOutput.Stderr)
-		if strings.Contains(addOutput.Stderr, "already exists") {
+		if !attach && strings.Contains(addOutput.Stderr, "already exists") {
 			return CreateDevPodWorktreeOutput{}, temporal.NewNonRetryableApplicationError(
 				err.Error(),
 				ErrTypeBranchAlreadyExists,
@@ -118,10 +136,13 @@ func CreateDevPodWorktreeActivity(ctx context.Context, input CreateDevPodWorktre
 			Command: "git",
 			Args:    []string{"worktree", "remove", "--force", "--force", worktreePath},
 		})
-		_, _ = input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-			Command: "git",
-			Args:    []string{"branch", "-D", input.BranchName},
-		})
+		// An attached branch predates this call and carries flow commits.
+		if !attach {
+			_, _ = input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+				Command: "git",
+				Args:    []string{"branch", "-D", input.BranchName},
+			})
+		}
 		return CreateDevPodWorktreeOutput{}, err
 	}
 

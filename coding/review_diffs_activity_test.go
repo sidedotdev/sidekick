@@ -168,6 +168,7 @@ func TestGenerateReviewDiffsActivity_StagedChangesAlwaysIncluded(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Contains(t, reviewed.FullDiff, "StagedBeforeReview")
+			require.NotContains(t, reviewed.FullDiff, preStartPointMarker, "changes before the start point are not ours to review")
 
 			writeAndStage(t, repoDir, "staged_after.go", "package feature\n\nfunc StagedAfterReview() {}\n")
 			result, err := ca.GenerateReviewDiffsActivity(ctx, GenerateReviewDiffsParams{

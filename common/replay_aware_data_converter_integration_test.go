@@ -11,6 +11,7 @@ import (
 
 	"sidekick/common"
 	"sidekick/srv/sqlite"
+	"sidekick/temporal/temporaltest"
 
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
@@ -122,12 +123,12 @@ func dumpWorkflowState(t *testing.T, ctx context.Context, c client.Client, workf
 	}
 }
 
-func runReplayLiveWorkflow(t *testing.T, dc converter.DataConverter, storage *sqlite.Storage) replayLiveRun {
+func runReplayLiveWorkflow(t *testing.T, hostPort string, dc converter.DataConverter, storage *sqlite.Storage) replayLiveRun {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
-	c, err := client.Dial(client.Options{HostPort: common.GetTemporalClientHostPort(), DataConverter: dc})
+	c, err := client.Dial(client.Options{HostPort: hostPort, DataConverter: dc})
 	require.NoError(t, err)
 	t.Cleanup(c.Close)
 
@@ -143,15 +144,10 @@ func runReplayLiveWorkflow(t *testing.T, dc converter.DataConverter, storage *sq
 	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{ID: "replay-aware-" + ksuid.New().String(), TaskQueue: taskQueue}, replayLiveWorkflow)
 	require.NoError(t, err)
 	// Registered at test scope so assertions made after this helper returns
-	// still trigger diagnostics and cleanup.
+	// still trigger diagnostics.
 	t.Cleanup(func() {
 		if t.Failed() {
 			dumpWorkflowState(t, ctx, c, run.GetID(), run.GetRunID())
-			// Its offloaded payloads live in a test DB, so the run can never
-			// be resumed; don't leave it running on the shared server.
-			if err := c.TerminateWorkflow(context.Background(), run.GetID(), run.GetRunID(), "replay-aware integration test failed"); err != nil {
-				t.Logf("terminate %s/%s: %v", run.GetID(), run.GetRunID(), err)
-			}
 		}
 	})
 
@@ -227,13 +223,14 @@ func historyPayloads(event *historypb.HistoryEvent) []*commonpb.Payload {
 	return out
 }
 
-// Runs against the local Temporal server and restarts the worker mid-run so
+// Runs against a throwaway Temporal server and restarts the worker mid-run so
 // the final workflow task is a full replay followed by live execution. Not
 // parallel: the sticky cache is process-global and gets purged.
 func TestReplayAwareDataConverter_WorkerReplayThenLive(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
+	hostPort := temporaltest.StartDevServer(t)
 
 	expectedResult := fmt.Sprintf("first=%d;local=%d;second=%d;signal=now",
 		len(oversized("first")), len(oversized("local")), len(oversized("second")))
@@ -244,7 +241,7 @@ func TestReplayAwareDataConverter_WorkerReplayThenLive(t *testing.T) {
 	t.Run("control: codec-only converter re-stores inputs on every replay", func(t *testing.T) {
 		storage := sqlite.NewTestSqliteStorage(t, "codec")
 		dc := converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), common.NewPayloadCodec(storage, integrationThreshold))
-		run := runReplayLiveWorkflow(t, dc, storage)
+		run := runReplayLiveWorkflow(t, hostPort, dc, storage)
 		require.NoError(t, run.workflowErr)
 		assert.Equal(t, expectedResult, run.result)
 		assert.Equal(t, expectedRefsByEvent, run.refsByEvent)
@@ -254,7 +251,7 @@ func TestReplayAwareDataConverter_WorkerReplayThenLive(t *testing.T) {
 	t.Run("replay-aware converter stores exactly the referenced payloads", func(t *testing.T) {
 		storage := sqlite.NewTestSqliteStorage(t, "codec")
 		dc := common.NewReplayAwareDataConverter(converter.GetDefaultDataConverter(), common.NewPayloadCodec(storage, integrationThreshold))
-		run := runReplayLiveWorkflow(t, dc, storage)
+		run := runReplayLiveWorkflow(t, hostPort, dc, storage)
 		require.NoError(t, run.workflowErr)
 		assert.Equal(t, expectedResult, run.result)
 		assert.Equal(t, expectedRefsByEvent, run.refsByEvent)

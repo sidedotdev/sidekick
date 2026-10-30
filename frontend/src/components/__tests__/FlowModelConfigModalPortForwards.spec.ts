@@ -35,9 +35,9 @@ const failedResponse = (error: string): StubResponse => ({
 
 interface FlowState {
   llmConfig: LLMConfig
-  modalConfig: ModalEnvConfig | null
+  modalConfig: ModalEnvConfig
   portForwards: PortForwardConfig[] | null
-  portForwardsQueryFails: boolean
+  envQueryFails: boolean
 }
 
 interface RecordedCall {
@@ -47,8 +47,7 @@ interface RecordedCall {
 }
 
 interface MockOptions {
-  onPortForwardsUpdate?: (attempt: number) => StubResponse | Promise<StubResponse> | undefined
-  onModalConfigUpdate?: (attempt: number) => StubResponse | Promise<StubResponse> | undefined
+  onEnvUpdate?: (attempt: number) => StubResponse | Promise<StubResponse> | undefined
 }
 
 const createFetchMock = (state: Partial<FlowState> = {}, options: MockOptions = {}) => {
@@ -56,12 +55,16 @@ const createFetchMock = (state: Partial<FlowState> = {}, options: MockOptions = 
     llmConfig: clone(loadedLlmConfig),
     modalConfig: clone(loadedModalConfig),
     portForwards: [],
-    portForwardsQueryFails: false,
+    envQueryFails: false,
     ...state,
   }
   const calls: RecordedCall[] = []
-  let portForwardAttempts = 0
-  let modalConfigAttempts = 0
+  let envAttempts = 0
+  const settings = () => ({
+    envType: 'modal',
+    modal: flowState.modalConfig,
+    portForwards: flowState.portForwards,
+  })
 
   const fetchMock = vi.fn(async (url: string, init: RequestInit = {}): Promise<StubResponse> => {
     const method = init.method ?? 'GET'
@@ -80,14 +83,10 @@ const createFetchMock = (state: Partial<FlowState> = {}, options: MockOptions = 
       switch (body?.query) {
         case 'model_config':
           return okResponse({ result: flowState.llmConfig })
-        case 'modal_config':
-          return flowState.modalConfig
-            ? okResponse({ result: flowState.modalConfig })
-            : failedResponse('modal configuration unavailable')
-        case 'port_forwards':
-          return flowState.portForwardsQueryFails
-            ? failedResponse('port forwards unavailable')
-            : okResponse({ result: { portForwards: flowState.portForwards } })
+        case 'env':
+          return flowState.envQueryFails
+            ? failedResponse('environment settings unavailable')
+            : okResponse({ result: settings() })
         default:
           throw new Error(`unexpected query: ${String(body?.query)}`)
       }
@@ -96,23 +95,15 @@ const createFetchMock = (state: Partial<FlowState> = {}, options: MockOptions = 
       flowState.llmConfig = body?.config as LLMConfig
       return okResponse({ message: 'accepted' })
     }
-    if (url === `${flowUrl}/port_forwards` && method === 'PUT') {
-      portForwardAttempts += 1
-      const override = await options.onPortForwardsUpdate?.(portForwardAttempts)
+    if (url === `${flowUrl}/env` && method === 'PUT') {
+      envAttempts += 1
+      const override = await options.onEnvUpdate?.(envAttempts)
       if (override) {
         return override
       }
       flowState.portForwards = body?.portForwards as PortForwardConfig[]
-      return okResponse({ portForwards: flowState.portForwards })
-    }
-    if (url === `${flowUrl}/modal_config` && method === 'PUT') {
-      modalConfigAttempts += 1
-      const override = await options.onModalConfigUpdate?.(modalConfigAttempts)
-      if (override) {
-        return override
-      }
-      flowState.modalConfig = body?.config as ModalEnvConfig
-      return okResponse({ message: 'Modal environment recreated' })
+      flowState.modalConfig = body?.modal as ModalEnvConfig
+      return okResponse({ settings: settings() })
     }
     throw new Error(`unexpected request: ${method} ${url}`)
   })
@@ -171,8 +162,10 @@ describe('FlowModelConfigModal port mappings', () => {
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('port_forwards')).toHaveLength(1)
-    expect(putsFor('port_forwards')[0].body).toEqual({
+    expect(putsFor('env')).toHaveLength(1)
+    expect(putsFor('env')[0].body).toEqual({
+      envType: 'modal',
+      modal: loadedModalConfig,
       portForwards: [{ hostPort: 3100 }, { hostPort: 5432, containerPort: 6432 }],
     })
     expect(putsFor('model_config')).toHaveLength(0)
@@ -194,7 +187,7 @@ describe('FlowModelConfigModal port mappings', () => {
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('port_forwards')[0].body).toEqual({ portForwards: [] })
+    expect(putsFor('env')[0].body).toEqual({ envType: 'modal', modal: loadedModalConfig, portForwards: [] })
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
@@ -213,7 +206,7 @@ describe('FlowModelConfigModal port mappings', () => {
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('port_forwards')[0].body).toEqual({ portForwards: [{ hostPort: 4000 }] })
+    expect(putsFor('env')[0].body).toEqual({ envType: 'modal', modal: loadedModalConfig, portForwards: [{ hostPort: 4000 }] })
   })
 
   it('reports conflicting mappings before contacting the workflow', async () => {
@@ -230,7 +223,7 @@ describe('FlowModelConfigModal port mappings', () => {
     await flushPromises()
 
     expect(wrapper.get('.error-state[role="alert"]').text()).toContain('3000')
-    expect(putsFor('port_forwards')).toHaveLength(0)
+    expect(putsFor('env')).toHaveLength(0)
     expect(wrapper.emitted('close')).toBeFalsy()
   })
 
@@ -246,7 +239,7 @@ describe('FlowModelConfigModal port mappings', () => {
     await flushPromises()
 
     expect(wrapper.get('.error-state[role="alert"]').text()).toContain('host port')
-    expect(putsFor('port_forwards')).toHaveLength(0)
+    expect(putsFor('env')).toHaveLength(0)
     expect(wrapper.emitted('close')).toBeFalsy()
   })
 
@@ -261,17 +254,21 @@ describe('FlowModelConfigModal port mappings', () => {
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('modal_config')).toHaveLength(1)
-    expect(putsFor('port_forwards')).toHaveLength(0)
+    expect(putsFor('env')).toHaveLength(1)
+    expect(putsFor('env')[0].body).toEqual({
+      envType: 'modal',
+      modal: { ...loadedModalConfig, vm: true },
+      portForwards: [{ hostPort: 3000 }],
+    })
     expect(putsFor('model_config')).toHaveLength(0)
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
-  it('retries only the section that failed', async () => {
+  it('retries the full environment settings without resubmitting applied model changes', async () => {
     const { fetchMock, putsFor } = createFetchMock(
       { portForwards: [{ hostPort: 3000 }] },
       {
-        onModalConfigUpdate: (attempt) => (
+        onEnvUpdate: (attempt) => (
           attempt === 1 ? failedResponse('sandbox recreation failed') : undefined
         ),
       },
@@ -281,21 +278,24 @@ describe('FlowModelConfigModal port mappings', () => {
     const wrapper = mountModal()
     await flushPromises()
 
+    await wrapper.get('.change-model').trigger('click')
     await wrapper.get('.host-port').setValue('3100')
     await wrapper.get('.modal-environment input[type="number"]').setValue('2')
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('.error-state[role="alert"]').text()).toContain('sandbox recreation failed')
-    expect(putsFor('port_forwards')).toHaveLength(1)
+    expect(putsFor('env')).toHaveLength(1)
+    expect(putsFor('model_config')).toHaveLength(1)
     expect(wrapper.emitted('close')).toBeFalsy()
     expect(inputValue(wrapper.get('.host-port').element)).toBe('3100')
 
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('port_forwards')).toHaveLength(1)
-    expect(putsFor('modal_config')).toHaveLength(2)
+    expect(putsFor('env')).toHaveLength(2)
+    expect(putsFor('env')[1].body).toEqual(putsFor('env')[0].body)
+    expect(putsFor('model_config')).toHaveLength(1)
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
@@ -315,8 +315,10 @@ describe('FlowModelConfigModal port mappings', () => {
     await flushPromises()
 
     expect(putsFor('model_config')).toHaveLength(1)
-    expect(putsFor('modal_config')).toHaveLength(1)
-    expect(putsFor('port_forwards')[0].body).toEqual({
+    expect(putsFor('env')).toHaveLength(1)
+    expect(putsFor('env')[0].body).toEqual({
+      envType: 'modal',
+      modal: { ...loadedModalConfig, vm: true },
       portForwards: [{ hostPort: 4000, containerPort: 4100 }],
     })
     expect(wrapper.emitted('close')).toHaveLength(1)
@@ -326,7 +328,7 @@ describe('FlowModelConfigModal port mappings', () => {
     const { fetchMock, putsFor } = createFetchMock(
       { portForwards: [{ hostPort: 3000 }] },
       {
-        onPortForwardsUpdate: (attempt) => (
+        onEnvUpdate: (attempt) => (
           attempt === 1 ? failedResponse('port 3100 is already bound') : undefined
         ),
       },
@@ -350,8 +352,8 @@ describe('FlowModelConfigModal port mappings', () => {
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('port_forwards')).toHaveLength(2)
-    expect(putsFor('port_forwards')[1].body).toEqual({ portForwards: [{ hostPort: 3100 }] })
+    expect(putsFor('env')).toHaveLength(2)
+    expect(putsFor('env')[1].body).toEqual({ envType: 'modal', modal: loadedModalConfig, portForwards: [{ hostPort: 3100 }] })
     expect(putsFor('model_config')).toHaveLength(0)
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
@@ -363,7 +365,7 @@ describe('FlowModelConfigModal port mappings', () => {
     })
     const { fetchMock } = createFetchMock(
       { portForwards: [{ hostPort: 3000 }] },
-      { onPortForwardsUpdate: () => pendingUpdate },
+      { onEnvUpdate: () => pendingUpdate },
     )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -375,6 +377,7 @@ describe('FlowModelConfigModal port mappings', () => {
     await flushPromises()
 
     expect(wrapper.get('.model-editor').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('#environment-type').attributes('disabled')).toBeDefined()
     expect(wrapper.get('.modal-environment input[type="checkbox"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('.modal-environment input[type="number"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('.host-port').attributes('disabled')).toBeDefined()
@@ -383,7 +386,9 @@ describe('FlowModelConfigModal port mappings', () => {
     expect(wrapper.get('.remove-port-forward').attributes('disabled')).toBeDefined()
     expect(wrapper.emitted('close')).toBeFalsy()
 
-    releaseUpdate?.(okResponse({ portForwards: [{ hostPort: 3100 }] }))
+    releaseUpdate?.(okResponse({
+      settings: { envType: 'modal', modal: loadedModalConfig, portForwards: [{ hostPort: 3100 }] },
+    }))
     await flushPromises()
 
     expect(wrapper.get('.model-editor').attributes('disabled')).toBeUndefined()
@@ -469,7 +474,7 @@ describe('FlowModelConfigModal port mappings', () => {
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('port_forwards')).toHaveLength(1)
+    expect(putsFor('env')).toHaveLength(1)
     wrapper.unmount()
 
     const reopened = mountModal()
@@ -483,7 +488,7 @@ describe('FlowModelConfigModal port mappings', () => {
     await reopened.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('port_forwards')).toHaveLength(1)
+    expect(putsFor('env')).toHaveLength(1)
     expect(reopened.emitted('close')).toHaveLength(1)
   })
 
@@ -499,19 +504,31 @@ describe('FlowModelConfigModal port mappings', () => {
     await wrapper.get('.apply-button').trigger('click')
     await flushPromises()
 
-    expect(putsFor('port_forwards')[0].body).toEqual({ portForwards: [{ hostPort: 3100 }] })
-    expect(putsFor('modal_config')[0].body).toEqual({ config: { ...loadedModalConfig, cpu: 2 } })
+    expect(putsFor('env')).toHaveLength(1)
+    expect(putsFor('env')[0].body).toEqual({
+      envType: 'modal',
+      modal: { ...loadedModalConfig, cpu: 2 },
+      portForwards: [{ hostPort: 3100 }],
+    })
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
-  it('hides mapping controls when the workflow cannot report them', async () => {
-    const { fetchMock } = createFetchMock({ portForwardsQueryFails: true })
+  it('reports unavailable environment settings and retries loading them', async () => {
+    const { fetchMock, flowState } = createFetchMock({ envQueryFails: true })
     vi.stubGlobal('fetch', fetchMock)
 
     const wrapper = mountModal()
     await flushPromises()
 
     expect(wrapper.find('.port-forwards').exists()).toBe(false)
+    expect(wrapper.find('.apply-button').exists()).toBe(false)
+    expect(wrapper.get('[role="alert"]').text()).toContain('environment settings unavailable')
+
+    flowState.envQueryFails = false
+    await wrapper.get('[role="alert"] button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.port-forwards').exists()).toBe(true)
     expect(wrapper.find('.modal-environment').exists()).toBe(true)
   })
 })

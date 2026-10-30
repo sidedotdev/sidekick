@@ -18,7 +18,7 @@ type MemoryStreamer struct {
 	taskListeners []chan domain.Task
 
 	flowActions         []domain.FlowAction
-	flowActionListeners []chan domain.FlowAction
+	flowActionListeners []flowActionListener
 
 	flowEvents         map[string][]domain.FlowEvent // keyed by flowId
 	flowEventListeners map[string][]chan struct{}
@@ -70,52 +70,71 @@ func (m *MemoryStreamer) StreamTaskChanges(ctx context.Context, workspaceId, str
 	return taskCh, errCh
 }
 
+type flowActionListener struct {
+	workspaceId string
+	flowId      string
+	ch          chan domain.FlowAction
+}
+
+func (l flowActionListener) matches(flowAction domain.FlowAction) bool {
+	return flowAction.WorkspaceId == l.workspaceId && flowAction.FlowId == l.flowId
+}
+
 func (m *MemoryStreamer) AddFlowActionChange(ctx context.Context, flowAction domain.FlowAction) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.flowActions = append(m.flowActions, flowAction)
-	for _, ch := range m.flowActionListeners {
+	for _, listener := range m.flowActionListeners {
+		if !listener.matches(flowAction) {
+			continue
+		}
 		select {
-		case ch <- flowAction:
+		case listener.ch <- flowAction:
 		default:
 		}
 	}
 	return nil
 }
 
+// StreamFlowActionChanges mirrors the production streamers' start-id contract:
+// "$" streams only new actions, while any other value replays the flow's
+// history first. Having no message ids, every replay starts from the
+// beginning. Replay and registration happen under one lock so no action is
+// missed or duplicated between them.
 func (m *MemoryStreamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
 	m.mu.Lock()
-	var backlog []domain.FlowAction
-	if streamMessageStartId == "" || streamMessageStartId == "0" {
-		for _, action := range m.flowActions {
-			if action.WorkspaceId == workspaceId && action.FlowId == flowId {
-				backlog = append(backlog, action)
+	listener := flowActionListener{workspaceId: workspaceId, flowId: flowId}
+	var history []domain.FlowAction
+	if streamMessageStartId != "$" {
+		for _, flowAction := range m.flowActions {
+			if listener.matches(flowAction) {
+				history = append(history, flowAction)
 			}
 		}
 	}
-	actionCh := make(chan domain.FlowAction, len(backlog)+100)
-	errCh := make(chan error, 1)
-	for _, action := range backlog {
-		actionCh <- action
+	listener.ch = make(chan domain.FlowAction, len(history)+100)
+	for _, flowAction := range history {
+		listener.ch <- flowAction
 	}
-	m.flowActionListeners = append(m.flowActionListeners, actionCh)
+	errCh := make(chan error, 1)
+	m.flowActionListeners = append(m.flowActionListeners, listener)
 	m.mu.Unlock()
 
 	go func() {
 		<-ctx.Done()
 		m.mu.Lock()
-		for i, ch := range m.flowActionListeners {
-			if ch == actionCh {
+		for i, l := range m.flowActionListeners {
+			if l.ch == listener.ch {
 				m.flowActionListeners = append(m.flowActionListeners[:i], m.flowActionListeners[i+1:]...)
 				break
 			}
 		}
 		m.mu.Unlock()
-		close(actionCh)
+		close(listener.ch)
 		close(errCh)
 	}()
 
-	return actionCh, errCh
+	return listener.ch, errCh
 }
 
 func (m *MemoryStreamer) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {

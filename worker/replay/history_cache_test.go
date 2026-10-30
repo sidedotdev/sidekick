@@ -36,10 +36,9 @@ const (
 	historyCacheMaxBytes = int64(1) << 30
 )
 
-// cachedHistory is the persisted resume state for one workflow run: all
-// events except the last fetched page, plus the page token that re-fetches
-// that last page. A run's history is append-only, so resuming from that token
-// re-reads at most one page and then only events appended since.
+// cachedHistory pairs an immutable history prefix with the token for the
+// following page. Completed downloads exclude the final page from the prefix
+// because that page can still grow while the workflow is running.
 type cachedHistory struct {
 	events      []*history.HistoryEvent
 	resumeToken []byte
@@ -50,9 +49,9 @@ var errHistoryResumeMismatch = errors.New("cached history prefix does not line u
 type historyPageFetcher func(pageToken []byte) (*workflowservice.GetWorkflowExecutionHistoryResponse, error)
 
 // fetchHistoryWithResume drains a run's history pages, starting from cached
-// resume state when provided. It returns the full history along with the
-// resume state to persist for the next fetch.
-func fetchHistoryWithResume(fetch historyPageFetcher, cached *cachedHistory) (*history.History, *cachedHistory, error) {
+// resume state when provided. Checkpoints contain only immutable pages.
+// On failure it returns no replayable history, but preserves valid progress.
+func fetchHistoryWithResume(fetch historyPageFetcher, cached *cachedHistory, checkpoint func(*cachedHistory)) (*history.History, *cachedHistory, error) {
 	var all []*history.HistoryEvent
 	var token []byte
 	resuming := false
@@ -64,7 +63,10 @@ func fetchHistoryWithResume(fetch historyPageFetcher, cached *cachedHistory) (*h
 	for {
 		resp, err := fetch(token)
 		if err != nil {
-			return nil, nil, err
+			if len(all) == 0 {
+				return nil, nil, err
+			}
+			return nil, &cachedHistory{events: all, resumeToken: token}, err
 		}
 		events := resp.GetHistory().GetEvents()
 		if resuming {
@@ -82,6 +84,9 @@ func fetchHistoryWithResume(fetch historyPageFetcher, cached *cachedHistory) (*h
 				nil
 		}
 		token = resp.GetNextPageToken()
+		if checkpoint != nil {
+			checkpoint(&cachedHistory{events: all, resumeToken: token})
+		}
 	}
 }
 
@@ -91,33 +96,55 @@ func fetchHistoryWithResume(fetch historyPageFetcher, cached *cachedHistory) (*h
 // scratch) are not re-transferred through the reverse-forwarded proxy on
 // every run. It reports whether the fetch resumed from cache.
 func fetchWorkflowHistoryCached(ctx context.Context, svc workflowservice.WorkflowServiceClient, namespace, cacheDir, workflowID, runID string) (*history.History, bool, error) {
+	page := 0
 	fetch := func(pageToken []byte) (*workflowservice.GetWorkflowExecutionHistoryResponse, error) {
+		page++
+		started := time.Now()
 		rctx, cancel := context.WithTimeout(ctx, historyPageTimeout)
 		defer cancel()
-		return svc.GetWorkflowExecutionHistory(rctx, &workflowservice.GetWorkflowExecutionHistoryRequest{
+		log.Debug().Str("workflowId", workflowID).Int("page", page).Msg("fetching replay history page")
+		resp, err := svc.GetWorkflowExecutionHistory(rctx, &workflowservice.GetWorkflowExecutionHistoryRequest{
 			Namespace:              namespace,
 			Execution:              &commonpb.WorkflowExecution{WorkflowId: workflowID, RunId: runID},
 			NextPageToken:          pageToken,
 			HistoryEventFilterType: enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT,
 		})
+		log.Debug().Str("workflowId", workflowID).Int("page", page).
+			Dur("duration", time.Since(started)).Int("events", len(resp.GetHistory().GetEvents())).
+			Int("bytes", proto.Size(resp)).Err(err).Msg("fetched replay history page")
+		return resp, err
+	}
+
+	persist := func(state *cachedHistory) {
+		if saveErr := saveCachedHistory(cacheDir, workflowID, runID, state); saveErr != nil {
+			log.Warn().Err(saveErr).Str("workflowId", workflowID).Msg("failed to persist replay history cache")
+		}
+	}
+	const checkpointPages = 8
+	pagesSinceCheckpoint := 0
+	checkpoint := func(state *cachedHistory) {
+		pagesSinceCheckpoint++
+		if pagesSinceCheckpoint >= checkpointPages {
+			persist(state)
+			pagesSinceCheckpoint = 0
+		}
 	}
 
 	cached := loadCachedHistory(cacheDir, workflowID, runID)
 	resumed := cached != nil && len(cached.events) > 0
-	hist, updated, err := fetchHistoryWithResume(fetch, cached)
-	if err != nil && resumed && !isTransientHistoryFetchErr(err) {
+	hist, updated, err := fetchHistoryWithResume(fetch, cached, checkpoint)
+	if err != nil && resumed && !isTransientHistoryFetchErr(err) && !errors.Is(err, context.Canceled) {
 		// Rejected resume state (stale token after a server upgrade, a reset
 		// run, ...) is recoverable: retry from scratch. Transient transport
 		// errors are left to the caller's retry policy instead, since a full
 		// refetch would fail the same way but cost far more.
 		resumed = false
-		hist, updated, err = fetchHistoryWithResume(fetch, nil)
+		pagesSinceCheckpoint = 0
+		hist, updated, err = fetchHistoryWithResume(fetch, nil, checkpoint)
 	}
+	persist(updated)
 	if err != nil {
 		return nil, false, err
-	}
-	if saveErr := saveCachedHistory(cacheDir, workflowID, runID, updated); saveErr != nil {
-		log.Warn().Err(saveErr).Str("workflowId", workflowID).Msg("failed to persist replay history cache")
 	}
 	return hist, resumed, nil
 }
@@ -337,7 +364,7 @@ func TestFetchHistoryWithResume(t *testing.T) {
 			"t1": {firstEventID: 3, count: 2, next: "t2"},
 			"t2": {firstEventID: 5, count: 1, next: ""},
 		}
-		hist, updated, err := fetchHistoryWithResume(fakePageFetcher(pages, nil), nil)
+		hist, updated, err := fetchHistoryWithResume(fakePageFetcher(pages, nil), nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -356,7 +383,7 @@ func TestFetchHistoryWithResume(t *testing.T) {
 		}
 		calls := 0
 		cached := &cachedHistory{events: makeEvents(1, 2, 3, 4), resumeToken: []byte("t2")}
-		hist, updated, err := fetchHistoryWithResume(fakePageFetcher(pages, &calls), cached)
+		hist, updated, err := fetchHistoryWithResume(fakePageFetcher(pages, &calls), cached, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -376,7 +403,7 @@ func TestFetchHistoryWithResume(t *testing.T) {
 			"t2": {firstEventID: 7, count: 1, next: ""},
 		}
 		cached := &cachedHistory{events: makeEvents(1, 2, 3, 4), resumeToken: []byte("t2")}
-		_, _, err := fetchHistoryWithResume(fakePageFetcher(pages, nil), cached)
+		_, _, err := fetchHistoryWithResume(fakePageFetcher(pages, nil), cached, nil)
 		if !errors.Is(err, errHistoryResumeMismatch) {
 			t.Fatalf("expected errHistoryResumeMismatch, got %v", err)
 		}
@@ -388,7 +415,7 @@ func TestFetchHistoryWithResume(t *testing.T) {
 			"t2": {firstEventID: 5, count: 0, next: ""},
 		}
 		cached := &cachedHistory{events: makeEvents(1, 2, 3, 4), resumeToken: []byte("t2")}
-		_, _, err := fetchHistoryWithResume(fakePageFetcher(pages, nil), cached)
+		_, _, err := fetchHistoryWithResume(fakePageFetcher(pages, nil), cached, nil)
 		if !errors.Is(err, errHistoryResumeMismatch) {
 			t.Fatalf("expected errHistoryResumeMismatch, got %v", err)
 		}
@@ -396,7 +423,7 @@ func TestFetchHistoryWithResume(t *testing.T) {
 
 	t.Run("fetch error propagates", func(t *testing.T) {
 		t.Parallel()
-		_, _, err := fetchHistoryWithResume(fakePageFetcher(map[string]fakeHistoryPage{}, nil), nil)
+		_, _, err := fetchHistoryWithResume(fakePageFetcher(map[string]fakeHistoryPage{}, nil), nil, nil)
 		if err == nil {
 			t.Fatal("expected error for unknown page token")
 		}

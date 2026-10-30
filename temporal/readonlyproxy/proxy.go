@@ -110,3 +110,7 @@ func Start(listenHostPort, temporalHostPort string, payloadStorage common.KeyVal
 func (s *readOnlyWorkflowService) DescribeWorkflowExecution(ctx context.Context, req *workflowservice.DescribeWorkflowExecutionRequest) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
 	return s.client.DescribeWorkflowExecution(ctx, req)
 }
+
+func (s *readOnlyWorkflowService) GetWorkflowExecutionHistoryReverse(ctx context.Context, req *workflowservice.GetWorkflowExecutionHistoryReverseRequest) (*workflowservice.GetWorkflowExecutionHistoryReverseResponse, error) {
+	return s.client.GetWorkflowExecutionHistoryReverse(ctx, req)
+}

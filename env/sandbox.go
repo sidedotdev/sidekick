@@ -11,6 +11,11 @@ import (
 type SandboxEnv interface {
 	Env
 	GetSandboxName() string
+	// SandboxSharedAcrossFlows reports whether other flows of the same repo
+	// may be using the sandbox too. A shared sandbox is only released by
+	// flow-end cleanup; one scoped to a single flow can be stopped as soon
+	// as the flow stops running on it.
+	SandboxSharedAcrossFlows() bool
 }
 
 var (
@@ -22,6 +27,13 @@ var (
 func (e *DevPodEnv) GetSandboxName() string    { return e.WorkspaceName }
 func (e *OpenShellEnv) GetSandboxName() string { return e.SandboxName }
 func (e *ModalEnv) GetSandboxName() string     { return e.SandboxName }
+
+// DevPod workspaces and OpenShell sandboxes are named per repo (see
+// DevPodWorkspaceName and OpenShellSandboxName); Modal sandboxes per flow
+// (see ModalSandboxName).
+func (e *DevPodEnv) SandboxSharedAcrossFlows() bool    { return true }
+func (e *OpenShellEnv) SandboxSharedAcrossFlows() bool { return true }
+func (e *ModalEnv) SandboxSharedAcrossFlows() bool     { return false }
 
 // SandboxProvider implements sandbox lifecycle management for one env type.
 // Providers self-register via RegisterSandboxProvider so that workflow code

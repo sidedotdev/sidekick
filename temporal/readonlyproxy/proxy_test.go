@@ -25,7 +25,8 @@ import (
 
 type fakeWorkflowService struct {
 	workflowservice.UnimplementedWorkflowServiceServer
-	history *historypb.History
+	history        *historypb.History
+	reverseHistory func(context.Context, *workflowservice.GetWorkflowExecutionHistoryReverseRequest) (*workflowservice.GetWorkflowExecutionHistoryReverseResponse, error)
 }
 
 func (s *fakeWorkflowService) GetSystemInfo(ctx context.Context, req *workflowservice.GetSystemInfoRequest) (*workflowservice.GetSystemInfoResponse, error) {
@@ -154,6 +155,18 @@ func TestReadOnlyProxyDecodesOffloadedPayloads(t *testing.T) {
 	var decoded string
 	require.NoError(t, converter.GetDefaultDataConverter().FromPayload(payloads[0], &decoded))
 	assert.Equal(t, value, decoded)
+
+	reverse, err := c.WorkflowService().GetWorkflowExecutionHistoryReverse(context.Background(), &workflowservice.GetWorkflowExecutionHistoryReverseRequest{
+		Namespace: "default",
+		Execution: &commonpb.WorkflowExecution{WorkflowId: "wf1", RunId: "run1"},
+	})
+	require.NoError(t, err)
+	require.Len(t, reverse.GetHistory().GetEvents(), 1)
+	payloads = reverse.History.Events[0].GetWorkflowExecutionStartedEventAttributes().GetInput().GetPayloads()
+	require.Len(t, payloads, 1)
+	decoded = ""
+	require.NoError(t, converter.GetDefaultDataConverter().FromPayload(payloads[0], &decoded))
+	assert.Equal(t, value, decoded)
 }
 
 func (s *fakeWorkflowService) DescribeWorkflowExecution(ctx context.Context, req *workflowservice.DescribeWorkflowExecutionRequest) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
@@ -163,4 +176,64 @@ func (s *fakeWorkflowService) DescribeWorkflowExecution(ctx context.Context, req
 			Status:    enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
 		},
 	}, nil
+}
+
+func (s *fakeWorkflowService) GetWorkflowExecutionHistoryReverse(ctx context.Context, req *workflowservice.GetWorkflowExecutionHistoryReverseRequest) (*workflowservice.GetWorkflowExecutionHistoryReverseResponse, error) {
+	if s.reverseHistory != nil {
+		return s.reverseHistory(ctx, req)
+	}
+	return &workflowservice.GetWorkflowExecutionHistoryReverseResponse{History: s.history}, nil
+}
+
+func TestReadOnlyProxyReverseHistory(t *testing.T) {
+	t.Parallel()
+
+	requests := make(chan *workflowservice.GetWorkflowExecutionHistoryReverseRequest, 1)
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	backend := grpc.NewServer()
+	workflowservice.RegisterWorkflowServiceServer(backend, &fakeWorkflowService{
+		reverseHistory: func(_ context.Context, req *workflowservice.GetWorkflowExecutionHistoryReverseRequest) (*workflowservice.GetWorkflowExecutionHistoryReverseResponse, error) {
+			requests <- req
+			return &workflowservice.GetWorkflowExecutionHistoryReverseResponse{
+				History: &historypb.History{Events: []*historypb.HistoryEvent{
+					{EventId: 30, EventType: enumspb.EVENT_TYPE_WORKFLOW_TASK_COMPLETED},
+					{EventId: 29, EventType: enumspb.EVENT_TYPE_WORKFLOW_TASK_STARTED},
+				}},
+				NextPageToken: []byte("older"),
+			}, nil
+		},
+	})
+	go func() { _ = backend.Serve(backendListener) }()
+	t.Cleanup(backend.Stop)
+
+	proxy, err := Start("127.0.0.1:0", backendListener.Addr().String(), nil)
+	require.NoError(t, err)
+	t.Cleanup(proxy.Stop)
+	c, err := client.Dial(client.Options{HostPort: proxy.Addr(), Namespace: "default"})
+	require.NoError(t, err)
+	defer c.Close()
+
+	resp, err := c.WorkflowService().GetWorkflowExecutionHistoryReverse(context.Background(), &workflowservice.GetWorkflowExecutionHistoryReverseRequest{
+		Namespace:       "namespace",
+		Execution:       &commonpb.WorkflowExecution{WorkflowId: "workflow", RunId: "run"},
+		MaximumPageSize: 50,
+		NextPageToken:   []byte("newer"),
+	})
+	require.NoError(t, err)
+	select {
+	case req := <-requests:
+		assert.Equal(t, "namespace", req.Namespace)
+		assert.Equal(t, "workflow", req.Execution.WorkflowId)
+		assert.Equal(t, "run", req.Execution.RunId)
+		assert.Equal(t, int32(50), req.MaximumPageSize)
+		assert.Equal(t, []byte("newer"), req.NextPageToken)
+	default:
+		t.Fatal("reverse history request did not reach the backend")
+	}
+	require.Len(t, resp.GetHistory().GetEvents(), 2)
+	assert.Equal(t, int64(30), resp.History.Events[0].EventId)
+	assert.Equal(t, enumspb.EVENT_TYPE_WORKFLOW_TASK_COMPLETED, resp.History.Events[0].EventType)
+	assert.Equal(t, int64(29), resp.History.Events[1].EventId)
+	assert.Equal(t, []byte("older"), resp.NextPageToken)
 }
