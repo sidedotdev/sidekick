@@ -381,9 +381,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		modelConfig = iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	}
 	maxLength := min(defaultRequestedKeepLength+state.contextSizeExtension, extendedRequestedKeepLength)
-	if err := ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig); err != nil {
-		return nil, err
-	}
+	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig)
 
 	hasExistingPlan := len(state.devPlan.Steps) > 0
 	var recordedPlan *DevPlan

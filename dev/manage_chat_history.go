@@ -10,7 +10,9 @@ import (
 	"sidekick/persisted_ai"
 	"slices"
 	"strings"
+	"time"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -71,7 +73,17 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, requestedKeepLength int, modelConfig common.ModelConfig) error {
+func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, requestedKeepLength int, modelConfig common.ModelConfig) {
+	ctx = workflow.WithRetryPolicy(ctx, temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2,
+		MaximumInterval:    256 * time.Second,
+		MaximumAttempts:    10,
+	})
+
+	// Exhausted failures intentionally panic rather than terminate the flow,
+	// leaving it available for investigation and repair.
+
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
@@ -95,13 +107,17 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 				ModelConfig:         modelConfig,
 			}).Get(ctx, &manageOutput)
 			if err != nil {
-				return fmt.Errorf("ManageChatHistory ManageV4 activity returned an error: %w", err)
+				wrapErr := fmt.Errorf("ManageChatHistory ManageV4 activity returned an error: %w", err)
+				workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+				panic(wrapErr)
 			}
 			managedChatHistory = manageOutput.ChatHistory
 		} else {
 			err := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, requestedKeepLength).Get(ctx, &managedChatHistory)
 			if err != nil {
-				return fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
+				wrapErr := fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
+				workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+				panic(wrapErr)
 			}
 		}
 
@@ -113,7 +129,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 			panic(wrapErr)
 		}
 		llm2History.SetRefs(managedLlm2History.Refs())
-		return nil
+		return
 	}
 
 	// Convert Messages() to []llm.ChatMessage for activity input
@@ -133,11 +149,12 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 	}
 	err := activityFuture.Get(ctx, &newChatHistory)
 	if err != nil {
-		return fmt.Errorf("ManageChatHistory activity returned an error: %w", err)
+		wrapErr := fmt.Errorf("ManageChatHistory activity returned an error: %w", err)
+		workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+		panic(wrapErr)
 	}
 
 	chatHistory.History = persisted_ai.NewLegacyChatHistoryFromChatMessages(newChatHistory)
-	return nil
 }
 
 func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {

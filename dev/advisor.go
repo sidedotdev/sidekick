@@ -251,9 +251,7 @@ func (a *Advisor) MaybeAdvise(
 
 	if manageAdvisorHistory {
 		keepLength := min(defaultRequestedKeepLength+a.requirementsLength, extendedRequestedKeepLength)
-		if err := ManageChatHistory(dCtx, a.ChatHistory, dCtx.WorkspaceId, keepLength, resolveAdvisorModelConfig(dCtx)); err != nil {
-			return err
-		}
+		ManageChatHistory(dCtx, a.ChatHistory, dCtx.WorkspaceId, keepLength, resolveAdvisorModelConfig(dCtx))
 	}
 
 	tools := append([]*llm.Tool{&advisorProceedTool, &advisorGuideTool}, executorTools...)

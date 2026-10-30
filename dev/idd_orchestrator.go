@@ -270,10 +270,7 @@ func runIddOrchestratorTurn(dCtx DevContext, input IddWorkflowInput, state *IddS
 	}
 
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
-	if err := ManageChatHistory(dCtx.ExecContext, chatHistory, dCtx.WorkspaceId, iddOrchestratorMaxChatLength, modelConfig); err != nil {
-		log.Error("Orchestrator: failed to manage chat history", "Error", err)
-		return
-	}
+	ManageChatHistory(dCtx.ExecContext, chatHistory, dCtx.WorkspaceId, iddOrchestratorMaxChatLength, modelConfig)
 
 	tools := []*llm.Tool{&addNudgeTool, &markReadyForReviewTool}
 	if !nudgeOnly {

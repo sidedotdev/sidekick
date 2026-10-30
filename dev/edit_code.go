@@ -202,9 +202,7 @@ editLoop:
 		}
 
 		maxLength := min(defaultRequestedKeepLength+contextSizeExtension, extendedRequestedKeepLength)
-		if err := ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig); err != nil {
-			return err
-		}
+		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig)
 
 		// Step 1: Get a list of *edit blocks* from the LLM
 		editBlocks, err = authorEditBlocksWithModelConfigResolver(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, environmentContext, advisor)
@@ -429,9 +427,7 @@ func authorEditBlocksWithModelConfigResolver(dCtx DevContext, resolveModelConfig
 		// calls immediately, we'll need a way to support this "burst"
 		// functionality (or maybe the ManageChatHistoryV2 function will
 		// natively always support burst due to the markers, hmmm...)
-		if err := ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig); err != nil {
-			return nil, err
-		}
+		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig)
 
 		if !applyImmediately && len(extractedEditBlocks) > 0 {
 			content := fmt.Sprintf("Note: %d edit block(s) are pending application.", len(extractedEditBlocks))

@@ -3,7 +3,6 @@ package dev
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"sidekick/common"
 	"sidekick/fflag"
@@ -17,8 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -716,9 +713,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) SetupTest() {
 	s.env.SetWorkerOptions(utils.TestWorkerOptions())
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
 		ctx = utils.NoRetryCtx(ctx)
-		if err := ManageChatHistory(ctx, chatHistory, "test-workspace-id", maxLength, common.ModelConfig{}); err != nil {
-			return nil, err
-		}
+		ManageChatHistory(ctx, chatHistory, "test-workspace-id", maxLength, common.ModelConfig{})
 		return chatHistory, nil
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
@@ -1002,9 +997,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V4_VerifiesR
 // verifyHydrationWorkflow is a named workflow that verifies hydration status after ManageChatHistory
 func verifyHydrationWorkflow(ctx workflow.Context, ch *persisted_ai.ChatHistoryContainer, ml int) (*hydrationVerifyResult, error) {
 	ctx = utils.NoRetryCtx(ctx)
-	if err := ManageChatHistory(ctx, ch, "test-workspace-id", ml, common.ModelConfig{}); err != nil {
-		return nil, err
-	}
+	ManageChatHistory(ctx, ch, "test-workspace-id", ml, common.ModelConfig{})
 
 	result := &hydrationVerifyResult{
 		IsHydrated: ch.IsHydrated(),
@@ -2517,25 +2510,4 @@ func TestManageChatHistoryV2_IntentTaskStartRetainsAllToolResults(t *testing.T) 
 	assert.Contains(t, cleared, taskStartMsg, "IntentTaskStart tool-call must be retained")
 	assert.Contains(t, cleared, startResult, "start_intent_subtask tool-result must be retained")
 	assert.Contains(t, cleared, nudgeResult, "add_nudge tool-result emitted in the same turn must also be retained")
-}
-
-func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_TimeoutReturnsError() {
-	history := &persisted_ai.ChatHistoryContainer{
-		History: persisted_ai.NewLlm2ChatHistory("test-flow", "test-workspace-id"),
-	}
-	var ca *persisted_ai.ChatHistoryActivities
-	s.env.OnActivity(ca.ManageV4, mock.Anything, mock.Anything).
-		Return((*persisted_ai.ManageOutput)(nil), temporal.NewTimeoutError(enumspb.TIMEOUT_TYPE_START_TO_CLOSE, nil)).
-		Once()
-
-	s.env.ExecuteWorkflow(s.wrapperWorkflow, history, 100)
-
-	s.True(s.env.IsWorkflowCompleted())
-	err := s.env.GetWorkflowError()
-	s.Require().Error(err)
-	var panicErr *temporal.PanicError
-	s.False(errors.As(err, &panicErr), "activity timeouts must not panic the workflow")
-	var timeoutErr *temporal.TimeoutError
-	s.Require().True(errors.As(err, &timeoutErr), "the activity timeout must remain available to callers")
-	s.Equal(enumspb.TIMEOUT_TYPE_START_TO_CLOSE, timeoutErr.TimeoutType())
 }
