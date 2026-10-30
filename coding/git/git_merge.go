@@ -76,6 +76,12 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 	if params.SourceBranch == "" || params.TargetBranch == "" {
 		return result, fmt.Errorf("both source and target branches are required for merge")
 	}
+	targetBranch, targetStartRef, err := resolveMergeTargetBranch(ctx, c.repository.envContainer, params.TargetBranch)
+	if err != nil {
+		return result, err
+	}
+	params.TargetBranch = targetBranch
+
 	transport, err := newMergeTransport(ctx, c.repository)
 	if err != nil {
 		return result, err
@@ -314,12 +320,17 @@ func (c *mergeCoordinator) Merge(ctx context.Context, params GitMergeParams) (re
 		resultErr = refreshErr
 		return
 	}
+	if targetStartRef != "" {
+		if err := ensureMergeTargetBranch(ctx, envContainer, params.TargetBranch, targetStartRef); err != nil {
+			return result, err
+		}
+	}
 
-	// Checkout the target branch before merging
+	// A merge target must remain a writable branch, never a detached HEAD.
 	checkoutOutput, checkoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
-		Args:         []string{"checkout", shellQuote(params.TargetBranch)},
+		Args:         []string{"switch", "--", shellQuote(params.TargetBranch)},
 	})
 	if checkoutErr != nil {
 		resultErr = fmt.Errorf("failed to run command to checkout target branch %s: %v", params.TargetBranch, checkoutErr)
