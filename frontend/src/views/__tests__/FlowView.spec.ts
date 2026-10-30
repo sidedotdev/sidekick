@@ -611,19 +611,20 @@ describe('FlowView paginated history integration', () => {
       } as Response)
       const events = MockWebSocket.instances.find(ws => ws.url.endsWith('/events'))!
       events.receive({ eventType: 'status_change', parentId: flowId, targetId: 'sf_new', status: 'started' })
-      await new Promise(resolve => setTimeout(resolve, 150))
+      await vi.waitFor(() => {
+        expect(fetch).toHaveBeenCalledWith('/api/v1/workspaces/route-workspace/subflows/sf_new')
+      })
       await flushPromises()
-      expect(vi.mocked(fetch).mock.lastCall?.[0]).toBe('/api/v1/workspaces/route-workspace/subflows/sf_new')
       const findTree = () => wrapper.findAllComponents({ name: 'SubflowContainer' })
         .find(component => component.props('subflowTree').id === 'sf_new')
       expect(findTree()).toBeUndefined()
 
       const socket = MockWebSocket.instances.find(ws => ws.url.includes('action_changes_ws'))!
       socket.receive({ ...action('first-step-action', 1000), subflowId: 'sf_new' })
-      await new Promise(resolve => setTimeout(resolve, 150))
-      await flushPromises()
-      expect(findTree()?.props('subflowTree')).toMatchObject({
-        name: 'New step', children: [{ id: 'first-step-action' }],
+      await vi.waitFor(() => {
+        expect(findTree()?.props('subflowTree')).toMatchObject({
+          name: 'New step', children: [{ id: 'first-step-action' }],
+        })
       })
     } finally {
       wrapper.unmount()
