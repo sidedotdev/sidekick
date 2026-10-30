@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -47,45 +48,71 @@ func TestGoNextCancelsActiveStream(t *testing.T) {
 
 func TestRunCommandUserCancellation(t *testing.T) {
 	t.Parallel()
+	type commandResult struct {
+		Canceled bool          `json:"canceled"`
+		Duration time.Duration `json:"duration"`
+	}
 	for _, signal := range []string{SignalNamePause, SignalNameUserAction} {
-		t.Run(signal, func(t *testing.T) {
-			t.Parallel()
-			var suite testsuite.WorkflowTestSuite
-			testEnv := suite.NewTestWorkflowEnvironment()
-			testEnv.SetWorkerOptions(utils.TestWorkerOptions())
-			devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: t.TempDir()})
-			require.NoError(t, err)
-			container := env.EnvContainer{Env: devEnv}
+		for _, tc := range []struct {
+			name         string
+			version      workflow.Version
+			wantCanceled bool
+		}{
+			{name: "legacy", version: workflow.DefaultVersion},
+			{name: "current", version: 1, wantCanceled: true},
+		} {
+			t.Run(signal+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				var suite testsuite.WorkflowTestSuite
+				testEnv := suite.NewTestWorkflowEnvironment()
+				testEnv.SetWorkerOptions(utils.TestWorkerOptions())
+				testEnv.OnGetVersion("run-command-expected-env-cancellation", workflow.DefaultVersion, 1).
+					Return(tc.version)
+				devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: t.TempDir()})
+				require.NoError(t, err)
+				container := env.EnvContainer{Env: devEnv}
 
-			testEnv.OnActivity(CheckCommandPermissionActivity, mock.Anything, mock.Anything).
-				Return(CheckCommandPermissionOutput{Result: common.PermissionAutoApprove}, nil)
-			testEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
-				After(time.Hour).Return(env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil)
+				testEnv.OnActivity(CheckCommandPermissionActivity, mock.Anything, mock.Anything).
+					Return(CheckCommandPermissionOutput{Result: common.PermissionAutoApprove}, nil)
+				testEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+					After(time.Hour).Return(env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil)
 
-			testEnv.RegisterDelayedCallback(func() {
-				if signal == SignalNamePause {
-					testEnv.SignalWorkflow(signal, Pause{})
+				testEnv.RegisterDelayedCallback(func() {
+					if signal == SignalNamePause {
+						testEnv.SignalWorkflow(signal, Pause{})
+					} else {
+						testEnv.SignalWorkflow(signal, string(flow_action.UserActionGoNext))
+					}
+				}, time.Second)
+
+				testEnv.ExecuteWorkflow(func(ctx workflow.Context) (commandResult, error) {
+					dCtx := DevContext{ExecContext: flow_action.ExecContext{
+						Context: utils.NoRetryCtx(ctx), GlobalState: &flow_action.GlobalState{},
+						EnvContainer: &container,
+					}}
+					SetupPauseHandler(dCtx, "", nil)
+					SetupUserActionHandler(dCtx)
+					start := workflow.Now(ctx)
+					_, err := RunCommand(dCtx, RunCommandParams{Command: "sleep 3600"})
+					if err != nil && !temporal.IsCanceledError(err) {
+						return commandResult{}, err
+					}
+					return commandResult{
+						Canceled: temporal.IsCanceledError(err),
+						Duration: workflow.Now(ctx).Sub(start),
+					}, nil
+				})
+				require.NoError(t, testEnv.GetWorkflowError())
+				var result commandResult
+				require.NoError(t, testEnv.GetWorkflowResult(&result))
+				require.Equal(t, tc.wantCanceled, result.Canceled)
+				if tc.wantCanceled {
+					require.Less(t, result.Duration, time.Minute)
 				} else {
-					testEnv.SignalWorkflow(signal, string(flow_action.UserActionGoNext))
+					require.GreaterOrEqual(t, result.Duration, time.Hour)
 				}
-			}, time.Second)
-
-			testEnv.ExecuteWorkflow(func(ctx workflow.Context) (bool, error) {
-				dCtx := DevContext{ExecContext: flow_action.ExecContext{
-					Context: utils.NoRetryCtx(ctx), GlobalState: &flow_action.GlobalState{},
-					EnvContainer: &container,
-				}}
-				SetupPauseHandler(dCtx, "", nil)
-				SetupUserActionHandler(dCtx)
-				start := workflow.Now(ctx)
-				_, err := RunCommand(dCtx, RunCommandParams{Command: "sleep 3600"})
-				return err != nil && workflow.Now(ctx).Sub(start) < time.Minute, nil
 			})
-			require.NoError(t, testEnv.GetWorkflowError())
-			var interrupted bool
-			require.NoError(t, testEnv.GetWorkflowResult(&interrupted))
-			require.True(t, interrupted)
-		})
+		}
 	}
 }
 
