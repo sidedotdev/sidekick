@@ -190,6 +190,10 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		return denyMessage, nil
 	}
 
+	if goNextStagesEnabled(dCtx) && dCtx.GlobalState != nil {
+		dCtx = dCtx.WithCancelOnPause()
+	}
+
 	// Prepare working directory
 	relWorkDir := "."
 	if params.WorkingDir != "" {

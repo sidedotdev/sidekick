@@ -61,7 +61,11 @@ func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult
 	actionCtx := dCtx.NewActionContext("run_tests")
 	actionCtx.ActionParams = actionParams
 	testResults, err := Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) ([]TestResult, error) {
-		return runTestsWithRetry(trackedCtx.DevContext, trackedCtx, commandsToRun, resultsCh)
+		testCtx := trackedCtx.DevContext
+		if goNextStagesEnabled(testCtx) {
+			testCtx = testCtx.WithCancelOnPause()
+		}
+		return runTestsWithRetry(testCtx, trackedCtx, commandsToRun, resultsCh)
 	})
 
 	if err != nil {

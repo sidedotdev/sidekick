@@ -326,6 +326,10 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		gatherPromptInfo,
 		PrepareInitialCodeContext,
 	)
+	skipCoding := consumeGoNext(dCtx)
+	if skipCoding {
+		err = nil
+	}
 	if err != nil {
 		return result, err
 	}
@@ -492,8 +496,14 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 
 		// Step 2: execute step
-		err = performStep(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExecution, advisor)
+		if !skipCoding {
+			err = performStep(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExecution, advisor)
+		}
+		skipCoding = false
 		promptInfo = SkipInfo{} // never reuse the prompt info from the previous attempt
+		if consumeGoNext(dCtx) {
+			err = nil
+		}
 		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			log.Warn().Err(err).Msg("Error executing step")
 			// TODO: on repeated overloaded_error from anthropic, we want to
@@ -510,7 +520,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 		// Step 3: evaluate completion of step
 		executeNormalStepEvaluation := true
-		if v := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 {
+		if v := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 && !goNextStagesEnabled(dCtx) {
 			action := dCtx.ExecContext.GlobalState.GetPendingUserAction()
 			if action != nil && *action == flow_action.UserActionGoNext {
 				dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
@@ -559,7 +569,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 	// Step 4: auto-format code and commit all changes to git, only if the type
 	// was edit
-	if step.Type == "edit" {
+	if step.Type == "edit" && !goNextStagesEnabled(dCtx) {
 		err = AutoFormatCode(dCtx)
 		if err != nil {
 			return result, fmt.Errorf("failed to auto-format code: %w", err)
@@ -598,6 +608,11 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 	case "edit":
 		// Pass a git diff of the repo + test results to the llm and ask if it looks good
 		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
+		skipTests := consumeGoNext(dCtx)
+		if skipTests {
+			testResult = TestResult{TestsSkipped: true}
+			err = nil
+		}
 		if err != nil {
 			return result, fmt.Errorf("failed to run tests: %w", err)
 		}
@@ -607,8 +622,12 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 		}
 
 		if v := workflow.GetVersion(dCtx, "step-integration-tests", workflow.DefaultVersion, 1); v >= 1 {
-			if step.RunIntegrationTests && testResult.TestsPassed && len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
+			if !skipTests && step.RunIntegrationTests && testResult.TestsPassed && len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
 				integrationTestResult, intErr := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
+				if consumeGoNext(dCtx) {
+					integrationTestResult = TestResult{TestsSkipped: true}
+					intErr = nil
+				}
 				if intErr != nil {
 					return result, fmt.Errorf("failed to run integration tests: %w", intErr)
 				}
@@ -620,6 +639,11 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 				if !integrationTestResult.TestsSkipped {
 					autoChecks += "\n\n" + integrationTestResult.Output
 				}
+			}
+		}
+		if goNextStagesEnabled(dCtx) {
+			if err := formatAndCommitCodingChanges(dCtx, chatHistory, fmt.Sprintf("%s\n\n%s", step.Title, step.Definition)); err != nil {
+				return result, err
 			}
 		}
 		fulfillment, err := CheckWorkMeetsCriteria(dCtx, reviewState.checkWorkInfo(dCtx, CheckWorkInfo{

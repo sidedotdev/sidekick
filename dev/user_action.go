@@ -62,6 +62,9 @@ func SetupUserActionHandler(dCtx DevContext) {
 				switch action {
 				case string(flow_action.UserActionGoNext):
 					dCtx.ExecContext.GlobalState.SetUserAction(flow_action.UserActionGoNext)
+					if goNextStagesEnabled(dCtx) {
+						dCtx.GlobalState.Cancel()
+					}
 
 				case string(UserActionDevRunStart):
 					// Spawn a new coroutine to avoid blocking inside the selector callback
@@ -198,4 +201,20 @@ func handleDevRunStop(dCtx DevContext) {
 		// Clear this instance from GlobalState
 		ClearDevRunInstance(dCtx.ExecContext.GlobalState, commandId)
 	}
+}
+
+func goNextStagesEnabled(dCtx DevContext) bool {
+	return workflow.GetVersion(dCtx, "go-next-stages", workflow.DefaultVersion, 1) >= 1
+}
+
+func consumeGoNext(dCtx DevContext) bool {
+	if !goNextStagesEnabled(dCtx) || dCtx.GlobalState == nil {
+		return false
+	}
+	action := dCtx.GlobalState.GetPendingUserAction()
+	if action == nil || *action != flow_action.UserActionGoNext {
+		return false
+	}
+	dCtx.GlobalState.ConsumePendingUserAction()
+	return true
 }
