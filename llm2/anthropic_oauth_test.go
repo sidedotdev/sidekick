@@ -91,7 +91,7 @@ func TestGetAnthropicOAuthCredentials_RefreshPreservesProfile(t *testing.T) {
 			t.Cleanup(func() { http.DefaultTransport = originalTransport })
 
 			before := time.Now().Unix()
-			creds, found, err := GetAnthropicOAuthCredentials(secret_manager.KeyringSecretManager{ProfileId: "work"})
+			creds, found, err := llm.GetAnthropicOAuthCredentials(secret_manager.KeyringSecretManager{ProfileId: "work"})
 			assert.Equal(t, 1, requestCount)
 			stored, storageErr := keyring.Get("sidekick", "WORK-"+llm.AnthropicOAuthSecretName)
 			require.NoError(t, storageErr)

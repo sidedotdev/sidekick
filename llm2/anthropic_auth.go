@@ -21,7 +21,7 @@ func anthropicCredentialsForRequest(secretManager secret_manager.SecretManager, 
 		}
 		return nil, token, false, nil
 	case common.ProviderAuthTypeSubscription:
-		oauthCreds, useOAuth, err := GetAnthropicOAuthCredentials(secretManager)
+		oauthCreds, useOAuth, err := llm.GetAnthropicOAuthCredentials(secretManager)
 		if err != nil {
 			return nil, "", false, anthropicOAuthLookupError(err, provider, normalizedAuthType)
 		}
@@ -32,7 +32,7 @@ func anthropicCredentialsForRequest(secretManager secret_manager.SecretManager, 
 		}
 		return oauthCreds, "", true, nil
 	case common.ProviderAuthTypeAny:
-		oauthCreds, useOAuth, err := GetAnthropicOAuthCredentials(secretManager)
+		oauthCreds, useOAuth, err := llm.GetAnthropicOAuthCredentials(secretManager)
 		if err != nil {
 			return nil, "", false, anthropicOAuthLookupError(err, provider, normalizedAuthType)
 		}

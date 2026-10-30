@@ -6,7 +6,6 @@ import (
 	"sidekick/common"
 	"sidekick/flow_action"
 	"sidekick/llm"
-	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
 	"sidekick/utils"
@@ -54,7 +53,7 @@ func ResolveToolNameMappingActivity(_ context.Context, input ResolveToolNameMapp
 	if common.NormalizeProviderAuthType(string(input.AuthType)) == common.ProviderAuthTypeAPI {
 		return ResolveToolNameMappingResult{}, nil
 	}
-	_, useOAuth, err := llm2.GetAnthropicOAuthCredentials(input.Secrets.SecretManager)
+	_, useOAuth, err := llm.GetAnthropicOAuthCredentials(input.Secrets.SecretManager)
 	if err != nil {
 		// Wrapping would hide the non-retryable type and details from Temporal.
 		if _, ok := common.AsProviderAuthError(err); ok {
