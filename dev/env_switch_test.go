@@ -926,13 +926,21 @@ func mockSwitchTransfer(wfEnv *testsuite.TestWorkflowEnvironment, recorder *envS
 		recorder.record("exported")
 		return env.ExportForSwitchOutput{Bundle: switchTestBundle}, nil
 	}).Once()
-	wfEnv.OnActivity(env.RestoreFromSwitchActivity, mock.Anything, env.RestoreFromSwitchInput{
+	restoreInput := env.RestoreFromSwitchInput{
 		EnvContainer: target,
 		Bundle:       switchTestBundle,
-	}).Return(func(context.Context, env.RestoreFromSwitchInput) (env.RestoreFromSwitchOutput, error) {
-		recorder.record("restored")
-		return env.RestoreFromSwitchOutput{}, verifyErr
-	}).Once()
+	}
+	if target.Env.GetType() == env.EnvTypeModal || target.Env.GetType() == env.EnvTypeOpenShell {
+		switch source.Env.GetType() {
+		case env.EnvTypeLocal, env.EnvTypeLocalGitWorktree, env.EnvTypeDevPod:
+			restoreInput.SourceEnvContainer = &source
+		}
+	}
+	wfEnv.OnActivity(env.RestoreFromSwitchActivity, mock.Anything, restoreInput).
+		Return(func(context.Context, env.RestoreFromSwitchInput) (env.RestoreFromSwitchOutput, error) {
+			recorder.record("restored")
+			return env.RestoreFromSwitchOutput{}, verifyErr
+		}).Once()
 }
 
 func mockSwitchDevPodProvisioning(wfEnv *testsuite.TestWorkflowEnvironment) env.EnvContainer {

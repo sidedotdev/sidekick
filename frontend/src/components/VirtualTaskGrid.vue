@@ -32,6 +32,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import TaskCard from './TaskCard.vue'
 import type { FullTask } from '../lib/models'
+import { useVirtualTaskLayout } from '../lib/useVirtualTaskLayout'
 
 const props = withDefaults(defineProps<{
   tasks: FullTask[]
@@ -49,8 +50,10 @@ const props = withDefaults(defineProps<{
 defineOptions({ inheritAttrs: false })
 
 const containerRef = ref<HTMLElement | null>(null)
-const scrollElement = ref<HTMLElement | null>(null)
-const scrollMargin = ref(0)
+const { scrollElement, scrollMargin, overscan } = useVirtualTaskLayout(
+  containerRef,
+  () => props.estimateRowHeight,
+)
 const containerWidth = ref(0)
 
 const columns = computed(() => {
@@ -69,32 +72,13 @@ const rows = computed(() => {
   return result
 })
 
-function findScrollParent(el: HTMLElement | null): HTMLElement | null {
-  while (el) {
-    const style = getComputedStyle(el)
-    if (/(auto|scroll)/.test(style.overflow + style.overflowY)) {
-      return el
-    }
-    el = el.parentElement
-  }
-  return null
-}
-
-function updateScrollMargin() {
-  if (containerRef.value && scrollElement.value) {
-    scrollMargin.value = containerRef.value.getBoundingClientRect().top
-      - scrollElement.value.getBoundingClientRect().top
-      + scrollElement.value.scrollTop
-  }
-}
-
 const virtualizer = useVirtualizer({
   get count() { return rows.value.length },
   getScrollElement: () => scrollElement.value,
   estimateSize: () => props.estimateRowHeight,
   get scrollMargin() { return scrollMargin.value },
   get gap() { return props.rowGap },
-  overscan: 3,
+  get overscan() { return overscan.value },
 })
 
 watch([() => rows.value.length, columns], () => {
@@ -116,14 +100,9 @@ function updateContainerWidth() {
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
-  scrollElement.value = findScrollParent(containerRef.value)
-  updateScrollMargin()
   updateContainerWidth()
 
-  resizeObserver = new ResizeObserver(() => {
-    updateScrollMargin()
-    updateContainerWidth()
-  })
+  resizeObserver = new ResizeObserver(updateContainerWidth)
   if (containerRef.value) {
     resizeObserver.observe(containerRef.value)
   }

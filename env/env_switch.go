@@ -311,7 +311,7 @@ func restoreFromSwitch(ctx context.Context, e Env, bundle SwitchBundle) error {
 		return fmt.Errorf("switch bundle has no head commit")
 	}
 	switch e.GetType() {
-	case EnvTypeLocal, EnvTypeLocalGitWorktree:
+	case EnvTypeLocal, EnvTypeLocalGitWorktree, EnvTypeDevPod:
 		if err := backupLocalSwitchWIP(ctx, e, bundle); err != nil {
 			return fmt.Errorf("failed to back up local work before environment switch: %w", err)
 		}
@@ -403,8 +403,9 @@ func ExportForSwitchActivity(ctx context.Context, input ExportForSwitchInput) (E
 }
 
 type RestoreFromSwitchInput struct {
-	EnvContainer EnvContainer `json:"envContainer"`
-	Bundle       SwitchBundle `json:"bundle"`
+	EnvContainer       EnvContainer  `json:"envContainer"`
+	Bundle             SwitchBundle  `json:"bundle"`
+	SourceEnvContainer *EnvContainer `json:"sourceEnvContainer,omitempty"`
 }
 
 type RestoreFromSwitchOutput struct{}
@@ -426,6 +427,22 @@ func RestoreFromSwitchActivity(ctx context.Context, input RestoreFromSwitchInput
 	if head != input.Bundle.HeadCommit {
 		return RestoreFromSwitchOutput{}, fmt.Errorf("switched env HEAD is %s, expected %s", head, input.Bundle.HeadCommit)
 	}
+
+	source := input.SourceEnvContainer
+	if source != nil && source.Env != nil &&
+		(switchable.GetType() == EnvTypeModal || switchable.GetType() == EnvTypeOpenShell) {
+		// Local and DevPod environments share a host checkout, which must
+		// remain intact until an independent destination has been restored.
+		switch source.Env.GetType() {
+		case EnvTypeLocal, EnvTypeLocalGitWorktree, EnvTypeDevPod:
+			if err := backupLocalSwitchWIP(ctx, source.Env, input.Bundle); err != nil {
+				// Stashing may already have cleaned the source. Do not roll
+				// back to it when the destination holds the restored work.
+				log.Warn().Err(err).Str("sourceEnvType", string(source.Env.GetType())).
+					Msg("environment restored, but source WIP cleanup failed")
+			}
+		}
+	}
 	return RestoreFromSwitchOutput{}, nil
 }
 
@@ -435,7 +452,7 @@ func backupLocalSwitchWIP(ctx context.Context, e Env, bundle SwitchBundle) error
 		return err
 	}
 
-	message := fmt.Sprintf("sidekick: local backup before environment switch to %s at %s", bundle.Branch, bundle.HeadCommit)
+	message := fmt.Sprintf("sidekick: WIP saved during environment switch for %s at %s", bundle.Branch, bundle.HeadCommit)
 	if _, err := gitOutputForSwitch(ctx, e, "stash", "push", "--include-untracked", "--message", message); err != nil {
 		return err
 	}
@@ -452,7 +469,25 @@ func backupLocalSwitchWIP(ctx context.Context, e Env, bundle SwitchBundle) error
 	if err != nil {
 		return err
 	}
-	log.Info().Str("workDir", e.GetWorkingDirectory()).Str("stashCommit", stash).
-		Str("stashMessage", message).Msg("saved local work before environment switch; recover with git stash apply --index <stashCommit>")
+	ref := "refs/side/env-switch-wip/" + stash
+	if _, err := gitOutputForSwitch(ctx, e, "update-ref", ref, stash); err != nil {
+		return err
+	}
+	log.Info().Str("workDir", e.GetWorkingDirectory()).Str("recoveryRef", ref).
+		Str("recoveryCommand", "git stash apply --index "+ref).
+		Msg("saved WIP during environment switch")
+
+	// Preserve the recovery ref before removing our entry from the user's list.
+	entries, err := gitOutputForSwitch(ctx, e, "stash", "list", "--format=%gd %H")
+	if err != nil {
+		return err
+	}
+	for _, entry := range strings.Split(entries, "\n") {
+		fields := strings.Fields(entry)
+		if len(fields) == 2 && fields[1] == stash {
+			_, err := gitOutputForSwitch(ctx, e, "stash", "drop", fields[0])
+			return err
+		}
+	}
 	return nil
 }

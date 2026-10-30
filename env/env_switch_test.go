@@ -232,14 +232,17 @@ func TestRestoreFromSwitchBacksUpLocalWIP(t *testing.T) {
 				assert.Empty(t, runGitIn(t, targetDir, "stash", "list"))
 				return
 			}
-			message := runGitIn(t, repoDir, "log", "-1", "--format=%s", "refs/stash")
-			assert.Contains(t, message, "sidekick: local backup before environment switch")
+			assert.Empty(t, runGitIn(t, targetDir, "stash", "list"))
+			refs := strings.Fields(runGitIn(t, repoDir, "for-each-ref", "--format=%(refname)", "refs/side/env-switch-wip/"))
+			require.Len(t, refs, 1)
+			message := runGitIn(t, repoDir, "log", "-1", "--format=%s", refs[0])
+			assert.Contains(t, message, "sidekick: WIP saved during environment switch")
 			assert.Contains(t, message, branch)
 			assert.Contains(t, message, bundle.HeadCommit)
 
 			recoveryDir := filepath.Join(t.TempDir(), "recover")
 			runGitIn(t, repoDir, "worktree", "add", "--detach", recoveryDir, before.Head)
-			runGitIn(t, recoveryDir, "stash", "apply", "--index", "refs/stash")
+			runGitIn(t, recoveryDir, "stash", "apply", "--index", refs[0])
 			recovered := captureWorktreeState(t, recoveryDir, files)
 			recovered.Branch = before.Branch
 			assert.Equal(t, before, recovered)

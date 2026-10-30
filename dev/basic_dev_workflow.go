@@ -1143,6 +1143,7 @@ func shortenCommitMessage(message string) string {
 // worktree. That delivery is what lands a merge whose initial attempt reported
 // conflicts, so when tracked it is recorded as a merge flow action.
 func transferResolvedBaseChanges(dCtx DevContext, params git.GitTransferWorktreeChangesParams, targetBranch string, tracked bool) (git.GitTransferWorktreeChangesResult, error) {
+	params.SourceWorktreePath = dCtx.EnvContainer.Env.GetWorkingDirectory()
 	if !tracked {
 		var transfer git.GitTransferWorktreeChangesResult
 		err := workflow.ExecuteActivity(dCtx, git.GitTransferWorktreeChangesActivity, *dCtx.EnvContainer, params).Get(dCtx, &transfer)
@@ -1155,6 +1156,7 @@ func transferResolvedBaseChanges(dCtx DevContext, params git.GitTransferWorktree
 	}
 	return Track(actionCtx, func(trackedCtx DevActionContext, _ *domain.FlowAction) (git.GitTransferWorktreeChangesResult, error) {
 		var transfer git.GitTransferWorktreeChangesResult
+		params.SourceWorktreePath = conflictResolutionWorktreePath(trackedCtx.DevContext, params.SourceWorktreePath)
 		err := workflow.ExecuteActivity(trackedCtx, git.GitTransferWorktreeChangesActivity, *trackedCtx.EnvContainer, params).Get(trackedCtx, &transfer)
 		return transfer, err
 	})
@@ -1328,7 +1330,6 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				}
 
 				if err := resolveMergeConflictsSubflow(dCtx, ResolveMergeConflictsParams{
-					WorktreePath:       resolutionWorktree,
 					SourceBranchName:   mergeInfo.TargetBranch,
 					Requirements:       params.Requirements,
 					PreviousReview:     params.PreviousReview,
@@ -1410,7 +1411,6 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 							// been relocated back onto our worktree against the
 							// base's current state; resolve again and retry.
 							if err := resolveMergeConflictsSubflow(dCtx, ResolveMergeConflictsParams{
-								WorktreePath:       transfer.ConflictDirPath,
 								SourceBranchName:   mergeInfo.TargetBranch,
 								Requirements:       params.Requirements,
 								PreviousReview:     params.PreviousReview,

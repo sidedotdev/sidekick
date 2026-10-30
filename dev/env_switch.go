@@ -278,10 +278,17 @@ func transferEnv(ctx workflow.Context, dCtx *DevContext, state flowEnvState, des
 	}
 	state.recordSwitchTarget(target)
 
-	err = workflow.ExecuteActivity(ctx, env.RestoreFromSwitchActivity, env.RestoreFromSwitchInput{
+	restoreInput := env.RestoreFromSwitchInput{
 		EnvContainer: target.EnvContainer,
 		Bundle:       bundle,
-	}).Get(ctx, nil)
+	}
+	if desired.EnvType == string(env.EnvTypeModal) || desired.EnvType == string(env.EnvTypeOpenShell) {
+		switch source.Env.GetType() {
+		case env.EnvTypeLocal, env.EnvTypeLocalGitWorktree, env.EnvTypeDevPod:
+			restoreInput.SourceEnvContainer = &source
+		}
+	}
+	err = workflow.ExecuteActivity(ctx, env.RestoreFromSwitchActivity, restoreInput).Get(ctx, nil)
 	if err != nil {
 		return envSwitchResult{}, fmt.Errorf("failed to restore flow state into %s env: %w", desired.EnvType, err)
 	}
