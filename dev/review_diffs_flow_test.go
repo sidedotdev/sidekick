@@ -69,6 +69,7 @@ type reviewDiffsFlowHarness struct {
 
 	// commitSubflowRuns counts the commit subflow rounds that committed work.
 	commitSubflowRuns int
+	skipCommitWrites  bool
 
 	// enabledFlags are the feature flags that evaluate as enabled; all others
 	// are disabled.
@@ -275,7 +276,9 @@ func (h *reviewDiffsFlowHarness) streamResponse(input persisted_ai.StreamInput) 
 
 	switch {
 	case offersCommitDone(input.Options.Tools):
-		h.commitPendingWork()
+		if !h.skipCommitWrites {
+			h.commitPendingWork()
+		}
 		return toolUse(commitDoneTool.Name, `{"summary":"committed the work"}`)
 	case forced == commitMessageTool.Name:
 		return toolUse(commitMessageTool.Name, `{"subject":"feat: review round work"}`)

@@ -535,6 +535,10 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		PrepareInitialCodeContext,
 		weightedRankQueries...,
 	)
+	skipCoding := consumeGoNext(dCtx)
+	if skipCoding {
+		err = nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -637,13 +641,24 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		}
 
 		// Step 2: edit code
-		err = EditCodeWithModelConfigResolver(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		if !skipCoding {
+			err = EditCodeWithModelConfigResolver(dCtx, resolveModelConfig, contextSizeExtension, chatHistory, promptInfo, advisor)
+		}
+		skipCoding = false
+		if consumeGoNext(dCtx) {
+			err = nil
+		}
 		if err != nil {
 			return "", fmt.Errorf("failed to write edit blocks: %w", err)
 		}
 
 		// Step 3: run tests
 		testResult, err = RunTests(dCtx, dCtx.RepoConfig.TestCommands)
+		skipTests := consumeGoNext(dCtx)
+		if skipTests {
+			testResult = TestResult{TestsSkipped: true}
+			err = nil
+		}
 		if err != nil {
 			if handleCodingTestError(dCtx, err, false) {
 				promptInfo = SkipInfo{}
@@ -663,8 +678,12 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		}
 
 		// Run integration tests if regular tests passed and integration tests are configured
-		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
+		if !skipTests && len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
 			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
+			if consumeGoNext(dCtx) {
+				integrationTestResult = TestResult{TestsSkipped: true}
+				err = nil
+			}
 			if err != nil {
 				if handleCodingTestError(dCtx, err, true) {
 					promptInfo = SkipInfo{}
@@ -679,6 +698,12 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 			}
 			if !integrationTestResult.TestsSkipped {
 				testOutput += "\n\n" + integrationTestResult.Output
+			}
+		}
+
+		if goNextStagesEnabled(dCtx) {
+			if err := formatAndCommitCodingChanges(dCtx, chatHistory, ""); err != nil {
+				return "", err
 			}
 		}
 
@@ -759,17 +784,19 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 		}
 	}
 
-	// Step 5: auto-format code
-	err = AutoFormatCode(dCtx)
-	if err != nil {
-		return "", err
-	}
+	if !goNextStagesEnabled(dCtx) {
+		// Step 5: auto-format code
+		err = AutoFormatCode(dCtx)
+		if err != nil {
+			return "", err
+		}
 
-	// Step 6: commit the work while its coding context is still fresh. Files
-	// are not staged beforehand so the model can group them into commits.
-	if llmCommitMessagesEnabled(dCtx) {
-		if err := commitPendingWork(dCtx, chatHistory); err != nil {
-			return "", fmt.Errorf("failed to commit coding changes: %w", err)
+		// Step 6: commit the work while its coding context is still fresh. Files
+		// are not staged beforehand so the model can group them into commits.
+		if llmCommitMessagesEnabled(dCtx) {
+			if err := commitPendingWork(dCtx, chatHistory); err != nil {
+				return "", fmt.Errorf("failed to commit coding changes: %w", err)
+			}
 		}
 	}
 

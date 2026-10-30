@@ -58,8 +58,14 @@ func testCodingSubflowVerifier(t *testing.T, reuse bool) {
 	}
 	settings := DefaultVerifierSettings()
 	settings.ReuseHistory = reuse
-	testEnv.OnActivity(flags.EvaluateFlags, mock.Anything, mock.Anything).Return(
-		verifierFlagValues(settings), nil).Once()
+	testEnv.OnActivity(flags.EvaluateFlags, mock.Anything, mock.MatchedBy(func(input fflag.EvaluateFlagsInput) bool {
+		_, ok := input.BoolFlags[ReviewChatHistoryEnabled]
+		return ok
+	})).Return(verifierFlagValues(settings), nil).Once()
+	testEnv.OnActivity(flags.EvaluateFlags, mock.Anything, mock.MatchedBy(func(input fflag.EvaluateFlagsInput) bool {
+		_, ok := input.BoolFlags[fflag.LlmCommitMessages]
+		return ok
+	})).Return(fflag.EvaluateFlagsOutput{BoolValues: map[string]bool{fflag.LlmCommitMessages: false}}, nil).Once()
 
 	blocks := map[string]llm2.Message{}
 	var historyActivities *persisted_ai.ChatHistoryActivities
@@ -147,8 +153,17 @@ func TestPlannedStepReviewForwardsHistoryAndSession(t *testing.T) {
 	var flags *fflag.FFlagActivities
 	settings := DefaultVerifierSettings()
 	settings.ReuseHistory = true
-	testEnv.OnActivity(flags.EvaluateFlags, mock.Anything, mock.Anything).Return(
-		verifierFlagValues(settings), nil).Once()
+	testEnv.OnActivity(flags.EvaluateFlags, mock.Anything, mock.MatchedBy(func(input fflag.EvaluateFlagsInput) bool {
+		_, ok := input.BoolFlags[ReviewChatHistoryEnabled]
+		return ok
+	})).Return(verifierFlagValues(settings), nil).Once()
+	testEnv.OnActivity(flags.EvaluateFlags, mock.Anything, mock.MatchedBy(func(input fflag.EvaluateFlagsInput) bool {
+		_, ok := input.BoolFlags[fflag.LlmCommitMessages]
+		return ok
+	})).Return(fflag.EvaluateFlagsOutput{BoolValues: map[string]bool{fflag.LlmCommitMessages: false}}, nil).Once()
+	testEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{}, nil)
+	testEnv.OnActivity(git.GitAddActivity, mock.Anything, mock.Anything).Return(nil).Twice()
+	testEnv.OnActivity(git.GitCommitActivity, mock.Anything, mock.Anything, mock.Anything).Return("commit-sha", nil).Twice()
 	testEnv.OnActivity(git.GitDiffActivity, mock.Anything, mock.Anything, mock.Anything).Return("+planned", nil)
 	var historyActivities *persisted_ai.ChatHistoryActivities
 	testEnv.OnActivity(historyActivities.AppendMessage, mock.Anything, mock.Anything).Return(

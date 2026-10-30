@@ -7,6 +7,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
@@ -186,7 +187,15 @@ Rules:
 // commitPendingWork has an LLM commit all uncommitted work with Conventional
 // Commits messages, continuing from a copy of the given chat history so the
 // model knows what the work was about. The given history is never mutated.
-func commitPendingWork(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer) error {
+func commitPendingWork(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer) (err error) {
+	if goNextStagesEnabled(dCtx) {
+		defer func() {
+			if consumeGoNext(dCtx) {
+				err = nil
+			}
+		}()
+		dCtx = dCtx.WithCancelOnPause()
+	}
 	if chatHistory == nil {
 		return fmt.Errorf("commit chat history is required")
 	}
@@ -236,6 +245,9 @@ func commitPendingWorkSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHis
 	limits := commitLimitsFor(dCtx)
 	iterations := 0
 	for {
+		if goNextStagesEnabled(dCtx) && dCtx.GlobalState.GetPendingUserAction() != nil {
+			return flow_action.PendingActionError
+		}
 		if limits.exceeded(iterations) {
 			return fmt.Errorf("changes were still not fully committed after %d commit iterations", iterations)
 		}
@@ -316,4 +328,26 @@ func commitPendingWorkSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHis
 			}
 		}
 	}
+}
+
+func formatAndCommitCodingChanges(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, legacyCommitMessage string) (err error) {
+	defer func() {
+		if consumeGoNext(dCtx) {
+			err = nil
+		}
+	}()
+	commitCtx := dCtx.WithCancelOnPause()
+	if err := AutoFormatCode(commitCtx); err != nil {
+		return err
+	}
+	if llmCommitMessagesEnabled(dCtx) {
+		return commitPendingWork(dCtx, chatHistory)
+	}
+	if legacyCommitMessage != "" {
+		if err := git.GitAddAll(commitCtx.ExecContext); err != nil {
+			return err
+		}
+		return git.GitCommit(commitCtx.ExecContext, legacyCommitMessage)
+	}
+	return nil
 }

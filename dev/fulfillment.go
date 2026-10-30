@@ -76,7 +76,19 @@ func criteriaFulfillmentReviewDiff(dCtx DevContext, promptInfo CheckWorkInfo, ig
 }
 
 // TODO /gen add a test for this function
-func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
+func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (result CriteriaFulfillment, err error) {
+	if goNextStagesEnabled(dCtx) {
+		defer func() {
+			if consumeGoNext(dCtx) {
+				result = CriteriaFulfillment{
+					IsFulfilled:     true,
+					WorkDescription: "The user skipped criteria fulfillment.",
+				}
+				err = nil
+			}
+		}()
+		dCtx = dCtx.WithCancelOnPause()
+	}
 	return checkWorkMeetsCriteria(dCtx, promptInfo, nil)
 }
 
