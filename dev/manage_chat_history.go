@@ -10,7 +10,9 @@ import (
 	"sidekick/persisted_ai"
 	"slices"
 	"strings"
+	"time"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -72,6 +74,16 @@ const (
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
 func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, requestedKeepLength int, modelConfig common.ModelConfig) {
+	ctx = workflow.WithRetryPolicy(ctx, temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2,
+		MaximumInterval:    256 * time.Second,
+		MaximumAttempts:    10,
+	})
+
+	// Exhausted failures intentionally panic rather than terminate the flow,
+	// leaving it available for investigation and repair.
+
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
@@ -136,13 +148,6 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatMessages, requestedKeepLength)
 	}
 	err := activityFuture.Get(ctx, &newChatHistory)
-
-	// NOTE: ManageChatHistory was never supposed to be fallible. But then we
-	// made it an activity for better observability. Even though the activity
-	// never returns an err. We'll panic to make such an unexpected error visible.
-	// TODO: in the future, we'll likely add fallible logic, eg calling an LLM
-	// to summarize. At that point, adjust ManageChatHistory to return the err
-	// instead.
 	if err != nil {
 		wrapErr := fmt.Errorf("ManageChatHistory activity returned an error: %w", err)
 		workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
