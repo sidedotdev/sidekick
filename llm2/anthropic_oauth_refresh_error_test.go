@@ -75,6 +75,40 @@ func TestAnthropicProvider_RefreshErrorClassification(t *testing.T) {
 			readErr: context.Canceled,
 		},
 		{
+			name:         "connection failure",
+			transportErr: errors.New("connection refused"),
+		},
+		{
+			name:    "truncated response",
+			status:  http.StatusOK,
+			readErr: io.ErrUnexpectedEOF,
+		},
+		{
+			name:   "rate limited",
+			status: http.StatusTooManyRequests,
+			body:   `{"error":"rate_limit_error"}`,
+		},
+		{
+			name:   "server error is not credential rejection",
+			status: http.StatusInternalServerError,
+			body:   `{"error":"invalid_grant"}`,
+		},
+		{
+			name:   "invalid request",
+			status: http.StatusBadRequest,
+			body:   `{"error":"invalid_request"}`,
+		},
+		{
+			name:   "unknown bad request",
+			status: http.StatusBadRequest,
+			body:   "Bad Request",
+		},
+		{
+			name:   "malformed response",
+			status: http.StatusOK,
+			body:   "not-json",
+		},
+		{
 			name:     "refresh token rejected",
 			status:   http.StatusBadRequest,
 			body:     `{"error":"invalid_grant"}`,

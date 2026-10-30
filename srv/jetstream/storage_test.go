@@ -120,6 +120,17 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 			_, nc := startStorageTestServer(t, t.TempDir())
 			js, err := jsapi.New(nc)
 			require.NoError(t, err)
+
+			// Keep another persisted stream active: NATS removes empty account
+			// directories asynchronously when a stream is deleted.
+			unrelated, err := js.CreateStream(ctx, jsapi.StreamConfig{
+				Name: "UNRELATED", Storage: jsapi.FileStorage,
+				Subjects: []string{"unrelated"},
+			})
+			require.NoError(t, err)
+			_, err = js.Publish(ctx, "unrelated", []byte("preserve-unrelated"))
+			require.NoError(t, err)
+
 			stream, err := js.CreateStream(ctx, jsapi.StreamConfig{
 				Name: EphemeralStreamName, Storage: jsapi.MemoryStorage,
 				Subjects: []string{"tasks.changes.*", "flow_actions.changes.*.*", "flow_events.*.*"},
@@ -149,6 +160,10 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 			s, err := NewStreamer(nc)
 			require.NoError(t, err)
 			require.Zero(t, requireFileConfig(t, ctx, s).State.Msgs)
+
+			msg, err := unrelated.GetMsg(ctx, 1)
+			require.NoError(t, err)
+			require.Equal(t, []byte("preserve-unrelated"), msg.Data)
 		})
 	}
 }

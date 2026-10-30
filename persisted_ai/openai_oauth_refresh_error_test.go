@@ -74,6 +74,54 @@ func TestOpenAIResponsesProvider_RefreshErrorClassification(t *testing.T) {
 			readErr: context.Canceled,
 		},
 		{
+			name:         "connection failure",
+			transportErr: errors.New("connection refused"),
+		},
+		{
+			name:         "DNS failure",
+			transportErr: &net.DNSError{Err: "no such host", IsNotFound: true},
+		},
+		{
+			name:    "truncated response",
+			status:  http.StatusOK,
+			readErr: io.ErrUnexpectedEOF,
+		},
+		{
+			name:   "rate limited",
+			status: http.StatusTooManyRequests,
+			body:   `{"error":"rate_limit_error"}`,
+		},
+		{
+			name:   "server error",
+			status: http.StatusInternalServerError,
+			body:   `{"error":"invalid_grant"}`,
+		},
+		{
+			name:   "gateway unavailable",
+			status: http.StatusBadGateway,
+			body:   "Bad Gateway",
+		},
+		{
+			name:   "invalid request",
+			status: http.StatusBadRequest,
+			body:   `{"error":"invalid_request"}`,
+		},
+		{
+			name:   "unknown bad request",
+			status: http.StatusBadRequest,
+			body:   "Bad Request",
+		},
+		{
+			name:   "malformed response",
+			status: http.StatusOK,
+			body:   "not-json",
+		},
+		{
+			name:   "incomplete response",
+			status: http.StatusOK,
+			body:   `{}`,
+		},
+		{
 			name:     "refresh token rejected",
 			status:   http.StatusBadRequest,
 			body:     `{"error":"invalid_grant"}`,
