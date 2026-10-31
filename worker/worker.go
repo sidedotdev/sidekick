@@ -185,7 +185,7 @@ func StartWorker(ctx context.Context, hostPort string, taskQueue string) (*Worke
 	w := worker.New(temporalClient, taskQueue, worker.Options{
 		BuildID:                  common.GetWorkerBuildID(),
 		DeadlockDetectionTimeout: 5 * time.Second,
-		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor(), env.NewEnvSwitchGateInterceptor()},
+		Interceptors:             WorkflowInterceptors(),
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
 		},
@@ -338,5 +338,14 @@ func registerLSPActivities(registry worker.ActivityRegistry, activities *lsp.LSP
 		{"SyncDocumentActivity", activities.SyncDocumentActivity},
 	} {
 		registry.RegisterActivityWithOptions(registration.fn, activity.RegisterOptions{Name: registration.name})
+	}
+}
+
+// WorkflowInterceptors must also be installed by replayers because they can
+// affect the ordering of workflow commands.
+func WorkflowInterceptors() []interceptor.WorkerInterceptor {
+	return []interceptor.WorkerInterceptor{
+		common.NewCodecCleanupInterceptor(),
+		env.NewEnvSwitchGateInterceptor(),
 	}
 }

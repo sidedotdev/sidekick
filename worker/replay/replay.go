@@ -420,9 +420,7 @@ func ReplayWorkflowLatest(ctx context.Context, client client.Client, id string, 
 		timed = newTimingDataConverter(dc)
 		replayDc = timed
 	}
-	replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
-		DataConverter: replayDc,
-	})
+	replayer, err := newWorkflowReplayer(replayDc)
 	if err != nil {
 		return err
 	}
@@ -617,4 +615,11 @@ func loadOrFetchHistory(ctx context.Context, client client.Client, id, cachePath
 		}
 	}
 	return hist, nil
+}
+
+func newWorkflowReplayer(dc converter.DataConverter) (worker.WorkflowReplayer, error) {
+	return worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
+		DataConverter: dc,
+		Interceptors:  sidekick_worker.WorkflowInterceptors(),
+	})
 }
