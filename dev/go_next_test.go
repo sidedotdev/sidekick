@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -47,44 +48,70 @@ func TestGoNextCancelsActiveStream(t *testing.T) {
 
 func TestRunCommandUserCancellation(t *testing.T) {
 	t.Parallel()
-	for _, signal := range []string{SignalNamePause, SignalNameUserAction} {
-		t.Run(signal, func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version workflow.Version
+	}{
+		{name: "current", version: 1},
+		{name: "old version", version: workflow.DefaultVersion},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			var suite testsuite.WorkflowTestSuite
-			testEnv := suite.NewTestWorkflowEnvironment()
-			testEnv.SetWorkerOptions(utils.TestWorkerOptions())
-			devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: t.TempDir()})
-			require.NoError(t, err)
-			container := env.EnvContainer{Env: devEnv}
+			for _, signal := range []string{SignalNamePause, SignalNameUserAction} {
+				t.Run(signal, func(t *testing.T) {
+					t.Parallel()
+					var suite testsuite.WorkflowTestSuite
+					testEnv := suite.NewTestWorkflowEnvironment()
+					testEnv.SetWorkerOptions(utils.TestWorkerOptions())
+					testEnv.OnGetVersion("run-command-user-cancellation", workflow.DefaultVersion, 1).Return(tc.version)
+					devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: t.TempDir()})
+					require.NoError(t, err)
+					container := env.EnvContainer{Env: devEnv}
 
-			testEnv.OnActivity(CheckCommandPermissionActivity, mock.Anything, mock.Anything).
-				Return(CheckCommandPermissionOutput{Result: common.PermissionAutoApprove}, nil)
-			testEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
-				After(time.Hour).Return(env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil)
+					testEnv.OnActivity(CheckCommandPermissionActivity, mock.Anything, mock.Anything).
+						Return(CheckCommandPermissionOutput{Result: common.PermissionAutoApprove}, nil)
+					testEnv.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).
+						After(time.Hour).Return(env.EnvRunCommandActivityOutput{ExitStatus: 0}, nil)
 
-			testEnv.RegisterDelayedCallback(func() {
-				if signal == SignalNamePause {
-					testEnv.SignalWorkflow(signal, Pause{})
-				} else {
-					testEnv.SignalWorkflow(signal, string(flow_action.UserActionGoNext))
-				}
-			}, time.Second)
+					testEnv.RegisterDelayedCallback(func() {
+						if signal == SignalNamePause {
+							testEnv.SignalWorkflow(signal, Pause{})
+						} else {
+							testEnv.SignalWorkflow(signal, string(flow_action.UserActionGoNext))
+						}
+					}, time.Second)
 
-			testEnv.ExecuteWorkflow(func(ctx workflow.Context) (bool, error) {
-				dCtx := DevContext{ExecContext: flow_action.ExecContext{
-					Context: utils.NoRetryCtx(ctx), GlobalState: &flow_action.GlobalState{},
-					EnvContainer: &container,
-				}}
-				SetupPauseHandler(dCtx, "", nil)
-				SetupUserActionHandler(dCtx)
-				start := workflow.Now(ctx)
-				_, err := RunCommand(dCtx, RunCommandParams{Command: "sleep 3600"})
-				return err != nil && workflow.Now(ctx).Sub(start) < time.Minute, nil
-			})
-			require.NoError(t, testEnv.GetWorkflowError())
-			var interrupted bool
-			require.NoError(t, testEnv.GetWorkflowResult(&interrupted))
-			require.True(t, interrupted)
+					type commandResult struct {
+						Canceled bool
+						Elapsed  time.Duration
+					}
+					testEnv.ExecuteWorkflow(func(ctx workflow.Context) (commandResult, error) {
+						dCtx := DevContext{ExecContext: flow_action.ExecContext{
+							Context: utils.NoRetryCtx(ctx), GlobalState: &flow_action.GlobalState{},
+							EnvContainer: &container,
+						}}
+						SetupPauseHandler(dCtx, "", nil)
+						SetupUserActionHandler(dCtx)
+						start := workflow.Now(ctx)
+						_, err := RunCommand(dCtx, RunCommandParams{Command: "sleep 3600"})
+						canceled := temporal.IsCanceledError(err)
+						if err != nil && !canceled {
+							return commandResult{}, err
+						}
+						return commandResult{Canceled: canceled, Elapsed: workflow.Now(ctx).Sub(start)}, nil
+					})
+					require.NoError(t, testEnv.GetWorkflowError())
+					var result commandResult
+					require.NoError(t, testEnv.GetWorkflowResult(&result))
+					if tc.version >= 1 {
+						require.True(t, result.Canceled)
+						require.Less(t, result.Elapsed, time.Minute)
+					} else {
+						require.False(t, result.Canceled)
+						require.GreaterOrEqual(t, result.Elapsed, time.Hour)
+					}
+				})
+			}
 		})
 	}
 }

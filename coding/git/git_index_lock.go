@@ -86,8 +86,23 @@ func cleanupStaleIndexLock(ctx context.Context, envContainer env.EnvContainer, w
 func runGitIndexCommandWithRetry(ctx context.Context, input env.EnvRunCommandActivityInput, cleanupDir string) (env.EnvRunCommandActivityOutput, error) {
 	output, err := env.EnvRunCommandActivity(ctx, input)
 	for _, delay := range indexLockRetryDelays {
-		if err != nil || output.ExitStatus == 0 || !isIndexLockContentionError(output) {
+		if err != nil || output.ExitStatus == 0 {
 			return output, err
+		}
+		if !isIndexLockContentionError(output) {
+			if !strings.Contains(output.Stdout+"\n"+output.Stderr, "Unable to write index") {
+				return output, err
+			}
+			// Git can omit lock details during a merge's index refresh, but
+			// this diagnostic can also indicate a non-retryable I/O failure.
+			locked, lockErr := worktreeHasIndexLock(ctx, input.EnvContainer, cleanupDir, input.EnvVars)
+			if lockErr != nil {
+				log.Warn().Err(lockErr).Msg("failed to check for git index.lock")
+				return output, err
+			}
+			if !locked {
+				return output, err
+			}
 		}
 
 		removed, cleanupErr := cleanupStaleIndexLock(ctx, input.EnvContainer, cleanupDir, input.EnvVars)
@@ -107,4 +122,19 @@ func runGitIndexCommandWithRetry(ctx context.Context, input env.EnvRunCommandAct
 		output, err = env.EnvRunCommandActivity(ctx, input)
 	}
 	return output, err
+}
+
+func worktreeHasIndexLock(ctx context.Context, envContainer env.EnvContainer, worktreeDir string, envVars []string) (bool, error) {
+	script := `lock=$(git rev-parse --git-path index.lock) && test -e "$lock"`
+	if worktreeDir != "" {
+		script = fmt.Sprintf("cd %s && %s", shellQuote(worktreeDir), script)
+	}
+	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "sh",
+		Args:               []string{"-c", script},
+		EnvVars:            envVars,
+	})
+	return output.ExitStatus == 0, err
 }
