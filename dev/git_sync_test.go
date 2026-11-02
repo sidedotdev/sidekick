@@ -67,8 +67,9 @@ func TestSubflowGitCheckpoint(t *testing.T) {
 					e = &env.LocalEnv{WorkingDirectory: "/repo"}
 				}
 				dCtx := DevContext{ExecContext: flow_action.ExecContext{
-					Context:      utils.NoRetryCtx(ctx),
-					EnvContainer: &env.EnvContainer{Env: e},
+					Context:               utils.NoRetryCtx(ctx),
+					EnvContainer:          &env.EnvContainer{Env: e},
+					DisableHumanInTheLoop: tt.fail,
 				}}
 				if tt.noContainer {
 					dCtx.EnvContainer = nil

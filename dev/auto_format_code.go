@@ -3,8 +3,7 @@ package dev
 import (
 	"fmt"
 	"sidekick/env"
-
-	"go.temporal.io/sdk/workflow"
+	"sidekick/flow_action"
 )
 
 func AutoFormatCode(dCtx DevContext) error {
@@ -16,14 +15,15 @@ func AutoFormatCode(dCtx DevContext) error {
 	// the repo, and use the appropriate formatter (for languages that have a
 	// standard formatter). Or if the repo has a .editorconfig, .prettierrc,
 	// rustfmt.toml or .rustfmt.toml etc, use that to determine the formatter
-	err := workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	input := env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		RelativeWorkingDir: "./",
 		Command:            "go",
 		Args:               []string{"fmt", "./..."},
-	}).Get(dCtx, nil)
+	}
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Format code", env.EnvRunCommandActivity, nil, input)
 	if err != nil {
-		return fmt.Errorf("failed to format the code: %v", err)
+		return fmt.Errorf("failed to format the code: %w", err)
 	}
 	return nil
 }
