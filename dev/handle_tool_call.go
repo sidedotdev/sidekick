@@ -181,10 +181,9 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 	return handleToolCallWithOptions(dCtx, toolCall, toolCallOptions{})
 }
 
-// TODO /gen/planned/req add a test for this function using WorkflowTestSuite
 func handleToolCallWithOptions(dCtx DevContext, toolCall llm.ToolCall, options toolCallOptions) (ToolCallOutput, error) {
 	var toolCallResult llm2.ToolResultBlock
-	dCtx.Context = utils.NoRetryCtx(dCtx)
+	dCtx.Context = utils.NoRetryCtx(dCtx.Context)
 	toolCallResult.Name = toolCall.Name
 	toolCallResult.ToolCallId = toolCall.Id
 
