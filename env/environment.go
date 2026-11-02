@@ -434,6 +434,7 @@ type ModalEnv struct {
 	runModalCommand      func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error)
 	runModalAPICommand   func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, error)
 	refreshModalEndpoint func(context.Context, string) (string, int, error)
+	lookupModalStatus    func(context.Context, string, string) (modalSandboxStatus, error)
 }
 
 type LocalEnvParams struct {
@@ -1226,6 +1227,7 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 			output, diagnostics, attemptErr = attempt(ctx, input)
 			return attemptErr
 		})
+		err = e.annotateAgentExecFailure(ctx, err)
 		return
 	}
 	runAPICommand := e.runAPICommandInner
