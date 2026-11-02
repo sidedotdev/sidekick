@@ -64,6 +64,12 @@ must, but running the relevant tests are preferred over that too. `go vet` and
 lint too BTW, but you can do so for faster feedback, especially for red/green
 stuff or when you just made a targeted fix.
 
+## Guidance on legacy code and ongoing migrations
+
+The `llm` package has been deprecated in favor of `llm2`. Changes to the `llm`
+package should almost never be needed, not for new features and definitely not
+for bug fixes.
+
 ## Complex Debugging
 
 When debugging complex issues, make sure you have an automated minimal
