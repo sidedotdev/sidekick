@@ -1146,9 +1146,9 @@ type modalEndpointRefresh struct {
 	// SnapshotTakenAt dates the filesystem state the restore brought back;
 	// zero when the guard record predates that bookkeeping.
 	SnapshotTakenAt time.Time
-	// PreviousSandboxID and PreviousExitCode describe the dead incarnation
-	// when Modal still remembers it; the exit code is the only evidence of
-	// why it died that survives the sandbox itself.
+	// The last known finished incarnation may be the snapshot source, not
+	// the most recent incarnation. An exit code alone does not prove why
+	// it stopped: eviction and deliberate termination can both return 137.
 	PreviousSandboxID string
 	PreviousExitCode  *int
 }
@@ -1164,7 +1164,7 @@ func (r modalEndpointRefresh) previousSandboxDescription() string {
 	if r.PreviousSandboxID == "" {
 		return "no record of the previous sandbox remains"
 	}
-	description := "previous sandbox " + r.PreviousSandboxID
+	description := "last known sandbox " + r.PreviousSandboxID
 	if r.PreviousExitCode != nil {
 		description += fmt.Sprintf(" exited with code %d", *r.PreviousExitCode)
 	}
@@ -1222,11 +1222,17 @@ var refreshModalEndpointDetailed = func(ctx context.Context, sandboxName string)
 		}
 	}
 	refresh := modalEndpointRefresh{Restored: true}
-	refresh.PreviousSandboxID, refresh.PreviousExitCode = modalFinishedSandboxInfo(ctx, client, sandboxName)
 	record, err := modalLatestSnapshot(ctx, client, sandboxName)
 	if err != nil {
 		return modalEndpointRefresh{}, err
 	}
+	var previousID string
+	if sb != nil {
+		previousID = sb.SandboxID
+	} else if record != nil {
+		previousID = record.SandboxId
+	}
+	refresh.PreviousSandboxID, refresh.PreviousExitCode = modalFinishedSandboxInfo(ctx, sandboxName, previousID)
 	if record == nil {
 		return modalEndpointRefresh{}, fmt.Errorf("modal sandbox %s no longer exists (%s) and has no snapshot to restore from",
 			sandboxName, refresh.previousSandboxDescription())
@@ -1266,19 +1272,21 @@ var refreshModalEndpointDetailed = func(ctx context.Context, sandboxName string)
 	return refresh, nil
 }
 
-// modalFinishedSandboxInfo returns the ID and exit code of a sandbox that
-// Modal still remembers under the name but no longer runs. Both are
-// best-effort: the name may already be released.
-func modalFinishedSandboxInfo(ctx context.Context, client *modal.Client, name string) (string, *int) {
-	sb, err := client.Sandboxes.FromName(ctx, modalAppName, name, nil)
-	if err != nil || sb == nil {
+// modalFinishedSandboxInfo finds a finished incarnation even after Modal has
+// released its name. The fallback ID may be an older snapshot source, so it
+// identifies the last known sandbox rather than proving which one just died.
+func modalFinishedSandboxInfo(ctx context.Context, name, previousID string) (string, *int) {
+	ctx, cancel := context.WithTimeout(ctx, modalFailureDiagnosticTimeout)
+	defer cancel()
+	status, err := lookupModalSandboxStatus(ctx, name, "")
+	var notFound modal.NotFoundError
+	if errors.As(err, &notFound) && previousID != "" && ctx.Err() == nil {
+		status, err = lookupModalSandboxStatus(ctx, "", previousID)
+	}
+	if err != nil || ctx.Err() != nil || status.exitCode == nil {
 		return "", nil
 	}
-	exitCode, err := sb.Poll(ctx)
-	if err != nil {
-		return sb.SandboxID, nil
-	}
-	return sb.SandboxID, exitCode
+	return status.id, status.exitCode
 }
 
 // modalRecordRestoreInSandbox appends the restore to the watchdog log inside

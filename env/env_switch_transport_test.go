@@ -65,6 +65,9 @@ func TestGitOutputForSwitchTransportRecovery(t *testing.T) {
 			cause := errors.New("agent exec channel closed: closed by client")
 			attempts := 0
 			e := &ModalEnv{
+				lookupModalStatus: func(context.Context, string, string) (modalSandboxStatus, error) {
+					return modalSandboxStatus{}, errors.New("status unavailable")
+				},
 				runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
 					attempts++
 					if tc.cancel {

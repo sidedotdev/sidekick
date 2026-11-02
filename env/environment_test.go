@@ -1105,6 +1105,9 @@ func TestModalRunCommandDoesNotRetryEstablishedChannelFailure(t *testing.T) {
 		SandboxName: "sandbox",
 		SSHHost:     "old.modal.host",
 		SSHPort:     1234,
+		lookupModalStatus: func(context.Context, string, string) (modalSandboxStatus, error) {
+			return modalSandboxStatus{}, errors.New("status unavailable")
+		},
 		runModalCommand: func(context.Context, EnvRunCommandInput) (EnvRunCommandOutput, string, error) {
 			attempts++
 			return EnvRunCommandOutput{}, diagnostics, &agentExecTransportError{
