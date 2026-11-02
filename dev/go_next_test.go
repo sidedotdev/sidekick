@@ -49,14 +49,11 @@ func TestGoNextCancelsActiveStream(t *testing.T) {
 func TestRunCommandUserCancellation(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name                    string
-		expectedEnvVersion      workflow.Version
-		userCancellationVersion workflow.Version
+		name    string
+		version workflow.Version
 	}{
-		{name: "current", expectedEnvVersion: 1, userCancellationVersion: 1},
-		{name: "expected env version", expectedEnvVersion: 1, userCancellationVersion: workflow.DefaultVersion},
-		{name: "user cancellation version", expectedEnvVersion: workflow.DefaultVersion, userCancellationVersion: 1},
-		{name: "old version", expectedEnvVersion: workflow.DefaultVersion, userCancellationVersion: workflow.DefaultVersion},
+		{name: "current", version: 1},
+		{name: "old version", version: workflow.DefaultVersion},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -66,8 +63,7 @@ func TestRunCommandUserCancellation(t *testing.T) {
 					var suite testsuite.WorkflowTestSuite
 					testEnv := suite.NewTestWorkflowEnvironment()
 					testEnv.SetWorkerOptions(utils.TestWorkerOptions())
-					testEnv.OnGetVersion("run-command-expected-env-cancel-on-pause", workflow.DefaultVersion, 1).Return(tc.expectedEnvVersion)
-					testEnv.OnGetVersion("run-command-user-cancellation", workflow.DefaultVersion, 1).Return(tc.userCancellationVersion)
+					testEnv.OnGetVersion("run-command-user-cancellation", workflow.DefaultVersion, 1).Return(tc.version)
 					devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: t.TempDir()})
 					require.NoError(t, err)
 					container := env.EnvContainer{Env: devEnv}
@@ -107,7 +103,7 @@ func TestRunCommandUserCancellation(t *testing.T) {
 					require.NoError(t, testEnv.GetWorkflowError())
 					var result commandResult
 					require.NoError(t, testEnv.GetWorkflowResult(&result))
-					if tc.expectedEnvVersion >= 1 || tc.userCancellationVersion >= 1 {
+					if tc.version >= 1 {
 						require.True(t, result.Canceled)
 						require.Less(t, result.Elapsed, time.Minute)
 					} else {
