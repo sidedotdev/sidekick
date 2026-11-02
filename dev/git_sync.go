@@ -26,26 +26,21 @@ func checkpointSubflowGit(dCtx DevContext) error {
 	options.HeartbeatTimeout = 0
 	ctx = workflow.WithActivityOptions(ctx, options)
 	input := git.SyncGitInput{EnvContainer: *dCtx.EnvContainer}
-	var err error
-	if workflow.GetVersion(ctx, "git-checkpoint-user-retry", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
-		err = workflow.ExecuteActivity(ctx, git.SyncGitActivity, input).Get(ctx, nil)
-	} else {
-		actionCtx := flow_action.ActionContext{
-			ExecContext: dCtx.WithContext(ctx).ExecContext,
-			ActionType:  "Checkpoint git",
-		}
-		err = flow_action.PerformWithUserRetryOptions(actionCtx, flow_action.UserRetryOptions{
-			PropagateCancellation: true,
-			OnFailure: flow_action.ActivityFailureHandlerFunc(func(eCtx flow_action.ExecContext, actionName string, activityErr error) (flow_action.RetryDecision, error) {
-				// Cleanup survives cancellation, but waiting for user input must not.
-				if dCtx.Err() != nil {
-					return flow_action.RetryDecisionFail, nil
-				}
-				eCtx.Context = dCtx.Context
-				return (flow_action.ContinuePromptFailureHandler{}).HandleActivityFailure(eCtx, actionName, activityErr)
-			}),
-		}, git.SyncGitActivity, nil, input)
+	actionCtx := flow_action.ActionContext{
+		ExecContext: dCtx.WithContext(ctx).ExecContext,
+		ActionType:  "Checkpoint git",
 	}
+	err := flow_action.PerformWithUserRetryOptions(actionCtx, flow_action.UserRetryOptions{
+		PropagateCancellation: true,
+		OnFailure: flow_action.ActivityFailureHandlerFunc(func(eCtx flow_action.ExecContext, actionName string, activityErr error) (flow_action.RetryDecision, error) {
+			// Cleanup survives cancellation, but waiting for user input must not.
+			if dCtx.Err() != nil {
+				return flow_action.RetryDecisionFail, nil
+			}
+			eCtx.Context = dCtx.Context
+			return (flow_action.ContinuePromptFailureHandler{}).HandleActivityFailure(eCtx, actionName, activityErr)
+		}),
+	}, git.SyncGitActivity, nil, input)
 	if err != nil {
 		return fmt.Errorf("checkpoint git: %w", err)
 	}

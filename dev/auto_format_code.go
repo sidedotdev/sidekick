@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"sidekick/env"
 	"sidekick/flow_action"
-
-	"go.temporal.io/sdk/workflow"
 )
 
 func AutoFormatCode(dCtx DevContext) error {
@@ -23,12 +21,7 @@ func AutoFormatCode(dCtx DevContext) error {
 		Command:            "go",
 		Args:               []string{"fmt", "./..."},
 	}
-	var err error
-	if workflow.GetVersion(dCtx, "auto-format-user-retry", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
-		err = workflow.ExecuteActivity(dCtx, env.EnvRunCommandActivity, input).Get(dCtx, nil)
-	} else {
-		err = flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Format code", env.EnvRunCommandActivity, nil, input)
-	}
+	err := flow_action.PerformActivityWithUserRetry(dCtx.ExecContext, "Format code", env.EnvRunCommandActivity, nil, input)
 	if err != nil {
 		return fmt.Errorf("failed to format the code: %w", err)
 	}

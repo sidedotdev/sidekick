@@ -23,17 +23,15 @@ import (
 func TestActivityTimeoutUserRetry(t *testing.T) {
 	t.Parallel()
 	operations := []struct {
-		name     string
-		changeID string
-		run      func(DevContext) error
+		name string
+		run  func(DevContext) error
 	}{
-		{name: "format", changeID: "auto-format-user-retry", run: AutoFormatCode},
-		{name: "checkpoint", changeID: "git-checkpoint-user-retry", run: checkpointSubflowGit},
+		{name: "format", run: AutoFormatCode},
+		{name: "checkpoint", run: checkpointSubflowGit},
 	}
 	scenarios := []struct {
 		name            string
 		disableHuman    bool
-		legacy          bool
 		legacyRetry     bool
 		canceled        bool
 		cancelOnRequest bool
@@ -43,7 +41,6 @@ func TestActivityTimeoutUserRetry(t *testing.T) {
 	}{
 		{name: "retry repeated timeouts", wantAttempts: 3, wantRequests: 2},
 		{name: "unattended", disableHuman: true, wantAttempts: 1, wantError: "StartToClose"},
-		{name: "legacy call site", legacy: true, wantAttempts: 1, wantError: "StartToClose"},
 		{name: "legacy retry handler", legacyRetry: true, wantAttempts: 1, wantError: "StartToClose"},
 		{name: "canceled checkpoint", canceled: true, wantAttempts: 1, wantError: "StartToClose"},
 		{name: "cancel pending retry", cancelOnRequest: true, wantAttempts: 1, wantRequests: 1, wantError: "canceled"},
@@ -60,10 +57,6 @@ func TestActivityTimeoutUserRetry(t *testing.T) {
 					var suite testsuite.WorkflowTestSuite
 					tenv := suite.NewTestWorkflowEnvironment()
 					tenv.SetWorkerOptions(utils.TestWorkerOptions())
-					if scenario.legacy {
-						tenv.OnGetVersion(operation.changeID, workflow.DefaultVersion, 1).
-							Return(workflow.DefaultVersion).Once()
-					}
 					if scenario.legacyRetry {
 						tenv.OnGetVersion("activity-user-retry", workflow.DefaultVersion, 1).
 							Return(workflow.DefaultVersion).Once()
