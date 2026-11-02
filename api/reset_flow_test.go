@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/segmentio/ksuid"
@@ -272,9 +273,18 @@ func TestResetFlowHandler_SubtaskResetsChildOnly(t *testing.T) {
 	f.describe(f.subtask.Id, enums.WORKFLOW_EXECUTION_STATUS_RUNNING, f.iddFlow.Id)
 	f.describe(f.iddFlow.Id, enums.WORKFLOW_EXECUTION_STATUS_RUNNING, f.taskWfId)
 	f.describe(f.taskWfId, enums.WORKFLOW_EXECUTION_STATUS_RUNNING, "")
+	f.temporal.On("WorkflowService").Return(resetWorkflowService{
+		reset: f.temporal.ResetWorkflowExecution,
+	}).Once()
 	f.temporal.On("ResetWorkflowExecution", mock.Anything, mock.MatchedBy(func(req *workflowservice.ResetWorkflowExecutionRequest) bool {
 		return req.WorkflowExecution.GetWorkflowId() == f.subtask.Id && req.WorkflowTaskFinishEventId == 42
-	})).Return(&workflowservice.ResetWorkflowExecutionResponse{RunId: "run_new"}, nil).Once()
+	})).Run(func(args mock.Arguments) {
+		ctx := args.Get(0).(context.Context)
+		deadline, ok := ctx.Deadline()
+		if assert.True(t, ok, "reset RPC must have an explicit deadline") {
+			assert.InDelta(t, time.Minute.Seconds(), time.Until(deadline).Seconds(), 1)
+		}
+	}).Return(&workflowservice.ResetWorkflowExecutionResponse{RunId: "run_new"}, nil).Once()
 
 	resp := f.postReset(t, f.subtask.Id, 42)
 	assert.Equal(t, http.StatusOK, resp.Code)
@@ -299,6 +309,7 @@ func TestResetFlowHandler_SubtaskRefusedWhenIddFlowStopped(t *testing.T) {
 	resp := f.postReset(t, f.subtask.Id, 42)
 	assert.Equal(t, http.StatusInternalServerError, resp.Code)
 	assert.Contains(t, resp.Body.String(), f.iddFlow.Id)
+	f.temporal.AssertNotCalled(t, "WorkflowService")
 	f.temporal.AssertNotCalled(t, "ResetWorkflowExecution", mock.Anything, mock.Anything)
 	f.temporal.AssertNotCalled(t, "TerminateWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	assert.Empty(t, f.monitorStarts())

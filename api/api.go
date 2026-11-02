@@ -1455,7 +1455,12 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 		return
 	}
 
-	resp, err := ctrl.temporalClient.ResetWorkflowExecution(c, &workflowservice.ResetWorkflowExecutionRequest{
+	resetCtx, cancel := context.WithTimeout(c.Request.Context(), time.Minute)
+	defer cancel()
+
+	// The SDK's high-level reset method caps RPCs at 10 seconds, which is
+	// insufficient for long histories. Use the service with our full deadline.
+	resp, err := ctrl.temporalClient.WorkflowService().ResetWorkflowExecution(resetCtx, &workflowservice.ResetWorkflowExecutionRequest{
 		Namespace:                 ctrl.temporalNamespace,
 		WorkflowExecution:         &commonpb.WorkflowExecution{WorkflowId: flowId},
 		WorkflowTaskFinishEventId: req.EventId,
