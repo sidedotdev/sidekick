@@ -14,7 +14,6 @@ import (
 	"github.com/nats-io/nats.go"
 	jsapi "github.com/nats-io/nats.go/jetstream"
 	"github.com/rs/zerolog"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -126,8 +125,9 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 			js, err := jsapi.New(nc)
 			require.NoError(t, err)
 
-			// Keep another persisted stream active: NATS removes empty account
-			// directories asynchronously when a stream is deleted.
+			// NATS v2.10.27 deletes empty account directories asynchronously.
+			// A live file-backed stream keeps them nonempty so deletion cannot
+			// race with creating the replacement stream's parent directories.
 			unrelated, err := js.CreateStream(ctx, jsapi.StreamConfig{
 				Name: "UNRELATED", Storage: jsapi.FileStorage,
 				Subjects: []string{"unrelated"},
@@ -142,6 +142,7 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 				MaxBytes: 100 * 1024 * 1024, Discard: jsapi.DiscardOld,
 			})
 			require.NoError(t, err)
+			originalInfo := stream.CachedInfo()
 			if populated {
 				_, err = js.Publish(ctx, "tasks.changes.workspace", []byte(`{"id":"preserve-me"}`))
 				require.NoError(t, err)
@@ -150,7 +151,8 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 			require.ErrorContains(t, err, "can not change storage type")
 			info, err := stream.Info(ctx)
 			require.NoError(t, err)
-			require.Equal(t, jsapi.MemoryStorage, info.Config.Storage)
+			require.Equal(t, originalInfo.Created, info.Created)
+			require.Equal(t, originalInfo.Config, info.Config)
 			if populated {
 				require.EqualValues(t, 1, info.State.Msgs)
 				msg, err := stream.GetMsg(ctx, 1)
@@ -162,14 +164,8 @@ func TestMemoryStorageMigrationRequiresExplicitAction(t *testing.T) {
 
 			// Explicit deletion is safe here because the test has no other publishers.
 			require.NoError(t, js.DeleteStream(ctx, EphemeralStreamName))
-			// NATS removes empty account directories asynchronously, which can race
-			// with creating the replacement stream's storage directories.
-			var s *Streamer
-			require.EventuallyWithT(t, func(c *assert.CollectT) {
-				var err error
-				s, err = NewStreamer(nc)
-				assert.NoError(c, err)
-			}, 5*time.Second, 10*time.Millisecond)
+			s, err := NewStreamer(nc)
+			require.NoError(t, err)
 			require.Zero(t, requireFileConfig(t, ctx, s).State.Msgs)
 
 			msg, err := unrelated.GetMsg(ctx, 1)
