@@ -338,6 +338,7 @@ func TestRetryAttemptsMigrationUpgradesExistingDatabase(t *testing.T) {
 	assert.Contains(t, columns, "attempts")
 	assert.Contains(t, columns, "next_retry_at")
 
+	require.NoError(t, m.Up())
 	storage := &Storage{db: &trackedDB{DB: db, name: "main", tracker: newBusyTracker()}}
 	existing, err := storage.GetFlowAction(ctx, "ws-1", "fa-existing")
 	require.NoError(t, err)
@@ -345,6 +346,54 @@ func TestRetryAttemptsMigrationUpgradesExistingDatabase(t *testing.T) {
 	assert.Nil(t, existing.Attempts)
 	assert.Nil(t, existing.NextRetryAt)
 
+	require.NoError(t, m.Migrate(retryAttemptsMigrationVersion))
 	require.NoError(t, m.Steps(-1))
 	assert.NotContains(t, flowActionColumnNames(), "attempts")
+}
+
+func TestFlowActionMetadataMigration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", testMemoryDsn)
+	require.NoError(t, err)
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	driver, err := sqlite.WithInstance(db, &sqlite.Config{})
+	require.NoError(t, err)
+	source, err := iofs.New(migrationsFs, "migrations")
+	require.NoError(t, err)
+	m, err := migrate.NewWithInstance("iofs", source, "test_action_metadata", driver)
+	require.NoError(t, err)
+
+	require.NoError(t, m.Migrate(21))
+	now := time.Now().UTC()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO flow_actions (id, subflow_name, subflow_description, subflow_id, flow_id, workspace_id, created, updated,
+			action_type, action_params, action_status, action_result, is_human_action, is_callback_action)
+		VALUES ('fa_legacy', '', '', '', 'flow_legacy', 'ws', ?, ?, 'test', '{}', 'complete', '', 0, 0)
+	`, now, now)
+	require.NoError(t, err)
+
+	require.NoError(t, m.Up())
+	storage := &Storage{db: &trackedDB{DB: db, name: "main", tracker: newBusyTracker()}}
+	action, err := storage.GetFlowAction(ctx, "ws", "fa_legacy")
+	require.NoError(t, err)
+	require.Nil(t, action.Metadata)
+	require.Equal(t, "complete", action.ActionStatus)
+
+	action.Metadata = map[string]any{"custom": "value"}
+	require.NoError(t, storage.PersistFlowAction(ctx, action))
+	action, err = storage.GetFlowAction(ctx, "ws", "fa_legacy")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"custom": "value"}, action.Metadata)
+
+	require.NoError(t, m.Migrate(21))
+	var id string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT id FROM flow_actions`).Scan(&id))
+	require.Equal(t, "fa_legacy", id)
+	require.NoError(t, m.Up())
+	action, err = storage.GetFlowAction(ctx, "ws", "fa_legacy")
+	require.NoError(t, err)
+	require.Nil(t, action.Metadata)
 }

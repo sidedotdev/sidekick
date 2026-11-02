@@ -62,6 +62,7 @@ type ActionContext struct {
 	ExecContext
 	ActionType   string
 	ActionParams map[string]interface{}
+	Metadata     map[string]any
 }
 
 // FlowCache lets flags be evaluated once per flow. It has a value receiver so

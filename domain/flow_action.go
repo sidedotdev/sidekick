@@ -31,15 +31,18 @@ type FlowActionAttempt struct {
 }
 
 type FlowAction struct {
-	Id                 string                 `json:"id"`
-	SubflowName        string                 `json:"subflow"`            // TODO: remove in favor of SubflowId
-	SubflowDescription string                 `json:"subflowDescription"` // TODO: remove in favor of SubflowId
-	SubflowId          string                 `json:"subflowId,omitempty"`
-	FlowId             string                 `json:"flowId"`
-	WorkspaceId        string                 `json:"workspaceId"`
-	Created            time.Time              `json:"created"`
-	Updated            time.Time              `json:"updated"`
-	ActionType         string                 `json:"actionType"`
+	Id                 string    `json:"id"`
+	SubflowName        string    `json:"subflow"`            // TODO: remove in favor of SubflowId
+	SubflowDescription string    `json:"subflowDescription"` // TODO: remove in favor of SubflowId
+	SubflowId          string    `json:"subflowId,omitempty"`
+	FlowId             string    `json:"flowId"`
+	WorkspaceId        string    `json:"workspaceId"`
+	Created            time.Time `json:"created"`
+	Updated            time.Time `json:"updated"`
+	ActionType         string    `json:"actionType"`
+	// Metadata is a generic container for writer-defined keys. The optional
+	// "links" key conventionally contains a list of FlowActionLink values.
+	Metadata           map[string]any         `json:"metadata,omitempty"`
 	ActionParams       map[string]interface{} `json:"actionParams"`
 	ActionStatus       ActionStatus           `json:"actionStatus"`
 	ActionResult       string                 `json:"actionResult"`
@@ -79,4 +82,12 @@ type FlowActionStorage interface {
 type FlowActionStreamer interface {
 	AddFlowActionChange(ctx context.Context, flowAction FlowAction) error
 	StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan FlowAction, <-chan error)
+}
+
+// FlowActionLink describes a relationship to an action or tool call, which
+// need not belong to the same flow. Rel is writer-defined (e.g. "approval_for").
+type FlowActionLink struct {
+	Rel          string `json:"rel"`
+	FlowActionId string `json:"flowActionId,omitempty"`
+	ToolCallId   string `json:"toolCallId,omitempty"`
 }

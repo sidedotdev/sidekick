@@ -186,6 +186,13 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	loc, err := time.LoadLocation("America/Los_Angeles")
 	s.Require().NoError(err)
 	baseTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+	metadata := map[string]any{
+		"links": []any{
+			map[string]any{"rel": "approval_for", "flowActionId": "fa_origin", "toolCallId": "call_origin"},
+			map[string]any{"rel": "related", "flowActionId": "fa_elsewhere"},
+		},
+		"custom": map[string]any{"enabled": true, "labels": []any{"a", "b"}},
+	}
 
 	flowAction := domain.FlowAction{
 		WorkspaceId:  workspaceId,
@@ -198,6 +205,7 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		ActionResult: "test-result",
 		Created:      baseTime,
 		Updated:      baseTime.Add(time.Hour),
+		Metadata:     metadata,
 	}
 
 	newAction := domain.FlowAction{
@@ -267,8 +275,10 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	s.True(first.Updated.Equal(flowAction.Updated))
 	s.Equal(flowAction.Created.Nanosecond(), first.Created.Nanosecond())
 	s.Equal(flowAction.Updated.Nanosecond(), first.Updated.Nanosecond())
+	s.Equal(metadata, first.Metadata)
 
 	second := receivedById[newAction.Id]
+	s.Nil(second.Metadata)
 	s.Equal(time.UTC, second.Created.Location())
 	s.Equal(time.UTC, second.Updated.Location())
 	s.True(second.Created.Equal(newAction.Created))

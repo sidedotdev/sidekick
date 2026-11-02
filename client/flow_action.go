@@ -20,6 +20,7 @@ type FlowAction struct {
 	Created          time.Time              `json:"created"`
 	Updated          time.Time              `json:"updated"`
 	ActionType       string                 `json:"actionType"`
+	Metadata         map[string]any         `json:"metadata,omitempty"`
 	ActionParams     map[string]interface{} `json:"actionParams"`
 	ActionStatus     domain.ActionStatus    `json:"actionStatus"`
 	ActionResult     string                 `json:"actionResult"`

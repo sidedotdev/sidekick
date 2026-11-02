@@ -277,6 +277,11 @@ func handleToolCallWithOptions(dCtx DevContext, toolCall llm.ToolCall, options t
 		case runCommandTool.Name:
 			var runCommandParams RunCommandParams
 			response, err = unmarshalAndInvoke(toolCall, &runCommandParams, func() (string, error) {
+				trackedDCtx.Context = workflow.WithValue(trackedDCtx.Context, runCommandOriginKey{}, domain.FlowActionLink{
+					Rel:          "approval_for",
+					FlowActionId: flowAction.Id,
+					ToolCallId:   toolCall.Id,
+				})
 				return RunCommand(trackedDCtx, runCommandParams)
 			})
 		case readImageTool.Name:

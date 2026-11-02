@@ -175,6 +175,13 @@ func (s Streamer) AddFlowActionChange(ctx context.Context, flowAction domain.Flo
 		}
 		flowActionMap["attempts"] = string(attemptsJSON)
 	}
+	if len(flowAction.Metadata) > 0 {
+		data, err := json.Marshal(flowAction.Metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+		flowActionMap["metadata"] = string(data)
+	}
 	err = s.Client.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		Values: flowActionMap,
@@ -279,9 +286,16 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 				}
 				nextRetryAt = &t
 			}
+			var metadata map[string]any
+			if data, ok := message.Values["metadata"].(string); ok && data != "" {
+				if err := json.Unmarshal([]byte(data), &metadata); err != nil {
+					return nil, "", fmt.Errorf("failed to unmarshal metadata in message %d: %w", i, err)
+				}
+			}
 			flowActions = append(flowActions, domain.FlowAction{
 				WorkspaceId:        workspaceId,
 				FlowId:             flowId,
+				Metadata:           metadata,
 				SubflowId:          subflowId,
 				Id:                 flowActionId,
 				SubflowName:        message.Values["subflow"].(string),

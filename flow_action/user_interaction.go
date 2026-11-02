@@ -383,8 +383,13 @@ would mean to apply it to your current situation.
 }
 
 func GetUserApproval(eCtx ExecContext, approvalType, approvalPrompt string, requestParams map[string]interface{}) (*UserResponse, error) {
+	return GetUserApprovalWithMetadata(eCtx, approvalType, approvalPrompt, requestParams, nil)
+}
+
+func GetUserApprovalWithMetadata(eCtx ExecContext, approvalType, approvalPrompt string, requestParams map[string]interface{}, metadata map[string]any) (*UserResponse, error) {
 	actionType := "approve." + approvalType
 	actionCtx := eCtx.NewActionContext("user_request." + actionType)
+	actionCtx.Metadata = metadata
 
 	if actionCtx.DisableHumanInTheLoop {
 		// auto-approve for now if humans are not in the loop
