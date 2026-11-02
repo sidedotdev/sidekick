@@ -155,6 +155,7 @@ export interface FlowAction {
   subflowId?: string; // Added to link FlowAction to a specific Subflow instance if applicable
   subflowDescription?: string
   actionType: string
+  metadata?: { [key: string]: any; links?: FlowActionLink[] }
   actionParams: { [key: string]: any }
   actionStatus: ActionStatus
   actionResult: string
@@ -465,4 +466,10 @@ export interface EnvSettings {
   envType: string
   portForwards: PortForwardConfig[]
   modal: ModalEnvConfig
+}
+
+export interface FlowActionLink {
+  rel: string
+  flowActionId?: string
+  toolCallId?: string
 }

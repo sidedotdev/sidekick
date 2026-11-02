@@ -39,12 +39,21 @@ func (s *Storage) PersistFlowAction(ctx context.Context, flowAction domain.FlowA
 		nextRetryAt = sql.NullTime{Time: flowAction.NextRetryAt.UTC(), Valid: true}
 	}
 
+	var metadata sql.NullString
+	if len(flowAction.Metadata) > 0 {
+		data, err := json.Marshal(flowAction.Metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+		metadata = sql.NullString{String: string(data), Valid: true}
+	}
+
 	query := `
 		INSERT OR REPLACE INTO flow_actions (
 			id, subflow_name, subflow_description, subflow_id, flow_id, workspace_id,
 			created, updated, action_type, action_params, action_status, action_result,
-			is_human_action, is_callback_action, temporal_activities, attempts, next_retry_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			is_human_action, is_callback_action, temporal_activities, attempts, next_retry_at, metadata
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	flowAction.Created = flowAction.Created.UTC()
@@ -54,7 +63,7 @@ func (s *Storage) PersistFlowAction(ctx context.Context, flowAction domain.FlowA
 		flowAction.Id, flowAction.SubflowName, flowAction.SubflowDescription, flowAction.SubflowId,
 		flowAction.FlowId, flowAction.WorkspaceId, flowAction.Created, flowAction.Updated,
 		flowAction.ActionType, actionParamsJSON, flowAction.ActionStatus, flowAction.ActionResult,
-		flowAction.IsHumanAction, flowAction.IsCallbackAction, temporalActivities, attempts, nextRetryAt,
+		flowAction.IsHumanAction, flowAction.IsCallbackAction, temporalActivities, attempts, nextRetryAt, metadata,
 	)
 
 	if err != nil {
@@ -66,20 +75,20 @@ func (s *Storage) PersistFlowAction(ctx context.Context, flowAction domain.FlowA
 
 const flowActionColumns = `id, subflow_name, subflow_description, subflow_id, flow_id, workspace_id,
 			   created, updated, action_type, action_params, action_status, action_result,
-			   is_human_action, is_callback_action, temporal_activities, attempts, next_retry_at`
+			   is_human_action, is_callback_action, temporal_activities, attempts, next_retry_at, metadata`
 
 // scanFlowAction decodes a row selected with flowActionColumns.
 func scanFlowAction(row rowScanner) (domain.FlowAction, error) {
 	var fa domain.FlowAction
 	var actionParamsJSON []byte
-	var temporalActivities, attempts sql.NullString
+	var temporalActivities, attempts, metadata sql.NullString
 	var nextRetryAt sql.NullTime
 
 	err := row.Scan(
 		&fa.Id, &fa.SubflowName, &fa.SubflowDescription, &fa.SubflowId,
 		&fa.FlowId, &fa.WorkspaceId, &fa.Created, &fa.Updated,
 		&fa.ActionType, &actionParamsJSON, &fa.ActionStatus, &fa.ActionResult,
-		&fa.IsHumanAction, &fa.IsCallbackAction, &temporalActivities, &attempts, &nextRetryAt,
+		&fa.IsHumanAction, &fa.IsCallbackAction, &temporalActivities, &attempts, &nextRetryAt, &metadata,
 	)
 	if err != nil {
 		return domain.FlowAction{}, err
@@ -101,6 +110,11 @@ func scanFlowAction(row rowScanner) (domain.FlowAction, error) {
 	if nextRetryAt.Valid {
 		t := nextRetryAt.Time.UTC()
 		fa.NextRetryAt = &t
+	}
+	if metadata.Valid {
+		if err := json.Unmarshal([]byte(metadata.String), &fa.Metadata); err != nil {
+			return domain.FlowAction{}, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		}
 	}
 	return fa, nil
 }

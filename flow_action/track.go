@@ -227,6 +227,7 @@ func trackFlowAction[T any](actionCtx ActionContext, isHumanAction bool, f func(
 		ActionType:         actionCtx.ActionType,
 		ActionStatus:       initialStatus,
 		ActionParams:       actionCtx.ActionParams,
+		Metadata:           actionCtx.Metadata,
 		IsHumanAction:      isHumanAction,
 		IsCallbackAction:   isHumanAction, // human actions are always callback actions and the only ones for now
 	}
@@ -326,6 +327,7 @@ func trackFlowActionFailureOnly[T any](actionCtx ActionContext, f func(actionCtx
 		ActionType:         actionCtx.ActionType,
 		ActionStatus:       initialStatus,
 		ActionParams:       actionCtx.ActionParams,
+		Metadata:           actionCtx.Metadata,
 	}
 
 	// Pre-generate an ID so we can tag activities even though the FlowAction

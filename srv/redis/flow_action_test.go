@@ -9,6 +9,7 @@ import (
 
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetFlowActions(t *testing.T) {
@@ -28,12 +29,13 @@ func TestGetFlowActions(t *testing.T) {
 	}
 
 	err := db.PersistFlowAction(ctx, flowAction1)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	err = db.PersistFlowAction(ctx, flowAction2)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	flowActions, err := db.GetFlowActions(ctx, flowAction1.WorkspaceId, flowAction1.FlowId)
-	assert.Nil(t, err)
+	require.NoError(t, err)
+	require.Len(t, flowActions, 2)
 	assert.Contains(t, flowActions, flowAction1)
 	assert.Contains(t, flowActions, flowAction2)
 

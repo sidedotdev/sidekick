@@ -876,6 +876,7 @@ type DevActionContext struct {
 	DevContext
 	ActionType   string
 	ActionParams map[string]interface{}
+	Metadata     map[string]any
 }
 
 func (actionCtx DevActionContext) WithContext(ctx workflow.Context) DevActionContext {
@@ -938,6 +939,7 @@ func (devActionCtx *DevActionContext) FlowActionContext() flow_action.ActionCont
 		ExecContext:  devActionCtx.ExecContext,
 		ActionType:   devActionCtx.ActionType,
 		ActionParams: devActionCtx.ActionParams,
+		Metadata:     devActionCtx.Metadata,
 	}
 }
 

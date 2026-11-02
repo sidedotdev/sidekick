@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -138,7 +139,13 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 	if permEvaluation != nil {
 		approvalParams["permissionEvaluation"] = permEvaluation
 	}
-	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, approvalParams)
+	var metadata map[string]any
+	if workflow.GetVersion(dCtx, "run-command-approval-metadata", workflow.DefaultVersion, 1) >= 1 {
+		if origin, ok := dCtx.Value(runCommandOriginKey{}).(domain.FlowActionLink); ok && (origin.FlowActionId != "" || origin.ToolCallId != "") {
+			metadata = map[string]any{"links": []domain.FlowActionLink{origin}}
+		}
+	}
+	userResponse, err := flow_action.GetUserApprovalWithMetadata(dCtx.ExecContext, "run_command", approvalPrompt, approvalParams, metadata)
 	if err != nil {
 		return false, "", "", fmt.Errorf("failed to get user approval: %v", err)
 	}
@@ -206,3 +213,5 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 
 	return response, nil
 }
+
+type runCommandOriginKey struct{}
