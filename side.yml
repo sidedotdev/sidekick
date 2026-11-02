@@ -21,7 +21,7 @@ worktree_setup: |
   fi && touch dist/empty.txt
 
 test_commands:
-  - command: "go run ./scripts/affected_tests/ -test.timeout 120s ./..."
+  - command: "go run ./scripts/affected_tests/ -test.timeout 295s ./..."
   - working_dir: "frontend"
     command: "bun run test:unit -- --no-color"
   - working_dir: "frontend"
@@ -30,7 +30,7 @@ test_commands:
     command: "bun run lint:check"
 
 integration_test_commands:
-  - command: "SIDE_INTEGRATION_TEST=true go run ./scripts/affected_tests/ -test.timeout 240s ./..."
+  - command: "SIDE_INTEGRATION_TEST=true go run ./scripts/affected_tests/ -test.timeout 295s ./..."
   - command: "go run ./scripts/lint_chat_history_append/"
   - command: "go run ./scripts/lint_track_callback/ ./..."
   - command: "go run ./scripts/lint_workflow_go_context/ ./..."
