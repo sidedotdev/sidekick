@@ -54,13 +54,35 @@ func TestGoplsIsOwnedRatherThanShared(t *testing.T) {
 
 func TestServerTransportCloseReapsOwnedProcess(t *testing.T) {
 	t.Parallel()
-	cmd := exec.Command("sh", "-c", "cat >/dev/null")
-	transport, err := startServerTransport(cmd)
-	require.NoError(t, err)
-	require.NoError(t, transport.Close())
-	require.NotNil(t, cmd.ProcessState)
-	require.True(t, cmd.ProcessState.Exited())
-	require.NoError(t, transport.Close())
+	for _, tt := range []struct {
+		name         string
+		script       string
+		requiresKill bool
+	}{
+		{name: "cooperative", script: "printf ready; while IFS= read -r line; do :; done"},
+		{name: "forced", script: "printf ready; exec sleep 30", requiresKill: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cmd := exec.Command("sh", "-c", tt.script)
+			transport, err := startServerTransport(cmd)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+			ready := make([]byte, len("ready"))
+			_, err = io.ReadFull(transport, ready)
+			require.NoError(t, err)
+			require.Equal(t, "ready", string(ready))
+
+			require.NoError(t, transport.Close())
+			require.NotNil(t, cmd.ProcessState)
+			require.ErrorIs(t, cmd.Process.Kill(), os.ErrProcessDone)
+			if tt.requiresKill {
+				require.False(t, cmd.ProcessState.Exited())
+			}
+			require.NoError(t, transport.Close())
+		})
+	}
 }
 
 func TestReadWriteCloserAfterPipesAlreadyClosed(t *testing.T) {

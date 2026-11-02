@@ -56,7 +56,7 @@ func runCommandWithExpectedEnv(dCtx DevContext, params RunCommandParams) (string
 	var previousSandbox bool
 	var output env.EnvRunCommandActivityOutput
 
-	if workflow.GetVersion(dCtx, "run-command-expected-env-cancellation", workflow.DefaultVersion, 1) >= 1 &&
+	if workflow.GetVersion(dCtx, "run-command-user-cancellation", workflow.DefaultVersion, 1) >= 1 &&
 		goNextStagesEnabled(dCtx) && dCtx.GlobalState != nil {
 		dCtx = dCtx.WithCancelOnPause()
 	}
