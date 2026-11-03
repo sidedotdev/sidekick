@@ -1679,7 +1679,10 @@ func (e *ModalEnv) sftpConnKey() string {
 
 // transport returns the SSH transport for this env's remote identity.
 func (e *ModalEnv) transport() SSHTransport {
-	return sshTransportFor(e.sftpConnKey(), e.PortForwards, e)
+	return modalFileTransport{
+		SSHTransport: sshTransportFor(e.sftpConnKey(), e.PortForwards, e),
+		env:          e,
+	}
 }
 
 func (e *ModalEnv) EnsureReverseForwards(ctx context.Context) error {

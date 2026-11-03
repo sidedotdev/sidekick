@@ -36,6 +36,12 @@ intent_links:
       - env/remote_sftp.go:withSFTPRetry
       - env/ssh_transport_native.go:WithSFTP
       - env/modal_sealed_recovery_test.go
+  - intent: "#shared-operation-admission"
+    code:
+      - env/modal_operation_admission.go
+      - env/agent.go
+      - env/managed_activity.go:BeginActivity
+      - env/modal_operation_admission_test.go
   - intent: "#scope-and-tradeoffs"
     code:
       - env/environment.go:withRestoreNotice
@@ -160,6 +166,32 @@ Waiting does not make an arbitrary SFTP EOF proof of non-execution. Existing
 operation retry eligibility and replay limits still apply; the probe only
 delays the retry until readiness, cancellation, or timeout. Ambiguous API
 command errors remain non-retryable.
+
+## Shared Operation Admission
+
+Modal agent borrowing and environment file access acquire a managed admission
+lease before dispatching work. Structured refusals of that lease use the same
+bounded command recovery, including endpoint refresh and sandbox replacement.
+No tool-specific or Temporal retry policy is needed, so automatic environment
+operations receive the same protection.
+
+The lease holds the shared admission lock until the protected work finishes.
+Shutdown cannot seal between admission and a search, symbol-definition request,
+or filesystem request on another pooled channel. This also protects filesystem
+operations comprising several SFTP requests without interpreting a dropped SFTP
+stream as proof that those requests never executed.
+
+Acquiring admission may retry; the protected callback is invoked at most once.
+An error returned by that callback never restarts it, even if the error resembles
+an admission refusal. File operations likewise gain no additional replay policy.
+Lease loss cancels the scoped operation context and is returned as an error.
+Admission is released after operation cleanup rather than merely on caller
+cancellation.
+
+This adds an admission exchange around file access and scoped agent borrowing.
+It also keeps a sandbox active for the lifetime of the borrowing callback, not
+just each RPC inside it. The tradeoff avoids replaying arbitrary callbacks or
+whole multi-operation activities while preserving the pooled-client contract.
 
 ## Scope and Tradeoffs
 

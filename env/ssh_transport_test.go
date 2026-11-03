@@ -115,7 +115,14 @@ type stubSSHTransport struct {
 	sftpOps  []SFTPOp
 }
 
-func (s *stubSSHTransport) Exec(context.Context, sideagent.ExecRequest) (sideagent.ExecResponse, error) {
+func (s *stubSSHTransport) Exec(ctx context.Context, req sideagent.ExecRequest) (sideagent.ExecResponse, error) {
+	if req.ActivityLease {
+		if req.OnReady != nil {
+			req.OnReady()
+		}
+		<-ctx.Done()
+		return sideagent.ExecResponse{}, ctx.Err()
+	}
 	return sideagent.ExecResponse{}, nil
 }
 func (s *stubSSHTransport) WithSFTP(_ context.Context, op SFTPOp) (any, error) {
@@ -161,7 +168,9 @@ func TestRemoteEnvFilesystemUsesSelectedTransport(t *testing.T) {
 	original := newNativeSSHTransport
 	var selected *stubSSHTransport
 	newNativeSSHTransport = func(key string, forwards []common.PortForwardConfig, sshEnv SSHCapableEnv) SSHTransport {
-		selected = &stubSSHTransport{key: key, forwards: forwards}
+		if selected == nil {
+			selected = &stubSSHTransport{key: key, forwards: forwards}
+		}
 		return selected
 	}
 	t.Cleanup(func() { newNativeSSHTransport = original })
