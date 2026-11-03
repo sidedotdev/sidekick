@@ -185,6 +185,11 @@ func TestModalGuardEmbeds(t *testing.T) {
 	// dispatches on it.
 	assert.Contains(t, modalSnapshotScript, `\"phase\":\"$phase\"`)
 	assert.Contains(t, modalGuardAppSource, `req.get("phase"`)
+	// The seal is the proof that nothing landed after the shutdown snapshot,
+	// so each request reports it and the guard binds it to what it records.
+	assert.Contains(t, modalSnapshotScript, `\"sealed\":$sealed,\"sealId\":\"$seal_id\"`)
+	assert.Contains(t, modalGuardAppSource, `req.get("sealed")`)
+	assert.Contains(t, modalGuardAppSource, `req.get("sealId")`)
 	assert.Contains(t, modalWatchdogScript, `heartbeat: busy reason=$busy_reason`)
 	assert.Contains(t, modalWatchdogScript, `heartbeat: quiet idle-for=${idle_for}s`)
 	assert.Contains(t, modalWatchdogScript, `snapshot-failures=$snapshot_failures terminate-failures=$terminate_failures`)
@@ -324,6 +329,8 @@ func TestModalSnapshotScript(t *testing.T) {
 		wantDiagnostic string
 		unsetGuardURL  bool
 		wantNoRequest  bool
+		// the sandbox is sealed against new work when the request is made
+		sealed bool
 	}{
 		{
 			name:        "snapshot with metadata",
@@ -337,6 +344,7 @@ func TestModalSnapshotScript(t *testing.T) {
 			phase:       "snapshot",
 			curlMode:    "snapshot-success",
 			wantSuccess: true,
+			sealed:      true,
 		},
 		{
 			name:           "missing required environment",
@@ -372,6 +380,13 @@ func TestModalSnapshotScript(t *testing.T) {
 		},
 		{
 			name:        "terminate success",
+			phase:       "terminate",
+			curlMode:    "terminate-success",
+			wantSuccess: true,
+			sealed:      true,
+		},
+		{
+			name:        "terminate while unsealed",
 			phase:       "terminate",
 			curlMode:    "terminate-success",
 			wantSuccess: true,
@@ -439,6 +454,10 @@ printf '%s' "$body" > "$output_file"
 printf '%s' "$status"
 `), 0o700))
 
+			sealFile := filepath.Join(tempDir, "sealed")
+			if tt.sealed {
+				require.NoError(t, os.WriteFile(sealFile, []byte("1700000000-42-7"), 0o600))
+			}
 			cmd := exec.Command("/bin/sh", snapshotPath, tt.phase)
 			cmd.Env = []string{
 				"PATH=" + tempDir + ":" + os.Getenv("PATH"),
@@ -448,6 +467,7 @@ printf '%s' "$status"
 				"SIDE_SANDBOX_NAME=sandbox-name",
 				"SIDE_IMAGE_VERSION=7",
 				"SIDE_WATCHDOG_LOG_FILE=" + logPath,
+				"SIDE_SEAL_FILE=" + sealFile,
 			}
 			if !tt.unsetGuardURL {
 				cmd.Env = append(cmd.Env, "SIDE_GUARD_URL=https://guard.invalid/hibernate")
@@ -476,12 +496,20 @@ printf '%s' "$status"
 					Phase        string          `json:"phase"`
 					ImageVersion int             `json:"imageVersion"`
 					Meta         json.RawMessage `json:"meta"`
+					Sealed       bool            `json:"sealed"`
+					SealId       string          `json:"sealId"`
 				}
 				require.NoError(t, json.Unmarshal(payloadData, &payload), "payload: %s", payloadData)
 				assert.Equal(t, "sandbox-name", payload.Name)
 				assert.Equal(t, "secret", payload.Token)
 				assert.Equal(t, tt.phase, payload.Phase)
 				assert.Equal(t, 7, payload.ImageVersion)
+				assert.Equal(t, tt.sealed, payload.Sealed)
+				wantSealId := ""
+				if tt.sealed {
+					wantSealId = "1700000000-42-7"
+				}
+				assert.Equal(t, wantSealId, payload.SealId)
 				if tt.meta == "" {
 					assert.JSONEq(t, `{}`, string(payload.Meta))
 				} else {
@@ -534,6 +562,7 @@ func runWatchdogIdleCycle(t *testing.T, script string, scenario watchdogScenario
 		"sidekick-snapshot": `#!/bin/sh
 echo "$1" >> "$FAKE_GUARD_CALLS"
 [ -e "$SIDE_SEAL_FILE" ] && echo "$1" >> "$FAKE_SEALED_DURING"
+echo "$1=$(cat "$SIDE_SEAL_FILE" 2>/dev/null)" >> "$FAKE_SEAL_IDS"
 if [ "$1" = snapshot ] && [ "$FAKE_EDIT_DURING_SNAPSHOT" = 1 ]; then
     date +%s > "$FAKE_MARKER_FILE"
     /bin/sleep 1
@@ -600,6 +629,7 @@ echo "$count" > "$FAKE_SLEEP_COUNT"
 		"SIDE_SEAL_FILE=" + sealFile,
 		"SIDE_TERMINATING_FILE=" + terminatingFile,
 		"FAKE_SEALED_DURING=" + filepath.Join(dir, "sealed-during"),
+		"FAKE_SEAL_IDS=" + filepath.Join(dir, "seal-ids"),
 	}
 	output, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
@@ -614,24 +644,34 @@ echo "$count" > "$FAKE_SLEEP_COUNT"
 	require.NotEmpty(t, logged)
 	_, sealErr := os.Stat(sealFile)
 	sealedDuring, _ := os.ReadFile(filepath.Join(dir, "sealed-during"))
+	sealIds := map[string]string{}
+	sealIdLines, _ := os.ReadFile(filepath.Join(dir, "seal-ids"))
+	for _, line := range strings.Split(strings.TrimSpace(string(sealIdLines)), "\n") {
+		if phase, id, ok := strings.Cut(line, "="); ok {
+			sealIds[phase] = id
+		}
+	}
 	return watchdogCycle{
 		calls:        strings.Fields(string(calls)),
 		output:       string(output),
 		sealed:       sealErr == nil,
 		sealedDuring: strings.Fields(string(sealedDuring)),
+		sealIds:      sealIds,
 		sealLock:     sealLock,
 		sealFile:     sealFile,
 	}
 }
 
 // watchdogCycle is what one idle cycle of the watchdog did: the guard phases
-// it requested, its log, whether the sandbox was left sealed, and which
-// phases ran while the sandbox was sealed against new work.
+// it requested, its log, whether the sandbox was left sealed, which phases
+// ran while the sandbox was sealed against new work, and the seal ID each
+// phase found in the seal file.
 type watchdogCycle struct {
 	calls        []string
 	output       string
 	sealed       bool
 	sealedDuring []string
+	sealIds      map[string]string
 	sealLock     string
 	sealFile     string
 }
@@ -653,6 +693,11 @@ func TestModalWatchdogIdleShutdown(t *testing.T) {
 		assert.Contains(t, cycle.output, "terminate accepted")
 		assert.True(t, cycle.sealed,
 			"a sandbox that dispatched terminate must stay sealed: the terminate may still arrive")
+		// The seal's identity is what binds the terminate to the snapshot
+		// taken under the same seal, so both must see one and the same.
+		assert.NotEmpty(t, cycle.sealIds["snapshot"], "the seal must carry an identity; output: %s", cycle.output)
+		assert.Equal(t, cycle.sealIds["snapshot"], cycle.sealIds["terminate"],
+			"snapshot and terminate must run under the same seal; output: %s", cycle.output)
 	})
 
 	// Termination that cannot be recorded could be forgotten by a restarted
@@ -887,4 +932,224 @@ func runFencedCommand(t *testing.T, binDir, command, lockPath, flagPath string) 
 		t.Fatalf("running the fenced command: %v", err)
 	}
 	return cmd.ProcessState.ExitCode(), stderr.String()
+}
+
+// TestModalLineageResumes pins when a restore may be reported as a lossless
+// resume rather than a rollback. The sealed watchdog terminates a sandbox
+// through the guard only after sealing it against new work and completing a
+// snapshot, so restoring exactly that sealed snapshot of the latest recorded
+// incarnation loses nothing. Every other combination, most importantly a
+// successor that died before its first snapshot, keeps the rollback warning.
+func TestModalLineageResumes(t *testing.T) {
+	t.Parallel()
+
+	cleanRecord := &modalSnapshotRecord{ImageId: "im-1", SandboxId: "sb-A", Sealed: true}
+	cases := []struct {
+		name    string
+		lineage modalIncarnationLineage
+		record  *modalSnapshotRecord
+		want    bool
+	}{
+		{
+			name:    "sealed idle shutdown of the latest incarnation",
+			lineage: modalIncarnationLineage{LatestSandboxId: "sb-A", ShutdownImageId: "im-1"},
+			record:  cleanRecord,
+			want:    true,
+		},
+		{
+			name:    "successor restored from the checkpoint died before any snapshot",
+			lineage: modalIncarnationLineage{LatestSandboxId: "sb-B"},
+			record:  cleanRecord,
+			want:    false,
+		},
+		{
+			name:    "latest incarnation shut down against a newer image than the record",
+			lineage: modalIncarnationLineage{LatestSandboxId: "sb-B", ShutdownImageId: "im-2"},
+			record:  cleanRecord,
+			want:    false,
+		},
+		{
+			name:    "record is a later snapshot than the shutdown checkpoint",
+			lineage: modalIncarnationLineage{LatestSandboxId: "sb-A", ShutdownImageId: "im-1"},
+			record:  &modalSnapshotRecord{ImageId: "im-2", SandboxId: "sb-A", Sealed: true},
+			want:    false,
+		},
+		{
+			name:    "record was not taken under the seal",
+			lineage: modalIncarnationLineage{LatestSandboxId: "sb-A", ShutdownImageId: "im-1"},
+			record:  &modalSnapshotRecord{ImageId: "im-1", SandboxId: "sb-A"},
+			want:    false,
+		},
+		{
+			name:    "record predates sandbox attribution",
+			lineage: modalIncarnationLineage{LatestSandboxId: "sb-A", ShutdownImageId: "im-1"},
+			record:  &modalSnapshotRecord{ImageId: "im-1", Sealed: true},
+			want:    false,
+		},
+		{
+			name:    "no lineage recorded",
+			lineage: modalIncarnationLineage{},
+			record:  cleanRecord,
+			want:    false,
+		},
+		{
+			name:    "no record",
+			lineage: modalIncarnationLineage{LatestSandboxId: "sb-A", ShutdownImageId: "im-1"},
+			record:  nil,
+			want:    false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, tc.lineage.resumes(tc.record))
+		})
+	}
+}
+
+// TestModalRestoreNoticeGating: Restored stays factual metadata (the sandbox
+// was recreated from a snapshot); whether anyone is warned depends on
+// whether that could have lost work. The in-sandbox lineage line is kept in
+// both cases but must not claim a rollback for a resume.
+func TestModalRestoreNoticeGating(t *testing.T) {
+	t.Parallel()
+
+	exitCode := 137
+	rollback := modalEndpointRefresh{
+		Restored:          true,
+		SnapshotImageId:   "im-1",
+		PreviousSandboxID: "sb-A",
+		PreviousExitCode:  &exitCode,
+	}
+	resume := rollback
+	resume.Hibernated = true
+	resume.PreviousExitCode = nil
+	unknownPrevious := modalEndpointRefresh{Restored: true, SnapshotImageId: "im-1"}
+
+	assert.Empty(t, modalEndpointRefresh{}.restoreNotice("side--x"))
+	assert.Empty(t, resume.restoreNotice("side--x"), "a lossless resume warns nobody")
+	notice := rollback.restoreNotice("side--x")
+	assert.Contains(t, notice, "im-1")
+	assert.Contains(t, notice, "sb-A")
+	assert.Contains(t, notice, "137")
+	assert.Contains(t, notice, "lost")
+	assert.NotContains(t, unknownPrevious.restoreNotice("side--x"), "no record",
+		"an unidentifiable predecessor is routine, not an alarm")
+
+	assert.Contains(t, modalRestoreLogLine(rollback), "restored")
+	assert.Contains(t, modalRestoreLogLine(rollback), "sb-A")
+	assert.Contains(t, modalRestoreLogLine(resume), "resumed")
+	assert.NotContains(t, modalRestoreLogLine(resume), "restored")
+}
+
+// TestModalRestoreOutcome covers how a restore is classified once the
+// replacement sandbox exists: from what was actually restored, not what was
+// intended, since creation reselects the image and may fall back to a clean
+// one. Only a restore of the latest incarnation's own sealed checkpoint,
+// with nothing contradicting the lineage, passes as a lossless resume.
+func TestModalRestoreOutcome(t *testing.T) {
+	t.Parallel()
+
+	exitCode := 137
+	checkpoint := &modalSnapshotRecord{ImageId: "im-1", SandboxId: "sb-A", Sealed: true, SnapshotStartedAt: 1_700_000_000}
+	clean := modalIncarnationLineage{LatestSandboxId: "sb-A", ShutdownImageId: "im-1"}
+	restored := ModalCreateSandboxOutput{SandboxName: "side--x", SSHHost: "new.host", SSHPort: 2222, SnapshotImageId: "im-1", Resumed: true}
+	cases := []struct {
+		name           string
+		context        modalRestoreContext
+		output         ModalCreateSandboxOutput
+		wantRestored   bool
+		wantHibernated bool
+		wantPrevious   string
+		// substrings the rollback notice must carry; nil when none is due
+		wantNotice []string
+	}{
+		{
+			name:           "sealed idle shutdown resumed",
+			context:        modalRestoreContext{Record: checkpoint, Lineage: clean},
+			output:         restored,
+			wantRestored:   true,
+			wantHibernated: true,
+			wantPrevious:   "sb-A",
+		},
+		{
+			name:           "finished sandbox still named by Modal agrees with the lineage",
+			context:        modalRestoreContext{PreviousSandboxID: "sb-A", PreviousExitCode: &exitCode, Record: checkpoint, Lineage: clean},
+			output:         restored,
+			wantRestored:   true,
+			wantHibernated: true,
+			wantPrevious:   "sb-A",
+		},
+		{
+			name:         "successor served work and died before any snapshot",
+			context:      modalRestoreContext{Record: checkpoint, Lineage: modalIncarnationLineage{LatestSandboxId: "sb-B"}},
+			output:       restored,
+			wantRestored: true,
+			wantPrevious: "sb-B",
+			wantNotice:   []string{"im-1", "sb-B", "lost"},
+		},
+		{
+			name:         "finished sandbox unknown to the lineage",
+			context:      modalRestoreContext{PreviousSandboxID: "sb-B", PreviousExitCode: &exitCode, Record: checkpoint, Lineage: clean},
+			output:       restored,
+			wantRestored: true,
+			wantPrevious: "sb-B",
+			wantNotice:   []string{"im-1", "sb-B", "137", "lost"},
+		},
+		{
+			name:         "lineage unavailable",
+			context:      modalRestoreContext{Record: checkpoint},
+			output:       restored,
+			wantRestored: true,
+			wantNotice:   []string{"im-1", "lost"},
+		},
+		{
+			name:         "checkpoint could not be restored and the sandbox started from scratch",
+			context:      modalRestoreContext{Record: checkpoint, Lineage: clean},
+			output:       ModalCreateSandboxOutput{SandboxName: "side--x", SSHHost: "new.host", SSHPort: 2222},
+			wantRestored: true,
+			wantPrevious: "sb-A",
+			wantNotice:   []string{"from scratch", "lost"},
+		},
+		{
+			name:         "restored a different image than the checkpoint",
+			context:      modalRestoreContext{Record: checkpoint, Lineage: clean},
+			output:       ModalCreateSandboxOutput{SandboxName: "side--x", SSHHost: "new.host", SSHPort: 2222, SnapshotImageId: "im-2"},
+			wantRestored: true,
+			wantPrevious: "sb-A",
+			wantNotice:   []string{"im-2", "lost"},
+		},
+		{
+			name:         "live successor found instead of restoring",
+			context:      modalRestoreContext{Record: checkpoint, Lineage: clean},
+			output:       ModalCreateSandboxOutput{SandboxName: "side--x", SSHHost: "new.host", SSHPort: 2222, Reused: true},
+			wantPrevious: "sb-A",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			refresh := tc.context.outcome(tc.output)
+			assert.Equal(t, tc.output.SSHHost, refresh.SSHHost)
+			assert.Equal(t, tc.output.SSHPort, refresh.SSHPort)
+			assert.Equal(t, tc.wantRestored, refresh.Restored)
+			assert.Equal(t, tc.wantHibernated, refresh.Hibernated)
+			assert.Equal(t, tc.wantPrevious, refresh.PreviousSandboxID)
+			assert.Equal(t, tc.output.SnapshotImageId, refresh.SnapshotImageId)
+			if tc.output.SnapshotImageId == checkpoint.ImageId {
+				assert.Equal(t, checkpoint.snapshotTime(), refresh.SnapshotTakenAt)
+			} else {
+				assert.True(t, refresh.SnapshotTakenAt.IsZero(), "a snapshot time belongs only to the checkpoint it dates")
+			}
+			notice := refresh.restoreNotice("side--x")
+			if tc.wantNotice == nil {
+				assert.Empty(t, notice)
+				return
+			}
+			for _, want := range tc.wantNotice {
+				assert.Contains(t, notice, want)
+			}
+			assert.NotContains(t, notice, "no record")
+		})
+	}
 }

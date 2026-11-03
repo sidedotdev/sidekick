@@ -1442,7 +1442,9 @@ func TestModalRunCommandReportsRestoreWhenRecoveryFails(t *testing.T) {
 // TestModalRunCommandReportsSnapshotRestore covers the silent-rollback case:
 // when the sandbox died and had to be restored from its last snapshot before
 // the command could run, the command's caller must be told, because every
-// filesystem change made after that snapshot is gone.
+// filesystem change made after that snapshot is gone. A resume from the
+// sealed idle-shutdown snapshot is the routine case and lost nothing, so it
+// must look like an uninterrupted session.
 func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 	transportFailure := "ssh transport failure before agent channel established: ssh handshake with old.host:1 timed out after 10s"
 	exitCode := 137
@@ -1454,11 +1456,18 @@ func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 		PreviousSandboxID: "sb-dead",
 		PreviousExitCode:  &exitCode,
 	}
+	hibernated := restored
+	hibernated.Hibernated = true
+	hibernated.PreviousExitCode = nil
+	unknownPrevious := restored
+	unknownPrevious.PreviousSandboxID = ""
+	unknownPrevious.PreviousExitCode = nil
 	cases := []struct {
 		name         string
 		refresh      modalEndpointRefresh
 		wantNotice   bool
 		wantContains []string
+		wantExcludes []string
 	}{
 		{
 			name:       "endpoint refreshed without restore",
@@ -1470,6 +1479,18 @@ func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 			refresh:      restored,
 			wantNotice:   true,
 			wantContains: []string{"side--test", "im-restored", "sb-dead", "137", "lost"},
+		},
+		{
+			name:         "restored with an unidentifiable previous sandbox",
+			refresh:      unknownPrevious,
+			wantNotice:   true,
+			wantContains: []string{"side--test", "im-restored", "lost"},
+			wantExcludes: []string{"no record"},
+		},
+		{
+			name:       "resumed from idle hibernation",
+			refresh:    hibernated,
+			wantNotice: false,
 		},
 	}
 	for _, tc := range cases {
@@ -1505,7 +1526,7 @@ func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 			}
 			if !tc.wantNotice {
 				if output.Stderr != "warn\n" {
-					t.Fatalf("stderr altered without a restore: %q", output.Stderr)
+					t.Fatalf("stderr altered without a rollback: %q", output.Stderr)
 				}
 				return
 			}
@@ -1515,6 +1536,11 @@ func TestModalRunCommandReportsSnapshotRestore(t *testing.T) {
 			for _, want := range tc.wantContains {
 				if !strings.Contains(output.Stderr, want) {
 					t.Errorf("restore notice missing %q: %q", want, output.Stderr)
+				}
+			}
+			for _, unwanted := range tc.wantExcludes {
+				if strings.Contains(output.Stderr, unwanted) {
+					t.Errorf("restore notice must not contain %q: %q", unwanted, output.Stderr)
 				}
 			}
 		})

@@ -702,6 +702,12 @@ type ModalCreateSandboxOutput struct {
 	SSHHost     string `json:"sshHost"`
 	SSHPort     int    `json:"sshPort"`
 	Reused      bool   `json:"reused"`
+	// SnapshotImageId is the snapshot the sandbox was actually created from;
+	// empty when it started from a clean image or was found running.
+	SnapshotImageId string `json:"snapshotImageId,omitempty"`
+	// Resumed is confirmed by the guard when this incarnation is registered,
+	// rather than inferred from lineage read before creation.
+	Resumed bool `json:"resumed,omitempty"`
 }
 
 type ModalRecreateSandboxInput struct {
@@ -1143,6 +1149,12 @@ type modalEndpointRefresh struct {
 	SSHPort         int
 	Restored        bool
 	SnapshotImageId string
+	// Hibernated reports that the snapshot is the sealed idle-shutdown
+	// checkpoint of the incarnation the host last brought up, so resuming
+	// from it lost nothing: the watchdog's routine hibernate/resume cycle,
+	// which warrants no warning. Restored stays true, since the sandbox was
+	// still recreated.
+	Hibernated bool
 	// SnapshotTakenAt dates the filesystem state the restore brought back;
 	// zero when the guard record predates that bookkeeping.
 	SnapshotTakenAt time.Time
@@ -1162,7 +1174,7 @@ func (r modalEndpointRefresh) snapshotDescription() string {
 
 func (r modalEndpointRefresh) previousSandboxDescription() string {
 	if r.PreviousSandboxID == "" {
-		return "no record of the previous sandbox remains"
+		return "previous sandbox unknown"
 	}
 	description := "last known sandbox " + r.PreviousSandboxID
 	if r.PreviousExitCode != nil {
@@ -1171,15 +1183,197 @@ func (r modalEndpointRefresh) previousSandboxDescription() string {
 	return description
 }
 
-// restoreNotice is the agent-facing explanation of a snapshot restore,
-// empty when nothing was restored.
+// restoreNotice is the agent-facing explanation of a recreation that may
+// have lost work; empty when nothing was recreated or when the restore
+// resumed a sealed idle shutdown, which lost nothing.
 func (r modalEndpointRefresh) restoreNotice(sandboxName string) string {
-	if !r.Restored {
+	if !r.Restored || r.Hibernated {
 		return ""
 	}
-	return fmt.Sprintf("[sidekick] modal sandbox %s was no longer running (%s) and was restored from its last snapshot %s before this command ran. "+
+	if r.SnapshotImageId == "" {
+		return fmt.Sprintf("[sidekick] modal sandbox %s was no longer running (%s) and had no usable snapshot, so it was recreated from scratch before this command ran. "+
+			"All filesystem changes made in it were lost: re-check recent edits and earlier command results before relying on them.",
+			sandboxName, r.previousSandboxDescription())
+	}
+	return fmt.Sprintf("[sidekick] modal sandbox %s was no longer running (%s) and was restored from snapshot %s before this command ran. "+
 		"Filesystem changes made after that snapshot were lost: re-check recent edits and earlier command results before relying on them.",
 		sandboxName, r.previousSandboxDescription(), r.snapshotDescription())
+}
+
+// modalRestoreContext is what is known about a sandbox before it is
+// recreated from a snapshot: the finished sandbox Modal may still name, the
+// checkpoint on offer, and the guard's lineage. The recreation reselects the
+// image and may fall back to a clean one, so what it means for the caller
+// is settled by outcome, from what was actually created.
+type modalRestoreContext struct {
+	PreviousSandboxID string
+	PreviousExitCode  *int
+	Record            *modalSnapshotRecord
+	Lineage           modalIncarnationLineage
+}
+
+func modalRestoreContextFor(ctx context.Context, client *modal.Client, sandboxName string) (modalRestoreContext, error) {
+	restore := modalRestoreContext{}
+	record, err := modalLatestSnapshot(ctx, client, sandboxName)
+	if err != nil {
+		return modalRestoreContext{}, err
+	}
+	restore.Record = record
+	// Modal releases a terminated sandbox's name within seconds, so the
+	// guard's lineage is usually the only account of which incarnation died
+	// and the only proof that it died by its own sealed idle shutdown. An
+	// unreadable lineage proves nothing, so the restore is then reported as
+	// a possible rollback.
+	lineage, err := modalIncarnationLineageFor(ctx, client, sandboxName)
+	if err != nil {
+		log.Warn().Err(err).Str("sandbox", sandboxName).Msg("cannot read modal sandbox lineage; reporting the restore as a possible rollback")
+	}
+	restore.Lineage = lineage
+	lastKnownID := lineage.LatestSandboxId
+	if lastKnownID == "" && record != nil {
+		lastKnownID = record.SandboxId
+	}
+	restore.PreviousSandboxID, restore.PreviousExitCode = modalFinishedSandboxInfo(ctx, sandboxName, lastKnownID)
+	return restore, nil
+}
+
+// previousSandboxId is the incarnation that died: the one Modal still
+// names, else the latest the guard registered.
+func (c modalRestoreContext) previousSandboxId() string {
+	if c.PreviousSandboxID != "" {
+		return c.PreviousSandboxID
+	}
+	return c.Lineage.LatestSandboxId
+}
+
+func (c modalRestoreContext) previousSandboxDescription() string {
+	return modalEndpointRefresh{PreviousSandboxID: c.previousSandboxId(), PreviousExitCode: c.PreviousExitCode}.previousSandboxDescription()
+}
+
+// outcome classifies what a recreation did. It resumed the sandbox
+// losslessly only if the image actually used is the sealed shutdown
+// checkpoint of the latest incarnation the guard knows of, and nothing
+// contradicts that: a finished sandbox Modal still names must be that same
+// incarnation.
+func (c modalRestoreContext) outcome(output ModalCreateSandboxOutput) modalEndpointRefresh {
+	refresh := modalEndpointRefresh{
+		SSHHost:           output.SSHHost,
+		SSHPort:           output.SSHPort,
+		Restored:          !output.Reused,
+		SnapshotImageId:   output.SnapshotImageId,
+		PreviousSandboxID: c.previousSandboxId(),
+		PreviousExitCode:  c.PreviousExitCode,
+	}
+	restoredCheckpoint := c.Record != nil && output.SnapshotImageId != "" && output.SnapshotImageId == c.Record.ImageId
+	if restoredCheckpoint {
+		refresh.SnapshotTakenAt = c.Record.snapshotTime()
+	}
+	previousAgrees := c.PreviousSandboxID == "" || c.PreviousSandboxID == c.Lineage.LatestSandboxId
+	refresh.Hibernated = refresh.Restored && output.Resumed && restoredCheckpoint && previousAgrees && c.Lineage.resumes(c.Record)
+	return refresh
+}
+
+// modalRefreshDeps are the control-plane operations behind an endpoint
+// refresh, injectable so its decisions can be tested without Modal.
+type modalRefreshDeps struct {
+	find           func(ctx context.Context, name string) (*modal.Sandbox, error)
+	awaitSSHD      func(ctx context.Context, sb *modal.Sandbox) error
+	endpoint       func(ctx context.Context, sb *modal.Sandbox) (string, int, error)
+	terminate      func(ctx context.Context, sb *modal.Sandbox) error
+	awaitGone      func(ctx context.Context, name string) error
+	register       func(ctx context.Context, name, sandboxId string) error
+	restoreContext func(ctx context.Context, name string) (modalRestoreContext, error)
+	create         func(ctx context.Context, input ModalCreateSandboxInput) (ModalCreateSandboxOutput, error)
+	recordRestore  func(ctx context.Context, name string, refresh modalEndpointRefresh)
+}
+
+// modalRefreshEndpoint re-resolves the SSH endpoint of a sandbox, recreating
+// it from a snapshot when it no longer exists.
+func modalRefreshEndpoint(ctx context.Context, sandboxName string, deps modalRefreshDeps) (modalEndpointRefresh, error) {
+	sb, err := deps.find(ctx, sandboxName)
+	if err != nil {
+		return modalEndpointRefresh{}, err
+	}
+	if sb != nil {
+		err := deps.awaitSSHD(ctx, sb)
+		if err == nil {
+			// A create that failed after bringing the sandbox up leaves it
+			// running unregistered, and it must not serve work until the
+			// guard knows of it (see modalRecordIncarnation).
+			if err := deps.register(ctx, sandboxName, sb.SandboxID); err != nil {
+				return modalEndpointRefresh{}, err
+			}
+			host, port, err := deps.endpoint(ctx, sb)
+			return modalEndpointRefresh{SSHHost: host, SSHPort: port}, err
+		}
+		switch {
+		case errors.Is(err, errModalContainerGone):
+			// Nothing can run in it again, yet it may keep polling as running
+			// and holding its name; terminating it frees the name for the
+			// restore below.
+			log.Warn().Err(err).Str("sandbox", sandboxName).Msg("modal sandbox container is gone; terminating it to restore from its snapshot")
+			if termErr := deps.terminate(ctx, sb); termErr != nil && !isModalSandboxTerminatingOrTerminated(termErr) {
+				return modalEndpointRefresh{}, fmt.Errorf("failed to terminate modal sandbox %s whose container is gone: %w", sandboxName, termErr)
+			}
+		case !isModalSandboxTerminatingOrTerminated(err):
+			return modalEndpointRefresh{}, err
+		}
+		// The sandbox is mid-shutdown (idle watchdog terminate): wait it out,
+		// then fall through to restore from its snapshot as if already gone.
+		if waitErr := deps.awaitGone(ctx, sandboxName); waitErr != nil {
+			return modalEndpointRefresh{}, waitErr
+		}
+	}
+	restore, err := deps.restoreContext(ctx, sandboxName)
+	if err != nil {
+		return modalEndpointRefresh{}, err
+	}
+	if restore.Record == nil {
+		return modalEndpointRefresh{}, fmt.Errorf("modal sandbox %s no longer exists (%s) and has no snapshot to restore from",
+			sandboxName, restore.previousSandboxDescription())
+	}
+	var config common.ModalEnvConfig
+	if len(restore.Record.Meta) > 0 {
+		if err := json.Unmarshal(restore.Record.Meta, &config); err != nil {
+			log.Warn().Err(err).Str("sandbox", sandboxName).Msg("invalid snapshot config metadata; restoring with defaults")
+		}
+	}
+	output, err := deps.create(ctx, ModalCreateSandboxInput{Name: sandboxName, Config: config})
+	if err != nil {
+		return modalEndpointRefresh{}, err
+	}
+	refresh := restore.outcome(output)
+	logEvent := log.Info()
+	message := "modal sandbox had hibernated; resumed it from its idle-shutdown snapshot"
+	switch {
+	case !refresh.Restored:
+		message = "modal sandbox was gone but a live successor was found; nothing was restored"
+	case refresh.SnapshotImageId == "":
+		logEvent = log.Warn()
+		message = "modal sandbox was gone and its snapshot could not be used; recreated it from scratch, discarding all filesystem changes"
+	case !refresh.Hibernated:
+		logEvent = log.Warn()
+		message = "modal sandbox was gone; restored it from a snapshot, discarding filesystem changes made since"
+	}
+	logEvent = logEvent.
+		Str("sandbox", sandboxName).
+		Str("restoredSandbox", output.SandboxName).
+		Str("snapshotImageId", refresh.SnapshotImageId).
+		Str("checkpointImageId", restore.Record.ImageId).
+		Str("checkpointOfSandbox", restore.Record.SandboxId).
+		Bool("checkpointSealed", restore.Record.Sealed).
+		Time("snapshotTakenAt", refresh.SnapshotTakenAt).
+		Str("previousSandboxId", refresh.PreviousSandboxID).
+		Str("lineageLatestSandboxId", restore.Lineage.LatestSandboxId).
+		Str("lineageShutdownImageId", restore.Lineage.ShutdownImageId)
+	if refresh.PreviousExitCode != nil {
+		logEvent = logEvent.Int("previousExitCode", *refresh.PreviousExitCode)
+	}
+	logEvent.Msg(message)
+	if refresh.Restored {
+		deps.recordRestore(ctx, output.SandboxName, refresh)
+	}
+	return refresh, nil
 }
 
 // refreshModalEndpointDetailed re-resolves a sandbox's SSH tunnel endpoint
@@ -1193,83 +1387,28 @@ var refreshModalEndpointDetailed = func(ctx context.Context, sandboxName string)
 	if err != nil {
 		return modalEndpointRefresh{}, err
 	}
-	sb, err := findModalSandbox(ctx, client, sandboxName)
-	if err != nil {
-		return modalEndpointRefresh{}, err
-	}
-	if sb != nil {
-		err := waitForModalSSHD(ctx, sb)
-		if err == nil {
-			host, port, err := modalTunnelEndpoint(ctx, sb)
-			return modalEndpointRefresh{SSHHost: host, SSHPort: port}, err
-		}
-		switch {
-		case errors.Is(err, errModalContainerGone):
-			// Nothing can run in it again, yet it may keep polling as running
-			// and holding its name; terminating it frees the name for the
-			// restore below.
-			log.Warn().Err(err).Str("sandbox", sandboxName).Msg("modal sandbox container is gone; terminating it to restore from its snapshot")
-			if _, termErr := sb.Terminate(ctx, nil); termErr != nil && !isModalSandboxTerminatingOrTerminated(termErr) {
-				return modalEndpointRefresh{}, fmt.Errorf("failed to terminate modal sandbox %s whose container is gone: %w", sandboxName, termErr)
-			}
-		case !isModalSandboxTerminatingOrTerminated(err):
-			return modalEndpointRefresh{}, err
-		}
-		// The sandbox is mid-shutdown (idle watchdog terminate): wait it out,
-		// then fall through to restore from its snapshot as if already gone.
-		if waitErr := waitForModalSandboxGone(ctx, client, sandboxName); waitErr != nil {
-			return modalEndpointRefresh{}, waitErr
-		}
-	}
-	refresh := modalEndpointRefresh{Restored: true}
-	record, err := modalLatestSnapshot(ctx, client, sandboxName)
-	if err != nil {
-		return modalEndpointRefresh{}, err
-	}
-	var previousID string
-	if sb != nil {
-		previousID = sb.SandboxID
-	} else if record != nil {
-		previousID = record.SandboxId
-	}
-	refresh.PreviousSandboxID, refresh.PreviousExitCode = modalFinishedSandboxInfo(ctx, sandboxName, previousID)
-	if record == nil {
-		return modalEndpointRefresh{}, fmt.Errorf("modal sandbox %s no longer exists (%s) and has no snapshot to restore from",
-			sandboxName, refresh.previousSandboxDescription())
-	}
-	refresh.SnapshotImageId = record.ImageId
-	refresh.SnapshotTakenAt = record.snapshotTime()
-	var config common.ModalEnvConfig
-	if len(record.Meta) > 0 {
-		if err := json.Unmarshal(record.Meta, &config); err != nil {
-			log.Warn().Err(err).Str("sandbox", sandboxName).Msg("invalid snapshot config metadata; restoring with defaults")
-		}
-	}
-	output, err := modalCreateSandbox(ctx, ModalCreateSandboxInput{Name: sandboxName, Config: config})
-	if err != nil {
-		return modalEndpointRefresh{}, err
-	}
-	logEvent := log.Warn().
-		Str("sandbox", sandboxName).
-		Str("restoredSandbox", output.SandboxName).
-		Bool("reusedSuccessor", output.Reused).
-		Str("snapshotImageId", record.ImageId).
-		Str("snapshotOfSandbox", record.SandboxId).
-		Time("snapshotTakenAt", refresh.SnapshotTakenAt).
-		Str("previousSandboxId", refresh.PreviousSandboxID)
-	if refresh.PreviousExitCode != nil {
-		logEvent = logEvent.Int("previousExitCode", *refresh.PreviousExitCode)
-	}
-	logEvent.Msg("modal sandbox was gone; restored it from its last snapshot, discarding filesystem changes made since")
-	if output.Reused {
-		// A live successor was found instead of a fresh restore, so nothing
-		// was rolled back by this call.
-		refresh.Restored = false
-	} else {
-		modalRecordRestoreInSandbox(ctx, output.SandboxName, refresh)
-	}
-	refresh.SSHHost, refresh.SSHPort = output.SSHHost, output.SSHPort
-	return refresh, nil
+	return modalRefreshEndpoint(ctx, sandboxName, modalRefreshDeps{
+		find: func(ctx context.Context, name string) (*modal.Sandbox, error) {
+			return findModalSandbox(ctx, client, name)
+		},
+		awaitSSHD: waitForModalSSHD,
+		endpoint:  modalTunnelEndpoint,
+		terminate: func(ctx context.Context, sb *modal.Sandbox) error {
+			_, err := sb.Terminate(ctx, nil)
+			return err
+		},
+		awaitGone: func(ctx context.Context, name string) error {
+			return waitForModalSandboxGone(ctx, client, name)
+		},
+		register: func(ctx context.Context, name, sandboxId string) error {
+			return modalRecordIncarnation(ctx, client, name, sandboxId, "")
+		},
+		restoreContext: func(ctx context.Context, name string) (modalRestoreContext, error) {
+			return modalRestoreContextFor(ctx, client, name)
+		},
+		create:        modalCreateSandbox,
+		recordRestore: modalRecordRestoreInSandbox,
+	})
 }
 
 // modalFinishedSandboxInfo finds a finished incarnation even after Modal has
@@ -1295,12 +1434,26 @@ func modalFinishedSandboxInfo(ctx context.Context, name, previousID string) (str
 // after the host's own logs and Modal's are gone. Best effort: a restore
 // must not fail because its bookkeeping did.
 func modalRecordRestoreInSandbox(ctx context.Context, sandboxName string, refresh modalEndpointRefresh) {
-	line := fmt.Sprintf("[%s] restored by sidekick host from snapshot %s (%s)",
-		time.Now().UTC().Format(time.RFC3339), refresh.snapshotDescription(), refresh.previousSandboxDescription())
-	command := fmt.Sprintf("printf '%%s\\n' %s >> /var/log/sidekick-watchdog.log", shellQuote(line))
+	command := fmt.Sprintf("printf '%%s\\n' %s >> /var/log/sidekick-watchdog.log", shellQuote(modalRestoreLogLine(refresh)))
 	if _, err := modalExecCommand(ctx, sandboxName, command); err != nil {
 		log.Warn().Err(err).Str("sandbox", sandboxName).Msg("failed to record snapshot restore in modal sandbox watchdog log")
 	}
+}
+
+// modalRestoreLogLine is the watchdog-log entry for a recreation. A resume
+// from the sealed idle shutdown is recorded as such, so the log never reads
+// as a rollback that did not happen.
+func modalRestoreLogLine(refresh modalEndpointRefresh) string {
+	kind := "restored by sidekick host"
+	if refresh.Hibernated {
+		kind = "resumed by sidekick host after idle hibernation"
+	}
+	source := "from snapshot " + refresh.snapshotDescription()
+	if refresh.SnapshotImageId == "" {
+		source = "from scratch, no usable snapshot"
+	}
+	return fmt.Sprintf("[%s] %s %s (%s)",
+		time.Now().UTC().Format(time.RFC3339), kind, source, refresh.previousSandboxDescription())
 }
 
 // modalCreateSandbox creates a Modal sandbox running sshd behind a Modal
@@ -1481,6 +1634,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 		return ModalCreateSandboxOutput{}, err
 	}
 	reused := sb != nil
+	var restoredFrom string
 
 	if sb == nil {
 		app, err := client.Apps.FromName(ctx, modalAppName, &modal.AppFromNameParams{CreateIfMissing: true})
@@ -1498,6 +1652,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 			if err != nil {
 				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to load pinned modal snapshot image %s: %w", input.SnapshotImageId, err)
 			}
+			restoredFrom = input.SnapshotImageId
 		}
 		for _, snapName := range modalSnapshotSources(input, name) {
 			record, snapErr := modalLookupRestoreSource(name, snapName, func(source string) (*modalSnapshotRecord, error) {
@@ -1523,6 +1678,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 				continue
 			}
 			image = snapImage
+			restoredFrom = record.ImageId
 			break
 		}
 		if image == nil {
@@ -1559,6 +1715,7 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 				return ModalCreateSandboxOutput{}, fmt.Errorf("modal sandbox %s already exists but is not running", name)
 			}
 			reused = true
+			restoredFrom = ""
 		}
 		if !reused {
 			// The tag is the guard's auth record for this sandbox's token;
@@ -1568,6 +1725,17 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 				return ModalCreateSandboxOutput{}, fmt.Errorf("failed to set modal guard token tag on sandbox %s: %w", name, tagErr)
 			}
 		}
+	}
+
+	// Registered before the endpoint is handed out, whether the sandbox is
+	// new or found running: a later restore is reported as lossless only if
+	// the incarnation the guard terminated was the last one registered, so
+	// an incarnation serving work unregistered could pass its own death off
+	// as its predecessor's clean shutdown. On failure the sandbox is left
+	// running; the retried create finds and registers it before use.
+	resumed, err := modalRegisterIncarnation(ctx, client, name, sb.SandboxID, restoredFrom)
+	if err != nil {
+		return ModalCreateSandboxOutput{}, err
 	}
 
 	modalRegisterSeedSandbox(input.RepoDir, name)
@@ -1589,10 +1757,12 @@ func modalCreateSandboxOnce(ctx context.Context, input ModalCreateSandboxInput) 
 		return ModalCreateSandboxOutput{}, err
 	}
 	return ModalCreateSandboxOutput{
-		SandboxName: name,
-		SSHHost:     sshHost,
-		SSHPort:     sshPort,
-		Reused:      reused,
+		SandboxName:     name,
+		SSHHost:         sshHost,
+		SSHPort:         sshPort,
+		Reused:          reused,
+		SnapshotImageId: restoredFrom,
+		Resumed:         resumed,
 	}, nil
 }
 
@@ -1623,6 +1793,14 @@ func modalCheckSandbox(ctx context.Context, sandboxName string) (ModalCheckSandb
 		return ModalCheckSandboxOutput{}, nil
 	}
 	if code, waitErr := proc.Wait(ctx); waitErr != nil || code != 0 {
+		return ModalCheckSandboxOutput{}, nil
+	}
+	// Handing out the endpoint lets work reach the sandbox, which the guard
+	// must know of first (see modalRecordIncarnation); one it cannot record
+	// is reported as not alive so that creation, which also registers,
+	// takes over.
+	if err := modalRecordIncarnation(ctx, client, sandboxName, sb.SandboxID, ""); err != nil {
+		log.Warn().Err(err).Str("sandbox", sandboxName).Msg("modal sandbox is running but could not be registered with the guard; reporting it as not alive")
 		return ModalCheckSandboxOutput{}, nil
 	}
 	sshHost, sshPort, err := modalTunnelEndpoint(ctx, sb)

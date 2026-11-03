@@ -170,14 +170,21 @@ func countOf(events []string, event string) int {
 
 // A refresh that restored the sandbox from a snapshot rolled its filesystem
 // back. File operations have no stderr to carry that, so the recovery must log
-// the notice; an ordinary endpoint move must not cry wolf.
+// the notice; an ordinary endpoint move or a resume from the sealed idle
+// shutdown must not cry wolf.
 func TestModalSSHTransportRecoveryLogsSnapshotRestore(t *testing.T) {
-	for _, restored := range []bool{true, false} {
-		name := "restored"
-		if !restored {
-			name = "endpoint moved without restore"
-		}
-		t.Run(name, func(t *testing.T) {
+	cases := []struct {
+		name       string
+		restored   bool
+		hibernated bool
+		wantNotice bool
+	}{
+		{name: "restored", restored: true, wantNotice: true},
+		{name: "endpoint moved without restore"},
+		{name: "resumed from idle hibernation", restored: true, hibernated: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			refresh := modalEndpointRefresh{
 				SSHHost:         "r450.modal.host",
 				SSHPort:         40001,
@@ -185,7 +192,8 @@ func TestModalSSHTransportRecoveryLogsSnapshotRestore(t *testing.T) {
 				SnapshotImageId: "im-transport-restore",
 			}
 			notice := refresh.restoreNotice("side--transport")
-			refresh.Restored = restored
+			refresh.Restored = tc.restored
+			refresh.Hibernated = tc.hibernated
 			previous := refreshModalEndpointDetailed
 			t.Cleanup(func() { refreshModalEndpointDetailed = previous })
 			refreshModalEndpointDetailed = func(context.Context, string) (modalEndpointRefresh, error) {
@@ -202,10 +210,11 @@ func TestModalSSHTransportRecoveryLogsSnapshotRestore(t *testing.T) {
 			assert.True(t, recovered)
 			assert.Equal(t, "r450.modal.host", e.SSHHost)
 			assert.Equal(t, 40001, e.SSHPort)
-			if restored {
+			if tc.wantNotice {
 				assert.Contains(t, logs.String(), notice)
 			} else {
 				assert.NotContains(t, logs.String(), "restored from its last snapshot")
+				assert.NotContains(t, logs.String(), "lost")
 			}
 		})
 	}

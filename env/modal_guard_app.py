@@ -75,6 +75,12 @@ class SnapshotRecord:
     snapshotStartedAt: Optional[float] = None
     # The sandbox incarnation the published snapshot was taken from.
     sandboxId: str = ""
+    # Whether the sandbox was sealed against new work when the snapshot was
+    # requested, and under which seal (the watchdog names each seal it
+    # takes). A sealed snapshot captures everything the sandbox ever
+    # acknowledged, provided the seal held until termination.
+    sealed: bool = False
+    sealId: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "SnapshotRecord":
@@ -87,6 +93,8 @@ class SnapshotRecord:
             lastShutdown=data.get("lastShutdown"),
             snapshotStartedAt=data.get("snapshotStartedAt"),
             sandboxId=data.get("sandboxId") or "",
+            sealed=bool(data.get("sealed")),
+            sealId=data.get("sealId") or "",
         )
 
     def to_dict(self) -> dict:
@@ -105,6 +113,10 @@ class SnapshotRecord:
             record["snapshotStartedAt"] = self.snapshotStartedAt
         if self.sandboxId:
             record["sandboxId"] = self.sandboxId
+        if self.sealed:
+            record["sealed"] = True
+        if self.sealId:
+            record["sealId"] = self.sealId
         return record
 
     def tracked_images(self) -> List[str]:
@@ -127,6 +139,7 @@ def _record_path(name: str) -> str:
 #   <name>.snapshots/<key>.json one immutable entry per published snapshot
 #   <name>.pending/<imageId>    marker: deletion of this image failed
 #   <name>.events/<key>.json    one immutable lifecycle event each
+#   <name>.lineage/<key>.json   one immutable incarnation or shutdown entry
 #
 # Handlers for one name can overlap (the watchdog's snapshot and a
 # host-requested one), and the volume offers no locking, so nothing here is
@@ -143,6 +156,10 @@ def _pending_dir(name: str) -> str:
 
 def _events_dir(name: str) -> str:
     return os.path.join(SNAPSHOT_DIR, name.replace("/", "_") + ".events")
+
+
+def _lineage_dir(name: str) -> str:
+    return os.path.join(SNAPSHOT_DIR, name.replace("/", "_") + ".lineage")
 
 
 def _unique_key(stamp: float) -> str:
@@ -173,10 +190,11 @@ def _list_dir(path: str) -> List[str]:
 
 
 # Lifecycle events are the one durable account of which snapshots were taken
-# (or failed) and when a sandbox was terminated: Modal's own logs for the
-# guard and for sandboxes are retained only briefly, and a terminated
-# incarnation takes its in-sandbox logs with it. Bounded so a long-lived name
-# cannot grow the directory forever.
+# (or failed), when a sandbox was terminated, and which incarnations the host
+# brought up under a name: Modal's own logs for the guard and for sandboxes
+# are retained only briefly, and a terminated incarnation takes its
+# in-sandbox logs with it. Bounded so a long-lived name cannot grow the
+# directory forever.
 MAX_EVENTS = 1000
 
 
@@ -198,6 +216,113 @@ def _append_event(name: str, event: dict) -> None:
         snapshots.commit()
     except Exception as exc:  # noqa: BLE001
         print("failed to append guard event for %s: %r" % (name, exc))
+
+
+# The lineage is the guard's account of which incarnations the host brought
+# up under a name and which of them ended by their own sealed idle shutdown.
+# It decides whether a restore is reported as a lossless resume, so unlike
+# the diagnostic events it is written fail-closed and is bounded by
+# incarnation count rather than by the far higher churn of events.
+MAX_LINEAGE_ENTRIES = 200
+
+
+def _list_lineage(name: str) -> List[dict]:
+    """Every retained lineage entry, oldest first. An entry pruned by a
+    concurrent handler is skipped; a malformed one raises rather than being
+    misread, since the lineage can excuse a warning."""
+    entries: List[dict] = []
+    for entry_name in _list_dir(_lineage_dir(name)):
+        if not entry_name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(_lineage_dir(name), entry_name)) as entry_file:
+                entries.append(json.load(entry_file))
+        except FileNotFoundError:
+            continue
+    return entries
+
+
+def _write_lineage(name: str, entry: dict) -> None:
+    """Durably add a lineage entry; storage failures raise. Pruning keeps
+    the newest entries, which always include the latest incarnation and
+    its shutdown."""
+    now = time.time()
+    record = {"at": now}
+    record.update(entry)
+    _write_file(os.path.join(_lineage_dir(name), _unique_key(now) + ".json"), json.dumps(record))
+    existing = _list_dir(_lineage_dir(name))
+    if len(existing) > 2 * MAX_LINEAGE_ENTRIES:
+        for stale in existing[: len(existing) - MAX_LINEAGE_ENTRIES]:
+            try:
+                os.remove(os.path.join(_lineage_dir(name), stale))
+            except FileNotFoundError:
+                pass
+    snapshots.commit()
+
+
+def _lineage(name: str) -> dict:
+    """The latest incarnation registered under a name and, if it ended by
+    its own sealed idle shutdown, the checkpoint it was terminated against.
+
+    Each registration supersedes the incarnations it observed and the one it
+    was restored from, so "latest" follows those relations rather than write
+    order: a registration that lands late (its host stalled between the
+    guard's liveness check and the write) cannot displace a successor
+    registered meanwhile. Anything but exactly one unsuperseded incarnation
+    reads as no lineage, which the host treats as unproven.
+    """
+    entries = _list_lineage(name)
+    registered: List[str] = []
+    superseded = set()
+    for entry in entries:
+        sandbox_id = entry.get("sandboxId") or ""
+        if entry.get("kind") != "incarnation" or not sandbox_id:
+            continue
+        if sandbox_id not in registered:
+            registered.append(sandbox_id)
+        superseded.update(entry.get("supersedes") or [])
+    current = [sandbox_id for sandbox_id in registered if sandbox_id not in superseded]
+    if len(current) != 1:
+        return {"latestSandboxId": "", "shutdownImageId": ""}
+    latest = current[0]
+    shutdown_image = ""
+    for entry in entries:
+        if entry.get("kind") == "shutdown" and entry.get("sandboxId") == latest:
+            shutdown_image = entry.get("imageId") or ""
+    return {"latestSandboxId": latest, "shutdownImageId": shutdown_image}
+
+
+def _requested_seal(req: dict) -> str:
+    """The seal a watchdog request was made under, or "" when the sandbox
+    was not sealed or the seal has no identity (older watchdogs), which
+    cannot be told apart from a seal that was lifted and taken again."""
+    if not req.get("sealed"):
+        return ""
+    return str(req.get("sealId") or "")
+
+
+def _is_sealed_shutdown_checkpoint(latest: Optional[SnapshotRecord], sandbox_id: str, req: dict) -> bool:
+    """Whether the termination being requested completes a sealed idle
+    shutdown whose checkpoint is the latest snapshot: taken of this very
+    sandbox under the very seal the termination is requested under. A
+    checkpoint from an earlier seal cycle may predate work that landed once
+    that seal was lifted, so it proves nothing for this one."""
+    seal_id = _requested_seal(req)
+    return bool(
+        latest and seal_id and latest.sealed and latest.sealId == seal_id and latest.sandboxId == sandbox_id
+    )
+
+
+def _record_shutdown(name: str, sandbox_id: str, image_id: str, seal_id: str) -> None:
+    """Durably attribute a sealed idle shutdown to its checkpoint before the
+    sandbox is terminated: if this cannot be recorded the termination fails,
+    and the watchdog retries it against the still-sealed sandbox."""
+    for entry in _list_lineage(name):
+        if entry.get("kind") == "shutdown" and entry.get("sandboxId") == sandbox_id and entry.get("imageId") == image_id:
+            # A failed commit can leave the entry visible in this container.
+            snapshots.commit()
+            return
+    _write_lineage(name, {"kind": "shutdown", "sandboxId": sandbox_id, "imageId": image_id, "sealId": seal_id})
 
 
 def _read_legacy_record(name: str) -> Optional[SnapshotRecord]:
@@ -270,6 +395,8 @@ def _read_record(name: str) -> Optional[SnapshotRecord]:
         pendingDelete=pending,
         snapshotStartedAt=latest.snapshotStartedAt,
         sandboxId=latest.sandboxId,
+        sealed=latest.sealed,
+        sealId=latest.sealId,
     )
 
 
@@ -366,7 +493,10 @@ def hibernate(req: dict):
     lands while the (non-destructive) snapshot is being taken: phase
     "snapshot" snapshots the filesystem and records it, leaving the sandbox
     running; phase "terminate" terminates it. Requests without a phase
-    (older watchdogs) do both at once.
+    (older watchdogs) do both at once. Requests made with the sandbox sealed
+    against new work carry the seal's identity; a termination under the same
+    seal as the latest snapshot is recorded as a clean shutdown, which lets
+    the host restore that snapshot without warning of lost work.
 
     Callers authenticate with a per-sandbox token, so a compromised sandbox
     can only hibernate itself, never its siblings.
@@ -411,15 +541,18 @@ def hibernate(req: dict):
             raise
         event("terminated", imageId=image_id)
 
+    seal_id = _requested_seal(req)
     if phase == "terminate":
         latest = _read_record(name)
+        if _is_sealed_shutdown_checkpoint(latest, sb.object_id, req):
+            _record_shutdown(name, sb.object_id, latest.imageId, seal_id)
         terminate(latest.imageId if latest else "")
         return JSONResponse({"status": "terminated"}, status_code=202)
 
     # The request's start is the best available bound on the state a snapshot
     # holds: Modal does not report when the filesystem was captured.
     started = time.time()
-    event("snapshot_started")
+    event("snapshot_started", sealId=seal_id)
     # Retained indefinitely (the default is 30 days): a flow can sit idle for
     # months and must still be restorable from its last snapshot. Retention is
     # therefore bounded only by the keep-latest-2 GC in _publish_snapshot.
@@ -441,6 +574,8 @@ def hibernate(req: dict):
                 meta=req.get("meta"),
                 snapshotStartedAt=started,
                 sandboxId=sb.object_id,
+                sealed=bool(seal_id),
+                sealId=seal_id,
             ),
         )
     except Exception as exc:
@@ -517,16 +652,17 @@ def delete_snapshot(name: str) -> str:
             {"deletedImages": deleted_images, "failedImages": failed, "recordDeleted": False}
         )
 
+    directories = (
+        _snapshots_dir(name), _pending_dir(name), _events_dir(name), _deleted_dir(name), _lineage_dir(name),
+    )
     for path in [_record_path(name)] + [
-        os.path.join(directory, entry)
-        for directory in (_snapshots_dir(name), _pending_dir(name), _events_dir(name), _deleted_dir(name))
-        for entry in _list_dir(directory)
+        os.path.join(directory, entry) for directory in directories for entry in _list_dir(directory)
     ]:
         try:
             os.remove(path)
         except FileNotFoundError:
             pass
-    for directory in (_snapshots_dir(name), _pending_dir(name), _events_dir(name), _deleted_dir(name)):
+    for directory in directories:
         try:
             os.rmdir(directory)
         except OSError:
@@ -565,6 +701,72 @@ def latest_snapshot(name: str) -> str:
     """
     record = _read_record(name)
     return json.dumps(record.to_dict()) if record else ""
+
+
+@app.function(image=image, volumes={SNAPSHOT_DIR: snapshots})
+def record_incarnation(name: str, sandbox_id: str, restored_from: str = "") -> str:
+    """Register the sandbox running under name, before it can accept work.
+
+    Never best effort: an incarnation missing from the lineage would let its
+    predecessor's clean shutdown pass for its own, so a storage failure
+    raises and the host withholds the sandbox. Only the sandbox live under
+    the name may be registered. Idempotent, since a create whose result was
+    lost is retried.
+
+    The incarnations observed here are read before the liveness check: every
+    one of them was live under the name before this sandbox was, so this
+    registration supersedes them all, however late it lands. The incarnation
+    whose snapshot this one was restored from is older still.
+    """
+    if not name or not sandbox_id:
+        raise ValueError("record_incarnation requires a sandbox name and sandbox id")
+    snapshots.reload()
+    observed = [
+        entry.get("sandboxId") for entry in _list_lineage(name)
+        if entry.get("kind") == "incarnation" and entry.get("sandboxId")
+    ]
+    predecessor = ""
+    resumed = False
+    if restored_from:
+        record = _read_record(name)
+        if record is not None and record.imageId == restored_from:
+            predecessor = record.sandboxId
+            lineage = _lineage(name)
+            resumed = bool(
+                record.sealed and predecessor
+                and lineage["latestSandboxId"] == predecessor
+                and lineage["shutdownImageId"] == restored_from
+            )
+    try:
+        sb = modal.Sandbox.from_name(SANDBOX_APP_NAME, name)
+    except modal.exception.NotFoundError:
+        raise ValueError("no sandbox is running under %s; refusing to register %s" % (name, sandbox_id))
+    if sb.object_id != sandbox_id or sb.poll() is not None:
+        raise ValueError("sandbox %s is not the one running under %s; refusing to register it" % (sandbox_id, name))
+    if sandbox_id in observed:
+        # A failed commit can leave the entry visible in this container.
+        snapshots.commit()
+        return json.dumps({"recorded": False})
+    supersedes = [other for other in dict.fromkeys(observed + [predecessor]) if other and other != sandbox_id]
+    entry = {"kind": "incarnation", "sandboxId": sandbox_id, "supersedes": supersedes}
+    if restored_from:
+        entry["restoredFrom"] = restored_from
+    if predecessor:
+        entry["predecessorSandboxId"] = predecessor
+    _write_lineage(name, entry)
+    event = {"event": "created", "sandboxId": sandbox_id}
+    if restored_from:
+        event["restoredFrom"] = restored_from
+    _append_event(name, event)
+    return json.dumps({"recorded": True, "resumed": resumed})
+
+
+@app.function(image=image, volumes={SNAPSHOT_DIR: snapshots})
+def incarnation_lineage(name: str) -> str:
+    """Return the lineage (see _lineage) the host consults before reporting
+    a restore. Storage failures raise rather than read as no lineage."""
+    snapshots.reload()
+    return json.dumps(_lineage(name))
 
 
 @app.function(image=image, volumes={SNAPSHOT_DIR: snapshots})

@@ -36,6 +36,18 @@ intent_links:
       - env/remote_sftp.go:withSFTPRetry
       - env/ssh_transport_native.go:WithSFTP
       - env/modal_sealed_recovery_test.go
+  - intent: "#a-resume-is-not-a-rollback"
+    code:
+      - env/modal_guard_app.py
+      - env/modal_snapshot.sh
+      - env/modal_watchdog.sh
+      - env/modal_guard.go:modalIncarnationLineage
+      - env/modal.go:modalRestoreContext
+      - env/modal.go:modalRefreshEndpoint
+      - env/modal.go:modalCreateSandboxOnce
+      - env/modal.go:modalCheckSandbox
+      - env/modal_guard_behavior_test.go:TestModalGuardIncarnationLineage
+      - env/modal_refresh_test.go:TestModalRefreshEndpoint
   - intent: "#scope-and-tradeoffs"
     code:
       - env/environment.go:withRestoreNotice
@@ -160,6 +172,28 @@ Waiting does not make an arbitrary SFTP EOF proof of non-execution. Existing
 operation retry eligibility and replay limits still apply; the probe only
 delays the retry until readiness, cancellation, or timeout. Ambiguous API
 command errors remain non-retryable.
+
+## A Resume Is Not a Rollback
+
+Restoring the sealed shutdown snapshot of the incarnation that was last
+brought up loses nothing: it is the ordinary idle hibernate/resume cycle, and
+nobody is warned about it (not command stderr, not SFTP or transport recovery
+logs, not the in-sandbox lineage log). Every other recreation is reported as
+a possible rollback, including one that fell back to a clean image because
+the checkpoint could not be used.
+
+The proof lives with the guard, because only the guard sees both halves: the
+host registers every incarnation it brings up (or finds running) before that
+incarnation can accept work, and the guard records a clean shutdown only
+when it terminates an incarnation under the same named seal its latest
+snapshot was taken under. A checkpoint from a seal that was since lifted
+proves nothing, since work may have landed in between. A successor that dies
+before its first snapshot keeps the warning: its predecessor's clean shutdown
+never vouches for it, and a registration that lands late never displaces its
+successor. Missing, unreadable or contradictory evidence (Modal still naming
+a different finished sandbox) also keeps the warning. Registration fails
+closed: an incarnation the guard could not record is not handed out, by
+creation, by check, or by endpoint refresh.
 
 ## Scope and Tradeoffs
 

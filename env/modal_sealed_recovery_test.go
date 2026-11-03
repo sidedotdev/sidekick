@@ -266,14 +266,20 @@ func TestModalAdmissionWaitBudget(t *testing.T) {
 }
 
 func TestModalSFTPRecoverySurfacesProbeRestore(t *testing.T) {
+	cases := []struct {
+		name       string
+		restored   bool
+		hibernated bool
+		wantNotice bool
+	}{
+		{name: "restored", restored: true, wantNotice: true},
+		{name: "ordinary stderr is not a restore"},
+		{name: "resumed from idle hibernation", restored: true, hibernated: true},
+	}
 	for _, kind := range []string{"native", "legacy"} {
 		t.Run(kind, func(t *testing.T) {
-			for _, restored := range []bool{true, false} {
-				name := "restored"
-				if !restored {
-					name = "ordinary stderr is not a restore"
-				}
-				t.Run(name, func(t *testing.T) {
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
 					t.Setenv(SSHTransportEnvVar, kind)
 					server := startSSHTestServer(t, sshTestServerOptions{})
 					refresh := modalEndpointRefresh{
@@ -283,7 +289,8 @@ func TestModalSFTPRecoverySurfacesProbeRestore(t *testing.T) {
 						SnapshotImageId: "im-readiness-checkpoint",
 					}
 					notice := refresh.restoreNotice("side--probe")
-					refresh.Restored = restored
+					refresh.Restored = tc.restored
+					refresh.Hibernated = tc.hibernated
 					previous := refreshModalEndpointDetailed
 					t.Cleanup(func() { refreshModalEndpointDetailed = previous })
 					refreshes := 0
@@ -329,7 +336,7 @@ func TestModalSFTPRecoverySurfacesProbeRestore(t *testing.T) {
 					require.NoError(t, err)
 					assert.NotNil(t, value)
 					assert.Equal(t, 2, operations)
-					if restored {
+					if tc.wantNotice {
 						assert.Contains(t, logs.String(), notice)
 					} else {
 						assert.NotContains(t, logs.String(), notice)

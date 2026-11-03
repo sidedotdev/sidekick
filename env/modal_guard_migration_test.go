@@ -99,10 +99,7 @@ print("OK")
 
 func TestModalGuardLegacyMigration(t *testing.T) {
 	t.Parallel()
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("python3 unavailable")
-	}
+	python := requireGuardTestPython(t)
 	for _, name := range []string{"retainPrevious", "pending", "partialDelete", "interruptedWrite"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

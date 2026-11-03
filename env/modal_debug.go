@@ -124,6 +124,15 @@ func debugModalSnapshotRecord(ctx context.Context, w io.Writer, client *modal.Cl
 		fmt.Fprintf(w, "%s Snapshot: imageId=%s imageVersion=%d takenAt=%s ofSandbox=%q history=%v\n",
 			now, record.ImageId, record.ImageVersion, taken, record.SandboxId, record.History)
 	}
+	// The lineage decides whether restoring that snapshot would be reported
+	// as a lossless resume or as a possible rollback.
+	lineage, err := modalIncarnationLineageFor(ctx, client, name)
+	if err != nil {
+		fmt.Fprintf(w, "%s Lineage error: %v\n", now, err)
+		return
+	}
+	fmt.Fprintf(w, "%s Lineage: latestSandbox=%q shutdownImage=%q restoreWouldBeLosslessResume=%t\n",
+		now, lineage.LatestSandboxId, lineage.ShutdownImageId, lineage.resumes(record))
 }
 
 // DebugModalSnapshotEvents prints the guard's durable lifecycle events for

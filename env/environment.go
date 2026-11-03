@@ -1276,8 +1276,8 @@ func (e *ModalEnv) runCommandWithRestoreNotice(ctx context.Context, input EnvRun
 	for round := 1; round <= maxModalRecoveryRounds; round++ {
 		var refresh modalEndpointRefresh
 		refresh, refreshErr = recovery.restoreAccess(ctx, diagnostics)
-		if refresh.Restored {
-			restoreNotice = refresh.restoreNotice(e.SandboxName)
+		if notice := refresh.restoreNotice(e.SandboxName); notice != "" {
+			restoreNotice = notice
 		}
 		if refreshErr != nil {
 			log.Warn().Err(refreshErr).Str("sandbox", e.SandboxName).Msg("failed to restore modal SSH access")
@@ -1446,10 +1446,10 @@ func (r *modalSSHTransportRecovery) recover(ctx context.Context, cause error) (b
 		return false, nil
 	}
 	refresh, err := r.restoreAccess(ctx, message)
-	if refresh.Restored {
+	if notice := refresh.restoreNotice(r.env.SandboxName); notice != "" {
 		// File operations have no stderr to carry the rollback notice, so the
 		// log is the only place the lost work is recorded.
-		log.Ctx(ctx).Warn().Str("sandbox", r.env.SandboxName).Msg(refresh.restoreNotice(r.env.SandboxName))
+		log.Ctx(ctx).Warn().Str("sandbox", r.env.SandboxName).Msg(notice)
 	}
 	if errors.Is(err, errModalKeyStillRejected) {
 		return false, nil

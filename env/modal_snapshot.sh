@@ -43,7 +43,18 @@ trap 'rm -f "$response_file" "$error_file"' EXIT HUP INT TERM
 
 meta="${SIDE_SANDBOX_META:-}"
 [ -n "$meta" ] || meta='{}'
-payload="{\"name\":\"$SIDE_SANDBOX_NAME\",\"token\":\"$SIDE_GUARD_TOKEN\",\"phase\":\"$phase\",\"imageVersion\":${SIDE_IMAGE_VERSION:-0},\"meta\":$meta}"
+# The seal file is the watchdog's proof that no work was admitted while this
+# request ran, and its content names the seal, so the guard can tell a
+# checkpoint taken under this seal from one left by an earlier seal that has
+# since been lifted. Only the regular file the watchdog writes counts.
+seal_file="${SIDE_SEAL_FILE:-/tmp/.sidekick-sealed}"
+sealed=false
+seal_id=""
+if [ -f "$seal_file" ]; then
+    sealed=true
+    seal_id=$(tr -cd 'A-Za-z0-9._-' < "$seal_file" 2>/dev/null)
+fi
+payload="{\"name\":\"$SIDE_SANDBOX_NAME\",\"token\":\"$SIDE_GUARD_TOKEN\",\"phase\":\"$phase\",\"imageVersion\":${SIDE_IMAGE_VERSION:-0},\"sealed\":$sealed,\"sealId\":\"$seal_id\",\"meta\":$meta}"
 # The guard holds the HTTP request open while the snapshot runs, so the curl
 # cutoff must outlive the guard's SNAPSHOT_TIMEOUT_SECONDS deadline (see
 # modal_guard_app.py); terminate responds quickly.

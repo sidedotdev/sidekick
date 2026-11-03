@@ -28,10 +28,7 @@ func TestModalGuardRevisionIsolationAndRestore(t *testing.T) {
 		"different binaries must not replace each other's guard deployment")
 	require.Equal(t, firstName, modalGuardAppName())
 
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("python3 unavailable")
-	}
+	python := requireGuardTestPython(t)
 	dir := t.TempDir()
 	for name, content := range map[string]string{
 		"modal.py":  modalStub,

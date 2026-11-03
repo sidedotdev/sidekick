@@ -118,7 +118,12 @@ terminating_file="${SIDE_TERMINATING_FILE:-/tmp/.sidekick-terminating}"
 seal() {
     # without flock the drain cannot be proven, so the shutdown is abandoned
     command -v flock >/dev/null 2>&1 || return 1
-    flock -x -w "$SEAL_WAIT" "$seal_lock" -c ": > '$seal_file'"
+    # The seal's name travels with every guard request made under it, so a
+    # checkpoint taken under a seal that was since lifted never passes for
+    # this one's: unique per seal taken by this process, and across watchdog
+    # restarts by pid.
+    seal_id="$(date +%s)-$$-$polls"
+    flock -x -w "$SEAL_WAIT" "$seal_lock" -c "printf '%s' '$seal_id' > '$seal_file'"
 }
 
 unseal() {

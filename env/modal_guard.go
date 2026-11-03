@@ -452,6 +452,9 @@ type modalSnapshotRecord struct {
 	SnapshotStartedAt float64 `json:"snapshotStartedAt,omitempty"`
 	// SandboxId names the incarnation the published snapshot was taken from.
 	SandboxId string `json:"sandboxId,omitempty"`
+	// Sealed reports that the sandbox was sealed against new work, under a
+	// named seal, when the snapshot was taken.
+	Sealed bool `json:"sealed,omitempty"`
 }
 
 // snapshotTime is the published snapshot's start time, or the zero time when
@@ -484,6 +487,84 @@ func modalSnapshotEvents(ctx context.Context, client *modal.Client, sandboxName 
 		return nil, nil
 	}
 	return strings.Split(strings.TrimSpace(encoded), "\n"), nil
+}
+
+// modalIncarnationLineage is the guard's account of the incarnations the
+// host brought up under a sandbox name. It is what tells a lossless resume
+// apart from a rollback: the idle watchdog seals a sandbox against new
+// work, snapshots it, and asks the guard to terminate it under that same
+// seal, so restoring exactly that snapshot of the latest incarnation brings
+// back everything it ever accepted. Any other restore may have lost work.
+type modalIncarnationLineage struct {
+	// LatestSandboxId is the latest registered incarnation; empty when
+	// none is known or the guard cannot tell which is latest.
+	LatestSandboxId string `json:"latestSandboxId"`
+	// ShutdownImageId is the checkpoint the latest incarnation was
+	// terminated against under an unbroken seal; empty unless it ended
+	// that way.
+	ShutdownImageId string `json:"shutdownImageId"`
+}
+
+// resumes reports whether restoring record brings the latest incarnation
+// back exactly as its sealed idle shutdown left it.
+func (l modalIncarnationLineage) resumes(record *modalSnapshotRecord) bool {
+	if record == nil || !record.Sealed || l.LatestSandboxId == "" || l.ShutdownImageId == "" {
+		return false
+	}
+	return record.SandboxId == l.LatestSandboxId && record.ImageId == l.ShutdownImageId
+}
+
+// modalRecordIncarnation registers a sandbox the host just created or found
+// running under its name, before any work can reach it. The guard can only
+// prove a later restore lossless by finding the incarnation it terminated to
+// be the last one registered, so an unregistered incarnation must never
+// serve work: callers fail rather than hand out its endpoint.
+func modalRecordIncarnation(ctx context.Context, client *modal.Client, sandboxName, sandboxId, restoredFrom string) error {
+	_, err := modalRegisterIncarnation(ctx, client, sandboxName, sandboxId, restoredFrom)
+	return err
+}
+
+// modalRegisterIncarnation also confirms whether the restored image is the
+// immediate predecessor's clean checkpoint. Lineage read before creation
+// cannot rule out an intervening incarnation created by another host.
+func modalRegisterIncarnation(ctx context.Context, client *modal.Client, sandboxName, sandboxId, restoredFrom string) (bool, error) {
+	if _, err := ensureModalGuard(ctx, client); err != nil {
+		return false, err
+	}
+	fn, err := client.Functions.FromName(ctx, modalGuardAppName(), "record_incarnation", nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to look up modal guard: %w", err)
+	}
+	result, err := fn.Remote(ctx, []any{sandboxName, sandboxId, restoredFrom}, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to register modal sandbox %s incarnation %s with the guard: %w", sandboxName, sandboxId, err)
+	}
+	encoded, _ := result.(string)
+	var registration struct {
+		Resumed bool `json:"resumed"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &registration); err != nil {
+		return false, fmt.Errorf("invalid registration for sandbox %s: %w", sandboxName, err)
+	}
+	return registration.Resumed, nil
+}
+
+// modalIncarnationLineageFor reads the guard's lineage for a sandbox name.
+func modalIncarnationLineageFor(ctx context.Context, client *modal.Client, sandboxName string) (modalIncarnationLineage, error) {
+	fn, err := client.Functions.FromName(ctx, modalGuardAppName(), "incarnation_lineage", nil)
+	if err != nil {
+		return modalIncarnationLineage{}, fmt.Errorf("failed to look up modal guard: %w", err)
+	}
+	result, err := fn.Remote(ctx, []any{sandboxName}, nil)
+	if err != nil {
+		return modalIncarnationLineage{}, fmt.Errorf("failed to query modal guard for sandbox lineage: %w", err)
+	}
+	encoded, _ := result.(string)
+	var lineage modalIncarnationLineage
+	if err := json.Unmarshal([]byte(encoded), &lineage); err != nil {
+		return modalIncarnationLineage{}, fmt.Errorf("invalid lineage for sandbox %s: %w", sandboxName, err)
+	}
+	return lineage, nil
 }
 
 // modalSnapshotDeletion reports what a delete_snapshot call reclaimed.
