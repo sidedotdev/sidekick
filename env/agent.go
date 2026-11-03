@@ -16,16 +16,15 @@ type AgentProvider interface {
 }
 
 func (e *ModalEnv) WithAgent(ctx context.Context, op func(*sideagent.Client) error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	transport := e.transport()
-	provider, ok := transport.(AgentProvider)
-	if !ok {
-		return fmt.Errorf("SSH transport %T does not provide agent access", transport)
-	}
-	if err := transport.EnsureReverseForwards(ctx, e.PortForwards); err != nil {
-		log.Warn().Err(err).Str("remote", e.sftpConnKey()).Msg("reverse port forwards unavailable; opening agent channel without them")
-	}
-	return provider.WithAgent(ctx, op)
+	return withModalAdmission(ctx, e, func(ctx context.Context) error {
+		transport := sshTransportFor(e.sftpConnKey(), e.PortForwards, e)
+		provider, ok := transport.(AgentProvider)
+		if !ok {
+			return fmt.Errorf("SSH transport %T does not provide agent access", transport)
+		}
+		if err := transport.EnsureReverseForwards(ctx, e.PortForwards); err != nil {
+			log.Warn().Err(err).Str("remote", e.sftpConnKey()).Msg("reverse port forwards unavailable; opening agent channel without them")
+		}
+		return provider.WithAgent(ctx, op)
+	})
 }

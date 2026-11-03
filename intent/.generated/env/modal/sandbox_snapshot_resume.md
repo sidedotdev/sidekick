@@ -48,6 +48,12 @@ intent_links:
       - env/modal.go:modalCheckSandbox
       - env/modal_guard_behavior_test.go:TestModalGuardIncarnationLineage
       - env/modal_refresh_test.go:TestModalRefreshEndpoint
+  - intent: "#shared-operation-admission"
+    code:
+      - env/modal_operation_admission.go
+      - env/agent.go
+      - env/managed_activity.go:BeginActivity
+      - env/modal_operation_admission_test.go
   - intent: "#scope-and-tradeoffs"
     code:
       - env/environment.go:withRestoreNotice
@@ -194,6 +200,32 @@ successor. Missing, unreadable or contradictory evidence (Modal still naming
 a different finished sandbox) also keeps the warning. Registration fails
 closed: an incarnation the guard could not record is not handed out, by
 creation, by check, or by endpoint refresh.
+
+## Shared Operation Admission
+
+Modal agent borrowing and environment file access acquire a managed admission
+lease before dispatching work. Structured refusals of that lease use the same
+bounded command recovery, including endpoint refresh and sandbox replacement.
+No tool-specific or Temporal retry policy is needed, so automatic environment
+operations receive the same protection.
+
+The lease holds the shared admission lock until the protected work finishes.
+Shutdown cannot seal between admission and a search, symbol-definition request,
+or filesystem request on another pooled channel. This also protects filesystem
+operations comprising several SFTP requests without interpreting a dropped SFTP
+stream as proof that those requests never executed.
+
+Acquiring admission may retry; the protected callback is invoked at most once.
+An error returned by that callback never restarts it, even if the error resembles
+an admission refusal. File operations likewise gain no additional replay policy.
+Lease loss cancels the scoped operation context and is returned as an error.
+Admission is released after operation cleanup rather than merely on caller
+cancellation.
+
+This adds an admission exchange around file access and scoped agent borrowing.
+It also keeps a sandbox active for the lifetime of the borrowing callback, not
+just each RPC inside it. The tradeoff avoids replaying arbitrary callbacks or
+whole multi-operation activities while preserving the pooled-client contract.
 
 ## Scope and Tradeoffs
 
