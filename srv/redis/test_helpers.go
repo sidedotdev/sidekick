@@ -3,6 +3,7 @@ package redis
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sidekick/srv"
@@ -37,7 +38,16 @@ func newTestRedisClient(t *testing.T) *redis.Client {
 		t.Skipf("Skipping test; redis-server not available: %v", err)
 	}
 
-	dir := t.TempDir()
+	// t.TempDir embeds the test name, which can exceed Unix socket path limits.
+	dir, err := os.MkdirTemp("", "redis-")
+	if err != nil {
+		t.Fatalf("Creating Redis test directory: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("Removing Redis test directory: %v", err)
+		}
+	})
 	socket := filepath.Join(dir, "redis.sock")
 	cmd := exec.Command(executable,
 		"--port", "0",

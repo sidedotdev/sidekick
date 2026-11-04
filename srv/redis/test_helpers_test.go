@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"sidekick/domain"
@@ -55,4 +56,15 @@ func TestRedisTestHelperIsolation(t *testing.T) {
 			require.Equal(t, other, stored)
 		})
 	}
+}
+
+func TestRedisTestHelperLongTestName(t *testing.T) {
+	t.Parallel()
+	t.Run(strings.Repeat("long-test-name-", 12), func(t *testing.T) {
+		t.Parallel()
+		client := newTestRedisClient(t)
+		ctx, cancel := context.WithTimeout(context.Background(), client.Options().DialTimeout)
+		defer cancel()
+		require.NoError(t, client.Ping(ctx).Err())
+	})
 }

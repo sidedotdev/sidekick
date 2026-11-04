@@ -50,7 +50,14 @@ func (r *devPodSSHTransportRecovery) recover(ctx context.Context, cause error) (
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			return runDevPodRecoveryCommand(ctx, "up", workspace, "--ide", "none")
+			// A positional workspace name becomes a Git URL if its metadata
+			// is missing. Only a known checkout is safe to use as a source.
+			args := []string{"up"}
+			if r.env.LocalRepoDir != "" {
+				args = append(args, r.env.LocalRepoDir)
+			}
+			args = append(args, "--id", workspace, "--ide", "none")
+			return runDevPodRecoveryCommand(ctx, args...)
 		})
 		return nil, err
 	})
