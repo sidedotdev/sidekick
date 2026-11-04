@@ -874,7 +874,7 @@ func TestContextGatherWebSearchWorkflow(t *testing.T) {
 		{name: "call only", provider: "openai", forgettingEnabled: true, wantSearch: true},
 		{name: "forgetting disabled", provider: "google", withResult: true, wantSearch: true},
 		{name: "unsupported provider", provider: "unsupported", forgettingEnabled: true},
-		{name: "legacy gather", provider: "openai", legacy: true, forgettingEnabled: true},
+		{name: "without gather version marker", provider: "openai", legacy: true, forgettingEnabled: true, wantSearch: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var suite testsuite.WorkflowTestSuite
@@ -884,15 +884,9 @@ func TestContextGatherWebSearchWorkflow(t *testing.T) {
 
 			var appended []llm2.Message
 			streamCalls := 0
-			gatherFinished := false
 			if tc.legacy {
 				env.OnGetVersion("context-gather-web-search", workflow.DefaultVersion, 1).
-					Return(workflow.DefaultVersion).Once()
-				env.OnGetVersion("web-search-tool", workflow.DefaultVersion, webSearchToolMaxVersion).
-					Run(func(mock.Arguments) {
-						assert.True(t, gatherFinished, "legacy gathering must not consume the shared web-search version")
-					}).
-					Return(webSearchToolMaxVersion).Once()
+					Return(workflow.DefaultVersion).Maybe()
 			}
 
 			wrapper := func(ctx workflow.Context) error {
@@ -909,16 +903,7 @@ func TestContextGatherWebSearchWorkflow(t *testing.T) {
 				}, ContextGatherOptions{InitialMessage: &llm.ChatMessage{
 					Role: llm.ChatMessageRoleUser, Content: "coding handoff",
 				}})
-				gatherFinished = true
-				if err != nil {
-					return err
-				}
-				if tc.legacy {
-					tools := appendWebSearchTool(dCtx, nil, common.ModelConfig{Provider: "openai"})
-					require.Len(t, tools, 1)
-					assert.Equal(t, common.ToolTypeWebSearch, tools[0].Type)
-				}
-				return nil
+				return err
 			}
 			env.RegisterWorkflow(wrapper)
 			env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)

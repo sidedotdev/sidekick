@@ -221,7 +221,6 @@ func GatherContextForCoding(dCtx DevContext, chatHistory *persisted_ai.ChatHisto
 func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, opts ContextGatherOptions) (int, error) {
 	forgettingEnabled := fflag.IsEnabledWithoutVersioning(dCtx, fflag.ContextGatheringForget)
 	tracker := newContextGatherHistory(chatHistory, forgettingEnabled)
-	webSearchEnabled := workflow.GetVersion(dCtx, "context-gather-web-search", workflow.DefaultVersion, 1) >= 1
 
 	prompt, err := renderContextGatherPrompt(dCtx, promptInfo, forgettingEnabled, opts.EnvironmentContext)
 	if err != nil {
@@ -244,9 +243,7 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 		},
 		ModelConfig: modelConfig,
 	}
-	if webSearchEnabled {
-		options.Tools = appendWebSearchTool(dCtx, options.Tools, modelConfig)
-	}
+	options.Tools = appendWebSearchTool(dCtx, options.Tools, modelConfig)
 
 	limits := contextGatherLimitsFor(dCtx)
 	limitsEnabled := contextGatherLimitsEnabled(dCtx)
@@ -287,17 +284,15 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 		iterations++
 
 		message := response.GetMessage()
-		if webSearchEnabled {
-			switch m := message.(type) {
-			case llm2.Message:
-				if err := tracker.registerBuiltinContextCalls(&m); err != nil {
-					return 0, fmt.Errorf("failed to register builtin context calls: %w", err)
-				}
-				message = m
-			case *llm2.Message:
-				if err := tracker.registerBuiltinContextCalls(m); err != nil {
-					return 0, fmt.Errorf("failed to register builtin context calls: %w", err)
-				}
+		switch m := message.(type) {
+		case llm2.Message:
+			if err := tracker.registerBuiltinContextCalls(&m); err != nil {
+				return 0, fmt.Errorf("failed to register builtin context calls: %w", err)
+			}
+			message = m
+		case *llm2.Message:
+			if err := tracker.registerBuiltinContextCalls(m); err != nil {
+				return 0, fmt.Errorf("failed to register builtin context calls: %w", err)
 			}
 		}
 		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, message); err != nil {
