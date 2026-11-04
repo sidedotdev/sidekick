@@ -365,3 +365,100 @@ func contextToolResultBlock(toolCallId, name, content string) llm2.ContentBlock 
 		},
 	}
 }
+
+func TestContextGatherBuiltinSearchReferences(t *testing.T) {
+	t.Parallel()
+
+	for _, withResult := range []bool{false, true} {
+		name := "call only"
+		if withResult {
+			name = "call and result"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			history := persisted_ai.NewLlm2ChatHistory("flow", "workspace")
+			tracker := newContextGatherHistory(&persisted_ai.ChatHistoryContainer{History: history}, true)
+			registerContextResult(t, tracker, "repository-call")
+			use := llm2.ContentBlock{
+				Type: llm2.ContentBlockTypeBuiltinToolUse,
+				BuiltinToolUse: &llm2.BuiltinToolUseBlock{
+					Id: "search-call", Name: "web_search", Arguments: `{"query":"library documentation"}`,
+				},
+				Metadata:  map[string]any{"provider": "original"},
+				Signature: []byte("signature"),
+			}
+			message := llm2.Message{
+				Role:    llm2.RoleAssistant,
+				Content: []llm2.ContentBlock{use},
+			}
+			if withResult {
+				message.Content = append(message.Content, llm2.ContentBlock{
+					Type: llm2.ContentBlockTypeBuiltinToolResult,
+					BuiltinToolResult: &llm2.BuiltinToolResultBlock{
+						ToolCallId: "search-call", Name: "web_search", Content: "documentation",
+					},
+					Metadata: map[string]any{"encrypted": "opaque"},
+				})
+			}
+			originalBlocks := append([]llm2.ContentBlock(nil), message.Content...)
+
+			require.NoError(t, tracker.registerBuiltinContextCalls(&message))
+			assert.Equal(t, originalBlocks, message.Content[:len(originalBlocks)])
+			require.Len(t, message.Content, len(originalBlocks)+1)
+			assert.Contains(t, message.Content[len(originalBlocks)].Text, "Context reference: call_2")
+			assert.Contains(t, message.Content[len(originalBlocks)].Text, "search-call")
+			assert.Equal(t, []string{"call_1", "call_2"}, tracker.referenceState().RetainedReferences)
+
+			tracker.llm2Transcript = []llm2.Message{message}
+			require.NoError(t, tracker.filterForCoding())
+			require.Len(t, history.Messages(), 1)
+			assert.Equal(t, originalBlocks, history.Llm2Messages()[0].Content)
+			if withResult {
+				assert.Equal(t, len("documentation"), tracker.gatheredContextSize())
+			}
+
+			_, err := tracker.forgetReferences([]string{"call_2"})
+			require.NoError(t, err)
+			tracker.llm2Transcript = []llm2.Message{message}
+			require.NoError(t, tracker.filterForCoding())
+			assert.Empty(t, history.Messages())
+
+			_, err = tracker.rememberReferences([]string{"call_2"})
+			require.NoError(t, err)
+			tracker.llm2Transcript = []llm2.Message{message}
+			require.NoError(t, tracker.filterForCoding())
+			require.Len(t, history.Messages(), 1)
+			assert.Equal(t, originalBlocks, history.Llm2Messages()[0].Content)
+		})
+	}
+}
+
+func TestContextGatherBuiltinSearchFiltering(t *testing.T) {
+	t.Parallel()
+
+	messages := []llm2.Message{{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "gatherer prose"},
+			{Type: llm2.ContentBlockTypeBuiltinToolUse, BuiltinToolUse: &llm2.BuiltinToolUseBlock{Id: "keep", Name: "web_search"}},
+			{Type: llm2.ContentBlockTypeBuiltinToolUse, BuiltinToolUse: &llm2.BuiltinToolUseBlock{Id: "forget", Name: "web_search"}},
+			{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "incomplete", Name: "bulk_search_repository"}},
+		},
+	}, {
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeBuiltinToolResult, BuiltinToolResult: &llm2.BuiltinToolResultBlock{ToolCallId: "keep", Content: "useful"}},
+			{Type: llm2.ContentBlockTypeBuiltinToolResult, BuiltinToolResult: &llm2.BuiltinToolResultBlock{ToolCallId: "forget", Content: "irrelevant"}},
+			{Type: llm2.ContentBlockTypeBuiltinToolResult, BuiltinToolResult: &llm2.BuiltinToolResultBlock{ToolCallId: "orphan", Content: "orphan"}},
+		},
+	}}
+	filtered := filterLlm2ContextGatherMessages(messages, map[string]bool{
+		"keep": true, "incomplete": true, "orphan": true,
+	})
+	require.Len(t, filtered, 2)
+	assert.Equal(t, []llm2.ContentBlock{messages[0].Content[1]}, filtered[0].Content)
+	assert.Equal(t, []llm2.ContentBlock{messages[1].Content[0]}, filtered[1].Content)
+	assert.Len(t, messages[0].Content, 4)
+	assert.Len(t, messages[1].Content, 3)
+}

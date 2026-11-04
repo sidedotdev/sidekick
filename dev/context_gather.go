@@ -221,6 +221,7 @@ func GatherContextForCoding(dCtx DevContext, chatHistory *persisted_ai.ChatHisto
 func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, opts ContextGatherOptions) (int, error) {
 	forgettingEnabled := fflag.IsEnabledWithoutVersioning(dCtx, fflag.ContextGatheringForget)
 	tracker := newContextGatherHistory(chatHistory, forgettingEnabled)
+	webSearchEnabled := workflow.GetVersion(dCtx, "context-gather-web-search", workflow.DefaultVersion, 1) >= 1
 
 	prompt, err := renderContextGatherPrompt(dCtx, promptInfo, forgettingEnabled, opts.EnvironmentContext)
 	if err != nil {
@@ -242,6 +243,9 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 			Type: llm.ToolChoiceTypeAuto,
 		},
 		ModelConfig: modelConfig,
+	}
+	if webSearchEnabled {
+		options.Tools = appendWebSearchTool(dCtx, options.Tools, modelConfig)
 	}
 
 	limits := contextGatherLimitsFor(dCtx)
@@ -283,6 +287,19 @@ func gatherContextForCodingSubflow(dCtx DevContext, chatHistory *persisted_ai.Ch
 		iterations++
 
 		message := response.GetMessage()
+		if webSearchEnabled {
+			switch m := message.(type) {
+			case llm2.Message:
+				if err := tracker.registerBuiltinContextCalls(&m); err != nil {
+					return 0, fmt.Errorf("failed to register builtin context calls: %w", err)
+				}
+				message = m
+			case *llm2.Message:
+				if err := tracker.registerBuiltinContextCalls(m); err != nil {
+					return 0, fmt.Errorf("failed to register builtin context calls: %w", err)
+				}
+			}
+		}
 		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, message); err != nil {
 			return 0, fmt.Errorf("failed to append context gathering response: %w", err)
 		}
@@ -524,7 +541,7 @@ Completion analysis: %s`,
 	forgettingInstructions := ""
 	if forgettingEnabled {
 		forgettingInstructions = fmt.Sprintf(`
-Each completed repository-context tool result includes a short reference such as %s1. Aggressively use the %s tool: as soon as you determine an exchange is not directly relevant to the coding work (a dead-end search, a file that turned out to be unrelated, or context that was superseded by a better result), schedule it for omission from the handoff immediately rather than waiting. It is safe to forget liberally, since %s can restore any omitted exchange that becomes relevant again. Before calling %s, always review every retained exchange and forget any that the coding agent will not need.
+Each completed repository-context tool result and server-side web search call includes a short reference such as %s1. A web search reference covers the call and any associated results. Aggressively use the %s tool: as soon as you determine an exchange is not directly relevant to the coding work (a dead-end search, a file that turned out to be unrelated, or context that was superseded by a better result), schedule it for omission from the handoff immediately rather than waiting. It is safe to forget liberally, since %s can restore any omitted exchange that becomes relevant again. Before calling %s, always review every retained exchange and forget any that the coding agent will not need.
 `, contextGatherReferencePrefix, contextGatherForgetTool.Name, contextGatherRememberTool.Name, contextGatherReadyTool.Name)
 	}
 
@@ -532,7 +549,7 @@ Each completed repository-context tool result includes a short reference such as
 
 Explore the repository thoroughly enough that the coding agent can begin implementation without repeating the same discovery work. Gather all repository context needed to understand the existing behavior, relevant symbols, call sites, data structures, tests, and conventions.
 
-Use only the provided read-only repository exploration tools. Do not attempt to edit files, run commands, change branches, or implement the task during this phase.%s
+Use only the provided read-only repository exploration tools and web search, when available. Use web search for relevant external documentation or current information. Do not attempt to edit files, run commands, change branches, or implement the task during this phase.%s
 Assistant prose and ordinary responses do not end this phase. Once enough context has been gathered and coding or command execution should begin, call the zero-argument %s tool. If genuinely blocked on information only the user can provide, call %s; in this phase that also transitions directly to coding without creating a user request.
 
 %s`, forgettingInstructions, contextGatherReadyTool.Name, getHelpOrInputTool.Name, taskContext)), nil
