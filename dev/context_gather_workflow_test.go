@@ -860,3 +860,172 @@ func TestContextGatherWrapUpToolsOnlyAllowHandoffAdjustments(t *testing.T) {
 		contextGatherRememberTool.Name,
 	}, toolNames(contextGatherWrapUpTools(true)))
 }
+
+func TestContextGatherWebSearchWorkflow(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		provider          string
+		legacy            bool
+		withResult        bool
+		forgettingEnabled bool
+		wantSearch        bool
+	}{
+		{name: "paired results", provider: "anthropic", withResult: true, forgettingEnabled: true, wantSearch: true},
+		{name: "call only", provider: "openai", forgettingEnabled: true, wantSearch: true},
+		{name: "forgetting disabled", provider: "google", withResult: true, wantSearch: true},
+		{name: "unsupported provider", provider: "unsupported", forgettingEnabled: true},
+		{name: "without gather version marker", provider: "openai", legacy: true, forgettingEnabled: true, wantSearch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var suite testsuite.WorkflowTestSuite
+			env := suite.NewTestWorkflowEnvironment()
+			env.SetWorkerOptions(utils.TestWorkerOptions())
+			env.SetTestTimeout(30 * time.Second)
+
+			var appended []llm2.Message
+			streamCalls := 0
+			if tc.legacy {
+				env.OnGetVersion("context-gather-web-search", workflow.DefaultVersion, 1).
+					Return(workflow.DefaultVersion).Maybe()
+			}
+
+			wrapper := func(ctx workflow.Context) error {
+				dCtx, _, err := newContextGatherPauseTestDevContext(ctx, "search-workspace")
+				if err != nil {
+					return err
+				}
+				dCtx.SetLLMConfig(common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: tc.provider, Model: "search-model"}},
+				})
+				history := NewVersionedChatHistory(ctx, "search-workspace")
+				_, err = gatherContextForCodingSubflow(dCtx, history, InitialCodeInfo{
+					Requirements: "Consult library documentation",
+				}, ContextGatherOptions{InitialMessage: &llm.ChatMessage{
+					Role: llm.ChatMessageRoleUser, Content: "coding handoff",
+				}})
+				return err
+			}
+			env.RegisterWorkflow(wrapper)
+			env.RegisterActivity(persisted_ai.RepairToolCallArgumentsActivity)
+			env.OnActivity(ResolveToolNameMappingActivity, mock.Anything, mock.Anything).
+				Return(ResolveToolNameMappingResult{}, nil).Maybe()
+
+			var flowActivities *flow_action.FlowActivities
+			env.OnActivity(flowActivities.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
+			env.OnActivity(flowActivities.GetModelMetadata, mock.Anything, mock.Anything, mock.Anything).
+				Return(common.ModelMetadata{}, nil).Maybe()
+
+			var flagActivities *fflag.FFlagActivities
+			env.OnActivity(flagActivities.EvalBoolFlag, mock.Anything, mock.Anything).
+				Return(tc.forgettingEnabled, nil).Once()
+
+			var historyActivities *persisted_ai.ChatHistoryActivities
+			env.OnActivity(historyActivities.AppendMessage, mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					appended = append(appended, args.Get(1).(persisted_ai.AppendMessageInput).Message)
+				}).
+				Return(&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "assistant"}, nil)
+
+			var llmActivities *persisted_ai.Llm2Activities
+			env.OnActivity(llmActivities.Stream, mock.Anything, mock.Anything).
+				Return(func(_ context.Context, input persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
+					streamCalls++
+					searchCount := 0
+					for _, tool := range input.Options.Tools {
+						if tool.Type == common.ToolTypeWebSearch {
+							searchCount++
+						}
+					}
+					if tc.wantSearch {
+						assert.Equal(t, 1, searchCount)
+					} else {
+						assert.Zero(t, searchCount)
+						return contextGatherTerminalResponse("ready", contextGatherReadyTool.Name), nil
+					}
+					if streamCalls == 1 {
+						message := llm2.Message{Role: llm2.RoleAssistant}
+						for _, id := range []string{"keep-search", "drop-search"} {
+							message.Content = append(message.Content, llm2.ContentBlock{
+								Type: llm2.ContentBlockTypeBuiltinToolUse,
+								BuiltinToolUse: &llm2.BuiltinToolUseBlock{
+									Id: id, Name: "web_search", Arguments: `{"query":"documentation"}`,
+								},
+							})
+							if tc.withResult {
+								message.Content = append(message.Content, llm2.ContentBlock{
+									Type: llm2.ContentBlockTypeBuiltinToolResult,
+									BuiltinToolResult: &llm2.BuiltinToolResultBlock{
+										ToolCallId: id, Name: "web_search", Content: id + " result",
+									},
+								})
+							}
+						}
+						return &llm2.MessageResponse{Output: message, StopReason: "stop"}, nil
+					}
+					if streamCalls == 2 {
+						var annotations string
+						for _, message := range appended {
+							annotations += message.GetContentString()
+						}
+						assert.Contains(t, annotations, "Context reference: call_1 (web_search tool call keep-search)")
+						assert.Contains(t, annotations, "Context reference: call_2 (web_search tool call drop-search)")
+						if tc.forgettingEnabled {
+							return &llm2.MessageResponse{Output: llm2.Message{
+								Role: llm2.RoleAssistant,
+								Content: []llm2.ContentBlock{{
+									Type: llm2.ContentBlockTypeToolUse,
+									ToolUse: &llm2.ToolUseBlock{
+										Id: "forget-search", Name: contextGatherForgetTool.Name,
+										Arguments: `{"references":["call_2"]}`,
+									},
+								}},
+							}, StopReason: "tool_use"}, nil
+						}
+					}
+					return contextGatherTerminalResponse("ready", contextGatherReadyTool.Name), nil
+				})
+
+			env.ExecuteWorkflow(wrapper)
+			require.NoError(t, env.GetWorkflowError())
+			env.AssertExpectations(t)
+
+			var handoff []llm2.ContentBlock
+			inHandoff := false
+			for _, message := range appended {
+				if message.GetContentString() == "coding handoff" {
+					inHandoff = true
+					continue
+				}
+				if inHandoff {
+					handoff = append(handoff, message.Content...)
+				}
+			}
+			require.True(t, inHandoff)
+			var calls, results []string
+			for _, block := range handoff {
+				switch block.Type {
+				case llm2.ContentBlockTypeBuiltinToolUse:
+					calls = append(calls, block.BuiltinToolUse.Id)
+				case llm2.ContentBlockTypeBuiltinToolResult:
+					results = append(results, block.BuiltinToolResult.ToolCallId)
+				default:
+					t.Errorf("unexpected handoff block: %s", block.Type)
+				}
+			}
+			if !tc.wantSearch {
+				assert.Empty(t, handoff)
+			} else {
+				expected := []string{"keep-search"}
+				if !tc.forgettingEnabled {
+					expected = append(expected, "drop-search")
+				}
+				assert.Equal(t, expected, calls)
+				if tc.withResult {
+					assert.Equal(t, expected, results)
+				} else {
+					assert.Empty(t, results)
+				}
+			}
+		})
+	}
+}

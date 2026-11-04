@@ -47,22 +47,10 @@ func (h *contextGatherHistory) registerContextToolResult(result *llm2.ToolResult
 	if result == nil {
 		return "", fmt.Errorf("context tool result is required")
 	}
-	if result.ToolCallId == "" {
-		return "", fmt.Errorf("context tool result has no tool call ID")
+	reference, err := h.registerContextExchange(result.ToolCallId, result.Name)
+	if err != nil {
+		return "", err
 	}
-	for _, exchange := range h.exchanges {
-		if exchange.ToolCallId == result.ToolCallId {
-			return "", fmt.Errorf("context tool call %q already has a reference", result.ToolCallId)
-		}
-	}
-
-	h.nextReference++
-	reference := fmt.Sprintf("%s%d", contextGatherReferencePrefix, h.nextReference)
-	h.exchanges[reference] = contextGatherExchange{
-		ToolCallId: result.ToolCallId,
-		ToolName:   result.Name,
-	}
-	h.referenceOrder = append(h.referenceOrder, reference)
 
 	result.Content = append(result.Content, llm2.ContentBlock{
 		Type: llm2.ContentBlockTypeText,
@@ -168,6 +156,15 @@ func (h *contextGatherHistory) gatheredContextSize() int {
 	for _, message := range h.history.History.Messages() {
 		size += len(message.GetContentString())
 	}
+	if _, ok := h.history.History.(*persisted_ai.Llm2ChatHistory); ok {
+		for _, message := range h.llm2Transcript {
+			for _, block := range message.Content {
+				if block.Type == llm2.ContentBlockTypeBuiltinToolResult && block.BuiltinToolResult != nil {
+					size += len(llm2.BuiltinToolResultText(block.BuiltinToolResult))
+				}
+			}
+		}
+	}
 	return size
 }
 
@@ -260,6 +257,14 @@ func filterLlm2ContextGatherMessages(messages []llm2.Message, retained map[strin
 				block.ToolResult != nil &&
 				complete[block.ToolResult.ToolCallId]:
 				blocks = append(blocks, block)
+			case block.Type == llm2.ContentBlockTypeBuiltinToolUse &&
+				block.BuiltinToolUse != nil &&
+				complete[block.BuiltinToolUse.Id]:
+				blocks = append(blocks, block)
+			case block.Type == llm2.ContentBlockTypeBuiltinToolResult &&
+				block.BuiltinToolResult != nil &&
+				complete[block.BuiltinToolResult.ToolCallId]:
+				blocks = append(blocks, block)
 			}
 		}
 		if len(blocks) > 0 {
@@ -284,6 +289,14 @@ func completeLlm2ContextToolCallIds(messages []llm2.Message, retained map[string
 				block.ToolResult != nil &&
 				retained[block.ToolResult.ToolCallId] {
 				results[block.ToolResult.ToolCallId] = true
+			}
+			if block.Type == llm2.ContentBlockTypeBuiltinToolUse &&
+				block.BuiltinToolUse != nil &&
+				retained[block.BuiltinToolUse.Id] {
+				calls[block.BuiltinToolUse.Id] = true
+				// Server-side calls are self-contained for providers that
+				// do not expose a separate search result block.
+				results[block.BuiltinToolUse.Id] = true
 			}
 		}
 	}
@@ -313,4 +326,46 @@ func formatContextGatherReferences(references []string) string {
 		return "none"
 	}
 	return strings.Join(references, ", ")
+}
+
+func (h *contextGatherHistory) registerContextExchange(toolCallId, toolName string) (string, error) {
+	if toolCallId == "" {
+		return "", fmt.Errorf("context tool result has no tool call ID")
+	}
+	for _, exchange := range h.exchanges {
+		if exchange.ToolCallId == toolCallId {
+			return "", fmt.Errorf("context tool call %q already has a reference", toolCallId)
+		}
+	}
+
+	h.nextReference++
+	reference := fmt.Sprintf("%s%d", contextGatherReferencePrefix, h.nextReference)
+	h.exchanges[reference] = contextGatherExchange{
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+	}
+	h.referenceOrder = append(h.referenceOrder, reference)
+	return reference, nil
+}
+
+func (h *contextGatherHistory) registerBuiltinContextCalls(message *llm2.Message) error {
+	var annotations []llm2.ContentBlock
+	for _, block := range message.Content {
+		if block.Type != llm2.ContentBlockTypeBuiltinToolUse || block.BuiltinToolUse == nil {
+			continue
+		}
+		call := block.BuiltinToolUse
+		reference, err := h.registerContextExchange(call.Id, call.Name)
+		if err != nil {
+			return err
+		}
+		// Native search payloads may be signed or opaque, and some providers
+		// return only a call, so annotations live outside the native blocks.
+		annotations = append(annotations, llm2.ContentBlock{
+			Type: llm2.ContentBlockTypeText,
+			Text: fmt.Sprintf("Context reference: %s (%s tool call %s)", reference, call.Name, call.Id),
+		})
+	}
+	message.Content = append(message.Content, annotations...)
+	return nil
 }
