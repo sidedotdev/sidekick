@@ -934,126 +934,10 @@ func contextVisibilityCheckDisabled(ctx workflow.Context) bool {
 	return visibilityVersion >= 1 && fflag.IsEnabledWithoutVersioning(ctx, fflag.DisableContextCodeVisibilityCheck)
 }
 
-// TODO /gen write tests for this
 func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock, opts applyEditBlocksOptions) ([]ApplyEditBlockReport, error) {
-	actionParams := map[string]interface{}{
-		// visible stuff is very verbose, so we leave it out of the flow events.
-		// they are very necessary in the activity though.
-		"editBlocks": utils.Map(editBlocks, func(block EditBlock) EditBlock {
-			block.VisibleCodeBlocks = []repotools.CodeBlock{}
-			block.VisibleFileRanges = []FileRange{}
-			return block
-		}),
-	}
-	actionCtx := dCtx.NewActionContext("apply_edit_blocks")
-	actionCtx.ActionParams = actionParams
-
-	var fullReports []ApplyEditBlockReport
-	_, err := Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) ([]ApplyEditBlockReport, error) {
-		var validEditBlocks []EditBlock
-		var invalidReports []ApplyEditBlockReport
-
-		// NOTE: there are enough cases where the LLM is able to actually infer
-		// the correct lines, but the validation fails due to being overly
-		// strict, e.g. not understanding that two separate code blocks are
-		// actually contiguous and rejecting edit blocks that span across, or
-		// ignoring other mechanisms of reading code that don't result in code
-		// blocks we understand. this hallucination check is most useful for
-		// models that are not current SOTA, which we don't recommend using
-		// anyways. If we can make the hallucination detection a bit smarter, eg
-		// by finding chunks that match and cover all lines and by incorporating
-		// code that isn't just in code blocks (e.g. raw excerpts and git
-		// diffs), then we may consider bringing back this validation.
-		checkDisabled := opts.ContextVisibilityCheckDisabled != nil && *opts.ContextVisibilityCheckDisabled
-		if opts.ContextVisibilityCheckDisabled == nil {
-			checkDisabled = contextVisibilityCheckDisabled(trackedCtx)
-		}
-		if checkDisabled {
-			validEditBlocks = editBlocks
-		} else {
-			validEditBlocks, invalidReports = validateEditBlocks(editBlocks)
-		}
-		//fmt.Printf("Validated %d edit blocks\n", len(validEditBlocks))
-		//fmt.Printf("Invalid reports: %d\n", len(invalidReports))
-
-		// reduce size of payloads to avoid temporal issues. we only
-		// use the symbol and file path at most to get updated file
-		// ranges for those symbols. the code is used in validateEditBlocks
-		// higher up only, which doesn't cross workflow/activity boundaries
-		for i := range validEditBlocks {
-			editBlock := &validEditBlocks[i]
-			for j := range editBlock.VisibleCodeBlocks {
-				codeBlock := &(editBlock.VisibleCodeBlocks[j])
-				codeBlock.Code = ""
-				codeBlock.FullContent = ""
-				codeBlock.BlockContent = ""
-				codeBlock.HeaderContent = ""
-			}
-			editBlock.VisibleCodeBlocks = utils.Unique(editBlock.VisibleCodeBlocks)
-		}
-		for i := range invalidReports {
-			if len(invalidReports[i].OriginalEditBlocks) == 0 {
-				continue
-			}
-			editBlock := &invalidReports[i].OriginalEditBlocks[0]
-			for j := range editBlock.VisibleCodeBlocks {
-				codeBlock := &(editBlock.VisibleCodeBlocks[j])
-				codeBlock.Code = ""
-				codeBlock.FullContent = ""
-				codeBlock.BlockContent = ""
-				codeBlock.HeaderContent = ""
-			}
-			editBlock.VisibleCodeBlocks = utils.Unique(editBlock.VisibleCodeBlocks)
-		}
-
-		fflag.EvalRetiredCheckEditsFlag(trackedCtx)
-		enabledFlags := make([]string, 0)
-		goBuildCheckVersion := workflow.GetVersion(trackedCtx, "check-go-build", workflow.DefaultVersion, 1)
-		if goBuildCheckVersion >= 1 && fflag.IsEnabledWithoutVersioning(trackedCtx, fflag.CheckGoBuild) {
-			enabledFlags = append(enabledFlags, fflag.CheckGoBuild)
-		}
-
-		applyEditBlockInput := ApplyEditBlockActivityInput{
-			EnvContainer:  *trackedCtx.EnvContainer,
-			EditBlocks:    validEditBlocks,
-			EnabledFlags:  enabledFlags,
-			CheckCommands: trackedCtx.RepoConfig.CheckCommands,
-		}
-
-		noRetryCtx := utils.NoRetryCtx(trackedCtx)
-		var validReports []ApplyEditBlockReport
-		var err error
-		v := workflow.GetVersion(trackedCtx, "apply-edit-blocks", workflow.DefaultVersion, 1)
-		if v == 1 {
-			var da *DevActivities
-			err = workflow.ExecuteActivity(noRetryCtx, da.ApplyEditBlocks, applyEditBlockInput).Get(noRetryCtx, &validReports)
-		} else {
-			err = workflow.ExecuteActivity(noRetryCtx, ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		reports := append(validReports, invalidReports...)
-		sort.Slice(reports, func(i, j int) bool {
-			return reports[i].SequenceNumbers()[0] < reports[j].SequenceNumbers()[0]
-		})
-
-		// visible stuff is very verbose, so we leave it out of the flow events,
-		// which are automatically using the returned value, so we side-step
-		// that here via the variable outside the closure.
-		fullReports = reports
-		trackedReports := utils.Map(reports, func(report ApplyEditBlockReport) ApplyEditBlockReport {
-			for i := range report.OriginalEditBlocks {
-				report.OriginalEditBlocks[i].VisibleCodeBlocks = []repotools.CodeBlock{}
-				report.OriginalEditBlocks[i].VisibleFileRanges = []FileRange{}
-			}
-			return report
-		})
-		return trackedReports, nil
+	return trackApplyEditBlocks(dCtx, editBlocks, func(trackedCtx DevContext) ([]ApplyEditBlockReport, error) {
+		return validateAndApplyEditBlocksUntracked(trackedCtx, editBlocks, opts)
 	})
-
-	return fullReports, err
 }
 
 func validateEditBlocks(editBlocks []EditBlock) (validEditBlocks []EditBlock, invalidReports []ApplyEditBlockReport) {
@@ -1838,4 +1722,134 @@ func runAutofixCommands(ctx context.Context, envContainer env.EnvContainer, repo
 type CheckResult struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
+}
+
+func trackApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock, apply func(DevContext) ([]ApplyEditBlockReport, error)) ([]ApplyEditBlockReport, error) {
+	actionParams := map[string]interface{}{
+		// visible stuff is very verbose, so we leave it out of the flow events.
+		// they are very necessary in the activity though.
+		"editBlocks": utils.Map(editBlocks, func(block EditBlock) EditBlock {
+			block.VisibleCodeBlocks = []repotools.CodeBlock{}
+			block.VisibleFileRanges = []FileRange{}
+			return block
+		}),
+	}
+	actionCtx := dCtx.NewActionContext("apply_edit_blocks")
+	actionCtx.ActionParams = actionParams
+
+	var fullReports []ApplyEditBlockReport
+	_, err := Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) ([]ApplyEditBlockReport, error) {
+		reports, err := apply(trackedCtx.DevContext)
+		if err != nil {
+			return nil, err
+		}
+
+		// visible stuff is very verbose, so we leave it out of the flow events,
+		// which are automatically using the returned value, so we side-step
+		// that here via the variable outside the closure.
+		fullReports = reports
+		trackedReports := utils.Map(reports, func(report ApplyEditBlockReport) ApplyEditBlockReport {
+			for i := range report.OriginalEditBlocks {
+				report.OriginalEditBlocks[i].VisibleCodeBlocks = []repotools.CodeBlock{}
+				report.OriginalEditBlocks[i].VisibleFileRanges = []FileRange{}
+			}
+			return report
+		})
+		return trackedReports, nil
+	})
+
+	return fullReports, err
+}
+
+// TODO /gen write tests for this
+func validateAndApplyEditBlocksUntracked(dCtx DevContext, editBlocks []EditBlock, opts applyEditBlocksOptions) ([]ApplyEditBlockReport, error) {
+	var validEditBlocks []EditBlock
+	var invalidReports []ApplyEditBlockReport
+
+	// NOTE: there are enough cases where the LLM is able to actually infer
+	// the correct lines, but the validation fails due to being overly
+	// strict, e.g. not understanding that two separate code blocks are
+	// actually contiguous and rejecting edit blocks that span across, or
+	// ignoring other mechanisms of reading code that don't result in code
+	// blocks we understand. this hallucination check is most useful for
+	// models that are not current SOTA, which we don't recommend using
+	// anyways. If we can make the hallucination detection a bit smarter, eg
+	// by finding chunks that match and cover all lines and by incorporating
+	// code that isn't just in code blocks (e.g. raw excerpts and git
+	// diffs), then we may consider bringing back this validation.
+	checkDisabled := opts.ContextVisibilityCheckDisabled != nil && *opts.ContextVisibilityCheckDisabled
+	if opts.ContextVisibilityCheckDisabled == nil {
+		checkDisabled = contextVisibilityCheckDisabled(dCtx)
+	}
+	if checkDisabled {
+		validEditBlocks = editBlocks
+	} else {
+		validEditBlocks, invalidReports = validateEditBlocks(editBlocks)
+	}
+	//fmt.Printf("Validated %d edit blocks\n", len(validEditBlocks))
+	//fmt.Printf("Invalid reports: %d\n", len(invalidReports))
+
+	// reduce size of payloads to avoid temporal issues. we only
+	// use the symbol and file path at most to get updated file
+	// ranges for those symbols. the code is used in validateEditBlocks
+	// higher up only, which doesn't cross workflow/activity boundaries
+	for i := range validEditBlocks {
+		editBlock := &validEditBlocks[i]
+		for j := range editBlock.VisibleCodeBlocks {
+			codeBlock := &(editBlock.VisibleCodeBlocks[j])
+			codeBlock.Code = ""
+			codeBlock.FullContent = ""
+			codeBlock.BlockContent = ""
+			codeBlock.HeaderContent = ""
+		}
+		editBlock.VisibleCodeBlocks = utils.Unique(editBlock.VisibleCodeBlocks)
+	}
+	for i := range invalidReports {
+		if len(invalidReports[i].OriginalEditBlocks) == 0 {
+			continue
+		}
+		editBlock := &invalidReports[i].OriginalEditBlocks[0]
+		for j := range editBlock.VisibleCodeBlocks {
+			codeBlock := &(editBlock.VisibleCodeBlocks[j])
+			codeBlock.Code = ""
+			codeBlock.FullContent = ""
+			codeBlock.BlockContent = ""
+			codeBlock.HeaderContent = ""
+		}
+		editBlock.VisibleCodeBlocks = utils.Unique(editBlock.VisibleCodeBlocks)
+	}
+
+	fflag.EvalRetiredCheckEditsFlag(dCtx)
+	enabledFlags := make([]string, 0)
+	goBuildCheckVersion := workflow.GetVersion(dCtx, "check-go-build", workflow.DefaultVersion, 1)
+	if goBuildCheckVersion >= 1 && fflag.IsEnabledWithoutVersioning(dCtx, fflag.CheckGoBuild) {
+		enabledFlags = append(enabledFlags, fflag.CheckGoBuild)
+	}
+
+	applyEditBlockInput := ApplyEditBlockActivityInput{
+		EnvContainer:  *dCtx.EnvContainer,
+		EditBlocks:    validEditBlocks,
+		EnabledFlags:  enabledFlags,
+		CheckCommands: dCtx.RepoConfig.CheckCommands,
+	}
+
+	noRetryCtx := utils.NoRetryCtx(dCtx)
+	var validReports []ApplyEditBlockReport
+	var err error
+	v := workflow.GetVersion(dCtx, "apply-edit-blocks", workflow.DefaultVersion, 1)
+	if v == 1 {
+		var da *DevActivities
+		err = workflow.ExecuteActivity(noRetryCtx, da.ApplyEditBlocks, applyEditBlockInput).Get(noRetryCtx, &validReports)
+	} else {
+		err = workflow.ExecuteActivity(noRetryCtx, ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	reports := append(validReports, invalidReports...)
+	sort.Slice(reports, func(i, j int) bool {
+		return reports[i].SequenceNumbers()[0] < reports[j].SequenceNumbers()[0]
+	})
+	return reports, nil
 }

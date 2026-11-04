@@ -22,39 +22,58 @@ func lazyEditBlockVisibilityEnabled(ctx workflow.Context) bool {
 // data first, then retries only the blocks that failed on ambiguous matches
 // with visibility restricted to what the LLM saw in visibleChatHistory.
 func applyEditBlocksWithLazyVisibility(dCtx DevContext, visibleChatHistory *persisted_ai.ChatHistoryContainer, editBlocks []EditBlock) (applyEditBlocksResult, error) {
-	checkDisabled := true
-	opts := applyEditBlocksOptions{ContextVisibilityCheckDisabled: &checkDisabled}
-	reports, err := validateAndApplyEditBlocks(dCtx, editBlocks, opts)
+	combinedTracking := workflow.GetVersion(dCtx, "lazy-edit-block-tracking", workflow.DefaultVersion, 1) >= 1
+	apply := validateAndApplyEditBlocks
+	if combinedTracking {
+		apply = validateAndApplyEditBlocksUntracked
+	}
+
+	run := func(ctx DevContext) ([]ApplyEditBlockReport, error) {
+		checkDisabled := true
+		opts := applyEditBlocksOptions{ContextVisibilityCheckDisabled: &checkDisabled}
+		reports, err := apply(ctx, editBlocks, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		kept, ambiguousBlocks := splitAmbiguousReports(reports)
+		if len(ambiguousBlocks) > 0 {
+			filePaths := utils.Unique(utils.Map(ambiguousBlocks, func(block EditBlock) string { return block.FilePath }))
+			sort.Strings(filePaths)
+			visibleCodeBlocks, err := extractVisibleCodeBlocksForFiles(ctx, visibleChatHistory, filePaths)
+			if err != nil {
+				return nil, err
+			}
+
+			// Retries go one block at a time: each block's visibility ranges are
+			// rebased here across every edit applied so far, including earlier
+			// retries, rather than relying on the activity's in-batch shifting.
+			reports = kept
+			for _, block := range ambiguousBlocks {
+				retryBlock := visibilityForRetry(block, visibleCodeBlocks, reports)
+				retryReports, err := apply(ctx, []EditBlock{retryBlock}, opts)
+				if err != nil {
+					return nil, err
+				}
+				reports = append(reports, retryReports...)
+			}
+			sort.SliceStable(reports, func(i, j int) bool {
+				return reports[i].SequenceNumbers()[0] < reports[j].SequenceNumbers()[0]
+			})
+		}
+		return reports, nil
+	}
+
+	var reports []ApplyEditBlockReport
+	var err error
+	if combinedTracking {
+		reports, err = trackApplyEditBlocks(dCtx, editBlocks, run)
+	} else {
+		reports, err = run(dCtx)
+	}
 	if err != nil {
 		return applyEditBlocksResult{}, err
 	}
-
-	kept, ambiguousBlocks := splitAmbiguousReports(reports)
-	if len(ambiguousBlocks) > 0 {
-		filePaths := utils.Unique(utils.Map(ambiguousBlocks, func(block EditBlock) string { return block.FilePath }))
-		sort.Strings(filePaths)
-		visibleCodeBlocks, err := extractVisibleCodeBlocksForFiles(dCtx, visibleChatHistory, filePaths)
-		if err != nil {
-			return applyEditBlocksResult{}, err
-		}
-
-		// Retries go one block at a time: each block's visibility ranges are
-		// rebased here across every edit applied so far, including earlier
-		// retries, rather than relying on the activity's in-batch shifting.
-		reports = kept
-		for _, block := range ambiguousBlocks {
-			retryBlock := visibilityForRetry(block, visibleCodeBlocks, reports)
-			retryReports, err := validateAndApplyEditBlocks(dCtx, []EditBlock{retryBlock}, opts)
-			if err != nil {
-				return applyEditBlocksResult{}, err
-			}
-			reports = append(reports, retryReports...)
-		}
-		sort.SliceStable(reports, func(i, j int) bool {
-			return reports[i].SequenceNumbers()[0] < reports[j].SequenceNumbers()[0]
-		})
-	}
-
 	return summarizeApplyEditBlocks(dCtx, reports)
 }
 
