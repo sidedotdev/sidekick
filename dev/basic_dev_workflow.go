@@ -723,6 +723,12 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 			VerifierSession:    reviewer,
 		}))
 		if err != nil {
+			if workflow.GetVersion(dCtx, "basic-criteria-pause-recovery", workflow.DefaultVersion, 1) >= 1 &&
+				dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
+				log.Debug().Err(err).Msg("Ignoring criteria fulfillment error while paused")
+				promptInfo = SkipInfo{}
+				continue
+			}
 			return "", fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
 		}
 		if fulfillment.IsFulfilled {
