@@ -198,7 +198,7 @@ func runHandleToolCallToolSubtests(t *testing.T, ctx context.Context, envContain
 	t.Run("get_symbol_definitions", func(t *testing.T) {
 		t.Parallel()
 		args := mustJSON(RequiredCodeContext{
-			Analysis: "retrieve the known symbol",
+			Description: "retrieve the known symbol",
 			Requests: []coding.FileSymDefRequest{
 				{FilePath: symbolFileName, Symbols: []coding.RequestedSymbol{{Name: "SymbolDefKnown"}}},
 			},
@@ -221,7 +221,7 @@ func runHandleToolCallToolSubtests(t *testing.T, ctx context.Context, envContain
 		// Missing named symbol in an existing file: exercises the LSP
 		// fallback and the repo-wide failure-hint index.
 		missingSymbolArgs := mustJSON(RequiredCodeContext{
-			Analysis: "retrieve a symbol that does not exist",
+			Description: "retrieve a symbol that does not exist",
 			Requests: []coding.FileSymDefRequest{
 				{FilePath: symbolFileName, Symbols: []coding.RequestedSymbol{{Name: "NoSuchSymbolAnywhere"}}},
 			},
@@ -238,7 +238,7 @@ func runHandleToolCallToolSubtests(t *testing.T, ctx context.Context, envContain
 		// Nonexistent file with a wildcard: a symbolless failure that must
 		// not trigger a repo-wide scan.
 		missingFileArgs := mustJSON(RequiredCodeContext{
-			Analysis: "retrieve a file that does not exist",
+			Description: "retrieve a file that does not exist",
 			Requests: []coding.FileSymDefRequest{
 				{FilePath: "no_such_file.go", Symbols: []coding.RequestedSymbol{{Name: "*"}}},
 			},

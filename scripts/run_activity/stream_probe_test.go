@@ -156,3 +156,48 @@ func TestPrepareStreamProbeRejectsInvalidInvocation(t *testing.T) {
 		})
 	}
 }
+
+func TestPrepareStreamProbeInlineMessages(t *testing.T) {
+	t.Parallel()
+
+	original := json.RawMessage(`{
+		"Options": {"provider": "anthropic", "model": "test-model"},
+		"ChatHistory": {
+			"type": "llm2",
+			"refs": [{"role": "user", "blockKeys": ["original-block"]}]
+		},
+		"probeMessages": [
+			{"role": "user", "content": [{"type": "text", "text": "isolated probe"}]}
+		],
+		"FlowActionId": "original-action",
+		"FlowId": "original-flow",
+		"WorkspaceId": "original-workspace"
+	}`)
+	input, err := prepareStreamProbe(activityInvocation{
+		Name: "Stream",
+		Args: []json.RawMessage{original},
+	}, streamProbeOptions{})
+	require.NoError(t, err)
+	require.True(t, input.ChatHistory.IsHydrated())
+	messages := input.ChatHistory.Llm2Messages()
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].Content, 1)
+	assert.Equal(t, "isolated probe", messages[0].Content[0].Text)
+	assert.Empty(t, input.FlowActionId)
+	assert.Equal(t, "original-flow", input.FlowId)
+	assert.Equal(t, "original-workspace", input.WorkspaceId)
+	assert.Contains(t, string(original), `"original-block"`)
+}
+
+func TestPrepareStreamProbeRejectsEmptyInlineMessages(t *testing.T) {
+	t.Parallel()
+
+	_, err := prepareStreamProbe(activityInvocation{
+		Name: "Stream",
+		Args: []json.RawMessage{json.RawMessage(`{
+			"ChatHistory": {"type": "llm2", "refs": []},
+			"probeMessages": []
+		}`)},
+	}, streamProbeOptions{})
+	require.ErrorContains(t, err, "probeMessages")
+}

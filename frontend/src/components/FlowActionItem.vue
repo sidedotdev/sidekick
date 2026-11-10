@@ -2,7 +2,7 @@
   <div class="flow-action" :class="{ 'expanded-action': expand }" :style="{ '--level': level }" ref="container">
     <div class="flow-action-header" :class="{ 'expanded-header': expand }">
       <a @click="toggle()" :class="{'disable-toggle': disableToggle}">
-        <h3 :title="`Updated: ${formatActionTimestamp(flowAction.updated)}`">
+        <h3 :title="actionTooltip">
           {{ actionHeading }}
           <span v-if="flowAction.actionType === 'env_switch'" class="env-switch-status">
             {{ flowAction.actionStatus }}
@@ -138,6 +138,15 @@ function showAttempts() {
   attemptsOpen.value = true;
 }
 
+const actionTooltip = computed(() => {
+  const updated = `Updated: ${formatActionTimestamp(props.flowAction.updated)}`;
+  const actionType = props.flowAction.actionType;
+  if (actionType.startsWith('tool_call.')) {
+    return `${actionType.replace(/^tool_call\./, 'Tool: ')}\n${updated}`;
+  }
+  return updated;
+});
+
 const actionHeading = computed(() => {
   const actionType = props.flowAction.actionType;
   
@@ -199,6 +208,10 @@ const actionHeading = computed(() => {
     default:
       // Handle general dot-notation pattern
       if (/^tool_call\./.test(props.flowAction.actionType)){
+        const description = props.flowAction.actionParams?.description;
+        if (typeof description === 'string' && description.trim()) {
+          return description.trim();
+        }
         return props.flowAction.actionType.replace(/^tool_call\./, 'Tool: ');
       } else if (actionType.includes('.')) {
         const dotIndex = actionType.indexOf('.');

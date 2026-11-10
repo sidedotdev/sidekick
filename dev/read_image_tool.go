@@ -24,8 +24,9 @@ const (
 )
 
 type ReadImageParams struct {
-	FilePath string `json:"file_path,omitempty" jsonschema:"description=The path to the image file relative to the current working directory. Absolute paths and '..' traversal are not allowed. Provide either file_path or url but not both."`
-	URL      string `json:"url,omitempty" jsonschema:"description=A URL pointing to an image to fetch and display. Provide either file_path or url but not both."`
+	Description string `json:"description" jsonschema:"description=A short user-facing description of what this call will do in active voice (usually 5-10 words). Include the specific target or operation."`
+	FilePath    string `json:"file_path,omitempty" jsonschema:"description=The path to the image file relative to the current working directory. Absolute paths and '..' traversal are not allowed. Provide either file_path or url but not both."`
+	URL         string `json:"url,omitempty" jsonschema:"description=A URL pointing to an image to fetch and display. Provide either file_path or url but not both."`
 }
 
 var readImageTool = llm.Tool{

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"sidekick"
 	"sidekick/common"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 )
 
@@ -17,6 +19,7 @@ type streamProbeOptions struct {
 	OmitTools       string
 	Model           string
 	ReasoningEffort string
+	ExportPath      string
 	// ExtraBody is a JSON object merged over the request's extra body, letting
 	// a probe add raw provider parameters the provider does not otherwise send.
 	ExtraBody string
@@ -27,8 +30,21 @@ func prepareStreamProbe(invocation activityInvocation, options streamProbeOption
 	if invocation.Name != "Stream" || len(invocation.Args) != 1 {
 		return input, fmt.Errorf("stream probe requires a Stream activity with exactly one input")
 	}
-	if err := json.Unmarshal(invocation.Args[0], &input); err != nil {
+	var probe struct {
+		persisted_ai.StreamInput
+		ProbeMessages []llm2.Message `json:"probeMessages"`
+	}
+	if err := json.Unmarshal(invocation.Args[0], &probe); err != nil {
 		return input, fmt.Errorf("decode Stream input: %w", err)
+	}
+	input = probe.StreamInput
+	if probe.ProbeMessages != nil {
+		if len(probe.ProbeMessages) == 0 {
+			return input, fmt.Errorf("probeMessages must not be empty")
+		}
+		history := persisted_ai.NewLlm2ChatHistory(input.FlowId, input.WorkspaceId)
+		history.SetMessages(probe.ProbeMessages)
+		input.ChatHistory = &persisted_ai.ChatHistoryContainer{History: history}
 	}
 	if input.ChatHistory == nil || input.ChatHistory.History == nil {
 		return input, fmt.Errorf("stream probe requires chat history")
@@ -116,10 +132,43 @@ func executeStreamProbe(invocation activityInvocation, options streamProbeOption
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	if options.ExportPath != "" {
+		if err := input.ChatHistory.Hydrate(ctx, service); err != nil {
+			return nil, fmt.Errorf("hydrate stream probe export: %w", err)
+		}
+		data, err := marshalStreamProbe(input)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(options.ExportPath, data, 0600); err != nil {
+			return nil, fmt.Errorf("write stream probe export: %w", err)
+		}
+		return json.Marshal(map[string]string{"exportPath": options.ExportPath})
+	}
+
 	activities := persisted_ai.Llm2Activities{Storage: service}
 	response, err := activities.Stream(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(response)
+}
+
+// probeMessages keeps edited prompts local instead of persisting diagnostic
+// variants into the original flow's content-block storage.
+func marshalStreamProbe(input persisted_ai.StreamInput) ([]byte, error) {
+	if input.ChatHistory == nil || !input.ChatHistory.IsHydrated() {
+		return nil, fmt.Errorf("stream probe export requires hydrated chat history")
+	}
+	messages := input.ChatHistory.Llm2Messages()
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("stream probe export requires nonempty llm2 messages")
+	}
+	return json.MarshalIndent([]any{struct {
+		persisted_ai.StreamInput
+		ProbeMessages []llm2.Message `json:"probeMessages"`
+	}{
+		StreamInput:   input,
+		ProbeMessages: messages,
+	}}, "", "  ")
 }

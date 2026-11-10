@@ -24,6 +24,7 @@ type SingleSearchParams struct {
 }
 
 type BulkSearchRepositoryParams struct {
+	Description  string               `json:"description" jsonschema:"description=A short user-facing description of what this call will do in active voice (usually 5-10 words). Include the specific target or operation."`
 	ContextLines int                  `json:"context_lines" jsonschema:"description=The number of lines of context to include around the search term."`
 	Searches     []SingleSearchParams `json:"searches" jsonschema:"description=The list of searches to perform."`
 }

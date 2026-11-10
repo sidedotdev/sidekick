@@ -503,6 +503,7 @@ func main() {
 	flag.StringVar(&probeOptions.Model, "probe-model", "", "override stream probe model")
 	flag.StringVar(&probeOptions.ReasoningEffort, "probe-effort", "", "override stream probe reasoning effort")
 	flag.StringVar(&probeOptions.ExtraBody, "probe-extra-body", "", "JSON object of raw provider request parameters merged into the stream probe")
+	flag.StringVar(&probeOptions.ExportPath, "probe-export", "", "export replayable Stream arguments with editable probeMessages to this JSON file without calling the model")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s [--timeout duration] [--direct] [--run-id id] <flow-id> <activity-id-or-scheduled-started-completed-event-id>\n", os.Args[0])

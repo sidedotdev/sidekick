@@ -23,15 +23,16 @@ import (
 )
 
 type RequiredCodeContext struct {
-	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before outputting requests."`
-	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of given symbols. Each request groups a single file_path with the list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it; when a symbol is not defined in file_path\\, the tool automatically resolves the real definition (possibly in another repo file or a third-party library). Symbol entries normally need only a name."`
+	Description string                     `json:"description" jsonschema:"description=A short user-facing description of what this call will do in active voice (usually 5-10 words). Include the specific target or operation."`
+	Requests    []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of given symbols. Each request groups a single file_path with the list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it; when a symbol is not defined in file_path\\, the tool automatically resolves the real definition (possibly in another repo file or a third-party library). Symbol entries normally need only a name."`
 }
 
 func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
 	type Alias RequiredCodeContext
 	aux := &struct {
-		RequestsNew []coding.FileSymDefRequest `json:"requests"`
-		RequestsOld []coding.FileSymDefRequest `json:"code_context_requests"`
+		RequestsNew    []coding.FileSymDefRequest `json:"requests"`
+		RequestsOld    []coding.FileSymDefRequest `json:"code_context_requests"`
+		LegacyAnalysis string                     `json:"analysis"`
 		*Alias
 	}{
 		Alias: (*Alias)(r),
@@ -46,13 +47,16 @@ func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
 	} else if aux.RequestsOld != nil {
 		r.Requests = aux.RequestsOld
 	}
+	if r.Description == "" {
+		r.Description = aux.LegacyAnalysis
+	}
 
 	return nil
 }
 
 var getSymbolDefinitionsTool = &llm.Tool{
 	Name:        "get_symbol_definitions",
-	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type definition bodies. The go import block will also be included. Each request groups one file_path with a list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it: when a symbol is not defined in file_path, the tool automatically resolves the real definition via LSP go-to-definition and inlines it from wherever it lives (another repo file or a third-party library/stdlib).",
+	Description: "Returns the complete function and type definition bodies for the requested code symbols. The go import block will also be included. Each request groups one file_path with a list of symbols to retrieve from it. file_path may be either the file where a symbol is defined OR a file that references/uses it: when a symbol is not defined in file_path, the tool automatically resolves the real definition via LSP go-to-definition and inlines it from wherever it lives (another repo file or a third-party library/stdlib).",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RequiredCodeContext{}),
 }
 
@@ -635,10 +639,10 @@ func mergeToolCallRequests(results []ToolCallWithCodeContext) RequiredCodeContex
 	for _, result := range results {
 		if result.Err == nil {
 			merged.Requests = append(merged.Requests, result.RequiredCodeContext.Requests...)
-			if merged.Analysis == "" {
-				merged.Analysis = result.RequiredCodeContext.Analysis
-			} else if result.RequiredCodeContext.Analysis != "" {
-				merged.Analysis += "\n" + result.RequiredCodeContext.Analysis
+			if merged.Description == "" {
+				merged.Description = result.RequiredCodeContext.Description
+			} else if result.RequiredCodeContext.Description != "" {
+				merged.Description += "\n" + result.RequiredCodeContext.Description
 			}
 		}
 	}
@@ -750,10 +754,10 @@ func processCodeContextToolCalls(actionCtx DevActionContext, noRetryCtx workflow
 		}
 
 		merged.Requests = append(merged.Requests, tcResult.RequiredCodeContext.Requests...)
-		if merged.Analysis == "" {
-			merged.Analysis = tcResult.RequiredCodeContext.Analysis
-		} else if tcResult.RequiredCodeContext.Analysis != "" {
-			merged.Analysis += "\n" + tcResult.RequiredCodeContext.Analysis
+		if merged.Description == "" {
+			merged.Description = tcResult.RequiredCodeContext.Description
+		} else if tcResult.RequiredCodeContext.Description != "" {
+			merged.Description += "\n" + tcResult.RequiredCodeContext.Description
 		}
 
 		// explicit empty requests are allowed, eg for new/empty projects

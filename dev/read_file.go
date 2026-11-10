@@ -195,6 +195,7 @@ func (fi *flexInt) UnmarshalJSON(data []byte) error {
 }
 
 type BulkReadFileParams struct {
+	Description  string     `json:"description" jsonschema:"description=A short user-facing description of what this call will do in active voice (usually 5-10 words). Include the specific target or operation."`
 	FileLines    []FileLine `json:"file_lines"`
 	WindowSize   int        `json:"window_size"`
 	AllowAnyPath bool       `json:"allow_any_path,omitempty"`
@@ -207,7 +208,8 @@ type BulkReadFileParams struct {
 // to keep existing workflow replays deterministic.
 func parseBulkReadFileParamsLenient(args string) (BulkReadFileParams, error) {
 	var aux struct {
-		FileLines []struct {
+		Description string `json:"description"`
+		FileLines   []struct {
 			FilePath   string  `json:"file_path"`
 			LineNumber flexInt `json:"line_number"`
 		} `json:"file_lines"`
@@ -220,6 +222,7 @@ func parseBulkReadFileParamsLenient(args string) (BulkReadFileParams, error) {
 		return BulkReadFileParams{}, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
 	}
 	params := BulkReadFileParams{
+		Description:  aux.Description,
 		WindowSize:   int(aux.WindowSize),
 		AllowAnyPath: aux.AllowAnyPath,
 	}

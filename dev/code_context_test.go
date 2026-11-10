@@ -100,7 +100,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 					Name: "get_symbol_definitions",
 				},
 				RequiredCodeContext: RequiredCodeContext{
-					Analysis: "Test analysis",
+					Description: "Test analysis",
 					Requests: []coding.FileSymDefRequest{
 						{FilePath: "foo/bar.go", Symbols: []coding.RequestedSymbol{{Name: "Func1"}}},
 					},
@@ -125,7 +125,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 					Name: "get_symbol_definitions",
 				},
 				RequiredCodeContext: RequiredCodeContext{
-					Analysis: "First analysis",
+					Description: "First analysis",
 					Requests: []coding.FileSymDefRequest{
 						{FilePath: "foo/bar.go", Symbols: []coding.RequestedSymbol{{Name: "Func1"}}},
 					},
@@ -137,7 +137,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 					Name: "get_symbol_definitions",
 				},
 				RequiredCodeContext: RequiredCodeContext{
-					Analysis: "Second analysis",
+					Description: "Second analysis",
 					Requests: []coding.FileSymDefRequest{
 						{FilePath: "baz/qux.go", Symbols: []coding.RequestedSymbol{{Name: "Func2"}, {Name: "Func3"}}},
 					},
@@ -162,7 +162,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 					Name: "get_symbol_definitions",
 				},
 				RequiredCodeContext: RequiredCodeContext{
-					Analysis: "Valid analysis",
+					Description: "Valid analysis",
 					Requests: []coding.FileSymDefRequest{
 						{FilePath: "foo/bar.go", Symbols: []coding.RequestedSymbol{{Name: "Func1"}}},
 					},
@@ -191,7 +191,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 			{
 				ToolCall: llm.ToolCall{Id: "call_1", Name: "get_symbol_definitions"},
 				RequiredCodeContext: RequiredCodeContext{
-					Analysis: "First",
+					Description: "First",
 					Requests: []coding.FileSymDefRequest{
 						{FilePath: "a.go", Symbols: []coding.RequestedSymbol{{Name: "A"}}},
 						{FilePath: "b.go", Symbols: []coding.RequestedSymbol{{Name: "B"}}},
@@ -201,7 +201,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 			{
 				ToolCall: llm.ToolCall{Id: "call_2", Name: "get_symbol_definitions"},
 				RequiredCodeContext: RequiredCodeContext{
-					Analysis: "Second",
+					Description: "Second",
 					Requests: []coding.FileSymDefRequest{
 						{FilePath: "c.go", Symbols: []coding.RequestedSymbol{{Name: "C"}}},
 					},
@@ -210,7 +210,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 			{
 				ToolCall: llm.ToolCall{Id: "call_3", Name: "get_symbol_definitions"},
 				RequiredCodeContext: RequiredCodeContext{
-					Analysis: "Third",
+					Description: "Third",
 					Requests: []coding.FileSymDefRequest{
 						{FilePath: "d.go", Symbols: []coding.RequestedSymbol{{Name: "D"}}},
 					},
@@ -227,7 +227,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 		assert.Equal(t, "b.go", merged.Requests[1].FilePath)
 		assert.Equal(t, "c.go", merged.Requests[2].FilePath)
 		assert.Equal(t, "d.go", merged.Requests[3].FilePath)
-		assert.Equal(t, "First\nSecond\nThird", merged.Analysis)
+		assert.Equal(t, "First\nSecond\nThird", merged.Description)
 	})
 }
 
@@ -398,7 +398,7 @@ func TestParseToolCallsToCodeContext(t *testing.T) {
 		assert.Equal(t, "pkg/util.go", merged.Requests[2].FilePath)
 
 		// Verify analysis is merged
-		assert.Equal(t, "First analysis\nSecond analysis\nThird analysis", merged.Analysis)
+		assert.Equal(t, "First analysis\nSecond analysis\nThird analysis", merged.Description)
 	})
 
 	t.Run("end-to-end: second tool call malformed generates per-call feedback", func(t *testing.T) {
@@ -522,7 +522,7 @@ func TestParseToolCallsToCodeContext(t *testing.T) {
 		assert.Equal(t, "a.go", merged.Requests[0].FilePath)
 		assert.Equal(t, "b.go", merged.Requests[1].FilePath)
 		assert.Equal(t, "c.go", merged.Requests[2].FilePath)
-		assert.Equal(t, "First\nSecond\nThird", merged.Analysis)
+		assert.Equal(t, "First\nSecond\nThird", merged.Description)
 	})
 }
 

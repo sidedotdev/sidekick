@@ -92,15 +92,15 @@ func (s *ProcessCodeContextToolCallsTestSuite) Test_AllToolCallsSucceed() {
 		{
 			ToolCall: llm.ToolCall{Id: "call_1", Name: "get_symbol_definitions"},
 			RequiredCodeContext: RequiredCodeContext{
-				Analysis: "analysis a",
-				Requests: []coding.FileSymDefRequest{{FilePath: "a.go", Symbols: []coding.RequestedSymbol{{Name: "A"}}}},
+				Description: "Inspect A",
+				Requests:    []coding.FileSymDefRequest{{FilePath: "a.go", Symbols: []coding.RequestedSymbol{{Name: "A"}}}},
 			},
 		},
 		{
 			ToolCall: llm.ToolCall{Id: "call_2", Name: "get_symbol_definitions"},
 			RequiredCodeContext: RequiredCodeContext{
-				Analysis: "analysis b",
-				Requests: []coding.FileSymDefRequest{{FilePath: "b.go", Symbols: []coding.RequestedSymbol{{Name: "B"}}}},
+				Description: "Inspect B",
+				Requests:    []coding.FileSymDefRequest{{FilePath: "b.go", Symbols: []coding.RequestedSymbol{{Name: "B"}}}},
 			},
 		},
 	})
@@ -110,7 +110,7 @@ func (s *ProcessCodeContextToolCallsTestSuite) Test_AllToolCallsSucceed() {
 	s.Len(result.Merged.Requests, 2)
 	s.Equal("a.go", result.Merged.Requests[0].FilePath)
 	s.Equal("b.go", result.Merged.Requests[1].FilePath)
-	s.Equal("analysis a\nanalysis b", result.Merged.Analysis)
+	s.Equal("Inspect A\nInspect B", result.Merged.Description)
 
 	// every tool call gets exactly one result, in order
 	s.Require().Len(result.Messages, 2)

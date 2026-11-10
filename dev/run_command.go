@@ -17,8 +17,9 @@ import (
 )
 
 type RunCommandParams struct {
-	Command    string `json:"command" jsonschema:"description=The shell command or script to execute. Will automatically be run in the repository root working directory (cd not needed)\\, or the relative directory specified via workingDir."`
-	WorkingDir string `json:"workingDir,omitempty" jsonschema:"description=Optional working directory relative to the repository root directory"`
+	Description string `json:"description" jsonschema:"description=A short user-facing description of what this command will do in active voice (usually 5-10 words). Include the specific operation and any destructive effects."`
+	Command     string `json:"command" jsonschema:"description=The shell command or script to execute. Will automatically be run in the repository root working directory (cd not needed)\\, or the relative directory specified via workingDir."`
+	WorkingDir  string `json:"workingDir,omitempty" jsonschema:"description=Optional working directory relative to the repository root directory"`
 }
 
 var runCommandTool = llm.Tool{
