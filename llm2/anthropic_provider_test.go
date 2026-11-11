@@ -83,7 +83,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAny}
 
 	mockTool := &common.Tool{
 		Name:        "get_current_weather",
@@ -103,7 +103,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
+	secretManager := requireAnthropicIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -332,8 +332,8 @@ func TestAnthropicResponsesProvider_ReasoningIntegration(t *testing.T) {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
-	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAny}
+	secretManager := requireAnthropicIntegrationCredentials(t)
 
 	reasoningModel := os.Getenv("ANTHROPIC_REASONING_MODEL")
 	if reasoningModel == "" {
@@ -537,7 +537,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAny}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
@@ -558,7 +558,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
+	secretManager := requireAnthropicIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -616,7 +616,7 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAny}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
@@ -666,7 +666,7 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
+	secretManager := requireAnthropicIntegrationCredentials(t)
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -1131,7 +1131,7 @@ func TestMessagesToAnthropicParams_ReasoningCleanup(t *testing.T) {
 func TestAnthropicProvider_CrossProviderReasoningHandoffIntegration(t *testing.T) {
 	t.Parallel()
 
-	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
+	secretManager := requireAnthropicIntegrationCredentials(t)
 	if !hasAnyIntegrationSecret(secretManager, "OPENAI_OAUTH", "OPENAI_API_KEY") {
 		t.Skip("Skipping cross-provider handoff test; no OpenAI credentials available")
 	}
@@ -1226,7 +1226,7 @@ func TestAnthropicProvider_CrossProviderReasoningHandoffIntegration(t *testing.T
 		for range anthropicEvents {
 		}
 	}()
-	anthropicResponse, err := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}.Stream(ctx, StreamRequest{
+	anthropicResponse, err := AnthropicProvider{AuthType: common.ProviderAuthTypeAny}.Stream(ctx, StreamRequest{
 		Messages: handoffMessages,
 		Options: Options{
 			ModelConfig: common.ModelConfig{

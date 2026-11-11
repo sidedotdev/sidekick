@@ -84,8 +84,8 @@ func TestAnthropicProvider_WebSearchIntegration(t *testing.T) {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
 
-	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
-	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAny}
+	secretManager := requireAnthropicIntegrationCredentials(t)
 
 	request := StreamRequest{
 		Messages: []Message{{
@@ -126,8 +126,8 @@ func TestOpenAIResponsesProvider_WebSearchIntegration(t *testing.T) {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
 
-	provider := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI}
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	provider := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAny}
+	secretManager := requireOpenAIIntegrationCredentials(t)
 
 	request := StreamRequest{
 		Messages: []Message{{
@@ -136,10 +136,8 @@ func TestOpenAIResponsesProvider_WebSearchIntegration(t *testing.T) {
 		}},
 		Options: Options{
 			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				// ChatGPT (OAuth) accounts only support a subset of models on
-				// the codex backend; gpt-5.4-mini works with both auth paths.
-				Model:           "gpt-5.4-mini",
+				Provider:        "openai",
+				Model:           common.OpenaiToolChatProviderType.SmallModel(),
 				ReasoningEffort: "low",
 			},
 			Tools:      []*common.Tool{{Type: common.ToolTypeWebSearch}},
@@ -152,13 +150,22 @@ func TestOpenAIResponsesProvider_WebSearchIntegration(t *testing.T) {
 
 	uses := builtinToolUseBlocks(response.Output)
 	require.NotEmpty(t, uses, "expected at least one builtin_tool_use block")
-	require.NotNil(t, uses[0].BuiltinToolUse)
-	assert.Contains(t, uses[0].BuiltinToolUse.Id, openaiWebSearchCallIdPrefix)
-	assert.NotEmpty(t, uses[0].BuiltinToolUse.Arguments)
-	assert.NotEmpty(t, uses[0].BuiltinToolUse.Status)
-
-	// OpenAI reports no builtin tool results; searches are provider-internal.
-	assert.Empty(t, builtinToolResultBlocks(response.Output))
+	toolCallIDs := make(map[string]struct{}, len(uses))
+	for _, block := range uses {
+		require.NotNil(t, block.BuiltinToolUse)
+		assert.NotEmpty(t, block.BuiltinToolUse.Id)
+		assert.Equal(t, "web_search", block.BuiltinToolUse.Name)
+		assert.NotEmpty(t, block.BuiltinToolUse.Arguments)
+		toolCallIDs[block.BuiltinToolUse.Id] = struct{}{}
+	}
+	for _, block := range builtinToolResultBlocks(response.Output) {
+		require.NotNil(t, block.BuiltinToolResult)
+		assert.Contains(t, toolCallIDs, block.BuiltinToolResult.ToolCallId)
+		assert.Equal(t, "web_search", block.BuiltinToolResult.Name)
+		assert.False(t, block.BuiltinToolResult.IsError)
+		assert.True(t, block.BuiltinToolResult.Content != "" || len(block.BuiltinToolResult.SearchResults) > 0,
+			"expected non-empty web-search results")
+	}
 
 	assertWebSearchRoundTrip(t, provider, request, response.Output)
 }
@@ -248,13 +255,13 @@ func TestWebSearchCrossProviderIntegration(t *testing.T) {
 		},
 	}
 
-	provider := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAPI}
-	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
+	provider := OpenAIResponsesProvider{AuthType: common.ProviderAuthTypeAny}
+	secretManager := requireOpenAIIntegrationCredentials(t)
 
 	request := StreamRequest{
 		Messages: anthropicHistory,
 		Options: Options{
-			ModelConfig: common.ModelConfig{Provider: "openai", Model: "gpt-5.4-mini"},
+			ModelConfig: common.ModelConfig{Provider: "openai", Model: common.OpenaiToolChatProviderType.SmallModel()},
 			Tools:       []*common.Tool{{Type: common.ToolTypeWebSearch}},
 			ToolChoice:  common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 		},

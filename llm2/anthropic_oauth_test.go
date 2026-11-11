@@ -16,8 +16,12 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-// Not parallel: HTTP transport and keyring overrides are process-wide.
+// go-keyring's mock provider has no restore operation, so it must stay in a subprocess.
 func TestGetAnthropicOAuthCredentials_RefreshPreservesProfile(t *testing.T) {
+	if runKeyringTestInSubprocess(t, "TestGetAnthropicOAuthCredentials_RefreshPreservesProfile") {
+		return
+	}
+
 	tests := []struct {
 		name     string
 		status   int
