@@ -20,6 +20,7 @@ type streamProbeOptions struct {
 	Model           string
 	ReasoningEffort string
 	ExportPath      string
+	HistoryEdits    string
 	// ExtraBody is a JSON object merged over the request's extra body, letting
 	// a probe add raw provider parameters the provider does not otherwise send.
 	ExtraBody string
@@ -32,15 +33,29 @@ func prepareStreamProbe(invocation activityInvocation, options streamProbeOption
 	}
 	var probe struct {
 		persisted_ai.StreamInput
-		ProbeMessages []llm2.Message `json:"probeMessages"`
+		ProbeMessages []llm2.Message  `json:"probeMessages"`
+		ProbeEdits    json.RawMessage `json:"probeEdits"`
 	}
 	if err := json.Unmarshal(invocation.Args[0], &probe); err != nil {
 		return input, fmt.Errorf("decode Stream input: %w", err)
 	}
 	input = probe.StreamInput
+	if options.HistoryEdits != "" {
+		probe.ProbeEdits = json.RawMessage(options.HistoryEdits)
+	}
+	if len(probe.ProbeEdits) != 0 && probe.ProbeMessages == nil {
+		return input, fmt.Errorf("probeEdits requires inline probeMessages; export the history first with --probe-export")
+	}
 	if probe.ProbeMessages != nil {
 		if len(probe.ProbeMessages) == 0 {
 			return input, fmt.Errorf("probeMessages must not be empty")
+		}
+		if len(probe.ProbeEdits) != 0 {
+			messages, err := editProbeHistory(probe.ProbeMessages, probe.ProbeEdits)
+			if err != nil {
+				return input, err
+			}
+			probe.ProbeMessages = messages
 		}
 		history := persisted_ai.NewLlm2ChatHistory(input.FlowId, input.WorkspaceId)
 		history.SetMessages(probe.ProbeMessages)

@@ -1,6 +1,7 @@
 package persisted_ai
 
 import (
+	"encoding/json"
 	"sidekick/common"
 	"sidekick/llm2"
 	"strings"
@@ -91,6 +92,9 @@ func mapContentBlockToolNames(block llm2.ContentBlock, config *ToolNameMappingCo
 
 	if block.ToolUse != nil {
 		toolUse := *block.ToolUse
+		if !reverse {
+			toolUse.Arguments = mapHistoricalToolArguments(mapToolName(toolUse.Name, config, true), toolUse.Arguments)
+		}
 		toolUse.Name = mapToolName(toolUse.Name, config, reverse)
 		mappedBlock.ToolUse = &toolUse
 	}
@@ -134,4 +138,29 @@ func mapToolName(name string, config *ToolNameMappingConfig, reverse bool) strin
 		return name
 	}
 	return mappedName
+}
+
+func mapHistoricalToolArguments(name, arguments string) string {
+	if name != "get_symbol_definitions" {
+		return arguments
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(arguments), &fields); err != nil {
+		return arguments
+	}
+	analysis, exists := fields["analysis"]
+	if !exists {
+		return arguments
+	}
+	if _, exists := fields["description"]; !exists {
+		fields["description"] = analysis
+	}
+	delete(fields, "analysis")
+
+	mapped, err := json.Marshal(fields)
+	if err != nil {
+		return arguments
+	}
+	return string(mapped)
 }

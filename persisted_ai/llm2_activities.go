@@ -176,11 +176,10 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		// together maximizes provider-side prompt cache hits.
 		options.PromptCacheKey = input.FlowId
 	}
-	messages := llm2History.Llm2Messages()
 	if input.ToolNameMapping != nil {
 		options = mapOptionsToolNames(options, input.ToolNameMapping)
-		messages = mapMessagesToolNames(messages, input.ToolNameMapping)
 	}
+	messages := mapMessagesToolNames(llm2History.Llm2Messages(), input.ToolNameMapping)
 
 	secretManager := newOpenAIOAuthSecretWrapper(ctx, input.Secrets.SecretManager)
 
