@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMapMessagesToolNames_HistoricalArguments(t *testing.T) {
+func TestMapMessagesToolNamesAndArguments_HistoricalArguments(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -93,7 +93,7 @@ func TestMapMessagesToolNames_HistoricalArguments(t *testing.T) {
 					},
 				}
 
-				mapped := mapMessagesToolNames(messages, config)
+				mapped := mapMessagesToolNamesAndArguments(messages, config)
 				for _, toolUse := range []*llm2.ToolUseBlock{
 					mapped[0].Content[0].ToolUse,
 					mapped[1].Content[0].ToolResult.Content[0].ToolUse,

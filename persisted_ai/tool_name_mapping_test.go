@@ -63,7 +63,7 @@ func TestMapOptionsToolNames(t *testing.T) {
 	assert.Equal(t, "get_help_or_input", options.Tools[2].Name)
 	assert.Equal(t, "done", options.ToolChoice.Name)
 }
-func TestMapMessagesToolNames(t *testing.T) {
+func TestMapMessagesToolNamesAndArguments(t *testing.T) {
 	t.Parallel()
 
 	config := testToolNameMappingConfig(map[string]string{
@@ -114,7 +114,7 @@ func TestMapMessagesToolNames(t *testing.T) {
 		},
 	}
 
-	mapped := mapMessagesToolNames(messages, config)
+	mapped := mapMessagesToolNamesAndArguments(messages, config)
 
 	assert.Equal(t, "Read", mapped[0].Content[0].ToolUse.Name)
 	assert.Equal(t, "mcp__tu__done", mapped[1].Content[0].ToolResult.Name)
@@ -190,7 +190,7 @@ func TestReverseMapMessageToolNames(t *testing.T) {
 	assert.Equal(t, "AskUserQuestion", message.Content[1].ToolResult.Content[0].ToolUse.Name)
 	assert.Equal(t, "mcp__tu__set_base_branch", message.Content[1].ToolResult.Content[1].ToolResult.Name)
 }
-func TestMapMessagesToolNames_WithPrefix(t *testing.T) {
+func TestMapMessagesToolNamesAndArguments_WithPrefix(t *testing.T) {
 	t.Parallel()
 
 	config := &ToolNameMappingConfig{
@@ -227,7 +227,7 @@ func TestMapMessagesToolNames_WithPrefix(t *testing.T) {
 		},
 	}
 
-	mapped := mapMessagesToolNames(messages, config)
+	mapped := mapMessagesToolNamesAndArguments(messages, config)
 
 	assert.Equal(t, "Read", mapped[0].Content[0].ToolUse.Name)
 	assert.Equal(t, "mcp__tu__done", mapped[0].Content[1].ToolUse.Name)

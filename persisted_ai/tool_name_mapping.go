@@ -53,7 +53,7 @@ func mapOptionsToolNames(options llm2.Options, config *ToolNameMappingConfig) ll
 	return mappedOptions
 }
 
-func mapMessagesToolNames(messages []llm2.Message, config *ToolNameMappingConfig) []llm2.Message {
+func mapMessagesToolNamesAndArguments(messages []llm2.Message, config *ToolNameMappingConfig) []llm2.Message {
 	return mapMessages(messages, config, false)
 }
 
@@ -70,24 +70,24 @@ func mapMessages(messages []llm2.Message, config *ToolNameMappingConfig, reverse
 	mappedMessages := make([]llm2.Message, len(messages))
 	for i, message := range messages {
 		mappedMessages[i] = message
-		mappedMessages[i].Content = mapContentBlocksToolNames(message.Content, config, reverse)
+		mappedMessages[i].Content = mapContentBlocksToolNamesAndArguments(message.Content, config, reverse)
 	}
 	return mappedMessages
 }
 
-func mapContentBlocksToolNames(blocks []llm2.ContentBlock, config *ToolNameMappingConfig, reverse bool) []llm2.ContentBlock {
+func mapContentBlocksToolNamesAndArguments(blocks []llm2.ContentBlock, config *ToolNameMappingConfig, reverse bool) []llm2.ContentBlock {
 	if len(blocks) == 0 {
 		return nil
 	}
 
 	mappedBlocks := make([]llm2.ContentBlock, len(blocks))
 	for i, block := range blocks {
-		mappedBlocks[i] = mapContentBlockToolNames(block, config, reverse)
+		mappedBlocks[i] = mapContentBlockToolNamesAndArguments(block, config, reverse)
 	}
 	return mappedBlocks
 }
 
-func mapContentBlockToolNames(block llm2.ContentBlock, config *ToolNameMappingConfig, reverse bool) llm2.ContentBlock {
+func mapContentBlockToolNamesAndArguments(block llm2.ContentBlock, config *ToolNameMappingConfig, reverse bool) llm2.ContentBlock {
 	mappedBlock := block
 
 	if block.ToolUse != nil {
@@ -102,7 +102,7 @@ func mapContentBlockToolNames(block llm2.ContentBlock, config *ToolNameMappingCo
 	if block.ToolResult != nil {
 		toolResult := *block.ToolResult
 		toolResult.Name = mapToolName(toolResult.Name, config, reverse)
-		toolResult.Content = mapContentBlocksToolNames(block.ToolResult.Content, config, reverse)
+		toolResult.Content = mapContentBlocksToolNamesAndArguments(block.ToolResult.Content, config, reverse)
 		mappedBlock.ToolResult = &toolResult
 	}
 
