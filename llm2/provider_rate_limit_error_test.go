@@ -42,6 +42,7 @@ func TestAnthropicProviderStream_RateLimit(t *testing.T) {
 		name           string
 		headers        map[string]string
 		wantRetryAfter time.Duration
+		resetAt        time.Time
 	}{
 		{
 			name:           "no retry hints",
@@ -58,7 +59,7 @@ func TestAnthropicProviderStream_RateLimit(t *testing.T) {
 				"anthropic-ratelimit-unified-status": "rejected",
 				"anthropic-ratelimit-unified-reset":  "4102444800",
 			},
-			wantRetryAfter: time.Until(time.Unix(4102444800, 0)),
+			resetAt: time.Unix(4102444800, 0),
 		},
 	}
 
@@ -85,16 +86,21 @@ func TestAnthropicProviderStream_RateLimit(t *testing.T) {
 			}
 			request := providerAuthTestRequest("anthropic", "claude-fable-5", map[string]string{"ANTHROPIC_API_KEY": "test-api-key"})
 
+			before := time.Now()
 			_, err := provider.Stream(ctx, request, make(chan Event, 1))
+			after := time.Now()
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "rate_limit_error")
 
 			details, ok := common.AsProviderRateLimitError(err)
 			require.True(t, ok, "expected provider rate limit error, got: %v", err)
 			assert.Equal(t, "anthropic", details.Provider)
-			// Timestamp-derived waits depend on the clock between the test's
-			// expectation and the provider's parse, so allow a small tolerance.
-			assert.InDelta(t, tt.wantRetryAfter, details.RetryAfter, float64(5*time.Second))
+			if tt.resetAt.IsZero() {
+				assert.Equal(t, tt.wantRetryAfter, details.RetryAfter)
+			} else {
+				assert.GreaterOrEqual(t, details.RetryAfter, tt.resetAt.Sub(after))
+				assert.LessOrEqual(t, details.RetryAfter, tt.resetAt.Sub(before))
+			}
 			var appErr *temporal.ApplicationError
 			require.True(t, errors.As(err, &appErr))
 			assert.True(t, appErr.NonRetryable())

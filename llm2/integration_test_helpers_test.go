@@ -75,3 +75,8 @@ func requireAWSCredentialsForIntegration(t *testing.T) string {
 	}
 	return ""
 }
+
+func requireAnthropicIntegrationCredentials(t *testing.T) secret_manager.SecretManager {
+	t.Helper()
+	return requireIntegrationAPIKey(t, "ANTHROPIC_OAUTH", "ANTHROPIC_API_KEY")
+}

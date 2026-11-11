@@ -194,7 +194,7 @@ func TestClassifiedClientError_SkipsActivityRetries(t *testing.T) {
 
 			require.True(t, env.IsWorkflowCompleted())
 			require.Error(t, env.GetWorkflowError())
-			assert.Equal(t, tt.wantAttempts, atomic.LoadInt32(&attempts))
+			assert.Equal(t, tt.wantAttempts, atomic.LoadInt32(&attempts), "workflow error: %v", env.GetWorkflowError())
 		})
 	}
 }
